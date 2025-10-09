@@ -9,6 +9,15 @@ version: 2.0.0
 
 Your personal wiki of proven techniques, patterns, and tools at `${CLAUDE_PLUGIN_ROOT}/skills/`.
 
+## Just Read This Guide?
+
+**RIGHT NOW**: Run this to see what skills are available:
+```bash
+${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
+```
+
+**THEN**: Follow the workflows below based on what your partner is asking for.
+
 ## How to Reference Skills
 
 **DO NOT use @ links** - they force-load entire files, burning 200k+ context instantly.
