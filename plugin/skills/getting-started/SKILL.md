@@ -22,7 +22,20 @@ Your personal wiki of proven techniques, patterns, and tools at `${CLAUDE_PLUGIN
 - `skills/path/name` → Use Read tool on `${CLAUDE_PLUGIN_ROOT}/skills/path/name/SKILL.md`
 - Load supporting files only when implementing
 
-## Mandatory Workflow 1: Before ANY Task
+## Mandatory Workflow 1: Brainstorming Before Coding
+
+**When your human partner wants to start a project, no matter how big or small:**
+
+**YOU MUST immediately read:** skills/collaboration/brainstorming
+
+**Don't:**
+- Jump straight to code
+- Wait for /brainstorm command
+- Skip brainstorming because you "understand the idea"
+
+**Why:** Just writing code is almost never the right first step. We always understand requirements and plan first.
+
+## Mandatory Workflow 2: Before ANY Task
 
 **1. Search skills:**
 ```bash
@@ -39,7 +52,7 @@ Dispatch subagent (see Workflow 2) to check for relevant past work.
 
 **"This doesn't count as a task" is rationalization.** Skills/conversations exist and you didn't search for them or didn't use them = failed task.
 
-## Mandatory Workflow 2: Historical Context Search
+## Mandatory Workflow 3: Historical Context Search
 
 **When:** Your human partner mentions past work, issue feels familiar, starting task in familiar domain, stuck/blocked, before reinventing
 
@@ -61,25 +74,6 @@ You: Searching past conversations...
 **Red flags:** Reading .jsonl files directly, pasting excerpts, asking "which conversation?", browsing archives
 
 **Pattern:** Search → Subagent synthesizes → Apply. Fast, focused, context-efficient.
-
-## Brainstorming Trigger
-
-**When your partner has an idea but no clear implementation plan:**
-
-Immediately suggest: "Let's use the brainstorming skill to refine this."
-
-The brainstorming skill uses Socratic method to:
-- Clarify requirements and constraints
-- Explore alternatives and tradeoffs
-- Create a clear design before coding
-
-**Trigger phrases:**
-- "I want to build..."
-- "How should I implement..."
-- "I'm thinking about..."
-- "What's the best way to..."
-
-**Use**: `/brainstorm` command or read skills/collaboration/brainstorming
 
 ## Announcing Skill Usage
 
