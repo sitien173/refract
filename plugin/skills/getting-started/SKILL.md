@@ -62,6 +62,25 @@ You: Searching past conversations...
 
 **Pattern:** Search → Subagent synthesizes → Apply. Fast, focused, context-efficient.
 
+## Brainstorming Trigger
+
+**When your partner has an idea but no clear implementation plan:**
+
+Immediately suggest: "Let's use the brainstorming skill to refine this."
+
+The brainstorming skill uses Socratic method to:
+- Clarify requirements and constraints
+- Explore alternatives and tradeoffs
+- Create a clear design before coding
+
+**Trigger phrases:**
+- "I want to build..."
+- "How should I implement..."
+- "I'm thinking about..."
+- "What's the best way to..."
+
+**Use**: `/brainstorm` command or read skills/collaboration/brainstorming
+
 ## Announcing Skill Usage
 
 **Every time you start using a skill, announce it:**
