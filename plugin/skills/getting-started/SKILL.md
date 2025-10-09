@@ -37,13 +37,18 @@ Your personal wiki of proven techniques, patterns, and tools at `${CLAUDE_PLUGIN
 
 ## Mandatory Workflow 2: Before ANY Task
 
-**1. Search skills:**
+**1. List available skills** (to avoid useless searches):
+```bash
+${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
+```
+
+**2. Search skills** (when you need something specific):
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search PATTERN
 ```
 
-**2. Search conversations:**
-Dispatch subagent (see Workflow 2) to check for relevant past work.
+**3. Search conversations:**
+Dispatch subagent (see Workflow 3) to check for relevant past work.
 
 **If skills found:**
 1. READ the skill: `${CLAUDE_PLUGIN_ROOT}/skills/path/skill-name/SKILL.md`
