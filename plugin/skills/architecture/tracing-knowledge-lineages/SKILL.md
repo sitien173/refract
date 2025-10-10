@@ -33,7 +33,7 @@ Ideas have history. Understanding why we arrived at current approaches - and wha
 
 Search for when/why current approach was chosen:
 
-1. **Check decision records** (`ai_working/decisions/`, `docs/decisions/`, ADRs)
+1. **Check decision records** (common locations: `docs/decisions/`, `docs/adr/`, `.decisions/`, architecture decision records)
 2. **Search conversations** (skills/collaboration/remembering-conversations)
 3. **Git archaeology** (`git log --all --full-history -- path/to/file`)
 4. **Ask the person who wrote it** (if available)
@@ -111,7 +111,7 @@ When major architectural changes occurred:
 
 **Where to look for lineage:**
 
-1. **Decision records** (`ai_working/decisions/`, architecture decision records)
+1. **Decision records** (search: `docs/decisions/`, `docs/adr/`, `.decisions/`, or ask where project keeps ADRs)
 2. **Conversation history** (search with skills/collaboration/remembering-conversations)
 3. **Git history** (`git log --grep="keyword"`, `git blame`)
 4. **Issue/PR discussions** (GitHub/GitLab issue history)
