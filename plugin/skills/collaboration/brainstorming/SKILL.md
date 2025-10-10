@@ -77,6 +77,15 @@ When your partner confirms (any affirmative response):
 - Switch to skills/collaboration/writing-plans skill
 - Create detailed plan in the worktree
 
+## Related Skills
+
+**During EXPLORING mode:**
+- When approaches have genuine trade-offs: skills/architecture/preserving-productive-tensions
+- When stuck or seeking innovation: skills/architecture/detecting-emergent-patterns
+
+**Before proposing changes:**
+- Understand why current approach exists: skills/architecture/tracing-knowledge-lineages
+
 ## Remember
 
 - Modes are operational stances, not linear phases

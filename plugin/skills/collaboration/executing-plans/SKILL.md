@@ -22,7 +22,7 @@ digraph executing_modes {
     rankdir=LR;
     node [shape=box, style=rounded];
 
-    REVIEWING [label="REVIEWING Mode\n\nRead plan critically\nIdentify concerns/questions/gaps\nCreate TodoWrite if plan is sound"];
+    REVIEWING [label="REVIEWING Mode\n\nRead plan critically\nIdentify concerns/questions/gaps\nConsider skills/architecture/tracing-knowledge-lineages\nCreate TodoWrite if plan is sound"];
 
     EXECUTING [label="EXECUTING Mode\n\nWork through batch (default 3 tasks)\nFollow each step exactly\nRun all verifications\nMark tasks completed"];
 
