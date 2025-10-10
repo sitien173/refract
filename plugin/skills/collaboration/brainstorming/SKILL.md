@@ -30,11 +30,11 @@ digraph brainstorming_modes {
 
     UNDERSTANDING -> EXPLORING [label="Have enough context to propose alternatives\n(gathered purpose, constraints, success criteria)"];
 
-    EXPLORING -> UNDERSTANDING [label="Partner reveals new constraint\n(compliance requirement, infrastructure limit, security need, forgotten requirement)"];
+    EXPLORING -> UNDERSTANDING [label="Partner reveals constraint you didn't consider\n(wasn't part of context when proposing approaches,\nchanges viability or trade-offs of proposed options)"];
 
     EXPLORING -> DESIGNING [label="Approach selected and validated\n(partner chose an approach, have all critical constraints)"];
 
-    DESIGNING -> UNDERSTANDING [label="Partner reveals fundamental gap\n(missing critical constraint, core assumption questioned)"];
+    DESIGNING -> UNDERSTANDING [label="Partner reveals gap in requirements\n(constraint you didn't know about,\nassumption that doesn't hold)"];
 
     DESIGNING -> EXPLORING [label="Need to reconsider approach\n(trade-offs too significant, partner questions approach)"];
 }

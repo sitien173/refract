@@ -89,6 +89,34 @@ You: Searching past conversations...
 
 **Pattern:** Search → Subagent synthesizes → Apply. Fast, focused, context-efficient.
 
+## Mandatory Workflow 4: When Stuck
+
+**When:** Not making progress, conventional approaches failing, same problem recurring, complexity spiraling, can't decide between options
+
+**DON'T:**
+- Keep trying same approach
+- Force through without help
+- Assume you'll figure it out
+- Skip searching because "I should know this"
+
+**DO:**
+1. **Search for problem-solving skills:**
+   ```bash
+   ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search stuck simplification pattern
+   ```
+
+2. **Start with dispatch skill:**
+   - Read skills/problem-solving/when-stuck
+   - Use flowchart to identify stuck-type
+   - Load recommended technique skill
+
+3. **Apply the technique:**
+   - Follow the process
+   - Document what you tried
+   - If still stuck, try different technique
+
+**Pattern:** Recognize stuck → Search skills → Load technique → Apply. Don't spin your wheels.
+
 ## Announcing Skill Usage
 
 **Every time you start using a skill, announce it:**
