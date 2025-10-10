@@ -111,7 +111,7 @@ When major architectural changes occurred:
 
 **Where to look for lineage:**
 
-1. **Decision records** (search: `docs/decisions/`, `docs/adr/`, `.decisions/`, or ask where project keeps ADRs)
+1. **Decision records** (common locations: `docs/decisions/`, `docs/adr/`, `.adr/`, or search for "ADR", "decision record")
 2. **Conversation history** (search with skills/collaboration/remembering-conversations)
 3. **Git history** (`git log --grep="keyword"`, `git blame`)
 4. **Issue/PR discussions** (GitHub/GitLab issue history)
