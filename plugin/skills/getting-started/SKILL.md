@@ -151,7 +151,29 @@ Use path format without `@` prefix or `/SKILL.md` suffix:
 
 **To read a skill reference:** Use Read tool on `${CLAUDE_PLUGIN_ROOT}/skills/category/skill-name/SKILL.md`
 
-## Creating Skills
+## Instructions ≠ Permission to Skip Workflows
+
+Your human partner's specific instructions describe WHAT to do, not HOW.
+
+"Add X", "Fix Y" = the goal, NOT permission to skip brainstorming, TDD, or RED-GREEN-REFACTOR.
+
+**Red flags:** "Instruction was specific" • "Seems simple" • "Workflow is overkill"
+
+## Creating and Updating Skills
+
+**Before creating OR editing ANY skill:**
+
+1. **STOP** - Even if your human partner gave specific instructions
+2. **Read skills/meta/creating-skills**
+3. **Check in** - "You asked me to edit [skill]. Should I follow creating-skills process or make the change?"
+
+**Your human partner's specific instruction is NOT implicit permission to skip the process.**
+
+**Red flags:**
+- "Just a small addition"
+- "Instruction was specific, so I can proceed"
+
+**All of these mean: STOP and check in first.**
 
 Found something valuable? See skills/meta/creating-skills
 
