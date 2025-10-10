@@ -1,13 +1,17 @@
 ---
 name: Getting Started with Skills
-description: Skills wiki intro - mandatory workflows, search tool, brainstorming triggers
+description: Skills wiki intro - mandatory workflows, search tool, brainstorming triggers, personal skills
 when_to_use: Read this FIRST at start of each conversation when skills are active
-version: 2.0.0
+version: 3.0.0
 ---
 
 # Getting Started with Skills
 
-Your personal wiki of proven techniques, patterns, and tools at `${CLAUDE_PLUGIN_ROOT}/skills/`.
+Two skill libraries work together:
+- **Core skills** at `${CLAUDE_PLUGIN_ROOT}/skills/` (from plugin)
+- **Personal skills** at `~/.config/superpowers/skills/` (yours to create and share)
+
+Personal skills shadow core skills when names match.
 
 ## Just Read This Guide?
 
@@ -28,7 +32,8 @@ ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
 - Load with Read tool only when needed
 
 **When you see skill references in documentation:**
-- `skills/path/name` → Use Read tool on `${CLAUDE_PLUGIN_ROOT}/skills/path/name/SKILL.md`
+- `skills/path/name` → Check personal first (`~/.config/superpowers/skills/path/name/SKILL.md`)
+- If not found, check core (`${CLAUDE_PLUGIN_ROOT}/skills/path/name/SKILL.md`)
 - Load supporting files only when implementing
 
 ## Mandatory Workflow 1: Brainstorming Before Coding
@@ -115,14 +120,7 @@ You: Searching past conversations...
 
 **Why:** Checklists without TodoWrite tracking = steps get skipped. Every time.
 
-**Examples:** TDD (write test, watch fail, implement, verify), Systematic Debugging (4 phases), Creating Skills (RED-GREEN-REFACTOR)
-
-## Navigation
-
-Really, try skills-search first.
-
-**Categories:** skills/INDEX.md → testing, debugging, coding, architecture, collaboration, meta
-**Individual skill:** Load from category INDEX
+**Examples:** TDD (write test, watch fail, implement, verify), Systematic Debugging (4 phases), Writing Skills (RED-GREEN-REFACTOR)
 
 ## How to Read a Skill
 
@@ -159,13 +157,15 @@ Your human partner's specific instructions describe WHAT to do, not HOW.
 
 **Red flags:** "Instruction was specific" • "Seems simple" • "Workflow is overkill"
 
-## Creating and Updating Skills
+## Writing and Sharing Skills
 
-**Before creating OR editing ANY skill:**
+**All personal skills are written to `~/.config/superpowers/skills/`**
+
+**Before writing ANY skill:**
 
 1. **STOP** - Even if your human partner gave specific instructions
-2. **Read skills/meta/creating-skills**
-3. **Check in** - "You asked me to edit [skill]. Should I follow creating-skills process or make the change?"
+2. **Read skills/meta/writing-skills**
+3. **Follow the TDD process** - No skill without failing test first
 
 **Your human partner's specific instruction is NOT implicit permission to skip the process.**
 
@@ -173,11 +173,14 @@ Your human partner's specific instructions describe WHAT to do, not HOW.
 - "Just a small addition"
 - "Instruction was specific, so I can proceed"
 
-**All of these mean: STOP and check in first.**
+**All of these mean: STOP and follow writing-skills process.**
 
-Found something valuable? See skills/meta/creating-skills
+**Want to share a skill with everyone?**
+- See skills/meta/sharing-skills for how to contribute to core superpowers
 
-Want a skill that doesn't exist? Edit skills/REQUESTS.md (at ${CLAUDE_PLUGIN_ROOT}/skills/REQUESTS.md)
+**Want a skill that doesn't exist?**
+- Write it yourself (see skills/meta/writing-skills) and share it!
+- Or open an issue at https://github.com/obra/superpowers/issues
 
 ## Summary
 
