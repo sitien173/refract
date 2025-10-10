@@ -1,8 +1,8 @@
 ---
 name: Creating Skills
 description: TDD for process documentation - test with subagents before writing, iterate until bulletproof
-when_to_use: When you discover a technique, pattern, or tool worth documenting for reuse. When you've written a skill and need to verify it works before deploying.
-version: 4.0.0
+when_to_use: When you discover a technique, pattern, or tool worth documenting for reuse. When editing existing skills. When asked to modify skill documentation. When you've written a skill and need to verify it works before deploying.
+version: 4.1.0
 languages: all
 ---
 
@@ -317,12 +317,17 @@ When: Reference material too large for inline
 NO SKILL WITHOUT A FAILING TEST FIRST
 ```
 
+This applies to NEW skills AND EDITS to existing skills.
+
 Write skill before testing? Delete it. Start over.
+Edit skill without testing? Same violation.
 
 **No exceptions:**
-- Don't keep it as "reference"
-- Don't "adapt" it while running tests
-- Don't look at it
+- Not for "simple additions"
+- Not for "just adding a section"
+- Not for "documentation updates"
+- Don't keep untested changes as "reference"
+- Don't "adapt" while running tests
 - Delete means delete
 
 See skills/testing/test-driven-development for why this matters. Same principles apply to documentation.
@@ -394,6 +399,8 @@ Different skill types need different test approaches:
 ## Bulletproofing Skills Against Rationalization
 
 Skills that enforce discipline (like TDD) need to resist rationalization. Agents are smart and will find loopholes when under pressure.
+
+**Psychology note:** Understanding WHY persuasion techniques work helps you apply them systematically. See persuasion-principles.md for research foundation (Cialdini, 2021; Meincke et al., 2025) on authority, commitment, scarcity, social proof, and unity principles.
 
 ### Close Every Loophole Explicitly
 
