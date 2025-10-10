@@ -14,6 +14,10 @@ Plus:
 - **Skills Search** - Grep-powered discovery of relevant skills
 - **Gap Tracking** - Failed searches logged for skill creation
 
+## Learn More
+
+Read the introduction: [Superpowers for Claude Code](https://blog.fsck.com/2025/10/09/superpowers/)
+
 ## Installation
 
 ### Via Plugin Marketplace (Recommended)
