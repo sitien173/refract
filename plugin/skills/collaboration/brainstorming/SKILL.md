@@ -30,13 +30,13 @@ digraph brainstorming_modes {
 
     UNDERSTANDING -> EXPLORING [label="Have enough context to propose alternatives\n(gathered purpose, constraints, success criteria)"];
 
-    EXPLORING -> UNDERSTANDING [label="New constraints emerge\n(compliance, infrastructure, security, 'Oh I forgot to mention...')"];
+    EXPLORING -> UNDERSTANDING [label="Partner reveals new constraint\n(compliance requirement, infrastructure limit, security need, forgotten requirement)"];
 
     EXPLORING -> DESIGNING [label="Approach selected and validated\n(partner chose an approach, have all critical constraints)"];
 
-    DESIGNING -> UNDERSTANDING [label="Fundamental gaps revealed during validation\n(missing constraints, assumptions questioned)"];
+    DESIGNING -> UNDERSTANDING [label="Partner reveals fundamental gap\n(missing critical constraint, core assumption questioned)"];
 
-    DESIGNING -> EXPLORING [label="Need to compare alternatives\n(trade-offs significant, partner asks 'what are the options?')"];
+    DESIGNING -> EXPLORING [label="Need to reconsider approach\n(trade-offs too significant, partner questions approach)"];
 }
 ```
 
@@ -79,12 +79,14 @@ When your partner confirms (any affirmative response):
 
 ## Related Skills
 
+**When stuck at any point:**
+- Use skills/problem-solving/when-stuck to dispatch to right technique
+
 **During EXPLORING mode:**
 - When approaches have genuine trade-offs: skills/architecture/preserving-productive-tensions
-- When stuck or seeking innovation: skills/architecture/detecting-emergent-patterns
 
-**Before proposing changes:**
-- Understand why current approach exists: skills/architecture/tracing-knowledge-lineages
+**Before proposing changes to existing code:**
+- Understand why it exists: skills/research/tracing-knowledge-lineages
 
 ## Remember
 

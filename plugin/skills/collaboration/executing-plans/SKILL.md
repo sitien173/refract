@@ -32,9 +32,9 @@ digraph executing_modes {
 
     REVIEWING -> EXECUTING [label="Plan is sound, no concerns\n(created TodoWrite, ready to start first batch)"];
 
-    REVIEWING -> BLOCKED [label="Plan has issues that prevent starting\n(missing info, unclear instructions, dependencies)"];
+    REVIEWING -> BLOCKED [label="Plan has critical gaps\n(missing information, unclear instructions, unmet dependencies)"];
 
-    EXECUTING -> BLOCKED [label="Hit a blocker mid-batch\n(missing dependency, test fails, unclear instruction)"];
+    EXECUTING -> BLOCKED [label="Cannot proceed with current task\n(dependency missing, test failing, instruction unclear)"];
 
     EXECUTING -> REPORTING [label="Batch completed successfully\n(all tasks done, verifications pass)"];
 
