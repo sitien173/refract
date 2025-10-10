@@ -1,56 +1,87 @@
 ---
 name: Brainstorming Ideas Into Designs
-description: Interactive idea refinement using Socratic method to develop fully-formed designs
-when_to_use: When your human partner says "I've got an idea", "Let's make/build/create", "I want to implement/add", "What if we". When starting design for complex feature. Before writing implementation plans. When idea needs refinement and exploration. ACTIVATE THIS AUTOMATICALLY when your human partner describes a feature or project idea - don't wait for /brainstorm command.
-version: 2.0.0
+description: Interactive idea refinement using mode-switching between understanding, exploring, and designing based on current needs
+when_to_use: When your human partner says "I've got an idea", "Let's make/build/create", "I want to implement/add", "What if we". When starting design for complex feature. Before writing implementation plans. When idea needs refinement and exploration. When new constraints emerge during design. ACTIVATE THIS AUTOMATICALLY when your human partner describes a feature or project idea - don't wait for /brainstorm command.
+version: 3.0.0
 ---
 
 # Brainstorming Ideas Into Designs
 
 ## Overview
 
-Transform rough ideas into fully-formed designs through structured questioning and alternative exploration.
+Transform rough ideas into fully-formed designs through flexible mode-switching based on what's needed NOW, not rigid phase progression.
 
-**Core principle:** Ask questions to understand, explore alternatives, present design incrementally for validation.
+**Core principle:** Switch between operational modes (UNDERSTANDING, EXPLORING, DESIGNING) based on current needs. New constraints? Switch to UNDERSTANDING. Need alternatives? Switch to EXPLORING. Ready for details? Switch to DESIGNING.
 
 **Announce at start:** "I'm using the Brainstorming skill to refine your idea into a design."
 
-## The Process
+## Operating Modes
 
-### Phase 1: Understanding
-- Check current project state in working directory
-- Ask ONE question at a time to refine the idea
-- Prefer multiple choice when possible
-- Gather: Purpose, constraints, success criteria
+```dot
+digraph brainstorming_modes {
+    rankdir=LR;
+    node [shape=box, style=rounded];
 
-### Phase 2: Exploration
-- Propose 2-3 different approaches (reference skills/coding/exploring-alternatives)
-- For each: Core architecture, trade-offs, complexity assessment
-- Ask your human partner which approach resonates
+    UNDERSTANDING [label="UNDERSTANDING Mode\n\nAsk ONE question at a time\nGather: purpose, constraints, success criteria\nApply YAGNI ruthlessly"];
 
-### Phase 3: Design Presentation
-- Present in 200-300 word sections
-- Cover: Architecture, components, data flow, error handling, testing
-- Ask after each section: "Does this look right so far?"
+    EXPLORING [label="EXPLORING Mode\n\nPropose 2-3 different approaches\nFor each: architecture, trade-offs, complexity\nAsk which approach resonates"];
 
-### Phase 4: Worktree Setup (for implementation)
+    DESIGNING [label="DESIGNING Mode\n\nPresent in 200-300 word sections\nCover: architecture, components, data flow\nAsk 'Does this look right?' after each section"];
+
+    UNDERSTANDING -> EXPLORING [label="Have enough context to propose alternatives\n(gathered purpose, constraints, success criteria)"];
+
+    EXPLORING -> UNDERSTANDING [label="New constraints emerge\n(compliance, infrastructure, security, 'Oh I forgot to mention...')"];
+
+    EXPLORING -> DESIGNING [label="Approach selected and validated\n(partner chose an approach, have all critical constraints)"];
+
+    DESIGNING -> UNDERSTANDING [label="Fundamental gaps revealed during validation\n(missing constraints, assumptions questioned)"];
+
+    DESIGNING -> EXPLORING [label="Need to compare alternatives\n(trade-offs significant, partner asks 'what are the options?')"];
+}
+```
+
+## Mode Switching Rules
+
+**YOU MUST announce every mode switch:** "Switching to [MODE] mode because [reason]"
+
+**No exceptions:**
+- Not "I need to understand..." (switching without announcing)
+- Not implied switches (acting in new mode without announcement)
+- Every mode change requires explicit announcement
+
+## Red Flags - You're Forcing Forward
+
+- New constraint emerges but you continue current mode
+- "I'll incorporate this into the current approach" (without re-evaluating)
+- Partner says "wait, there's also..." but you don't switch to UNDERSTANDING
+- Designing without all critical constraints
+- Exploring alternatives with incomplete requirements
+- Switching modes without announcing the switch
+
+**All of these mean: STOP. Switch to appropriate mode (and announce it).**
+
+## After Design Validation
+
+### Worktree Setup (for implementation)
 When design is approved and implementation will follow:
 - Announce: "I'm using the Using Git Worktrees skill to set up an isolated workspace."
 - Switch to skills/collaboration/using-git-worktrees
 - Follow that skill's process for directory selection, safety verification, and setup
 - Return here when worktree ready
 
-### Phase 5: Planning Handoff
+### Planning Handoff
 Ask: "Ready to create the implementation plan?"
 
-When your human partner confirms (any affirmative response):
+When your partner confirms (any affirmative response):
 - Announce: "I'm using the Writing Plans skill to create the implementation plan."
 - Switch to skills/collaboration/writing-plans skill
 - Create detailed plan in the worktree
 
 ## Remember
-- One question per message during Phase 1
-- Apply YAGNI ruthlessly (reference skills/architecture/reducing-complexity)
-- Explore 2-3 alternatives before settling
-- Present incrementally, validate as you go
-- Announce skill usage at start
+
+- Modes are operational stances, not linear phases
+- You can move freely: UNDERSTANDING ↔ EXPLORING ↔ DESIGNING
+- Always announce mode switches
+- One question per message in UNDERSTANDING mode
+- Present design incrementally in DESIGNING mode
+- New constraints ALWAYS trigger return to UNDERSTANDING

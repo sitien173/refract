@@ -1,59 +1,83 @@
 ---
 name: Executing Plans
-description: Execute detailed plans in batches with review checkpoints
-when_to_use: When have a complete implementation plan to execute. When implementing in separate session from planning. When your human partner points you to a plan file to implement.
-version: 2.0.0
+description: Execute detailed plans with mode-switching for review, execution, and handling blockers
+when_to_use: When have a complete implementation plan to execute. When implementing in separate session from planning. When your human partner points you to a plan file to implement. When hit a blocker during execution. When plan needs re-review after updates.
+version: 3.0.0
 ---
 
 # Executing Plans
 
 ## Overview
 
-Load plan, review critically, execute tasks in batches, report for review between batches.
+Execute implementation plans by switching between reviewing, executing, and handling blockers based on current needs.
 
-**Core principle:** Batch execution with checkpoints for architect review.
+**Core principle:** Review critically, execute in batches, stop when blocked, report at checkpoints.
 
 **Announce at start:** "I'm using the Executing Plans skill to implement this plan."
 
-## The Process
+## Operating Modes
 
-### Step 1: Load and Review Plan
-1. Read plan file
-2. Review critically - identify any questions or concerns about the plan
-3. If concerns: Raise them with your human partner before starting
-4. If no concerns: Create TodoWrite and proceed
+```dot
+digraph executing_modes {
+    rankdir=LR;
+    node [shape=box, style=rounded];
 
-### Step 2: Execute Batch
-**Default: First 3 tasks**
+    REVIEWING [label="REVIEWING Mode\n\nRead plan critically\nIdentify concerns/questions/gaps\nCreate TodoWrite if plan is sound"];
 
-For each task:
-1. Mark as in_progress
-2. Follow each step exactly (plan has bite-sized steps)
-3. Run verifications as specified
-4. Mark as completed
+    EXECUTING [label="EXECUTING Mode\n\nWork through batch (default 3 tasks)\nFollow each step exactly\nRun all verifications\nMark tasks completed"];
 
-### Step 3: Report
-When batch complete:
-- Show what was implemented
-- Show verification output
-- Say: "Ready for feedback."
+    BLOCKED [label="BLOCKED Mode\n\nStop execution immediately\nIdentify specific blocker\nAsk for clarification/help"];
 
-### Step 4: Continue
-Based on feedback:
-- Apply changes if needed
-- Execute next batch
-- Repeat until complete
+    REPORTING [label="REPORTING Mode\n\nShow what was implemented\nShow verification output\nSay 'Ready for feedback'"];
 
-### Step 5: Complete Development
+    REVIEWING -> EXECUTING [label="Plan is sound, no concerns\n(created TodoWrite, ready to start first batch)"];
 
-After all tasks complete and verified:
+    REVIEWING -> BLOCKED [label="Plan has issues that prevent starting\n(missing info, unclear instructions, dependencies)"];
+
+    EXECUTING -> BLOCKED [label="Hit a blocker mid-batch\n(missing dependency, test fails, unclear instruction)"];
+
+    EXECUTING -> REPORTING [label="Batch completed successfully\n(all tasks done, verifications pass)"];
+
+    BLOCKED -> REVIEWING [label="Blocker resolved with plan update\n(partner updated plan, need to re-review changes)"];
+
+    BLOCKED -> EXECUTING [label="Blocker resolved, can continue\n(got clarification, continue current batch)"];
+
+    REPORTING -> EXECUTING [label="Feedback received, continue\n(no fundamental issues, execute next batch)"];
+
+    REPORTING -> REVIEWING [label="Feedback requires plan changes\n(approach needs rethinking, plan being updated)"];
+}
+```
+
+## Mode Switching Rules
+
+**YOU MUST announce every mode switch:** "Switching to [MODE] mode because [reason]"
+
+**No exceptions:**
+- Not silent switches
+- Not implied mode changes
+- Every switch requires explicit announcement
+
+## Red Flags - You're Forcing Through
+
+- Hit a blocker but continue executing anyway
+- Plan has concerns but you start executing
+- Tests fail but you mark task completed
+- Unclear instruction but you guess instead of asking
+- Partner updating plan but you don't switch to REVIEWING
+
+**All of these mean: STOP. Switch to appropriate mode (and announce it).**
+
+## After All Tasks Complete
+
+When all tasks are done and verified:
 - Announce: "I'm using the Finishing a Development Branch skill to complete this work."
 - Switch to skills/collaboration/finishing-a-development-branch
 - Follow that skill to verify tests, present options, execute choice
 
 ## Remember
-- Review plan critically first
-- Follow plan steps exactly
-- Don't skip verifications
-- Reference skills when plan says to
-- Between batches: just report and wait
+
+- Modes are operational stances, not rigid steps
+- You can switch freely based on what's needed
+- Always announce mode switches
+- Blockers require immediate BLOCKED mode
+- Never force through when stuck
