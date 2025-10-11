@@ -53,7 +53,6 @@ if command -v gh &> /dev/null; then
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         gh repo fork obra/superpowers-skills --remote=true
-        git remote add upstream "$SKILLS_REPO"
         echo "Forked! You can now contribute skills back to the community."
     else
         git remote add upstream "$SKILLS_REPO"
