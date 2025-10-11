@@ -138,19 +138,6 @@ Personal skills go in `~/.config/superpowers/skills/` and shadow core skills whe
 
 The skill itself tells you which type it is.
 
-## Referencing Skills in Documentation
-
-**When writing documentation that references other skills:**
-
-Use path format without `@` prefix or `/SKILL.md` suffix:
-- ✅ Good: `skills/testing/test-driven-development`
-- ✅ Good: `skills/debugging/systematic-debugging`
-- ❌ Bad: `@skills/testing/test-driven-development/SKILL.md` (force-loads, burns context)
-
-**Why no @ links:** `@` syntax force-loads files immediately, consuming 200k+ context before you need them.
-
-**To read a skill reference:** Use Read tool on `${CLAUDE_PLUGIN_ROOT}/skills/category/skill-name/SKILL.md`
-
 ## Instructions ≠ Permission to Skip Workflows
 
 Your human partner's specific instructions describe WHAT to do, not HOW.
