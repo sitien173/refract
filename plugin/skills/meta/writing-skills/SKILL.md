@@ -571,6 +571,11 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] No narrative storytelling
 - [ ] Supporting files only for tools or heavy reference
 
+**Deployment:**
+- [ ] Commit skill to git (in `~/.config/superpowers/`)
+- [ ] Push to GitHub (if remote configured)
+- [ ] Consider sharing via skills/meta/sharing-skills (if broadly useful)
+
 ## Discovery Workflow
 
 How future Claude finds your skill:
