@@ -17,7 +17,7 @@ Personal skills shadow core skills when names match.
 
 **RIGHT NOW**: Run this to see what skills are available:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills
 ```
 
 **THEN**: Follow the workflows below based on what your partner is asking for.
@@ -51,17 +51,13 @@ ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
 
 ## Mandatory Workflow 2: Before ANY Task
 
-**1. List available skills** (to avoid useless searches):
+**1. Find skills** (shows all, or filter by pattern):
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills           # Show all
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills PATTERN   # Filter by pattern
 ```
 
-**2. Search skills** (when you need something specific):
-```bash
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search PATTERN
-```
-
-**3. Search conversations:**
+**2. Search conversations:**
 Dispatch subagent (see Workflow 3) to check for relevant past work.
 
 **If skills found:**
@@ -186,7 +182,7 @@ Your human partner's specific instructions describe WHAT to do, not HOW.
 
 **Starting conversation?** You just read this. Good.
 
-**Starting any task?** Run skills-search first, announce usage, follow what you find.
+**Starting any task?** Run find-skills first, announce usage, follow what you find.
 
 **Skill has checklist?** TodoWrite for every item.
 

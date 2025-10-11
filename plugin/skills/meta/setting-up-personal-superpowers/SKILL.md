@@ -81,7 +81,7 @@ gh repo edit --add-topic superpowers
 
 **Personal skills shadow core skills** - if you have `~/.config/superpowers/skills/testing/test-driven-development/SKILL.md`, it will be used instead of the core version.
 
-The `list-skills` and `skills-search` tools automatically search both locations with deduplication.
+The `find-skills` tool automatically searches both locations with deduplication.
 
 ## Writing Skills
 
@@ -145,7 +145,7 @@ File a bug at https://github.com/obra/superpowers/issues
 **Personal skills not being found:**
 - Check `~/.config/superpowers/skills/` exists
 - Verify skill has `SKILL.md` file
-- Run `${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills` to see if it appears
+- Run `${CLAUDE_PLUGIN_ROOT}/scripts/find-skills` to see if it appears
 
 **GitHub push failed:**
 - Check `gh auth status`

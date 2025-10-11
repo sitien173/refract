@@ -62,12 +62,12 @@ See `skills/meta/sharing-skills` for how to contribute to core.
 
 ### Finding Skills
 
-Search both personal and core skills before starting any task:
+Find both personal and core skills before starting any task:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills  # See all available
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'test.*driven|TDD'
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'debug.*systematic'
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills              # All skills with descriptions
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills test         # Filter by pattern
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills 'TDD|debug'  # Regex pattern
 ```
 
 ### Using Slash Commands
@@ -127,14 +127,25 @@ ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'debug.*systematic'
 
 ### Tools
 
-- **skills-search** - Grep-powered skill discovery
-- **search-conversations** - Semantic search of past Claude sessions
+**In `scripts/` directory:**
+- **find-skills** - Unified skill discovery with descriptions (replaces list-skills + skills-search)
+- **run** - Generic runner for any skill script (searches personal then core)
+
+**Skill-specific tools:**
+- **search-conversations** - Semantic search of past Claude sessions (in remembering-conversations skill)
+
+**Using scripts:**
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills              # Show all skills
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills pattern      # Search skills
+${CLAUDE_PLUGIN_ROOT}/scripts/run <path> [args]        # Run any skill script
+```
 
 ## How It Works
 
 1. **SessionStart Hook** - Auto-setup personal skills repo, inject core skills context
 2. **Two-Tier Skills** - Personal skills (`~/.config/superpowers/skills/`) + Core skills (plugin)
-3. **Skills Discovery** - `list-skills` and `skills-search` find skills from both locations
+3. **Skills Discovery** - `find-skills` searches both locations with descriptions
 4. **Shadowing** - Personal skills override core skills when paths match
 5. **Mandatory Workflow** - Skills become required when they exist for your task
 6. **Gap Tracking** - Failed searches logged to `~/.config/superpowers/search-log.jsonl`

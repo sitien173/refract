@@ -19,8 +19,8 @@ fi
 PERSONAL_SUPERPOWERS_DIR="${PERSONAL_SUPERPOWERS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/superpowers}"
 PERSONAL_SKILLS_DIR="${PERSONAL_SUPERPOWERS_DIR}/skills"
 
-# Collect all skill paths with deduplication
-declare -A seen_skills
+# Collect all skill paths with deduplication (bash 3.2 compatible)
+seen_skills_list=""
 all_skills=()
 
 # Personal skills first (take precedence)
@@ -29,7 +29,7 @@ if [[ -d "$PERSONAL_SKILLS_DIR" ]]; then
         skill_path="${file#$PERSONAL_SKILLS_DIR/}"
         skill_path="${skill_path%/SKILL.md}"
         if [[ -n "$skill_path" ]]; then
-            seen_skills["$skill_path"]=1
+            seen_skills_list="${seen_skills_list}${skill_path}"$'\n'
             all_skills+=("$skill_path")
         fi
     done < <(find "$PERSONAL_SKILLS_DIR" -name "SKILL.md" -type f 2>/dev/null || true)
@@ -39,7 +39,9 @@ fi
 while IFS= read -r file; do
     skill_path="${file#$CORE_SKILLS_DIR/}"
     skill_path="${skill_path%/SKILL.md}"
-    if [[ -n "$skill_path" ]] && [[ -z "${seen_skills[$skill_path]:-}" ]]; then
+    if [[ -n "$skill_path" ]]; then
+        # Skip if already seen in personal skills
+        echo "$seen_skills_list" | grep -q "^${skill_path}$" && continue
         all_skills+=("$skill_path")
     fi
 done < <(find "$CORE_SKILLS_DIR" -name "SKILL.md" -type f 2>/dev/null || true)

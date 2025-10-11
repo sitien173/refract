@@ -576,7 +576,7 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 How future Claude finds your skill:
 
 1. **Encounters problem** ("tests are flaky")
-2. **Searches skills** using `skills-search` tool (checks personal then core)
+2. **Searches skills** using `find-skills` tool (checks personal then core)
 3. **Finds SKILL.md** (rich when_to_use matches)
 4. **Scans overview** (is this relevant?)
 5. **Reads patterns** (quick reference table)

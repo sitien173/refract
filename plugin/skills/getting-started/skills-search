@@ -69,8 +69,8 @@ path_matches_core=$(echo "$all_skills_core" | grep -E "$@" 2>/dev/null || true)
 # Combine all matches
 all_matches=$(printf "%s\n%s\n%s\n%s" "$content_matches_personal" "$content_matches_core" "$path_matches_personal" "$path_matches_core" | grep -v '^$' || true)
 
-# Deduplicate by skill path (personal shadows core)
-declare -A seen_skills
+# Deduplicate by skill path (personal shadows core) - bash 3.2 compatible
+seen_skills_list=""
 results=""
 while IFS= read -r file; do
     # Extract skill path relative to its base directory
@@ -82,8 +82,8 @@ while IFS= read -r file; do
     skill_path="${skill_path%/SKILL.md}"
 
     # Only include if we haven't seen this skill path yet
-    if [[ -z "${seen_skills[$skill_path]:-}" ]]; then
-        seen_skills["$skill_path"]=1
+    if ! echo "$seen_skills_list" | grep -q "^${skill_path}$"; then
+        seen_skills_list="${seen_skills_list}${skill_path}"$'\n'
         results="${results}${file}"$'\n'
     fi
 done <<< "$all_matches"
