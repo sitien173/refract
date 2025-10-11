@@ -8,8 +8,15 @@ SKILLS_REPO="https://github.com/obra/superpowers-skills.git"
 if [ -d "$SKILLS_DIR/.git" ]; then
     cd "$SKILLS_DIR"
 
-    # Fetch upstream (silently)
-    git fetch upstream 2>/dev/null || git fetch origin 2>/dev/null || true
+    # Get the remote name for the current tracking branch
+    TRACKING_REMOTE=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null | cut -d'/' -f1 || echo "")
+
+    # Fetch from tracking remote if set, otherwise try upstream then origin
+    if [ -n "$TRACKING_REMOTE" ]; then
+        git fetch "$TRACKING_REMOTE" 2>/dev/null || true
+    else
+        git fetch upstream 2>/dev/null || git fetch origin 2>/dev/null || true
+    fi
 
     # Check if we can fast-forward
     LOCAL=$(git rev-parse @ 2>/dev/null || echo "")
