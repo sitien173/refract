@@ -9,7 +9,9 @@ The superpowers plugin is a minimal shim that:
 - Registers hooks that load skills from the local repository
 - Offers users the option to fork the skills repo for contributions
 
-All skills, scripts, and documentation live in the separate superpowers-skills repository. Users can edit skills locally, commit changes, and optionally contribute back via pull requests.
+All skills, scripts, and documentation live in the separate [superpowers-skills](https://github.com/obra/superpowers-skills) repository. Users can edit skills locally, commit changes, and optionally contribute back via pull requests.
+
+**Skills Repository:** https://github.com/obra/superpowers-skills
 
 ## What You Get
 
@@ -53,7 +55,7 @@ The plugin automatically handles skills repository setup on first run.
 
 ## Updating Skills
 
-The plugin checks for upstream skill updates on each session start. To update your local skills, ask Claude to use the updating-skills skill when notified of new upstream changes.
+The plugin automatically fetches and fast-forwards your local skills repository on each session start. If your local branch has diverged and can't auto-update, Claude will notify you to use the pulling-updates-from-skills-repository skill.
 
 ## Contributing Skills
 
@@ -119,10 +121,10 @@ ${SUPERPOWERS_SKILLS_ROOT}/skills/using-skills/find-skills 'TDD|debug'  # Regex 
 - receiving-code-review - Responding to feedback
 
 **Meta** (`skills/meta/`)
-- setting-up-personal-superpowers - Personal skills repository setup
 - writing-skills - TDD for documentation, create new skills
-- sharing-skills - Contribute skills back to core
+- sharing-skills - Contribute skills back via branch and PR
 - testing-skills-with-subagents - Validate skill quality
+- pulling-updates-from-skills-repository - Sync with upstream
 - gardening-skills-wiki - Maintain and improve skills
 
 ### Commands
