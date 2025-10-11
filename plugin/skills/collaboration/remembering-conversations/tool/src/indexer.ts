@@ -6,6 +6,7 @@ import { parseConversation } from './parser.js';
 import { initEmbeddings, generateExchangeEmbedding } from './embeddings.js';
 import { summarizeConversation } from './summarizer.js';
 import { ConversationExchange } from './types.js';
+import { getArchiveDir, getExcludeConfigPath } from './paths.js';
 
 // Set max output tokens for Claude SDK (used by summarizer)
 process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '20000';
@@ -19,10 +20,6 @@ function getProjectsDir(): string {
   return process.env.TEST_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
 }
 
-function getArchiveDir(): string {
-  return process.env.TEST_ARCHIVE_DIR || path.join(os.homedir(), '.clank', 'conversation-archive');
-}
-
 // Projects to exclude from indexing (configurable via env or config file)
 function getExcludedProjects(): string[] {
   // Check env variable first
@@ -31,7 +28,7 @@ function getExcludedProjects(): string[] {
   }
 
   // Check for config file
-  const configPath = path.join(os.homedir(), '.clank', 'conversation-index', 'exclude.txt');
+  const configPath = getExcludeConfigPath();
   if (fs.existsSync(configPath)) {
     const content = fs.readFileSync(configPath, 'utf-8');
     return content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'));
@@ -71,7 +68,7 @@ export async function indexConversations(
 
   console.log('Scanning for conversation files...');
   const PROJECTS_DIR = getProjectsDir();
-  const ARCHIVE_DIR = getArchiveDir();
+  const ARCHIVE_DIR = getArchiveDir(); // Now uses paths.ts
   const projects = fs.readdirSync(PROJECTS_DIR);
 
   let totalExchanges = 0;
@@ -195,7 +192,7 @@ export async function indexSession(sessionId: string, concurrency: number = 1): 
 
   // Find the conversation file for this session
   const PROJECTS_DIR = getProjectsDir();
-  const ARCHIVE_DIR = getArchiveDir();
+  const ARCHIVE_DIR = getArchiveDir(); // Now uses paths.ts
   const projects = fs.readdirSync(PROJECTS_DIR);
   const excludedProjects = getExcludedProjects();
   let found = false;
@@ -268,7 +265,7 @@ export async function indexUnprocessed(concurrency: number = 1): Promise<void> {
   await initEmbeddings();
 
   const PROJECTS_DIR = getProjectsDir();
-  const ARCHIVE_DIR = getArchiveDir();
+  const ARCHIVE_DIR = getArchiveDir(); // Now uses paths.ts
   const projects = fs.readdirSync(PROJECTS_DIR);
   const excludedProjects = getExcludedProjects();
 

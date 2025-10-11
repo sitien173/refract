@@ -2,9 +2,9 @@
 import { verifyIndex, repairIndex } from './verify.js';
 import { indexSession, indexUnprocessed, indexConversations } from './indexer.js';
 import { initDatabase } from './db.js';
+import { getDbPath, getArchiveDir } from './paths.js';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 
 const command = process.argv[2];
 
@@ -74,14 +74,14 @@ async function main() {
         console.log('Rebuilding entire index...');
 
         // Delete database
-        const dbPath = path.join(os.homedir(), '.clank', 'conversation-index', 'db.sqlite');
+        const dbPath = getDbPath();
         if (fs.existsSync(dbPath)) {
           fs.unlinkSync(dbPath);
           console.log('Deleted existing database');
         }
 
         // Delete all summary files
-        const archiveDir = path.join(os.homedir(), '.clank', 'conversation-archive');
+        const archiveDir = getArchiveDir();
         if (fs.existsSync(archiveDir)) {
           const projects = fs.readdirSync(archiveDir);
           for (const project of projects) {
