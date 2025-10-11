@@ -31,7 +31,7 @@ cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": "<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**RIGHT NOW, go read**: @${CLAUDE_PLUGIN_ROOT}/skills/getting-started/SKILL.md${github_recommendation}\n</EXTREMELY_IMPORTANT>"
+    "additionalContext": "<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Skill tools are at:**\n- find-skills: ${CLAUDE_PLUGIN_ROOT}/scripts/find-skills\n- skill-run: ${CLAUDE_PLUGIN_ROOT}/scripts/skill-run\n\n**RIGHT NOW, go read**: @${CLAUDE_PLUGIN_ROOT}/skills/getting-started/SKILL.md${github_recommendation}\n</EXTREMELY_IMPORTANT>"
   }
 }
 EOF
