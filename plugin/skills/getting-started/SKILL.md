@@ -15,9 +15,18 @@ Personal skills shadow core skills when names match.
 
 ## Just Read This Guide?
 
-**RIGHT NOW**: Run this to see what skills are available:
+**RIGHT NOW**: Find the plugin location and list skills:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/find-skills
+# Find plugin location
+find ~/.claude/plugins/cache -name "superpowers" -type d 2>/dev/null | grep -v ".git" | head -1
+
+# Then run (replace PATH with the path found above):
+PATH/scripts/find-skills
+```
+
+Or just use the full path directly:
+```bash
+~/.claude/plugins/cache/superpowers/scripts/find-skills
 ```
 
 **THEN**: Follow the workflows below based on what your partner is asking for.
@@ -52,16 +61,18 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/find-skills
 ## Mandatory Workflow 2: Before ANY Task
 
 **1. Find skills** (shows all, or filter by pattern):
+
+Use the plugin cache path (default: `~/.claude/plugins/cache/superpowers`):
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/find-skills           # Show all
-${CLAUDE_PLUGIN_ROOT}/scripts/find-skills PATTERN   # Filter by pattern
+~/.claude/plugins/cache/superpowers/scripts/find-skills           # Show all
+~/.claude/plugins/cache/superpowers/scripts/find-skills PATTERN   # Filter by pattern
 ```
 
 **2. Search conversations:**
 Dispatch subagent (see Workflow 3) to check for relevant past work.
 
 **If skills found:**
-1. READ the skill: `${CLAUDE_PLUGIN_ROOT}/skills/path/skill-name/SKILL.md`
+1. READ the skill - check personal first (`~/.config/superpowers/skills/path/SKILL.md`), then core (`~/.claude/plugins/cache/superpowers/skills/path/SKILL.md`)
 2. ANNOUNCE usage: "I'm using the [Skill Name] skill"
 3. FOLLOW the skill (many are rigid requirements)
 
