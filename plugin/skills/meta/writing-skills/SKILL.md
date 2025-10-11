@@ -237,6 +237,19 @@ Mention key concepts multiple times:
 
 Grep hits from multiple places = easier discovery
 
+### 5. Cross-Referencing Other Skills
+
+**When writing documentation that references other skills:**
+
+Use path format without `@` prefix or `/SKILL.md` suffix:
+- ✅ Good: `skills/testing/test-driven-development`
+- ✅ Good: `skills/debugging/systematic-debugging`
+- ❌ Bad: `@skills/testing/test-driven-development/SKILL.md` (force-loads, burns context)
+
+**Why no @ links:** `@` syntax force-loads files immediately, consuming 200k+ context before you need them.
+
+**To read a skill reference:** Use Read tool on `${CLAUDE_PLUGIN_ROOT}/skills/category/skill-name/SKILL.md`
+
 ## Flowchart Usage
 
 ```dot
