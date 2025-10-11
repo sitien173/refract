@@ -15,35 +15,24 @@ Personal skills shadow core skills when names match.
 
 ## Just Read This Guide?
 
-**RIGHT NOW**: Find the plugin location and list skills:
-```bash
-# Find plugin location
-find ~/.claude/plugins/cache -name "superpowers" -type d 2>/dev/null | grep -v ".git" | head -1
+**RIGHT NOW**: Check out all the skills you've got! 
 
-# Then run (replace PATH with the path found above):
-PATH/scripts/find-skills
-```
+`find-skills` with no args will show all your skills
 
-Or just use the full path directly:
-```bash
-~/.claude/plugins/cache/superpowers/scripts/find-skills
-```
 
-**THEN**: Follow the workflows below based on what your partner is asking for.
+**THEN**: Follow the workflows below based on what your partner is trying to do.
 
 ## How to Reference Skills
 
-**DO NOT use @ links** - they force-load entire files, burning 200k+ context instantly.
-
-**INSTEAD, use skill path references:**
 - Format: `skills/category/skill-name` (no @ prefix, no /SKILL.md suffix)
 - Example: `skills/collaboration/brainstorming` or `skills/testing/test-driven-development`
-- Load with Read tool only when needed
+
+- Load with your Read tool when you need them.
 
 **When you see skill references in documentation:**
 - `skills/path/name` → Check personal first (`~/.config/superpowers/skills/path/name/SKILL.md`)
 - If not found, check core (`${CLAUDE_PLUGIN_ROOT}/skills/path/name/SKILL.md`)
-- Load supporting files only when implementing
+- Load supporting files only when you need them
 
 ## Mandatory Workflow 1: Brainstorming Before Coding
 
@@ -56,20 +45,18 @@ Or just use the full path directly:
 - Wait for /brainstorm command
 - Skip brainstorming because you "understand the idea"
 
-**Why:** Just writing code is almost never the right first step. We always understand requirements and plan first.
+**Why:** Just jumping into implementation is almost never the right first step. We always understand requirements and plan first.
 
 ## Mandatory Workflow 2: Before ANY Task
 
 **1. Find skills** (shows all, or filter by pattern):
 
-Use the plugin cache path (default: `~/.claude/plugins/cache/superpowers`):
 ```bash
-~/.claude/plugins/cache/superpowers/scripts/find-skills           # Show all
-~/.claude/plugins/cache/superpowers/scripts/find-skills PATTERN   # Filter by pattern
+find-skills [PATTERN]   # Filter by grep-compatible pattern
 ```
 
-**2. Search conversations:**
-Dispatch subagent (see Workflow 3) to check for relevant past work.
+**2. Check if historical context would help:**
+Review Workflow 3 conditions. If applicable, dispatch subagent to search past work.
 
 **If skills found:**
 1. READ the skill - check personal first (`~/.config/superpowers/skills/path/SKILL.md`), then core (`~/.claude/plugins/cache/superpowers/skills/path/SKILL.md`)
@@ -78,7 +65,7 @@ Dispatch subagent (see Workflow 3) to check for relevant past work.
 
 **"This doesn't count as a task" is rationalization.** Skills/conversations exist and you didn't search for them or didn't use them = failed task.
 
-## Mandatory Workflow 3: Historical Context Search
+## Workflow 3: Historical Context Search (Conditional)
 
 **When:** Your human partner mentions past work, issue feels familiar, starting task in familiar domain, stuck/blocked, before reinventing
 
@@ -129,6 +116,14 @@ You: Searching past conversations...
 
 **Examples:** TDD (write test, watch fail, implement, verify), Systematic Debugging (4 phases), Writing Skills (RED-GREEN-REFACTOR)
 
+## Writing Skills
+
+**Want to document a technique, pattern, or tool for reuse?**
+
+See skills/meta/writing-skills for the complete TDD process for documentation.
+
+Personal skills go in `~/.config/superpowers/skills/` and shadow core skills when names match.
+
 ## How to Read a Skill
 
 1. **Frontmatter** - `when_to_use` match your situation?
@@ -163,31 +158,6 @@ Your human partner's specific instructions describe WHAT to do, not HOW.
 "Add X", "Fix Y" = the goal, NOT permission to skip brainstorming, TDD, or RED-GREEN-REFACTOR.
 
 **Red flags:** "Instruction was specific" • "Seems simple" • "Workflow is overkill"
-
-## Writing and Sharing Skills
-
-**All personal skills are written to `~/.config/superpowers/skills/`**
-
-**Before writing ANY skill:**
-
-1. **STOP** - Even if your human partner gave specific instructions
-2. **Read skills/meta/writing-skills**
-3. **Follow the TDD process** - No skill without failing test first
-
-**Your human partner's specific instruction is NOT implicit permission to skip the process.**
-
-**Red flags:**
-- "Just a small addition"
-- "Instruction was specific, so I can proceed"
-
-**All of these mean: STOP and follow writing-skills process.**
-
-**Want to share a skill with everyone?**
-- See skills/meta/sharing-skills for how to contribute to core superpowers
-
-**Want a skill that doesn't exist?**
-- Write it yourself (see skills/meta/writing-skills) and share it!
-- Or open an issue at https://github.com/obra/superpowers/issues
 
 ## Summary
 
