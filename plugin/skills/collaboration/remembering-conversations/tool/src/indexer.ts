@@ -58,13 +58,18 @@ async function processBatch<T, R>(
 export async function indexConversations(
   limitToProject?: string,
   maxConversations?: number,
-  concurrency: number = 1
+  concurrency: number = 1,
+  noSummaries: boolean = false
 ): Promise<void> {
   console.log('Initializing database...');
   const db = initDatabase();
 
   console.log('Loading embedding model...');
   await initEmbeddings();
+
+  if (noSummaries) {
+    console.log('⚠️  Running in no-summaries mode (skipping AI summaries)');
+  }
 
   console.log('Scanning for conversation files...');
   const PROJECTS_DIR = getProjectsDir();
@@ -139,24 +144,28 @@ export async function indexConversations(
       });
     }
 
-    // Batch summarize conversations in parallel
-    const needsSummary = toProcess.filter(c => !fs.existsSync(c.summaryPath));
+    // Batch summarize conversations in parallel (unless --no-summaries)
+    if (!noSummaries) {
+      const needsSummary = toProcess.filter(c => !fs.existsSync(c.summaryPath));
 
-    if (needsSummary.length > 0) {
-      console.log(`  Generating ${needsSummary.length} summaries (concurrency: ${concurrency})...`);
+      if (needsSummary.length > 0) {
+        console.log(`  Generating ${needsSummary.length} summaries (concurrency: ${concurrency})...`);
 
-      await processBatch(needsSummary, async (conv) => {
-        try {
-          const summary = await summarizeConversation(conv.exchanges);
-          fs.writeFileSync(conv.summaryPath, summary, 'utf-8');
-          const wordCount = summary.split(/\s+/).length;
-          console.log(`  ✓ ${conv.file}: ${wordCount} words`);
-          return summary;
-        } catch (error) {
-          console.log(`  ✗ ${conv.file}: ${error}`);
-          return null;
-        }
-      }, concurrency);
+        await processBatch(needsSummary, async (conv) => {
+          try {
+            const summary = await summarizeConversation(conv.exchanges);
+            fs.writeFileSync(conv.summaryPath, summary, 'utf-8');
+            const wordCount = summary.split(/\s+/).length;
+            console.log(`  ✓ ${conv.file}: ${wordCount} words`);
+            return summary;
+          } catch (error) {
+            console.log(`  ✗ ${conv.file}: ${error}`);
+            return null;
+          }
+        }, concurrency);
+      }
+    } else {
+      console.log(`  Skipping ${toProcess.length} summaries (--no-summaries mode)`);
     }
 
     // Now process embeddings and DB inserts (fast, sequential is fine)
@@ -187,7 +196,7 @@ export async function indexConversations(
   console.log(`\n✅ Indexing complete! Conversations: ${conversationsProcessed}, Exchanges: ${totalExchanges}`);
 }
 
-export async function indexSession(sessionId: string, concurrency: number = 1): Promise<void> {
+export async function indexSession(sessionId: string, concurrency: number = 1, noSummaries: boolean = false): Promise<void> {
   console.log(`Indexing session: ${sessionId}`);
 
   // Find the conversation file for this session
@@ -227,9 +236,9 @@ export async function indexSession(sessionId: string, concurrency: number = 1): 
       const exchanges = await parseConversation(sourcePath, project, archivePath);
 
       if (exchanges.length > 0) {
-        // Generate summary
+        // Generate summary (unless --no-summaries)
         const summaryPath = archivePath.replace('.jsonl', '-summary.txt');
-        if (!fs.existsSync(summaryPath)) {
+        if (!noSummaries && !fs.existsSync(summaryPath)) {
           const summary = await summarizeConversation(exchanges);
           fs.writeFileSync(summaryPath, summary, 'utf-8');
           console.log(`Summary: ${summary.split(/\s+/).length} words`);
@@ -257,9 +266,10 @@ export async function indexSession(sessionId: string, concurrency: number = 1): 
   }
 }
 
-export async function indexUnprocessed(concurrency: number = 1): Promise<void> {
+export async function indexUnprocessed(concurrency: number = 1, noSummaries: boolean = false): Promise<void> {
   console.log('Finding unprocessed conversations...');
   if (concurrency > 1) console.log(`Concurrency: ${concurrency}`);
+  if (noSummaries) console.log('⚠️  Running in no-summaries mode (skipping AI summaries)');
 
   const db = initDatabase();
   await initEmbeddings();
@@ -295,8 +305,11 @@ export async function indexUnprocessed(concurrency: number = 1): Promise<void> {
       const archivePath = path.join(projectArchive, file);
       const summaryPath = archivePath.replace('.jsonl', '-summary.txt');
 
-      // Skip if already has summary
-      if (fs.existsSync(summaryPath)) continue;
+      // Check if already indexed in database
+      const alreadyIndexed = db.prepare('SELECT COUNT(*) as count FROM exchanges WHERE archive_path = ?')
+        .get(archivePath) as { count: number };
+
+      if (alreadyIndexed.count > 0) continue;
 
       fs.mkdirSync(projectArchive, { recursive: true });
 
@@ -320,21 +333,29 @@ export async function indexUnprocessed(concurrency: number = 1): Promise<void> {
   }
 
   console.log(`Found ${unprocessed.length} unprocessed conversations`);
-  console.log(`Generating summaries (concurrency: ${concurrency})...\n`);
 
-  // Batch process summaries
-  await processBatch(unprocessed, async (conv) => {
-    try {
-      const summary = await summarizeConversation(conv.exchanges);
-      fs.writeFileSync(conv.summaryPath, summary, 'utf-8');
-      const wordCount = summary.split(/\s+/).length;
-      console.log(`  ✓ ${conv.project}/${conv.file}: ${wordCount} words`);
-      return summary;
-    } catch (error) {
-      console.log(`  ✗ ${conv.project}/${conv.file}: ${error}`);
-      return null;
+  // Batch process summaries (unless --no-summaries)
+  if (!noSummaries) {
+    const needsSummary = unprocessed.filter(c => !fs.existsSync(c.summaryPath));
+    if (needsSummary.length > 0) {
+      console.log(`Generating ${needsSummary.length} summaries (concurrency: ${concurrency})...\n`);
+
+      await processBatch(needsSummary, async (conv) => {
+        try {
+          const summary = await summarizeConversation(conv.exchanges);
+          fs.writeFileSync(conv.summaryPath, summary, 'utf-8');
+          const wordCount = summary.split(/\s+/).length;
+          console.log(`  ✓ ${conv.project}/${conv.file}: ${wordCount} words`);
+          return summary;
+        } catch (error) {
+          console.log(`  ✗ ${conv.project}/${conv.file}: ${error}`);
+          return null;
+        }
+      }, concurrency);
     }
-  }, concurrency);
+  } else {
+    console.log(`Skipping summaries for ${unprocessed.length} conversations (--no-summaries mode)\n`);
+  }
 
   // Now index embeddings
   console.log(`\nIndexing embeddings...`);

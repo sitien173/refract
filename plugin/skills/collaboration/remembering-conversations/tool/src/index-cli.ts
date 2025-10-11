@@ -18,7 +18,13 @@ function getConcurrency(): number {
   return 1; // default
 }
 
+// Parse --no-summaries flag
+function getNoSummaries(): boolean {
+  return process.argv.includes('--no-summaries');
+}
+
 const concurrency = getConcurrency();
+const noSummaries = getNoSummaries();
 
 async function main() {
   try {
@@ -29,11 +35,11 @@ async function main() {
           console.error('Usage: index-cli index-session <session-id>');
           process.exit(1);
         }
-        await indexSession(sessionId, concurrency);
+        await indexSession(sessionId, concurrency, noSummaries);
         break;
 
       case 'index-cleanup':
-        await indexUnprocessed(concurrency);
+        await indexUnprocessed(concurrency, noSummaries);
         break;
 
       case 'verify':
@@ -98,12 +104,12 @@ async function main() {
 
         // Re-index everything
         console.log('Re-indexing all conversations...');
-        await indexConversations(undefined, undefined, concurrency);
+        await indexConversations(undefined, undefined, concurrency, noSummaries);
         break;
 
       case 'index-all':
       default:
-        await indexConversations(undefined, undefined, concurrency);
+        await indexConversations(undefined, undefined, concurrency, noSummaries);
         break;
     }
   } catch (error) {
