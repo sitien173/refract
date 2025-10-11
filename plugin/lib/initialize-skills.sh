@@ -11,12 +11,20 @@ if [ -d "$SKILLS_DIR/.git" ]; then
     # Fetch upstream
     git fetch upstream 2>/dev/null || git fetch origin 2>/dev/null || true
 
-    # Check if behind upstream
+    # Check if we can fast-forward
     LOCAL=$(git rev-parse @ 2>/dev/null || echo "")
     REMOTE=$(git rev-parse @{u} 2>/dev/null || echo "")
+    BASE=$(git merge-base @ @{u} 2>/dev/null || echo "")
 
     if [ -n "$LOCAL" ] && [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
-        echo "⚠️ New skills available from upstream. Ask me to use the updating-skills skill."
+        # Check if we can fast-forward (local is ancestor of remote)
+        if [ "$LOCAL" = "$BASE" ]; then
+            # Fast-forward merge is possible
+            git merge --ff-only @{u} 2>/dev/null && echo "✓ Skills updated to latest version" || true
+        else
+            # Can't fast-forward (diverged or local is ahead)
+            echo "⚠️ New skills available from upstream. Ask me to use the pulling-updates-from-skills-repository skill."
+        fi
     fi
 
     exit 0
