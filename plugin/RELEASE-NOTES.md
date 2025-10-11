@@ -1,5 +1,15 @@
 # Superpowers v2.0.0 Release Notes
 
+## Overview
+
+Superpowers v2.0 represents a major architectural shift focused on making skills more accessible, maintainable, and community-driven.
+
+The headline change is **skills repository separation**: all skills, scripts, and documentation have moved from the plugin into a dedicated repository ([obra/superpowers-skills](https://github.com/obra/superpowers-skills)). This transforms superpowers from a monolithic plugin into a lightweight shim that manages a local clone of the skills repository. Skills now auto-update on session start, users can fork and contribute improvements via standard git workflows, and the entire skills library is versioned independently from the plugin.
+
+Beyond infrastructure, this release adds nine new skills focused on problem-solving, research, and architecture. The core **using-skills** documentation has been completely rewritten with imperative tone and clearer structure, making it easier for Claude to understand when and how to use skills. Tools like **find-skills** now output paths that can be directly pasted into the Read tool, eliminating friction in the skills discovery workflow.
+
+For users, the experience is seamless: the plugin handles cloning, forking, and updating automatically. For contributors, the new architecture makes it trivial to improve skills and share them back with the community. This release lays the foundation for skills to evolve rapidly as a community resource.
+
 ## Breaking Changes
 
 ### Skills Repository Separation
