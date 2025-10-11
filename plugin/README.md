@@ -28,11 +28,12 @@ Read the introduction: [Superpowers for Claude Code](https://blog.fsck.com/2025/
 /plugin install superpowers@superpowers-marketplace
 ```
 
-That's it! The plugin will:
-- Inject skills library into your session context
-- Make skills searchable via `${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search`
-- Add `/brainstorm`, `/write-plan`, and `/execute-plan` commands
-- Create `~/.superpowers/` for local data
+That's it! On first session, the plugin automatically:
+- Sets up `~/.config/superpowers/` as your personal skills repository
+- Initializes git repo for version control
+- Makes core skills searchable alongside your personal skills
+- Adds `/brainstorm`, `/write-plan`, and `/execute-plan` commands
+- Offers to create public GitHub repo for sharing your skills
 
 ### Verify Installation
 
@@ -48,14 +49,25 @@ That's it! The plugin will:
 
 ## Quick Start
 
+### Your Personal Skills
+
+Write your own skills to `~/.config/superpowers/skills/`:
+- All personal skills automatically discovered by search tools
+- Personal skills shadow core skills when names match
+- Version controlled with git
+- Optional: Share on GitHub and contribute back to core
+
+See `skills/meta/writing-skills` for how to create new skills.
+See `skills/meta/sharing-skills` for how to contribute to core.
+
 ### Finding Skills
 
-Search for relevant skills before starting any task:
+Find both personal and core skills before starting any task:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'test.*driven|TDD'
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'debug.*systematic'
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'refactor'
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills              # All skills with descriptions
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills test         # Filter by pattern
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills 'TDD|debug'  # Regex pattern
 ```
 
 ### Using Slash Commands
@@ -101,7 +113,9 @@ ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'refactor'
 - receiving-code-review - Responding to feedback
 
 **Meta** (`skills/meta/`)
-- creating-skills - Document new techniques
+- setting-up-personal-superpowers - Personal skills repository setup
+- writing-skills - TDD for documentation, create new skills
+- sharing-skills - Contribute skills back to core
 - testing-skills-with-subagents - Validate skill quality
 - gardening-skills-wiki - Maintain and improve skills
 
@@ -113,15 +127,28 @@ ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'refactor'
 
 ### Tools
 
-- **skills-search** - Grep-powered skill discovery
-- **search-conversations** - Semantic search of past Claude sessions
+**In `scripts/` directory:**
+- **find-skills** - Unified skill discovery with descriptions (replaces list-skills + skills-search)
+- **skill-run** - Generic runner for any skill script (searches personal then core)
+
+**Skill-specific tools:**
+- **search-conversations** - Semantic search of past Claude sessions (in remembering-conversations skill)
+
+**Using scripts:**
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills                 # Show all skills
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills pattern         # Search skills
+${CLAUDE_PLUGIN_ROOT}/scripts/skill-run <path> [args]     # Run any skill script
+```
 
 ## How It Works
 
-1. **SessionStart Hook** - Injects skills library context at session start
-2. **Skills Discovery** - `skills-search` finds relevant skills using grep patterns
-3. **Mandatory Workflow** - Skills become required when they exist for your task
-4. **Gap Tracking** - Failed searches logged to `~/.superpowers/search-log.jsonl`
+1. **SessionStart Hook** - Auto-setup personal skills repo, inject core skills context
+2. **Two-Tier Skills** - Personal skills (`~/.config/superpowers/skills/`) + Core skills (plugin)
+3. **Skills Discovery** - `find-skills` searches both locations with descriptions
+4. **Shadowing** - Personal skills override core skills when paths match
+5. **Mandatory Workflow** - Skills become required when they exist for your task
+6. **Gap Tracking** - Failed searches logged to `~/.config/superpowers/search-log.jsonl`
 
 ## Philosophy
 
@@ -131,21 +158,49 @@ ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search 'refactor'
 - **Evidence over claims** - Verify before declaring success
 - **Domain over implementation** - Work at problem level, not solution level
 
-## Data Directory
+## Personal Superpowers Directory
 
-The plugin creates `~/.superpowers/` for local data:
+The plugin auto-creates your personal superpowers directory on first session.
 
+**Default location:** `~/.config/superpowers/`
+
+**Customize via environment variables:**
+```bash
+# Option 1: Set exact location
+export PERSONAL_SUPERPOWERS_DIR="$HOME/my-superpowers"
+
+# Option 2: Use XDG standard
+export XDG_CONFIG_HOME="$HOME/.local/config"  # Uses $HOME/.local/config/superpowers
 ```
-~/.superpowers/
-├── search-log.jsonl          # Failed skill searches
-└── conversation-index/       # Indexed past conversations (if enabled)
+
+**Structure:**
 ```
+~/.config/superpowers/        # (or your custom location)
+├── .git/                     # Git repository
+├── .gitignore                # Ignores logs and indexes
+├── README.md                 # About your personal superpowers
+├── skills/                   # Your personal skills
+│   └── your-skill/
+│       └── SKILL.md
+├── search-log.jsonl          # Failed skill searches (not tracked)
+└── conversation-index/       # Indexed conversations (not tracked)
+```
+
+**Why git?** Track your skills evolution, share with others, contribute back to core.
 
 ## Contributing
 
-Want to add a skill? See `skills/meta/creating-skills/SKILL.md`
+**Write personal skills:**
+1. Create in `~/.config/superpowers/skills/your-skill/`
+2. Follow TDD process in `skills/meta/writing-skills`
+3. Commit to your personal repo
 
-Missing a skill? Edit `skills/REQUESTS.md` or open an issue
+**Share with everyone:**
+1. Follow workflow in `skills/meta/sharing-skills`
+2. Fork → Branch → Copy → PR to core
+3. Keep personal version or delete after merge
+
+**Missing a skill?** Edit `skills/REQUESTS.md` or open an issue
 
 ## License
 

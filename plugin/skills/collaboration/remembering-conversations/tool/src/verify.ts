@@ -1,19 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { parseConversation } from './parser.js';
 import { initDatabase, getAllExchanges, getFileLastIndexed } from './db.js';
+import { getArchiveDir } from './paths.js';
 
 export interface VerificationResult {
   missing: Array<{ path: string; reason: string }>;
   orphaned: Array<{ uuid: string; path: string }>;
   outdated: Array<{ path: string; fileTime: number; dbTime: number }>;
   corrupted: Array<{ path: string; error: string }>;
-}
-
-// Allow overriding paths for testing
-function getArchiveDir(): string {
-  return process.env.TEST_ARCHIVE_DIR || path.join(os.homedir(), '.clank', 'conversation-archive');
 }
 
 export async function verifyIndex(): Promise<VerificationResult> {

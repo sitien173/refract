@@ -1,13 +1,9 @@
 import Database from 'better-sqlite3';
 import { ConversationExchange } from './types.js';
 import path from 'path';
-import os from 'os';
 import fs from 'fs';
 import * as sqliteVec from 'sqlite-vec';
-
-function getDbPath(): string {
-  return process.env.TEST_DB_PATH || path.join(os.homedir(), '.clank', 'conversation-index', 'db.sqlite');
-}
+import { getDbPath } from './paths.js';
 
 export function migrateSchema(db: Database.Database): void {
   const hasColumn = db.prepare(`

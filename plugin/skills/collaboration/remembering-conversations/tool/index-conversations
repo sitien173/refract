@@ -22,6 +22,7 @@ COMMANDS:
 OPTIONS:
   --concurrency N    Parallel summarization (1-16, default: 1)
   -c N               Short form of --concurrency
+  --no-summaries     Skip AI summary generation (free, but no summaries in results)
   --help, -h         Show this help
 
 EXAMPLES:
@@ -30,6 +31,9 @@ EXAMPLES:
 
   # Index with 8 parallel summarizations (8x faster)
   index-conversations --cleanup --concurrency 8
+
+  # Index without AI summaries (free, fast)
+  index-conversations --cleanup --no-summaries
 
   # Check index health
   index-conversations --verify

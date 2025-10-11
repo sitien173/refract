@@ -1,19 +1,32 @@
 ---
 name: Getting Started with Skills
-description: Skills wiki intro - mandatory workflows, search tool, brainstorming triggers
+description: Skills wiki intro - mandatory workflows, search tool, brainstorming triggers, personal skills
 when_to_use: Read this FIRST at start of each conversation when skills are active
-version: 2.0.0
+version: 3.0.0
 ---
 
 # Getting Started with Skills
 
-Your personal wiki of proven techniques, patterns, and tools at `${CLAUDE_PLUGIN_ROOT}/skills/`.
+Two skill libraries work together:
+- **Core skills** at `${CLAUDE_PLUGIN_ROOT}/skills/` (from plugin)
+- **Personal skills** at `~/.config/superpowers/skills/` (yours to create and share)
+
+Personal skills shadow core skills when names match.
 
 ## Just Read This Guide?
 
-**RIGHT NOW**: Run this to see what skills are available:
+**RIGHT NOW**: Find the plugin location and list skills:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
+# Find plugin location
+find ~/.claude/plugins/cache -name "superpowers" -type d 2>/dev/null | grep -v ".git" | head -1
+
+# Then run (replace PATH with the path found above):
+PATH/scripts/find-skills
+```
+
+Or just use the full path directly:
+```bash
+~/.claude/plugins/cache/superpowers/scripts/find-skills
 ```
 
 **THEN**: Follow the workflows below based on what your partner is asking for.
@@ -28,7 +41,8 @@ ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
 - Load with Read tool only when needed
 
 **When you see skill references in documentation:**
-- `skills/path/name` → Use Read tool on `${CLAUDE_PLUGIN_ROOT}/skills/path/name/SKILL.md`
+- `skills/path/name` → Check personal first (`~/.config/superpowers/skills/path/name/SKILL.md`)
+- If not found, check core (`${CLAUDE_PLUGIN_ROOT}/skills/path/name/SKILL.md`)
 - Load supporting files only when implementing
 
 ## Mandatory Workflow 1: Brainstorming Before Coding
@@ -46,21 +60,19 @@ ${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
 
 ## Mandatory Workflow 2: Before ANY Task
 
-**1. List available skills** (to avoid useless searches):
+**1. Find skills** (shows all, or filter by pattern):
+
+Use the plugin cache path (default: `~/.claude/plugins/cache/superpowers`):
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/list-skills
+~/.claude/plugins/cache/superpowers/scripts/find-skills           # Show all
+~/.claude/plugins/cache/superpowers/scripts/find-skills PATTERN   # Filter by pattern
 ```
 
-**2. Search skills** (when you need something specific):
-```bash
-${CLAUDE_PLUGIN_ROOT}/skills/getting-started/skills-search PATTERN
-```
-
-**3. Search conversations:**
+**2. Search conversations:**
 Dispatch subagent (see Workflow 3) to check for relevant past work.
 
 **If skills found:**
-1. READ the skill: `${CLAUDE_PLUGIN_ROOT}/skills/path/skill-name/SKILL.md`
+1. READ the skill - check personal first (`~/.config/superpowers/skills/path/SKILL.md`), then core (`~/.claude/plugins/cache/superpowers/skills/path/SKILL.md`)
 2. ANNOUNCE usage: "I'm using the [Skill Name] skill"
 3. FOLLOW the skill (many are rigid requirements)
 
@@ -115,14 +127,7 @@ You: Searching past conversations...
 
 **Why:** Checklists without TodoWrite tracking = steps get skipped. Every time.
 
-**Examples:** TDD (write test, watch fail, implement, verify), Systematic Debugging (4 phases), Creating Skills (RED-GREEN-REFACTOR)
-
-## Navigation
-
-Really, try skills-search first.
-
-**Categories:** skills/INDEX.md → testing, debugging, coding, architecture, collaboration, meta
-**Individual skill:** Load from category INDEX
+**Examples:** TDD (write test, watch fail, implement, verify), Systematic Debugging (4 phases), Writing Skills (RED-GREEN-REFACTOR)
 
 ## How to Read a Skill
 
@@ -159,13 +164,15 @@ Your human partner's specific instructions describe WHAT to do, not HOW.
 
 **Red flags:** "Instruction was specific" • "Seems simple" • "Workflow is overkill"
 
-## Creating and Updating Skills
+## Writing and Sharing Skills
 
-**Before creating OR editing ANY skill:**
+**All personal skills are written to `~/.config/superpowers/skills/`**
+
+**Before writing ANY skill:**
 
 1. **STOP** - Even if your human partner gave specific instructions
-2. **Read skills/meta/creating-skills**
-3. **Check in** - "You asked me to edit [skill]. Should I follow creating-skills process or make the change?"
+2. **Read skills/meta/writing-skills**
+3. **Follow the TDD process** - No skill without failing test first
 
 **Your human partner's specific instruction is NOT implicit permission to skip the process.**
 
@@ -173,17 +180,20 @@ Your human partner's specific instructions describe WHAT to do, not HOW.
 - "Just a small addition"
 - "Instruction was specific, so I can proceed"
 
-**All of these mean: STOP and check in first.**
+**All of these mean: STOP and follow writing-skills process.**
 
-Found something valuable? See skills/meta/creating-skills
+**Want to share a skill with everyone?**
+- See skills/meta/sharing-skills for how to contribute to core superpowers
 
-Want a skill that doesn't exist? Edit skills/REQUESTS.md (at ${CLAUDE_PLUGIN_ROOT}/skills/REQUESTS.md)
+**Want a skill that doesn't exist?**
+- Write it yourself (see skills/meta/writing-skills) and share it!
+- Or open an issue at https://github.com/obra/superpowers/issues
 
 ## Summary
 
 **Starting conversation?** You just read this. Good.
 
-**Starting any task?** Run skills-search first, announce usage, follow what you find.
+**Starting any task?** Run find-skills first, announce usage, follow what you find.
 
 **Skill has checklist?** TodoWrite for every item.
 

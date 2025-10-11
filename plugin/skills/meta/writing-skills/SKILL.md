@@ -1,16 +1,18 @@
 ---
-name: Creating Skills
+name: Writing Skills
 description: TDD for process documentation - test with subagents before writing, iterate until bulletproof
 when_to_use: When you discover a technique, pattern, or tool worth documenting for reuse. When editing existing skills. When asked to modify skill documentation. When you've written a skill and need to verify it works before deploying.
-version: 4.1.0
+version: 5.0.0
 languages: all
 ---
 
-# Creating Skills
+# Writing Skills
 
 ## Overview
 
-**Creating skills IS Test-Driven Development applied to process documentation.**
+**Writing skills IS Test-Driven Development applied to process documentation.**
+
+**All personal skills are written to `~/.config/superpowers/skills/`** - this is your personal superpowers repository, separate from the core superpowers library.
 
 You write test cases (pressure scenarios with subagents), watch them fail (baseline behavior), write the skill (documentation), watch tests pass (agents comply), and refactor (close loopholes).
 
@@ -69,14 +71,16 @@ API docs, syntax guides, tool documentation (office docs)
 
 ## Directory Structure
 
+**All skills are written to `~/.config/superpowers/skills/`:**
+
 ```
-skills/
+~/.config/superpowers/skills/
   skill-name/
     SKILL.md              # Main reference (required)
     supporting-file.*     # Only if needed
 ```
 
-**Flat namespace** - all skills in one searchable location
+**Flat namespace** - all personal skills in one searchable location
 
 **Separate files for:**
 1. **Heavy reference** (100+ lines) - API docs, comprehensive syntax
@@ -527,7 +531,6 @@ helper1, helper2, step3, pattern4
 
 **Do NOT:**
 - Create multiple skills in batch without testing each
-- Update INDEX.md before testing skills
 - Move to next skill before current one is verified
 - Skip testing because "batching is more efficient"
 
@@ -568,12 +571,17 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] No narrative storytelling
 - [ ] Supporting files only for tools or heavy reference
 
+**Deployment:**
+- [ ] Commit skill to git (in `~/.config/superpowers/`)
+- [ ] Push to GitHub (if remote configured)
+- [ ] Consider sharing via skills/meta/sharing-skills (if broadly useful)
+
 ## Discovery Workflow
 
 How future Claude finds your skill:
 
 1. **Encounters problem** ("tests are flaky")
-2. **Greps skills** (`grep -r "flaky" ~/.claude/skills/`)
+2. **Searches skills** using `find-skills` tool (checks personal then core)
 3. **Finds SKILL.md** (rich when_to_use matches)
 4. **Scans overview** (is this relevant?)
 5. **Reads patterns** (quick reference table)
