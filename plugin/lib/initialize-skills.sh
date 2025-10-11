@@ -8,7 +8,7 @@ SKILLS_REPO="https://github.com/obra/superpowers-skills.git"
 if [ -d "$SKILLS_DIR/.git" ]; then
     cd "$SKILLS_DIR"
 
-    # Fetch upstream
+    # Fetch upstream (silently)
     git fetch upstream 2>/dev/null || git fetch origin 2>/dev/null || true
 
     # Check if we can fast-forward
@@ -16,14 +16,21 @@ if [ -d "$SKILLS_DIR/.git" ]; then
     REMOTE=$(git rev-parse @{u} 2>/dev/null || echo "")
     BASE=$(git merge-base @ @{u} 2>/dev/null || echo "")
 
+    # Try to fast-forward merge first
     if [ -n "$LOCAL" ] && [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
         # Check if we can fast-forward (local is ancestor of remote)
         if [ "$LOCAL" = "$BASE" ]; then
             # Fast-forward merge is possible
-            git merge --ff-only @{u} 2>/dev/null && echo "✓ Skills updated to latest version" || true
+            echo "Updating skills to latest version..."
+            if git merge --ff-only @{u} 2>&1; then
+                echo "✓ Skills updated successfully"
+                echo "SKILLS_UPDATED=true"
+            else
+                echo "Failed to update skills"
+            fi
         else
-            # Can't fast-forward (diverged or local is ahead)
-            echo "⚠️ New skills available from upstream. Ask me to use the pulling-updates-from-skills-repository skill."
+            # Can't fast-forward - will be reported at the end
+            echo "SKILLS_BEHIND=true"
         fi
     fi
 
