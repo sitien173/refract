@@ -2,7 +2,7 @@
 name: Executing Plans
 description: Execute detailed plans in batches with review checkpoints
 when_to_use: When have a complete implementation plan to execute. When implementing in separate session from planning. When your human partner points you to a plan file to implement.
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Executing Plans
@@ -51,9 +51,28 @@ After all tasks complete and verified:
 - Switch to skills/collaboration/finishing-a-development-branch
 - Follow that skill to verify tests, present options, execute choice
 
+## When to Stop and Ask for Help
+
+**STOP executing immediately when:**
+- Hit a blocker mid-batch (missing dependency, test fails, instruction unclear)
+- Plan has critical gaps preventing starting
+- You don't understand an instruction
+- Verification fails repeatedly
+
+**Ask for clarification rather than guessing.**
+
+## When to Revisit Earlier Steps
+
+**Return to Review (Step 1) when:**
+- Partner updates the plan based on your feedback
+- Fundamental approach needs rethinking
+
+**Don't force through blockers** - stop and ask.
+
 ## Remember
 - Review plan critically first
 - Follow plan steps exactly
 - Don't skip verifications
 - Reference skills when plan says to
 - Between batches: just report and wait
+- Stop when blocked, don't guess

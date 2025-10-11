@@ -2,7 +2,7 @@
 name: Brainstorming Ideas Into Designs
 description: Interactive idea refinement using Socratic method to develop fully-formed designs
 when_to_use: When your human partner says "I've got an idea", "Let's make/build/create", "I want to implement/add", "What if we". When starting design for complex feature. Before writing implementation plans. When idea needs refinement and exploration. ACTIVATE THIS AUTOMATICALLY when your human partner describes a feature or project idea - don't wait for /brainstorm command.
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Brainstorming Ideas Into Designs
@@ -24,7 +24,7 @@ Transform rough ideas into fully-formed designs through structured questioning a
 - Gather: Purpose, constraints, success criteria
 
 ### Phase 2: Exploration
-- Propose 2-3 different approaches (reference skills/coding/exploring-alternatives)
+- Propose 2-3 different approaches
 - For each: Core architecture, trade-offs, complexity assessment
 - Ask your human partner which approach resonates
 
@@ -48,9 +48,28 @@ When your human partner confirms (any affirmative response):
 - Switch to skills/collaboration/writing-plans skill
 - Create detailed plan in the worktree
 
+## When to Revisit Earlier Phases
+
+**You can and should go backward when:**
+- Partner reveals new constraint during Phase 2 or 3 → Return to Phase 1 to understand it
+- Validation shows fundamental gap in requirements → Return to Phase 1
+- Partner questions approach during Phase 3 → Return to Phase 2 to explore alternatives
+- Something doesn't make sense → Go back and clarify
+
+**Don't force forward linearly** when going backward would give better results.
+
+## Related Skills
+
+**During exploration:**
+- When approaches have genuine trade-offs: skills/architecture/preserving-productive-tensions
+
+**Before proposing changes to existing code:**
+- Understand why it exists: skills/research/tracing-knowledge-lineages
+
 ## Remember
 - One question per message during Phase 1
-- Apply YAGNI ruthlessly (reference skills/architecture/reducing-complexity)
+- Apply YAGNI ruthlessly
 - Explore 2-3 alternatives before settling
 - Present incrementally, validate as you go
+- Go backward when needed - flexibility > rigid progression
 - Announce skill usage at start
