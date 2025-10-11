@@ -26,12 +26,22 @@ elif echo "$setup_output" | grep -q "setup_failed=true"; then
     github_recommendation="\n\n⚠️  Personal superpowers setup encountered an issue. Please file a bug at https://github.com/obra/superpowers/issues"
 fi
 
+# Run find-skills to show all available skills
+find_skills_output=$("${CLAUDE_PLUGIN_ROOT}/scripts/find-skills" 2>&1 || echo "Error running find-skills")
+
+# Read getting-started content
+getting_started_content=$(cat "${CLAUDE_PLUGIN_ROOT}/skills/getting-started/SKILL.md" 2>&1 || echo "Error reading getting-started")
+
+# Escape both outputs for JSON
+find_skills_escaped=$(echo "$find_skills_output" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+getting_started_escaped=$(echo "$getting_started_content" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+
 # Output context injection as JSON
 cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": "<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Skill tools are at:**\n- find-skills: ${CLAUDE_PLUGIN_ROOT}/scripts/find-skills\n- skill-run: ${CLAUDE_PLUGIN_ROOT}/scripts/skill-run\n\n**RIGHT NOW, go read**: @${CLAUDE_PLUGIN_ROOT}/skills/getting-started/SKILL.md${github_recommendation}\n</EXTREMELY_IMPORTANT>"
+    "additionalContext": "<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**The content below is from skills/getting-started/SKILL.md - your introduction to using skills:**\n\n${getting_started_escaped}\n\n**Tool paths (use these when you need to search for or run skills):**\n- find-skills: ${CLAUDE_PLUGIN_ROOT}/scripts/find-skills\n- skill-run: ${CLAUDE_PLUGIN_ROOT}/scripts/skill-run\n\n**Available skills (output of find-skills):**\n\n${find_skills_escaped}${github_recommendation}\n</EXTREMELY_IMPORTANT>"
   }
 }
 EOF

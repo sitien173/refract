@@ -7,32 +7,11 @@ version: 3.1.0
 
 # Getting Started with Skills
 
-Two skill libraries work together:
-- **Core skills** at `${CLAUDE_PLUGIN_ROOT}/skills/` (from plugin)
-- **Personal skills** at `~/.config/superpowers/skills/` (yours to create and share)
+Skills live in two places:
+- **Core:** `${CLAUDE_PLUGIN_ROOT}/skills/` (from plugin)
+- **Personal:** `~/.config/superpowers/skills/` (yours to create)
 
-Personal skills shadow core skills when names match.
-
-## Just Read This Guide?
-
-**RIGHT NOW**: Check out all the skills you've got! 
-
-`find-skills` with no args will show all your skills
-
-
-**THEN**: Follow the workflows below based on what your partner is trying to do.
-
-## How to Reference Skills
-
-- Format: `skills/category/skill-name` (no @ prefix, no /SKILL.md suffix)
-- Example: `skills/collaboration/brainstorming` or `skills/testing/test-driven-development`
-
-- Load with your Read tool when you need them.
-
-**When you see skill references in documentation:**
-- `skills/path/name` → Check personal first (`~/.config/superpowers/skills/path/name/SKILL.md`)
-- If not found, check core (`${CLAUDE_PLUGIN_ROOT}/skills/path/name/SKILL.md`)
-- Load supporting files only when you need them
+Personal skills shadow core when names match. To load `skills/path/name`, check personal first, then core.
 
 ## Mandatory Workflow 1: Brainstorming Before Coding
 
@@ -49,11 +28,7 @@ Personal skills shadow core skills when names match.
 
 ## Mandatory Workflow 2: Before ANY Task
 
-**1. Find skills** (shows all, or filter by pattern):
-
-```bash
-find-skills [PATTERN]   # Filter by grep-compatible pattern
-```
+**1. Check the skills list** shown at session start, or run `find-skills [PATTERN]` to filter.
 
 **2. Check if historical context would help:**
 Review Workflow 3 conditions. If applicable, dispatch subagent to search past work.
@@ -155,8 +130,3 @@ Your human partner's specific instructions describe WHAT to do, not HOW.
 **Skill has checklist?** TodoWrite for every item.
 
 **Skills are mandatory when they exist, not optional.**
-
-
-## Last thing
-
-In the first response after reading this guide, you MUST announce to the user that you have read the getting started guide
