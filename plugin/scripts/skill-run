@@ -2,21 +2,20 @@
 # Generic runner for skill scripts
 # Searches personal superpowers first, then core plugin
 #
-# Usage: scripts/run <skill-relative-path> [args...]
-# Example: scripts/run skills/collaboration/remembering-conversations/tool/search-conversations "query"
+# Usage: scripts/skill-run <skill-relative-path> [args...]
+# Example: scripts/skill-run skills/collaboration/remembering-conversations/tool/search-conversations "query"
 
 set -euo pipefail
 
 if [[ $# -eq 0 ]]; then
     cat <<'EOF'
-Usage: scripts/run <skill-relative-path> [args...]
+Usage: scripts/skill-run <skill-relative-path> [args...]
 
 Runs scripts from skills, checking personal superpowers first, then core.
 
 Examples:
-  scripts/run skills/collaboration/remembering-conversations/tool/search-conversations "query"
-  scripts/run skills/getting-started/list-skills
-  scripts/run skills/getting-started/skills-search "pattern"
+  scripts/skill-run skills/collaboration/remembering-conversations/tool/search-conversations "query"
+  scripts/skill-run skills/collaboration/remembering-conversations/tool/index-conversations --cleanup
 
 The script will be found at:
   1. ~/.config/superpowers/<skill-relative-path> (personal, if exists)

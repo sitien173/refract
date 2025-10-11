@@ -129,16 +129,16 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/find-skills 'TDD|debug'  # Regex pattern
 
 **In `scripts/` directory:**
 - **find-skills** - Unified skill discovery with descriptions (replaces list-skills + skills-search)
-- **run** - Generic runner for any skill script (searches personal then core)
+- **skill-run** - Generic runner for any skill script (searches personal then core)
 
 **Skill-specific tools:**
 - **search-conversations** - Semantic search of past Claude sessions (in remembering-conversations skill)
 
 **Using scripts:**
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/find-skills              # Show all skills
-${CLAUDE_PLUGIN_ROOT}/scripts/find-skills pattern      # Search skills
-${CLAUDE_PLUGIN_ROOT}/scripts/run <path> [args]        # Run any skill script
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills                 # Show all skills
+${CLAUDE_PLUGIN_ROOT}/scripts/find-skills pattern         # Search skills
+${CLAUDE_PLUGIN_ROOT}/scripts/skill-run <path> [args]     # Run any skill script
 ```
 
 ## How It Works
