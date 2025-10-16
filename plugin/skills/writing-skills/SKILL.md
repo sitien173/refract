@@ -9,7 +9,7 @@ description: Use when creating new skills, editing existing skills, or verifying
 
 **Writing skills IS Test-Driven Development applied to process documentation.**
 
-**Skills are written to `${SUPERPOWERS_SKILLS_ROOT}` (cloned to `~/.config/superpowers/skills/`).** You edit skills in your local branch of this repository.
+**Personal skills are written to `~/.claude/skills`** 
 
 You write test cases (pressure scenarios with subagents), watch them fail (baseline behavior), write the skill (documentation), watch tests pass (agents comply), and refactor (close loopholes).
 
@@ -68,16 +68,15 @@ API docs, syntax guides, tool documentation (office docs)
 
 ## Directory Structure
 
-**All skills are in the skills repository at `${SUPERPOWERS_SKILLS_ROOT}`:**
 
 ```
-${SUPERPOWERS_SKILLS_ROOT}
+skills/
   skill-name/
     SKILL.md              # Main reference (required)
     supporting-file.*     # Only if needed
 ```
 
-**Flat namespace** - all skills in one searchable location
+**Flat namespace** - all skills in one searchable namespace
 
 **Separate files for:**
 1. **Heavy reference** (100+ lines) - API docs, comprehensive syntax
@@ -247,27 +246,16 @@ wc -w skills/path/SKILL.md
 - `creating-skills`, `testing-skills`, `debugging-with-logs`
 - Active, describes the action you're taking
 
-### 4. Content Repetition
-
-Mention key concepts multiple times:
-- In description
-- In overview
-- In section headers
-
-Grep hits from multiple places = easier discovery
-
-### 5. Cross-Referencing Other Skills
+### 4. Cross-Referencing Other Skills
 
 **When writing documentation that references other skills:**
 
 Use path format without `@` prefix or `/SKILL.md` suffix:
-- ✅ Good: `skills/testing/test-driven-development`
-- ✅ Good: `skills/debugging/systematic-debugging`
+- ✅ Good: `test-driven-development`
+- ✅ Good: `systematic-debugging`
 - ❌ Bad: `@skills/testing/test-driven-development/SKILL.md` (force-loads, burns context)
 
 **Why no @ links:** `@` syntax force-loads files immediately, consuming 200k+ context before you need them.
-
-**To read a skill reference:** Use Read tool on `${SUPERPOWERS_SKILLS_ROOT}/category/skill-name/SKILL.md`
 
 ## Flowchart Usage
 
@@ -366,7 +354,7 @@ Edit skill without testing? Same violation.
 - Don't "adapt" while running tests
 - Delete means delete
 
-See skills/testing/test-driven-development for why this matters. Same principles apply to documentation.
+See the test-driven-development skill for why this matters. Same principles apply to documentation.
 
 ## Testing All Skill Types
 
@@ -529,7 +517,7 @@ Run same scenarios WITH skill. Agent should now comply.
 
 Agent found new rationalization? Add explicit counter. Re-test until bulletproof.
 
-**See skills/testing-skills-with-subagents for:**
+**See the testing-skills-with-subagents skill for:**
 - How to write pressure scenarios
 - Pressure types (time, sunk cost, authority, exhaustion)
 - Plugging holes systematically
@@ -613,8 +601,7 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 How future Claude finds your skill:
 
 1. **Encounters problem** ("tests are flaky")
-2. **Searches skills** using `find-skills` tool (searches skills repository)
-3. **Finds SKILL.md** (rich description matches)
+3. **Finds SKILL** (description matches)
 4. **Scans overview** (is this relevant?)
 5. **Reads patterns** (quick reference table)
 6. **Loads example** (only when implementing)
