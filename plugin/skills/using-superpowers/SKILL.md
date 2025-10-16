@@ -7,14 +7,13 @@ description: Use when starting any conversation - establishes mandatory workflow
 
 ## Critical Rules
 
-1. **Follow mandatory workflows.** Brainstorming before coding. Check for skills before ANY task.
+1. **Follow mandatory workflows.** Brainstorming before coding. Check for relevant skills before ANY task.
 
-2. **Create TodoWrite todos for checklists.** Mental tracking = steps get skipped. Every time.
-
+2. Execute skills with the SlashCommand tool
 
 ## Mandatory: Before ANY Task
 
-**1. If relevant skill exists, YOU MUST use it:**
+**1. If a relevant skill exists, YOU MUST use it:**
 
 - Announce: "I've read [Skill Name] skill and I'm using it to [purpose]"
 - Follow it exactly
@@ -41,14 +40,12 @@ If a skill has a checklist, YOU MUST create TodoWrite todos for EACH item.
 
 ## Announcing Skill Usage
 
-After you've read a skill with Read tool, announce you're using it:
-
-"I've read the [Skill Name] skill and I'm using it to [what you're doing]."
+Before using a skill, announce that you are using it.
+"I'm using [Skill Name] to [what you're doing]."
 
 **Examples:**
-- "I've read the Brainstorming skill and I'm using it to refine your idea into a design."
-- "I've read the Test-Driven Development skill and I'm using it to implement this feature."
-- "I've read the Systematic Debugging skill and I'm using it to find the root cause."
+- "I'm using the Brainstorming skill  to refine your idea into a design."
+- "I'm using the Test-Driven Development skill  to implement this feature."
 
 **Why:** Transparency helps your human partner understand your process and catch errors early. It also confirms you actually read the skill.
 
