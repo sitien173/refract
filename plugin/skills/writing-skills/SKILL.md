@@ -17,6 +17,8 @@ You write test cases (pressure scenarios with subagents), watch them fail (basel
 
 See skills/testing/test-driven-development for the fundamental RED-GREEN-REFACTOR cycle. This skill adapts TDD to documentation.
 
+**Official guidance:** For Anthropic's official skill authoring best practices, see anthropic-best-practices.md. This document provides additional patterns and guidelines that complement the TDD-focused approach in this skill.
+
 ## What is a Skill?
 
 A **skill** is a reference guide for proven techniques, patterns, or tools. Skills help future Claude instances find and apply effective approaches.
