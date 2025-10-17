@@ -205,9 +205,9 @@ Ready to implement auth feature
 ## Integration
 
 **Called by:**
-- skills/collaboration/brainstorming (Phase 4)
+- **brainstorming** (Phase 4) - REQUIRED when design is approved and implementation follows
 - Any skill needing isolated workspace
 
 **Pairs with:**
-- skills/collaboration/finishing-a-development-branch (cleanup)
-- skills/collaboration/executing-plans (work happens here)
+- **finishing-a-development-branch** - REQUIRED for cleanup after work complete
+- **executing-plans** or **subagent-driven-development** - Work happens in this worktree
