@@ -1,5 +1,10 @@
 # Superpowers Release Notes
 
+## v3.1.1 (2025-10-17)
+
+### Bug Fixes
+
+- **Fixed command syntax in README** (#44) - Updated all command references to use correct namespaced syntax (`/superpowers:brainstorm` instead of `/brainstorm`). Plugin-provided commands are automatically namespaced by Claude Code to avoid conflicts between plugins.
 
 ## v3.1.0 (2025-10-17)
 

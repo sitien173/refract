@@ -11,7 +11,7 @@ Give Claude Code superpowers with a comprehensive skills library of proven techn
 - **Meta Skills** - Creating, testing, and sharing skills
 
 Plus:
-- **Slash Commands** - `/brainstorm`, `/write-plan`, `/execute-plan`
+- **Slash Commands** - `/superpowers:brainstorm`, `/superpowers:write-plan`, `/superpowers:execute-plan`
 - **Automatic Integration** - Skills activate automatically when relevant
 - **Consistent Workflows** - Systematic approaches to common engineering tasks
 
@@ -36,9 +36,9 @@ Read the introduction: [Superpowers for Claude Code](https://blog.fsck.com/2025/
 /help
 
 # Should see:
-# /brainstorm - Interactive design refinement
-# /write-plan - Create implementation plan
-# /execute-plan - Execute plan in batches
+# /superpowers:brainstorm - Interactive design refinement
+# /superpowers:write-plan - Create implementation plan
+# /superpowers:execute-plan - Execute plan in batches
 ```
 
 ## Quick Start
@@ -47,17 +47,17 @@ Read the introduction: [Superpowers for Claude Code](https://blog.fsck.com/2025/
 
 **Brainstorm a design:**
 ```
-/brainstorm
+/superpowers:brainstorm
 ```
 
 **Create an implementation plan:**
 ```
-/write-plan
+/superpowers:write-plan
 ```
 
 **Execute the plan:**
 ```
-/execute-plan
+/superpowers:execute-plan
 ```
 
 ### Automatic Skill Activation
