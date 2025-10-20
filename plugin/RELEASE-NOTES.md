@@ -1,5 +1,21 @@
 # Superpowers Release Notes
 
+## v3.2.1 (2025-10-20)
+
+### New Features
+
+**Code reviewer agent now included in plugin**
+- Added `superpowers:code-reviewer` agent to plugin's `agents/` directory
+- Agent provides systematic code review against plans and coding standards
+- Previously required users to have personal agent configuration
+- All skill references updated to use namespaced `superpowers:code-reviewer`
+- Fixes #55
+
+### Files Changed
+- New: `agents/code-reviewer.md` - Agent definition with review checklist and output format
+- Updated: `skills/requesting-code-review/SKILL.md` - References to `superpowers:code-reviewer`
+- Updated: `skills/subagent-driven-development/SKILL.md` - References to `superpowers:code-reviewer`
+
 ## v3.2.0 (2025-10-18)
 
 ### New Features
