@@ -20,6 +20,8 @@ Start by understanding the current project context, then ask questions one at a 
 - Only one question per message - if a topic needs more exploration, break it into multiple questions
 - Focus on understanding: purpose, constraints, success criteria
 
+**Model tip for exploration:** When dispatching subagents to explore the codebase, use `model: haiku` for fast, cost-effective searches. Haiku excels at file pattern matching and quick lookups.
+
 **► Checkpoint 1 (Task Analysis):** After understanding the idea, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 - Collect: task description, files involved, tech stack
 - Check critical task conditions → Match: invoke directly
