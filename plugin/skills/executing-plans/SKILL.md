@@ -24,6 +24,8 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 ### Step 2: Execute Batch
 **Default: First 3 tasks**
 
+**Claude Model Selection:** When dispatching Claude subagents for task execution, use `model: sonnet` for implementation work. Sonnet excels at code writing and is more cost-effective than Opus for execution tasks.
+
 Copy this checklist template for each batch:
 
 ```
