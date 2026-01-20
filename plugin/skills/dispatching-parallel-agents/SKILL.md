@@ -71,6 +71,30 @@ Task("Fix tool-approval-race-conditions.test.ts failures")
 // All three run concurrently
 ```
 
+### 3.1 Model Selection for Parallel Agents
+
+Choose Claude model based on task type for optimal cost/performance:
+
+| Task Type | Model | Example |
+|-----------|-------|---------|
+| Code fixes, implementations | `model: sonnet` | "Fix test failures", "Implement feature" |
+| Architecture review | Opus (default) | "Review design decisions" |
+| Codebase exploration | `model: haiku` | "Find all usages of X" |
+
+**Example with model specification:**
+
+```typescript
+// Code implementation tasks → Sonnet (cost-effective for code)
+Task("Fix agent-tool-abort.test.ts failures", model: "sonnet")
+Task("Fix batch-completion-behavior.test.ts failures", model: "sonnet")
+
+// Exploration tasks → Haiku (fast, cheap)
+Task("Find all files using deprecated API", model: "haiku")
+
+// Complex analysis → Opus (default, deep reasoning)
+Task("Review architectural implications of changes")
+```
+
 ### 4. Review and Integrate
 
 When agents return:
