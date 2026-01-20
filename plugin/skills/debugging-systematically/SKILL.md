@@ -82,6 +82,8 @@ You MUST complete each phase before proceeding to the next.
    - New dependencies, config changes
    - Environmental differences
 
+   **Search tip:** When dispatching subagents to search for code patterns or trace data flow, use `model: haiku` for fast, cost-effective exploration.
+
 4. **Gather Evidence in Multi-Component Systems**
 
    **WHEN system has multiple components (CI → build → signing, API → service → database):**
