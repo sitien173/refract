@@ -88,12 +88,10 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
 ## Claude Model Strategy for Subagents
 
-When dispatching Claude subagents via the Task tool, choose the right model:
+| Model | Use For |
+|-------|---------|
+| Opus (default) | Review, architecture, complex reasoning |
+| `model: sonnet` | Implementation, coding |
+| `model: haiku` | Exploration, search |
 
-| Model | Parameter | Use For |
-|-------|-----------|---------|
-| **Opus** | (default) | Code review, architecture, complex reasoning |
-| **Sonnet** | `model: sonnet` | Implementation, coding, test writing |
-| **Haiku** | `model: haiku` | Exploration, search, quick lookups |
-
-See `developing-with-subagents` for detailed guidance on model selection per subagent type.
+See `developing-with-subagents` for details.

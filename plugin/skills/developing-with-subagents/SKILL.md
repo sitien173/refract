@@ -123,16 +123,13 @@ digraph process {
 
 ## Claude Model Strategy
 
-When dispatching Claude subagents, choose the right model based on task type:
+Choose model based on task type:
 
-| Subagent | Model | Rationale |
-|----------|-------|-----------|
-| Implementer | `model: sonnet` | Code writing and execution - Sonnet excels at implementation |
-| Spec Reviewer | Opus (default) | Deep reasoning for spec compliance verification |
-| Code Quality Reviewer | Opus (default) | Architectural understanding for quality assessment |
-| Exploration | `model: haiku` | Fast, cost-effective codebase searches |
-
-**Note:** The Task tool's `model` parameter accepts: `sonnet`, `haiku`, or omit for Opus (default).
+| Subagent | Model | Freedom |
+|----------|-------|---------|
+| Implementer | `model: sonnet` | Low - always use Sonnet for code |
+| Spec/Quality Reviewer | Opus (default) | Low - always use Opus for review |
+| Exploration | `model: haiku` | Medium - prefer Haiku, flexible |
 
 ## Collaboration Checkpoints
 
