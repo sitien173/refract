@@ -121,6 +121,19 @@ digraph process {
 - `./spec-reviewer-prompt.md` - Dispatch spec compliance reviewer subagent
 - `./code-quality-reviewer-prompt.md` - Dispatch code quality reviewer subagent
 
+## Claude Model Strategy
+
+When dispatching Claude subagents, choose the right model based on task type:
+
+| Subagent | Model | Rationale |
+|----------|-------|-----------|
+| Implementer | `model: sonnet` | Code writing and execution - Sonnet excels at implementation |
+| Spec Reviewer | Opus (default) | Deep reasoning for spec compliance verification |
+| Code Quality Reviewer | Opus (default) | Architectural understanding for quality assessment |
+| Exploration | `model: haiku` | Fast, cost-effective codebase searches |
+
+**Note:** The Task tool's `model` parameter accepts: `sonnet`, `haiku`, or omit for Opus (default).
+
 ## Collaboration Checkpoints
 
 Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md` at these stages:
