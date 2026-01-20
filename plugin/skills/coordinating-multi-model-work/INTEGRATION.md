@@ -40,6 +40,12 @@ codeagent-wrapper --backend codex - "$PWD" <<'EOF'
 ## Context
 [Problem/task description]
 
+## Code Location (if applicable)
+File: [file_path]
+Lines: [start_line]-[end_line]
+
+Note: Use your CLI tools to read the file at the specified location.
+
 ## Analysis Focus
 1. API design and implementation
 2. Data flow and state management
@@ -57,6 +63,12 @@ EOF
 codeagent-wrapper --backend gemini - "$PWD" <<'EOF'
 ## Context
 [Problem/task description]
+
+## Code Location (if applicable)
+File: [file_path]
+Lines: [start_line]-[end_line]
+
+Note: Use your CLI tools to read the file at the specified location.
 
 ## Analysis Focus
 1. Component structure and rendering

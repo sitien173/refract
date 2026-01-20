@@ -36,8 +36,9 @@ Please analyze from a backend/system architecture perspective.
 ## Problem Description
 {bug_description}
 
-## Related Code
-{code_context}
+## Related Code Location
+File: {file_path}
+Lines: {start_line}-{end_line}
 
 ## Error Message
 {error_message}
@@ -47,6 +48,8 @@ Please analyze from a backend/system architecture perspective.
 2. Why does this problem occur?
 3. How to fix it?
 4. How to prevent similar issues from happening again?
+
+Note: Use your CLI tools to read the file at the specified location.
 
 ## Output Format
 ### Root Cause Analysis
@@ -71,10 +74,13 @@ Please analyze from a backend/system architecture perspective.
 
 ```
 ## Review Scope
-{files_to_review}
+Files to review:
+{file_list_with_line_ranges}
 
 ## Change Summary
 {change_summary}
+
+Note: Use your CLI tools to read the files at the specified locations.
 
 ## Please Review From the Following Perspectives
 
@@ -165,11 +171,14 @@ Please analyze from a backend/system architecture perspective.
 
 ```
 ## Code to Test
-{code_to_test}
+File: {file_path}
+Lines: {start_line}-{end_line}
 
 ## Test Requirements
 - Test framework: {test_framework}
 - Coverage target: {coverage_target}
+
+Note: Use your CLI tools to read the file at the specified location.
 
 ## Please Generate Test Cases
 
