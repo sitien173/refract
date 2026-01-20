@@ -98,6 +98,8 @@ GREEN Phase:  Write minimal skill → Run WITH skill → Verify compliance
 REFACTOR:     Find new rationalizations → Add counters → Re-test
 ```
 
+**Model tip:** Use `model: sonnet` for test execution subagents. Sonnet follows instructions well and is cost-effective for repeated testing iterations.
+
 ## The Bottom Line
 
 **Creating skills IS TDD for process documentation.**
