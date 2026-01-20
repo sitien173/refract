@@ -37,6 +37,8 @@ HEAD_SHA=$(git rev-parse HEAD)
 
 Use Task tool with superpowers:code-reviewer type, fill template at `code-reviewer.md`
 
+**Note:** Code review requires deep reasoning for quality assessment. Use default Opus model (do not specify `model` parameter) to ensure thorough analysis.
+
 **Placeholders:**
 - `{WHAT_WAS_IMPLEMENTED}` - What you just built
 - `{PLAN_OR_REQUIREMENTS}` - What it should do
