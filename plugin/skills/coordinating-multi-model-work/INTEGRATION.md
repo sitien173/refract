@@ -28,7 +28,7 @@ For tasks requiring specialized expertise, apply semantic routing:
 3. **Invoke model** with English prompts via codeagent-wrapper
 4. **Integrate results** before proceeding
 
-**Fallback:** If codeagent-wrapper unavailable, continue with Claude's analysis.
+**Fallback (Fail-Closed):** If codeagent-wrapper is unavailable or times out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final answer).
 ```
 
 ## Invocation Templates

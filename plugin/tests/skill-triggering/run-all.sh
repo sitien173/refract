@@ -8,13 +8,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPTS_DIR="$SCRIPT_DIR/prompts"
 
 SKILLS=(
-    "systematic-debugging"
-    "test-driven-development"
+    "debugging-systematically"
+    "practicing-test-driven-development"
     "writing-plans"
     "dispatching-parallel-agents"
     "executing-plans"
     "requesting-code-review"
+    "coordinating-multi-model-work"
 )
+
+prompt_file_for_skill() {
+    case "$1" in
+        debugging-systematically)
+            echo "$PROMPTS_DIR/systematic-debugging.txt"
+            ;;
+        practicing-test-driven-development)
+            echo "$PROMPTS_DIR/test-driven-development.txt"
+            ;;
+        *)
+            echo "$PROMPTS_DIR/$1.txt"
+            ;;
+    esac
+}
 
 echo "=== Running Skill Triggering Tests ==="
 echo ""
@@ -24,7 +39,7 @@ FAILED=0
 RESULTS=()
 
 for skill in "${SKILLS[@]}"; do
-    prompt_file="$PROMPTS_DIR/${skill}.txt"
+    prompt_file="$(prompt_file_for_skill "$skill")"
 
     if [ ! -f "$prompt_file" ]; then
         echo "⚠️  SKIP: No prompt file for $skill"

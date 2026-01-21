@@ -417,19 +417,15 @@ Each skill should:
 4. Notify the user
 5. Execute the task using the chosen model(s)
 
-## Fallback Handling
+## Fallback Handling (Fail-Closed)
 
-If codeagent-wrapper is not available or invocation fails:
+If codeagent-wrapper is not available or invocation fails (timeout, tool unavailable, permission blocked):
 
-1. **Log the failure reason** for debugging
-2. **Fall back to Claude** handling the task independently
-3. **Note in the output** that external models were not used
-4. **Proceed with best effort** using Claude's capabilities
+Follow `coordinating-multi-model-work/GATE.md`.
 
-**Example fallback message:**
-```
-注意: 外部模型不可用,将使用 Claude 直接处理此任务
-```
+- **STOP** in a BLOCKED state.
+- Do **not** proceed with a final answer or “best effort” solution without external output.
+- Provide the rerun command and the unblock steps.
 
 ## Best Practices
 

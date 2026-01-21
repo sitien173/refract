@@ -1,6 +1,6 @@
 ---
 name: coordinating-multi-model-work
-description: "Routes tasks to optimal AI models (Codex for backend, Gemini for frontend) and enables cross-validation. Use when: needing specialized model expertise, cross-validating critical changes, or leveraging multi-model capabilities. Keywords: Codex, Gemini, model routing, cross-validation"
+description: "Routes work to Codex (backend) and Gemini (frontend) via codeagent-wrapper, with cross-validation for full-stack/uncertain tasks. Use when: UI/components/styles, APIs/databases/auth/security/performance, debugging, code review, or tasks mentioning Codex/Gemini/CCG/multi-model. Keywords: codeagent-wrapper, codex, gemini, cross-validation, api, database, auth, security, performance, ui, component"
 ---
 
 ## Contents

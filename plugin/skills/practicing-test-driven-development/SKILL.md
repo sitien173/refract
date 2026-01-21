@@ -327,7 +327,7 @@ See `coordinating-multi-model-work/INTEGRATION.md` for invocation templates.
 
 **CRITICAL:** Generated tests **must still follow TDD cycle** - run them to confirm they fail (RED) before implementing.
 
-**Fallback:** If external models unavailable, Claude generates tests directly.
+**Fallback (Fail-Closed):** If external models are unavailable or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with generated tests).
 
 ## Final Rule
 

@@ -128,4 +128,4 @@ At checkpoint, apply semantic routing from `coordinating-multi-model-work/routin
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 
-**Fallback:** If external models are not available, use Claude subagent (superpowers:code-reviewer) for review.
+**Fallback (Fail-Closed):** If external models are not available or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final review).

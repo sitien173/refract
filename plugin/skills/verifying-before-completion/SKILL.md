@@ -157,4 +157,4 @@ See `coordinating-multi-model-work/INTEGRATION.md` for invocation templates.
 
 **CRITICAL:** Cross-model verification is **additional** to, not a replacement for running actual commands. **Never claim success based solely on model confirmation.**
 
-**Fallback:** If external models unavailable, ensure Claude's verification is rigorous with comprehensive evidence.
+**Fallback (Fail-Closed):** If external models are unavailable or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not claim verification).

@@ -78,4 +78,4 @@ At checkpoints, when invoking external models:
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 
-**Fallback:** If codeagent-wrapper unavailable, continue with Claude's assessment.
+**Fallback (Fail-Closed):** If codeagent-wrapper is unavailable or times out when Routing != CLAUDE, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final design recommendation).

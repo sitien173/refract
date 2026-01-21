@@ -319,4 +319,4 @@ At checkpoints, apply semantic routing from `coordinating-multi-model-work/routi
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 
-**Fallback:** Claude subagent is always available as fallback and can handle any task with full context.
+**Fallback (Fail-Closed):** If external models are required but unavailable or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with task completion output).

@@ -148,14 +148,14 @@ Claude 自主决策流程:
 
 ---
 
-## Fallback Handling
+## Fallback Handling (Fail-Closed)
 
-**外部模型调用失败时：**
+**外部模型调用失败时（超时、不可用、权限阻塞等）：**
 
-1. 记录失败原因
-2. 通知用户: "注意: [模型]不可用，将使用 Claude 继续"
-3. Claude 独立完成任务
-4. 在输出中标注未使用外部模型
+遵循 `coordinating-multi-model-work/GATE.md`。
+
+- 必须进入 **BLOCKED** 状态并停止（不继续用 Claude 给最终结论/最终方案）。
+- 必须给出：失败原因 + 用户可复现的重试命令/需要解除的阻塞条件。
 
 ---
 

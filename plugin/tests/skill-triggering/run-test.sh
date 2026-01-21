@@ -45,11 +45,68 @@ cd "$OUTPUT_DIR"
 
 echo "Plugin dir: $PLUGIN_DIR"
 echo "Running claude -p with naive prompt..."
-timeout 300 claude -p "$PROMPT" \
+
+run_with_timeout() {
+    local seconds="$1"; shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$seconds" "$@"
+        return $?
+    fi
+
+    if command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$seconds" "$@"
+        return $?
+    fi
+
+    python3 - "$seconds" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+seconds = int(sys.argv[1])
+cmd = sys.argv[2:]
+
+p = subprocess.Popen(cmd, start_new_session=True)
+start = time.time()
+
+while True:
+    rc = p.poll()
+    if rc is not None:
+        sys.exit(rc)
+
+    if time.time() - start >= seconds:
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+        # Give it a moment to exit gracefully.
+        for _ in range(20):
+            rc = p.poll()
+            if rc is not None:
+                sys.exit(124)
+            time.sleep(0.1)
+
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+        sys.exit(124)
+
+    time.sleep(0.1)
+PY
+}
+
+run_with_timeout 300 claude -p "$PROMPT" \
     --plugin-dir "$PLUGIN_DIR" \
     --dangerously-skip-permissions \
     --max-turns "$MAX_TURNS" \
     --output-format stream-json \
+    --verbose \
     > "$LOG_FILE" 2>&1 || true
 
 echo ""

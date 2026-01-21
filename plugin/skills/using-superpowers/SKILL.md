@@ -95,3 +95,9 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 | `model: haiku` | Exploration, search |
 
 See `developing-with-subagents` for details.
+
+## Multi-Model Capability (Codex + Gemini)
+
+If a task would benefit from specialized external models, you MUST use `superpowers:coordinating-multi-model-work` and follow `coordinating-multi-model-work/GATE.md`.
+
+Fail-closed rule: if Routing != CLAUDE and the external call cannot be completed (timeout/tool/permissions), you MUST STOP and report BLOCKED (no final answer).
