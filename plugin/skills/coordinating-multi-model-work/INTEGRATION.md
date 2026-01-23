@@ -28,7 +28,7 @@ For tasks requiring specialized expertise, apply semantic routing:
 3. **Invoke model** with English prompts via codeagent-wrapper
 4. **Integrate results** before proceeding
 
-**Fallback (Fail-Closed):** If codeagent-wrapper is unavailable or times out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final answer).
+**Fallback (Fail-Closed):** If codeagent-wrapper is unavailable or times out, STOP and follow `coordinating-multi-model-work/GATE.md`.
 ```
 
 ## Invocation Templates
@@ -89,12 +89,15 @@ Invoke both models in parallel, then integrate:
 ## Cross-Validation Results
 
 ### Codex Analysis (Backend)
+
 [Results]
 
 ### Gemini Analysis (Frontend)
+
 [Results]
 
 ### Integrated Conclusion
+
 - **Agreement**: [Consistent findings]
 - **Divergence**: [Differences]
 - **Recommendation**: [Final determination]

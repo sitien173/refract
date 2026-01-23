@@ -8,6 +8,8 @@ Use this gate whenever a skill decides **Routing != CLAUDE** (CODEX/GEMINI/CROSS
 - If you cannot obtain external output (timeout, tool unavailable, permission blocked), you MUST STOP.
 - Do NOT provide a final conclusion, final patch, or “best effort” solution without external output.
 
+**Early exposure:** If you decide `Routing != CLAUDE`, run the external invocation immediately (before doing real work). Do not defer the gate until the end.
+
 ## Invocation
 
 Use the templates in `INTEGRATION.md`.

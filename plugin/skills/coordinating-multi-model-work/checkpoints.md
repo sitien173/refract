@@ -2,189 +2,39 @@
 
 ## Overview
 
-嵌入式检查点使 Claude 能够在技能执行的关键阶段自主决定是否调用外部模型（Codex/Gemini）。
+检查点用于在技能执行的关键阶段决定是否需要外部模型，并强制执行统一的证据协议（Evidence / BLOCKED）。
 
-**核心原则：** Claude 自主评估并决策，仅在实际调用时通知用户。
+## Checkpoints
 
-## Checkpoint Types
+### CP1: Task Analysis（开始前）
 
-| 检查点 | 时机 | 目的 |
-|--------|------|------|
-| **CP1: Task Analysis** | 任务开始前 | 确定是否需要专家模型参与 |
-| **CP2: Mid-Review** | 关键决策点 | 对不确定的问题寻求第二意见 |
-| **CP3: Quality Gate** | 完成前 | 让专家模型审查输出 |
+目标：决定是否需要外部模型。
 
-## Checkpoint 1: Task Analysis
+- 收集：任务目标、涉及文件、技术栈、风险/不确定性
+- 使用：`coordinating-multi-model-work/routing-decision.md` 做语义路由
 
-**收集信息：**
-- 任务描述和目标
-- 涉及的文件和目录
-- 技术栈和框架
+**Early exposure:** 一旦决定 `Routing != CLAUDE`，立刻执行 `GATE.md`（拿到 Evidence 或输出 BLOCKED），不要先写方案/写代码。
 
-**评估流程：**
-1. 检查关键任务条件 → 匹配：直接调用
-2. 评估一般任务信号 → 正向：调用
-3. 两者都不满足：Claude 独立处理
+### CP2: Mid-Review（关键决策点）
 
-## Checkpoint 2: Mid-Review
+触发：
 
-**触发条件：**
-- 多个实现方案需要选择
-- 发现潜在性能/安全问题
-- 调试陷入停滞
+- 方案分叉（2+ 可行路径，代价/风险不同）
+- 调试不确定（根因不清、出现互相矛盾证据）
+- 出现安全/性能/数据一致性疑虑
 
-**行为：** 主动调用交叉验证获取多角度视角
+行为：优先使用 `CROSS_VALIDATION`，并同样遵循 early exposure + evidence。
 
-## Checkpoint 3: Quality Gate
+### CP3: Quality Gate（输出前）
 
-**触发条件：**
-- 代码生成完成，准备提交
-- 修复完成，准备验证
+目标：在"最终输出/最终结论/声称通过测试/请求 code review"前做最后一次专家复核。
 
-**行为：** 调用领域专家进行审查
-
----
-
-## Critical Task Detection
-
-**关键任务自动触发外部模型，无需用户确认。**
-
-### Core Business Logic
-```
-关键词: payment, auth, security, transaction, encryption
-关键词(中文): 认证, 支付, 权限, 加密, 交易
-```
-
-### Architecture Design
-```
-- 创建新目录结构
-- 修改跨越 3+ 模块
-- 关键词: design, architecture, refactor, 设计, 架构, 重构
-```
-
-### Complexity Metrics
-```
-- 修改文件 ≥ 3
-- 预计代码行数 ≥ 100
-- 跨前后端修改
-```
-
-### Debug Complexity
-```
-- 错误信息不明确
-- 2+ 次修复尝试失败
-- 涉及异步/并发/状态管理
-```
-
----
-
-## General Task Evaluation
-
-**对于非关键任务，Claude 评估：**
-
-1. **预期收益** - 专家模型是否会显著改善结果？
-2. **领域清晰度** - 是否明确是前端或后端？
-3. **成本效益** - 调用成本是否值得预期改善？
-
-**评估正向 → 静默调用并通知用户。**
-
----
-
-## Autonomous Decision Flow
-
-```
-Claude 自主决策流程:
-┌─────────────────────────────────────────────────┐
-│  检查点触发                                      │
-│     ↓                                           │
-│  收集任务信息 (文件, 技术栈, 复杂度)               │
-│     ↓                                           │
-│  关键任务? ──是──→ 调用模型, 通知用户              │
-│     ↓ 否                                        │
-│  一般任务评估:                                   │
-│  - 预期收益 > 调用成本?                          │
-│  - 领域明确 (前端/后端)?                         │
-│     ↓                                           │
-│  值得调用? ──是──→ 调用模型, 通知用户              │
-│     ↓ 否                                        │
-│  Claude 独立处理 (无通知)                        │
-└─────────────────────────────────────────────────┘
-```
-
----
-
-## User Notification
-
-**仅在实际调用时通知（一句话）：**
-
-```
-我将使用 Codex 来优化这个数据库查询
-我将使用 Gemini 来审查这个组件实现
-我将使用交叉验证来分析这个全栈问题
-```
-
-**Claude 独立处理时不通知。**
-
----
-
-## Model Selection
-
-使用 `routing-decision.md` 中的语义路由规则：
-
-| 任务类型 | 模型 |
-|----------|------|
-| 后端 (API, 数据库, 算法) | CODEX |
-| 前端 (UI, 组件, 样式) | GEMINI |
-| 全栈或不确定 | CROSS_VALIDATION |
-| 简单任务 | CLAUDE |
-
----
-
-## Invocation Template
-
-调用外部模型时使用 `INTEGRATION.md` 中的模板。
-
-**重要：** 所有发送给外部模型的提示必须使用英文。
-
----
-
-## Fallback Handling (Fail-Closed)
-
-**外部模型调用失败时（超时、不可用、权限阻塞等）：**
-
-遵循 `coordinating-multi-model-work/GATE.md`。
-
-- 必须进入 **BLOCKED** 状态并停止（不继续用 Claude 给最终结论/最终方案）。
-- 必须给出：失败原因 + 用户可复现的重试命令/需要解除的阻塞条件。
-
----
-
-## Embedding in Skills
-
-在技能中嵌入检查点时，添加以下引用：
-
-```markdown
-## Collaboration Checkpoint
-
-**At this stage, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:**
-
-1. Collect task information (files, stack, complexity)
-2. Check critical task conditions → Match: invoke directly
-3. Evaluate general task signals → Positive: invoke
-4. Neither: Claude handles independently
-
-If invoking: Notify user with one sentence.
-```
-
----
+- 若 `Routing != CLAUDE`：必须先有 Evidence
+- 外部失败：必须 BLOCKED（fail-closed）
 
 ## User Override
 
-用户可以覆盖自主决策：
+用户可以明确覆盖路由：
 
-| 用户命令 | 行为 |
-|----------|------|
-| "用 Codex" | 强制使用 Codex |
-| "用 Gemini" | 强制使用 Gemini |
-| "都用" / "交叉验证" | 强制交叉验证 |
-| "不要用外部模型" | Claude 独立处理 |
+- "用 Codex" / "用 Gemini" / "交叉验证" → 强制对应 Routing
+- "不要用外部模型" → 强制 `Routing = CLAUDE`
