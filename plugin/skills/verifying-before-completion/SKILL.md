@@ -157,9 +157,9 @@ This is non-negotiable.
 **Related skill:** superpowers:coordinating-multi-model-work
 
 At checkpoint, apply semantic routing using `coordinating-multi-model-work/routing-decision.md`:
-- Backend-only critical → CODEX verification
-- Frontend-only critical → GEMINI verification
-- Full-stack/architectural → CROSS_VALIDATION
+- Backend-only critical → CODEX verification (Codex MCP `mcp__codex__codex`)
+- Frontend-only critical → GEMINI verification (Gemini MCP `mcp__gemini__gemini`)
+- Full-stack/architectural → CROSS_VALIDATION (call both MCP tools)
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 

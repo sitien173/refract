@@ -321,4 +321,4 @@ At checkpoints, apply semantic routing using `coordinating-multi-model-work/rout
 
 See `coordinating-multi-model-work/INTEGRATION.md` for invocation templates.
 
-**Fallback (Fail-Closed):** If codeagent-wrapper is unavailable or times out when Routing != CLAUDE, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final conclusion).
+**Fallback (Fail-Closed):** If Codex MCP / Gemini MCP is unavailable or times out when Routing != CLAUDE, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final conclusion).

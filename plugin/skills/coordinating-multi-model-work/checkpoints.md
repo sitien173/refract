@@ -13,7 +13,7 @@
 - 收集：任务目标、涉及文件、技术栈、风险/不确定性
 - 使用：`coordinating-multi-model-work/routing-decision.md` 做语义路由
 
-**Early exposure:** 一旦决定 `Routing != CLAUDE`，立刻执行 `GATE.md`（拿到 Evidence 或输出 BLOCKED），不要先写方案/写代码。
+**Early exposure:** 一旦决定 `Routing != CLAUDE`，立刻执行 `GATE.md`（使用 MCP 工具取得 Evidence 或输出 BLOCKED），不要先写方案/写代码。
 
 ### CP2: Mid-Review（关键决策点）
 

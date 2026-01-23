@@ -4,4 +4,4 @@ I need to add a new feature to validate email addresses. It should:
 - Check that there's a dot in the domain part
 - Return true/false
 
-Can you implement this?
+Please use the practicing-test-driven-development skill to implement this.

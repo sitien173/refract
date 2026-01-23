@@ -175,9 +175,9 @@ Description changed to imperative: "You MUST use this before any creative workâ€
 ### Changed
 
 - **Refactored Codex Implementation**: Now uses shared `lib/skills-core.js` ES module
-  - Eliminates code duplication between Codex and OpenCode
+  - Eliminates code duplication between Codex MCP and OpenCode
   - Single source of truth for skill discovery and parsing
-  - Codex successfully loads ES modules via Node.js interop
+  - Codex MCP successfully loads ES modules via Node.js interop
 
 - **Improved Documentation**: Rewrote README to explain problem/solution clearly
   - Removed duplicate sections and conflicting information

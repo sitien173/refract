@@ -1,6 +1,6 @@
 # Gemini Base Prompt Template
 
-> **IMPORTANT**: All prompts sent to Gemini must be in English. This ensures standardized and efficient multi-model collaboration.
+> **IMPORTANT**: All prompts sent to Gemini must be in English. Invoke Gemini via the MCP tool `mcp__gemini__gemini` (required param: `PROMPT`; optional: `sandbox`, `SESSION_ID`, `return_all_messages`, `model`).
 
 ## General Analysis Template
 

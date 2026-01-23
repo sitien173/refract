@@ -25,74 +25,55 @@ For tasks requiring specialized expertise, apply semantic routing:
 
 1. **Analyze task domain** using `coordinating-multi-model-work/routing-decision.md`
 2. **Notify user**: "我将使用 [model] 来 [task purpose]"
-3. **Invoke model** with English prompts via codeagent-wrapper
+3. **Invoke model** with English prompts via the MCP tools (`mcp__codex__codex` for backend, `mcp__gemini__gemini` for frontend)
 4. **Integrate results** before proceeding
 
-**Fallback (Fail-Closed):** If codeagent-wrapper is unavailable or times out, STOP and follow `coordinating-multi-model-work/GATE.md`.
+**Fallback (Fail-Closed):** If the MCP tool call fails or times out, STOP and follow `coordinating-multi-model-work/GATE.md`.
 ```
 
 ## Invocation Templates
 
-### Backend Analysis (Codex)
+### Backend Analysis (Codex MCP)
 
-```bash
-codeagent-wrapper --backend codex - "$PWD" <<'EOF'
-## Context
-[Problem/task description]
-
-## Code Location (if applicable)
-File: [file_path]
-Lines: [start_line]-[end_line]
-
-Note: Use your CLI tools to read the file at the specified location.
-
-## Analysis Focus
-1. API design and implementation
-2. Data flow and state management
-3. Performance and security considerations
-
-## Expected Output
-- Assessment with strengths/risks
-- Specific recommendations
-EOF
+```json
+{
+  "tool": "mcp__codex__codex",
+  "params": {
+    "PROMPT": "## Context\n[Problem/task description]\n\n## Code Location (if applicable)\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n## Analysis Focus\n1. API design and implementation\n2. Data flow and state management\n3. Performance and security considerations\n\n## Expected Output\n- Assessment with strengths/risks\n- Specific recommendations",
+    "cd": "$PWD",
+    "sandbox": "default",
+    "SESSION_ID": "<reuse-or-new>",
+    "model": "codex-latest"
+  }
+}
 ```
 
-### Frontend Analysis (Gemini)
+### Frontend Analysis (Gemini MCP)
 
-```bash
-codeagent-wrapper --backend gemini - "$PWD" <<'EOF'
-## Context
-[Problem/task description]
-
-## Code Location (if applicable)
-File: [file_path]
-Lines: [start_line]-[end_line]
-
-Note: Use your CLI tools to read the file at the specified location.
-
-## Analysis Focus
-1. Component structure and rendering
-2. User interaction and experience
-3. Accessibility and responsive design
-
-## Expected Output
-- Assessment with strengths/risks
-- Specific recommendations
-EOF
+```json
+{
+  "tool": "mcp__gemini__gemini",
+  "params": {
+    "PROMPT": "## Context\n[Problem/task description]\n\n## Code Location (if applicable)\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n## Analysis Focus\n1. Component structure and rendering\n2. User interaction and experience\n3. Accessibility and responsive design\n\n## Expected Output\n- Assessment with strengths/risks\n- Specific recommendations",
+    "sandbox": "default",
+    "SESSION_ID": "<reuse-or-new>",
+    "model": "gemini-latest"
+  }
+}
 ```
 
 ### Cross-Validation (Both)
 
-Invoke both models in parallel, then integrate:
+Invoke both MCP tools in parallel, then integrate:
 
 ```markdown
 ## Cross-Validation Results
 
-### Codex Analysis (Backend)
+### Codex Analysis (Backend via mcp__codex__codex)
 
 [Results]
 
-### Gemini Analysis (Frontend)
+### Gemini Analysis (Frontend via mcp__gemini__gemini)
 
 [Results]
 

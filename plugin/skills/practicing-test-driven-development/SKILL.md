@@ -329,9 +329,9 @@ When adding mocks or test utilities, read @testing-anti-patterns.md to avoid com
 **Related skill:** superpowers:coordinating-multi-model-work
 
 At checkpoints, apply semantic routing using `coordinating-multi-model-work/routing-decision.md`:
-- Frontend component tests → GEMINI
-- Backend logic tests → CODEX
-- Full-stack tests → CROSS_VALIDATION
+- Frontend component tests → GEMINI (Gemini MCP `mcp__gemini__gemini`)
+- Backend logic tests → CODEX (Codex MCP `mcp__codex__codex`)
+- Full-stack tests → CROSS_VALIDATION (call both MCP tools)
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 

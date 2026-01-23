@@ -72,7 +72,7 @@
 
 ### Phase 1: Parallel Invocation
 
-Send tasks to both Codex and Gemini simultaneously, each analyzing from their professional perspective.
+Send tasks to both Codex and Gemini simultaneously via the MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`), each analyzing from their professional perspective.
 
 **Codex Task Template**:
 ```
@@ -162,7 +162,7 @@ After collecting outputs from both models, perform comparative analysis:
 - **Trigger Reason**: [Full-stack issue/High uncertainty/Design decision/Complex bug/Critical modification]
 - **Validation Scope**: [Files/modules involved]
 
-### Codex Analysis (Backend Perspective)
+### Codex Analysis (Backend Perspective via mcp__codex__codex)
 
 #### Analysis Conclusion
 [Codex's main conclusion]
@@ -174,7 +174,7 @@ After collecting outputs from both models, perform comparative analysis:
 #### Suggested Solution
 [Codex's suggested solution]
 
-### Gemini Analysis (Frontend Perspective)
+### Gemini Analysis (Frontend Perspective via mcp__gemini__gemini)
 
 #### Analysis Conclusion
 [Gemini's main conclusion]
@@ -235,8 +235,8 @@ After collecting outputs from both models, perform comparative analysis:
 
 ### Parallel Invocation Optimization
 
-- Both model calls should execute in parallel to reduce wait time
-- Use `&` background execution or parallel tools
+- Both MCP tool calls should execute in parallel to reduce wait time
+- Use `&` background execution or MCP-aware parallel helpers
 
 ### Timeout Handling
 

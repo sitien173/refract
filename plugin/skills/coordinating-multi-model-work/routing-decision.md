@@ -8,7 +8,7 @@ This framework guides Claude in making semantic routing decisions for multi-mode
 
 ## When to Use
 
-Invoke this framework when a skill needs to call external models (Codex/Gemini) via codeagent-wrapper.
+Invoke this framework when a skill needs to call external models (Codex/Gemini) via the MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`).
 
 ## Standard Information Set
 

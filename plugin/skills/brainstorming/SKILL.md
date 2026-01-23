@@ -84,9 +84,9 @@ At checkpoints, when invoking external models:
 
 1. **Apply semantic routing** using `coordinating-multi-model-work/routing-decision.md`
 2. **Notify user**: "我将使用 [model] 来评估这个设计方案"
-3. **Invoke model** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates)
+3. **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
 4. **Integrate results** into design recommendation
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 
-**Fallback (Fail-Closed):** If codeagent-wrapper is unavailable or times out when Routing != CLAUDE, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final design recommendation).
+**Fallback (Fail-Closed):** If Codex MCP / Gemini MCP is unavailable or times out when Routing != CLAUDE, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final design recommendation).

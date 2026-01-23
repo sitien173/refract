@@ -4,7 +4,7 @@ Use this gate whenever a skill decides **Routing != CLAUDE** (CODEX/GEMINI/CROSS
 
 ## Core Rule
 
-- If Routing != CLAUDE, you MUST obtain external model output via `codeagent-wrapper`.
+- If Routing != CLAUDE, you MUST obtain external model output via the Codex/Gemini MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`).
 - If you cannot obtain external output (timeout, tool unavailable, permission blocked), you MUST STOP.
 - Do NOT provide a final conclusion, final patch, or “best effort” solution without external output.
 
@@ -29,7 +29,8 @@ Routing: CODEX | GEMINI | CROSS_VALIDATION
 Why: <one sentence>
 
 Evidence:
-- Command: <the exact command you ran, including any timeout env vars>
+- Tool: mcp__codex__codex | mcp__gemini__gemini
+- Params: <key MCP parameters used (PROMPT, cd, SESSION_ID, sandbox, model, etc.)>
 - Result: <3-6 bullets of what the external model said>
 - Integration: <what you accepted/rejected and why>
 ```
@@ -45,7 +46,7 @@ Status: BLOCKED
 Reason: timeout | tool-unavailable | permission-blocked | other
 
 Next action:
-- Provide the exact rerun command for the user.
+- Provide the exact rerun MCP tool call (tool + params) for the user.
 - Ask the user to re-run after fixing the blocker.
 
 Stop here. Do not proceed.

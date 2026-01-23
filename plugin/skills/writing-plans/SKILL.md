@@ -152,11 +152,11 @@ During plan execution (via `executing-plans` or `developing-with-subagents`):
    - Makes routing decision based on semantic understanding
    - Uses hint as **guidance**, not strict rule
 
-3. Routes task to optimal model:
-   - Frontend → GEMINI
-   - Backend → CODEX
-   - Full-stack/uncertain → CROSS_VALIDATION
-   - Simple → CLAUDE
+3. Routes task to optimal model (MCP tools):
+   - Frontend → GEMINI (Gemini MCP `mcp__gemini__gemini`)
+   - Backend → CODEX (Codex MCP `mcp__codex__codex`)
+   - Full-stack/uncertain → CROSS_VALIDATION (call both MCP tools)
+   - Simple → CLAUDE (no MCP call)
 
 **Example with hints:**
 

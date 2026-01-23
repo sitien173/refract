@@ -2,7 +2,7 @@
 
 This file is a lightweight cheat sheet. It is **not** the routing decision algorithm.
 
-Prefer semantic routing via `coordinating-multi-model-work/routing-decision.md`.
+Prefer semantic routing via `coordinating-multi-model-work/routing-decision.md` and invoke the MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`) accordingly.
 
 ## High-signal defaults
 

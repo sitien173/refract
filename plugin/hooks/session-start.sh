@@ -7,51 +7,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Auto-setup codeagent-wrapper
-setup_codeagent_wrapper() {
-    local bin_dir="${HOME}/.claude/bin"
-    local wrapper_name="codeagent-wrapper"
-    local target="${bin_dir}/${wrapper_name}"
-
-    # Detect platform
-    local os arch binary_name
-    case "$(uname -s)" in
-        Darwin) os="darwin" ;;
-        Linux) os="linux" ;;
-        MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-        *) return 0 ;;
-    esac
-
-    case "$(uname -m)" in
-        x86_64|amd64) arch="amd64" ;;
-        arm64|aarch64) arch="arm64" ;;
-        *) return 0 ;;
-    esac
-
-    if [ "$os" = "windows" ]; then
-        binary_name="${wrapper_name}-${os}-${arch}.exe"
-    else
-        binary_name="${wrapper_name}-${os}-${arch}"
-    fi
-
-    local source="${PLUGIN_ROOT}/bin/${binary_name}"
-
-    # Check if source exists
-    [ -f "$source" ] || return 0
-
-    # Create bin directory if needed
-    mkdir -p "$bin_dir"
-
-    # Copy if not exists or outdated
-    if [ ! -f "$target" ] || [ "$source" -nt "$target" ]; then
-        cp "$source" "$target"
-        chmod +x "$target"
-    fi
-}
-
-# Run codeagent-wrapper setup (silent, non-blocking)
-setup_codeagent_wrapper 2>/dev/null || true
-
 # Check if legacy skills directory exists and build warning
 warning_message=""
 legacy_skills_dir="${HOME}/.config/superpowers/skills"
@@ -93,7 +48,7 @@ cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": "<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\n\n${using_superpowers_escaped}\n\n---\n\n**【1%规则 - 强制执行】coordinating-multi-model-work skill：**\n\n**只要任务有 1% 的可能性需要调用外部模型（Codex/Gemini），你就必须：**\n\n1. **首先使用 Skill 工具读取** `superpowers:coordinating-multi-model-work` skill\n2. **执行检查点评估**（CP1/CP2/CP3）决定是否调用\n3. **如果评估结果需要调用**，则按照协议调用 Codex/Gemini\n4. **如果评估结果不需要调用**，则由 Claude 独立处理\n\n**跳过评估直接调用 = 严重违规**\n**评估后应该调用但忽略不调用 = 严重违规**\n\n**coordinating-multi-model-work skill 完整内容：**\n\n${coordinating_escaped}\n\n${warning_escaped}\n</EXTREMELY_IMPORTANT>"
+    "additionalContext": "<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\n\n${using_superpowers_escaped}\n\n---\n\n**【1%规则 - 强制执行】coordinating-multi-model-work skill：**\n\n**只要任务有 1% 的可能性需要调用外部 MCP tools（Codex MCP/Gemini MCP），你就必须：**\n\n1. **首先使用 Skill 工具读取** `superpowers:coordinating-multi-model-work` skill\n2. **执行检查点评估**（CP1/CP2/CP3）决定是否调用\n3. **如果评估结果需要调用**，则按照协议调用 MCP tools（`mcp__codex__codex` / `mcp__gemini__gemini`）\n4. **如果评估结果不需要调用**，则由 Claude 独立处理\n\n**跳过评估直接调用 = 严重违规**\n**评估后应该调用但忽略不调用 = 严重违规**\n\n**coordinating-multi-model-work skill 完整内容：**\n\n${coordinating_escaped}\n\n${warning_escaped}\n</EXTREMELY_IMPORTANT>"
   }
 }
 EOF

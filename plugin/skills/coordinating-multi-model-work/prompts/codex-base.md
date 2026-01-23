@@ -1,6 +1,6 @@
 # Codex Base Prompt Template
 
-> **IMPORTANT**: All prompts sent to Codex must be in English. This ensures standardized and efficient multi-model collaboration.
+> **IMPORTANT**: All prompts sent to Codex must be in English. Invoke Codex via the MCP tool `mcp__codex__codex` (required params: `PROMPT`, `cd`; optional: `sandbox`, `SESSION_ID`, `return_all_messages`, `model`).
 
 ## General Analysis Template
 

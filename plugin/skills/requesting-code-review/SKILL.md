@@ -134,7 +134,7 @@ At checkpoint, apply semantic routing from `coordinating-multi-model-work/routin
 
 - **Notify user:** "我将使用 [model] 来评审这些代码更改"
 
-- **Invoke model** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates)
+- **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 

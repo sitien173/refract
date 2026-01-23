@@ -1,6 +1,6 @@
 ---
 name: coordinating-multi-model-work
-description: "Routes work to Codex (backend) and Gemini (frontend) via codeagent-wrapper, with cross-validation for full-stack/uncertain tasks. Use when: UI/components/styles, APIs/databases/auth/security/performance, debugging, code review, or tasks mentioning Codex/Gemini/CCG/multi-model. Keywords: codeagent-wrapper, codex, gemini, cross-validation, api, database, auth, security, performance, ui, component"
+description: "Routes work to Codex (backend) and Gemini (frontend) via Codex/Gemini MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`), with cross-validation for full-stack/uncertain tasks. Use when: UI/components/styles, APIs/databases/auth/security/performance, debugging, code review, or tasks mentioning Codex/Gemini/CCG/multi-model. Keywords: codex mcp, gemini mcp, cross-validation, api, database, auth, security, performance, ui, component"
 ---
 
 ## Contents
@@ -15,7 +15,7 @@ description: "Routes work to Codex (backend) and Gemini (frontend) via codeagent
 
 ## Overview
 
-Use this module to decide whether to call **Codex** (backend) and/or **Gemini** (frontend) via `codeagent-wrapper`, and to enforce a consistent evidence protocol.
+Use this module to decide whether to call **Codex** (backend) and/or **Gemini** (frontend) via the Codex/Gemini MCP tools, and to enforce a consistent evidence protocol.
 
 This module is intentionally minimal: it provides a small workflow and pushes details into reference files.
 
