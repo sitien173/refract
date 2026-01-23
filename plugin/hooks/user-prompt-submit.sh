@@ -9,4 +9,6 @@ REMINDER_TEXT="⚠️ 多模型强制协议:
 - 未遵守视为严重违规
 "
 
-jq --arg remind "$REMINDER_TEXT" '.user_input = $remind + .user_input' /tmp/prompt.json > /tmp/prompt.json.tmp && mv /tmp/prompt.json.tmp /tmp/prompt.json
+# Claude Code hooks 的事件 JSON 通过 stdin 传入；UserPromptSubmit 的 stdout 会被追加到上下文。
+# 因此这里直接输出提醒，不再依赖 /tmp/prompt.json。
+printf '%s\n' "$REMINDER_TEXT"
