@@ -17,9 +17,19 @@ description: "Creates comprehensive implementation plans with bite-sized tasks, 
 
 Write comprehensive implementation plans assuming the engineer has zero context for our codebase and questionable taste. Document everything they need to know: which files to touch for each task, code, testing, docs they might need to check, how to test it. Give them the whole plan as bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.
 
+## 协议门槛（必须）
+
+遵循 hooks 注入的【CP 协议门槛】要求：
+- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
+- 声称计划已完成/准备交接执行前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+
+不满足 → 立刻停止，先补齐 CP 块再继续。
+
 Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
+
+硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
 
 **► Checkpoint 1 (Task Analysis):** Before writing the plan, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 - Collect: overall scope, files involved, tech stack, complexity
@@ -185,6 +195,8 @@ During plan execution (via `executing-plans` or `developing-with-subagents`):
 - Focus on clear task descriptions and file paths; routing is handled automatically
 
 ## Execution Handoff
+
+硬提醒：在你声称计划已完成/准备交接执行之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
 
 **► Checkpoint 3 (Quality Gate):** Before handoff, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 - Plan complete and ready for execution → invoke domain expert for final review

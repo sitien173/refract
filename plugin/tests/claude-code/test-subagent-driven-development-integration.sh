@@ -149,7 +149,7 @@ Begin now. Execute the plan."
 
 echo "Running Claude (output will be shown below and saved to $OUTPUT_FILE)..."
 echo "================================================================================"
-cd "$SCRIPT_DIR/../.." && timeout 1800 claude -p "$PROMPT" --allowed-tools=all --add-dir "$TEST_PROJECT" --permission-mode bypassPermissions 2>&1 | tee "$OUTPUT_FILE" || {
+cd "$SCRIPT_DIR/../.." && run_with_timeout 1800 claude -p "$PROMPT" --allowed-tools=all --add-dir "$TEST_PROJECT" --permission-mode bypassPermissions 2>&1 | tee "$OUTPUT_FILE" || {
     echo ""
     echo "================================================================================"
     echo "EXECUTION FAILED (exit code: $?)"
@@ -163,11 +163,25 @@ echo ""
 
 # Find the session transcript
 # Session files are in ~/.claude/projects/-<working-dir>/<session-id>.jsonl
-WORKING_DIR_ESCAPED=$(echo "$SCRIPT_DIR/../.." | sed 's/\//-/g' | sed 's/^-//')
+# Session dir corresponds to where we run `claude` from (repo root).
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+WORKING_DIR_ESCAPED=$(echo "$REPO_ROOT" | sed 's/\//-/g')
 SESSION_DIR="$HOME/.claude/projects/$WORKING_DIR_ESCAPED"
 
 # Find the most recent session file (created during this test run)
-SESSION_FILE=$(find "$SESSION_DIR" -name "*.jsonl" -type f -mmin -60 2>/dev/null | sort -r | head -1)
+SESSION_FILE=$(python3 - "$SESSION_DIR" <<'PY'
+import glob
+import os
+import sys
+
+d = sys.argv[1]
+paths = glob.glob(os.path.join(d, '*.jsonl'))
+if not paths:
+    raise SystemExit(1)
+paths.sort(key=os.path.getmtime, reverse=True)
+print(paths[0])
+PY
+) || SESSION_FILE=""
 
 if [ -z "$SESSION_FILE" ]; then
     echo "ERROR: Could not find session transcript file"

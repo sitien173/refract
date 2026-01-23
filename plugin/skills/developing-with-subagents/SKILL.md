@@ -18,6 +18,14 @@ Execute plan by dispatching fresh subagent per task, with two-stage review after
 
 **Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
 
+## 协议门槛（必须）
+
+遵循 hooks 注入的【CP 协议门槛】要求：
+- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
+- 声称完成/请求 review/宣称验证通过前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+
+不满足 → 立刻停止，先补齐 CP 块再继续。
+
 ## When to Use
 
 ```dot
@@ -56,6 +64,7 @@ Plan Execution Progress:
 Per-Task Checklist (copy for each):
 Task N: [description]
 - [ ] Checkpoint 1 (Task Analysis) applied
+- [ ] 【CP1 评估】已输出（单独一条消息）
 - [ ] Implementer subagent dispatched
 - [ ] Questions answered (if any)
 - [ ] Implementation complete
@@ -137,6 +146,7 @@ Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md` at th
 
 **► Checkpoint 1 (Task Analysis):** Before dispatching implementer subagent:
 - Collect: task files, description, complexity
+- **Output a standalone `【CP1 评估】` block to the user BEFORE the first Task tool call**
 - Check critical task conditions → Match: invoke expert model
 - Evaluate general task signals → Positive: invoke
 

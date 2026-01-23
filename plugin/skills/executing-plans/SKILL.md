@@ -13,6 +13,14 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 
 **Announce at start:** "I'm using the executing-plans skill to implement this plan."
 
+## 协议门槛（必须）
+
+遵循 hooks 注入的【CP 协议门槛】要求：
+- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
+- 声称 batch 完成/宣称验证通过/准备收尾前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+
+不满足 → 立刻停止，先补齐 CP 块再继续。
+
 ## The Process
 
 ### Step 1: Load and Review Plan
@@ -45,7 +53,8 @@ Current Task:
 
 For each task:
 1. Mark as in_progress
-2. **► Checkpoint 1 (Task Analysis):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+2. 硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
+3. **► Checkpoint 1 (Task Analysis):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
    - Collect: task files, description, tech stack from plan
    - Check critical task conditions → Match: invoke expert model
    - Evaluate general task signals → Positive: invoke
@@ -60,6 +69,7 @@ For each task:
 
 ### Step 3: Report
 When batch complete:
+- 硬提醒：在你声称 batch 完成/宣布验证通过之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
 - Show what was implemented
 - Show verification output
 - Say: "Ready for feedback."

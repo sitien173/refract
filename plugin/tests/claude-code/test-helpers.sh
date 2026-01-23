@@ -1,31 +1,60 @@
 #!/usr/bin/env bash
 # Helper functions for Claude Code skill tests
 
+# Run a command with a timeout.
+# Uses coreutils `timeout` when available; falls back to `gtimeout` (macOS) or python.
+# Usage: run_with_timeout <seconds> <cmd> [args...]
+run_with_timeout() {
+    local seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$seconds" "$@"
+        return $?
+    fi
+
+    if command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$seconds" "$@"
+        return $?
+    fi
+
+    python3 - "$seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout_s = float(sys.argv[1])
+cmd = sys.argv[2:]
+
+try:
+    p = subprocess.run(cmd, timeout=timeout_s)
+    raise SystemExit(p.returncode)
+except subprocess.TimeoutExpired:
+    # Match coreutils timeout exit code.
+    raise SystemExit(124)
+PY
+}
+
 # Run Claude Code with a prompt and capture output
 # Usage: run_claude "prompt text" [timeout_seconds] [allowed_tools]
 run_claude() {
     local prompt="$1"
-    local timeout="${2:-60}"
+    local timeout_seconds="${2:-60}"
     local allowed_tools="${3:-}"
-    local output_file=$(mktemp)
+    local output_file
+    output_file=$(mktemp)
 
-    # Build command
-    local cmd="claude -p \"$prompt\""
+    # Always return 0 and print captured output to stdout.
+    # This prevents `set -e` from aborting test scripts on transient CLI/API errors,
+    # while still letting pattern assertions fail the test deterministically.
     if [ -n "$allowed_tools" ]; then
-        cmd="$cmd --allowed-tools=$allowed_tools"
+        run_with_timeout "$timeout_seconds" claude -p "$prompt" --allowed-tools="$allowed_tools" --permission-mode bypassPermissions > "$output_file" 2>&1 || true
+    else
+        run_with_timeout "$timeout_seconds" claude -p "$prompt" --permission-mode bypassPermissions > "$output_file" 2>&1 || true
     fi
 
-    # Run Claude in headless mode with timeout
-    if timeout "$timeout" bash -c "$cmd" > "$output_file" 2>&1; then
-        cat "$output_file"
-        rm -f "$output_file"
-        return 0
-    else
-        local exit_code=$?
-        cat "$output_file" >&2
-        rm -f "$output_file"
-        return $exit_code
-    fi
+    cat "$output_file"
+    rm -f "$output_file"
+    return 0
 }
 
 # Check if output contains a pattern
@@ -35,7 +64,7 @@ assert_contains() {
     local pattern="$2"
     local test_name="${3:-test}"
 
-    if echo "$output" | grep -q "$pattern"; then
+    if echo "$output" | grep -Eq "$pattern"; then
         echo "  [PASS] $test_name"
         return 0
     else
@@ -54,7 +83,7 @@ assert_not_contains() {
     local pattern="$2"
     local test_name="${3:-test}"
 
-    if echo "$output" | grep -q "$pattern"; then
+    if echo "$output" | grep -Eq "$pattern"; then
         echo "  [FAIL] $test_name"
         echo "  Did not expect to find: $pattern"
         echo "  In output:"

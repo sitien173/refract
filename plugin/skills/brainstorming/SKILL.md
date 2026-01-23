@@ -11,6 +11,14 @@ Help turn ideas into fully formed designs and specs through natural collaborativ
 
 Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design in small sections (200-300 words), checking after each section whether it looks right so far.
 
+## 协议门槛（必须）
+
+遵循 hooks 注入的【CP 协议门槛】要求：
+- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
+- 给出最终设计结论/请求 review 前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+
+不满足 → 立刻停止，先补齐 CP 块再继续。
+
 ## The Process
 
 **Understanding the idea:**
@@ -21,6 +29,8 @@ Start by understanding the current project context, then ask questions one at a 
 - Focus on understanding: purpose, constraints, success criteria
 
 **Model tip for exploration:** When dispatching subagents to explore the codebase, use `model: haiku` for fast, cost-effective searches. Haiku excels at file pattern matching and quick lookups.
+
+硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
 
 **► Checkpoint 1 (Task Analysis):** After understanding the idea, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 - Collect: task description, files involved, tech stack
@@ -39,6 +49,7 @@ Start by understanding the current project context, then ask questions one at a 
 
 **Presenting the design:**
 - Once you believe you understand what you're building, present the design
+- 硬提醒：在你给出最终设计结论/声称设计定稿之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
 - Break it into sections of 200-300 words
 - Ask after each section whether it looks right so far
 - Cover: architecture, components, data flow, error handling, testing

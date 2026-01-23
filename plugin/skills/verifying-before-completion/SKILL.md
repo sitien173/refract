@@ -21,7 +21,17 @@ NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
 
 If you haven't run the verification command in this message, you cannot claim it passes.
 
+## 协议门槛（必须）
+
+遵循 hooks 注入的【CP 协议门槛】要求：
+- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
+- 声称验证通过/宣称完成/准备提交或开 PR 前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+
+不满足 → 立刻停止，先补齐 CP 块再继续。
+
 ## The Gate Function
+
+硬提醒：在你声称“验证通过/已完成/已修复”等任何结论之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
 
 **► Checkpoint 3 (Quality Gate):** Before claiming completion, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 - Critical changes complete → invoke domain expert for independent verification

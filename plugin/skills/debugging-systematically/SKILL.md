@@ -22,6 +22,14 @@ Random fixes waste time and create new bugs. Quick patches mask underlying issue
 
 **Violating the letter of this process is violating the spirit of debugging.**
 
+## 协议门槛（必须）
+
+遵循 hooks 注入的【CP 协议门槛】要求：
+- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
+- 给出最终结论/声称完成/请求 review 前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+
+不满足 → 立刻停止，先补齐 CP 块再继续。
+
 ## The Iron Law
 
 ```
@@ -57,6 +65,8 @@ Use for ANY technical issue:
 You MUST complete each phase before proceeding to the next.
 
 ### Phase 1: Root Cause Investigation
+
+硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
 
 **► Checkpoint 1 (Task Analysis):** Before investigation, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 - Unclear error messages → invoke domain expert for interpretation
@@ -187,6 +197,8 @@ You MUST complete each phase before proceeding to the next.
    - Research more
 
 ### Phase 4: Implementation
+
+硬提醒：在你给出最终结论/声称修复完成/宣称验证通过之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
 
 **Fix the root cause, not the symptom:**
 

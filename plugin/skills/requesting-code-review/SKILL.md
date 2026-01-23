@@ -9,6 +9,14 @@ Dispatch superpowers:code-reviewer subagent to catch issues before they cascade.
 
 **Core principle:** Review early, review often.
 
+## 协议门槛（必须）
+
+遵循 hooks 注入的【CP 协议门槛】要求：
+- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
+- 请求 review/输出任何评审结论前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+
+不满足 → 立刻停止，先补齐 CP 块再继续。
+
 ## When to Request Review
 
 **Mandatory:**
@@ -22,6 +30,8 @@ Dispatch superpowers:code-reviewer subagent to catch issues before they cascade.
 - After fixing complex bug
 
 ## How to Request
+
+硬提醒：在你请求 review/输出任何“评审结论”之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
 
 **► Checkpoint 3 (Quality Gate):** Before requesting review, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 - Code changes complete → invoke domain expert for specialized review

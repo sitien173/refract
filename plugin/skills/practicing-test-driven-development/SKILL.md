@@ -22,6 +22,14 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 **Violating the letter of the rules is violating the spirit of the rules.**
 
+## 协议门槛（必须）
+
+遵循 hooks 注入的【CP 协议门槛】要求：
+- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
+- 声称完成/请求 review/宣称验证通过前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+
+不满足 → 立刻停止，先补齐 CP 块再继续。
+
 ## When to Use
 
 **Always:**
@@ -80,6 +88,8 @@ digraph tdd_cycle {
 ### RED - Write Failing Test
 
 Write one minimal test showing what should happen.
+
+硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
 
 **► Checkpoint 1 (Task Analysis):** Before writing test, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 - Check critical task conditions → Match: invoke domain expert for test design
@@ -185,6 +195,8 @@ Don't add features, refactor other code, or "improve" beyond the test.
 ### Verify GREEN - Watch It Pass
 
 **MANDATORY.**
+
+硬提醒：在你声称完成/宣布验证通过之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
 
 ```bash
 npm test path/to/test.test.ts
