@@ -17,8 +17,8 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 
 Follow the [CP Protocol Threshold] injected by hooks:
 
-- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
-- Before claiming a batch is complete / verification passed / ready to wrap up: output a standalone [CP3 Assessment] (this message must not include tool calls)
+- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
+- Before claiming a batch is complete / verification passed / ready to wrap up: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the conclusion may follow in the same reply)
 
 If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 

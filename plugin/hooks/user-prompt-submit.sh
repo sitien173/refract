@@ -5,8 +5,10 @@ set -euo pipefail
 
 REMINDER_TEXT="[CP Protocol Threshold (Required)]
 
-1) Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
-2) Before claiming completion / requesting review / claiming verification passed: output a standalone [CP3 Assessment] (this message must not include tool calls)
+1) Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls)
+2) Before claiming completion / requesting review / claiming verification passed: output a standalone [CP3 Assessment] block (the block itself must not include tool calls)
+
+Note: Put the CP block first; tool calls may follow in the same assistant reply.
 
 [CP1 Assessment]
 - Task type: [Frontend/Backend/Full-stack/Other]

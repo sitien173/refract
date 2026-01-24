@@ -25,8 +25,8 @@ If you haven't run the verification command in this message, you cannot claim it
 
 Follow the [CP Protocol Threshold] injected by hooks:
 
-- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
-- Before claiming verification passed / completion / ready to commit or open a PR: output a standalone [CP3 Assessment] (this message must not include tool calls)
+- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
+- Before claiming verification passed / completion / ready to commit or open a PR: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the claim may follow in the same reply)
 
 If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
