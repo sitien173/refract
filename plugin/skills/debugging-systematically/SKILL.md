@@ -6,13 +6,24 @@ description: "Find root cause before attempting fixes through four-phase investi
 # Systematic Debugging
 
 ## Contents
-- [Overview](#overview)
-- [The Iron Law](#the-iron-law)
-- [The Four Phases](#the-four-phases)
-- [Red Flags](#red-flags---stop-and-follow-process)
-- [Common Rationalizations](#common-rationalizations)
-- [Supporting Techniques](#supporting-techniques)
-- [Multi-Model Cross-Validation](#multi-model-cross-validation)
+
+- [Systematic Debugging](#systematic-debugging)
+  - [Contents](#contents)
+  - [Overview](#overview)
+  - [Protocol Threshold (Required)](#protocol-threshold-required)
+  - [The Iron Law](#the-iron-law)
+  - [When to Use](#when-to-use)
+  - [The Four Phases](#the-four-phases)
+    - [Phase 1: Root Cause Investigation](#phase-1-root-cause-investigation)
+    - [Phase 2: Pattern Analysis](#phase-2-pattern-analysis)
+    - [Phase 3: Hypothesis and Testing](#phase-3-hypothesis-and-testing)
+    - [Phase 4: Implementation](#phase-4-implementation)
+  - [Red Flags - STOP and Follow Process](#red-flags---stop-and-follow-process)
+  - [Common Rationalizations](#common-rationalizations)
+  - [Quick Reference](#quick-reference)
+  - [When Process Reveals "No Root Cause"](#when-process-reveals-no-root-cause)
+  - [Supporting Techniques](#supporting-techniques)
+  - [Multi-Model Cross-Validation](#multi-model-cross-validation)
 
 ## Overview
 
@@ -22,13 +33,14 @@ Random fixes waste time and create new bugs. Quick patches mask underlying issue
 
 **Violating the letter of this process is violating the spirit of debugging.**
 
-## 协议门槛（必须）
+## Protocol Threshold (Required)
 
-遵循 hooks 注入的【CP 协议门槛】要求：
-- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
-- 给出最终结论/声称完成/请求 review 前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+Follow the [CP Protocol Threshold] injected by hooks:
 
-不满足 → 立刻停止，先补齐 CP 块再继续。
+- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
+- Before giving a final conclusion / claiming completion / requesting review: output a standalone [CP3 Assessment] (this message must not include tool calls)
+
+If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
 ## The Iron Law
 
@@ -41,6 +53,7 @@ If you haven't completed Phase 1, you cannot propose fixes.
 ## When to Use
 
 Use for ANY technical issue:
+
 - Test failures
 - Bugs in production
 - Unexpected behavior
@@ -49,6 +62,7 @@ Use for ANY technical issue:
 - Integration issues
 
 **Use this ESPECIALLY when:**
+
 - Under time pressure (emergencies make guessing tempting)
 - "Just one quick fix" seems obvious
 - You've already tried multiple fixes
@@ -56,6 +70,7 @@ Use for ANY technical issue:
 - You don't fully understand the issue
 
 **Don't skip when:**
+
 - Issue seems simple (simple bugs have root causes too)
 - You're in a hurry (rushing guarantees rework)
 - Manager wants it fixed NOW (systematic is faster than thrashing)
@@ -66,9 +81,10 @@ You MUST complete each phase before proceeding to the next.
 
 ### Phase 1: Root Cause Investigation
 
-硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
+Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
 
 **► Checkpoint 1 (Task Analysis):** Before investigation, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Unclear error messages → invoke domain expert for interpretation
 - Involves async/concurrency/state management → invoke cross-validation for multi-perspective analysis
 
@@ -99,6 +115,7 @@ You MUST complete each phase before proceeding to the next.
    **WHEN system has multiple components (CI → build → signing, API → service → database):**
 
    **BEFORE proposing fixes, add diagnostic instrumentation:**
+
    ```
    For EACH component boundary:
      - Log what data enters component
@@ -112,6 +129,7 @@ You MUST complete each phase before proceeding to the next.
    ```
 
    **Example (multi-layer system):**
+
    ```bash
    # Layer 1: Workflow
    echo "=== Secrets available in workflow: ==="
@@ -170,6 +188,7 @@ You MUST complete each phase before proceeding to the next.
 ### Phase 3: Hypothesis and Testing
 
 **► Checkpoint 2 (Mid-Review):** When testing hypothesis, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - 2+ failed fix attempts → invoke cross-validation for fresh perspective
 - Debugging stalled → invoke domain expert for specialized analysis
 
@@ -198,7 +217,7 @@ You MUST complete each phase before proceeding to the next.
 
 ### Phase 4: Implementation
 
-硬提醒：在你给出最终结论/声称修复完成/宣称验证通过之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
+Hard reminder: before giving a final conclusion / claiming the fix is complete / claiming verification passed, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 
 **Fix the root cause, not the symptom:**
 
@@ -246,6 +265,7 @@ You MUST complete each phase before proceeding to the next.
 ## Red Flags - STOP and Follow Process
 
 If you catch yourself thinking:
+
 - "Quick fix for now, investigate later"
 - "Just try changing X and see if it works"
 - "Add multiple changes, run tests"
@@ -264,25 +284,25 @@ If you catch yourself thinking:
 
 ## Common Rationalizations
 
-| Excuse | Reality |
-|--------|---------|
-| "Issue is simple, don't need process" | Simple issues have root causes too. Process is fast for simple bugs. |
-| "Emergency, no time for process" | Systematic debugging is FASTER than guess-and-check thrashing. |
-| "Just try this first, then investigate" | First fix sets the pattern. Do it right from the start. |
-| "I'll write test after confirming fix works" | Untested fixes don't stick. Test first proves it. |
-| "Multiple fixes at once saves time" | Can't isolate what worked. Causes new bugs. |
-| "Reference too long, I'll adapt the pattern" | Partial understanding guarantees bugs. Read it completely. |
-| "I see the problem, let me fix it" | Seeing symptoms ≠ understanding root cause. |
-| "One more fix attempt" (after 2+ failures) | 3+ failures = architectural problem. Question pattern, don't fix again. |
+| Excuse                                       | Reality                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| "Issue is simple, don't need process"        | Simple issues have root causes too. Process is fast for simple bugs.    |
+| "Emergency, no time for process"             | Systematic debugging is FASTER than guess-and-check thrashing.          |
+| "Just try this first, then investigate"      | First fix sets the pattern. Do it right from the start.                 |
+| "I'll write test after confirming fix works" | Untested fixes don't stick. Test first proves it.                       |
+| "Multiple fixes at once saves time"          | Can't isolate what worked. Causes new bugs.                             |
+| "Reference too long, I'll adapt the pattern" | Partial understanding guarantees bugs. Read it completely.              |
+| "I see the problem, let me fix it"           | Seeing symptoms ≠ understanding root cause.                             |
+| "One more fix attempt" (after 2+ failures)   | 3+ failures = architectural problem. Question pattern, don't fix again. |
 
 ## Quick Reference
 
-| Phase | Key Activities | Success Criteria |
-|-------|---------------|------------------|
-| **1. Root Cause** | Read errors, reproduce, check changes, gather evidence | Understand WHAT and WHY |
-| **2. Pattern** | Find working examples, compare | Identify differences |
-| **3. Hypothesis** | Form theory, test minimally | Confirmed or new hypothesis |
-| **4. Implementation** | Create test, fix, verify | Bug resolved, tests pass |
+| Phase                 | Key Activities                                         | Success Criteria            |
+| --------------------- | ------------------------------------------------------ | --------------------------- |
+| **1. Root Cause**     | Read errors, reproduce, check changes, gather evidence | Understand WHAT and WHY     |
+| **2. Pattern**        | Find working examples, compare                         | Identify differences        |
+| **3. Hypothesis**     | Form theory, test minimally                            | Confirmed or new hypothesis |
+| **4. Implementation** | Create test, fix, verify                               | Bug resolved, tests pass    |
 
 ## When Process Reveals "No Root Cause"
 
@@ -304,6 +324,7 @@ These techniques are part of systematic debugging and available in this director
 - **`condition-based-waiting.md`** - Replace arbitrary timeouts with condition polling
 
 **Related skills:**
+
 - **superpowers:practicing-test-driven-development** - For creating failing test case (Phase 4, Step 1)
 - **superpowers:verifying-before-completion** - Verify fix worked before claiming success
 - **superpowers:coordinating-multi-model-work** - For multi-model cross-validation diagnosis
@@ -313,6 +334,7 @@ These techniques are part of systematic debugging and available in this director
 **Related skill:** superpowers:coordinating-multi-model-work
 
 At checkpoints, apply semantic routing using `coordinating-multi-model-work/routing-decision.md`:
+
 - Clear backend issue → CODEX
 - Clear frontend issue → GEMINI
 - Uncertain root cause → CROSS_VALIDATION

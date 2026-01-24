@@ -1,35 +1,35 @@
-# Skills 评估场景
+# Skills Evaluation Scenarios
 
-按 Anthropic 最佳实践，使用评估场景验证 skills 有效性。
+Use evaluation scenarios (per Anthropic best practices) to validate skill effectiveness.
 
-## 评估格式
+## Evaluation Format
 
 ```json
 {
   "skill": "skill-name",
-  "query": "用户请求",
-  "context": "可选的上下文文件",
+  "query": "User request",
+  "context": "Optional context file",
   "expected_behavior": [
-    "预期行为 1",
-    "预期行为 2"
+    "Expected behavior 1",
+    "Expected behavior 2"
   ]
 }
 ```
 
-## 核心工作流 Skills
+## Core Workflow Skills
 
 ### test-driven-development
 
 ```json
 {
   "skill": "test-driven-development",
-  "query": "帮我添加一个验证邮箱格式的函数",
+  "query": "Add a function to validate email format",
   "expected_behavior": [
-    "在写实现代码前，先写失败的测试",
-    "运行测试确认失败，显示失败原因",
-    "写最小代码让测试通过",
-    "运行测试确认通过",
-    "不添加超出测试范围的功能"
+    "Write a failing test before implementation",
+    "Run tests to confirm failure and show the reason",
+    "Write minimal code to make the test pass",
+    "Run tests to confirm passing",
+    "Do not add functionality beyond the test scope"
   ]
 }
 ```
@@ -37,13 +37,13 @@
 ```json
 {
   "skill": "test-driven-development",
-  "query": "这个函数有bug，帮我修复",
+  "query": "This function has a bug, please fix it",
   "context": "src/utils/parser.ts",
   "expected_behavior": [
-    "先写重现 bug 的失败测试",
-    "确认测试失败且失败原因正确",
-    "修复代码",
-    "确认测试通过"
+    "Write a failing test that reproduces the bug",
+    "Confirm the test fails for the correct reason",
+    "Fix the code",
+    "Confirm the test passes"
   ]
 }
 ```
@@ -53,15 +53,15 @@
 ```json
 {
   "skill": "debugging-systematically",
-  "query": "测试失败了，帮我看看",
-  "context": "npm test 输出显示 3 个测试失败",
+  "query": "Tests are failing, please take a look",
+  "context": "npm test output shows 3 test failures",
   "expected_behavior": [
-    "Phase 1: 仔细阅读错误信息，不立即提出修复",
-    "尝试复现问题",
-    "检查最近的代码变更",
-    "Phase 2: 找到类似的正常工作代码进行对比",
-    "Phase 3: 形成单一假设并最小化测试",
-    "Phase 4: 写失败测试后再修复"
+    "Phase 1: Carefully read the error messages before proposing fixes",
+    "Try to reproduce the issue",
+    "Check recent code changes",
+    "Phase 2: Compare with similar working code",
+    "Phase 3: Form a single hypothesis and minimize the test",
+    "Phase 4: Write a failing test before fixing"
   ]
 }
 ```
@@ -69,12 +69,12 @@
 ```json
 {
   "skill": "debugging-systematically",
-  "query": "构建失败，错误信息看不懂",
+  "query": "Build failed and I can't understand the error",
   "expected_behavior": [
-    "不直接猜测修复方案",
-    "仔细阅读完整错误信息和堆栈",
-    "如果涉及多组件系统，添加诊断日志定位问题层",
-    "形成假设后再提出修复"
+    "Do not guess a fix immediately",
+    "Carefully read the full error message and stack trace",
+    "If multiple components are involved, add diagnostic logs to isolate the layer",
+    "Form a hypothesis before proposing a fix"
   ]
 }
 ```
@@ -84,12 +84,12 @@
 ```json
 {
   "skill": "verifying-before-completion",
-  "query": "帮我修复这个 bug 然后提交",
+  "query": "Fix this bug and then commit",
   "expected_behavior": [
-    "修复后运行测试命令",
-    "显示测试输出证明通过",
-    "只有看到通过证据后才声称'修复完成'",
-    "不使用'应该可以了'、'应该通过了'等模糊表述"
+    "Run tests after the fix",
+    "Show test output proving success",
+    "Only claim 'fixed' after seeing passing evidence",
+    "Avoid vague wording like 'should work' or 'should pass'"
   ]
 }
 ```
@@ -99,13 +99,13 @@
 ```json
 {
   "skill": "brainstorming",
-  "query": "我想添加用户认证功能",
+  "query": "I want to add user authentication",
   "expected_behavior": [
-    "先了解项目现状（文件、文档、最近提交）",
-    "一次只问一个问题",
-    "优先使用选择题",
-    "提出 2-3 种不同方案并说明权衡",
-    "设计分段呈现，每段后确认"
+    "Understand the current project state first (files, docs, recent commits)",
+    "Ask one question at a time",
+    "Prefer multiple-choice questions",
+    "Propose 2-3 different approaches with trade-offs",
+    "Present the design in sections and confirm after each"
   ]
 }
 ```
@@ -115,13 +115,13 @@
 ```json
 {
   "skill": "executing-plans",
-  "query": "执行 docs/plans/feature.md 这个计划",
+  "query": "Execute the plan in docs/plans/feature.md",
   "expected_behavior": [
-    "先阅读计划并批判性审查",
-    "有疑问时先提出，不直接开始",
-    "使用清单跟踪进度",
-    "每批完成后报告并等待反馈",
-    "不跳过计划中的验证步骤"
+    "Read the plan first and review it critically",
+    "Ask questions before starting if anything is unclear",
+    "Use a checklist to track progress",
+    "Report after each batch and wait for feedback",
+    "Do not skip verification steps in the plan"
   ]
 }
 ```
@@ -131,32 +131,32 @@
 ```json
 {
   "skill": "developing-with-subagents",
-  "query": "用子代理方式执行这个计划",
+  "query": "Execute this plan using subagents",
   "context": "docs/plans/feature.md",
   "expected_behavior": [
-    "一次性读取计划并提取所有任务",
-    "为每个任务派遣独立子代理",
-    "子代理有问题时先回答再继续",
-    "先 spec review 再 code quality review",
-    "reviewer 发现问题时循环修复直到通过"
+    "Read the plan once and extract all tasks",
+    "Dispatch a separate subagent for each task",
+    "Answer subagent questions before proceeding",
+    "Run spec review before code quality review",
+    "Iterate on fixes until the reviewer passes"
   ]
 }
 ```
 
-## 辅助 Skills
+## Supporting Skills
 
 ### using-git-worktrees
 
 ```json
 {
   "skill": "using-git-worktrees",
-  "query": "帮我创建一个隔离的工作空间开发新功能",
+  "query": "Create an isolated workspace to develop a new feature",
   "expected_behavior": [
-    "检查现有 .worktrees 或 worktrees 目录",
-    "验证目录是否被 gitignore",
-    "如未忽略，添加到 .gitignore 并提交",
-    "创建 worktree 后运行项目设置",
-    "运行测试验证干净基线"
+    "Check existing .worktrees or worktrees directories",
+    "Verify the directory is gitignored",
+    "If not ignored, add it to .gitignore and commit",
+    "Run project setup after creating the worktree",
+    "Run tests to verify a clean baseline"
   ]
 }
 ```
@@ -166,13 +166,13 @@
 ```json
 {
   "skill": "finishing-development-branches",
-  "query": "开发完成了，帮我处理分支",
+  "query": "Development is complete, help me handle the branch",
   "expected_behavior": [
-    "先运行测试验证通过",
-    "测试失败时不提供完成选项",
-    "提供精确的 4 个选项",
-    "选择丢弃时要求输入确认",
-    "正确清理 worktree"
+    "Run tests and verify they pass",
+    "Do not offer completion options if tests fail",
+    "Provide exactly 4 options",
+    "Require confirmation when discarding",
+    "Clean up the worktree correctly"
   ]
 }
 ```
@@ -182,20 +182,20 @@
 ```json
 {
   "skill": "dispatching-parallel-agents",
-  "query": "有 5 个测试文件失败，帮我修复",
+  "query": "Five test files are failing, help me fix them",
   "expected_behavior": [
-    "识别失败是否独立",
-    "如果独立，按问题域分组",
-    "并行派遣多个代理",
-    "每个代理有明确范围和约束",
-    "汇总结果并验证无冲突"
+    "Identify whether failures are independent",
+    "If independent, group them by problem domain",
+    "Dispatch multiple agents in parallel",
+    "Give each agent a clear scope and constraints",
+    "Summarize results and verify no conflicts"
   ]
 }
 ```
 
-## 运行评估
+## Run the Evaluation
 
-1. 在没有 skill 的情况下运行查询，记录行为
-2. 启用 skill 后运行同样查询
-3. 对比行为是否匹配 expected_behavior
-4. 记录差异并迭代改进 skill
+1. Run the query without the skill and record behavior
+2. Enable the skill and run the same query
+3. Compare behavior against expected_behavior
+4. Record differences and iterate on the skill

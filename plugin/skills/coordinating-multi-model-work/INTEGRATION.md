@@ -9,6 +9,7 @@ Task Type → Model Selection:
 ├─ Frontend (UI, components, styles) → GEMINI
 ├─ Backend (API, database, logic) → CODEX
 ├─ Full-stack or uncertain → CROSS_VALIDATION
+├─ Design docs, implementation docs, requirements specs, architecture docs, and other critical documentation → CROSS_VALIDATION
 └─ Simple (docs, configs) → CLAUDE (no external model needed)
 ```
 
@@ -24,7 +25,7 @@ Copy this section to your skill and customize the prompts:
 For tasks requiring specialized expertise, apply semantic routing:
 
 1. **Analyze task domain** using `coordinating-multi-model-work/routing-decision.md`
-2. **Notify user**: "我将使用 [model] 来 [task purpose]"
+2. **Notify user**: "I will use [model] to [task purpose]"
 3. **Invoke model** with English prompts via the MCP tools (`mcp__codex__codex` for backend, `mcp__gemini__gemini` for frontend)
 4. **Integrate results** before proceeding
 
@@ -69,11 +70,11 @@ Invoke both MCP tools in parallel, then integrate:
 ```markdown
 ## Cross-Validation Results
 
-### Codex Analysis (Backend via mcp__codex__codex)
+### Codex Analysis (Backend via mcp**codex**codex)
 
 [Results]
 
-### Gemini Analysis (Frontend via mcp__gemini__gemini)
+### Gemini Analysis (Frontend via mcp**gemini**gemini)
 
 [Results]
 

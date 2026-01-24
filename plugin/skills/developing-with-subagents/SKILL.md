@@ -6,6 +6,7 @@ description: "Executes plans by dispatching fresh subagent per task with two-sta
 # Subagent-Driven Development
 
 ## Contents
+
 - [Overview](#overview)
 - [When to Use](#when-to-use)
 - [The Process](#the-process)
@@ -18,13 +19,14 @@ Execute plan by dispatching fresh subagent per task, with two-stage review after
 
 **Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
 
-## 协议门槛（必须）
+## Protocol Threshold (Required)
 
-遵循 hooks 注入的【CP 协议门槛】要求：
-- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
-- 声称完成/请求 review/宣称验证通过前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+Follow the [CP Protocol Threshold] injected by hooks:
 
-不满足 → 立刻停止，先补齐 CP 块再继续。
+- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
+- Before claiming completion / requesting review / claiming verification passed: output a standalone [CP3 Assessment] (this message must not include tool calls)
+
+If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
 ## When to Use
 
@@ -47,6 +49,7 @@ digraph when_to_use {
 ```
 
 **vs. Executing Plans (parallel session):**
+
 - Same session (no context switch)
 - Fresh subagent per task (no context pollution)
 - Two-stage review after each task: spec compliance first, then code quality
@@ -64,7 +67,7 @@ Plan Execution Progress:
 Per-Task Checklist (copy for each):
 Task N: [description]
 - [ ] Checkpoint 1 (Task Analysis) applied
-- [ ] 【CP1 评估】已输出（单独一条消息）
+- [ ] 【CP1 Assessment】 output (standalone message)
 - [ ] Implementer subagent dispatched
 - [ ] Questions answered (if any)
 - [ ] Implementation complete
@@ -134,27 +137,30 @@ digraph process {
 
 Choose model based on task type:
 
-| Subagent | Model | Freedom |
-|----------|-------|---------|
-| Implementer | `model: sonnet` | Low - always use Sonnet for code |
-| Spec/Quality Reviewer | Opus (default) | Low - always use Opus for review |
-| Exploration | `model: haiku` | Medium - prefer Haiku, flexible |
+| Subagent              | Model           | Freedom                          |
+| --------------------- | --------------- | -------------------------------- |
+| Implementer           | `model: sonnet` | Low - always use Sonnet for code |
+| Spec/Quality Reviewer | Opus (default)  | Low - always use Opus for review |
+| Exploration           | `model: haiku`  | Medium - prefer Haiku, flexible  |
 
 ## Collaboration Checkpoints
 
 Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md` at these stages:
 
 **► Checkpoint 1 (Task Analysis):** Before dispatching implementer subagent:
+
 - Collect: task files, description, complexity
-- **Output a standalone `【CP1 评估】` block to the user BEFORE the first Task tool call**
+- **Output a standalone `【CP1 Assessment】` block to the user BEFORE the first Task tool call**
 - Check critical task conditions → Match: invoke expert model
 - Evaluate general task signals → Positive: invoke
 
 **► Checkpoint 2 (Mid-Review):** During subagent execution:
+
 - Subagent asks question requiring external expertise → invoke domain expert
 - Multiple implementation approaches debated → invoke cross-validation
 
 **► Checkpoint 3 (Quality Gate):** After subagent completes, before spec review:
+
 - Implementation complete → invoke domain expert for pre-review assessment
 
 ## Example Workflow
@@ -236,23 +242,27 @@ Done!
 ## Advantages
 
 **vs. Manual execution:**
+
 - Subagents follow TDD naturally
 - Fresh context per task (no confusion)
 - Parallel-safe (subagents don't interfere)
 - Subagent can ask questions (before AND during work)
 
 **vs. Executing Plans:**
+
 - Same session (no handoff)
 - Continuous progress (no waiting)
 - Review checkpoints automatic
 
 **Efficiency gains:**
+
 - No file reading overhead (controller provides full text)
 - Controller curates exactly what context is needed
 - Subagent gets complete information upfront
 - Questions surfaced before work begins (not after)
 
 **Quality gates:**
+
 - Self-review catches issues before handoff
 - Two-stage review: spec compliance, then code quality
 - Review loops ensure fixes actually work
@@ -260,6 +270,7 @@ Done!
 - Code quality ensures implementation is well-built
 
 **Cost:**
+
 - More subagent invocations (implementer + 2 reviewers per task)
 - Controller does more prep work (extracting all tasks upfront)
 - Review loops add iterations
@@ -268,6 +279,7 @@ Done!
 ## Red Flags
 
 **Never:**
+
 - Skip reviews (spec compliance OR code quality)
 - Proceed with unfixed issues
 - Dispatch multiple implementation subagents in parallel (conflicts)
@@ -281,32 +293,38 @@ Done!
 - Move to next task while either review has open issues
 
 **If subagent asks questions:**
+
 - Answer clearly and completely
 - Provide additional context if needed
 - Don't rush them into implementation
 
 **If reviewer finds issues:**
+
 - Implementer (same subagent) fixes them
 - Reviewer reviews again
 - Repeat until approved
 - Don't skip the re-review
 
 **If subagent fails task:**
+
 - Dispatch fix subagent with specific instructions
 - Don't try to fix manually (context pollution)
 
 ## Integration
 
 **Required workflow skills:**
+
 - **superpowers:writing-plans** - Creates the plan this skill executes
 - **superpowers:requesting-code-review** - Code review template for reviewer subagents
 - **superpowers:finishing-development-branches** - Complete development after all tasks
 - **superpowers:coordinating-multi-model-work** - Multi-model routing for task execution
 
 **Subagents should use:**
+
 - **superpowers:practicing-test-driven-development** - Subagents follow TDD for each task
 
 **Alternative workflow:**
+
 - **superpowers:executing-plans** - Use for parallel session instead of same-session execution
 
 ## Multi-Model Task Dispatch
@@ -323,7 +341,7 @@ At checkpoints, apply semantic routing from `coordinating-multi-model-work/routi
 
 - **Check for Model Hint:** If task includes hint, use as guidance
 
-- **Notify user:** "我将使用 [model/subagent] 来实现 [task name]"
+- **Notify user:** "I will use [model/subagent] to implement [task name]"
 
 - **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
 

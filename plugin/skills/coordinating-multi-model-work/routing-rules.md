@@ -9,13 +9,14 @@ Prefer semantic routing via `coordinating-multi-model-work/routing-decision.md` 
 - UI/components/styles/interactions → **GEMINI**
 - APIs/databases/security/performance/concurrency → **CODEX**
 - Full-stack changes or uncertain debugging → **CROSS_VALIDATION**
-- Pure docs / trivial edits → **CLAUDE**
+- Simple documentation edits / trivial edits → **CLAUDE**
 
 ## Common file hints (examples)
 
 - `**/*.tsx`, `**/*.css` → GEMINI
 - `**/*.go`, `**/*.py`, `**/*.sql`, `**/*.sh` → CODEX
 - Mixed set across frontend + backend → CROSS_VALIDATION
+- Design docs, implementation docs, requirements specs, architecture docs, and other critical documentation → CROSS_VALIDATION
 
 ## Reminder
 

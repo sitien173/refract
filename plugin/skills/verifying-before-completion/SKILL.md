@@ -21,19 +21,21 @@ NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
 
 If you haven't run the verification command in this message, you cannot claim it passes.
 
-## 协议门槛（必须）
+## Protocol Threshold (Required)
 
-遵循 hooks 注入的【CP 协议门槛】要求：
-- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
-- 声称验证通过/宣称完成/准备提交或开 PR 前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+Follow the [CP Protocol Threshold] injected by hooks:
 
-不满足 → 立刻停止，先补齐 CP 块再继续。
+- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
+- Before claiming verification passed / completion / ready to commit or open a PR: output a standalone [CP3 Assessment] (this message must not include tool calls)
+
+If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
 ## The Gate Function
 
-硬提醒：在你声称“验证通过/已完成/已修复”等任何结论之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
+Hard reminder: before claiming “verification passed/completed/fixed” or any similar conclusion, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 
 **► Checkpoint 3 (Quality Gate):** Before claiming completion, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Critical changes complete → invoke domain expert for independent verification
 - Full-stack changes → invoke cross-validation for comprehensive check
 
@@ -53,15 +55,15 @@ Skip any step = lying, not verifying
 
 ## Common Failures
 
-| Claim | Requires | Not Sufficient |
-|-------|----------|----------------|
-| Tests pass | Test command output: 0 failures | Previous run, "should pass" |
-| Linter clean | Linter output: 0 errors | Partial check, extrapolation |
-| Build succeeds | Build command: exit 0 | Linter passing, logs look good |
-| Bug fixed | Test original symptom: passes | Code changed, assumed fixed |
-| Regression test works | Red-green cycle verified | Test passes once |
-| Agent completed | VCS diff shows changes | Agent reports "success" |
-| Requirements met | Line-by-line checklist | Tests passing |
+| Claim                 | Requires                        | Not Sufficient                 |
+| --------------------- | ------------------------------- | ------------------------------ |
+| Tests pass            | Test command output: 0 failures | Previous run, "should pass"    |
+| Linter clean          | Linter output: 0 errors         | Partial check, extrapolation   |
+| Build succeeds        | Build command: exit 0           | Linter passing, logs look good |
+| Bug fixed             | Test original symptom: passes   | Code changed, assumed fixed    |
+| Regression test works | Red-green cycle verified        | Test passes once               |
+| Agent completed       | VCS diff shows changes          | Agent reports "success"        |
+| Requirements met      | Line-by-line checklist          | Tests passing                  |
 
 ## Red Flags - STOP
 
@@ -76,44 +78,49 @@ Skip any step = lying, not verifying
 
 ## Rationalization Prevention
 
-| Excuse | Reality |
-|--------|---------|
-| "Should work now" | RUN the verification |
-| "I'm confident" | Confidence ≠ evidence |
-| "Just this once" | No exceptions |
-| "Linter passed" | Linter ≠ compiler |
-| "Agent said success" | Verify independently |
-| "I'm tired" | Exhaustion ≠ excuse |
-| "Partial check is enough" | Partial proves nothing |
-| "Different words so rule doesn't apply" | Spirit over letter |
+| Excuse                                  | Reality                |
+| --------------------------------------- | ---------------------- |
+| "Should work now"                       | RUN the verification   |
+| "I'm confident"                         | Confidence ≠ evidence  |
+| "Just this once"                        | No exceptions          |
+| "Linter passed"                         | Linter ≠ compiler      |
+| "Agent said success"                    | Verify independently   |
+| "I'm tired"                             | Exhaustion ≠ excuse    |
+| "Partial check is enough"               | Partial proves nothing |
+| "Different words so rule doesn't apply" | Spirit over letter     |
 
 ## Key Patterns
 
 **Tests:**
+
 ```
 ✅ [Run test command] [See: 34/34 pass] "All tests pass"
 ❌ "Should pass now" / "Looks correct"
 ```
 
 **Regression tests (TDD Red-Green):**
+
 ```
 ✅ Write → Run (pass) → Revert fix → Run (MUST FAIL) → Restore → Run (pass)
 ❌ "I've written a regression test" (without red-green verification)
 ```
 
 **Build:**
+
 ```
 ✅ [Run build] [See: exit 0] "Build passes"
 ❌ "Linter passed" (linter doesn't check compilation)
 ```
 
 **Requirements:**
+
 ```
 ✅ Re-read plan → Create checklist → Verify each → Report gaps or completion
 ❌ "Tests pass, phase complete"
 ```
 
 **Agent delegation:**
+
 ```
 ✅ Agent reports success → Check VCS diff → Verify changes → Report actual state
 ❌ Trust agent report
@@ -122,6 +129,7 @@ Skip any step = lying, not verifying
 ## Why This Matters
 
 From 24 failure memories:
+
 - your human partner said "I don't believe you" - trust broken
 - Undefined functions shipped - would crash
 - Missing requirements shipped - incomplete features
@@ -131,6 +139,7 @@ From 24 failure memories:
 ## When To Apply
 
 **ALWAYS before:**
+
 - ANY variation of success/completion claims
 - ANY expression of satisfaction
 - ANY positive statement about work state
@@ -139,6 +148,7 @@ From 24 failure memories:
 - Delegating to agents
 
 **Rule applies to:**
+
 - Exact phrases
 - Paraphrases and synonyms
 - Implications of success
@@ -157,6 +167,7 @@ This is non-negotiable.
 **Related skill:** superpowers:coordinating-multi-model-work
 
 At checkpoint, apply semantic routing using `coordinating-multi-model-work/routing-decision.md`:
+
 - Backend-only critical → CODEX verification (Codex MCP `mcp__codex__codex`)
 - Frontend-only critical → GEMINI verification (Gemini MCP `mcp__gemini__gemini`)
 - Full-stack/architectural → CROSS_VALIDATION (call both MCP tools)

@@ -11,17 +11,19 @@ Help turn ideas into fully formed designs and specs through natural collaborativ
 
 Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design in small sections (200-300 words), checking after each section whether it looks right so far.
 
-## 协议门槛（必须）
+## Protocol Threshold (Required)
 
-遵循 hooks 注入的【CP 协议门槛】要求：
-- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
-- 给出最终设计结论/请求 review 前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+Follow the [CP Protocol Threshold] injected by hooks:
 
-不满足 → 立刻停止，先补齐 CP 块再继续。
+- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
+- Before providing a final design conclusion or requesting review: output a standalone [CP3 Assessment] (this message must not include tool calls)
+
+If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
 ## The Process
 
 **Understanding the idea:**
+
 - Check out the current project state first (files, docs, recent commits)
 - Ask questions one at a time to refine the idea
 - Prefer multiple choice questions when possible, but open-ended is fine too
@@ -30,26 +32,30 @@ Start by understanding the current project context, then ask questions one at a 
 
 **Model tip for exploration:** When dispatching subagents to explore the codebase, use `model: haiku` for fast, cost-effective searches. Haiku excels at file pattern matching and quick lookups.
 
-硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
+Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
 
 **► Checkpoint 1 (Task Analysis):** After understanding the idea, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Collect: task description, files involved, tech stack
 - Check critical task conditions → Match: invoke directly
 - Evaluate general task signals → Positive: invoke
 - Neither: Claude handles independently
 
 **Exploring approaches:**
+
 - Propose 2-3 different approaches with trade-offs
 - Present options conversationally with your recommendation and reasoning
 - Lead with your recommended option and explain why
 
 **► Checkpoint 2 (Mid-Review):** When multiple approaches have significant trade-offs, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Multiple implementation approaches to choose from → invoke cross-validation
 - Potential performance/security issues discovered → invoke domain expert
 
 **Presenting the design:**
+
 - Once you believe you understand what you're building, present the design
-- 硬提醒：在你给出最终设计结论/声称设计定稿之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
+- Hard reminder: before giving a final design conclusion or claiming the design is finalized, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 - Break it into sections of 200-300 words
 - Ask after each section whether it looks right so far
 - Cover: architecture, components, data flow, error handling, testing
@@ -58,11 +64,13 @@ Start by understanding the current project context, then ask questions one at a 
 ## After the Design
 
 **Documentation:**
+
 - Write the validated design to `docs/plans/YYYY-MM-DD-<topic>-design.md`
 - Use elements-of-style:writing-clearly-and-concisely skill if available
 - Commit the design document to git
 
 **Implementation (if continuing):**
+
 - Ask: "Ready to set up for implementation?"
 - Use superpowers:using-git-worktrees to create isolated workspace
 - Use superpowers:writing-plans to create detailed implementation plan
@@ -83,7 +91,7 @@ Start by understanding the current project context, then ask questions one at a 
 At checkpoints, when invoking external models:
 
 1. **Apply semantic routing** using `coordinating-multi-model-work/routing-decision.md`
-2. **Notify user**: "我将使用 [model] 来评估这个设计方案"
+2. **Notify user**: "I will use [model] to evaluate this design"
 3. **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
 4. **Integrate results** into design recommendation
 

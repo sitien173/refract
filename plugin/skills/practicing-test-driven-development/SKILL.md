@@ -6,6 +6,7 @@ description: "Write failing tests before implementation code using red-green-ref
 # Test-Driven Development (TDD)
 
 ## Contents
+
 - [Overview](#overview)
 - [The Iron Law](#the-iron-law)
 - [Red-Green-Refactor](#red-green-refactor)
@@ -22,23 +23,26 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 **Violating the letter of the rules is violating the spirit of the rules.**
 
-## 协议门槛（必须）
+## Protocol Threshold (Required)
 
-遵循 hooks 注入的【CP 协议门槛】要求：
-- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
-- 声称完成/请求 review/宣称验证通过前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+Follow the [CP Protocol Threshold] injected by hooks:
 
-不满足 → 立刻停止，先补齐 CP 块再继续。
+- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
+- Before claiming completion / requesting review / claiming verification passed: output a standalone [CP3 Assessment] (this message must not include tool calls)
+
+If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
 ## When to Use
 
 **Always:**
+
 - New features
 - Bug fixes
 - Refactoring
 - Behavior changes
 
 **Exceptions (ask your human partner):**
+
 - Throwaway prototypes
 - Generated code
 - Configuration files
@@ -54,6 +58,7 @@ NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 Write code before the test? Delete it. Start over.
 
 **No exceptions:**
+
 - Don't keep it as "reference"
 - Don't "adapt" it while writing tests
 - Don't look at it
@@ -89,46 +94,51 @@ digraph tdd_cycle {
 
 Write one minimal test showing what should happen.
 
-硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
+Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
 
 **► Checkpoint 1 (Task Analysis):** Before writing test, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Check critical task conditions → Match: invoke domain expert for test design
 - Complex testing scenario → invoke cross-validation for comprehensive test coverage
 
-**✅ 好的示例：**
+**✅ Good example:**
+
 ```typescript
-test('retries failed operations 3 times', async () => {
+test("retries failed operations 3 times", async () => {
   let attempts = 0;
   const operation = () => {
     attempts++;
-    if (attempts < 3) throw new Error('fail');
-    return 'success';
+    if (attempts < 3) throw new Error("fail");
+    return "success";
   };
 
   const result = await retryOperation(operation);
 
-  expect(result).toBe('success');
+  expect(result).toBe("success");
   expect(attempts).toBe(3);
 });
 ```
+
 Clear name, tests real behavior, one thing
 
+**❌ Bad example:**
 
-**❌ 不好的示例：**
 ```typescript
-test('retry works', async () => {
-  const mock = jest.fn()
+test("retry works", async () => {
+  const mock = jest
+    .fn()
     .mockRejectedValueOnce(new Error())
     .mockRejectedValueOnce(new Error())
-    .mockResolvedValueOnce('success');
+    .mockResolvedValueOnce("success");
   await retryOperation(mock);
   expect(mock).toHaveBeenCalledTimes(3);
 });
 ```
+
 Vague name, tests mock not code
 
-
 **Requirements:**
+
 - One behavior
 - Clear name
 - Real code (no mocks unless unavoidable)
@@ -142,6 +152,7 @@ npm test path/to/test.test.ts
 ```
 
 Confirm:
+
 - Test fails (not errors)
 - Failure message is expected
 - Fails because feature missing (not typos)
@@ -155,10 +166,12 @@ Confirm:
 Write simplest code to pass the test.
 
 **► Checkpoint 3 (Quality Gate):** After implementation passes, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Implementation complete → invoke domain expert for code review
 - Critical business logic → invoke cross-validation for security/performance review
 
-**✅ 好的示例：**
+**✅ Good example:**
+
 ```typescript
 async function retryOperation<T>(fn: () => Promise<T>): Promise<T> {
   for (let i = 0; i < 3; i++) {
@@ -168,27 +181,28 @@ async function retryOperation<T>(fn: () => Promise<T>): Promise<T> {
       if (i === 2) throw e;
     }
   }
-  throw new Error('unreachable');
+  throw new Error("unreachable");
 }
 ```
+
 Just enough to pass
 
+**❌ Bad example:**
 
-**❌ 不好的示例：**
 ```typescript
 async function retryOperation<T>(
   fn: () => Promise<T>,
   options?: {
     maxRetries?: number;
-    backoff?: 'linear' | 'exponential';
+    backoff?: "linear" | "exponential";
     onRetry?: (attempt: number) => void;
-  }
+  },
 ): Promise<T> {
   // YAGNI
 }
 ```
-Over-engineered
 
+Over-engineered
 
 Don't add features, refactor other code, or "improve" beyond the test.
 
@@ -196,13 +210,14 @@ Don't add features, refactor other code, or "improve" beyond the test.
 
 **MANDATORY.**
 
-硬提醒：在你声称完成/宣布验证通过之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
+Hard reminder: before claiming completion or verification passed, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 
 ```bash
 npm test path/to/test.test.ts
 ```
 
 Confirm:
+
 - Test passes
 - Other tests still pass
 - Output pristine (no errors, warnings)
@@ -214,6 +229,7 @@ Confirm:
 ### REFACTOR - Clean Up
 
 After green only:
+
 - Remove duplication
 - Improve names
 - Extract helpers
@@ -226,11 +242,11 @@ Next failing test for next feature.
 
 ## Good Tests
 
-| Quality | Good | Bad |
-|---------|------|-----|
-| **Minimal** | One thing. "and" in name? Split it. | `test('validates email and domain and whitespace')` |
-| **Clear** | Name describes behavior | `test('test1')` |
-| **Shows intent** | Demonstrates desired API | Obscures what code should do |
+| Quality          | Good                                | Bad                                                 |
+| ---------------- | ----------------------------------- | --------------------------------------------------- |
+| **Minimal**      | One thing. "and" in name? Split it. | `test('validates email and domain and whitespace')` |
+| **Clear**        | Name describes behavior             | `test('test1')`                                     |
+| **Shows intent** | Demonstrates desired API            | Obscures what code should do                        |
 
 ## Red Flags - STOP and Start Over
 
@@ -255,30 +271,34 @@ Next failing test for next feature.
 **Bug:** Empty email accepted
 
 **RED**
+
 ```typescript
-test('rejects empty email', async () => {
-  const result = await submitForm({ email: '' });
-  expect(result.error).toBe('Email required');
+test("rejects empty email", async () => {
+  const result = await submitForm({ email: "" });
+  expect(result.error).toBe("Email required");
 });
 ```
 
 **Verify RED**
+
 ```bash
 $ npm test
 FAIL: expected 'Email required', got undefined
 ```
 
 **GREEN**
+
 ```typescript
 function submitForm(data: FormData) {
   if (!data.email?.trim()) {
-    return { error: 'Email required' };
+    return { error: "Email required" };
   }
   // ...
 }
 ```
 
 **Verify GREEN**
+
 ```bash
 $ npm test
 PASS
@@ -304,12 +324,12 @@ Can't check all boxes? You skipped TDD. Start over.
 
 ## When Stuck
 
-| Problem | Solution |
-|---------|----------|
+| Problem                | Solution                                                             |
+| ---------------------- | -------------------------------------------------------------------- |
 | Don't know how to test | Write wished-for API. Write assertion first. Ask your human partner. |
-| Test too complicated | Design too complicated. Simplify interface. |
-| Must mock everything | Code too coupled. Use dependency injection. |
-| Test setup huge | Extract helpers. Still complex? Simplify design. |
+| Test too complicated   | Design too complicated. Simplify interface.                          |
+| Must mock everything   | Code too coupled. Use dependency injection.                          |
+| Test setup huge        | Extract helpers. Still complex? Simplify design.                     |
 
 ## Debugging Integration
 
@@ -320,6 +340,7 @@ Never fix bugs without a test.
 ## Testing Anti-Patterns
 
 When adding mocks or test utilities, read @testing-anti-patterns.md to avoid common pitfalls:
+
 - Testing mock behavior instead of real behavior
 - Adding test-only methods to production classes
 - Mocking without understanding dependencies
@@ -329,6 +350,7 @@ When adding mocks or test utilities, read @testing-anti-patterns.md to avoid com
 **Related skill:** superpowers:coordinating-multi-model-work
 
 At checkpoints, apply semantic routing using `coordinating-multi-model-work/routing-decision.md`:
+
 - Frontend component tests → GEMINI (Gemini MCP `mcp__gemini__gemini`)
 - Backend logic tests → CODEX (Codex MCP `mcp__codex__codex`)
 - Full-stack tests → CROSS_VALIDATION (call both MCP tools)

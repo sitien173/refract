@@ -9,35 +9,40 @@ Dispatch superpowers:code-reviewer subagent to catch issues before they cascade.
 
 **Core principle:** Review early, review often.
 
-## 协议门槛（必须）
+## Protocol Threshold (Required)
 
-遵循 hooks 注入的【CP 协议门槛】要求：
-- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
-- 请求 review/输出任何评审结论前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+Follow the [CP Protocol Threshold] injected by hooks:
 
-不满足 → 立刻停止，先补齐 CP 块再继续。
+- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
+- Before requesting review or outputting any review conclusion: output a standalone [CP3 Assessment] (this message must not include tool calls)
+
+If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
 ## When to Request Review
 
 **Mandatory:**
+
 - After each task in subagent-driven development
 - After completing major feature
 - Before merge to main
 
 **Optional but valuable:**
+
 - When stuck (fresh perspective)
 - Before refactoring (baseline check)
 - After fixing complex bug
 
 ## How to Request
 
-硬提醒：在你请求 review/输出任何“评审结论”之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
+Hard reminder: before requesting review or outputting any “review conclusion,” you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 
 **► Checkpoint 3 (Quality Gate):** Before requesting review, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Code changes complete → invoke domain expert for specialized review
 - Critical business logic changes → invoke cross-validation for comprehensive assessment
 
 **1. Get git SHAs:**
+
 ```bash
 BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
 HEAD_SHA=$(git rev-parse HEAD)
@@ -50,6 +55,7 @@ Use Task tool with superpowers:code-reviewer type, fill template at `code-review
 **Note:** Code review requires deep reasoning for quality assessment. Use default Opus model (do not specify `model` parameter) to ensure thorough analysis.
 
 **Placeholders:**
+
 - `{WHAT_WAS_IMPLEMENTED}` - What you just built
 - `{PLAN_OR_REQUIREMENTS}` - What it should do
 - `{BASE_SHA}` - Starting commit
@@ -57,6 +63,7 @@ Use Task tool with superpowers:code-reviewer type, fill template at `code-review
 - `{DESCRIPTION}` - Brief summary
 
 **3. Act on feedback:**
+
 - Fix Critical issues immediately
 - Fix Important issues before proceeding
 - Note Minor issues for later
@@ -93,27 +100,32 @@ You: [Fix progress indicators]
 ## Integration with Workflows
 
 **Subagent-Driven Development:**
+
 - Review after EACH task
 - Catch issues before they compound
 - Fix before moving to next task
 
 **Executing Plans:**
+
 - Review after each batch (3 tasks)
 - Get feedback, apply, continue
 
 **Ad-Hoc Development:**
+
 - Review before merge
 - Review when stuck
 
 ## Red Flags
 
 **Never:**
+
 - Skip review because "it's simple"
 - Ignore Critical issues
 - Proceed with unfixed Important issues
 - Argue with valid technical feedback
 
 **If reviewer wrong:**
+
 - Push back with technical reasoning
 - Show code/tests that prove it works
 - Request clarification
@@ -132,7 +144,7 @@ At checkpoint, apply semantic routing from `coordinating-multi-model-work/routin
   - Full-stack changes or architectural impact → CROSS_VALIDATION
   - Simple changes or documentation → CLAUDE subagent
 
-- **Notify user:** "我将使用 [model] 来评审这些代码更改"
+- **Notify user:** "I will use [model] to review these code changes"
 
 - **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
 

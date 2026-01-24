@@ -13,23 +13,26 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 
 **Announce at start:** "I'm using the executing-plans skill to implement this plan."
 
-## 协议门槛（必须）
+## Protocol Threshold (Required)
 
-遵循 hooks 注入的【CP 协议门槛】要求：
-- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
-- 声称 batch 完成/宣称验证通过/准备收尾前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+Follow the [CP Protocol Threshold] injected by hooks:
 
-不满足 → 立刻停止，先补齐 CP 块再继续。
+- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
+- Before claiming a batch is complete / verification passed / ready to wrap up: output a standalone [CP3 Assessment] (this message must not include tool calls)
+
+If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
 ## The Process
 
 ### Step 1: Load and Review Plan
+
 1. Read plan file
 2. Review critically - identify any questions or concerns about the plan
 3. If concerns: Raise them with your human partner before starting
 4. If no concerns: Create TodoWrite and proceed
 
 ### Step 2: Execute Batch
+
 **Default: First 3 tasks**
 
 **Claude Model Selection:** When dispatching Claude subagents for task execution, use `model: sonnet` for implementation work. Sonnet excels at code writing and is more cost-effective than Opus for execution tasks.
@@ -52,30 +55,35 @@ Current Task:
 ```
 
 For each task:
+
 1. Mark as in_progress
-2. 硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
+2. Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
 3. **► Checkpoint 1 (Task Analysis):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
    - Collect: task files, description, tech stack from plan
    - Check critical task conditions → Match: invoke expert model
    - Evaluate general task signals → Positive: invoke
-3. Follow each step exactly (plan has bite-sized steps)
-4. **► Checkpoint 2 (Mid-Review):** If blocked or uncertain:
+4. Follow each step exactly (plan has bite-sized steps)
+5. **► Checkpoint 2 (Mid-Review):** If blocked or uncertain:
    - Multiple approaches possible → invoke cross-validation
    - Debugging stalled → invoke domain expert
-5. Run verifications as specified
-6. **► Checkpoint 3 (Quality Gate):** Before marking complete:
+6. Run verifications as specified
+7. **► Checkpoint 3 (Quality Gate):** Before marking complete:
    - Code generation complete → invoke domain expert for review
-7. Mark as completed
+8. Mark as completed
 
 ### Step 3: Report
+
 When batch complete:
-- 硬提醒：在你声称 batch 完成/宣布验证通过之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
+
+- Hard reminder: before claiming a batch is complete or verification passed, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 - Show what was implemented
 - Show verification output
 - Say: "Ready for feedback."
 
 ### Step 4: Continue
+
 Based on feedback:
+
 - Apply changes if needed
 - Execute next batch
 - Repeat until complete
@@ -83,6 +91,7 @@ Based on feedback:
 ### Step 5: Complete Development
 
 After all tasks complete and verified:
+
 - Announce: "I'm using the finishing-development-branches skill to complete this work."
 - **REQUIRED SUB-SKILL:** Use superpowers:finishing-development-branches
 - Follow that skill to verify tests, present options, execute choice
@@ -90,6 +99,7 @@ After all tasks complete and verified:
 ## When to Stop and Ask for Help
 
 **STOP executing immediately when:**
+
 - Hit a blocker mid-batch (missing dependency, test fails, instruction unclear)
 - Plan has critical gaps preventing starting
 - You don't understand an instruction
@@ -100,12 +110,14 @@ After all tasks complete and verified:
 ## When to Revisit Earlier Steps
 
 **Return to Review (Step 1) when:**
+
 - Partner updates the plan based on your feedback
 - Fundamental approach needs rethinking
 
 **Don't force through blockers** - stop and ask.
 
 ## Remember
+
 - Review plan critically first
 - Follow plan steps exactly
 - Don't skip verifications
@@ -127,7 +139,7 @@ At checkpoints, apply semantic routing from `coordinating-multi-model-work/routi
 
 - **Check for Model Hint:** If plan includes `Model hint`, respect explicit hints
 
-- **Notify user:** "我将使用 [model] 来执行 [task description]"
+- **Notify user:** "I will use [model] to execute [task description]"
 
 - **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
 

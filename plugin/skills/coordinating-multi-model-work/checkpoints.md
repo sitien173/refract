@@ -2,39 +2,39 @@
 
 ## Overview
 
-检查点用于在技能执行的关键阶段决定是否需要外部模型，并强制执行统一的证据协议（Evidence / BLOCKED）。
+Checkpoints are used at key stages to decide whether external models are needed, and to enforce a unified evidence protocol (Evidence / BLOCKED).
 
 ## Checkpoints
 
-### CP1: Task Analysis（开始前）
+### CP1: Task Analysis (Before starting)
 
-目标：决定是否需要外部模型。
+Goal: decide whether external models are needed.
 
-- 收集：任务目标、涉及文件、技术栈、风险/不确定性
-- 使用：`coordinating-multi-model-work/routing-decision.md` 做语义路由
+- Collect: task goals, involved files, tech stack, risks/uncertainty
+- Use: semantic routing via `coordinating-multi-model-work/routing-decision.md`
 
-**Early exposure:** 一旦决定 `Routing != CLAUDE`，立刻执行 `GATE.md`（使用 MCP 工具取得 Evidence 或输出 BLOCKED），不要先写方案/写代码。
+**Early exposure:** once you decide `Routing != CLAUDE`, immediately execute `GATE.md` (use MCP tools to obtain Evidence or output BLOCKED). Do not write plans or code first.
 
-### CP2: Mid-Review（关键决策点）
+### CP2: Mid-Review (Key decision point)
 
-触发：
+Triggered by:
 
-- 方案分叉（2+ 可行路径，代价/风险不同）
-- 调试不确定（根因不清、出现互相矛盾证据）
-- 出现安全/性能/数据一致性疑虑
+- Branching approaches (2+ viable paths with different costs/risks)
+- Debugging uncertainty (root cause unclear, conflicting evidence)
+- Security/performance/data consistency concerns
 
-行为：优先使用 `CROSS_VALIDATION`，并同样遵循 early exposure + evidence。
+Action: prefer `CROSS_VALIDATION`, and follow early exposure + evidence.
 
-### CP3: Quality Gate（输出前）
+### CP3: Quality Gate (Before output)
 
-目标：在"最终输出/最终结论/声称通过测试/请求 code review"前做最后一次专家复核。
+Goal: perform a final Codex/Gemini review before "final output/final conclusion/claiming tests passed/requesting code review".
 
-- 若 `Routing != CLAUDE`：必须先有 Evidence
-- 外部失败：必须 BLOCKED（fail-closed）
+- If `Routing != CLAUDE`: Evidence required
+- External failure: must BLOCKED (fail-closed)
 
 ## User Override
 
-用户可以明确覆盖路由：
+Users can explicitly override routing:
 
-- "用 Codex" / "用 Gemini" / "交叉验证" → 强制对应 Routing
-- "不要用外部模型" → 强制 `Routing = CLAUDE`
+- "Use Codex" / "Use Gemini" / "Cross-validate" → force corresponding Routing
+- "Do not use external models" → force `Routing = CLAUDE`

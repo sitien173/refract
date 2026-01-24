@@ -6,32 +6,37 @@ description: "Creates comprehensive implementation plans with bite-sized tasks, 
 # Writing Plans
 
 ## Contents
-- [Overview](#overview)
-- [Bite-Sized Task Granularity](#bite-sized-task-granularity)
-- [Plan Document Header](#plan-document-header)
-- [Task Structure](#task-structure)
-- [Multi-Model Task Routing](#multi-model-task-routing)
-- [Execution Handoff](#execution-handoff)
+
+- [Writing Plans](#writing-plans)
+  - [Contents](#contents)
+  - [Overview](#overview)
+  - [Protocol Threshold (Required)](#protocol-threshold-required)
+  - [Bite-Sized Task Granularity](#bite-sized-task-granularity)
+  - [Plan Document Header](#plan-document-header)
+  - [Task Structure](#task-structure)
+  - [Execution Handoff](#execution-handoff)
 
 ## Overview
 
 Write comprehensive implementation plans assuming the engineer has zero context for our codebase and questionable taste. Document everything they need to know: which files to touch for each task, code, testing, docs they might need to check, how to test it. Give them the whole plan as bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.
 
-## 协议门槛（必须）
+## Protocol Threshold (Required)
 
-遵循 hooks 注入的【CP 协议门槛】要求：
-- 首次调用 Task 前：先单独输出【CP1 评估】（含字段；同消息不得包含 tool 调用）
-- 声称计划已完成/准备交接执行前：先单独输出【CP3 评估】（含字段；同消息不得包含 tool 调用）
+Follow the [CP Protocol Threshold] injected by hooks:
 
-不满足 → 立刻停止，先补齐 CP 块再继续。
+- Before the first Task call: output a standalone [CP1 Assessment] (this message must not include tool calls)
+- Before claiming the plan is complete / ready for execution handoff: output a standalone [CP3 Assessment] (this message must not include tool calls)
+
+If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
 Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
-硬提醒：在你第一次调用 Task 工具前，必须先**单独输出**一次 `【CP1 评估】`（按固定格式，含字段）。
+Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
 
 **► Checkpoint 1 (Task Analysis):** Before writing the plan, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Collect: overall scope, files involved, tech stack, complexity
 - Check critical task conditions → Match: invoke expert model for architecture review
 - Evaluate general task signals → Positive: invoke for plan quality assessment
@@ -43,6 +48,7 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 ## Bite-Sized Task Granularity
 
 **Each step is one action (2-5 minutes):**
+
 - "Write the failing test" - step
 - "Run it to make sure it fails" - step
 - "Implement the minimal code to make the test pass" - step
@@ -69,10 +75,11 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 ## Task Structure
 
-```markdown
+````markdown
 ### Task N: [Component Name]
 
 **Files:**
+
 - Create: `exact/path/to/file.py`
 - Modify: `exact/path/to/existing.py:123-145`
 - Test: `tests/exact/path/to/test.py`
@@ -84,6 +91,7 @@ def test_specific_behavior():
     result = function(input)
     assert result == expected
 ```
+````
 
 **Step 2: Run test to verify it fails**
 
@@ -108,7 +116,8 @@ Expected: PASS
 git add tests/path/test.py src/path/file.py
 git commit -m "feat: add specific feature"
 ```
-```
+
+````
 
 ## Remember
 - Exact file paths always
@@ -132,7 +141,7 @@ When writing plans, you can optionally annotate tasks with model hints to guide 
 **Files:**
 - Create: `exact/path/to/file.py`
 ...
-```
+````
 
 **Routing hint meanings:**
 
@@ -162,28 +171,34 @@ During plan execution (via `executing-plans` or `developing-with-subagents`):
 
 ```markdown
 ### Task 1: Create API endpoint
+
 **Model hint:** `codex`
 
 **Files:**
+
 - Create: `server/api/users.go`
 - Test: `server/api/users_test.go`
-...
+  ...
 
 ### Task 2: Create user profile component
+
 **Model hint:** `gemini`
 
 **Files:**
+
 - Create: `src/components/UserProfile.tsx`
 - Create: `src/components/UserProfile.css`
-...
+  ...
 
 ### Task 3: Integrate API with component
+
 **Model hint:** `cross-validation`
 
 **Files:**
+
 - Modify: `src/components/UserProfile.tsx`
 - Modify: `server/api/users.go`
-...
+  ...
 ```
 
 **Important notes:**
@@ -196,9 +211,10 @@ During plan execution (via `executing-plans` or `developing-with-subagents`):
 
 ## Execution Handoff
 
-硬提醒：在你声称计划已完成/准备交接执行之前，必须先**单独输出**一次 `【CP3 评估】`（按固定格式，含字段）。
+Hard reminder: before claiming the plan is complete/ready to hand off for execution, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 
 **► Checkpoint 3 (Quality Gate):** Before handoff, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+
 - Plan complete and ready for execution → invoke domain expert for final review
 - Critical tasks identified in plan → invoke cross-validation for architecture verification
 
@@ -213,10 +229,12 @@ After saving the plan, offer execution choice:
 **Which approach?"**
 
 **If Subagent-Driven chosen:**
+
 - **REQUIRED SUB-SKILL:** Use superpowers:developing-with-subagents
 - Stay in this session
 - Fresh subagent per task + code review
 
 **If Parallel Session chosen:**
+
 - Guide them to open new session in worktree
 - **REQUIRED SUB-SKILL:** New session uses superpowers:executing-plans
