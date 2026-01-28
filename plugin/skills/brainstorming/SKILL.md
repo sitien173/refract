@@ -13,10 +13,13 @@ Start by understanding the current project context, then ask questions one at a 
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks:
+Follow the [CP Protocol Threshold] injected by hooks.
 
-- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
-- Before providing a final design conclusion or requesting review: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the conclusion may follow in the same reply)
+IMPORTANT: "standalone" means the CP block must be its own block at the top of the reply.
+It does NOT mean you should stop after the CP block. Continue in the same reply.
+
+- Before the first Task call: output a standalone [CP1 Assessment] block at the top of the reply; then continue with your actual content (and tool calls if needed) in the same reply.
+- Before providing a final design conclusion or requesting review: output a standalone [CP3 Assessment] block at the top of the reply; then continue with the conclusion/next actions in the same reply.
 
 If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 
@@ -32,7 +35,7 @@ If unmet -> immediately perform the CP assessment, then continue the flow right 
 
 **Model tip for exploration:** When dispatching subagents to explore the codebase, use `model: haiku` for fast, cost-effective searches. Haiku excels at file pattern matching and quick lookups.
 
-Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
+Hard reminder: before your first Task tool call, you must output a standalone `[CP1 Assessment]` block (fixed format with fields).
 
 **► Checkpoint 1 (Task Analysis):** After understanding the idea, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 
@@ -55,7 +58,7 @@ Hard reminder: before your first Task tool call, you must output a standalone `�
 **Presenting the design:**
 
 - Once you believe you understand what you're building, present the design
-- Hard reminder: before giving a final design conclusion or claiming the design is finalized, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
+- Hard reminder: before giving a final design conclusion or claiming the design is finalized, you must output a standalone `[CP3 Assessment]` block (fixed format with fields).
 - Break it into sections of 200-300 words
 - Ask after each section whether it looks right so far
 - Cover: architecture, components, data flow, error handling, testing
@@ -63,11 +66,15 @@ Hard reminder: before your first Task tool call, you must output a standalone `�
 
 ## After the Design
 
-**Documentation:**
+**Documentation (must not be skipped):**
 
-- Write the validated design to `docs/plans/YYYY-MM-DD-<topic>-design.md`
-- Use elements-of-style:writing-clearly-and-concisely skill if available
-- Commit the design document to git
+Once the user confirms the design looks right, do ALL of the following:
+
+1. Ensure the output directory exists (create `docs/plans/` if missing)
+2. Write the final design content to `docs/plans/YYYY-MM-DD-<topic>-design.md`
+3. Then tell the user the file path you wrote
+
+Only commit if the user explicitly asks you to commit.
 
 **Implementation (if continuing):**
 
