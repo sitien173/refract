@@ -118,3 +118,4 @@ MIT License - see `LICENSE`.
 - [fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow) - CCG workflow
 - [GuDaStudio/geminimcp](https://github.com/GuDaStudio/geminimcp) - Gemini MCP
 - [GuDaStudio/codexmcp](https://github.com/GuDaStudio/codexmcp) - Codex MCP
+- [sitien173/cursormcp](https://github.com/sitien173/cursormcp) - Cursor MCP
