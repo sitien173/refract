@@ -81,6 +81,22 @@ Based on the analysis, output:
 - **CROSS_VALIDATION** - Both models for full-stack tasks, architectural decisions, or high uncertainty
 - **CLAUDE** - Simple tasks that don't require specialized external models
 
+> **Note:** Cursor (`mcp__cursor__cursor`) is intentionally absent from routing targets. It is a universal code quality layer that activates based on whether code changed, not based on task domain. See `checkpoints.md` for details.
+
+## Quality Gate Decision (Orthogonal to Routing)
+
+In addition to domain routing, CP3 evaluates whether code quality review is needed:
+
+```
+**QualityGateRequired:** [Yes | No]
+**Rationale:** [Code changed / docs-only]
+```
+
+This is independent of the routing decision:
+- Cursor (`mcp__cursor__cursor`) is NOT a routing destination
+- It activates automatically when code changed, regardless of routing label
+- See `checkpoints.md` for the full QualityGateRequired decision table
+
 ## Decision Guidelines
 
 - Strong frontend signals and weak/no backend signals → GEMINI

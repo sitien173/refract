@@ -15,9 +15,9 @@ description: "Executes plans by dispatching fresh subagent per task with two-sta
 
 ## Overview
 
-Execute plan by dispatching fresh subagent per task, with two-stage review after each: spec compliance review first, then code quality review.
+Execute plan by dispatching fresh subagent per task, with two-stage review after each: spec compliance review first (Opus), then code quality review (Cursor MCP, with Opus fallback).
 
-**Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
+**Core principle:** Fresh subagent per task + two-stage review (spec via Opus, then quality via Cursor MCP) = high quality, fast iteration
 
 ## Protocol Threshold (Required)
 
@@ -73,7 +73,7 @@ Task N: [description]
 - [ ] Implementation complete
 - [ ] Checkpoint 3 (Quality Gate) applied
 - [ ] Spec reviewer: ✅ compliant
-- [ ] Code quality reviewer: ✅ approved
+- [ ] Cursor code quality review: ✅ approved (or Opus fallback)
 - [ ] Task marked complete
 
 Final Steps:
@@ -95,9 +95,9 @@ digraph process {
         "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [shape=box];
         "Spec reviewer subagent confirms code matches spec?" [shape=diamond];
         "Implementer subagent fixes spec gaps" [shape=box];
-        "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [shape=box];
-        "Code quality reviewer subagent approves?" [shape=diamond];
-        "Implementer subagent fixes quality issues" [shape=box];
+        "Call Cursor MCP for code quality review (./code-quality-reviewer-prompt.md)" [shape=box];
+        "Cursor approves?" [shape=diamond];
+        "Implementer subagent fixes quality issues (max 3 loops)" [shape=box];
         "Mark task complete in TodoWrite" [shape=box];
     }
 
@@ -115,11 +115,11 @@ digraph process {
     "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" -> "Spec reviewer subagent confirms code matches spec?";
     "Spec reviewer subagent confirms code matches spec?" -> "Implementer subagent fixes spec gaps" [label="no"];
     "Implementer subagent fixes spec gaps" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [label="re-review"];
-    "Spec reviewer subagent confirms code matches spec?" -> "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [label="yes"];
-    "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" -> "Code quality reviewer subagent approves?";
-    "Code quality reviewer subagent approves?" -> "Implementer subagent fixes quality issues" [label="no"];
-    "Implementer subagent fixes quality issues" -> "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [label="re-review"];
-    "Code quality reviewer subagent approves?" -> "Mark task complete in TodoWrite" [label="yes"];
+    "Spec reviewer subagent confirms code matches spec?" -> "Call Cursor MCP for code quality review (./code-quality-reviewer-prompt.md)" [label="yes"];
+    "Call Cursor MCP for code quality review (./code-quality-reviewer-prompt.md)" -> "Cursor approves?";
+    "Cursor approves?" -> "Implementer subagent fixes quality issues (max 3 loops)" [label="no"];
+    "Implementer subagent fixes quality issues (max 3 loops)" -> "Call Cursor MCP for code quality review (./code-quality-reviewer-prompt.md)" [label="re-review"];
+    "Cursor approves?" -> "Mark task complete in TodoWrite" [label="yes"];
     "Mark task complete in TodoWrite" -> "More tasks remain?";
     "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
     "More tasks remain?" -> "Dispatch final code reviewer subagent for entire implementation" [label="no"];
@@ -137,11 +137,12 @@ digraph process {
 
 Choose model based on task type:
 
-| Subagent              | Model           | Freedom                          |
-| --------------------- | --------------- | -------------------------------- |
-| Implementer           | `model: sonnet` | Low - always use Sonnet for code |
-| Spec/Quality Reviewer | Opus (default)  | Low - always use Opus for review |
-| Exploration           | `model: haiku`  | Medium - prefer Haiku, flexible  |
+| Subagent              | Model                              | Freedom                              |
+| --------------------- | ---------------------------------- | ------------------------------------ |
+| Implementer           | `model: sonnet`                    | Low - always use Sonnet for code     |
+| Spec Reviewer         | Opus (default)                     | Low - always use Opus for review     |
+| Code Quality Reviewer | Cursor MCP (`mcp__cursor__cursor`) | Low - always use Cursor; Opus fallback |
+| Exploration           | `model: haiku`                     | Medium - prefer Haiku, flexible      |
 
 ## Collaboration Checkpoints
 
@@ -159,9 +160,12 @@ Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md` at th
 - Subagent asks question requiring external expertise → invoke domain expert
 - Multiple implementation approaches debated → invoke cross-validation
 
-**► Checkpoint 3 (Quality Gate):** After subagent completes, before spec review:
+**► Checkpoint 3 (Quality Gate):** After subagent completes implementation:
 
 - Implementation complete → invoke domain expert for pre-review assessment
+- Code quality review via Cursor runs after spec compliance passes (see `code-quality-reviewer-prompt.md`)
+- If Cursor unavailable: fall back to Opus code quality reviewer
+- Max 3 fix-review loops with Cursor before escalating to user
 
 ## Example Workflow
 
@@ -191,8 +195,8 @@ Implementer: "Got it. Implementing now..."
 [Dispatch spec compliance reviewer]
 Spec reviewer: ✅ Spec compliant - all requirements met, nothing extra
 
-[Get git SHAs, dispatch code quality reviewer]
-Code reviewer: Strengths: Good test coverage, clean. Issues: None. Approved.
+[Get git SHAs, call Cursor MCP for code quality review]
+Cursor: APPROVE — Good test coverage, clean implementation. No issues found.
 
 [Mark Task 1 complete]
 
@@ -219,14 +223,14 @@ Implementer: Removed --json flag, added progress reporting
 [Spec reviewer reviews again]
 Spec reviewer: ✅ Spec compliant now
 
-[Dispatch code quality reviewer]
-Code reviewer: Strengths: Solid. Issues (Important): Magic number (100)
+[Call Cursor MCP for code quality review]
+Cursor: Issues (Important): Magic number (100)
 
 [Implementer fixes]
 Implementer: Extracted PROGRESS_INTERVAL constant
 
-[Code reviewer reviews again]
-Code reviewer: ✅ Approved
+[Re-submit to Cursor]
+Cursor: APPROVE
 
 [Mark Task 2 complete]
 
@@ -264,10 +268,11 @@ Done!
 **Quality gates:**
 
 - Self-review catches issues before handoff
-- Two-stage review: spec compliance, then code quality
-- Review loops ensure fixes actually work
+- Two-stage review: spec compliance (Opus), then code quality (Cursor MCP)
+- Review loops ensure fixes actually work (max 3 with Cursor)
 - Spec compliance prevents over/under-building
-- Code quality ensures implementation is well-built
+- Code quality via Cursor ensures implementation is well-built
+- Opus fallback if Cursor unavailable — quality review never skipped
 
 **Cost:**
 
@@ -291,6 +296,8 @@ Done!
 - Let implementer self-review replace actual review (both are needed)
 - **Start code quality review before spec compliance is ✅** (wrong order)
 - Move to next task while either review has open issues
+- Skip Cursor fallback to Opus when Cursor is unavailable (don't just skip quality review)
+- Exceed 3 fix-review loops with Cursor without escalating to user
 
 **If subagent asks questions:**
 

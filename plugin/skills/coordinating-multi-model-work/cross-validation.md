@@ -240,8 +240,10 @@ After collecting outputs from both models, perform comparative analysis:
 
 ### Timeout Handling
 
-- Single model call timeout: use completed result + Claude supplement
-- Both timeout: fallback to Claude independent analysis
+- Single model call timeout: use completed result + Claude supplement (log which model timed out)
+- Both timeout: BLOCKED — follow `GATE.md` fail-closed procedure (do not fall back to Claude independent analysis)
+
+> **Note:** This aligns with the tiered failure policy in `GATE.md`. Cross-validation requires at least one external perspective to be meaningful.
 
 ### Cost Control
 

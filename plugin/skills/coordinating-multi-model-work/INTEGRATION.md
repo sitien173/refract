@@ -10,7 +10,8 @@ Task Type → Model Selection:
 ├─ Backend (API, database, logic) → CODEX
 ├─ Full-stack or uncertain → CROSS_VALIDATION
 ├─ Design docs, implementation docs, requirements specs, architecture docs, and other critical documentation → CROSS_VALIDATION
-└─ Simple (docs, configs) → CLAUDE (no external model needed)
+├─ Simple (docs, configs) → CLAUDE (no external model needed)
+└─ Code quality review (automatic) → CURSOR (not a routing target — see below)
 ```
 
 ## Standard Integration Section
@@ -84,6 +85,29 @@ Invoke both MCP tools in parallel, then integrate:
 - **Divergence**: [Differences]
 - **Recommendation**: [Final determination]
 ```
+
+### Code Quality Review (Cursor MCP)
+
+Cursor is invoked automatically for code quality review — it is NOT a routing target. Use this template when code changes need quality validation (subagent stage 2, CP3 with code changes).
+
+```json
+{
+  "tool": "mcp__cursor__cursor",
+  "params": {
+    "PROMPT": "## Code Quality Review\n\n### Task Context\n[Original task spec — what was being built and why]\n\n### Changes to Review\n[Diff or file paths with line ranges]\nCommit: [SHA]\n\n### Review Focus\n1. Correctness: bugs, edge cases, off-by-one errors, null handling\n2. Readability: naming, structure, comments where non-obvious\n3. Maintainability: DRY, coupling, separation of concerns\n4. Performance: anti-patterns, unnecessary allocations, N+1 queries\n\n### Important\n- Spec compliance has already been verified — focus only on code quality\n- Do NOT suggest feature additions or scope changes\n\n### Output Format\n- APPROVE if no issues found\n- Or list issues as:\n  - File: [path]\n  - Line: [number]\n  - Severity: Critical | Important | Minor\n  - Issue: [description]\n  - Suggestion: [fix]",
+    "cd": "$PWD",
+    "sandbox": "default",
+    "SESSION_ID": "<reuse-or-new>"
+  }
+}
+```
+
+**Cursor-specific rules:**
+- Pin review to a specific commit SHA (artifact pinning)
+- Max 3 fix-review loops before escalating to user
+- If Cursor unavailable at subagent stage 2: fall back to Opus quality reviewer
+- If Cursor unavailable at CP3: proceed without (supplementary)
+- See `GATE.md` for tiered failure policy details
 
 ## Important Rules
 
