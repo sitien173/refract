@@ -29,10 +29,10 @@ mkdir -p "$TEST_PROJECT"
 PROMPT="Change to directory $TEST_PROJECT, then use the developing-with-subagents skill to execute the following plan.
 
 IMPORTANT (protocol):
-- Before the first Task tool call, you MUST output a standalone assistant text message that begins with 【CP1 评估】 and includes these required fields:
-  - 任务类型
-  - 路由决策
-  - 理由
+- Before the first Task tool call, you MUST output a standalone assistant text message that begins with [CP1 Assessment] and includes these required fields:
+  - Task type
+  - Routing decision
+  - Rationale
 - That CP1 message must NOT include any tool calls.
 
 PLAN:
@@ -125,15 +125,14 @@ with open(path, 'r', encoding='utf-8') as f:
 
             if block.get('type') == 'text' and cp1_line is None:
                 text = block.get('text') or ''
-                if '【CP1 评估】' in text:
+                if '[CP1 Assessment]' in text:
                     cp1_line = i
 
                     # CP1 block must include required fields.
-                    # Accept both list format ("- 字段:") and bold label format ("字段：").
                     cp1_block_ok = (
-                        (('- 任务类型:' in text) or ('任务类型：' in text))
-                        and ((('- 路由决策:' in text)) or ('路由决策：' in text))
-                        and ((('- 理由:' in text)) or ('理由：' in text))
+                        ('Task type' in text or 'task type' in text)
+                        and ('Routing decision' in text or 'routing decision' in text)
+                        and ('Rationale' in text or 'rationale' in text)
                     )
 
                     # CP1 must be a standalone assistant text message (no tool_use blocks in same message).
@@ -161,7 +160,7 @@ else:
 print('')
 print('Test 2: CP1 evaluation block was output...')
 if cp1_line is None:
-    print('  [FAIL] No "【CP1 评估】" block found in assistant messages')
+    print('  [FAIL] No "[CP1 Assessment]" block found in assistant messages')
     failed = True
 else:
     print(f'  [PASS] CP1 evaluation found at transcript line {cp1_line}')
@@ -172,10 +171,10 @@ if cp1_line is None:
     print('  [FAIL] Missing CP1; cannot validate required fields')
     failed = True
 elif cp1_block_ok:
-    print('  [PASS] CP1 contains: 任务类型 / 路由决策 / 理由')
+    print('  [PASS] CP1 contains: Task type / Routing decision / Rationale')
 else:
     print('  [FAIL] CP1 missing one or more required fields:')
-    print('         - 任务类型 / 路由决策 / 理由')
+    print('         - Task type / Routing decision / Rationale')
     failed = True
 
 print('')

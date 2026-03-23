@@ -28,10 +28,10 @@ PROMPT="Change to directory $TEST_PROJECT.
 
 Then do the following strictly:
 1) Output a standalone assistant text block containing the exact lines:
-   【CP3 评估】
-   - 任务类型: 其他
-   - 路由决策: CLAUDE
-   - 理由: 测试用
+   [CP3 Assessment]
+   - Task type: Other
+   - Routing decision: CLAUDE
+   - Rationale: test
    IMPORTANT: This CP3 block must be the only content in that assistant message (no tool calls in the same message).
 2) After that, output the exact text: DONE
 
@@ -118,12 +118,12 @@ with open(path, 'r', encoding='utf-8') as f:
             if block.get('type') == 'text':
                 text = block.get('text') or ''
 
-                if cp3_line is None and '【CP3 评估】' in text:
+                if cp3_line is None and '[CP3 Assessment]' in text:
                     cp3_line = i
                     cp3_block_ok = (
-                        ('- 任务类型:' in text)
-                        and ('- 路由决策:' in text)
-                        and ('- 理由:' in text)
+                        ('Task type' in text or 'task type' in text)
+                        and ('Routing decision' in text or 'routing decision' in text)
+                        and ('Rationale' in text or 'rationale' in text)
                     )
                     cp3_is_text_only_block = all(
                         isinstance(b, dict) and b.get('type') != 'tool_use'
@@ -150,7 +150,7 @@ else:
 print('')
 print('Test 2: CP3 evaluation block was output...')
 if cp3_line is None:
-    print('  [FAIL] No "【CP3 评估】" block found in assistant messages')
+    print('  [FAIL] No "[CP3 Assessment]" block found in assistant messages')
     failed = True
 else:
     print(f'  [PASS] CP3 evaluation found at transcript line {cp3_line}')
@@ -161,10 +161,10 @@ if cp3_line is None:
     print('  [FAIL] Missing CP3; cannot validate required fields')
     failed = True
 elif cp3_block_ok:
-    print('  [PASS] CP3 contains: 任务类型 / 路由决策 / 理由')
+    print('  [PASS] CP3 contains: Task type / Routing decision / Rationale')
 else:
     print('  [FAIL] CP3 missing one or more required fields:')
-    print('         - 任务类型 / 路由决策 / 理由')
+    print('         - Task type / Routing decision / Rationale')
     failed = True
 
 print('')

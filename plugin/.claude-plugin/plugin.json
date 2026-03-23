@@ -1,6 +1,6 @@
 {
   "name": "superpowers-ccg",
-  "description": "Superpowers-CCG: 融合 CCG 多模型协作能力的完整软件开发工作流",
+  "description": "Superpowers-CCG: Skills-driven development workflow with CCG multi-model collaboration (Claude + Codex + Gemini + Cursor)",
   "version": "1.1.3",
   "author": {
     "name": "BryanHoo"
@@ -15,6 +15,7 @@
     "multi-model",
     "codex",
     "gemini",
+    "cursor",
     "collaboration",
     "workflows"
   ]
