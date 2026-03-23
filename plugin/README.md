@@ -14,8 +14,13 @@ Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.
 
 ### Prerequisites
 
-- Claude Code CLI installed (`claude --version`)
-- `uvx` available (used by the MCP server install commands below)
+- [Claude Code](https://docs.claude.com/docs/claude-code) installed (`claude --version`)
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated (`gemini --version`)
+- [Codex CLI](https://developers.openai.com/codex/quickstart) installed and authenticated (`codex --version`)
+- [Cursor Agent CLI](https://github.com/sitien173/cursormcp) — `agent` binary available in PATH (or `%LOCALAPPDATA%\cursor-agent\agent.cmd` on Windows)
+- `uv` / `uvx` available — install via:
+  - Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+  - macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ### Install
 
