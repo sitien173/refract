@@ -1,10 +1,12 @@
-# Superpowers-CCG
+# Superpowers-CCCG
 
-Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.com/obra/superpowers). It keeps the same skills-driven workflow, and adds **CCG multi-model collaboration**: Claude orchestrates, and can route to **Codex MCP** (backend), **Gemini MCP** (frontend), and **Cursor MCP** (code quality review) with optional cross-validation.
+Superpowers-CCCG is a fork/enhanced variant of [obra/superpowers](https://github.com/obra/superpowers). It keeps the same skills-driven workflow, and adds **CCCG multi-model collaboration**: Claude orchestrates, and can route to **Codex MCP** (backend), **Gemini MCP** (frontend), and **Cursor MCP** (code quality review) with optional cross-validation.
+
+> **CCCG** = **C**laude + **C**odex + **C**ursor + **G**emini
 
 ## What You Get
 
-- **Multi-model routing (CCG)**: route tasks to Codex (backend) / Gemini (frontend), or use **CROSS_VALIDATION** when uncertain.
+- **Multi-model routing (CCCG)**: route tasks to Codex (backend) / Gemini (frontend), or use **CROSS_VALIDATION** when uncertain.
 - **Cursor code quality layer**: automatic code quality review via Cursor MCP after implementation, replacing the Opus quality reviewer in subagent workflows.
 - **MCP tool integration**: external calls go through MCP tools: `mcp__codex__codex`, `mcp__gemini__gemini`, `mcp__cursor__cursor`.
 - **Collaboration checkpoints**: CP1/CP2/CP3 checkpoints embedded in key skills to decide when to call external models.
@@ -88,7 +90,7 @@ The routing/checkpoint rules live in `skills/coordinating-multi-model-work/`.
 - **CP checkpoints** (CP1/CP2/CP3) added to enforce evidence-driven collaboration.
 - **Cursor as code quality layer**: automatic post-implementation review replacing Opus quality reviewer.
 - **Tiered fail-closed gate**: domain experts are strict-BLOCKED on failure; Cursor has graceful fallback to Opus.
-- **Skill set changes** (additions/renames) for the CCG workflow.
+- **Skill set changes** (additions/renames) for the CCCG workflow.
 
 ## Update
 
@@ -119,7 +121,7 @@ MIT License - see `LICENSE`.
 ## Acknowledgments
 
 - [obra/superpowers](https://github.com/obra/superpowers) - Original Superpowers project
-- [BryanHoo/superpowers-ccg](https://github.com/BryanHoo/superpowers-ccg) - CCG multi-model collaboration fork
+- [BryanHoo/superpowers-ccg](https://github.com/BryanHoo/superpowers-ccg) - CCG multi-model collaboration fork (upstream)
 - [fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow) - CCG workflow
 - [GuDaStudio/geminimcp](https://github.com/GuDaStudio/geminimcp) - Gemini MCP
 - [GuDaStudio/codexmcp](https://github.com/GuDaStudio/codexmcp) - Codex MCP
