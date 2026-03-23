@@ -42,8 +42,8 @@ claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.
 # Frontend specialist
 claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/geminimcp.git geminimcp
 
-# Code quality reviewer (install per Cursor MCP documentation)
-# claude mcp add cursor -s user ...
+# Code quality reviewer
+claude mcp add cursor -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/cursormcp.git cursormcp
 ```
 
 ## Using External Models
