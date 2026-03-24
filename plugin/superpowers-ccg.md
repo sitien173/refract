@@ -1,9 +1,9 @@
-# Superpowers CCG - Agent Rules
+# Superpowers CCCG - Agent Rules
 
 > This document defines the skills, workflows, and principles for AI agents working in this project.
 > Any agent MUST read and follow these rules.
 >
-> **Skill Namespace:** All skills use the `superpowers-ccg:` prefix (e.g., `superpowers-ccg:brainstorming`)
+> **Skill Namespace:** All skills use the `superpowers-cccg:` prefix (e.g., `superpowers-cccg:brainstorming`)
 
 ---
 
@@ -48,19 +48,19 @@ These are non-negotiable. Violating them requires stopping and starting over.
 
 ### How to Find Skills
 
-GET Skills from superpowers-ccg plugin
+GET Skills from superpowers-cccg plugin
 
-**Namespace:** All skills use the `superpowers-ccg:` prefix.
+**Namespace:** All skills use the `superpowers-cccg:` prefix.
 
-**Invocation format:** `superpowers-ccg:<skill-name>` (e.g., `superpowers-ccg:brainstorming`)
+**Invocation format:** `superpowers-cccg:<skill-name>` (e.g., `superpowers-cccg:brainstorming`)
 
 ### When to Use Skills
 
 ```
 BEFORE any response or action:
-  1. Could ANY superpowers-ccg: skill apply? (even 1% chance)
+  1. Could ANY superpowers-cccg: skill apply? (even 1% chance)
   2. If yes → Invoke skill immediately
-  3. Announce: "I'm using superpowers-ccg:[skill] to [purpose]"
+  3. Announce: "I'm using superpowers-cccg:[skill] to [purpose]"
   4. Follow skill exactly
 ```
 
@@ -76,21 +76,21 @@ BEFORE any response or action:
 ### Workflow 1: Creating Features (Creative Work)
 
 ```
-superpowers-ccg:brainstorming → superpowers-ccg:writing-plans → [superpowers-ccg:using-git-worktrees] → superpowers-ccg:executing-plans OR superpowers-ccg:developing-with-subagents → superpowers-ccg:finishing-development-branches
+superpowers-cccg:brainstorming → superpowers-cccg:writing-plans → [superpowers-cccg:using-git-worktrees] → superpowers-cccg:executing-plans OR superpowers-cccg:developing-with-subagents → superpowers-cccg:finishing-development-branches
 ```
 
 | Step | Skill | Purpose |
 |------|-------|---------|
-| 1 | `superpowers-ccg:brainstorming` | Explore requirements, design before implementation |
-| 2 | `superpowers-ccg:writing-plans` | Create bite-sized implementation plan |
-| 3 | `superpowers-ccg:using-git-worktrees` | (Optional) Isolated workspace |
-| 4 | `superpowers-ccg:executing-plans` OR `superpowers-ccg:developing-with-subagents` | Execute plan task-by-task |
-| 5 | `superpowers-ccg:finishing-development-branches` | Verify tests, merge/PR/cleanup |
+| 1 | `superpowers-cccg:brainstorming` | Explore requirements, design before implementation |
+| 2 | `superpowers-cccg:writing-plans` | Create bite-sized implementation plan |
+| 3 | `superpowers-cccg:using-git-worktrees` | (Optional) Isolated workspace |
+| 4 | `superpowers-cccg:executing-plans` OR `superpowers-cccg:developing-with-subagents` | Execute plan task-by-task |
+| 5 | `superpowers-cccg:finishing-development-branches` | Verify tests, merge/PR/cleanup |
 
 ### Workflow 2: Debugging
 
 ```
-superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:verifying-before-completion
+superpowers-cccg:debugging-systematically → [TDD for fix] → superpowers-cccg:verifying-before-completion
 ```
 
 | Phase | Action |
@@ -103,7 +103,7 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 ### Workflow 3: Code Review
 
 ```
-superpowers-ccg:requesting-code-review → [reviewer subagent] → superpowers-ccg:receiving-code-review → [implement fixes]
+superpowers-cccg:requesting-code-review → [reviewer subagent] → superpowers-cccg:receiving-code-review → [implement fixes]
 ```
 
 ---
@@ -114,46 +114,46 @@ superpowers-ccg:requesting-code-review → [reviewer subagent] → superpowers-c
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `superpowers-ccg:brainstorming` | Creating features, building components, starting creative work | Explore requirements and design before implementation |
-| `superpowers-ccg:debugging-systematically` | Bugs, test failures, unexpected behavior, errors | Find root cause through four-phase investigation |
-| `superpowers-ccg:practicing-test-driven-development` | Implementing features, fixing bugs, refactoring | Red-green-refactor cycle |
-| `superpowers-ccg:verifying-before-completion` | About to claim work is done, before commit/PR | Ensure evidence before assertions |
+| `superpowers-cccg:brainstorming` | Creating features, building components, starting creative work | Explore requirements and design before implementation |
+| `superpowers-cccg:debugging-systematically` | Bugs, test failures, unexpected behavior, errors | Find root cause through four-phase investigation |
+| `superpowers-cccg:practicing-test-driven-development` | Implementing features, fixing bugs, refactoring | Red-green-refactor cycle |
+| `superpowers-cccg:verifying-before-completion` | About to claim work is done, before commit/PR | Ensure evidence before assertions |
 
 ### Planning Skills
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `superpowers-ccg:writing-plans` | Have spec/requirements, before coding | Create detailed implementation plan with bite-sized tasks |
-| `superpowers-ccg:executing-plans` | Have plan document, separate session | Execute plan in batches with review checkpoints |
-| `superpowers-ccg:developing-with-subagents` | Have plan, same session, independent tasks | Fresh subagent per task with two-stage review |
+| `superpowers-cccg:writing-plans` | Have spec/requirements, before coding | Create detailed implementation plan with bite-sized tasks |
+| `superpowers-cccg:executing-plans` | Have plan document, separate session | Execute plan in batches with review checkpoints |
+| `superpowers-cccg:developing-with-subagents` | Have plan, same session, independent tasks | Fresh subagent per task with two-stage review |
 
 ### Git/Workspace Skills
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `superpowers-ccg:using-git-worktrees` | Starting feature work needing isolation | Create isolated git worktree |
-| `superpowers-ccg:finishing-development-branches` | Implementation complete, tests pass | Guide merge/PR/cleanup options |
+| `superpowers-cccg:using-git-worktrees` | Starting feature work needing isolation | Create isolated git worktree |
+| `superpowers-cccg:finishing-development-branches` | Implementation complete, tests pass | Guide merge/PR/cleanup options |
 
 ### Review Skills
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `superpowers-ccg:requesting-code-review` | Completing tasks, before merge | Dispatch code reviewer subagent |
-| `superpowers-ccg:receiving-code-review` | Got review feedback | Evaluate feedback with technical rigor |
+| `superpowers-cccg:requesting-code-review` | Completing tasks, before merge | Dispatch code reviewer subagent |
+| `superpowers-cccg:receiving-code-review` | Got review feedback | Evaluate feedback with technical rigor |
 
 ### Parallel Execution
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `superpowers-ccg:dispatching-parallel-agents` | 2+ independent tasks, parallel investigations | One agent per problem domain |
+| `superpowers-cccg:dispatching-parallel-agents` | 2+ independent tasks, parallel investigations | One agent per problem domain |
 
 ### Meta Skills
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `superpowers-ccg:using-superpowers` | Starting conversation, need skill guidance | How to find and use skills |
-| `superpowers-ccg:writing-skills` | Creating/editing skills | TDD for process documentation |
-| `superpowers-ccg:coordinating-multi-model-work` | Any implementation work, cross-validation needed | Route to Codex/Gemini/Cursor via MCP |
+| `superpowers-cccg:using-superpowers` | Starting conversation, need skill guidance | How to find and use skills |
+| `superpowers-cccg:writing-skills` | Creating/editing skills | TDD for process documentation |
+| `superpowers-cccg:coordinating-multi-model-work` | Any implementation work, cross-validation needed | Route to Codex/Gemini/Cursor via MCP |
 
 ---
 
@@ -163,9 +163,9 @@ These are quick-invoke workflows located in `commands/`.
 
 | Command | Invokes Skill | Purpose |
 |---------|---------------|---------|
-| `/brainstorm` | `superpowers-ccg:brainstorming` | Start creative exploration |
-| `/write-plan` | `superpowers-ccg:writing-plans` | Create implementation plan |
-| `/execute-plan` | `superpowers-ccg:executing-plans` | Execute plan in batches |
+| `/brainstorm` | `superpowers-cccg:brainstorming` | Start creative exploration |
+| `/write-plan` | `superpowers-cccg:writing-plans` | Create implementation plan |
+| `/execute-plan` | `superpowers-cccg:executing-plans` | Execute plan in batches |
 
 ---
 
@@ -325,7 +325,7 @@ git commit -m "feat: add specific feature"
 
 ## Model Selection (For Subagents)
 
-See `superpowers-ccg:developing-with-subagents` and `superpowers-ccg:dispatching-parallel-agents` for details.
+See `superpowers-cccg:developing-with-subagents` and `superpowers-cccg:dispatching-parallel-agents` for details.
 
 | Task Type | Model |
 |-----------|-------|
@@ -344,31 +344,31 @@ See `superpowers-ccg:developing-with-subagents` and `superpowers-ccg:dispatching
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ BEFORE ANY ACTION                                           │
-│ ✓ Could any superpowers-ccg: skill apply? → Invoke skill    │
+│ ✓ Could any superpowers-cccg: skill apply? → Invoke skill    │
 │ ✓ Check for applicable iron laws                            │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│ CREATIVE WORK (superpowers-ccg:*)                           │
+│ CREATIVE WORK (superpowers-cccg:*)                           │
 │ brainstorming → writing-plans → [using-git-worktrees]       │
 │ → executing-plans OR developing-with-subagents              │
 │ → finishing-development-branches                            │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│ DEBUGGING (superpowers-ccg:debugging-systematically)        │
+│ DEBUGGING (superpowers-cccg:debugging-systematically)        │
 │ Root Cause → Pattern → Hypothesis → Implementation          │
 │ (NO FIXES until Phase 1 complete)                           │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│ TDD (superpowers-ccg:practicing-test-driven-development)    │
+│ TDD (superpowers-cccg:practicing-test-driven-development)    │
 │ RED (write failing test) → GREEN (minimal code) → REFACTOR  │
 │ (NO CODE without failing test first)                        │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│ COMPLETION (superpowers-ccg:verifying-before-completion)    │
+│ COMPLETION (superpowers-cccg:verifying-before-completion)    │
 │ Run verification → Read output → THEN claim result          │
 │ (NO CLAIMS without evidence)                                │
 └─────────────────────────────────────────────────────────────┘
@@ -376,4 +376,4 @@ See `superpowers-ccg:developing-with-subagents` and `superpowers-ccg:dispatching
 
 ---
 
-*This document is the authoritative reference for agent behavior in superpowers-ccg.*
+*This document is the authoritative reference for agent behavior in superpowers-cccg.*
