@@ -35,7 +35,7 @@ Test helpers (`tests/claude-code/test-helpers.sh`) expose: `run_claude`, `assert
 
 ### Skills (`skills/`)
 
-Each skill lives in a subdirectory with `SKILL.md` (YAML frontmatter + instructions). Skills are discovered and resolved via `lib/skills-core.js`. All skills are exposed under the `superpowers-ccg:` namespace.
+Each skill lives in a subdirectory with `SKILL.md` (YAML frontmatter + instructions). Skills are discovered and resolved via `lib/skills-core.js`. All skills are exposed under the `superpowers-cccg:` namespace.
 
 Key skills:
 - `coordinating-multi-model-work/` — Routes tasks to Codex/Gemini/Cursor MCP; defines the CP checkpoint protocol. Claude is orchestrator-only.
@@ -87,7 +87,7 @@ Quick-invoke workflows: `/brainstorm`, `/write-plan`, `/execute-plan`. These map
 
 ## Skill Authoring
 
-When creating or editing skills, use `superpowers-ccg:writing-skills`. Skills require a failing test before implementation (same TDD discipline as code).
+When creating or editing skills, use `superpowers-cccg:writing-skills`. Skills require a failing test before implementation (same TDD discipline as code).
 
 Skill file structure:
 ```

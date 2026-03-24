@@ -18,13 +18,6 @@ echo "Test time: $(date)"
 echo "Claude version: $(claude --version 2>/dev/null || echo 'not found')"
 echo ""
 
-# Check if Claude Code is available
-if ! command -v claude &> /dev/null; then
-    echo "ERROR: Claude Code CLI not found"
-    echo "Install Claude Code first: https://code.claude.com"
-    exit 1
-fi
-
 # Parse command line arguments
 VERBOSE=false
 SPECIFIC_TEST=""
@@ -60,6 +53,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --help, -h           Show this help"
             echo ""
             echo "Tests:"
+            echo "  test-namespace-consistency.sh       Lint: no stale superpowers-ccg: namespace"
             echo "  test-subagent-driven-development.sh  Test skill loading and requirements"
             echo ""
             echo "Integration Tests (use --integration):"
@@ -76,7 +70,13 @@ done
 
 # List of skill tests to run (fast unit tests)
 tests=(
+    "test-namespace-consistency.sh"
     "test-subagent-driven-development.sh"
+)
+
+# Tests that do not require the Claude Code CLI (safe for CI without claude installed)
+static_tests=(
+    "test-namespace-consistency.sh"
 )
 
 # Integration tests (slow, full execution)
@@ -94,6 +94,28 @@ fi
 # Filter to specific test if requested
 if [ -n "$SPECIFIC_TEST" ]; then
     tests=("$SPECIFIC_TEST")
+fi
+
+# Require Claude only when at least one selected test needs it
+needs_claude=false
+for test in "${tests[@]}"; do
+    is_static=false
+    for st in "${static_tests[@]}"; do
+        if [ "$test" = "$st" ]; then
+            is_static=true
+            break
+        fi
+    done
+    if [ "$is_static" = false ]; then
+        needs_claude=true
+        break
+    fi
+done
+
+if [ "$needs_claude" = true ] && ! command -v claude &> /dev/null; then
+    echo "ERROR: Claude Code CLI not found"
+    echo "Install Claude Code first: https://code.claude.com"
+    exit 1
 fi
 
 # Track results

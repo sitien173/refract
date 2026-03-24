@@ -63,27 +63,39 @@ Input variables:
 
 ## Invocation (Opus as Reviewer)
 
-When Cursor was the implementer, dispatch an Opus subagent using `superpowers-ccg:code-reviewer` with the same review focus and BASE_SHA/HEAD_SHA context.
+When Cursor was the implementer, dispatch an Opus subagent using `superpowers-cccg:code-reviewer` with the same review focus and BASE_SHA/HEAD_SHA context.
 
 **This is NOT a fallback** — it is the deterministic choice when Cursor implements.
 
 ```
 1. Log: `[Quality Review] Cursor implemented — dispatching Opus reviewer (no self-review)`
-2. Dispatch Opus subagent using `superpowers-ccg:code-reviewer`
+2. Dispatch Opus subagent using `superpowers-cccg:code-reviewer`
 3. Use the same BASE_SHA/HEAD_SHA and task context
 ```
 
 ## Review Loop
 
 - If reviewer returns issues: implementer fixes, then re-submit to reviewer
-- **Max 3 fix-review loops** — after 3 iterations, escalate to user
+- **Loop limits are risk-tiered:**
+  - Trivial tasks: 0 loops (no quality review)
+  - Standard tasks: max 3 fix-review loops
+  - Critical tasks: max 4 fix-review loops, then escalate to user with full context
 - If reviewer approves: mark task complete
+
+**Escalation format (when max loops reached):**
+
+```text
+⚠️ Review loop limit reached ([N] iterations)
+Task complexity: [Standard/Critical]
+Remaining issues: [list from last review]
+Options: (1) Accept with known issues, (2) User fixes manually, (3) Re-route to different model
+```
 
 ## Fallback (Cursor Reviewer Unavailable)
 
 If `mcp__cursor__cursor` is unavailable when it should be the reviewer (Codex/Gemini implemented):
 1. Log: `[Cursor Fallback] Cursor MCP unavailable, using Opus quality reviewer`
-2. Fall back to dispatching an Opus subagent using `superpowers-ccg:code-reviewer`
+2. Fall back to dispatching an Opus subagent using `superpowers-cccg:code-reviewer`
 3. Use the same BASE_SHA/HEAD_SHA and task context
 
 ## Fallback (Opus Reviewer Unavailable)

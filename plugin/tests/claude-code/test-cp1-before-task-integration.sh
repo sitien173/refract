@@ -31,6 +31,8 @@ PROMPT="Change to directory $TEST_PROJECT, then use the developing-with-subagent
 IMPORTANT (protocol):
 - Before the first Task tool call, you MUST output a standalone assistant text message that begins with [CP1 Assessment] and includes these required fields:
   - Task type
+  - Complexity
+  - Enforcement mode
   - Routing decision
   - Rationale
 - That CP1 message must NOT include any tool calls.
@@ -131,6 +133,8 @@ with open(path, 'r', encoding='utf-8') as f:
                     # CP1 block must include required fields.
                     cp1_block_ok = (
                         ('Task type' in text or 'task type' in text)
+                        and ('Complexity' in text or 'complexity' in text)
+                        and ('Enforcement mode' in text or 'enforcement mode' in text)
                         and ('Routing decision' in text or 'routing decision' in text)
                         and ('Rationale' in text or 'rationale' in text)
                     )
@@ -171,10 +175,10 @@ if cp1_line is None:
     print('  [FAIL] Missing CP1; cannot validate required fields')
     failed = True
 elif cp1_block_ok:
-    print('  [PASS] CP1 contains: Task type / Routing decision / Rationale')
+    print('  [PASS] CP1 contains: Task type / Complexity / Enforcement mode / Routing decision / Rationale')
 else:
     print('  [FAIL] CP1 missing one or more required fields:')
-    print('         - Task type / Routing decision / Rationale')
+    print('         - Task type / Complexity / Enforcement mode / Routing decision / Rationale')
     failed = True
 
 print('')

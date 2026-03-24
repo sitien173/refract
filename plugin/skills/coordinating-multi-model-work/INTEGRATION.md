@@ -28,7 +28,7 @@ Copy this section to your skill and customize the prompts:
 ```markdown
 ## Multi-Model Integration
 
-**Related skill:** superpowers-ccg:coordinating-multi-model-work
+**Related skill:** superpowers-cccg:coordinating-multi-model-work
 
 For tasks requiring implementation, apply semantic routing:
 
@@ -144,7 +144,7 @@ Use this template when Cursor is the **quality reviewer** (not the implementer).
 
 ### Code Quality Review (Opus — when Cursor implements)
 
-When Cursor is the implementer, use Opus for quality review (no self-review). Dispatch an Opus subagent using `superpowers-ccg:code-reviewer` with the same review focus as above.
+When Cursor is the implementer, use Opus for quality review (no self-review). Dispatch an Opus subagent using `superpowers-cccg:code-reviewer` with the same review focus as above.
 
 ## Important Rules
 

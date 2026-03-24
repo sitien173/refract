@@ -341,7 +341,7 @@ Done!
 
 ## Multi-Model Task Dispatch
 
-**Related skill:** superpowers-ccg:coordinating-multi-model-work
+**Related skill:** superpowers-cccg:coordinating-multi-model-work
 
 At checkpoints, apply semantic routing from `coordinating-multi-model-work/routing-decision.md`:
 

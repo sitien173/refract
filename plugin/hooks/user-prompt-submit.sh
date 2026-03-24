@@ -12,13 +12,21 @@ Note: Put the CP block first; tool calls may follow in the same assistant reply.
 
 [CP1 Assessment]
 - Task type: [Frontend/Backend/Full-stack/Other]
-- Routing decision: [CLAUDE/CODEX/GEMINI/CROSS_VALIDATION]
+- Complexity: [Trivial/Standard/Critical]
+- Enforcement mode: [Strict/Degraded/Incident]
+- Routing decision: [CLAUDE/CODEX/GEMINI/CURSOR/CROSS_VALIDATION]
 - Rationale: ...
+
+Compact format (Trivial tasks only):
+[CP1] Routing: CLAUDE | Trivial: <reason>
 
 [CP3 Assessment]
 - Task type: [Frontend/Backend/Full-stack/Other]
-- Routing decision: [CLAUDE/CODEX/GEMINI/CROSS_VALIDATION]
+- Routing decision: [CLAUDE/CODEX/GEMINI/CURSOR/CROSS_VALIDATION]
 - Rationale: ...
+
+Compact format (Trivial tasks only):
+[CP3] Verified: <evidence>
 
 If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 "

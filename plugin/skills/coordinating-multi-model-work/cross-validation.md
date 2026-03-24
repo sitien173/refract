@@ -207,6 +207,25 @@ After collecting outputs from both models, perform comparative analysis:
 2. [Action 2]
 ```
 
+### Divergence-Only Report (Default for Standard tasks)
+
+For standard-complexity tasks, use this compact format that highlights only where models disagreed:
+
+```text
+## Cross-Validation Summary
+
+**Agreement:** [1-2 sentence summary of shared conclusions]
+
+**Divergences:**
+| Aspect | Codex | Gemini | Resolution |
+|--------|-------|--------|------------|
+| [Only divergent points] | [View] | [View] | [Decision + rationale] |
+
+**Action:** [What to do next based on resolution]
+```
+
+Use the full Standard Report format for Critical-complexity tasks or when divergences are extensive (3+ divergence rows).
+
 ### 3-Way Escalation Report (Optional)
 
 When Cursor is included as a third perspective, extend the report:
