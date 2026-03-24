@@ -1,12 +1,12 @@
 {
   "name": "superpowers-ccg",
-  "description": "Superpowers-CCG: Skills-driven development workflow with CCG multi-model collaboration (Claude + Codex + Gemini + Cursor)",
-  "version": "1.1.3",
+  "description": "Superpowers-CCCG: Skills-driven development workflow with CCCG multi-model orchestration (Claude orchestrator + Codex backend + Cursor general + Gemini frontend)",
+  "version": "1.2.0",
   "author": {
-    "name": "BryanHoo"
+    "name": "sitien173"
   },
-  "homepage": "https://github.com/BryanHoo/superpowers-ccg",
-  "repository": "https://github.com/BryanHoo/superpowers-ccg",
+  "homepage": "https://github.com/sitien173/superpowers-cccg",
+  "repository": "https://github.com/sitien173/superpowers-cccg",
   "license": "MIT",
   "keywords": [
     "skills",
