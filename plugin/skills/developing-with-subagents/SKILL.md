@@ -15,9 +15,9 @@ description: "Executes plans by dispatching fresh subagent per task with two-sta
 
 ## Overview
 
-Execute plan by dispatching fresh subagent per task, with two-stage review after each: spec compliance review first (Opus), then code quality review (Cursor MCP, with Opus fallback).
+Execute plan by routing each task to the appropriate external model (Codex/Gemini/Cursor based on domain), with two-stage review after each: spec compliance review first (Opus), then code quality review (deterministic: Cursor reviews Codex/Gemini work, Opus reviews Cursor work).
 
-**Core principle:** Fresh subagent per task + two-stage review (spec via Opus, then quality via Cursor MCP) = high quality, fast iteration
+**Core principle:** Route to external model per task + two-stage review (spec via Opus, then quality via deterministic reviewer) = high quality, fast iteration. Claude orchestrates but never implements.
 
 ## Protocol Threshold (Required)
 
@@ -73,7 +73,7 @@ Task N: [description]
 - [ ] Implementation complete
 - [ ] Checkpoint 3 (Quality Gate) applied
 - [ ] Spec reviewer: ✅ compliant
-- [ ] Cursor code quality review: ✅ approved (or Opus fallback)
+- [ ] Quality review: ✅ approved (Cursor if Codex/Gemini implemented; Opus if Cursor implemented)
 - [ ] Task marked complete
 
 Final Steps:
@@ -88,16 +88,16 @@ digraph process {
 
     subgraph cluster_per_task {
         label="Per Task";
-        "Dispatch implementer subagent (./implementer-prompt.md)" [shape=box];
-        "Implementer subagent asks questions?" [shape=diamond];
+        "Route to external model (Codex/Gemini/Cursor per routing)" [shape=box];
+        "External model asks questions?" [shape=diamond];
         "Answer questions, provide context" [shape=box];
-        "Implementer subagent implements, tests, commits, self-reviews" [shape=box];
+        "External model implements, tests, commits" [shape=box];
         "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [shape=box];
         "Spec reviewer subagent confirms code matches spec?" [shape=diamond];
-        "Implementer subagent fixes spec gaps" [shape=box];
-        "Call Cursor MCP for code quality review (./code-quality-reviewer-prompt.md)" [shape=box];
-        "Cursor approves?" [shape=diamond];
-        "Implementer subagent fixes quality issues (max 3 loops)" [shape=box];
+        "External model fixes spec gaps" [shape=box];
+        "Quality review (./code-quality-reviewer-prompt.md)" [shape=box];
+        "Quality reviewer approves?" [shape=diamond];
+        "External model fixes quality issues (max 3 loops)" [shape=box];
         "Mark task complete in TodoWrite" [shape=box];
     }
 
@@ -106,22 +106,22 @@ digraph process {
     "Dispatch final code reviewer subagent for entire implementation" [shape=box];
     "Use superpowers:finishing-development-branches" [shape=box style=filled fillcolor=lightgreen];
 
-    "Read plan, extract all tasks with full text, note context, create TodoWrite" -> "Dispatch implementer subagent (./implementer-prompt.md)";
-    "Dispatch implementer subagent (./implementer-prompt.md)" -> "Implementer subagent asks questions?";
-    "Implementer subagent asks questions?" -> "Answer questions, provide context" [label="yes"];
-    "Answer questions, provide context" -> "Dispatch implementer subagent (./implementer-prompt.md)";
-    "Implementer subagent asks questions?" -> "Implementer subagent implements, tests, commits, self-reviews" [label="no"];
-    "Implementer subagent implements, tests, commits, self-reviews" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)";
+    "Read plan, extract all tasks with full text, note context, create TodoWrite" -> "Route to external model (Codex/Gemini/Cursor per routing)";
+    "Route to external model (Codex/Gemini/Cursor per routing)" -> "External model asks questions?";
+    "External model asks questions?" -> "Answer questions, provide context" [label="yes"];
+    "Answer questions, provide context" -> "Route to external model (Codex/Gemini/Cursor per routing)";
+    "External model asks questions?" -> "External model implements, tests, commits" [label="no"];
+    "External model implements, tests, commits" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)";
     "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" -> "Spec reviewer subagent confirms code matches spec?";
-    "Spec reviewer subagent confirms code matches spec?" -> "Implementer subagent fixes spec gaps" [label="no"];
-    "Implementer subagent fixes spec gaps" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [label="re-review"];
-    "Spec reviewer subagent confirms code matches spec?" -> "Call Cursor MCP for code quality review (./code-quality-reviewer-prompt.md)" [label="yes"];
-    "Call Cursor MCP for code quality review (./code-quality-reviewer-prompt.md)" -> "Cursor approves?";
-    "Cursor approves?" -> "Implementer subagent fixes quality issues (max 3 loops)" [label="no"];
-    "Implementer subagent fixes quality issues (max 3 loops)" -> "Call Cursor MCP for code quality review (./code-quality-reviewer-prompt.md)" [label="re-review"];
-    "Cursor approves?" -> "Mark task complete in TodoWrite" [label="yes"];
+    "Spec reviewer subagent confirms code matches spec?" -> "External model fixes spec gaps" [label="no"];
+    "External model fixes spec gaps" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [label="re-review"];
+    "Spec reviewer subagent confirms code matches spec?" -> "Quality review (./code-quality-reviewer-prompt.md)" [label="yes"];
+    "Quality review (./code-quality-reviewer-prompt.md)" -> "Quality reviewer approves?";
+    "Quality reviewer approves?" -> "External model fixes quality issues (max 3 loops)" [label="no"];
+    "External model fixes quality issues (max 3 loops)" -> "Quality review (./code-quality-reviewer-prompt.md)" [label="re-review"];
+    "Quality reviewer approves?" -> "Mark task complete in TodoWrite" [label="yes"];
     "Mark task complete in TodoWrite" -> "More tasks remain?";
-    "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
+    "More tasks remain?" -> "Route to external model (Codex/Gemini/Cursor per routing)" [label="yes"];
     "More tasks remain?" -> "Dispatch final code reviewer subagent for entire implementation" [label="no"];
     "Dispatch final code reviewer subagent for entire implementation" -> "Use superpowers:finishing-development-branches";
 }
@@ -129,20 +129,22 @@ digraph process {
 
 ## Prompt Templates
 
-- `./implementer-prompt.md` - Dispatch implementer subagent
+- `./implementer-prompt.md` - Dispatch implementer subagent (legacy template — prefer routing to external models via MCP)
 - `./spec-reviewer-prompt.md` - Dispatch spec compliance reviewer subagent
-- `./code-quality-reviewer-prompt.md` - Dispatch code quality reviewer subagent
+- `./code-quality-reviewer-prompt.md` - Dispatch code quality reviewer (determines Cursor vs Opus)
 
-## Claude Model Strategy
+## Model Strategy
 
-Choose model based on task type:
+Route implementation to external models. Claude orchestrates only.
 
-| Subagent              | Model                              | Freedom                              |
-| --------------------- | ---------------------------------- | ------------------------------------ |
-| Implementer           | `model: sonnet`                    | Low - always use Sonnet for code     |
-| Spec Reviewer         | Opus (default)                     | Low - always use Opus for review     |
-| Code Quality Reviewer | Cursor MCP (`mcp__cursor__cursor`) | Low - always use Cursor; Opus fallback |
-| Exploration           | `model: haiku`                     | Medium - prefer Haiku, flexible      |
+| Role | Model | Selection Rule |
+| ---- | ----- | -------------- |
+| Backend implementation | Codex MCP (`mcp__codex__codex`) | CODEX routing |
+| Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) | GEMINI routing |
+| General implementation | Cursor MCP (`mcp__cursor__cursor`) | CURSOR routing |
+| Spec Reviewer | Opus (default) | Always Opus |
+| Quality Reviewer | Cursor or Opus | `Reviewer = (Implementer == Cursor ? Opus : Cursor)` |
+| Exploration | `model: haiku` | Flexible |
 
 ## Collaboration Checkpoints
 
@@ -160,12 +162,14 @@ Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md` at th
 - Subagent asks question requiring external expertise → invoke domain expert
 - Multiple implementation approaches debated → invoke cross-validation
 
-**► Checkpoint 3 (Quality Gate):** After subagent completes implementation:
+**► Checkpoint 3 (Quality Gate):** After external model completes implementation:
 
-- Implementation complete → invoke domain expert for pre-review assessment
-- Code quality review via Cursor runs after spec compliance passes (see `code-quality-reviewer-prompt.md`)
-- If Cursor unavailable: fall back to Opus code quality reviewer
-- Max 3 fix-review loops with Cursor before escalating to user
+- Implementation complete → invoke spec reviewer for compliance check
+- Quality review runs after spec compliance passes (see `code-quality-reviewer-prompt.md`)
+- Deterministic reviewer: `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
+- If Cursor quality reviewer unavailable: fall back to Opus
+- If Opus quality reviewer unavailable (for Cursor-implemented work): BLOCKED
+- Max 3 fix-review loops before escalating to user
 
 ## Example Workflow
 
@@ -268,11 +272,11 @@ Done!
 **Quality gates:**
 
 - Self-review catches issues before handoff
-- Two-stage review: spec compliance (Opus), then code quality (Cursor MCP)
-- Review loops ensure fixes actually work (max 3 with Cursor)
+- Two-stage review: spec compliance (Opus), then quality (deterministic reviewer)
+- Review loops ensure fixes actually work (max 3 loops)
 - Spec compliance prevents over/under-building
-- Code quality via Cursor ensures implementation is well-built
-- Opus fallback if Cursor unavailable — quality review never skipped
+- Quality review: Cursor reviews Codex/Gemini work, Opus reviews Cursor work
+- Quality review never skipped — always has a reviewer available
 
 **Cost:**
 
@@ -296,8 +300,9 @@ Done!
 - Let implementer self-review replace actual review (both are needed)
 - **Start code quality review before spec compliance is ✅** (wrong order)
 - Move to next task while either review has open issues
-- Skip Cursor fallback to Opus when Cursor is unavailable (don't just skip quality review)
-- Exceed 3 fix-review loops with Cursor without escalating to user
+- Skip quality review fallback when primary reviewer is unavailable
+- Exceed 3 fix-review loops without escalating to user
+- Let Claude write implementation code (Claude is orchestrator-only)
 
 **If subagent asks questions:**
 
@@ -336,21 +341,22 @@ Done!
 
 ## Multi-Model Task Dispatch
 
-**Related skill:** superpowers:coordinating-multi-model-work
+**Related skill:** superpowers-ccg:coordinating-multi-model-work
 
 At checkpoints, apply semantic routing from `coordinating-multi-model-work/routing-decision.md`:
 
-- **Routing decision:**
-  - Clear backend task (API, database, server logic) → CODEX
-  - Clear frontend task (UI, components, styles) → GEMINI
-  - Full-stack integration or critical task → CROSS_VALIDATION
-  - General task requiring complete context → CLAUDE subagent
+- **Routing decision (Claude never implements):**
+  - Clear backend task (API, database, server logic) → **CODEX** (`mcp__codex__codex`)
+  - Clear frontend task (UI, components, styles) → **GEMINI** (`mcp__gemini__gemini`)
+  - Debugging, refactoring, DevOps, general implementation → **CURSOR** (`mcp__cursor__cursor`)
+  - Full-stack integration or critical task → **CROSS_VALIDATION** (multiple MCP tools)
+  - Documentation-only (no code) → **CLAUDE** (orchestration)
 
 - **Check for Model Hint:** If task includes hint, use as guidance
 
-- **Notify user:** "I will use [model/subagent] to implement [task name]"
+- **Notify user:** "I will use [model] to implement [task name]"
 
-- **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
+- **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates).
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 

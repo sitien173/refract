@@ -72,7 +72,9 @@
 
 ### Phase 1: Parallel Invocation
 
-Send tasks to both Codex and Gemini simultaneously via the MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`), each analyzing from their professional perspective.
+**Default (2-way):** Send tasks to both Codex and Gemini simultaneously via MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`), each analyzing from their professional perspective.
+
+**3-way escalation (optional):** For critical/high-uncertainty tasks, include Cursor (`mcp__cursor__cursor`) as a third perspective. Use 3-way only when the task has high architectural impact or spans multiple domains beyond frontend/backend.
 
 **Codex Task Template**:
 ```
@@ -203,6 +205,30 @@ After collecting outputs from both models, perform comparative analysis:
 #### Follow-up Actions
 1. [Action 1]
 2. [Action 2]
+```
+
+### 3-Way Escalation Report (Optional)
+
+When Cursor is included as a third perspective, extend the report:
+
+```markdown
+### Cursor Analysis (General Perspective via mcp__cursor__cursor)
+
+#### Analysis Conclusion
+[Cursor's main conclusion]
+
+#### Issues Found
+1. [Issue 1]
+
+#### Suggested Solution
+[Cursor's suggested solution]
+
+### Comprehensive Conclusion
+
+#### Points of Divergence
+| Aspect | Codex View | Gemini View | Cursor View | Arbitration Conclusion |
+|--------|-----------|-------------|-------------|------------------------|
+| [Aspect 1] | [View] | [View] | [View] | [Conclusion] |
 ```
 
 ## Quality Assurance

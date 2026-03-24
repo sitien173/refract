@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Is
 
-**Superpowers-CCG** is a Claude Code plugin that adds a skills-driven development workflow with multi-model orchestration (Claude + Codex MCP + Gemini MCP). It is a fork of [obra/superpowers](https://github.com/obra/superpowers).
+**Superpowers-CCCG** is a Claude Code plugin that adds a skills-driven development workflow with multi-model orchestration (Claude + Codex + Cursor + Gemini). Claude acts as pure orchestrator — all implementation code is routed to external models. It is a fork of [obra/superpowers](https://github.com/obra/superpowers).
 
 This is not a compiled application — it is a **plugin/skills framework** written as Markdown files, Bash scripts, and a small Node.js utility. There is no `package.json`, `Makefile`, or build step.
 
@@ -38,8 +38,8 @@ Test helpers (`tests/claude-code/test-helpers.sh`) expose: `run_claude`, `assert
 Each skill lives in a subdirectory with `SKILL.md` (YAML frontmatter + instructions). Skills are discovered and resolved via `lib/skills-core.js`. All skills are exposed under the `superpowers-ccg:` namespace.
 
 Key skills:
-- `coordinating-multi-model-work/` — Routes tasks to Codex/Gemini MCP; defines the CP checkpoint protocol
-- `developing-with-subagents/` — Dispatches fresh subagents per task with two-stage review (spec via Opus, quality via Cursor MCP)
+- `coordinating-multi-model-work/` — Routes tasks to Codex/Gemini/Cursor MCP; defines the CP checkpoint protocol. Claude is orchestrator-only.
+- `developing-with-subagents/` — Routes tasks to external models with two-stage review (spec via Opus, quality via deterministic reviewer)
 - `executing-plans/` — Batch plan execution with review checkpoints
 
 ### Hooks (`hooks/`)
@@ -56,18 +56,19 @@ Hook registration is in `hooks/hooks.json`.
 
 ### Multi-Model Routing
 
-Tasks are routed based on type:
+Claude is the **orchestrator** — it routes tasks, coordinates models, and integrates results but **never writes implementation code**.
 
 | Routing | When | MCP Tool |
 |---------|------|----------|
 | `CODEX` | Backend: API, DB, auth, algorithms | `mcp__codex__codex` |
 | `GEMINI` | Frontend: UI, components, styles | `mcp__gemini__gemini` |
-| `CROSS_VALIDATION` | Full-stack, architectural, uncertain | Both |
-| `CLAUDE` | Docs, simple config, general tasks | None |
+| `CURSOR` | General: debugging, refactoring, DevOps, scripts | `mcp__cursor__cursor` |
+| `CROSS_VALIDATION` | Full-stack, architectural, uncertain | Multiple |
+| `CLAUDE` | Orchestration only: docs, coordination (NO code) | None |
 
-Cursor (`mcp__cursor__cursor`) is not a routing target — it is a universal code quality layer that activates automatically when code changes exist, operating in subagent stage 2 (replacing Opus quality reviewer) and at CP3 (parallel with domain expert). Falls back to Opus if unavailable at stage 2; proceeds without at CP3.
+Cursor has a dual role: **implementation agent** (CURSOR routing) and **quality reviewer** (when Codex/Gemini implements). When Cursor implements, Opus reviews quality (no self-review). Deterministic rule: `Reviewer = (Implementer == Cursor ? Opus : Cursor)`.
 
-**Fail-closed rule**: If `Routing != CLAUDE` and the MCP call cannot complete, output `BLOCKED` — never guess or produce a final answer without evidence. See `GATE.md` for tiered failure policy.
+**Fail-closed rule**: If `Routing != CLAUDE` and the MCP call cannot complete, output `BLOCKED` — never guess or produce a final answer without evidence. If all external models are unavailable, all coding tasks are BLOCKED by design. See `GATE.md` for tiered failure policy.
 
 ### Checkpoint (CP) Protocol
 

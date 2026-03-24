@@ -153,7 +153,7 @@ superpowers-ccg:requesting-code-review → [reviewer subagent] → superpowers-c
 |-------|---------|---------|
 | `superpowers-ccg:using-superpowers` | Starting conversation, need skill guidance | How to find and use skills |
 | `superpowers-ccg:writing-skills` | Creating/editing skills | TDD for process documentation |
-| `superpowers-ccg:coordinating-multi-model-work` | Backend/frontend work, cross-validation needed | Route to Codex/Gemini via MCP |
+| `superpowers-ccg:coordinating-multi-model-work` | Any implementation work, cross-validation needed | Route to Codex/Gemini/Cursor via MCP |
 
 ---
 
@@ -177,27 +177,38 @@ These are quick-invoke workflows located in `commands/`.
 |-------|-------------|----------|
 | `CODEX` | Backend: API, database, algorithms, auth, security | `mcp__codex__codex` |
 | `GEMINI` | Frontend: UI, components, styles, interactions | `mcp__gemini__gemini` |
-| `CROSS_VALIDATION` | Full-stack, uncertain, critical tasks | Both MCP tools |
-| `CLAUDE` | Simple tasks, general work | No MCP call |
+| `CURSOR` | General: debugging, refactoring, DevOps, scripts, tasks not fitting Codex/Gemini | `mcp__cursor__cursor` |
+| `CROSS_VALIDATION` | Full-stack, uncertain, critical tasks | Multiple MCP tools |
+| `CLAUDE` | Orchestration only: routing, coordination, docs editing (NO code) | No MCP call |
 
-> **Note:** Cursor (`mcp__cursor__cursor`) is NOT a routing label. It is a universal code quality layer that activates automatically when code changes need review. See below.
+> **Important:** Claude is the **orchestrator** — it routes tasks, coordinates models, and integrates results but **never writes implementation code**. All coding tasks must route to CODEX, GEMINI, or CURSOR. If all external models are unavailable, the task is BLOCKED by design.
 
-### Cursor (Code Quality Layer)
+### Cursor (Dual Role)
 
-Cursor reviews code for quality (bugs, edge cases, readability, maintainability, performance). It operates in two places:
+Cursor serves two distinct roles:
 
-1. **Subagent stage 2:** Replaces Opus code quality reviewer. Falls back to Opus if unavailable.
-2. **CP3 quality gate:** Runs in parallel with domain expert when code changed. Proceeds without if unavailable.
+**1. Implementation Agent (CURSOR routing):**
+- Debugging, refactoring, DevOps, scripts, general implementation
+- Catches all tasks that don't clearly fit CODEX or GEMINI
+- Fail-closed: BLOCKED if unavailable
+
+**2. Quality Reviewer (automatic, when Codex/Gemini implements):**
+- Reviews code quality at subagent stage 2 and CP3
+- Falls back to Opus if unavailable at stage 2
+- Proceeds without if unavailable at CP3
+
+**Deterministic Reviewer Rule:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
+- When Cursor implements → Opus reviews (no self-review)
+- When Codex/Gemini implements → Cursor reviews
 
 Max 3 fix-review loops before escalating to user. Docs-only changes are exempt.
 
 ### Core Instructions
 
-1. **Share thinking** - After initial analysis, ask Codex/Gemini to improve requirements and plan
-2. **Get prototype** - Before coding, request unified diff patch as reference only
-3. **Request review** - After coding, use Codex/Gemini to review changes and requirement coverage
-3.5. **Quality review** - After coding, use Cursor (`mcp__cursor__cursor`) for code quality review. Cursor is automatic, not a routing decision.
-4. **Think independently** - Question their answers; blind trust is worse than no trust
+1. **Route to external model** - After initial analysis, route implementation to the appropriate model (Codex/Gemini/Cursor)
+2. **Claude does NOT write code** - All coding goes through external models; Claude orchestrates only
+3. **Obtain quality review** - After implementation, get quality review from the deterministic reviewer
+4. **Think independently** - Question external model answers; blind trust is worse than no trust
 
 ### Fail-Closed Gate
 
@@ -222,7 +233,7 @@ Skills use checkpoints (CP1, CP2, CP3) for quality gates.
 Task: <description>
 Files: <involved files>
 Tech Stack: <technologies>
-Routing: CLAUDE | CODEX | GEMINI | CROSS_VALIDATION
+Routing: CLAUDE | CODEX | GEMINI | CURSOR | CROSS_VALIDATION
 Action: <proceed | invoke external>
 ```
 
@@ -318,10 +329,13 @@ See `superpowers-ccg:developing-with-subagents` and `superpowers-ccg:dispatching
 
 | Task Type | Model |
 |-----------|-------|
-| Code writing, implementation | `model: sonnet` |
+| Backend implementation | Codex MCP (`mcp__codex__codex`) |
+| Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) |
+| General implementation (debugging, refactoring, DevOps) | Cursor MCP (`mcp__cursor__cursor`) |
 | Review, architecture, complex reasoning | Opus (default) |
 | Exploration, search, quick lookups | `model: haiku` |
-| Code quality review | Cursor MCP (`mcp__cursor__cursor`); Opus fallback |
+| Quality review (Codex/Gemini implements) | Cursor MCP (`mcp__cursor__cursor`); Opus fallback |
+| Quality review (Cursor implements) | Opus (no self-review) |
 
 ---
 

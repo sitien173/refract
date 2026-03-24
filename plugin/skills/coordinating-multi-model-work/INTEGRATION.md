@@ -2,16 +2,23 @@
 
 This file provides standard integration patterns for other skills to use multi-model capabilities.
 
+**Claude is orchestrator-only** — all implementation code goes through external models.
+
 ## Quick Reference
 
 ```
 Task Type → Model Selection:
-├─ Frontend (UI, components, styles) → GEMINI
 ├─ Backend (API, database, logic) → CODEX
+├─ Frontend (UI, components, styles) → GEMINI
+├─ General (debugging, refactoring, DevOps, scripts) → CURSOR
 ├─ Full-stack or uncertain → CROSS_VALIDATION
-├─ Design docs, implementation docs, requirements specs, architecture docs, and other critical documentation → CROSS_VALIDATION
-├─ Simple (docs, configs) → CLAUDE (no external model needed)
-└─ Code quality review (automatic) → CURSOR (not a routing target — see below)
+├─ Design docs, architecture docs, critical documentation → CROSS_VALIDATION
+└─ Documentation-only / coordination (no code) → CLAUDE (orchestrator)
+
+Quality Reviewer Selection:
+├─ Codex/Gemini implements → Cursor reviews
+├─ Cursor implements → Opus reviews (no self-review)
+└─ Docs-only → Skip quality review
 ```
 
 ## Standard Integration Section
@@ -21,13 +28,13 @@ Copy this section to your skill and customize the prompts:
 ```markdown
 ## Multi-Model Integration
 
-**Related skill:** superpowers:coordinating-multi-model-work
+**Related skill:** superpowers-ccg:coordinating-multi-model-work
 
-For tasks requiring specialized expertise, apply semantic routing:
+For tasks requiring implementation, apply semantic routing:
 
 1. **Analyze task domain** using `coordinating-multi-model-work/routing-decision.md`
 2. **Notify user**: "I will use [model] to [task purpose]"
-3. **Invoke model** with English prompts via the MCP tools (`mcp__codex__codex` for backend, `mcp__gemini__gemini` for frontend)
+3. **Invoke model** via MCP tools (`mcp__codex__codex` for backend, `mcp__gemini__gemini` for frontend, `mcp__cursor__cursor` for general)
 4. **Integrate results** before proceeding
 
 **Fallback (Fail-Closed):** If the MCP tool call fails or times out, STOP and follow `coordinating-multi-model-work/GATE.md`.
@@ -35,7 +42,7 @@ For tasks requiring specialized expertise, apply semantic routing:
 
 ## Invocation Templates
 
-### Backend Analysis (Codex MCP)
+### Backend Implementation (Codex MCP)
 
 ```json
 {
@@ -50,7 +57,7 @@ For tasks requiring specialized expertise, apply semantic routing:
 }
 ```
 
-### Frontend Analysis (Gemini MCP)
+### Frontend Implementation (Gemini MCP)
 
 ```json
 {
@@ -64,18 +71,45 @@ For tasks requiring specialized expertise, apply semantic routing:
 }
 ```
 
-### Cross-Validation (Both)
+### General Implementation (Cursor MCP)
 
-Invoke both MCP tools in parallel, then integrate:
+Use this template when Cursor is the **implementation agent** (CURSOR routing). This is distinct from the quality review template below.
+
+```json
+{
+  "tool": "mcp__cursor__cursor",
+  "params": {
+    "PROMPT": "## Implementation Task\n\n### Context\n[Problem/task description — what needs to be built/fixed and why]\n\n### Code Location\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n### Requirements\n1. [Requirement 1]\n2. [Requirement 2]\n3. [Requirement 3]\n\n### Implementation Focus\n1. Correctness and edge case handling\n2. Clean, maintainable code\n3. Appropriate test coverage\n\n### Expected Output\n- Implementation with unified diff patch\n- Test cases covering the changes\n- Brief explanation of approach taken",
+    "cd": "$PWD",
+    "sandbox": "default",
+    "SESSION_ID": "<reuse-or-new>"
+  }
+}
+```
+
+**CURSOR routing rules:**
+- Fail-closed: BLOCKED if Cursor unavailable (same as CODEX/GEMINI)
+- Quality review by Opus (never self-review) — see quality review template below
+- Max 3 fix-review loops before escalating to user
+- See `GATE.md` for tiered failure policy details
+
+### Cross-Validation (Multiple Models)
+
+Default: invoke Codex + Gemini in parallel, then integrate.
+For critical/high-uncertainty tasks: optionally escalate to 3-way (Codex + Gemini + Cursor).
 
 ```markdown
 ## Cross-Validation Results
 
-### Codex Analysis (Backend via mcp**codex**codex)
+### Codex Analysis (Backend via mcp__codex__codex)
 
 [Results]
 
-### Gemini Analysis (Frontend via mcp**gemini**gemini)
+### Gemini Analysis (Frontend via mcp__gemini__gemini)
+
+[Results]
+
+### Cursor Analysis (General via mcp__cursor__cursor) — optional 3-way
 
 [Results]
 
@@ -86,9 +120,9 @@ Invoke both MCP tools in parallel, then integrate:
 - **Recommendation**: [Final determination]
 ```
 
-### Code Quality Review (Cursor MCP)
+### Code Quality Review (Cursor — when Codex/Gemini implements)
 
-Cursor is invoked automatically for code quality review — it is NOT a routing target. Use this template when code changes need quality validation (subagent stage 2, CP3 with code changes).
+Use this template when Cursor is the **quality reviewer** (not the implementer). Only use when Codex or Gemini implemented the code.
 
 ```json
 {
@@ -102,16 +136,20 @@ Cursor is invoked automatically for code quality review — it is NOT a routing 
 }
 ```
 
-**Cursor-specific rules:**
+**Quality review rules:**
 - Pin review to a specific commit SHA (artifact pinning)
 - Max 3 fix-review loops before escalating to user
 - If Cursor unavailable at subagent stage 2: fall back to Opus quality reviewer
 - If Cursor unavailable at CP3: proceed without (supplementary)
-- See `GATE.md` for tiered failure policy details
+
+### Code Quality Review (Opus — when Cursor implements)
+
+When Cursor is the implementer, use Opus for quality review (no self-review). Dispatch an Opus subagent using `superpowers-ccg:code-reviewer` with the same review focus as above.
 
 ## Important Rules
 
 1. **All prompts to external models MUST be in English**
 2. User notifications follow user's configured language
 3. Always validate external model outputs before using
-4. Claude handles simple tasks directly (no external model needed)
+4. **Claude does NOT write implementation code** — route to CODEX, GEMINI, or CURSOR
+5. **Deterministic reviewer:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`

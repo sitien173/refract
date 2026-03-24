@@ -1,13 +1,13 @@
 ---
 name: coordinating-multi-model-work
-description: "Routes work to Codex (backend) and Gemini (frontend) via MCP tools, with Cursor for code quality review and cross-validation for full-stack/uncertain tasks. Use when: UI/components/styles, APIs/databases/auth/security/performance, debugging, code review, or tasks mentioning Codex/Gemini/Cursor/CCG/multi-model. Keywords: codex mcp, gemini mcp, cursor mcp, cross-validation, code quality, api, database, auth, security, performance, ui, component"
+description: "Routes work to Codex (backend), Gemini (frontend), and Cursor (general implementation) via MCP tools. Claude is orchestrator-only — all code goes through external models. Use when: any implementation task, UI/components/styles, APIs/databases/auth/security/performance, debugging, refactoring, code review, or tasks mentioning Codex/Gemini/Cursor/CCCG/multi-model. Keywords: codex mcp, gemini mcp, cursor mcp, cross-validation, implementation, api, database, auth, security, performance, ui, component, debugging, refactoring"
 ---
 
 ## Contents
 
 - [Coordinating Multi-Model Work](#coordinating-multi-model-work)
   - [Overview](#overview)
-  - [Core Instruction for CodeX MCP/ Gemini MCP](#core-instruction-for-codex-mcp-gemini-mcp)
+  - [Core Instructions](#core-instructions)
   - [The Two Rules](#the-two-rules)
   - [Checkpoint Workflow](#checkpoint-workflow)
   - [Reference Files](#reference-files)
@@ -18,23 +18,33 @@ description: "Routes work to Codex (backend) and Gemini (frontend) via MCP tools
 
 ## Overview
 
-Use this module to decide whether to call **Codex** (backend), **Gemini** (frontend), and/or **Cursor** (code quality) via MCP tools, and to enforce a consistent evidence protocol.
+Claude is the **orchestrator** — it routes tasks, coordinates models, and integrates results but **never writes implementation code**.
+
+Use this module to route implementation to the right external model:
+- **Codex** (`mcp__codex__codex`) — backend: APIs, databases, algorithms, server-side logic
+- **Gemini** (`mcp__gemini__gemini`) — frontend: UI, components, styles, interactions
+- **Cursor** (`mcp__cursor__cursor`) — general: debugging, refactoring, DevOps, scripts, tasks not fitting Codex/Gemini
 
 This module is intentionally minimal: it provides a small workflow and pushes details into reference files.
 
-## Core Instruction for CodeX MCP/ Gemini MCP
+## Core Instructions
 
-At any time, you must consider how the current process can collaborate with Codex/Gemini and how to call the MCP tools they provide to ensure objective, comprehensive analysis.
 You **must** execute the steps below:
-**1** After forming an initial analysis of the user request, share the request and your initial thinking with Codex/Gemini and ask them to improve the requirement analysis and implementation plan.
-**2** Before implementing any concrete coding task, **you must ask Codex/Gemini for a code prototype (they must provide only a unified diff patch and must not make any real code changes)**. After receiving the prototype, you may **only** use it as logical reference, then rewrite your own production-grade, highly readable, highly maintainable code before making changes.
-**3** Whenever you complete real coding work and `Routing != CLAUDE`, **you must immediately use Codex/Gemini to review the code changes and requirement coverage**.
-**3.5** Whenever code changes are complete, **use Cursor (`mcp__cursor__cursor`) for code quality review**. Cursor reviews for bugs, edge cases, readability, maintainability, and performance. This is automatic — Cursor is not a routing target but a universal quality layer. See `coordinating-multi-model-work/INTEGRATION.md` for the invocation template.
-**4** Codex/Gemini/Cursor provide references only. You **must** think independently and even question their answers. Blind trust is worse than no trust; your joint mission is to converge on a unified, comprehensive, precise result, which requires continuous debate to reach the truth.
+
+**1** After forming an initial analysis of the user request, share the request and your initial thinking with the appropriate external model (Codex/Gemini/Cursor based on routing) and ask them to improve the requirement analysis and implementation plan.
+
+**2** Before implementing any concrete coding task, **route to the appropriate external model for implementation**. Claude does NOT write code — all coding goes through CODEX, GEMINI, or CURSOR.
+
+**3** After the external model completes implementation, **obtain quality review**:
+- If Codex/Gemini implemented → Cursor reviews code quality
+- If Cursor implemented → Opus reviews code quality (no self-review)
+- Deterministic rule: `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
+
+**4** All external models provide references and implementations. You **must** think independently and question their answers. Blind trust is worse than no trust; your joint mission is to converge on a unified, comprehensive, precise result.
 
 ## The Two Rules
 
-1. **Main rule (Fail-Closed Gate):** If you decide `Routing != CLAUDE`, you MUST obtain external output, or STOP in `BLOCKED`.
+1. **Main rule (Fail-Closed Gate):** If you decide `Routing != CLAUDE`, you MUST obtain external output, or STOP in `BLOCKED`. Since Claude never implements code, all coding tasks MUST go external.
 
 2. **Early exposure:** If you decide `Routing != CLAUDE`, run the external call **before** doing real work (writing code, generating tests, or producing final conclusions).
 

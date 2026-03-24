@@ -8,7 +8,7 @@ This framework guides Claude in making semantic routing decisions for multi-mode
 
 ## When to Use
 
-Invoke this framework when a skill needs to call external models (Codex/Gemini) via the MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`).
+Invoke this framework when a skill needs to call external models (Codex/Gemini/Cursor) via the MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`, `mcp__cursor__cursor`).
 
 ## Standard Information Set
 
@@ -68,7 +68,7 @@ Does this task involve multiple domains or uncertain factors?
 Based on the analysis, output:
 
 ```
-**Routing Decision:** [GEMINI | CODEX | CROSS_VALIDATION | CLAUDE]
+**Routing Decision:** [CODEX | GEMINI | CURSOR | CROSS_VALIDATION | CLAUDE]
 **Rationale:** [One sentence]
 ```
 
@@ -76,12 +76,13 @@ Based on the analysis, output:
 
 ### Routing Targets
 
-- **GEMINI** - Frontend expert for UI, components, styles, interactions
 - **CODEX** - Backend expert for APIs, databases, algorithms, server-side logic
-- **CROSS_VALIDATION** - Both models for full-stack tasks, architectural decisions, or high uncertainty
-- **CLAUDE** - Simple tasks that don't require specialized external models
+- **GEMINI** - Frontend expert for UI, components, styles, interactions
+- **CURSOR** - General implementation agent for debugging, refactoring, DevOps, scripts, and tasks not clearly backend or frontend
+- **CROSS_VALIDATION** - Multiple models for full-stack tasks, architectural decisions, or high uncertainty (default: Codex+Gemini; escalate to 3-way with Cursor for critical/high-uncertainty tasks)
+- **CLAUDE** - Orchestrator only: routing decisions, coordination, documentation edits. **Claude does NOT write implementation code** — all coding tasks must route to CODEX, GEMINI, or CURSOR
 
-> **Note:** Cursor (`mcp__cursor__cursor`) is intentionally absent from routing targets. It is a universal code quality layer that activates based on whether code changed, not based on task domain. See `checkpoints.md` for details.
+> **Important:** Claude's role is pure orchestration. If a task requires code changes, it MUST be routed to an external model. If all external models are unavailable, the task is BLOCKED by design.
 
 ## Quality Gate Decision (Orthogonal to Routing)
 
@@ -92,20 +93,22 @@ In addition to domain routing, CP3 evaluates whether code quality review is need
 **Rationale:** [Code changed / docs-only]
 ```
 
-This is independent of the routing decision:
-- Cursor (`mcp__cursor__cursor`) is NOT a routing destination
-- It activates automatically when code changed, regardless of routing label
+**Deterministic Reviewer Rule:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
+- When Cursor implements (CURSOR routing): Opus reviews code quality (no self-review)
+- When Codex/Gemini implements: Cursor reviews code quality (unchanged)
 - See `checkpoints.md` for the full QualityGateRequired decision table
 
 ## Decision Guidelines
 
-- Strong frontend signals and weak/no backend signals → GEMINI
-- Strong backend signals and weak/no frontend signals → CODEX
-- Strong signals in both domains OR high uncertainty OR architectural → CROSS_VALIDATION
-- Simple task OR documentation OR trivial config → CLAUDE
-- Ambiguous case → CROSS_VALIDATION (err on the side of getting multiple perspectives)
+- Strong backend signals and weak/no frontend signals → **CODEX**
+- Strong frontend signals and weak/no backend signals → **GEMINI**
+- Debugging, refactoring, DevOps, scripts, or no clear domain → **CURSOR**
+- Strong signals in both domains OR high uncertainty OR architectural → **CROSS_VALIDATION**
+- Documentation-only OR pure coordination (no code changes) → **CLAUDE**
+- Ambiguous case between domains → **CROSS_VALIDATION**
+- Ambiguous case but single-domain → **CURSOR** (general-purpose catch-all)
 
-**Key Principle**: When in doubt, prefer CROSS_VALIDATION over guessing.
+**Key Principle**: Claude never writes code. When in doubt between CODEX/GEMINI/CURSOR, prefer CROSS_VALIDATION. When in doubt between CLAUDE and others, route externally.
 
 ## Examples
 
@@ -148,7 +151,20 @@ This is independent of the routing decision:
 
 ---
 
-### Example 4: Uncertain Debugging
+### Example 4: Debugging Task
+
+**Input:** "Fix the flaky test in CI pipeline"
+**Files:** `tests/integration/test_pipeline.sh`, `.github/workflows/ci.yml`
+
+**Output:**
+```
+**Routing Decision:** CURSOR
+**Rationale:** Debugging task with DevOps/CI focus — no clear backend or frontend domain
+```
+
+---
+
+### Example 5: Uncertain Debugging (Multi-Domain)
 
 **Input:** "Fix the authentication bug - users can't log in"
 **Files:** Unknown (need investigation)
@@ -157,4 +173,17 @@ This is independent of the routing decision:
 ```
 **Routing Decision:** CROSS_VALIDATION
 **Rationale:** Authentication bug with unclear root cause requires multi-perspective diagnosis
+```
+
+---
+
+### Example 6: Refactoring Task
+
+**Input:** "Refactor the logging utility to use structured logging"
+**Files:** `lib/logger.js`, `lib/utils.js`
+
+**Output:**
+```
+**Routing Decision:** CURSOR
+**Rationale:** General refactoring task not specific to frontend or backend domain
 ```
