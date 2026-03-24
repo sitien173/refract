@@ -6,7 +6,7 @@
   },
   "plugins": [
     {
-      "name": "superpowers-ccg",
+      "name": "superpowers-cccg",
       "description": "Skills-driven development workflow with CCCG multi-model orchestration (Claude orchestrator + Codex backend + Cursor general + Gemini frontend)",
       "version": "1.2.0",
       "source": {

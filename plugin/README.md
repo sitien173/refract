@@ -36,7 +36,7 @@ claude plugin marketplace add https://github.com/sitien173/superpowers-cccg
 2) Install plugin
 
 ```bash
-claude plugin install superpowers-ccg
+claude plugin install superpowers-cccg
 ```
 
 ### MCP Setup (required)
@@ -99,7 +99,7 @@ The routing/checkpoint rules live in `skills/coordinating-multi-model-work/`.
 ## Update
 
 ```bash
-claude plugin update superpowers-ccg
+claude plugin update superpowers-cccg
 ```
 
 ## Testing
