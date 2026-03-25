@@ -52,7 +52,7 @@ HEAD_SHA=$(git rev-parse HEAD)
 
 Use Task tool with superpowers:code-reviewer type, fill template at `code-reviewer.md`
 
-**Note:** Code review requires deep reasoning for quality assessment. Use default Opus model (do not specify `model` parameter) to ensure thorough analysis.
+**Note:** Code review now ends with the Opus final-arbiter agent. If Cursor review-assistant feedback exists, include it in the review packet so Opus can accept, dismiss, or extend it.
 
 **Placeholders:**
 

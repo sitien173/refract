@@ -1,27 +1,27 @@
-# Code Quality Review (Deterministic Reviewer)
+# Code Review Chain (Cursor Assistant + Opus Final Arbiter)
 
-Use this template when dispatching code quality review after spec compliance passes.
+Use this template when dispatching code review after spec compliance passes.
 
-**Purpose:** Verify implementation is well-built (clean, tested, maintainable)
+**Purpose:** Verify implementation is well-built (clean, tested, maintainable) while keeping Opus as the final decision-maker.
 
 **Only dispatch after spec compliance review passes.**
 
-## Reviewer Selection (Deterministic)
+## Review Chain Selection
 
-**Rule:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
+**Rule:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
 
-| Implementer | Quality Reviewer | Rationale |
-|-------------|-----------------|-----------|
-| Codex (`mcp__codex__codex`) | Cursor (`mcp__cursor__cursor`) | Cross-model review |
-| Gemini (`mcp__gemini__gemini`) | Cursor (`mcp__cursor__cursor`) | Cross-model review |
-| Cursor (`mcp__cursor__cursor`) | Opus subagent | No self-review allowed |
+| Implementer | Review Assistant | Final Arbiter | Rationale |
+|-------------|------------------|---------------|-----------|
+| Codex (`mcp__codex__codex`) | Cursor (`mcp__cursor__cursor`) | Opus subagent | Cross-model review + consistent final bar |
+| Gemini (`mcp__gemini__gemini`) | Cursor (`mcp__cursor__cursor`) | Opus subagent | Cross-model review + consistent final bar |
+| Cursor (`mcp__cursor__cursor`) | Skip | Opus subagent | No self-review allowed |
 
-## Invocation (Cursor as Reviewer)
+## Invocation (Cursor as Review Assistant)
 
 When Codex or Gemini was the implementer, call `mcp__cursor__cursor`:
 
 ```text
-## Code Quality Review
+## Code Review Assistant
 
 ### Task Context
 [WHAT_WAS_IMPLEMENTED — from implementer's report]
@@ -43,16 +43,17 @@ Commit: [HEAD_SHA]
 
 ### Output Format
 - APPROVE if no issues found
-- Or list issues with: File, Line, Severity (Critical/Important/Minor), Issue, Suggestion
+- Or list issues with: File, Line, Severity (Critical/Important/Minor), Issue, Suggestion, Confidence
 ```
 
 ### Parameters (Cursor)
 
-```
+```text
 Tool: mcp__cursor__cursor
 cd: $PWD
 sandbox: default
 SESSION_ID: <reuse-or-new>
+model: claude-4.5-opus-high-thinking
 
 Input variables:
   WHAT_WAS_IMPLEMENTED: [from implementer's report]
@@ -61,48 +62,49 @@ Input variables:
   HEAD_SHA: [current commit]
 ```
 
-## Invocation (Opus as Reviewer)
+## Invocation (Opus as Final Arbiter)
 
-When Cursor was the implementer, dispatch an Opus subagent using `superpowers-cccg:code-reviewer` with the same review focus and BASE_SHA/HEAD_SHA context.
+Dispatch an Opus subagent using `superpowers-cccg:code-reviewer` for every code-changing path. When Cursor assistant feedback exists, include it alongside the diff and task context.
 
-**This is NOT a fallback** — it is the deterministic choice when Cursor implements.
-
-```
-1. Log: `[Quality Review] Cursor implemented — dispatching Opus reviewer (no self-review)`
+```text
+1. Log: `[Final Arbiter] Dispatching Opus reviewer`
 2. Dispatch Opus subagent using `superpowers-cccg:code-reviewer`
 3. Use the same BASE_SHA/HEAD_SHA and task context
+4. Include Cursor assistant findings if present
 ```
+
+Opus decides whether to accept Cursor findings, dismiss them, add missed issues, or approve.
 
 ## Review Loop
 
-- If reviewer returns issues: implementer fixes, then re-submit to reviewer
+- If Opus returns issues: implementer fixes, then re-submit to the review chain
 - **Loop limits are risk-tiered:**
   - Trivial tasks: 0 loops (no quality review)
   - Standard tasks: max 3 fix-review loops
   - Critical tasks: max 4 fix-review loops, then escalate to user with full context
-- If reviewer approves: mark task complete
+- If Opus approves: mark task complete
 
 **Escalation format (when max loops reached):**
 
 ```text
 ⚠️ Review loop limit reached ([N] iterations)
 Task complexity: [Standard/Critical]
-Remaining issues: [list from last review]
+Remaining issues: [list from last Opus review]
 Options: (1) Accept with known issues, (2) User fixes manually, (3) Re-route to different model
 ```
 
-## Fallback (Cursor Reviewer Unavailable)
+## Fallback (Cursor Assistant Unavailable)
 
-If `mcp__cursor__cursor` is unavailable when it should be the reviewer (Codex/Gemini implemented):
-1. Log: `[Cursor Fallback] Cursor MCP unavailable, using Opus quality reviewer`
-2. Fall back to dispatching an Opus subagent using `superpowers-cccg:code-reviewer`
+If `mcp__cursor__cursor` is unavailable when it should be the review assistant (Codex/Gemini implemented):
+1. Log: `[Cursor Fallback] Cursor MCP unavailable, using direct Opus final review`
+2. Fall back to dispatching the Opus arbiter without assistant feedback
 3. Use the same BASE_SHA/HEAD_SHA and task context
 
 ## Fallback (Opus Reviewer Unavailable)
 
-If Opus is unavailable when it should be the reviewer (Cursor implemented):
-- **BLOCKED** — Opus is the only valid reviewer for Cursor-implemented code
-- Do NOT let Cursor self-review
+If Opus is unavailable when it should be the final arbiter:
+- **BLOCKED** — Opus is the only valid final reviewer
+- Do NOT let Cursor self-review or replace Opus
 - Escalate to user
 
-**Reviewer returns:** APPROVE, or Issues (Critical/Important/Minor) with suggestions
+**Final arbiter returns:** APPROVE, or Issues (Critical/Important/Minor) with suggestions

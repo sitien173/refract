@@ -93,9 +93,9 @@ In addition to domain routing, CP3 evaluates whether code quality review is need
 **Rationale:** [Code changed / docs-only]
 ```
 
-**Deterministic Reviewer Rule:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
-- When Cursor implements (CURSOR routing): Opus reviews code quality (no self-review)
-- When Codex/Gemini implements: Cursor reviews code quality (unchanged)
+**Review Chain Rule:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
+- When Cursor implements (CURSOR routing): Opus reviews directly (no self-review)
+- When Codex/Gemini implement: Cursor review assistant runs first, then Opus makes the final decision
 - See `checkpoints.md` for the full QualityGateRequired decision table
 
 ## Decision Guidelines

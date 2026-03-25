@@ -34,8 +34,8 @@ graph TB
 
     subgraph REVIEW["🔍 Quality Review"]
         direction LR
-        OPUS_REV["Opus Reviewer<br><i>Reviews Cursor's work</i>"]
-        CURSOR_REV["Cursor Reviewer<br><i>Reviews Codex/Gemini work</i>"]
+        OPUS_REV["Opus Final Arbiter<br><i>Final say on all code paths</i>"]
+        CURSOR_REV["Cursor Review Assistant<br><i>Advisory review for Codex/Gemini</i>"]
     end
 
     subgraph GATE["🚧 Fail-Closed Gate"]
@@ -113,8 +113,8 @@ flowchart TD
     SPEC_REV -->|Fail| FIX_SPEC[Implementer<br>fixes spec gaps]
     FIX_SPEC --> SPEC_REV
 
-    QUAL_REV -->|"Codex/Gemini implemented"| CURSOR_REVIEWS[Cursor reviews]
-    QUAL_REV -->|"Cursor implemented"| OPUS_REVIEWS[Opus reviews]
+    QUAL_REV -->|"Codex/Gemini implemented"| CURSOR_REVIEWS[Cursor assists, Opus arbitrates]
+    QUAL_REV -->|"Cursor implemented"| OPUS_REVIEWS[Opus reviews directly]
 
     CURSOR_REVIEWS -->|Approve| DONE
     CURSOR_REVIEWS -->|"Issues (≤3 loops)"| FIX_Q[Fix quality issues]
@@ -188,7 +188,7 @@ sequenceDiagram
         Note over C: CP3 — Quality Gate
         C->>R: Spec review (Opus)
         R-->>C: Pass/Fail
-        C->>R: Quality review (Cursor or Opus)
+        C->>R: Review chain (Cursor assistant if applicable, then Opus)
         R-->>C: Approve / Issues
     end
 

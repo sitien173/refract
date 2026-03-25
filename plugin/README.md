@@ -1,6 +1,6 @@
 # Superpowers-CCCG
 
-Superpowers-CCCG is a fork/enhanced variant of [obra/superpowers](https://github.com/obra/superpowers). It keeps the same skills-driven workflow, and adds **CCCG multi-model orchestration**: Claude is the **pure orchestrator** (never writes code), routing all implementation to **Codex MCP** (backend), **Gemini MCP** (frontend), and **Cursor MCP** (general implementation + code quality review) with optional cross-validation.
+Superpowers-CCCG is a fork/enhanced variant of [obra/superpowers](https://github.com/obra/superpowers). It keeps the same skills-driven workflow, and adds **CCCG multi-model orchestration**: Claude is the **pure orchestrator** (never writes code), routing implementation to **Codex MCP** (backend), **Gemini MCP** (frontend), and **Cursor MCP** (general implementation), with **Cursor as a review assistant** and **Opus as the final arbiter** for every code-changing path.
 
 > **CCCG** = **C**laude + **C**odex + **C**ursor + **G**emini
 
@@ -8,7 +8,8 @@ Superpowers-CCCG is a fork/enhanced variant of [obra/superpowers](https://github
 
 - **Claude as pure orchestrator**: Claude routes, coordinates, and integrates — it never writes implementation code.
 - **Multi-model routing (CCCG)**: route tasks to Codex (backend), Gemini (frontend), or Cursor (general: debugging, refactoring, DevOps, scripts). Use **CROSS_VALIDATION** for full-stack/critical tasks.
-- **Cursor dual role**: implementation agent (CURSOR routing) AND code quality reviewer (when Codex/Gemini implements). No self-review — Opus reviews Cursor's work.
+- **Cursor dual role**: implementation agent for general work, and review assistant when Codex/Gemini implements.
+- **Opus final arbiter**: Opus has final say on every code-changing path. For Codex/Gemini work, Opus sees Cursor's feedback plus the code; for Cursor work, Opus reviews directly.
 - **MCP tool integration**: external calls go through MCP tools: `mcp__codex__codex`, `mcp__gemini__gemini`, `mcp__cursor__cursor`.
 - **Collaboration checkpoints**: CP1/CP2/CP3 checkpoints embedded in key skills to decide when to call external models.
 - **Fail-closed gate**: if a required external model call cannot complete, the workflow stops with `BLOCKED` rather than guessing. All coding tasks are BLOCKED if no external models are available.
@@ -50,7 +51,7 @@ claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.
 # Frontend specialist
 claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/geminimcp.git geminimcp
 
-# General implementation + code quality reviewer
+# General implementation + review assistant
 claude mcp add cursor -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/cursormcp.git cursormcp
 ```
 
@@ -62,7 +63,9 @@ You typically do **not** call MCP tools manually. Tell Claude what you want, and
 - Ask for frontend help: "Use Gemini MCP for UI/components/styles, return a patch only."
 - Ask for general implementation: "Debug this flaky test" or "Refactor the logging utility" — routes to Cursor.
 - Ask for extra confidence: "Do CROSS_VALIDATION (Codex + Gemini) for this design, and reconcile conflicts."
-- Code quality review runs automatically after implementation — Cursor reviews Codex/Gemini work, Opus reviews Cursor's work.
+- Code review runs automatically after implementation:
+  - Codex/Gemini path: Cursor reviews first, then Opus arbitrates.
+  - Cursor path: Opus reviews directly.
 
 Note: prompts sent to external models are expected to be **English** for consistency (you can still chat with Claude in any language).
 
@@ -78,6 +81,10 @@ Note: prompts sent to external models are expected to be **English** for consist
 
 The routing/checkpoint rules live in `skills/coordinating-multi-model-work/`.
 
+Cursor model policy:
+- Implementation via Cursor MCP uses `claude-4.6-sonnet-medium-thinking`.
+- Review assistance and optional Cursor cross-validation use `claude-4.5-opus-high-thinking`.
+
 ## Checkpoint Protocol
 
 | Checkpoint | When | Purpose |
@@ -90,10 +97,10 @@ The routing/checkpoint rules live in `skills/coordinating-multi-model-work/`.
 
 - **Claude as orchestrator-only**: Claude never writes implementation code — all coding routes to external models.
 - **Built-in multi-model routing** via MCP tools (Codex, Gemini, Cursor).
-- **Cursor dual role**: implementation agent (CURSOR routing) + code quality reviewer (for Codex/Gemini work).
-- **Deterministic reviewer rule**: `Reviewer = (Implementer == Cursor ? Opus : Cursor)` — no self-review.
+- **Cursor dual role**: implementation agent (CURSOR routing) + review assistant (for Codex/Gemini work).
+- **Review chain rule**: `ReviewAssistant = (Implementer == Cursor ? None : Cursor)` and `FinalArbiter = Opus`.
 - **CP checkpoints** (CP1/CP2/CP3) added to enforce evidence-driven collaboration.
-- **Tiered fail-closed gate**: all implementation routes are strict-BLOCKED on failure; quality review falls back to Opus when Cursor reviews, but is BLOCKED when Opus must review Cursor's work (no self-review allowed).
+- **Tiered fail-closed gate**: all implementation routes are strict-BLOCKED on failure; Cursor assistant review may fall back to direct Opus review, but Opus final review is required for every code-changing path.
 - **Skill set changes** (additions/renames) for the CCCG workflow.
 
 ## Update

@@ -183,23 +183,32 @@ These are quick-invoke workflows located in `commands/`.
 
 > **Important:** Claude is the **orchestrator** — it routes tasks, coordinates models, and integrates results but **never writes implementation code**. All coding tasks must route to CODEX, GEMINI, or CURSOR. If all external models are unavailable, the task is BLOCKED by design.
 
-### Cursor (Dual Role)
+### Cursor (Implementation + Review Assistant)
 
 Cursor serves two distinct roles:
 
 **1. Implementation Agent (CURSOR routing):**
 - Debugging, refactoring, DevOps, scripts, general implementation
 - Catches all tasks that don't clearly fit CODEX or GEMINI
+- Uses `claude-4.6-sonnet-medium-thinking`
 - Fail-closed: BLOCKED if unavailable
 
-**2. Quality Reviewer (automatic, when Codex/Gemini implements):**
-- Reviews code quality at subagent stage 2 and CP3
-- Falls back to Opus if unavailable at stage 2
-- Proceeds without if unavailable at CP3
+**2. Review Assistant (automatic, when Codex/Gemini implements):**
+- Reviews code quality before the final Opus judgment
+- Uses `claude-4.5-opus-high-thinking`
+- Surfaces issues, suggestions, and false-positive candidates for Opus to arbitrate
+- If unavailable, Opus reviews directly
 
-**Deterministic Reviewer Rule:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
-- When Cursor implements → Opus reviews (no self-review)
-- When Codex/Gemini implements → Cursor reviews
+### Opus (Final Arbiter)
+
+- Opus has final say on every code-changing path
+- When Codex/Gemini implement → Opus reviews the code and Cursor's feedback
+- When Cursor implements → Opus reviews directly (no self-review)
+
+**Review Chain Rule:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
+- When Cursor implements → skip review assistant, go straight to Opus
+- When Codex/Gemini implement → Cursor assists, Opus arbitrates
+- If Opus is unavailable for a code-changing task → BLOCKED
 
 Max 3 fix-review loops before escalating to user. Docs-only changes are exempt.
 
@@ -207,7 +216,7 @@ Max 3 fix-review loops before escalating to user. Docs-only changes are exempt.
 
 1. **Route to external model** - After initial analysis, route implementation to the appropriate model (Codex/Gemini/Cursor)
 2. **Claude does NOT write code** - All coding goes through external models; Claude orchestrates only
-3. **Obtain quality review** - After implementation, get quality review from the deterministic reviewer
+3. **Run the review chain** - After implementation, get Cursor assistant review when applicable, then Opus final arbitration
 4. **Think independently** - Question external model answers; blind trust is worse than no trust
 
 ### Fail-Closed Gate
@@ -331,11 +340,11 @@ See `superpowers-cccg:developing-with-subagents` and `superpowers-cccg:dispatchi
 |-----------|-------|
 | Backend implementation | Codex MCP (`mcp__codex__codex`) |
 | Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) |
-| General implementation (debugging, refactoring, DevOps) | Cursor MCP (`mcp__cursor__cursor`) |
+| General implementation (debugging, refactoring, DevOps) | Cursor MCP (`mcp__cursor__cursor`, `model: claude-4.6-sonnet-medium-thinking`) |
 | Review, architecture, complex reasoning | Opus (default) |
 | Exploration, search, quick lookups | `model: haiku` |
-| Quality review (Codex/Gemini implements) | Cursor MCP (`mcp__cursor__cursor`); Opus fallback |
-| Quality review (Cursor implements) | Opus (no self-review) |
+| Review assistant (Codex/Gemini implements) | Cursor MCP (`mcp__cursor__cursor`, `model: claude-4.5-opus-high-thinking`) |
+| Final arbiter (all code-changing paths) | Opus |
 
 ---
 

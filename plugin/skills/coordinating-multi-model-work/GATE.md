@@ -7,11 +7,11 @@ Use this gate whenever a skill decides **Routing != CLAUDE** (CODEX/GEMINI/CURSO
 ## Core Rule
 
 - If Routing != CLAUDE, you MUST obtain external model output via MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`, `mcp__cursor__cursor`).
-- If code changed, you MUST obtain quality review from the appropriate reviewer (see Deterministic Reviewer Rule).
+- If code changed, you MUST obtain final Opus review. On Codex/Gemini paths, get Cursor review-assistant output first when available.
 - If you cannot obtain required external output (timeout, tool unavailable, permission blocked), follow the **Tiered Failure Policy** and **Enforcement Modes** below.
 - Do NOT provide a final conclusion, final patch, or "best effort" solution without required evidence, unless the **Tiered Failure Policy** or **Enforcement Modes** explicitly permits proceeding (for example, a user-approved unverified proposal in **Degraded** mode only).
 
-**Deterministic Reviewer Rule:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
+**Review Chain Rule:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
 
 **Early exposure:** If you decide `Routing != CLAUDE`, run the external invocation immediately (before doing real work). Do not defer the gate until the end.
 
@@ -39,7 +39,18 @@ Evidence:
 - Tool: mcp__codex__codex | mcp__gemini__gemini
 - Params: <key MCP parameters used (PROMPT, cd, SESSION_ID, sandbox, model, etc.)>
 - Result: <3-6 bullets of what the external model said>
-- Integration: <what you accepted/rejected and why>
+
+Evidence (Review Assistant):
+- Tool: mcp__cursor__cursor
+- Params: <include `model: claude-4.5-opus-high-thinking` when used>
+- Result: <3-6 bullets of what Cursor flagged or approved>
+
+Evidence (Final Arbiter):
+- Reviewer: Opus
+- Artifact: <commit SHA>
+- Result: <3-6 bullets of Opus's final judgment>
+
+Integration: <what you accepted/rejected and why>
 ```
 
 ### CURSOR Routing Evidence
@@ -54,17 +65,17 @@ Evidence (Implementation):
 - Params: <key MCP parameters used>
 - Result: <3-6 bullets of what Cursor implemented>
 
-Evidence (Quality Review):
-- Reviewer: Opus (deterministic — Cursor cannot self-review)
+Evidence (Final Arbiter):
+- Reviewer: Opus
 - Artifact: <commit SHA>
 - Result: <3-6 bullets>
 
 Integration: <what was accepted/rejected from each>
 ```
 
-### Extended Evidence (with Quality Review)
+### Extended Evidence (with Review Chain)
 
-When quality reviewer participates alongside domain expert at CP3:
+When the review chain participates alongside the domain expert at CP3:
 
 ```text
 [Multi-Model Gate]
@@ -76,8 +87,13 @@ Evidence (Domain):
 - Artifact: <commit SHA>
 - Result: <3-6 bullets>
 
-Evidence (Code Quality):
-- Reviewer: Cursor | Opus (per deterministic reviewer rule)
+Evidence (Review Assistant):
+- Tool: mcp__cursor__cursor | Skipped
+- Artifact: <commit SHA>
+- Result: <3-6 bullets, or why assistant stage was skipped>
+
+Evidence (Final Arbiter):
+- Reviewer: Opus
 - Artifact: <commit SHA>
 - Result: <3-6 bullets>
 
@@ -109,9 +125,8 @@ Not all external calls have the same failure severity. Use this matrix:
 |-------------|-----------|-----------|
 | CURSOR routing (implementation) | BLOCKED — strict fail-closed | Primary implementer, no substitute |
 | Domain expert at CP3 (Codex/Gemini) | BLOCKED — strict fail-closed | Primary validation, no substitute |
-| Quality reviewer (Cursor reviewing Codex/Gemini work) at subagent stage 2 | Fall back to Opus quality reviewer | Cursor is primary but Opus can substitute |
-| Quality reviewer (Cursor) at CP3 (supplementary) | Proceed without — log warning | Domain review is primary; code was already reviewed in stage 2 |
-| Quality reviewer (Opus reviewing Cursor work) | BLOCKED — Opus must review | No self-review allowed, Opus is the only reviewer |
+| Review assistant (Cursor reviewing Codex/Gemini work) | Fall back to direct Opus review | Assistant stage is helpful but not mandatory if Opus can arbitrate directly |
+| Final arbiter (Opus reviewing any code-changing path) | BLOCKED — Opus must review | Opus is the only final reviewer |
 | Cross-validation: one model times out | Use completed result + Claude supplement | Partial evidence better than none |
 | Cross-validation: all timeout | BLOCKED | No evidence available |
 
@@ -154,6 +169,7 @@ To retry: [exact MCP tool call to retry]
 
 - If Routing != CLAUDE: do I have Implementation Evidence from the external model?
 - If code changed: do I have Quality Review Evidence (or valid exemption)?
-- Was the correct reviewer used? (Cursor implemented → Opus reviewed, not Cursor)
+- Do I have final Opus review evidence for every code-changing path?
+- If Codex/Gemini implemented: do I have Cursor assistant evidence or a logged fallback to direct Opus review?
 - If not: did I stop in BLOCKED state (no final answer)?
 - Exemption: docs-only changes do not require Quality Review Evidence

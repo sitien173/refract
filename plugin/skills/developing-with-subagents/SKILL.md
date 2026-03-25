@@ -15,9 +15,9 @@ description: "Executes plans by dispatching fresh subagent per task with two-sta
 
 ## Overview
 
-Execute plan by routing each task to the appropriate external model (Codex/Gemini/Cursor based on domain), with two-stage review after each: spec compliance review first (Opus), then code quality review (deterministic: Cursor reviews Codex/Gemini work, Opus reviews Cursor work).
+Execute plan by routing each task to the appropriate external model (Codex/Gemini/Cursor based on domain), with spec compliance review first (Opus), then a code review chain where Cursor assists on Codex/Gemini paths and Opus makes the final decision on every code-changing path.
 
-**Core principle:** Route to external model per task + two-stage review (spec via Opus, then quality via deterministic reviewer) = high quality, fast iteration. Claude orchestrates but never implements.
+**Core principle:** Route to external model per task + Opus-led review chain (spec via Opus, then Cursor assistant when applicable, then Opus final arbitration) = high quality, fast iteration. Claude orchestrates but never implements.
 
 ## Protocol Threshold (Required)
 
@@ -73,7 +73,8 @@ Task N: [description]
 - [ ] Implementation complete
 - [ ] Checkpoint 3 (Quality Gate) applied
 - [ ] Spec reviewer: ✅ compliant
-- [ ] Quality review: ✅ approved (Cursor if Codex/Gemini implemented; Opus if Cursor implemented)
+- [ ] Review chain: ✅ assistant completed if applicable
+- [ ] Opus final arbiter: ✅ approved
 - [ ] Task marked complete
 
 Final Steps:
@@ -95,8 +96,8 @@ digraph process {
         "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [shape=box];
         "Spec reviewer subagent confirms code matches spec?" [shape=diamond];
         "External model fixes spec gaps" [shape=box];
-        "Quality review (./code-quality-reviewer-prompt.md)" [shape=box];
-        "Quality reviewer approves?" [shape=diamond];
+        "Review chain (./code-quality-reviewer-prompt.md)" [shape=box];
+        "Opus final arbiter approves?" [shape=diamond];
         "External model fixes quality issues (max 3 loops)" [shape=box];
         "Mark task complete in TodoWrite" [shape=box];
     }
@@ -115,11 +116,11 @@ digraph process {
     "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" -> "Spec reviewer subagent confirms code matches spec?";
     "Spec reviewer subagent confirms code matches spec?" -> "External model fixes spec gaps" [label="no"];
     "External model fixes spec gaps" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [label="re-review"];
-    "Spec reviewer subagent confirms code matches spec?" -> "Quality review (./code-quality-reviewer-prompt.md)" [label="yes"];
-    "Quality review (./code-quality-reviewer-prompt.md)" -> "Quality reviewer approves?";
-    "Quality reviewer approves?" -> "External model fixes quality issues (max 3 loops)" [label="no"];
-    "External model fixes quality issues (max 3 loops)" -> "Quality review (./code-quality-reviewer-prompt.md)" [label="re-review"];
-    "Quality reviewer approves?" -> "Mark task complete in TodoWrite" [label="yes"];
+    "Spec reviewer subagent confirms code matches spec?" -> "Review chain (./code-quality-reviewer-prompt.md)" [label="yes"];
+    "Review chain (./code-quality-reviewer-prompt.md)" -> "Opus final arbiter approves?";
+    "Opus final arbiter approves?" -> "External model fixes quality issues (max 3 loops)" [label="no"];
+    "External model fixes quality issues (max 3 loops)" -> "Review chain (./code-quality-reviewer-prompt.md)" [label="re-review"];
+    "Opus final arbiter approves?" -> "Mark task complete in TodoWrite" [label="yes"];
     "Mark task complete in TodoWrite" -> "More tasks remain?";
     "More tasks remain?" -> "Route to external model (Codex/Gemini/Cursor per routing)" [label="yes"];
     "More tasks remain?" -> "Dispatch final code reviewer subagent for entire implementation" [label="no"];
@@ -131,7 +132,7 @@ digraph process {
 
 - `./implementer-prompt.md` - Dispatch implementer subagent (legacy template — prefer routing to external models via MCP)
 - `./spec-reviewer-prompt.md` - Dispatch spec compliance reviewer subagent
-- `./code-quality-reviewer-prompt.md` - Dispatch code quality reviewer (determines Cursor vs Opus)
+- `./code-quality-reviewer-prompt.md` - Dispatch the review chain (Cursor assistant when applicable, then Opus)
 
 ## Model Strategy
 
@@ -143,7 +144,8 @@ Route implementation to external models. Claude orchestrates only.
 | Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) | GEMINI routing |
 | General implementation | Cursor MCP (`mcp__cursor__cursor`) | CURSOR routing |
 | Spec Reviewer | Opus (default) | Always Opus |
-| Quality Reviewer | Cursor or Opus | `Reviewer = (Implementer == Cursor ? Opus : Cursor)` |
+| Review Assistant | Cursor or Skip | Use Cursor for Codex/Gemini work, skip for Cursor work |
+| Final Arbiter | Opus | Always Opus for code-changing paths |
 | Exploration | `model: haiku` | Flexible |
 
 ## Collaboration Checkpoints
@@ -165,10 +167,10 @@ Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md` at th
 **► Checkpoint 3 (Quality Gate):** After external model completes implementation:
 
 - Implementation complete → invoke spec reviewer for compliance check
-- Quality review runs after spec compliance passes (see `code-quality-reviewer-prompt.md`)
-- Deterministic reviewer: `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
-- If Cursor quality reviewer unavailable: fall back to Opus
-- If Opus quality reviewer unavailable (for Cursor-implemented work): BLOCKED
+- The review chain runs after spec compliance passes (see `code-quality-reviewer-prompt.md`)
+- Review chain: `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
+- If Cursor review assistant is unavailable: fall back to direct Opus review
+- If Opus is unavailable: BLOCKED
 - Max 3 fix-review loops before escalating to user
 
 ## Example Workflow
@@ -199,8 +201,11 @@ Implementer: "Got it. Implementing now..."
 [Dispatch spec compliance reviewer]
 Spec reviewer: ✅ Spec compliant - all requirements met, nothing extra
 
-[Get git SHAs, call Cursor MCP for code quality review]
+[Get git SHAs, call Cursor MCP for review assistance]
 Cursor: APPROVE — Good test coverage, clean implementation. No issues found.
+
+[Dispatch Opus final arbiter with Cursor feedback + diff]
+Opus: APPROVE — Assistant findings accepted, no additional issues.
 
 [Mark Task 1 complete]
 
@@ -227,14 +232,15 @@ Implementer: Removed --json flag, added progress reporting
 [Spec reviewer reviews again]
 Spec reviewer: ✅ Spec compliant now
 
-[Call Cursor MCP for code quality review]
+[Call Cursor MCP for review assistance]
 Cursor: Issues (Important): Magic number (100)
 
 [Implementer fixes]
 Implementer: Extracted PROGRESS_INTERVAL constant
 
-[Re-submit to Cursor]
+[Re-submit Cursor assistant + Opus final arbiter]
 Cursor: APPROVE
+Opus: APPROVE
 
 [Mark Task 2 complete]
 
@@ -272,11 +278,11 @@ Done!
 **Quality gates:**
 
 - Self-review catches issues before handoff
-- Two-stage review: spec compliance (Opus), then quality (deterministic reviewer)
+- Opus-led review chain: spec compliance (Opus), then Cursor assistant when applicable, then Opus final arbitration
 - Review loops ensure fixes actually work (max 3 loops)
 - Spec compliance prevents over/under-building
-- Quality review: Cursor reviews Codex/Gemini work, Opus reviews Cursor work
-- Quality review never skipped — always has a reviewer available
+- Review chain: Cursor assists Codex/Gemini work, Opus arbitrates every code-changing path
+- Final Opus review is never skipped for code-changing work
 
 **Cost:**
 
@@ -300,7 +306,7 @@ Done!
 - Let implementer self-review replace actual review (both are needed)
 - **Start code quality review before spec compliance is ✅** (wrong order)
 - Move to next task while either review has open issues
-- Skip quality review fallback when primary reviewer is unavailable
+- Skip Cursor assistant fallback or skip final Opus review
 - Exceed 3 fix-review loops without escalating to user
 - Let Claude write implementation code (Claude is orchestrator-only)
 

@@ -77,45 +77,44 @@ Goal: perform final review before "final output/final conclusion/claiming tests 
 
 **Code Quality Review:**
 - Evaluate `QualityGateRequired`: did code change in this task?
-- **Deterministic Reviewer Rule:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
-- When Codex/Gemini implements: Cursor reviews quality (in parallel with domain expert)
-- When Cursor implements: Opus reviews quality (no self-review)
+- **Review Chain Rule:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
+- When Codex/Gemini implement: Cursor review assistant runs first, then Opus makes the final decision
+- When Cursor implements: Opus reviews directly (no self-review)
 - If no code changed (docs-only): skip quality review
-- Quality reviewer failure at CP3: see tiered policy in `GATE.md`
+- If Cursor review assistant is unavailable for a Codex/Gemini path: Opus reviews directly
+- If Opus is unavailable for any code-changing path: BLOCKED
 
 **QualityGateRequired Decision (Risk-Tiered):**
 
 | Task Complexity | Spec Review | Quality Review | Max Fix-Review Loops | Notes |
 |----------------|-------------|----------------|---------------------|-------|
 | **Trivial** (docs, config, <5 lines) | Skip | Skip | 0 | No code review needed |
-| **Standard** (single-domain, clear scope) | Full | Full | 3 | Current default behavior |
-| **Critical** (multi-file, auth/payment/core) | Full + cross-validation | Full + cross-validation | 4+ with user escalation | Enhanced scrutiny |
+| **Standard** (single-domain, clear scope) | Full | Full review chain | 3 | Cursor assists only when implementer is not Cursor |
+| **Critical** (multi-file, auth/payment/core) | Full + cross-validation | Full review chain + cross-validation | 4+ with user escalation | Enhanced scrutiny |
 
-**Routing × Code Changed Matrix** (unchanged):
+**Routing × Code Changed Matrix**:
 
-| Routing | Code Changed? | Implementation By | Quality Reviewed By |
-|---------|--------------|-------------------|-------------------|
-| CODEX | Yes | Codex | Cursor (parallel) |
-| CODEX | No (docs-only) | Codex | Skip |
-| GEMINI | Yes | Gemini | Cursor (parallel) |
-| GEMINI | No (docs-only) | Gemini | Skip |
-| CURSOR | Yes | Cursor | Opus (no self-review) |
-| CURSOR | No (docs-only) | Cursor | Skip |
-| CROSS_VALIDATION | Yes | Multiple | Depends on implementer |
-| CLAUDE | No (docs-only) | N/A (orchestrator) | Skip |
+| Routing | Code Changed? | Implementation By | Review Assistant | Final Arbiter |
+|---------|--------------|-------------------|------------------|---------------|
+| CODEX | Yes | Codex | Cursor | Opus |
+| CODEX | No (docs-only) | Codex | Skip | Skip |
+| GEMINI | Yes | Gemini | Cursor | Opus |
+| GEMINI | No (docs-only) | Gemini | Skip | Skip |
+| CURSOR | Yes | Cursor | Skip | Opus |
+| CURSOR | No (docs-only) | Cursor | Skip | Skip |
+| CROSS_VALIDATION | Yes | Multiple | Depends on final implementer | Opus |
+| CLAUDE | No (docs-only) | N/A (orchestrator) | Skip | Skip |
 
 > **Note:** `CLAUDE + Code Changed` is not a valid state — if code changes are needed, Claude MUST route to an external model. If this state is detected, re-route to CURSOR.
 
-**Artifact Pinning:** All CP3 reviews must reference the same commit SHA. If fixes from one review invalidate the other, re-run both against the new SHA.
+**Artifact Pinning:** All CP3 reviews must reference the same commit SHA. If fixes invalidate an earlier assistant review or Opus judgment, re-run the applicable review chain against the new SHA.
 
-**Conflict Arbitration:**
+**Review Chain Arbitration:**
 
-| Domain Expert | Quality Reviewer | Action |
-|--------------|-----------------|--------|
-| Pass | Pass | Proceed |
-| Pass | Fail | Fix quality issues, re-review quality only |
-| Fail | Pass | Fix domain issues, re-review domain expert only |
-| Fail | Fail | Fix all issues, re-review both |
+- Cursor assistant findings are advisory. Opus decides whether they stand.
+- If Cursor assistant approves but Opus finds issues, fix Opus issues and re-run Opus.
+- If Cursor assistant finds issues that Opus dismisses, proceed with Opus's judgment and record the dismissal.
+- After substantive fixes on a Codex/Gemini path, re-run Cursor assistant and Opus. After fixes on a Cursor path, re-run Opus.
 
 ## User Override
 

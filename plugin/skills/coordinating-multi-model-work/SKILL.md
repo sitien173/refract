@@ -25,6 +25,10 @@ Use this module to route implementation to the right external model:
 - **Gemini** (`mcp__gemini__gemini`) — frontend: UI, components, styles, interactions
 - **Cursor** (`mcp__cursor__cursor`) — general: debugging, refactoring, DevOps, scripts, tasks not fitting Codex/Gemini
 
+Cursor model policy:
+- Implementation via Cursor uses `claude-4.6-sonnet-medium-thinking`
+- Review assistance and optional Cursor cross-validation use `claude-4.5-opus-high-thinking`
+
 This module is intentionally minimal: it provides a small workflow and pushes details into reference files.
 
 ## Core Instructions
@@ -35,10 +39,10 @@ You **must** execute the steps below:
 
 **2** Before implementing any concrete coding task, **route to the appropriate external model for implementation**. Claude does NOT write code — all coding goes through CODEX, GEMINI, or CURSOR.
 
-**3** After the external model completes implementation, **obtain quality review**:
-- If Codex/Gemini implemented → Cursor reviews code quality
-- If Cursor implemented → Opus reviews code quality (no self-review)
-- Deterministic rule: `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
+**3** After the external model completes implementation, **run the review chain**:
+- If Codex/Gemini implemented → Cursor review assistant runs first, then Opus makes the final judgment
+- If Cursor implemented → Opus reviews directly (no self-review)
+- Review chain rule: `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
 
 **4** All external models provide references and implementations. You **must** think independently and question their answers. Blind trust is worse than no trust; your joint mission is to converge on a unified, comprehensive, precise result.
 

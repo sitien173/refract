@@ -21,21 +21,29 @@ Prefer semantic routing via `coordinating-multi-model-work/routing-decision.md` 
 - `**/*.md` (docs only, no code) → CLAUDE
 - Design docs, implementation docs, requirements specs, architecture docs → CROSS_VALIDATION
 
-## Cursor (Implementation + Quality Review)
+## Cursor (Implementation + Review Assistant)
 
 Cursor (`mcp__cursor__cursor`) has a **dual role**:
 
 ### As Implementation Agent (CURSOR routing)
 - Debugging, refactoring, DevOps, scripts, general implementation
 - Catches all tasks that don't clearly fit CODEX or GEMINI
+- Uses `claude-4.6-sonnet-medium-thinking`
 - Fail-closed: BLOCKED if unavailable (same as CODEX/GEMINI)
 
-### As Quality Reviewer (automatic, orthogonal to routing)
+### As Review Assistant (automatic, orthogonal to routing)
 - Reviews code quality when Codex or Gemini implements
-- Does NOT self-review when Cursor implements — Opus reviews instead
+- Uses `claude-4.5-opus-high-thinking`
+- Does NOT self-review when Cursor implements — Opus reviews directly
 - See `checkpoints.md` for `QualityGateRequired` decision table
 
-**Deterministic reviewer:** `Reviewer = (Implementer == Cursor ? Opus : Cursor)`
+## Opus (Final Arbiter)
+
+- Final reviewer on every code-changing path
+- Reviews Cursor assistant feedback plus the code on Codex/Gemini paths
+- Reviews Cursor directly on CURSOR paths
+
+**Review chain:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
 
 ## Claude (Orchestrator Only)
 

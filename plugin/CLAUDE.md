@@ -39,7 +39,7 @@ Each skill lives in a subdirectory with `SKILL.md` (YAML frontmatter + instructi
 
 Key skills:
 - `coordinating-multi-model-work/` — Routes tasks to Codex/Gemini/Cursor MCP; defines the CP checkpoint protocol. Claude is orchestrator-only.
-- `developing-with-subagents/` — Routes tasks to external models with two-stage review (spec via Opus, quality via deterministic reviewer)
+- `developing-with-subagents/` — Routes tasks to external models with spec review via Opus, then a review chain where Cursor assists when applicable and Opus makes the final decision
 - `executing-plans/` — Batch plan execution with review checkpoints
 
 ### Hooks (`hooks/`)
@@ -66,7 +66,7 @@ Claude is the **orchestrator** — it routes tasks, coordinates models, and inte
 | `CROSS_VALIDATION` | Full-stack, architectural, uncertain | Multiple |
 | `CLAUDE` | Orchestration only: docs, coordination (NO code) | None |
 
-Cursor has a dual role: **implementation agent** (CURSOR routing) and **quality reviewer** (when Codex/Gemini implements). When Cursor implements, Opus reviews quality (no self-review). Deterministic rule: `Reviewer = (Implementer == Cursor ? Opus : Cursor)`.
+Cursor has a dual role: **implementation agent** (CURSOR routing) and **review assistant** (when Codex/Gemini implements). Cursor implementation uses `claude-4.6-sonnet-medium-thinking`; Cursor review assistance and optional cross-validation use `claude-4.5-opus-high-thinking`. Opus is the final arbiter for every code-changing path: Codex/Gemini work goes through Cursor assistant plus Opus, while Cursor work goes straight to Opus.
 
 **Fail-closed rule**: If `Routing != CLAUDE` and the MCP call cannot complete, output `BLOCKED` — never guess or produce a final answer without evidence. If all external models are unavailable, all coding tasks are BLOCKED by design. See `GATE.md` for tiered failure policy.
 
