@@ -52,7 +52,7 @@ claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.
 claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/geminimcp.git geminimcp
 
 # General implementation + review assistant
-claude mcp add cursor -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/cursormcp.git cursormcp
+claude mcp add cursor -s user --transport stdio -- uvx --from git+https://github.com/sitien173/cursormcp.git cursormcp
 ```
 
 ## Using External Models
