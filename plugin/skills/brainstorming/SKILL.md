@@ -76,6 +76,43 @@ Once the user confirms the design looks right, do ALL of the following:
 
 Only commit if the user explicitly asks you to commit.
 
+**Native Task Integration (must not be skipped):**
+
+After each design section is confirmed by the user, create a native task using Claude Code's TaskCreate tool. Follow the format in `skills/shared/task-format-reference.md`.
+
+~~~yaml
+TaskCreate:
+  subject: "Implement [Component Name]"
+  description: |
+    **Goal:** [What this component produces — one sentence]
+
+    **Files:**
+    - Create/Modify: [paths identified during design]
+
+    **Acceptance Criteria:**
+    - [ ] [Criterion from design validation]
+    - [ ] [Criterion from design validation]
+
+    **Verify:** [How to test this component works]
+
+    ```json:metadata
+    {"files": ["path/from/design"], "verifyCommand": "command to verify", "acceptanceCriteria": ["criterion 1", "criterion 2"]}
+    ```
+  activeForm: "Implementing [Component Name]"
+~~~
+
+Track all returned task IDs.
+
+After **all** components are validated, wire dependency relationships:
+
+~~~yaml
+TaskUpdate:
+  taskId: [dependent-task-id]
+  addBlockedBy: [prerequisite-task-ids]
+~~~
+
+Before handing off to writing-plans, run `TaskList` to display the complete task tree with dependency status so the user can confirm it looks right.
+
 **Implementation (if continuing):**
 
 - Ask: "Ready to set up for implementation?"
