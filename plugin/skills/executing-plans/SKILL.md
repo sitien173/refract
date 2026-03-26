@@ -24,12 +24,36 @@ If unmet -> immediately perform the CP assessment, then continue the flow right 
 
 ## The Process
 
+### Step 0: Load Persisted Tasks
+
+1. Call `TaskList` to check for existing native tasks in this session
+2. **Locate tasks file:** Look for `<plan-path>.tasks.json` (same directory as the plan `.md`)
+3. **If tasks file exists AND native tasks are empty** (fresh session): recreate from JSON using TaskCreate:
+   - Include full `description` from `.tasks.json` (not just subject — it contains the `json:metadata` fence)
+   - Restore `blockedBy` relationships with `TaskUpdate` after all tasks are created
+4. **If native tasks already exist:** verify they match the plan, then resume from the first `pending` or `in_progress` task
+5. **If neither tasks file nor native tasks exist:** proceed to Step 1b after reviewing the plan
+
+Update `.tasks.json` after every task status change (see Step 2).
+
 ### Step 1: Load and Review Plan
 
 1. Read plan file
 2. Review critically - identify any questions or concerns about the plan
 3. If concerns: Raise them with your human partner before starting
 4. If no concerns: Create TodoWrite and proceed
+
+### Step 1b: Bootstrap Tasks from Plan (if needed)
+
+Only run this step if TaskList returned no tasks AND no `.tasks.json` file was found.
+
+1. Parse the plan document for `## Task N:` or `### Task N:` headers
+2. For each task found, use TaskCreate with:
+   - `subject`: the task title from the plan (e.g. `"Task 1: [Component Name]"`)
+   - `description`: full structured content (Goal, Files, Acceptance Criteria, Verify, Steps) with `json:metadata` code fence at the end
+   - `activeForm`: present tense action (e.g. `"Implementing X"`)
+3. **CRITICAL — Dependencies:** For each task that has `blockedBy` in the plan, call `TaskUpdate` with `addBlockedBy`. Do NOT skip this — dependencies enforce correct execution order.
+4. Call `TaskList` to verify `blockedBy` relationships are correctly shown (e.g. "blocked by #1, #2")
 
 ### Step 2: Execute Batch
 
@@ -56,20 +80,21 @@ Current Task:
 
 For each task:
 
-1. Mark as in_progress
-2. Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
-3. **► Checkpoint 1 (Task Analysis):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+1. Mark as `in_progress` (`TaskUpdate status: in_progress`); sync `.tasks.json` (update `"status"` to `"in_progress"`, set `"lastUpdated"` to current ISO timestamp)
+2. **Parse task metadata:** Extract the `json:metadata` code fence from the task description to get `verifyCommand` and `acceptanceCriteria`
+3. Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
+4. **► Checkpoint 1 (Task Analysis):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
    - Collect: task files, description, tech stack from plan
    - Check critical task conditions → Match: invoke expert model
    - Evaluate general task signals → Positive: invoke
-4. Follow each step exactly (plan has bite-sized steps)
-5. **► Checkpoint 2 (Mid-Review):** If blocked or uncertain:
+5. Follow each step exactly (plan has bite-sized steps)
+6. **► Checkpoint 2 (Mid-Review):** If blocked or uncertain:
    - Multiple approaches possible → invoke cross-validation
    - Debugging stalled → invoke domain expert
-6. Run verifications as specified
-7. **► Checkpoint 3 (Quality Gate):** Before marking complete:
+7. **Run verification using metadata:** Execute `verifyCommand` from the parsed metadata. Check each item in `acceptanceCriteria` before proceeding. If verification fails, stop and report — do NOT mark as completed.
+8. **► Checkpoint 3 (Quality Gate):** Before marking complete:
    - Code generation complete → invoke domain expert for review
-8. Mark as completed
+9. Mark as `completed` (`TaskUpdate status: completed`); sync `.tasks.json` (update `"status"` to `"completed"`, set `"lastUpdated"` to current ISO timestamp)
 
 ### Step 3: Report
 
