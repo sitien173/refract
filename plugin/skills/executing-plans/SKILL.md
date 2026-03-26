@@ -92,8 +92,11 @@ For each task:
    - Multiple approaches possible → invoke cross-validation
    - Debugging stalled → invoke domain expert
 7. **Run verification using metadata:** Execute `verifyCommand` from the parsed metadata. Check each item in `acceptanceCriteria` before proceeding. If verification fails, stop and report — do NOT mark as completed.
-8. **► Checkpoint 3 (Quality Gate):** Before marking complete:
-   - Code generation complete → invoke domain expert for review
+8. **► Checkpoint 3 (Quality Gate):** Before marking complete, run the review chain from `developing-with-subagents/code-quality-reviewer-prompt.md`:
+   - If Codex or Gemini implemented → call `mcp__cursor__cursor` (model: `claude-4.5-opus-high-thinking`) as review assistant first, then dispatch Opus as final arbiter
+   - If Cursor implemented → dispatch Opus as final arbiter directly (no self-review)
+   - If Opus finds issues → implementer fixes, re-run chain (max 3 loops for Standard tasks)
+   - If Opus approves → proceed to mark complete
 9. Mark as `completed` (`TaskUpdate status: completed`); sync `.tasks.json` (update `"status"` to `"completed"`, set `"lastUpdated"` to current ISO timestamp)
 
 ### Step 3: Report
@@ -166,7 +169,11 @@ At checkpoints, apply semantic routing from `coordinating-multi-model-work/routi
 
 - **Notify user:** "I will use [model] to execute [task description]"
 
-- **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
+- **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, Cursor MCP (`mcp__cursor__cursor`) for general/debugging, and call all in parallel for CROSS_VALIDATION.
+
+- **Post-implementation review chain:** After any Codex/Gemini/Cursor MCP call completes, apply `developing-with-subagents/code-quality-reviewer-prompt.md`:
+  - Codex/Gemini → Cursor MCP review assistant (model: `claude-4.5-opus-high-thinking`) → Opus final arbiter
+  - Cursor → Opus final arbiter directly
 
 **Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
 
