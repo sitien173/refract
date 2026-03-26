@@ -33,6 +33,16 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
+**REQUIRED FIRST STEP — Initialize Task Tracking:**
+
+Before exploring code or writing the plan, you MUST:
+
+1. Call `TaskList` to check for existing tasks from brainstorming
+2. If tasks exist: enhance them with implementation details as you write each plan task (use `TaskUpdate` to add Steps, Verify, and metadata)
+3. If no tasks exist: create them with `TaskCreate` as you write each task
+
+Do not proceed to codebase exploration until `TaskList` has been called.
+
 Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
 
 **► Checkpoint 1 (Task Analysis):** Before writing the plan, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
@@ -208,6 +218,85 @@ During plan execution (via `executing-plans` or `developing-with-subagents`):
 - Missing or `auto` hint → Executor performs full semantic analysis
 - Plan author doesn't need to understand routing logic deeply
 - Focus on clear task descriptions and file paths; routing is handled automatically
+
+## Native Task Integration Reference
+
+Use Claude Code's native task tools to create structured tasks alongside the plan document. Follow the format in `skills/shared/task-format-reference.md`.
+
+### Creating Tasks
+
+For each task in the plan, create a corresponding native task. Embed metadata as a `json:metadata` code fence at the end of the description — this is the only way to ensure metadata survives TaskGet (the `metadata` parameter on TaskCreate is accepted but not returned by TaskGet).
+
+~~~yaml
+TaskCreate:
+  subject: "Task N: [Component Name]"
+  description: |
+    **Goal:** [From task's Goal line]
+
+    **Files:**
+    [From task's Files section]
+
+    **Acceptance Criteria:**
+    [From task's Acceptance Criteria]
+
+    **Verify:** [From task's Verify line]
+
+    **Steps:**
+    [Key actions from task's Steps — abbreviated]
+
+    ```json:metadata
+    {"files": ["path/to/file"], "verifyCommand": "command -v", "acceptanceCriteria": ["criterion 1", "criterion 2"]}
+    ```
+  activeForm: "Implementing [Component Name]"
+~~~
+
+### Setting Dependencies
+
+After all tasks are created, wire blockedBy relationships:
+
+~~~yaml
+TaskUpdate:
+  taskId: [dependent-task-id]
+  addBlockedBy: [prerequisite-task-ids]
+~~~
+
+### Task Persistence File
+
+At plan completion, write a `.tasks.json` file **in the same directory as the plan document**.
+
+If the plan is `docs/plans/2026-01-15-feature.md`, the tasks file MUST be `docs/plans/2026-01-15-feature.md.tasks.json`.
+
+```json
+{
+  "planPath": "docs/plans/YYYY-MM-DD-feature.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: ...",
+      "status": "pending",
+      "description": "**Goal:** ...\n\n**Files:**\n...\n\n```json:metadata\n{\"files\": [\"path/to/file\"], \"verifyCommand\": \"command -v\", \"acceptanceCriteria\": [\"criterion 1\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: ...",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** ...\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": []}\n```"
+    }
+  ],
+  "lastUpdated": "<ISO timestamp>"
+}
+```
+
+Both the plan `.md` and `.tasks.json` must be co-located in `docs/plans/`.
+
+### Resuming Work
+
+Any new session can resume execution by running:
+```
+/superpowers-cccg:executing-plans <plan-path>
+```
+The skill reads the `.tasks.json` file and continues from the first `pending` or `in_progress` task.
 
 ## Execution Handoff
 
