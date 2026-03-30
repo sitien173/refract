@@ -1,5 +1,39 @@
-# Project Overview
-- Superpowers-CCCG is a Claude Code plugin / skills framework for multi-model orchestration across Claude, Codex, Gemini, and Cursor.
-- The repository is primarily markdown skills, prompt templates, shell scripts, hook config, and small supporting utilities rather than a compiled app.
-- The authoritative workflow/rules document is `superpowers-ccg.md`.
-- Key runtime areas: `skills/` for skill definitions, `agents/` for reusable agent specs, `commands/` for shortcut workflows, `hooks/` for Claude Code hook registration, `.claude-plugin/` for plugin metadata, and `tests/claude-code/` for skill workflow tests.
+# Project Overview: superpowers-ccg
+
+## Purpose
+Claude Code plugin that adds a skills-driven development workflow with multi-model orchestration (Claude + Codex + Cursor + Gemini). Claude acts as pure orchestrator — all implementation code is routed to external models via MCP tools.
+
+Fork of [obra/superpowers](https://github.com/obra/superpowers).
+
+## Tech Stack
+- **Not a compiled application** — no `package.json`, `Makefile`, or build step
+- Markdown files (`.md`) — skill definitions and documentation
+- Bash scripts (`.sh`) — hooks and test runner
+- Node.js (`lib/skills-core.js`) — skill discovery/resolution
+- Windows environment (but uses bash/unix shell syntax via Git Bash)
+
+## Directory Structure
+```
+.claude-plugin/     plugin metadata (plugin.json, marketplace.json) — version 1.2.0
+agents/             agent definitions
+bin/                CLI utilities
+commands/           quick-invoke commands (/brainstorm, /write-plan, /execute-plan)
+docs/               documentation
+hooks/              runtime behavior hooks (hooks.json, *.sh, run-hook.cmd)
+lib/                skills-core.js — skill discovery and resolution
+skills/             all skill subdirectories, each with SKILL.md
+tests/              test suites (claude-code, explicit-skill-requests, etc.)
+superpowers-ccg.md  authoritative agent rules document
+CLAUDE.md           Claude Code project instructions
+```
+
+## Multi-Model Routing
+| Label | When | MCP Tool |
+|-------|------|----------|
+| CODEX | Backend: API, DB, algorithms | `mcp__codex__codex` |
+| GEMINI | Frontend: UI, components, styles | `mcp__gemini__gemini` |
+| CURSOR | DevOps: CI/CD, scripts, Dockerfiles, infrastructure | `mcp__cursor__cursor` |
+| CLAUDE | Orchestration only (NO code) | none |
+
+## Review Chain
+Opus reviews all code-changing paths directly. No intermediate review assistant step.

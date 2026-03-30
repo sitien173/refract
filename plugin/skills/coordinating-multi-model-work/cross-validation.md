@@ -74,7 +74,7 @@
 
 **Default (2-way):** Send tasks to both Codex and Gemini simultaneously via MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`), each analyzing from their professional perspective.
 
-**3-way escalation (optional):** For critical/high-uncertainty tasks, include Cursor (`mcp__cursor__cursor`) as a third perspective. Use 3-way only when the task has high architectural impact or spans multiple domains beyond frontend/backend. When Cursor participates here, use `model: claude-4.5-opus-high-thinking`.
+**3-way escalation (optional):** For critical/high-uncertainty tasks involving DevOps, include Cursor (`mcp__cursor__cursor`) as a third perspective. Use 3-way only when the task has infrastructure/DevOps aspects alongside frontend/backend. When Cursor participates here, use `model: claude-4.5-opus-high-thinking`.
 
 **Codex Task Template**:
 ```
@@ -231,7 +231,7 @@ Use the full Standard Report format for Critical-complexity tasks or when diverg
 When Cursor is included as a third perspective, extend the report:
 
 ```markdown
-### Cursor Analysis (General Perspective via mcp__cursor__cursor, `model: claude-4.5-opus-high-thinking`)
+### Cursor Analysis (DevOps Perspective via mcp__cursor__cursor, `model: claude-4.5-opus-high-thinking`)
 
 #### Analysis Conclusion
 [Cursor's main conclusion]

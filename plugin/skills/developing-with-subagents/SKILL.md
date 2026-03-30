@@ -15,18 +15,13 @@ description: "Executes plans by dispatching fresh subagent per task with two-sta
 
 ## Overview
 
-Execute plan by routing each task to the appropriate external model (Codex/Gemini/Cursor based on domain), with spec compliance review first (Opus), then a code review chain where Cursor assists on Codex/Gemini paths and Opus makes the final decision on every code-changing path.
+Execute plan by routing each task to the appropriate external model (Codex/Gemini/Cursor based on domain), with spec compliance review first (Opus), then Opus code quality review on every code-changing path.
 
-**Core principle:** Route to external model per task + Opus-led review chain (spec via Opus, then Cursor assistant when applicable, then Opus final arbitration) = high quality, fast iteration. Claude orchestrates but never implements.
+**Core principle:** Route to external model per task + Opus review (spec then quality) = high quality, fast iteration. Claude orchestrates but never implements.
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks:
-
-- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
-- Before claiming completion / requesting review / claiming verification passed: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the claim may follow in the same reply)
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
 
 ## When to Use
 
@@ -73,8 +68,7 @@ Task N: [description]
 - [ ] Implementation complete
 - [ ] Checkpoint 3 (Quality Gate) applied
 - [ ] Spec reviewer: ✅ compliant
-- [ ] Review chain: ✅ assistant completed if applicable
-- [ ] Opus final arbiter: ✅ approved
+- [ ] Opus review: ✅ approved
 - [ ] Task marked complete
 
 Final Steps:
@@ -132,7 +126,7 @@ digraph process {
 
 - `./implementer-prompt.md` - Dispatch implementer subagent (legacy template — prefer routing to external models via MCP)
 - `./spec-reviewer-prompt.md` - Dispatch spec compliance reviewer subagent
-- `./code-quality-reviewer-prompt.md` - Dispatch the review chain (Cursor assistant when applicable, then Opus)
+- `./code-quality-reviewer-prompt.md` - Dispatch Opus quality review
 
 ## Model Strategy
 
@@ -142,36 +136,20 @@ Route implementation to external models. Claude orchestrates only.
 | ---- | ----- | -------------- |
 | Backend implementation | Codex MCP (`mcp__codex__codex`) | CODEX routing |
 | Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) | GEMINI routing |
-| General implementation | Cursor MCP (`mcp__cursor__cursor`) | CURSOR routing |
+| DevOps implementation | Cursor MCP (`mcp__cursor__cursor`) | CURSOR routing |
 | Spec Reviewer | Opus (default) | Always Opus |
-| Review Assistant | Cursor or Skip | Use Cursor for Codex/Gemini work, skip for Cursor work |
-| Final Arbiter | Opus | Always Opus for code-changing paths |
+| Quality Reviewer | Opus | Always Opus for code-changing paths |
 | Exploration | `model: haiku` | Flexible |
 
 ## Collaboration Checkpoints
 
 Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md` at these stages:
 
-**► Checkpoint 1 (Task Analysis):** Before dispatching implementer subagent:
+**► CP1 (Task Analysis):** Before dispatching implementer, apply `coordinating-multi-model-work/checkpoints.md`.
 
-- Collect: task files, description, complexity
-- **Output a standalone `【CP1 Assessment】` block to the user BEFORE the first Task tool call**
-- Check critical task conditions → Match: invoke expert model
-- Evaluate general task signals → Positive: invoke
+**► CP2 (Mid-Review):** During execution, apply `coordinating-multi-model-work/checkpoints.md` if triggered.
 
-**► Checkpoint 2 (Mid-Review):** During subagent execution:
-
-- Subagent asks question requiring external expertise → invoke domain expert
-- Multiple implementation approaches debated → invoke cross-validation
-
-**► Checkpoint 3 (Quality Gate):** After external model completes implementation:
-
-- Implementation complete → invoke spec reviewer for compliance check
-- The review chain runs after spec compliance passes (see `code-quality-reviewer-prompt.md`)
-- Review chain: `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
-- If Cursor review assistant is unavailable: fall back to direct Opus review
-- If Opus is unavailable: BLOCKED
-- Max 3 fix-review loops before escalating to user
+**► CP3 (Quality Gate):** After implementation, invoke spec reviewer, then Opus quality review per `coordinating-multi-model-work/review-chain.md`.
 
 ## Example Workflow
 
@@ -201,11 +179,8 @@ Implementer: "Got it. Implementing now..."
 [Dispatch spec compliance reviewer]
 Spec reviewer: ✅ Spec compliant - all requirements met, nothing extra
 
-[Get git SHAs, call Cursor MCP for review assistance]
-Cursor: APPROVE — Good test coverage, clean implementation. No issues found.
-
-[Dispatch Opus final arbiter with Cursor feedback + diff]
-Opus: APPROVE — Assistant findings accepted, no additional issues.
+[Dispatch Opus reviewer with diff + task context]
+Opus: APPROVE — Good test coverage, clean implementation. No issues found.
 
 [Mark Task 1 complete]
 
@@ -232,14 +207,13 @@ Implementer: Removed --json flag, added progress reporting
 [Spec reviewer reviews again]
 Spec reviewer: ✅ Spec compliant now
 
-[Call Cursor MCP for review assistance]
-Cursor: Issues (Important): Magic number (100)
+[Dispatch Opus reviewer]
+Opus: Issues (Important): Magic number (100)
 
 [Implementer fixes]
 Implementer: Extracted PROGRESS_INTERVAL constant
 
-[Re-submit Cursor assistant + Opus final arbiter]
-Cursor: APPROVE
+[Re-submit Opus reviewer]
 Opus: APPROVE
 
 [Mark Task 2 complete]
@@ -278,11 +252,9 @@ Done!
 **Quality gates:**
 
 - Self-review catches issues before handoff
-- Opus-led review chain: spec compliance (Opus), then Cursor assistant when applicable, then Opus final arbitration
+- Opus review per `coordinating-multi-model-work/review-chain.md`
 - Review loops ensure fixes actually work (max 3 loops)
 - Spec compliance prevents over/under-building
-- Review chain: Cursor assists Codex/Gemini work, Opus arbitrates every code-changing path
-- Final Opus review is never skipped for code-changing work
 
 **Cost:**
 
@@ -306,7 +278,7 @@ Done!
 - Let implementer self-review replace actual review (both are needed)
 - **Start code quality review before spec compliance is ✅** (wrong order)
 - Move to next task while either review has open issues
-- Skip Cursor assistant fallback or skip final Opus review
+- Skip Opus review
 - Exceed 3 fix-review loops without escalating to user
 - Let Claude write implementation code (Claude is orchestrator-only)
 
@@ -347,23 +319,4 @@ Done!
 
 ## Multi-Model Task Dispatch
 
-**Related skill:** superpowers-cccg:coordinating-multi-model-work
-
-At checkpoints, apply semantic routing from `coordinating-multi-model-work/routing-decision.md`:
-
-- **Routing decision (Claude never implements):**
-  - Clear backend task (API, database, server logic) → **CODEX** (`mcp__codex__codex`)
-  - Clear frontend task (UI, components, styles) → **GEMINI** (`mcp__gemini__gemini`)
-  - Debugging, refactoring, DevOps, general implementation → **CURSOR** (`mcp__cursor__cursor`)
-  - Full-stack integration or critical task → **CROSS_VALIDATION** (multiple MCP tools)
-  - Documentation-only (no code) → **CLAUDE** (orchestration)
-
-- **Check for Model Hint:** If task includes hint, use as guidance
-
-- **Notify user:** "I will use [model] to implement [task name]"
-
-- **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates).
-
-**Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
-
-**Fallback (Fail-Closed):** If external models are required but unavailable or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with task completion output).
+See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.

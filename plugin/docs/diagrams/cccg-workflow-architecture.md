@@ -29,13 +29,13 @@ graph TB
         direction LR
         CODEX["🔧 Codex MCP<br><i>Backend: API, DB,<br>auth, algorithms</i>"]
         GEMINI["🎨 Gemini MCP<br><i>Frontend: UI,<br>components, styles</i>"]
-        CURSOR["🔨 Cursor MCP<br><i>General: debug,<br>refactor, DevOps</i>"]
+        CURSOR["🔨 Cursor MCP<br><i>DevOps: CI/CD,<br>scripts, infra</i>"]
     end
 
     subgraph REVIEW["🔍 Quality Review"]
         direction LR
         OPUS_REV["Opus Final Arbiter<br><i>Final say on all code paths</i>"]
-        CURSOR_REV["Cursor Review Assistant<br><i>Advisory review for Codex/Gemini</i>"]
+        OPUS_REV2["Opus Reviewer<br><i>Reviews all code paths</i>"]
     end
 
     subgraph GATE["🚧 Fail-Closed Gate"]
@@ -55,10 +55,10 @@ graph TB
     CODEX --> CP3
     GEMINI --> CP3
     CURSOR --> CP3
-    CP3 --> CURSOR_REV
     CP3 --> OPUS_REV
-    CURSOR_REV --> INTEGRATE
+    CP3 --> OPUS_REV2
     OPUS_REV --> INTEGRATE
+    OPUS_REV2 --> INTEGRATE
     INTEGRATE --> FB
     FB --> CLAUDE
     CP2 -.->|"retries>=2 / stall / ambiguity"| ROUTE
@@ -113,19 +113,13 @@ flowchart TD
     SPEC_REV -->|Fail| FIX_SPEC[Implementer<br>fixes spec gaps]
     FIX_SPEC --> SPEC_REV
 
-    QUAL_REV -->|"Codex/Gemini implemented"| CURSOR_REVIEWS[Cursor assists, Opus arbitrates]
-    QUAL_REV -->|"Cursor implemented"| OPUS_REVIEWS[Opus reviews directly]
-
-    CURSOR_REVIEWS -->|Approve| DONE
-    CURSOR_REVIEWS -->|"Issues (≤3 loops)"| FIX_Q[Fix quality issues]
-    FIX_Q --> CURSOR_REVIEWS
+    QUAL_REV --> OPUS_REVIEWS[Opus reviews directly]
 
     OPUS_REVIEWS -->|Approve| DONE
     OPUS_REVIEWS -->|"Issues (≤3 loops)"| FIX_Q2[Fix quality issues]
     FIX_Q2 --> OPUS_REVIEWS
 
-    CURSOR_REVIEWS -->|"Loop limit"| ESCALATE([Escalate to user])
-    OPUS_REVIEWS -->|"Loop limit"| ESCALATE
+    OPUS_REVIEWS -->|"Loop limit"| ESCALATE([Escalate to user])
 ```
 
 ---
@@ -138,14 +132,14 @@ flowchart LR
 
     ANALYZE -->|"API, DB, auth,<br>algorithms, security"| CODEX_R["CODEX<br>mcp__codex__codex"]
     ANALYZE -->|"UI, components,<br>styles, interactions"| GEMINI_R["GEMINI<br>mcp__gemini__gemini"]
-    ANALYZE -->|"Debug, refactor,<br>DevOps, scripts"| CURSOR_R["CURSOR<br>mcp__cursor__cursor"]
+    ANALYZE -->|"CI/CD, scripts,<br>Dockerfiles, infra"| CURSOR_R["CURSOR<br>mcp__cursor__cursor"]
     ANALYZE -->|"Full-stack,<br>uncertain,<br>architectural"| CROSS["CROSS_VALIDATION<br>Parallel: Codex+Gemini<br>±Cursor"]
     ANALYZE -->|"Docs only,<br>coordination"| CLAUDE_R["CLAUDE<br>Orchestrator"]
 
-    CODEX_R --> REV_C[Reviewer: Cursor]
-    GEMINI_R --> REV_C
-    CURSOR_R --> REV_O[Reviewer: Opus]
-    CROSS --> REV_BOTH["Reviewer: Depends<br>on implementer"]
+    CODEX_R --> REV_O[Reviewer: Opus]
+    GEMINI_R --> REV_O
+    CURSOR_R --> REV_O
+    CROSS --> REV_O
     CLAUDE_R --> NO_REV[No review needed]
 ```
 
@@ -188,7 +182,7 @@ sequenceDiagram
         Note over C: CP3 — Quality Gate
         C->>R: Spec review (Opus)
         R-->>C: Pass/Fail
-        C->>R: Review chain (Cursor assistant if applicable, then Opus)
+        C->>R: Opus quality review
         R-->>C: Approve / Issues
     end
 

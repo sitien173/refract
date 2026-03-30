@@ -78,7 +78,7 @@ Based on the analysis, output:
 
 - **CODEX** - Backend expert for APIs, databases, algorithms, server-side logic
 - **GEMINI** - Frontend expert for UI, components, styles, interactions
-- **CURSOR** - General implementation agent for debugging, refactoring, DevOps, scripts, and tasks not clearly backend or frontend
+- **CURSOR** - DevOps agent for CI/CD, shell scripts, Dockerfiles, Makefiles, infrastructure, and repo tooling
 - **CROSS_VALIDATION** - Multiple models for full-stack tasks, architectural decisions, or high uncertainty (default: Codex+Gemini; escalate to 3-way with Cursor for critical/high-uncertainty tasks)
 - **CLAUDE** - Orchestrator only: routing decisions, coordination, documentation edits. **Claude does NOT write implementation code** — all coding tasks must route to CODEX, GEMINI, or CURSOR
 
@@ -93,22 +93,36 @@ In addition to domain routing, CP3 evaluates whether code quality review is need
 **Rationale:** [Code changed / docs-only]
 ```
 
-**Review Chain Rule:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
-- When Cursor implements (CURSOR routing): Opus reviews directly (no self-review)
-- When Codex/Gemini implement: Cursor review assistant runs first, then Opus makes the final decision
-- See `checkpoints.md` for the full QualityGateRequired decision table
+See `coordinating-multi-model-work/review-chain.md` for the review chain rule and `checkpoints.md` for the QualityGateRequired decision table.
 
 ## Decision Guidelines
 
 - Strong backend signals and weak/no frontend signals → **CODEX**
 - Strong frontend signals and weak/no backend signals → **GEMINI**
-- Debugging, refactoring, DevOps, scripts, or no clear domain → **CURSOR**
+- DevOps, CI/CD, shell scripts, Dockerfiles, Makefiles, infrastructure → **CURSOR**
 - Strong signals in both domains OR high uncertainty OR architectural → **CROSS_VALIDATION**
+- Debugging or refactoring with unclear domain → **CROSS_VALIDATION**
 - Documentation-only OR pure coordination (no code changes) → **CLAUDE**
 - Ambiguous case between domains → **CROSS_VALIDATION**
-- Ambiguous case but single-domain → **CURSOR** (general-purpose catch-all)
 
 **Key Principle**: Claude never writes code. When in doubt between CODEX/GEMINI/CURSOR, prefer CROSS_VALIDATION. When in doubt between CLAUDE and others, route externally.
+
+## File Extension Heuristics
+
+Quick hints (use semantic analysis for final decision):
+
+| File Pattern | Default Routing |
+|-------------|----------------|
+| `**/*.go`, `**/*.py`, `**/*.sql` | CODEX |
+| `**/*.tsx`, `**/*.css`, `**/*.html` | GEMINI |
+| `**/*.sh`, `**/*.yml`, `Dockerfile`, `Makefile`, `**/*.tf` | CURSOR |
+| Mixed frontend + backend | CROSS_VALIDATION |
+| `**/*.md` (docs only, no code) | CLAUDE |
+| Design docs, architecture docs, requirements specs | CROSS_VALIDATION |
+
+## Review Chain
+
+See `coordinating-multi-model-work/review-chain.md` for the canonical review chain rule.
 
 ## Examples
 
@@ -151,7 +165,7 @@ In addition to domain routing, CP3 evaluates whether code quality review is need
 
 ---
 
-### Example 4: Debugging Task
+### Example 4: DevOps Task
 
 **Input:** "Fix the flaky test in CI pipeline"
 **Files:** `tests/integration/test_pipeline.sh`, `.github/workflows/ci.yml`
@@ -159,7 +173,7 @@ In addition to domain routing, CP3 evaluates whether code quality review is need
 **Output:**
 ```
 **Routing Decision:** CURSOR
-**Rationale:** Debugging task with DevOps/CI focus — no clear backend or frontend domain
+**Rationale:** CI/CD pipeline task — DevOps domain
 ```
 
 ---
@@ -184,6 +198,6 @@ In addition to domain routing, CP3 evaluates whether code quality review is need
 
 **Output:**
 ```
-**Routing Decision:** CURSOR
-**Rationale:** General refactoring task not specific to frontend or backend domain
+**Routing Decision:** CROSS_VALIDATION
+**Rationale:** General refactoring with unclear domain — cross-validate for best approach
 ```

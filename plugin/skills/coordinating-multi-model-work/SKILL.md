@@ -1,6 +1,6 @@
 ---
 name: coordinating-multi-model-work
-description: "Routes work to Codex (backend), Gemini (frontend), and Cursor (general implementation) via MCP tools. Claude is orchestrator-only — all code goes through external models. Use when: any implementation task, UI/components/styles, APIs/databases/auth/security/performance, debugging, refactoring, code review, or tasks mentioning Codex/Gemini/Cursor/CCCG/multi-model. Keywords: codex mcp, gemini mcp, cursor mcp, cross-validation, implementation, api, database, auth, security, performance, ui, component, debugging, refactoring"
+description: "Routes work to Codex (backend), Gemini (frontend), and Cursor (DevOps) via MCP tools. Claude is orchestrator-only — all code goes through external models. Use when: any implementation task, UI/components/styles, APIs/databases/auth/security/performance, DevOps/CI/scripts, or tasks mentioning Codex/Gemini/Cursor/CCCG/multi-model. Keywords: codex mcp, gemini mcp, cursor mcp, cross-validation, implementation, api, database, auth, security, performance, ui, component, devops, ci/cd"
 ---
 
 ## Contents
@@ -23,13 +23,11 @@ Claude is the **orchestrator** — it routes tasks, coordinates models, and inte
 Use this module to route implementation to the right external model:
 - **Codex** (`mcp__codex__codex`) — backend: APIs, databases, algorithms, server-side logic
 - **Gemini** (`mcp__gemini__gemini`) — frontend: UI, components, styles, interactions
-- **Cursor** (`mcp__cursor__cursor`) — general: debugging, refactoring, DevOps, scripts, tasks not fitting Codex/Gemini
-
-Cursor model policy:
-- Implementation via Cursor uses `claude-4.6-sonnet-medium-thinking`
-- Review assistance and optional Cursor cross-validation use `claude-4.5-opus-high-thinking`
+- **Cursor** (`mcp__cursor__cursor`) — DevOps: CI/CD, shell scripts, Dockerfiles, infrastructure, repo tooling
 
 This module is intentionally minimal: it provides a small workflow and pushes details into reference files.
+
+For review chain details, see `coordinating-multi-model-work/review-chain.md`.
 
 ## Core Instructions
 
@@ -39,10 +37,7 @@ You **must** execute the steps below:
 
 **2** Before implementing any concrete coding task, **route to the appropriate external model for implementation**. Claude does NOT write code — all coding goes through CODEX, GEMINI, or CURSOR.
 
-**3** After the external model completes implementation, **run the review chain**:
-- If Codex/Gemini implemented → Cursor review assistant runs first, then Opus makes the final judgment
-- If Cursor implemented → Opus reviews directly (no self-review)
-- Review chain rule: `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
+**3** After the external model completes implementation, **obtain Opus review** per `coordinating-multi-model-work/review-chain.md`.
 
 **4** All external models provide references and implementations. You **must** think independently and question their answers. Blind trust is worse than no trust; your joint mission is to converge on a unified, comprehensive, precise result.
 
@@ -66,5 +61,5 @@ At skill checkpoints (CP1/CP2/CP3):
 - **Routing framework (semantic):** `coordinating-multi-model-work/routing-decision.md`
 - **Fail-closed gate + evidence format:** `coordinating-multi-model-work/GATE.md`
 - **Invocation templates:** `coordinating-multi-model-work/INTEGRATION.md`
-- **Quick heuristics (non-normative):** `coordinating-multi-model-work/routing-rules.md`
+- **Review chain (canonical):** `coordinating-multi-model-work/review-chain.md`
 - **Cross-validation mechanism:** `coordinating-multi-model-work/cross-validation.md`

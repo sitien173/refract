@@ -6,20 +6,8 @@ This file provides standard integration patterns for other skills to use multi-m
 
 ## Quick Reference
 
-```
-Task Type -> Model Selection:
-|- Backend (API, database, logic) -> CODEX
-|- Frontend (UI, components, styles) -> GEMINI
-|- General (debugging, refactoring, DevOps, scripts) -> CURSOR
-|- Full-stack or uncertain -> CROSS_VALIDATION
-|- Design docs, architecture docs, critical documentation -> CROSS_VALIDATION
-\- Documentation-only / coordination (no code) -> CLAUDE (orchestrator)
-
-Review Chain:
-|- Codex/Gemini implements -> Cursor review assistant (`claude-4.5-opus-high-thinking`) -> Opus final arbiter
-|- Cursor implements -> Opus final arbiter (no self-review)
-\- Docs-only -> Skip quality review
-```
+See `coordinating-multi-model-work/routing-decision.md` for routing rules.
+See `coordinating-multi-model-work/review-chain.md` for the review chain.
 
 ## Standard Integration Section
 
@@ -34,7 +22,7 @@ For tasks requiring implementation, apply semantic routing:
 
 1. **Analyze task domain** using `coordinating-multi-model-work/routing-decision.md`
 2. **Notify user**: "I will use [model] to [task purpose]"
-3. **Invoke model** via MCP tools (`mcp__codex__codex` for backend, `mcp__gemini__gemini` for frontend, `mcp__cursor__cursor` for general)
+3. **Invoke model** via MCP tools (`mcp__codex__codex` for backend, `mcp__gemini__gemini` for frontend, `mcp__cursor__cursor` for DevOps)
 4. **Run the review chain** before completion claims
 5. **Integrate results** before proceeding
 
@@ -72,9 +60,9 @@ For tasks requiring implementation, apply semantic routing:
 }
 ```
 
-### General Implementation (Cursor MCP)
+### DevOps Implementation (Cursor MCP)
 
-Use this template when Cursor is the **implementation agent** (CURSOR routing). This is distinct from the review assistant template below.
+Use this template when Cursor is the **implementation agent** (CURSOR routing — DevOps tasks only: CI/CD, scripts, Dockerfiles, infrastructure).
 
 ```json
 {
@@ -90,8 +78,9 @@ Use this template when Cursor is the **implementation agent** (CURSOR routing). 
 ```
 
 **CURSOR routing rules:**
+- Cursor handles DevOps tasks only (CI/CD, scripts, Dockerfiles, infrastructure)
 - Fail-closed: BLOCKED if Cursor unavailable (same as CODEX/GEMINI)
-- Final review by Opus (never self-review)
+- Final review by Opus
 - Max 3 fix-review loops before escalating to user
 - See `GATE.md` for tiered failure policy details
 
@@ -111,7 +100,7 @@ For critical/high-uncertainty tasks: optionally escalate to 3-way (Codex + Gemin
 
 [Results]
 
-### Cursor Analysis (General via mcp__cursor__cursor, `model: claude-4.5-opus-high-thinking`) — optional 3-way
+### Cursor Analysis (DevOps via mcp__cursor__cursor, `model: claude-4.5-opus-high-thinking`) — optional 3-way
 
 [Results]
 
@@ -137,37 +126,9 @@ For critical/high-uncertainty tasks: optionally escalate to 3-way (Codex + Gemin
 }
 ```
 
-### Code Review Assistant (Cursor — when Codex/Gemini implement)
+### Final Review (Opus)
 
-Use this template when Cursor is the **review assistant** (not the implementer). Only use when Codex or Gemini implemented the code.
-
-```json
-{
-  "tool": "mcp__cursor__cursor",
-  "params": {
-    "PROMPT": "## Code Review Assistant\n\n### Task Context\n[Original task spec — what was being built and why]\n\n### Changes to Review\n[Diff or file paths with line ranges]\nCommit: [SHA]\n\n### Review Focus\n1. Correctness: bugs, edge cases, off-by-one errors, null handling\n2. Readability: naming, structure, comments where non-obvious\n3. Maintainability: DRY, coupling, separation of concerns\n4. Performance: anti-patterns, unnecessary allocations, N+1 queries\n\n### Important\n- Spec compliance has already been verified — focus only on code quality\n- Do NOT suggest feature additions or scope changes\n\n### Output Format\n- APPROVE if no issues found\n- Or list issues as:\n  - File: [path]\n  - Line: [number]\n  - Severity: Critical | Important | Minor\n  - Issue: [description]\n  - Suggestion: [fix]\n  - Confidence: High | Medium | Low",
-    "cd": "$PWD",
-    "sandbox": "default",
-    "SESSION_ID": "<reuse-or-new>",
-    "model": "claude-4.5-opus-high-thinking"
-  }
-}
-```
-
-**Review assistant rules:**
-- Pin review to a specific commit SHA (artifact pinning)
-- Max 3 fix-review loops before escalating to user
-- If Cursor assistant is unavailable: fall back to direct Opus review
-
-### Final Arbitration (Opus — all code-changing paths)
-
-After implementation, and after Cursor assistant review when applicable, dispatch the Opus `superpowers-cccg:code-reviewer` agent with:
-- Original task context
-- Diff or file paths with line ranges
-- Commit SHA
-- Cursor assistant findings, if present
-
-Opus decides whether to accept Cursor findings, dismiss them, add missed issues, or approve.
+Opus reviews all code-changing paths directly. See `coordinating-multi-model-work/review-chain.md` for the full review protocol.
 
 ## Important Rules
 
@@ -175,4 +136,4 @@ Opus decides whether to accept Cursor findings, dismiss them, add missed issues,
 2. User notifications follow user's configured language
 3. Always validate external model outputs before using
 4. **Claude does NOT write implementation code** — route to CODEX, GEMINI, or CURSOR
-5. **Review chain:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor)` and `FinalArbiter = Opus`
+5. **Review chain:** See `coordinating-multi-model-work/review-chain.md`

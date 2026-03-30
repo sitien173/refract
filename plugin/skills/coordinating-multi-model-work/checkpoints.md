@@ -77,44 +77,20 @@ Goal: perform final review before "final output/final conclusion/claiming tests 
 
 **Code Quality Review:**
 - Evaluate `QualityGateRequired`: did code change in this task?
-- **Review Chain Rule:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
-- When Codex/Gemini implement: Cursor review assistant runs first, then Opus makes the final decision
-- When Cursor implements: Opus reviews directly (no self-review)
+- Apply the review chain per `coordinating-multi-model-work/review-chain.md`
 - If no code changed (docs-only): skip quality review
-- If Cursor review assistant is unavailable for a Codex/Gemini path: Opus reviews directly
-- If Opus is unavailable for any code-changing path: BLOCKED
 
 **QualityGateRequired Decision (Risk-Tiered):**
 
-| Task Complexity | Spec Review | Quality Review | Max Fix-Review Loops | Notes |
-|----------------|-------------|----------------|---------------------|-------|
-| **Trivial** (docs, config, <5 lines) | Skip | Skip | 0 | No code review needed |
-| **Standard** (single-domain, clear scope) | Full | Full review chain | 3 | Cursor assists only when implementer is not Cursor |
-| **Critical** (multi-file, auth/payment/core) | Full + cross-validation | Full review chain + cross-validation | 4+ with user escalation | Enhanced scrutiny |
+| Task Complexity | Spec Review | Quality Review | Max Fix-Review Loops |
+|----------------|-------------|----------------|---------------------|
+| **Trivial** (docs, config, <5 lines) | Skip | Skip | 0 |
+| **Standard** (single-domain, clear scope) | Full | Full review chain | 3 |
+| **Critical** (multi-file, auth/payment/core) | Full + cross-validation | Full review chain + cross-validation | 4+ with user escalation |
 
-**Routing × Code Changed Matrix**:
+> **Note:** `CLAUDE + Code Changed` is not a valid state — if code changes are needed, Claude MUST route to an external model. If this state is detected, re-route to CROSS_VALIDATION.
 
-| Routing | Code Changed? | Implementation By | Review Assistant | Final Arbiter |
-|---------|--------------|-------------------|------------------|---------------|
-| CODEX | Yes | Codex | Cursor | Opus |
-| CODEX | No (docs-only) | Codex | Skip | Skip |
-| GEMINI | Yes | Gemini | Cursor | Opus |
-| GEMINI | No (docs-only) | Gemini | Skip | Skip |
-| CURSOR | Yes | Cursor | Skip | Opus |
-| CURSOR | No (docs-only) | Cursor | Skip | Skip |
-| CROSS_VALIDATION | Yes | Multiple | Depends on final implementer | Opus |
-| CLAUDE | No (docs-only) | N/A (orchestrator) | Skip | Skip |
-
-> **Note:** `CLAUDE + Code Changed` is not a valid state — if code changes are needed, Claude MUST route to an external model. If this state is detected, re-route to CURSOR.
-
-**Artifact Pinning:** All CP3 reviews must reference the same commit SHA. If fixes invalidate an earlier assistant review or Opus judgment, re-run the applicable review chain against the new SHA.
-
-**Review Chain Arbitration:**
-
-- Cursor assistant findings are advisory. Opus decides whether they stand.
-- If Cursor assistant approves but Opus finds issues, fix Opus issues and re-run Opus.
-- If Cursor assistant finds issues that Opus dismisses, proceed with Opus's judgment and record the dismissal.
-- After substantive fixes on a Codex/Gemini path, re-run Cursor assistant and Opus. After fixes on a Cursor path, re-run Opus.
+For the full review chain rule, routing matrix, artifact pinning, and arbitration rules, see `coordinating-multi-model-work/review-chain.md`.
 
 ## User Override
 

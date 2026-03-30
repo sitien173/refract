@@ -177,57 +177,23 @@ These are quick-invoke workflows located in `commands/`.
 |-------|-------------|----------|
 | `CODEX` | Backend: API, database, algorithms, auth, security | `mcp__codex__codex` |
 | `GEMINI` | Frontend: UI, components, styles, interactions | `mcp__gemini__gemini` |
-| `CURSOR` | General: debugging, refactoring, DevOps, scripts, tasks not fitting Codex/Gemini | `mcp__cursor__cursor` |
+| `CURSOR` | DevOps: CI/CD, shell scripts, Dockerfiles, infrastructure, repo tooling | `mcp__cursor__cursor` |
 | `CROSS_VALIDATION` | Full-stack, uncertain, critical tasks | Multiple MCP tools |
 | `CLAUDE` | Orchestration only: routing, coordination, docs editing (NO code) | No MCP call |
 
 > **Important:** Claude is the **orchestrator** — it routes tasks, coordinates models, and integrates results but **never writes implementation code**. All coding tasks must route to CODEX, GEMINI, or CURSOR. If all external models are unavailable, the task is BLOCKED by design.
 
-### Cursor (Implementation + Review Assistant)
+### Review Chain
 
-Cursor serves two distinct roles:
-
-**1. Implementation Agent (CURSOR routing):**
-- Debugging, refactoring, DevOps, scripts, general implementation
-- Catches all tasks that don't clearly fit CODEX or GEMINI
-- Uses `claude-4.6-sonnet-medium-thinking`
-- Fail-closed: BLOCKED if unavailable
-
-**2. Review Assistant (automatic, when Codex/Gemini implements):**
-- Reviews code quality before the final Opus judgment
-- Uses `claude-4.5-opus-high-thinking`
-- Surfaces issues, suggestions, and false-positive candidates for Opus to arbitrate
-- If unavailable, Opus reviews directly
-
-### Opus (Final Arbiter)
-
-- Opus has final say on every code-changing path
-- When Codex/Gemini implement → Opus reviews the code and Cursor's feedback
-- When Cursor implements → Opus reviews directly (no self-review)
-
-**Review Chain Rule:** `ReviewAssistant = (Implementer == Cursor ? None : Cursor); FinalArbiter = Opus`
-- When Cursor implements → skip review assistant, go straight to Opus
-- When Codex/Gemini implement → Cursor assists, Opus arbitrates
-- If Opus is unavailable for a code-changing task → BLOCKED
-
-Max 3 fix-review loops before escalating to user. Docs-only changes are exempt.
+See `coordinating-multi-model-work/review-chain.md` for the canonical review chain rule (Opus reviews all code-changing paths directly).
 
 ### Core Instructions
 
-1. **Route to external model** - After initial analysis, route implementation to the appropriate model (Codex/Gemini/Cursor)
-2. **Claude does NOT write code** - All coding goes through external models; Claude orchestrates only
-3. **Run the review chain** - After implementation, get Cursor assistant review when applicable, then Opus final arbitration
-4. **Think independently** - Question external model answers; blind trust is worse than no trust
-
-### Fail-Closed Gate
-
-```
-IF Routing != CLAUDE:
-  MUST obtain external output
-  OR STOP in BLOCKED state
-  
-DO NOT proceed without evidence
-```
+1. **Route to external model** — After initial analysis, route implementation to the appropriate model (Codex/Gemini/Cursor for DevOps)
+2. **Claude does NOT write code** — All coding goes through external models; Claude orchestrates only
+3. **Opus reviews all code** — After implementation, Opus reviews per `coordinating-multi-model-work/review-chain.md`
+4. **Think independently** — Question external model answers; blind trust is worse than no trust
+5. **Fail-closed** — If `Routing != CLAUDE` and MCP call fails, output BLOCKED (see `coordinating-multi-model-work/GATE.md`)
 
 ---
 
@@ -235,34 +201,11 @@ DO NOT proceed without evidence
 
 Skills use checkpoints (CP1, CP2, CP3) for quality gates.
 
-### CP1 - Task Analysis (Before First Task Call)
+See `skills/shared/protocol-threshold.md` for CP format and `coordinating-multi-model-work/checkpoints.md` for full logic.
 
-```
-[CP1 Assessment]
-Task: <description>
-Files: <involved files>
-Tech Stack: <technologies>
-Routing: CLAUDE | CODEX | GEMINI | CURSOR | CROSS_VALIDATION
-Action: <proceed | invoke external>
-```
-
-### CP2 - Mid-Review (During Execution)
-
-Triggers:
-- Multiple implementation approaches
-- 2+ failed fix attempts
-- Debugging stalled
-- Blocked or uncertain
-
-### CP3 - Quality Gate (Before Completion Claims)
-
-```
-[CP3 Assessment]
-Verification: <command run and output>
-Result: <pass | fail>
-Evidence: <proof>
-Routing: <if external review needed>
-```
+- **CP1** — Before first Task call: assess routing, invoke external model if needed
+- **CP2** — Mid-execution: triggered by uncertainty, stalled debugging, 2+ failed attempts
+- **CP3** — Before claiming completion: run verification, record evidence, run review chain
 
 ---
 
@@ -335,16 +278,15 @@ git commit -m "feat: add specific feature"
 ## Model Selection (For Subagents)
 
 See `superpowers-cccg:developing-with-subagents` and `superpowers-cccg:dispatching-parallel-agents` for details.
+See `coordinating-multi-model-work/review-chain.md` for review protocol.
 
 | Task Type | Model |
 |-----------|-------|
 | Backend implementation | Codex MCP (`mcp__codex__codex`) |
 | Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) |
-| General implementation (debugging, refactoring, DevOps) | Cursor MCP (`mcp__cursor__cursor`, `model: claude-4.6-sonnet-medium-thinking`) |
-| Review, architecture, complex reasoning | Opus (default) |
-| Exploration, search, quick lookups | `model: haiku` |
-| Review assistant (Codex/Gemini implements) | Cursor MCP (`mcp__cursor__cursor`, `model: claude-4.5-opus-high-thinking`) |
-| Final arbiter (all code-changing paths) | Opus |
+| DevOps implementation | Cursor MCP (`mcp__cursor__cursor`) |
+| Review, architecture | Opus (default) |
+| Exploration, search | `model: haiku` |
 
 ---
 

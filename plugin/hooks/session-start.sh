@@ -23,7 +23,7 @@ You have superpowers.
 **Multi-Model Routing:**
 - Backend (API, DB, auth) → CODEX (`mcp__codex__codex`)
 - Frontend (UI, styles) → GEMINI (`mcp__gemini__gemini`)
-- General (debug, refactor, DevOps) → CURSOR (`mcp__cursor__cursor`)
+- DevOps (CI/CD, scripts, infrastructure) → CURSOR (`mcp__cursor__cursor`)
 - Full-stack/uncertain → CROSS_VALIDATION (multiple)
 - Docs/coordination only → CLAUDE
 

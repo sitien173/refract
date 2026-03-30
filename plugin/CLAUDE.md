@@ -39,7 +39,7 @@ Each skill lives in a subdirectory with `SKILL.md` (YAML frontmatter + instructi
 
 Key skills:
 - `coordinating-multi-model-work/` — Routes tasks to Codex/Gemini/Cursor MCP; defines the CP checkpoint protocol. Claude is orchestrator-only.
-- `developing-with-subagents/` — Routes tasks to external models with spec review via Opus, then a review chain where Cursor assists when applicable and Opus makes the final decision
+- `developing-with-subagents/` — Routes tasks to external models with spec review via Opus, then Opus quality review on every code-changing path
 - `executing-plans/` — Batch plan execution with review checkpoints
 
 ### Hooks (`hooks/`)
@@ -62,11 +62,11 @@ Claude is the **orchestrator** — it routes tasks, coordinates models, and inte
 |---------|------|----------|
 | `CODEX` | Backend: API, DB, auth, algorithms | `mcp__codex__codex` |
 | `GEMINI` | Frontend: UI, components, styles | `mcp__gemini__gemini` |
-| `CURSOR` | General: debugging, refactoring, DevOps, scripts | `mcp__cursor__cursor` |
+| `CURSOR` | DevOps: CI/CD, scripts, Dockerfiles, infrastructure | `mcp__cursor__cursor` |
 | `CROSS_VALIDATION` | Full-stack, architectural, uncertain | Multiple |
 | `CLAUDE` | Orchestration only: docs, coordination (NO code) | None |
 
-Cursor has a dual role: **implementation agent** (CURSOR routing) and **review assistant** (when Codex/Gemini implements). Cursor implementation uses `claude-4.6-sonnet-medium-thinking`; Cursor review assistance and optional cross-validation use `claude-4.5-opus-high-thinking`. Opus is the final arbiter for every code-changing path: Codex/Gemini work goes through Cursor assistant plus Opus, while Cursor work goes straight to Opus.
+Cursor is the **DevOps implementation agent** (CI/CD, scripts, Dockerfiles, infrastructure) using `claude-4.6-sonnet-medium-thinking`. Opus reviews all code-changing paths directly — there is no intermediate review assistant step.
 
 **Fail-closed rule**: If `Routing != CLAUDE` and the MCP call cannot complete, output `BLOCKED` — never guess or produce a final answer without evidence. If all external models are unavailable, all coding tasks are BLOCKED by design. See `GATE.md` for tiered failure policy.
 

@@ -11,12 +11,7 @@ Dispatch superpowers:code-reviewer subagent to catch issues before they cascade.
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks:
-
-- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
-- Before requesting review or outputting any review conclusion: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the request/conclusion may follow in the same reply)
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
 
 ## When to Request Review
 
@@ -34,12 +29,7 @@ If unmet -> immediately perform the CP assessment, then continue the flow right 
 
 ## How to Request
 
-Hard reminder: before requesting review or outputting any “review conclusion,” you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
-
-**► Checkpoint 3 (Quality Gate):** Before requesting review, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Code changes complete → invoke domain expert for specialized review
-- Critical business logic changes → invoke cross-validation for comprehensive assessment
+**► CP3 (Quality Gate):** Before requesting review, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **1. Get git SHAs:**
 
@@ -52,7 +42,7 @@ HEAD_SHA=$(git rev-parse HEAD)
 
 Use Task tool with superpowers:code-reviewer type, fill template at `code-reviewer.md`
 
-**Note:** Code review now ends with the Opus final-arbiter agent. If Cursor review-assistant feedback exists, include it in the review packet so Opus can accept, dismiss, or extend it.
+**Note:** Code review is handled by the Opus reviewer agent directly. Opus reviews all code-changing paths.
 
 **Placeholders:**
 
@@ -134,20 +124,4 @@ See template at: requesting-code-review/code-reviewer.md
 
 ## Multi-Model Code Review
 
-**Related skill:** superpowers:coordinating-multi-model-work
-
-At checkpoint, apply semantic routing from `coordinating-multi-model-work/routing-decision.md`:
-
-- **Routing decision:**
-  - Backend changes only (API, database, algorithms) → CODEX
-  - Frontend changes only (UI, components, styles) → GEMINI
-  - Full-stack changes or architectural impact → CROSS_VALIDATION
-  - Simple changes or documentation → CLAUDE subagent
-
-- **Notify user:** "I will use [model] to review these code changes"
-
-- **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
-
-**Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
-
-**Fallback (Fail-Closed):** If external models are not available or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final review).
+See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.
