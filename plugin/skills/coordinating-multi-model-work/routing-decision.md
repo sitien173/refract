@@ -126,7 +126,7 @@ In addition to primary routing, Claude may use supplementary MCP tools to enhanc
 
 | Supplementary Tool | When to Use Alongside Routing |
 |-------------------|-------------------------------|
-| Tavily | Research phase: unfamiliar tech, current info needed |
+| Grok Search (Tavily) | Research phase: unfamiliar tech, current info needed |
 | Sequential-Thinking | Complex tasks: 3+ components, architectural decisions |
 | Serena | Large codebases: symbol tracing, dependency analysis |
 | Magic | Frontend routing: complements Gemini with component patterns |

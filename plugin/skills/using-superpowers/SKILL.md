@@ -96,8 +96,6 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
 See `developing-with-subagents` for details.
 
-## Multi-Model Capability (Codex MCP + Gemini MCP)
+## Multi-Model Capability
 
-If a task would benefit from specialized external models, you MUST use `superpowers:coordinating-multi-model-work` and follow `coordinating-multi-model-work/GATE.md`. CODEX/GEMINI/CROSS_VALIDATION/CLAUDE are routing labels for MCP tool usage (Codex MCP `mcp__codex__codex`, Gemini MCP `mcp__gemini__gemini`).
-
-Fail-closed rule: if Routing != CLAUDE and the external call cannot be completed (timeout/tool/permissions), you MUST STOP and report BLOCKED (no final answer).
+If a task would benefit from specialized external models, use `superpowers:coordinating-multi-model-work`. See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.

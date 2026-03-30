@@ -12,21 +12,6 @@ Fork of [obra/superpowers](https://github.com/obra/superpowers).
 - Node.js (`lib/skills-core.js`) — skill discovery/resolution
 - Windows environment (but uses bash/unix shell syntax via Git Bash)
 
-## Directory Structure
-```
-.claude-plugin/     plugin metadata (plugin.json, marketplace.json)
-agents/             agent definitions
-bin/                CLI utilities
-commands/           quick-invoke commands (/brainstorm, /write-plan, /execute-plan)
-docs/               documentation
-hooks/              runtime behavior hooks (hooks.json, *.sh, run-hook.cmd)
-lib/                skills-core.js — skill discovery and resolution
-skills/             all skill subdirectories, each with SKILL.md
-tests/              test suites (claude-code, explicit-skill-requests, etc.)
-superpowers-ccg.md  authoritative agent rules document
-CLAUDE.md           Claude Code project instructions
-```
-
 ## Primary Routing (Implementation)
 | Label | When | MCP Tool |
 |-------|------|----------|
@@ -39,12 +24,10 @@ CLAUDE.md           Claude Code project instructions
 Opus reviews all code-changing paths directly. No intermediate review assistant step.
 
 ## Supplementary Tools (Optional Enhancements)
-| Tool | Purpose |
-|------|---------|
-| Tavily | Web search, real-time info (research, error search) |
-| Sequential-Thinking | Structured multi-step reasoning (complex analysis) |
-| Serena | Semantic code understanding (symbol tracing, project memory) |
-| Magic | UI component generation (complements Gemini) |
-| Morphllm | Bulk pattern-based editing (multi-file transformations) |
-
-These enhance Claude's orchestration but are NOT required — workflows work without them.
+| Tool | MCP | Purpose |
+|------|-----|---------|
+| Grok Search (Tavily) | `mcp__grok-search__web_search` | Web search, real-time info |
+| Sequential-Thinking | `mcp__mcp-sequentialthinking-tools__sequentialthinking_tools` | Structured multi-step reasoning |
+| Serena | `mcp__plugin_serena_serena__*` | Semantic code understanding, project memory |
+| Magic | `mcp__magic__21st_magic_component_builder` | UI component generation |
+| Morphllm | `mcp__morph-mcp__edit_file` | Bulk pattern-based editing |

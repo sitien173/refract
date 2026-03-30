@@ -28,7 +28,7 @@ Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders auto
 **Model tip for exploration:** When dispatching subagents to explore the codebase, use `model: haiku` for fast, cost-effective searches. Haiku excels at file pattern matching and quick lookups.
 
 **Supplementary tools (optional, enhance research):**
-- **Tavily:** If the idea involves unfamiliar tech, current trends, or competitive analysis — use Tavily to gather real-time information before proposing approaches. Especially useful when the user references a library, service, or pattern you're uncertain about.
+- **Grok Search (Tavily):** If the idea involves unfamiliar tech, current trends, or competitive analysis — use `mcp__grok-search__web_search` to gather real-time information before proposing approaches. Especially useful when the user references a library, service, or pattern you're uncertain about.
 - **Serena:** If the project is large (>10 files involved) — use Serena for semantic codebase exploration to understand existing architecture and symbol relationships.
 - See `skills/shared/supplementary-tools.md` for full reference.
 

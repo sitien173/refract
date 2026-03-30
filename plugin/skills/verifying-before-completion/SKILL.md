@@ -23,21 +23,11 @@ If you haven't run the verification command in this message, you cannot claim it
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks:
-
-- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
-- Before claiming verification passed / completion / ready to commit or open a PR: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the claim may follow in the same reply)
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
 
 ## The Gate Function
 
-Hard reminder: before claiming “verification passed/completed/fixed” or any similar conclusion, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
-
-**► Checkpoint 3 (Quality Gate):** Before claiming completion, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Critical changes complete → invoke domain expert for independent verification
-- Full-stack changes → invoke cross-validation for comprehensive check
+**► CP3 (Quality Gate):** Before claiming completion, apply `coordinating-multi-model-work/checkpoints.md`.
 
 ```
 BEFORE claiming any status or expressing satisfaction:
@@ -164,18 +154,6 @@ This is non-negotiable.
 
 ## Multi-Model Cross-Verification
 
-**Related skill:** superpowers:coordinating-multi-model-work
-
-At checkpoint, apply semantic routing using `coordinating-multi-model-work/routing-decision.md`:
-
-- Backend-only critical → CODEX verification (Codex MCP `mcp__codex__codex`)
-- Frontend-only critical → GEMINI verification (Gemini MCP `mcp__gemini__gemini`)
-- Full-stack/architectural → CROSS_VALIDATION (call both MCP tools)
-
-**Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
-
-See `coordinating-multi-model-work/INTEGRATION.md` for invocation templates.
+See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.
 
 **CRITICAL:** Cross-model verification is **additional** to, not a replacement for running actual commands. **Never claim success based solely on model confirmation.**
-
-**Fallback (Fail-Closed):** If external models are unavailable or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not claim verification).

@@ -42,7 +42,7 @@ Do not proceed to codebase exploration until `TaskList` has been called.
 
 **Supplementary tools (optional, enhance planning):**
 - **Sequential-Thinking:** For architecturally complex plans (3+ interacting components, multiple viable approaches), use Sequential-Thinking MCP to decompose task dependencies and validate the ordering.
-- **Tavily:** When the plan involves unfamiliar libraries or APIs, use Tavily to gather current documentation and best practices before writing implementation steps.
+- **Grok Search (Tavily):** When the plan involves unfamiliar libraries or APIs, use `mcp__grok-search__web_search` to gather current documentation and best practices before writing implementation steps.
 - **Serena:** For plans that modify existing code, use Serena to understand current symbol relationships and identify all files that need modification.
 - See `skills/shared/supplementary-tools.md` for full reference.
 

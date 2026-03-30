@@ -294,7 +294,7 @@ These MCP tools enhance Claude's orchestration. They are **optional** — workfl
 
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| Tavily | Web search, real-time info | Research phase, error search, unfamiliar tech |
+| Grok Search (Tavily) | Web search, real-time info | Research phase, error search, unfamiliar tech |
 | Sequential-Thinking | Structured multi-step reasoning | 3+ components, architectural decisions, arbitration |
 | Serena | Semantic code understanding | Large codebases, symbol tracing, refactoring |
 | Magic | UI component generation | Frontend component patterns (complements Gemini) |

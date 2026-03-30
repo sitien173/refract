@@ -80,7 +80,7 @@ You MUST complete each phase before proceeding to the next.
 
 **Supplementary tools (optional, enhance investigation):**
 - **Sequential-Thinking:** For bugs spanning 3+ components/layers, use Sequential-Thinking MCP to systematically decompose the problem, track hypotheses, and validate reasoning chains.
-- **Tavily:** For unknown error messages or library-specific bugs, use Tavily to search for known issues, workarounds, and recent bug reports.
+- **Grok Search (Tavily):** For unknown error messages or library-specific bugs, use `mcp__grok-search__web_search` to search for known issues, workarounds, and recent bug reports.
 - **Serena:** For large codebases, use Serena for symbol-aware tracing — find references, trace call chains, and understand dependency relationships.
 - See `skills/shared/supplementary-tools.md` for full reference.
 

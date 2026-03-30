@@ -25,12 +25,7 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks:
-
-- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
-- Before claiming completion / requesting review / claiming verification passed: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the conclusion may follow in the same reply)
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
 
 ## When to Use
 
@@ -94,12 +89,7 @@ digraph tdd_cycle {
 
 Write one minimal test showing what should happen.
 
-Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
-
-**► Checkpoint 1 (Task Analysis):** Before writing test, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Check critical task conditions → Match: invoke domain expert for test design
-- Complex testing scenario → invoke cross-validation for comprehensive test coverage
+**► CP1 (Task Analysis):** Before writing test, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **✅ Good example:**
 
@@ -165,10 +155,7 @@ Confirm:
 
 Write simplest code to pass the test.
 
-**► Checkpoint 3 (Quality Gate):** After implementation passes, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Implementation complete → invoke domain expert for code review
-- Critical business logic → invoke cross-validation for security/performance review
+**► CP3 (Quality Gate):** After implementation passes, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **✅ Good example:**
 
@@ -209,8 +196,6 @@ Don't add features, refactor other code, or "improve" beyond the test.
 ### Verify GREEN - Watch It Pass
 
 **MANDATORY.**
-
-Hard reminder: before claiming completion or verification passed, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 
 ```bash
 npm test path/to/test.test.ts
@@ -347,21 +332,9 @@ When adding mocks or test utilities, read @testing-anti-patterns.md to avoid com
 
 ## Multi-Model Test Generation
 
-**Related skill:** superpowers:coordinating-multi-model-work
+See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.
 
-At checkpoints, apply semantic routing using `coordinating-multi-model-work/routing-decision.md`:
-
-- Frontend component tests → GEMINI (Gemini MCP `mcp__gemini__gemini`)
-- Backend logic tests → CODEX (Codex MCP `mcp__codex__codex`)
-- Full-stack tests → CROSS_VALIDATION (call both MCP tools)
-
-**Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
-
-See `coordinating-multi-model-work/INTEGRATION.md` for invocation templates.
-
-**CRITICAL:** Generated tests **must still follow TDD cycle** - run them to confirm they fail (RED) before implementing.
-
-**Fallback (Fail-Closed):** If external models are unavailable or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with generated tests).
+**CRITICAL:** Generated tests **must still follow TDD cycle** — run them to confirm they fail (RED) before implementing.
 
 ## Final Rule
 

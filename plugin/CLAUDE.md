@@ -74,7 +74,7 @@ Cursor is the **DevOps implementation agent** (CI/CD, scripts, Dockerfiles, infr
 
 Claude may use these MCP tools to enhance orchestration — they are optional enhancements, not requirements. See `skills/shared/supplementary-tools.md`.
 
-- **Tavily** — real-time web search (research, error search)
+- **Grok Search** (Tavily-powered) — real-time web search (research, error search)
 - **Sequential-Thinking** — structured reasoning for complex analysis
 - **Serena** — semantic code understanding (symbol tracing, project memory)
 - **Magic** — UI component generation (complements Gemini)

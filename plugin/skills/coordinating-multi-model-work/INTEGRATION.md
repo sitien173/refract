@@ -137,7 +137,7 @@ Claude may use these MCP tools to enhance orchestration. They are **optional** �
 ### Pre-Routing Enhancement
 
 Before routing to an external model, optionally use:
-- **Tavily** — gather current info about unfamiliar libraries, APIs, or patterns
+- **Grok Search** (`mcp__grok-search__web_search`) — gather current info about unfamiliar libraries, APIs, or patterns
 - **Sequential-Thinking** — decompose complex multi-component tasks
 - **Serena** — understand existing codebase structure and symbol relationships
 

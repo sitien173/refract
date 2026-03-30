@@ -6,9 +6,15 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ## Tool Reference
 
-### Tavily (`mcp__tavily__*`)
+### Grok Search / Tavily (`mcp__grok-search__web_search`, `mcp__grok-search__web_fetch`, `mcp__grok-search__web_map`)
 
-**Purpose:** Web search and real-time information retrieval.
+**Purpose:** Web search and real-time information retrieval (Grok Search wraps Tavily).
+
+**Tools:**
+- `mcp__grok-search__web_search` — deep web search with Tavily-powered results
+- `mcp__grok-search__web_fetch` — fetch and extract full page content as Markdown
+- `mcp__grok-search__web_map` — map website structure by graph traversal
+- `mcp__grok-search__get_sources` — retrieve source list for a search session
 
 **Use when:**
 - Research phase in brainstorming (current events, competitive analysis)
@@ -18,7 +24,7 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 **Auto-triggers:** "search", "latest", "current trends", "find error solution", unknown error messages
 
-**Fallback:** WebSearch / WebFetch (slower, less structured)
+**Fallback:** Built-in WebSearch / WebFetch (less structured)
 
 ---
 
@@ -88,17 +94,17 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ### Research Phase (Brainstorming)
 ```
-Tavily (gather info) → Sequential (analyze & decompose) → Design output
+Grok Search (gather info) → Sequential (analyze & decompose) → Design output
 ```
 
 ### Complex Debugging
 ```
-Sequential (decompose problem) → Tavily (search known issues) → Serena (trace symbols) → Fix
+Sequential (decompose problem) → Grok Search (search known issues) → Serena (trace symbols) → Fix
 ```
 
 ### Plan Writing
 ```
-Sequential (architectural decomposition) → Tavily (library docs) → Plan output
+Sequential (architectural decomposition) → Grok Search (library docs) → Plan output
 ```
 
 ### Frontend Implementation
