@@ -130,6 +130,31 @@ For critical/high-uncertainty tasks: optionally escalate to 3-way (Codex + Gemin
 
 Opus reviews all code-changing paths directly. See `coordinating-multi-model-work/review-chain.md` for the full review protocol.
 
+## Supplementary Tool Integration
+
+Claude may use these MCP tools to enhance orchestration. They are **optional** — if unavailable, proceed without them.
+
+### Pre-Routing Enhancement
+
+Before routing to an external model, optionally use:
+- **Tavily** — gather current info about unfamiliar libraries, APIs, or patterns
+- **Sequential-Thinking** — decompose complex multi-component tasks
+- **Serena** — understand existing codebase structure and symbol relationships
+
+### During Implementation
+
+Alongside external model work, optionally use:
+- **Magic** — generate UI component patterns to include in Gemini prompts
+- **Morphllm** — apply bulk pattern edits after external model provides the diff template
+
+### Post-Implementation
+
+After external model completes, optionally use:
+- **Serena** — verify symbol references and dependencies are intact
+- **Sequential-Thinking** — systematically evaluate review findings when divergences exist
+
+**No fail-closed gate** for supplementary tools. See `skills/shared/supplementary-tools.md` for full reference.
+
 ## Important Rules
 
 1. **All prompts to external models MUST be in English**

@@ -13,15 +13,7 @@ Start by understanding the current project context, then ask questions one at a 
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks.
-
-IMPORTANT: "standalone" means the CP block must be its own block at the top of the reply.
-It does NOT mean you should stop after the CP block. Continue in the same reply.
-
-- Before the first Task call: output a standalone [CP1 Assessment] block at the top of the reply; then continue with your actual content (and tool calls if needed) in the same reply.
-- Before providing a final design conclusion or requesting review: output a standalone [CP3 Assessment] block at the top of the reply; then continue with the conclusion/next actions in the same reply.
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
 
 ## The Process
 
@@ -35,30 +27,25 @@ If unmet -> immediately perform the CP assessment, then continue the flow right 
 
 **Model tip for exploration:** When dispatching subagents to explore the codebase, use `model: haiku` for fast, cost-effective searches. Haiku excels at file pattern matching and quick lookups.
 
-Hard reminder: before your first Task tool call, you must output a standalone `[CP1 Assessment]` block (fixed format with fields).
+**Supplementary tools (optional, enhance research):**
+- **Tavily:** If the idea involves unfamiliar tech, current trends, or competitive analysis — use Tavily to gather real-time information before proposing approaches. Especially useful when the user references a library, service, or pattern you're uncertain about.
+- **Serena:** If the project is large (>10 files involved) — use Serena for semantic codebase exploration to understand existing architecture and symbol relationships.
+- See `skills/shared/supplementary-tools.md` for full reference.
 
-**► Checkpoint 1 (Task Analysis):** After understanding the idea, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Collect: task description, files involved, tech stack
-- Check critical task conditions → Match: invoke directly
-- Evaluate general task signals → Positive: invoke
-- Neither: Claude handles independently
+**► CP1 (Task Analysis):** After understanding the idea, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **Exploring approaches:**
 
 - Propose 2-3 different approaches with trade-offs
 - Present options conversationally with your recommendation and reasoning
 - Lead with your recommended option and explain why
+- **Sequential-Thinking (optional):** For complex designs with 3+ interacting components, use Sequential-Thinking MCP to systematically decompose trade-offs and validate reasoning chains before presenting options.
 
-**► Checkpoint 2 (Mid-Review):** When multiple approaches have significant trade-offs, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Multiple implementation approaches to choose from → invoke cross-validation
-- Potential performance/security issues discovered → invoke domain expert
+**► CP2 (Mid-Review):** When multiple approaches have significant trade-offs, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **Presenting the design:**
 
 - Once you believe you understand what you're building, present the design
-- Hard reminder: before giving a final design conclusion or claiming the design is finalized, you must output a standalone `[CP3 Assessment]` block (fixed format with fields).
 - Break it into sections of 200-300 words
 - Ask after each section whether it looks right so far
 - Cover: architecture, components, data flow, error handling, testing
@@ -130,15 +117,4 @@ Before handing off to writing-plans, run `TaskList` to display the complete task
 
 ## Multi-Model Design Validation
 
-**Related skill:** superpowers:coordinating-multi-model-work
-
-At checkpoints, when invoking external models:
-
-1. **Apply semantic routing** using `coordinating-multi-model-work/routing-decision.md`
-2. **Notify user**: "I will use [model] to evaluate this design"
-3. **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, and call both in parallel for CROSS_VALIDATION.
-4. **Integrate results** into design recommendation
-
-**Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
-
-**Fallback (Fail-Closed):** If Codex MCP / Gemini MCP is unavailable or times out when Routing != CLAUDE, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final design recommendation).
+See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.

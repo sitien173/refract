@@ -35,12 +35,7 @@ Random fixes waste time and create new bugs. Quick patches mask underlying issue
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks:
-
-- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
-- Before giving a final conclusion / claiming completion / requesting review: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the conclusion may follow in the same reply)
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
 
 ## The Iron Law
 
@@ -81,12 +76,13 @@ You MUST complete each phase before proceeding to the next.
 
 ### Phase 1: Root Cause Investigation
 
-Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
+**► CP1 (Task Analysis):** Before investigation, apply `coordinating-multi-model-work/checkpoints.md`.
 
-**► Checkpoint 1 (Task Analysis):** Before investigation, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Unclear error messages → invoke domain expert for interpretation
-- Involves async/concurrency/state management → invoke cross-validation for multi-perspective analysis
+**Supplementary tools (optional, enhance investigation):**
+- **Sequential-Thinking:** For bugs spanning 3+ components/layers, use Sequential-Thinking MCP to systematically decompose the problem, track hypotheses, and validate reasoning chains.
+- **Tavily:** For unknown error messages or library-specific bugs, use Tavily to search for known issues, workarounds, and recent bug reports.
+- **Serena:** For large codebases, use Serena for symbol-aware tracing — find references, trace call chains, and understand dependency relationships.
+- See `skills/shared/supplementary-tools.md` for full reference.
 
 **BEFORE attempting ANY fix:**
 
@@ -187,10 +183,7 @@ Hard reminder: before your first Task tool call, you must output a standalone `�
 
 ### Phase 3: Hypothesis and Testing
 
-**► Checkpoint 2 (Mid-Review):** When testing hypothesis, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- 2+ failed fix attempts → invoke cross-validation for fresh perspective
-- Debugging stalled → invoke domain expert for specialized analysis
+**► CP2 (Mid-Review):** When testing hypothesis, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **Scientific method:**
 
@@ -216,8 +209,6 @@ Hard reminder: before your first Task tool call, you must output a standalone `�
    - Research more
 
 ### Phase 4: Implementation
-
-Hard reminder: before giving a final conclusion / claiming the fix is complete / claiming verification passed, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 
 **Fix the root cause, not the symptom:**
 
@@ -331,16 +322,4 @@ These techniques are part of systematic debugging and available in this director
 
 ## Multi-Model Cross-Validation
 
-**Related skill:** superpowers:coordinating-multi-model-work
-
-At checkpoints, apply semantic routing using `coordinating-multi-model-work/routing-decision.md`:
-
-- Clear backend issue → CODEX
-- Clear frontend issue → GEMINI
-- Uncertain root cause → CROSS_VALIDATION
-
-**Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
-
-See `coordinating-multi-model-work/INTEGRATION.md` for invocation templates.
-
-**Fallback (Fail-Closed):** If Codex MCP / Gemini MCP is unavailable or times out when Routing != CLAUDE, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with a final conclusion).
+See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.

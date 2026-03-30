@@ -15,12 +15,7 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks:
-
-- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
-- Before claiming a batch is complete / verification passed / ready to wrap up: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the conclusion may follow in the same reply)
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
 
 ## The Process
 
@@ -82,28 +77,17 @@ For each task:
 
 1. Mark as `in_progress` (`TaskUpdate status: in_progress`); sync `.tasks.json` (update `"status"` to `"in_progress"`, set `"lastUpdated"` to current ISO timestamp)
 2. **Parse task metadata:** Extract the `json:metadata` code fence from the task description to get `verifyCommand` and `acceptanceCriteria`
-3. Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
-4. **► Checkpoint 1 (Task Analysis):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-   - Collect: task files, description, tech stack from plan
-   - Check critical task conditions → Match: invoke expert model
-   - Evaluate general task signals → Positive: invoke
-5. Follow each step exactly (plan has bite-sized steps)
-6. **► Checkpoint 2 (Mid-Review):** If blocked or uncertain:
-   - Multiple approaches possible → invoke cross-validation
-   - Debugging stalled → invoke domain expert
+3. **► CP1 (Task Analysis):** Apply `coordinating-multi-model-work/checkpoints.md`
+4. Follow each step exactly (plan has bite-sized steps)
+5. **► CP2 (Mid-Review):** If blocked or uncertain, apply `coordinating-multi-model-work/checkpoints.md`
 7. **Run verification using metadata:** Execute `verifyCommand` from the parsed metadata. Check each item in `acceptanceCriteria` before proceeding. If verification fails, stop and report — do NOT mark as completed.
-8. **► Checkpoint 3 (Quality Gate):** Before marking complete, run the review chain from `developing-with-subagents/code-quality-reviewer-prompt.md`:
-   - If Codex or Gemini implemented → call `mcp__cursor__cursor` (model: `claude-4.5-opus-high-thinking`) as review assistant first, then dispatch Opus as final arbiter
-   - If Cursor implemented → dispatch Opus as final arbiter directly (no self-review)
-   - If Opus finds issues → implementer fixes, re-run chain (max 3 loops for Standard tasks)
-   - If Opus approves → proceed to mark complete
+8. **► CP3 (Quality Gate):** Before marking complete, run the review chain per `coordinating-multi-model-work/review-chain.md`
 9. Mark as `completed` (`TaskUpdate status: completed`); sync `.tasks.json` (update `"status"` to `"completed"`, set `"lastUpdated"` to current ISO timestamp)
 
 ### Step 3: Report
 
 When batch complete:
 
-- Hard reminder: before claiming a batch is complete or verification passed, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
 - Show what was implemented
 - Show verification output
 - Say: "Ready for feedback."
@@ -155,26 +139,16 @@ After all tasks complete and verified:
 
 ## Multi-Model Task Execution
 
-**Related skill:** superpowers:coordinating-multi-model-work
+See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.
 
-At checkpoints, apply semantic routing from `coordinating-multi-model-work/routing-decision.md`:
-
-- **Routing decision:**
-  - Backend task (API, database, algorithms) → CODEX
-  - Frontend task (UI, components, styles) → GEMINI
-  - Full-stack task or integration → CROSS_VALIDATION
-  - Simple config/docs → CLAUDE
-
+Additional notes for plan execution:
 - **Check for Model Hint:** If plan includes `Model hint`, respect explicit hints
+- **Post-implementation:** Opus reviews per `coordinating-multi-model-work/review-chain.md`
 
-- **Notify user:** "I will use [model] to execute [task description]"
+## Supplementary Tools (Optional)
 
-- **Call MCP tool** with English prompts (see `coordinating-multi-model-work/INTEGRATION.md` for templates). Use Codex MCP (`mcp__codex__codex`) for backend, Gemini MCP (`mcp__gemini__gemini`) for frontend, Cursor MCP (`mcp__cursor__cursor`) for general/debugging, and call all in parallel for CROSS_VALIDATION.
+These tools enhance plan execution when available. See `skills/shared/supplementary-tools.md`.
 
-- **Post-implementation review chain:** After any Codex/Gemini/Cursor MCP call completes, apply `developing-with-subagents/code-quality-reviewer-prompt.md`:
-  - Codex/Gemini → Cursor MCP review assistant (model: `claude-4.5-opus-high-thinking`) → Opus final arbiter
-  - Cursor → Opus final arbiter directly
-
-**Full checkpoint logic:** See `coordinating-multi-model-work/checkpoints.md`
-
-**Fallback (Fail-Closed):** If external models are not available or time out, STOP and follow `coordinating-multi-model-work/GATE.md` (do not proceed with task completion output).
+- **Morphllm Fast-Apply:** For tasks involving repeated edits across multiple files (pattern migrations, style enforcement), use Morphllm for token-efficient bulk edits.
+- **Serena:** For tasks modifying existing code in large codebases, use Serena to verify symbol references and dependencies before and after changes.
+- **Sequential-Thinking:** When a task stalls at CP2 (2+ failed attempts, ambiguous approach), use Sequential-Thinking to systematically decompose the problem.

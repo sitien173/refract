@@ -22,12 +22,7 @@ Write comprehensive implementation plans assuming the engineer has zero context 
 
 ## Protocol Threshold (Required)
 
-Follow the [CP Protocol Threshold] injected by hooks:
-
-- Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls; tool calls may follow in the same reply)
-- Before claiming the plan is complete / ready for execution handoff: output a standalone [CP3 Assessment] block (the block itself must not include tool calls; the claim may follow in the same reply)
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
 
 Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
 
@@ -43,13 +38,13 @@ Before exploring code or writing the plan, you MUST:
 
 Do not proceed to codebase exploration until `TaskList` has been called.
 
-Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
+**► CP1 (Task Analysis):** Before writing the plan, apply `coordinating-multi-model-work/checkpoints.md`.
 
-**► Checkpoint 1 (Task Analysis):** Before writing the plan, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Collect: overall scope, files involved, tech stack, complexity
-- Check critical task conditions → Match: invoke expert model for architecture review
-- Evaluate general task signals → Positive: invoke for plan quality assessment
+**Supplementary tools (optional, enhance planning):**
+- **Sequential-Thinking:** For architecturally complex plans (3+ interacting components, multiple viable approaches), use Sequential-Thinking MCP to decompose task dependencies and validate the ordering.
+- **Tavily:** When the plan involves unfamiliar libraries or APIs, use Tavily to gather current documentation and best practices before writing implementation steps.
+- **Serena:** For plans that modify existing code, use Serena to understand current symbol relationships and identify all files that need modification.
+- See `skills/shared/supplementary-tools.md` for full reference.
 
 **Context:** This should be run in a dedicated worktree (created by brainstorming skill).
 
@@ -300,12 +295,7 @@ The skill reads the `.tasks.json` file and continues from the first `pending` or
 
 ## Execution Handoff
 
-Hard reminder: before claiming the plan is complete/ready to hand off for execution, you must output a standalone `【CP3 Assessment】` block (fixed format with fields).
-
-**► Checkpoint 3 (Quality Gate):** Before handoff, apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
-
-- Plan complete and ready for execution → invoke domain expert for final review
-- Critical tasks identified in plan → invoke cross-validation for architecture verification
+**► CP3 (Quality Gate):** Before handoff, apply `coordinating-multi-model-work/checkpoints.md`.
 
 After saving the plan, offer execution choice:
 

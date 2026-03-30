@@ -118,6 +118,8 @@ Focus on:
 
 ### Phase 2: Result Comparison
 
+**Supplementary tool (optional):** For complex divergences with 3+ conflicting aspects, use **Sequential-Thinking MCP** to systematically evaluate each divergence point before arbitration.
+
 After collecting outputs from both models, perform comparative analysis:
 
 ```

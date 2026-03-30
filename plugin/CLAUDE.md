@@ -70,6 +70,16 @@ Cursor is the **DevOps implementation agent** (CI/CD, scripts, Dockerfiles, infr
 
 **Fail-closed rule**: If `Routing != CLAUDE` and the MCP call cannot complete, output `BLOCKED` — never guess or produce a final answer without evidence. If all external models are unavailable, all coding tasks are BLOCKED by design. See `GATE.md` for tiered failure policy.
 
+### Supplementary Tools (Optional)
+
+Claude may use these MCP tools to enhance orchestration — they are optional enhancements, not requirements. See `skills/shared/supplementary-tools.md`.
+
+- **Tavily** — real-time web search (research, error search)
+- **Sequential-Thinking** — structured reasoning for complex analysis
+- **Serena** — semantic code understanding (symbol tracing, project memory)
+- **Magic** — UI component generation (complements Gemini)
+- **Morphllm** — bulk pattern-based code editing
+
 ### Checkpoint (CP) Protocol
 
 - **CP1**: Before first Task call — assess routing, invoke external model if needed

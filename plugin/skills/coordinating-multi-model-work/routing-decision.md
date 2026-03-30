@@ -120,6 +120,18 @@ Quick hints (use semantic analysis for final decision):
 | `**/*.md` (docs only, no code) | CLAUDE |
 | Design docs, architecture docs, requirements specs | CROSS_VALIDATION |
 
+## Supplementary Tools (Orchestrator-Level)
+
+In addition to primary routing, Claude may use supplementary MCP tools to enhance analysis. These are optional and do not affect routing decisions. See `skills/shared/supplementary-tools.md`.
+
+| Supplementary Tool | When to Use Alongside Routing |
+|-------------------|-------------------------------|
+| Tavily | Research phase: unfamiliar tech, current info needed |
+| Sequential-Thinking | Complex tasks: 3+ components, architectural decisions |
+| Serena | Large codebases: symbol tracing, dependency analysis |
+| Magic | Frontend routing: complements Gemini with component patterns |
+| Morphllm | Bulk edits: pattern-driven multi-file changes |
+
 ## Review Chain
 
 See `coordinating-multi-model-work/review-chain.md` for the canonical review chain rule.

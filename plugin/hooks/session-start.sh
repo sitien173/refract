@@ -27,6 +27,8 @@ You have superpowers.
 - Full-stack/uncertain → CROSS_VALIDATION (multiple)
 - Docs/coordination only → CLAUDE
 
+**Supplementary Tools (optional):** Tavily (research), Sequential-Thinking (complex reasoning), Serena (semantic code), Magic (UI components), Morphllm (bulk edits). See `skills/shared/supplementary-tools.md`.
+
 **Skill Namespace:** `superpowers-cccg:` — use Skill tool to load any skill by name.
 
 **To learn more:** Load `superpowers-cccg:using-superpowers` or `superpowers-cccg:coordinating-multi-model-work` for full instructions.

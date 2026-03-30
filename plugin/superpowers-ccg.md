@@ -288,6 +288,18 @@ See `coordinating-multi-model-work/review-chain.md` for review protocol.
 | Review, architecture | Opus (default) |
 | Exploration, search | `model: haiku` |
 
+### Supplementary Tools (Optional Enhancements)
+
+These MCP tools enhance Claude's orchestration. They are **optional** — workflows work without them. See `skills/shared/supplementary-tools.md`.
+
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| Tavily | Web search, real-time info | Research phase, error search, unfamiliar tech |
+| Sequential-Thinking | Structured multi-step reasoning | 3+ components, architectural decisions, arbitration |
+| Serena | Semantic code understanding | Large codebases, symbol tracing, refactoring |
+| Magic | UI component generation | Frontend component patterns (complements Gemini) |
+| Morphllm | Bulk pattern-based editing | Multi-file transformations, style migrations |
+
 ---
 
 *This document is the authoritative reference for agent behavior in superpowers-cccg.*
