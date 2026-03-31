@@ -27,7 +27,9 @@ You have superpowers.
 - Full-stack/uncertain → CROSS_VALIDATION (multiple)
 - Docs/coordination only → CLAUDE
 
-**Supplementary Tools (optional):** Grok Search/Tavily (research), Sequential-Thinking (complex reasoning), Serena (semantic code), Magic (UI components), Morphllm (bulk edits). See `skills/shared/supplementary-tools.md`.
+**Shared Serena (HTTP 9121):** All agents share one Serena instance. `global/response_protocol` controls token-efficient agent output format.
+
+**Supplementary Tools (optional):** Grok Search/Tavily (research), Sequential-Thinking (complex reasoning), Serena (shared context bus), Magic (UI components), Morphllm (bulk edits).
 
 **Skill Namespace:** `superpowers-cccg:` — use Skill tool to load any skill by name.
 

@@ -29,6 +29,27 @@ For tasks requiring implementation, apply semantic routing:
 **Fallback (Fail-Closed):** If the MCP tool call fails or times out, STOP and follow `coordinating-multi-model-work/GATE.md`.
 ```
 
+## Response Protocol (Token Optimization)
+
+All prompts to external models MUST include the response protocol to prevent token waste. The protocol is stored in Serena shared memory (`global/response_protocol`) and is readable by all agents.
+
+**How it works:**
+1. Claude appends `\n\n## Response Protocol\nRead Serena memory 'global/response_protocol' and follow it strictly. ...` to every PROMPT
+2. External model reads the full protocol from Serena (shared HTTP instance)
+3. If Serena is unavailable, the inline fallback in the PROMPT is sufficient
+
+**Compact fallback** (append to every PROMPT — ~120 tokens):
+
+```
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK (if Serena unavailable): You are responding to an orchestrator agent, NOT a human.
+- NO thinking narration, NO restating context, NO full file rewrites
+- Output format: ## ANALYSIS (≤200 words) → ## DIFF (changed hunks only) → ## ISSUES (≤5 items) → ## VERDICT (one sentence)
+- For implementation: ## APPROACH (≤100 words) → ## DIFF → ## VERIFY (commands) → ## ISSUES
+- For review: ## VERDICT (APPROVE|CHANGES_REQUESTED) → ## FINDINGS → ## SUGGESTED_FIXES
+```
+
 ## Invocation Templates
 
 ### Backend Implementation (Codex MCP)
@@ -37,7 +58,7 @@ For tasks requiring implementation, apply semantic routing:
 {
   "tool": "mcp__codex__codex",
   "params": {
-    "PROMPT": "## Context\n[Problem/task description]\n\n## Code Location (if applicable)\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n## Analysis Focus\n1. API design and implementation\n2. Data flow and state management\n3. Performance and security considerations\n\n## Expected Output\n- Assessment with strengths/risks\n- Specific recommendations",
+    "PROMPT": "## Context\n[Problem/task description]\n\n## Code Location\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n## Analysis Focus\n1. API design and implementation\n2. Data flow and state management\n3. Performance and security considerations\n\n## Response Protocol\nFIRST: Read Serena memory 'global/response_protocol' for full format rules.\nFALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites. Output: ## ANALYSIS (≤200 words) → ## DIFF (changed hunks only) → ## ISSUES (≤5) → ## VERDICT (one sentence).",
     "cd": "$PWD",
     "sandbox": "default",
     "SESSION_ID": "<reuse-or-new>",
@@ -52,7 +73,7 @@ For tasks requiring implementation, apply semantic routing:
 {
   "tool": "mcp__gemini__gemini",
   "params": {
-    "PROMPT": "## Context\n[Problem/task description]\n\n## Code Location (if applicable)\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n## Analysis Focus\n1. Component structure and rendering\n2. User interaction and experience\n3. Accessibility and responsive design\n\n## Expected Output\n- Assessment with strengths/risks\n- Specific recommendations",
+    "PROMPT": "## Context\n[Problem/task description]\n\n## Code Location\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n## Analysis Focus\n1. Component structure and rendering\n2. User interaction and experience\n3. Accessibility and responsive design\n\n## Response Protocol\nFIRST: Read Serena memory 'global/response_protocol' for full format rules.\nFALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites. Output: ## ANALYSIS (≤200 words) → ## DIFF (changed hunks only) → ## ISSUES (≤5) → ## VERDICT (one sentence).",
     "sandbox": "default",
     "SESSION_ID": "<reuse-or-new>",
     "model": "gemini-latest"
@@ -68,7 +89,7 @@ Use this template when Cursor is the **implementation agent** (CURSOR routing �
 {
   "tool": "mcp__cursor__cursor",
   "params": {
-    "PROMPT": "## Implementation Task\n\n### Context\n[Problem/task description — what needs to be built/fixed and why]\n\n### Code Location\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n### Requirements\n1. [Requirement 1]\n2. [Requirement 2]\n3. [Requirement 3]\n\n### Implementation Focus\n1. Correctness and edge case handling\n2. Clean, maintainable code\n3. Appropriate test coverage\n\n### Expected Output\n- Implementation with unified diff patch\n- Test cases covering the changes\n- Brief explanation of approach taken",
+    "PROMPT": "## Implementation Task\n\n### Context\n[Problem/task description — what needs to be built/fixed and why]\n\n### Code Location\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n### Requirements\n1. [Requirement 1]\n2. [Requirement 2]\n3. [Requirement 3]\n\n## Response Protocol\nFIRST: Read Serena memory 'global/response_protocol' for full format rules.\nFALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context. Output: ## APPROACH (≤100 words) → ## DIFF (changed hunks only) → ## VERIFY (commands) → ## ISSUES.",
     "cd": "$PWD",
     "sandbox": "default",
     "SESSION_ID": "<reuse-or-new>",
@@ -117,7 +138,7 @@ For critical/high-uncertainty tasks: optionally escalate to 3-way (Codex + Gemin
 {
   "tool": "mcp__cursor__cursor",
   "params": {
-    "PROMPT": "## Cross-Validation Analysis\n\n### Context\n[Problem/task description]\n\n### Focus\n1. Cross-cutting implementation risks\n2. Integration edge cases\n3. Tradeoffs between proposed solutions\n\n### Output\n- Main conclusion\n- Issues found\n- Suggested resolution",
+    "PROMPT": "## Cross-Validation Analysis\n\n### Context\n[Problem/task description]\n\n### Focus\n1. Cross-cutting implementation risks\n2. Integration edge cases\n3. Tradeoffs between proposed solutions\n\n## Response Protocol\nFIRST: Read Serena memory 'global/response_protocol' for full format rules.\nFALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context. Output: ## ANALYSIS (≤200 words) → ## DIFF (if applicable) → ## ISSUES (≤5) → ## VERDICT (one sentence).",
     "cd": "$PWD",
     "sandbox": "default",
     "SESSION_ID": "<reuse-or-new>",

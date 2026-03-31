@@ -23,11 +23,17 @@ Fork of [obra/superpowers](https://github.com/obra/superpowers).
 ## Review Chain
 Opus reviews all code-changing paths directly. No intermediate review assistant step.
 
+## Shared Context Layer
+All agents (Claude, Codex, Gemini, Cursor) connect to a **single Serena instance** via Streamable HTTP (port 9121). This enables:
+- Shared project memories readable by all agents
+- `global/response_protocol` — token-optimized output format for agent-to-agent communication
+- Cross-agent knowledge sharing without prompt injection
+
 ## Supplementary Tools (Optional Enhancements)
 | Tool | MCP | Purpose |
-|------|-----|---------|
+|------|-----|---------| 
 | Grok Search (Tavily) | `mcp__grok-search__web_search` | Web search, real-time info |
 | Sequential-Thinking | `mcp__mcp-sequentialthinking-tools__sequentialthinking_tools` | Structured multi-step reasoning |
-| Serena | `mcp__plugin_serena_serena__*` | Semantic code understanding, project memory |
+| Serena | `mcp__serena__*` | Semantic code understanding, project memory, shared context |
 | Magic | `mcp__magic__21st_magic_component_builder` | UI component generation |
 | Morphllm | `mcp__morph-mcp__edit_file` | Bulk pattern-based editing |

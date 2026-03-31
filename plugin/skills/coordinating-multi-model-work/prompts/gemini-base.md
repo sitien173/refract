@@ -1,257 +1,160 @@
-# Gemini Base Prompt Template
+# Gemini Base Prompt Templates
 
-> **IMPORTANT**: All prompts sent to Gemini must be in English. Invoke Gemini via the MCP tool `mcp__gemini__gemini` (required param: `PROMPT`; optional: `sandbox`, `SESSION_ID`, `return_all_messages`, `model`).
+> Invoke via `mcp__gemini__gemini` (required: `PROMPT`; optional: `sandbox`, `SESSION_ID`, `model`).
+> All prompts in English. Every template ends with the Response Protocol block.
+> Gemini has an effective context limit of ~32k tokens — keep prompts focused.
 
-## General Analysis Template
+## Response Protocol Block (append to ALL prompts)
 
 ```
-## Task Background
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites. Use the output format below.
+```
+
+---
+
+## Analysis Template
+
+```
+## Context
 {task_context}
 
-## Analysis Requirements
-Please analyze from a frontend/user experience perspective.
-
-## Focus Areas
-1. **Component Structure** - Component division, reusability, composition patterns
-2. **User Experience** - Interaction fluidity, timely feedback, usability
-3. **Visual Design** - Layout reasonableness, style consistency, responsive adaptation
-4. **Performance** - Rendering performance, load speed, resource optimization
-5. **Accessibility** - Keyboard navigation, screen reader support, color contrast
-
-## Output Format
-### Analysis Conclusion
-[Main findings and conclusions]
-
-### Issue List
-1. [Issue description] - [Impact Level: High/Medium/Low]
-2. ...
-
-### Recommended Solutions
-[Specific improvement suggestions]
-```
-
-## Debugging Analysis Template
-
-```
-## Problem Description
-{bug_description}
-
-## Related Code Location
+## Code Location
 File: {file_path}
 Lines: {start_line}-{end_line}
 
-## User Feedback/Error Manifestation
-{user_feedback}
+Note: Use your CLI tools to read the file at the specified location.
 
-## Please Analyze
-1. What is the manifestation of the problem?
-2. What are the possible causes?
-3. How to reproduce the problem?
-4. How to fix it?
+## Focus
+1. Component structure and composition patterns
+2. User interaction and feedback
+3. Visual consistency and responsive design
+4. Rendering performance
+5. Accessibility (keyboard, screen reader, contrast)
+
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites.
+Output: ## ANALYSIS (≤200 words, bullets) → ## DIFF (changed hunks only) → ## ISSUES (≤5, one line each) → ## VERDICT (one sentence).
+```
+
+## Debugging Template
+
+```
+## Bug
+{bug_description}
+
+## Location
+File: {file_path}
+Lines: {start_line}-{end_line}
+
+## User-Visible Behavior
+{user_feedback}
 
 Note: Use your CLI tools to read the file at the specified location.
 
-## Output Format
-### Problem Location
-[Which component/module the problem appears in]
+## Required
+1. Which component/module is affected
+2. Root cause (not symptoms)
+3. Fix as unified diff patch
 
-### Possible Causes
-1. [Cause 1] - [Likelihood: High/Medium/Low]
-2. [Cause 2] - [Likelihood: High/Medium/Low]
-
-### Reproduction Steps
-1. [Step 1]
-2. [Step 2]
-3. [Expected result vs Actual result]
-
-### Fix Solution
-```diff
-- [Original code]
-+ [Fixed code]
-```
-
-### User Experience Improvement
-[How user experience improves after the fix]
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## ANALYSIS (root cause in ≤200 words) → ## DIFF (fix as changed hunks only) → ## ISSUES (≤5) → ## VERDICT (one sentence).
 ```
 
 ## Code Review Template
 
 ```
-## Review Scope
-Files to review:
+## Files
 {file_list_with_line_ranges}
 
-## Change Summary
+## Changes
 {change_summary}
 
 Note: Use your CLI tools to read the files at the specified locations.
 
-## Please Review From the Following Perspectives
+## Review Focus
+1. Component design — single responsibility, reusability, props API
+2. UX — loading/error/empty states, interaction smoothness
+3. Styles — design system compliance, responsive breakpoints, conflicts
+4. Performance — unnecessary re-renders, memo usage, resource loading
+5. Accessibility — semantic HTML, ARIA, keyboard operability
 
-### 1. Component Design
-- Is component responsibility single?
-- Is it easy to reuse?
-- Is Props design reasonable?
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## VERDICT (APPROVE|CHANGES_REQUESTED) → ## FINDINGS ([Critical|Important|Minor] file:line — description) → ## SUGGESTED_FIXES (diff patches).
+```
 
-### 2. User Experience
-- Is interaction smooth?
-- Is loading state handled?
-- Is error state user-friendly?
+## Component Implementation Template
 
-### 3. Style Quality
-- Does it comply with design standards?
-- Is responsive design comprehensive?
-- Are there any style conflicts?
+```
+## Component
+{component_requirements}
 
-### 4. Performance
-- Are there any unnecessary re-renders?
-- Is memo/useMemo used correctly?
-- Is resource loading optimized?
+## Design Reference
+{design_reference}
 
-### 5. Accessibility
-- Semantic HTML?
-- ARIA attributes?
-- Keyboard operable?
+## Tech Stack
+Framework: {framework}
+Styling: {styling}
+State: {state_management}
 
-## Output Format
-### Review Conclusion
-[Overall assessment: Approved/Needs Changes/Needs Rewrite]
+## Requirements
+1. Single responsibility, clear props API with types
+2. Handle loading, error, and empty states
+3. Support keyboard and screen readers
+4. Responsive across breakpoints
 
-### Issue List
-| File | Line | Issue | Type | Suggestion |
-|------|------|-------|------|------------|
-| ... | ... | ... | UX/Performance/Accessibility | ... |
-
-### Strengths
-[Areas where the code excels]
-
-### Improvement Suggestions
-[Specific improvement suggestions]
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## APPROACH (≤100 words) → ## DIFF (component code as unified diff) → ## VERIFY (how to test visually) → ## ISSUES (limitations/risks).
 ```
 
 ## UI Design Evaluation Template
 
 ```
-## Design Proposal
+## Proposal
 {design_proposal}
 
-## Design Constraints
+## Constraints
 {constraints}
 
-## Please Evaluate
+## Evaluate
+1. Visual hierarchy — information priority, emphasis, guidance
+2. Interaction — operation flow, feedback, mental models
+3. Responsive — breakpoint adaptation, touch targets, content priority
+4. Consistency — design system compliance, pattern reuse
 
-### 1. Visual Hierarchy
-- Is information hierarchy clear?
-- Are key points highlighted?
-- Is visual guidance reasonable?
-
-### 2. Interaction Design
-- Is the operation flow smooth?
-- Is feedback timely?
-- Does it align with user mental models?
-
-### 3. Responsive Design
-- Is adaptation at each breakpoint reasonable?
-- Touch device experience?
-- Content priority?
-
-### 4. Consistency
-- Does it comply with the design system?
-- Is component usage consistent?
-- Are interaction patterns unified?
-
-## Output Format
-### Evaluation Conclusion
-[Overall assessment]
-
-### Strengths
-1. [Strength 1]
-2. [Strength 2]
-
-### Issues
-1. [Issue 1] - [Improvement suggestion]
-2. [Issue 2] - [Improvement suggestion]
-
-### Design Suggestions
-[Specific design improvement suggestions, may include sketch descriptions]
-```
-
-## Component Development Template
-
-```
-## Component Requirements
-{component_requirements}
-
-## Design Mockup/Prototype
-{design_reference}
-
-## Tech Stack
-- Framework: {framework}
-- Styling approach: {styling}
-- State management: {state_management}
-
-## Please Implement
-
-### Requirements
-1. Clear component structure, single responsibility
-2. Complete Props types with default values
-3. Styles support customization and theming
-4. Handle loading, error, and empty states
-5. Support keyboard operation and screen readers
-
-## Output Format
-### Component Code
-```{framework}
-// Component implementation
-```
-
-### Usage Example
-```{framework}
-// Usage example
-```
-
-### Props Documentation
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| ... | ... | ... | ... |
-
-### Accessibility Notes
-[Accessibility features of the component]
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## ANALYSIS (≤200 words) → ## ISSUES (design problems with fixes, ≤5) → ## VERDICT (one sentence).
 ```
 
 ## Test Generation Template
 
 ```
-## Component to Test
+## Component Under Test
 File: {file_path}
 Lines: {start_line}-{end_line}
-
-## Test Requirements
-- Test framework: {test_framework}
-- Coverage target: {coverage_target}
+Framework: {test_framework}
 
 Note: Use your CLI tools to read the file at the specified location.
 
-## Please Generate Test Cases
+## Coverage Scope
+1. Rendering — component mounts correctly
+2. Interaction — user actions produce expected results
+3. State — state transitions work correctly
+4. Boundaries — edge cases and invalid props
+5. Accessibility — a11y compliance
 
-### Coverage Scope
-1. Rendering tests - Component renders correctly
-2. Interaction tests - User action responses
-3. State tests - State changes correctly
-4. Boundary tests - Exceptional input handling
-5. Accessibility tests - a11y compliance
-
-## Output Format
-### Test Cases
-```{language}
-// Test code
-```
-
-### Test Description
-| Test Name | Test Purpose | User Scenario |
-|-----------|--------------|---------------|
-| ... | ... | ... |
-
-### Coverage Analysis
-[Scenarios covered by tests and recommended additional tests]
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## APPROACH (≤100 words) → ## DIFF (test code as unified diff) → ## VERIFY (commands to run tests) → ## ISSUES (uncovered scenarios).
 ```

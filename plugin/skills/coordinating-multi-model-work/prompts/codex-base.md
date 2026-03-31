@@ -1,204 +1,153 @@
-# Codex Base Prompt Template
+# Codex Base Prompt Templates
 
-> **IMPORTANT**: All prompts sent to Codex must be in English. Invoke Codex via the MCP tool `mcp__codex__codex` (required params: `PROMPT`, `cd`; optional: `sandbox`, `SESSION_ID`, `return_all_messages`, `model`).
+> Invoke via `mcp__codex__codex` (required: `PROMPT`, `cd`; optional: `sandbox`, `SESSION_ID`, `model`).
+> All prompts in English. Every template ends with the Response Protocol block.
 
-## General Analysis Template
+## Response Protocol Block (append to ALL prompts)
 
 ```
-## Task Background
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites. Use the output format below.
+```
+
+---
+
+## Analysis Template
+
+```
+## Context
 {task_context}
 
-## Analysis Requirements
-Please analyze from a backend/system architecture perspective.
-
-## Focus Areas
-1. **Code Logic** - Algorithm correctness, boundary condition handling
-2. **Data Flow** - How data flows through the system
-3. **Performance** - Time complexity, space complexity, potential bottlenecks
-4. **Security** - Input validation, access control, data protection
-5. **Maintainability** - Code structure, error handling, logging
-
-## Output Format
-### Analysis Conclusion
-[Main findings and conclusions]
-
-### Issue List
-1. [Issue description] - [Severity: High/Medium/Low]
-2. ...
-
-### Recommended Solutions
-[Specific improvement suggestions]
-```
-
-## Debugging Analysis Template
-
-```
-## Problem Description
-{bug_description}
-
-## Related Code Location
+## Code Location
 File: {file_path}
 Lines: {start_line}-{end_line}
 
-## Error Message
-{error_message}
+Note: Use your CLI tools to read the file at the specified location.
 
-## Please Analyze
-1. What is the root cause of the problem?
-2. Why does this problem occur?
-3. How to fix it?
-4. How to prevent similar issues from happening again?
+## Focus
+1. Algorithm correctness and boundary handling
+2. Data flow through the system
+3. Performance (time/space complexity, bottlenecks)
+4. Security (input validation, access control, data protection)
+
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites.
+Output: ## ANALYSIS (≤200 words, bullets) → ## DIFF (changed hunks only) → ## ISSUES (≤5, one line each) → ## VERDICT (one sentence).
+```
+
+## Debugging Template
+
+```
+## Bug
+{bug_description}
+
+## Location
+File: {file_path}
+Lines: {start_line}-{end_line}
+
+## Error
+{error_message}
 
 Note: Use your CLI tools to read the file at the specified location.
 
-## Output Format
-### Root Cause Analysis
-[Root cause of the problem]
+## Required
+1. Root cause (not symptoms)
+2. Causation chain (direct → indirect → root)
+3. Fix as unified diff patch
 
-### Causation Chain
-1. [Direct cause]
-2. [Indirect cause]
-3. [Root cause]
-
-### Fix Solution
-```diff
-- [Original code]
-+ [Fixed code]
-```
-
-### Prevention Measures
-[Suggestions to prevent similar issues]
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## ANALYSIS (root cause in ≤200 words) → ## DIFF (fix as changed hunks only) → ## ISSUES (prevention measures, ≤5) → ## VERDICT (one sentence).
 ```
 
 ## Code Review Template
 
 ```
-## Review Scope
-Files to review:
+## Files
 {file_list_with_line_ranges}
 
-## Change Summary
+## Changes
 {change_summary}
 
 Note: Use your CLI tools to read the files at the specified locations.
 
-## Please Review From the Following Perspectives
+## Review Focus
+1. Correctness — logic errors, boundary conditions, error handling
+2. Performance — N+1 queries, unnecessary allocations, complexity
+3. Security — injection, validation, data protection
+4. Maintainability — naming, structure, DRY
 
-### 1. Correctness
-- Is the logic correct?
-- Are boundary conditions handled?
-- Is error handling comprehensive?
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## VERDICT (APPROVE|CHANGES_REQUESTED) → ## FINDINGS ([Critical|Important|Minor] file:line — description) → ## SUGGESTED_FIXES (diff patches).
+```
 
-### 2. Performance
-- Are there any performance issues?
-- Are database queries optimized?
-- Are there any unnecessary computations?
+## Implementation Template
 
-### 3. Security
-- Are there any security vulnerabilities?
-- Is input validated?
-- Is sensitive data protected?
+```
+## Task
+{task_description}
 
-### 4. Maintainability
-- Is the code clear?
-- Is naming reasonable?
-- Does it comply with project standards?
+## Code Location
+File: {file_path}
+Lines: {start_line}-{end_line}
 
-## Output Format
-### Review Conclusion
-[Overall assessment: Approved/Needs Changes/Needs Rewrite]
+Note: Use your CLI tools to read the file at the specified location.
 
-### Issue List
-| File | Line | Issue | Severity | Suggestion |
-|------|------|-------|----------|------------|
-| ... | ... | ... | ... | ... |
+## Requirements
+1. {requirement_1}
+2. {requirement_2}
+3. {requirement_3}
 
-### Strengths
-[Areas where the code excels]
-
-### Improvement Suggestions
-[Specific improvement suggestions]
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## APPROACH (≤100 words) → ## DIFF (changed hunks only) → ## VERIFY (commands to run) → ## ISSUES (limitations/risks).
 ```
 
 ## Design Evaluation Template
 
 ```
-## Design Proposal
+## Proposal
 {design_proposal}
 
-## Technical Constraints
+## Constraints
 {constraints}
 
-## Please Evaluate
+## Evaluate
+1. Architecture — component division, dependencies, design principles
+2. Scalability — extensibility, future requirements, over-engineering risk
+3. Reliability — failure handling, data consistency
+4. Feasibility — technical challenges, dependency risks
 
-### 1. Architecture Reasonableness
-- Is component division reasonable?
-- Are dependencies clear?
-- Does it follow design principles?
-
-### 2. Scalability
-- Is it easy to extend?
-- Does it support future requirements?
-- Is it over-designed?
-
-### 3. Reliability
-- Failure handling mechanisms?
-- Data consistency guarantees?
-- Monitoring and alerts?
-
-### 4. Implementation Feasibility
-- Technical challenges?
-- Dependency risks?
-- Implementation suggestions?
-
-## Output Format
-### Evaluation Conclusion
-[Overall assessment]
-
-### Strengths
-1. [Strength 1]
-2. [Strength 2]
-
-### Risks
-1. [Risk 1] - [Mitigation measures]
-2. [Risk 2] - [Mitigation measures]
-
-### Improvement Suggestions
-[Specific suggestions]
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## ANALYSIS (≤200 words) → ## ISSUES (risks with mitigations, ≤5) → ## VERDICT (one sentence).
 ```
 
 ## Test Generation Template
 
 ```
-## Code to Test
+## Code Under Test
 File: {file_path}
 Lines: {start_line}-{end_line}
-
-## Test Requirements
-- Test framework: {test_framework}
-- Coverage target: {coverage_target}
+Framework: {test_framework}
 
 Note: Use your CLI tools to read the file at the specified location.
 
-## Please Generate Test Cases
+## Coverage Scope
+1. Normal paths
+2. Boundary conditions
+3. Error handling
+4. Edge cases
 
-### Coverage Scope
-1. Normal path testing
-2. Boundary condition testing
-3. Error handling testing
-4. Performance testing (if applicable)
-
-## Output Format
-### Test Cases
-```{language}
-// Test code
-```
-
-### Test Description
-| Test Name | Test Purpose | Expected Result |
-|-----------|--------------|-----------------|
-| ... | ... | ... |
-
-### Coverage Analysis
-[Scenarios covered by tests and scenarios not covered]
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context.
+Output: ## APPROACH (≤100 words) → ## DIFF (test code as unified diff) → ## VERIFY (commands to run tests) → ## ISSUES (uncovered scenarios).
 ```

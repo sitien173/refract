@@ -194,6 +194,7 @@ See `coordinating-multi-model-work/review-chain.md` for the canonical review cha
 3. **Opus reviews all code** — After implementation, Opus reviews per `coordinating-multi-model-work/review-chain.md`
 4. **Think independently** — Question external model answers; blind trust is worse than no trust
 5. **Fail-closed** — If `Routing != CLAUDE` and MCP call fails, output BLOCKED (see `coordinating-multi-model-work/GATE.md`)
+6. **Response Protocol** — Every external model prompt MUST include the response protocol (see `coordinating-multi-model-work/INTEGRATION.md`). Agents read `global/response_protocol` from shared Serena for token-efficient structured output
 
 ---
 
@@ -288,6 +289,15 @@ See `coordinating-multi-model-work/review-chain.md` for review protocol.
 | Review, architecture | Opus (default) |
 | Exploration, search | `model: haiku` |
 
+### Shared Context Layer (Serena HTTP)
+
+All agents (Claude, Codex, Gemini, Cursor) connect to a **single Serena instance** via Streamable HTTP (port 9121). Key shared memories:
+
+| Memory | Purpose |
+|--------|---------|
+| `global/response_protocol` | Token-optimized output format for agent-to-agent communication |
+| `project_overview` | Project context readable by all agents |
+
 ### Supplementary Tools (Optional Enhancements)
 
 These MCP tools enhance Claude's orchestration. They are **optional** — workflows work without them. See `skills/shared/supplementary-tools.md`.
@@ -296,7 +306,7 @@ These MCP tools enhance Claude's orchestration. They are **optional** — workfl
 |------|---------|-------------|
 | Grok Search (Tavily) | Web search, real-time info | Research phase, error search, unfamiliar tech |
 | Sequential-Thinking | Structured multi-step reasoning | 3+ components, architectural decisions, arbitration |
-| Serena | Semantic code understanding | Large codebases, symbol tracing, refactoring |
+| Serena | Shared context bus, semantic code | Project memory, symbol tracing, cross-agent knowledge |
 | Magic | UI component generation | Frontend component patterns (complements Gemini) |
 | Morphllm | Bulk pattern-based editing | Multi-file transformations, style migrations |
 

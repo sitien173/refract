@@ -45,7 +45,7 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ---
 
-### Serena (`mcp__plugin_serena_serena__*`)
+### Serena (`mcp__serena__*`)
 
 **Purpose:** Semantic code understanding with project memory.
 

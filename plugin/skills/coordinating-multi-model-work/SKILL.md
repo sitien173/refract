@@ -55,11 +55,24 @@ At skill checkpoints (CP1/CP2/CP3):
 2. If `Routing != CLAUDE`, apply `coordinating-multi-model-work/GATE.md` immediately (evidence or BLOCKED)
 3. Continue only after evidence is recorded
 
+## Token Optimization (Response Protocol)
+
+All external model prompts include a **Response Protocol** that prevents token waste (thinking narration, context repetition, unstructured output). The protocol is stored in Serena shared memory (`global/response_protocol`) and read by all agents via the shared Serena HTTP instance.
+
+**Every PROMPT to an external model MUST end with:**
+```
+## Response Protocol
+FIRST: Read Serena memory 'global/response_protocol' for full format rules.
+FALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites. Output: ## ANALYSIS (≤200 words) → ## DIFF (changed hunks only) → ## ISSUES (≤5) → ## VERDICT (one sentence).
+```
+
+See `coordinating-multi-model-work/INTEGRATION.md` for complete templates.
+
 ## Reference Files
 
 - **Checkpoint logic:** `coordinating-multi-model-work/checkpoints.md`
 - **Routing framework (semantic):** `coordinating-multi-model-work/routing-decision.md`
 - **Fail-closed gate + evidence format:** `coordinating-multi-model-work/GATE.md`
-- **Invocation templates:** `coordinating-multi-model-work/INTEGRATION.md`
+- **Invocation templates + response protocol:** `coordinating-multi-model-work/INTEGRATION.md`
 - **Review chain (canonical):** `coordinating-multi-model-work/review-chain.md`
 - **Cross-validation mechanism:** `coordinating-multi-model-work/cross-validation.md`

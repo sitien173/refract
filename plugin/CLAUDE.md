@@ -70,13 +70,24 @@ Cursor is the **DevOps implementation agent** (CI/CD, scripts, Dockerfiles, infr
 
 **Fail-closed rule**: If `Routing != CLAUDE` and the MCP call cannot complete, output `BLOCKED` — never guess or produce a final answer without evidence. If all external models are unavailable, all coding tasks are BLOCKED by design. See `GATE.md` for tiered failure policy.
 
+### Shared Context Layer (Serena HTTP)
+
+All agents (Claude, Codex, Gemini, Cursor) connect to a **single Serena instance** via Streamable HTTP (port 9121). This provides:
+- **Shared project memories** — readable by all agents without prompt injection
+- **`global/response_protocol`** — token-optimized output format for agent-to-agent communication
+- **Cross-agent knowledge** — any agent can write findings that others read
+
+### Token Optimization (Response Protocol)
+
+Every prompt to external models includes a Response Protocol that suppresses thinking narration, context repetition, and unstructured output. The protocol lives in Serena memory `global/response_protocol` — agents read it directly. See `coordinating-multi-model-work/INTEGRATION.md`.
+
 ### Supplementary Tools (Optional)
 
 Claude may use these MCP tools to enhance orchestration — they are optional enhancements, not requirements. See `skills/shared/supplementary-tools.md`.
 
 - **Grok Search** (Tavily-powered) — real-time web search (research, error search)
 - **Sequential-Thinking** — structured reasoning for complex analysis
-- **Serena** — semantic code understanding (symbol tracing, project memory)
+- **Serena** (`mcp__serena__*`) — semantic code understanding, project memory, shared context bus
 - **Magic** — UI component generation (complements Gemini)
 - **Morphllm** — bulk pattern-based code editing
 
