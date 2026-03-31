@@ -16,14 +16,14 @@ You have superpowers.
 
 **Core Rules:**
 1. **1% Rule:** If there is even a 1% chance a skill applies, use the Skill tool to load it before responding.
-2. **Claude is orchestrator-only:** All implementation code goes through external models (Codex/Gemini/Cursor MCP).
+2. **Claude is orchestrator-only:** All implementation code goes through external models (Codex/Gemini MCP).
 3. **Checkpoint Protocol:** CP1 before first Task call, CP3 before claiming completion.
 4. **Fail-Closed:** If Routing != CLAUDE and MCP call fails, output BLOCKED (see GATE.md for tiered policy).
 
 **Multi-Model Routing:**
 - Backend (API, DB, auth) → CODEX (`mcp__codex__codex`)
 - Frontend (UI, styles) → GEMINI (`mcp__gemini__gemini`)
-- DevOps (CI/CD, scripts, infrastructure) → CURSOR (`mcp__cursor__cursor`)
+- Backend and systems (API, DB, auth, CI/CD, scripts, infrastructure) → CODEX (`mcp__codex__codex`)
 - Full-stack/uncertain → CROSS_VALIDATION (multiple)
 - Docs/coordination only → CLAUDE
 
@@ -31,9 +31,9 @@ You have superpowers.
 
 **Supplementary Tools (optional):** Grok Search/Tavily (research), Sequential-Thinking (complex reasoning), Serena (shared context bus), Magic (UI components), Morphllm (bulk edits).
 
-**Skill Namespace:** `superpowers-cccg:` — use Skill tool to load any skill by name.
+**Skill Namespace:** `superpowers-ccg:` — use Skill tool to load any skill by name.
 
-**To learn more:** Load `superpowers-cccg:using-superpowers` or `superpowers-cccg:coordinating-multi-model-work` for full instructions.
+**To learn more:** Load `superpowers-ccg:using-superpowers` or `superpowers-ccg:coordinating-multi-model-work` for full instructions.
 ENDOFCOMPACT
 )"
 

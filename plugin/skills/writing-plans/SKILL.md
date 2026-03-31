@@ -289,7 +289,7 @@ Both the plan `.md` and `.tasks.json` must be co-located in `docs/plans/`.
 
 Any new session can resume execution by running:
 ```
-/superpowers-cccg:executing-plans <plan-path>
+/superpowers-ccg:executing-plans <plan-path>
 ```
 The skill reads the `.tasks.json` file and continues from the first `pending` or `in_progress` task.
 

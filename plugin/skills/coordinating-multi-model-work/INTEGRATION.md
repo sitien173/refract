@@ -6,59 +6,39 @@ This file provides standard integration patterns for other skills to use multi-m
 
 ## Quick Reference
 
-See `coordinating-multi-model-work/routing-decision.md` for routing rules.
-See `coordinating-multi-model-work/review-chain.md` for the review chain.
+See `coordinating-multi-model-work/routing-decision.md` for routing rules and `coordinating-multi-model-work/review-chain.md` for the review chain.
 
 ## Standard Integration Section
-
-Copy this section to your skill and customize the prompts:
 
 ```markdown
 ## Multi-Model Integration
 
-**Related skill:** superpowers-cccg:coordinating-multi-model-work
+**Related skill:** superpowers-ccg:coordinating-multi-model-work
 
 For tasks requiring implementation, apply semantic routing:
 
-1. **Analyze task domain** using `coordinating-multi-model-work/routing-decision.md`
-2. **Notify user**: "I will use [model] to [task purpose]"
-3. **Invoke model** via MCP tools (`mcp__codex__codex` for backend, `mcp__gemini__gemini` for frontend, `mcp__cursor__cursor` for DevOps)
-4. **Run the review chain** before completion claims
-5. **Integrate results** before proceeding
+1. Analyze task domain using `coordinating-multi-model-work/routing-decision.md`
+2. Notify user: "I will use [model] to [task purpose]"
+3. Invoke model via MCP tools (`mcp__codex__codex` for backend and systems, `mcp__gemini__gemini` for frontend)
+4. Run the review chain before completion claims
+5. Integrate results before proceeding
 
-**Fallback (Fail-Closed):** If the MCP tool call fails or times out, STOP and follow `coordinating-multi-model-work/GATE.md`.
+**Fallback (Fail-Closed):** If the MCP tool call fails or times out, stop and follow `coordinating-multi-model-work/GATE.md`.
 ```
 
-## Response Protocol (Token Optimization)
-
-All prompts to external models MUST include the response protocol to prevent token waste. The protocol is stored in Serena shared memory (`global/response_protocol`) and is readable by all agents.
-
-**How it works:**
-1. Claude appends `\n\n## Response Protocol\nRead Serena memory 'global/response_protocol' and follow it strictly. ...` to every PROMPT
-2. External model reads the full protocol from Serena (shared HTTP instance)
-3. If Serena is unavailable, the inline fallback in the PROMPT is sufficient
-
-**Compact fallback** (append to every PROMPT — ~120 tokens):
-
-```
 ## Response Protocol
-FIRST: Read Serena memory 'global/response_protocol' for full format rules.
-FALLBACK (if Serena unavailable): You are responding to an orchestrator agent, NOT a human.
-- NO thinking narration, NO restating context, NO full file rewrites
-- Output format: ## ANALYSIS (≤200 words) → ## DIFF (changed hunks only) → ## ISSUES (≤5 items) → ## VERDICT (one sentence)
-- For implementation: ## APPROACH (≤100 words) → ## DIFF → ## VERIFY (commands) → ## ISSUES
-- For review: ## VERDICT (APPROVE|CHANGES_REQUESTED) → ## FINDINGS → ## SUGGESTED_FIXES
-```
+
+All prompts to external models must include the response protocol from Serena memory `global/response_protocol`.
 
 ## Invocation Templates
 
-### Backend Implementation (Codex MCP)
+### Backend and Systems Implementation (Codex MCP)
 
 ```json
 {
   "tool": "mcp__codex__codex",
   "params": {
-    "PROMPT": "## Context\n[Problem/task description]\n\n## Code Location\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n## Analysis Focus\n1. API design and implementation\n2. Data flow and state management\n3. Performance and security considerations\n\n## Response Protocol\nFIRST: Read Serena memory 'global/response_protocol' for full format rules.\nFALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites. Output: ## ANALYSIS (≤200 words) → ## DIFF (changed hunks only) → ## ISSUES (≤5) → ## VERDICT (one sentence).",
+    "PROMPT": "## Context\n[Problem/task description]\n\n## Code Location\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n## Analysis Focus\n1. API, backend, or systems implementation\n2. Data flow and state management\n3. Performance, security, and operational considerations\n\n## Response Protocol\nFIRST: Read Serena memory 'global/response_protocol' for full format rules.\nFALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context, NO full file rewrites. Output: ## ANALYSIS (≤200 words) → ## DIFF (changed hunks only) → ## ISSUES (≤5) → ## VERDICT (one sentence).",
     "cd": "$PWD",
     "sandbox": "default",
     "SESSION_ID": "<reuse-or-new>",
@@ -81,105 +61,18 @@ FALLBACK (if Serena unavailable): You are responding to an orchestrator agent, N
 }
 ```
 
-### DevOps Implementation (Cursor MCP)
+### Cross-Validation (Codex + Gemini)
 
-Use this template when Cursor is the **implementation agent** (CURSOR routing — DevOps tasks only: CI/CD, scripts, Dockerfiles, infrastructure).
+Default: invoke Codex and Gemini in parallel, then integrate.
 
-```json
-{
-  "tool": "mcp__cursor__cursor",
-  "params": {
-    "PROMPT": "## Implementation Task\n\n### Context\n[Problem/task description — what needs to be built/fixed and why]\n\n### Code Location\nFile: [file_path]\nLines: [start_line]-[end_line]\n\nNote: Use your CLI tools to read the file at the specified location.\n\n### Requirements\n1. [Requirement 1]\n2. [Requirement 2]\n3. [Requirement 3]\n\n## Response Protocol\nFIRST: Read Serena memory 'global/response_protocol' for full format rules.\nFALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context. Output: ## APPROACH (≤100 words) → ## DIFF (changed hunks only) → ## VERIFY (commands) → ## ISSUES.",
-    "cd": "$PWD",
-    "sandbox": "default",
-    "SESSION_ID": "<reuse-or-new>",
-    "model": "claude-4.6-sonnet-medium-thinking"
-  }
-}
-```
+## Final Review (Opus)
 
-**CURSOR routing rules:**
-- Cursor handles DevOps tasks only (CI/CD, scripts, Dockerfiles, infrastructure)
-- Fail-closed: BLOCKED if Cursor unavailable (same as CODEX/GEMINI)
-- Final review by Opus
-- Max 3 fix-review loops before escalating to user
-- See `GATE.md` for tiered failure policy details
-
-### Cross-Validation (Multiple Models)
-
-Default: invoke Codex + Gemini in parallel, then integrate.
-For critical/high-uncertainty tasks: optionally escalate to 3-way (Codex + Gemini + Cursor). When Cursor participates in cross-validation, use `model: claude-4.5-opus-high-thinking`.
-
-```markdown
-## Cross-Validation Results
-
-### Codex Analysis (Backend via mcp__codex__codex)
-
-[Results]
-
-### Gemini Analysis (Frontend via mcp__gemini__gemini)
-
-[Results]
-
-### Cursor Analysis (DevOps via mcp__cursor__cursor, `model: claude-4.5-opus-high-thinking`) — optional 3-way
-
-[Results]
-
-### Integrated Conclusion
-
-- **Agreement**: [Consistent findings]
-- **Divergence**: [Differences]
-- **Recommendation**: [Final determination]
-```
-
-### Optional Cursor Cross-Validation Invocation
-
-```json
-{
-  "tool": "mcp__cursor__cursor",
-  "params": {
-    "PROMPT": "## Cross-Validation Analysis\n\n### Context\n[Problem/task description]\n\n### Focus\n1. Cross-cutting implementation risks\n2. Integration edge cases\n3. Tradeoffs between proposed solutions\n\n## Response Protocol\nFIRST: Read Serena memory 'global/response_protocol' for full format rules.\nFALLBACK: You respond to an orchestrator agent, NOT a human. NO thinking narration, NO restating context. Output: ## ANALYSIS (≤200 words) → ## DIFF (if applicable) → ## ISSUES (≤5) → ## VERDICT (one sentence).",
-    "cd": "$PWD",
-    "sandbox": "default",
-    "SESSION_ID": "<reuse-or-new>",
-    "model": "claude-4.5-opus-high-thinking"
-  }
-}
-```
-
-### Final Review (Opus)
-
-Opus reviews all code-changing paths directly. See `coordinating-multi-model-work/review-chain.md` for the full review protocol.
-
-## Supplementary Tool Integration
-
-Claude may use these MCP tools to enhance orchestration. They are **optional** — if unavailable, proceed without them.
-
-### Pre-Routing Enhancement
-
-Before routing to an external model, optionally use:
-- **Grok Search** (`mcp__grok-search__web_search`) — gather current info about unfamiliar libraries, APIs, or patterns
-- **Sequential-Thinking** — decompose complex multi-component tasks
-- **Serena** — understand existing codebase structure and symbol relationships
-
-### During Implementation
-
-Alongside external model work, optionally use:
-- **Magic** — generate UI component patterns to include in Gemini prompts
-- **Morphllm** — apply bulk pattern edits after external model provides the diff template
-
-### Post-Implementation
-
-After external model completes, optionally use:
-- **Serena** — verify symbol references and dependencies are intact
-- **Sequential-Thinking** — systematically evaluate review findings when divergences exist
-
-**No fail-closed gate** for supplementary tools. See `skills/shared/supplementary-tools.md` for full reference.
+Opus reviews all code-changing paths directly. See `coordinating-multi-model-work/review-chain.md`.
 
 ## Important Rules
 
-1. **All prompts to external models MUST be in English**
-2. User notifications follow user's configured language
-3. Always validate external model outputs before using
-4. **Claude does NOT write implementation code** — route to CODEX, GEMINI, or CURSOR
-5. **Review chain:** See `coordinating-multi-model-work/review-chain.md`
+1. All prompts to external models must be in English.
+2. User notifications follow the user's configured language.
+3. Always validate external model outputs before using them.
+4. Claude does not write implementation code.
+5. Follow the review chain in `coordinating-multi-model-work/review-chain.md`.

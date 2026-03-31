@@ -15,13 +15,13 @@ Supporting files (e.g., `GATE.md`, `routing-decision.md`, `checkpoints.md`) live
 
 ## Skill Authoring Rules (Iron Laws)
 - **TDD required**: Write a failing test BEFORE implementing any skill
-- Skills are in the `superpowers-cccg:` namespace
-- Use `superpowers-cccg:writing-skills` skill when creating/editing skills
+- Skills are in the `superpowers-ccg:` namespace
+- Use `superpowers-ccg:writing-skills` skill when creating/editing skills
 
 ## Naming
 - Skill directories: `kebab-case`
 - Skill names in frontmatter: `kebab-case`
-- Skill invocation: `superpowers-cccg:<skill-name>`
+- Skill invocation: `superpowers-ccg:<skill-name>`
 
 ## Markdown Style
 - Use `##` for top-level sections within skills

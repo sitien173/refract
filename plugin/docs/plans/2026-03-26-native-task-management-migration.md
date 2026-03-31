@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Migrate the Native Task Management feature from pcvelz/superpowers into superpowers-cccg by adding TaskCreate/TaskUpdate/TaskList integration to the brainstorming, writing-plans, and executing-plans skills.
+**Goal:** Migrate the Native Task Management feature from pcvelz/superpowers into superpowers-ccg by adding TaskCreate/TaskUpdate/TaskList integration to the brainstorming, writing-plans, and executing-plans skills.
 
 **Architecture:** Four Markdown edits in dependency order — shared reference file first, then brainstorming, writing-plans, and executing-plans. No code compilation. Verification is grep-based (check that required sections exist in each file after editing).
 
@@ -334,7 +334,7 @@ Both the plan `.md` and `.tasks.json` must be co-located in `docs/plans/`.
 
 Any new session can resume execution by running:
 ```
-/superpowers-cccg:executing-plans <plan-path>
+/superpowers-ccg:executing-plans <plan-path>
 ```
 The skill reads the `.tasks.json` file and continues from the first `pending` or `in_progress` task.
 

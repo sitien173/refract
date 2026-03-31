@@ -7,7 +7,7 @@ When a task is complete in superpowers-ccg:
 2. [ ] Test passes after implementation
 3. [ ] All fast tests still pass (`./tests/claude-code/run-skill-tests.sh`)
 4. [ ] Skill frontmatter `name` and `description` are accurate
-5. [ ] `superpowers-cccg.md` updated if skill reference tables changed
+5. [ ] `superpowers-ccg.md` updated if skill reference tables changed
 
 ## For Any Change
 1. [ ] Run fast tests: `./tests/claude-code/run-skill-tests.sh`

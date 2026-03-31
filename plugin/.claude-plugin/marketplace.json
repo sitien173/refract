@@ -1,17 +1,17 @@
 {
-  "name": "superpowers-cccg-marketplace",
-  "description": "Superpowers-CCCG Plugin Marketplace",
+  "name": "superpowers-ccg-marketplace",
+  "description": "Superpowers-CCG Plugin Marketplace",
   "owner": {
     "name": "sitien173"
   },
   "plugins": [
     {
-      "name": "superpowers-cccg",
-      "description": "Skills-driven development workflow with CCCG multi-model orchestration (Claude orchestrator + Codex backend + Cursor DevOps + Gemini frontend)",
+      "name": "superpowers-ccg",
+      "description": "Skills-driven development workflow with CCG multi-model orchestration (Claude orchestrator + Codex backend/systems + Gemini frontend)",
       "version": "1.2.0",
       "source": {
         "source": "url",
-        "url": "https://github.com/sitien173/superpowers-cccg.git"
+        "url": "https://github.com/sitien173/superpowers-ccg.git"
       },
       "author": {
         "name": "sitien173"

@@ -1,7 +1,7 @@
 # Project Overview: superpowers-ccg
 
 ## Purpose
-Claude Code plugin that adds a skills-driven development workflow with multi-model orchestration (Claude + Codex + Cursor + Gemini). Claude acts as pure orchestrator — all implementation code is routed to external models via MCP tools.
+Claude Code plugin that adds a skills-driven development workflow with multi-model orchestration (Claude + Codex + Gemini). Claude acts as pure orchestrator — all implementation code is routed to external models via MCP tools.
 
 Fork of [obra/superpowers](https://github.com/obra/superpowers).
 
@@ -17,14 +17,14 @@ Fork of [obra/superpowers](https://github.com/obra/superpowers).
 |-------|------|----------|
 | CODEX | Backend: API, DB, algorithms | `mcp__codex__codex` |
 | GEMINI | Frontend: UI, components, styles | `mcp__gemini__gemini` |
-| CURSOR | DevOps: CI/CD, scripts, Dockerfiles, infrastructure | `mcp__cursor__cursor` |
+| CODEX | Backend and systems: API, DB, algorithms, CI/CD, scripts, Dockerfiles, infrastructure | `mcp__codex__codex` |
 | CLAUDE | Orchestration only (NO code) | none |
 
 ## Review Chain
 Opus reviews all code-changing paths directly. No intermediate review assistant step.
 
 ## Shared Context Layer
-All agents (Claude, Codex, Gemini, Cursor) connect to a **single Serena instance** via Streamable HTTP (port 9121). This enables:
+All agents (Claude, Codex, Gemini) connect to a **single Serena instance** via Streamable HTTP (port 9121). This enables:
 - Shared project memories readable by all agents
 - `global/response_protocol` — token-optimized output format for agent-to-agent communication
 - Cross-agent knowledge sharing without prompt injection

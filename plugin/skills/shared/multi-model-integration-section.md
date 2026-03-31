@@ -2,7 +2,7 @@
 
 All skills that invoke external models MUST follow this integration pattern.
 
-**Related skill:** `superpowers-cccg:coordinating-multi-model-work`
+**Related skill:** `superpowers-ccg:coordinating-multi-model-work`
 
 ## Integration Steps
 
@@ -11,7 +11,7 @@ All skills that invoke external models MUST follow this integration pattern.
 3. **Invoke model** via MCP tools:
    - Backend → `mcp__codex__codex`
    - Frontend → `mcp__gemini__gemini`
-   - DevOps (CI/CD, scripts, infrastructure) → `mcp__cursor__cursor`
+   - Backend and systems (API, DB, scripts, CI/CD, infrastructure) → `mcp__codex__codex`
    - Full-stack/uncertain → Call multiple MCP tools (CROSS_VALIDATION)
 4. **Run the review chain** per `coordinating-multi-model-work/review-chain.md`
 5. **Integrate results** before proceeding

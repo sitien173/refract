@@ -8,7 +8,7 @@
 
 ## Goal
 
-Integrate Claude Code's native TaskCreate/TaskUpdate/TaskList tools into the superpowers-cccg workflow so tasks are created during design, enriched during planning, persisted as `.tasks.json`, and executed with dependency enforcement and cross-session resume.
+Integrate Claude Code's native TaskCreate/TaskUpdate/TaskList tools into the superpowers-ccg workflow so tasks are created during design, enriched during planning, persisted as `.tasks.json`, and executed with dependency enforcement and cross-session resume.
 
 ## Architecture
 

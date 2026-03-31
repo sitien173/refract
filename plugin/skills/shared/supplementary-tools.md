@@ -1,6 +1,6 @@
 # Supplementary MCP Tools (Optional Enhancements)
 
-Supplementary tools enhance Claude's orchestration capabilities. They are **optional** — all workflows work without them via native tool fallbacks. They do NOT replace the primary routing to Codex/Gemini/Cursor.
+Supplementary tools enhance Claude's orchestration capabilities. They are **optional** — all workflows work without them via native tool fallbacks. They do NOT replace the primary routing to Codex/Gemini.
 
 **Design principle:** MCPs enhance performance, never block functionality. If unavailable, proceed with native tools.
 
@@ -119,12 +119,12 @@ Serena (scope & analyze) → Morphllm (execute bulk edits) → Opus review
 
 ## Integration with Primary Routing
 
-Supplementary tools operate at the **orchestrator level** — Claude uses them to enhance its own analysis before/alongside routing to Codex/Gemini/Cursor.
+Supplementary tools operate at the **orchestrator level** — Claude uses them to enhance its own analysis before/alongside routing to Codex/Gemini.
 
 ```
 1. Claude receives task
 2. [Optional] Use supplementary tools for research/analysis/planning
-3. Route implementation to Codex/Gemini/Cursor (primary routing)
+3. Route implementation to Codex/Gemini (primary routing)
 4. [Optional] Use supplementary tools during review/integration
 5. Opus reviews
 ```
