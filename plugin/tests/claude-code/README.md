@@ -82,15 +82,22 @@ echo "=== All tests passed ==="
 
 ### Fast Tests (run by default)
 
+#### test-token-efficiency-guards.sh
+Static workflow guard test:
+- No stale CURSOR routing in active token-path docs
+- No "prototype then rewrite" language
+- Bounded task / worker ownership language exists
+- Cross-validation is explicitly constrained
+
 #### test-subagent-driven-development.sh
 Tests skill content and requirements (~2 minutes):
 - Skill loading and accessibility
-- Workflow ordering (spec compliance before code quality)
-- Self-review requirements documented
-- Plan reading efficiency documented
-- Spec compliance reviewer skepticism documented
-- Review loops documented
-- Task context provision documented
+- One bounded task at a time
+- Spec review before Opus quality review
+- One worker owner per task
+- Same worker session reuse for fixes
+- No prototype-then-rewrite pattern
+- Diff-or-questions output contract
 
 ### Integration Tests (use --integration flag)
 

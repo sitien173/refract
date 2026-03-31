@@ -1,15 +1,12 @@
 # Protocol Threshold (Shared Reference)
 
-All skills that use checkpoints MUST follow the CP Protocol injected by hooks.
+All skills that use checkpoints must follow the CP protocol injected by hooks.
 
 ## Required Behavior
 
-- **Before the first Task call:** Output a standalone `[CP1 Assessment]` block (no tool calls in the block itself; tool calls may follow in the same reply)
-- **Before claiming completion / requesting review / claiming verification passed:** Output a standalone `[CP3 Assessment]` block (no tool calls in the block itself; the claim may follow in the same reply)
-
-"Standalone" means the CP block must be its own block at the top of the reply. It does NOT mean you should stop after the CP block — continue in the same reply.
-
-If unmet: immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
+- Before the first Task call, output a standalone `[CP1 Assessment]` block.
+- Before claiming completion or verification, output a standalone `[CP3 Assessment]` block.
+- Keep both blocks minimal. The checkpoint is a gate, not a summary.
 
 ## CP1 Assessment Format
 
@@ -17,12 +14,12 @@ If unmet: immediately perform the CP assessment, then continue the flow right aw
 [CP1 Assessment]
 - Task type: [Frontend/Backend/Full-stack/Other]
 - Complexity: [Trivial/Standard/Critical]
-- Enforcement mode: [Strict/Degraded/Incident]
-- Routing decision: [CLAUDE/CODEX/GEMINI/CURSOR/CROSS_VALIDATION]
-- Rationale: ...
+- Routing decision: [CLAUDE/CODEX/GEMINI/CROSS_VALIDATION]
+- Rationale: [one sentence]
 ```
 
-Compact format (Trivial tasks only):
+Compact trivial form:
+
 ```text
 [CP1] Routing: CLAUDE | Trivial: <reason>
 ```
@@ -32,19 +29,18 @@ Compact format (Trivial tasks only):
 ```text
 [CP3 Assessment]
 - Task type: [Frontend/Backend/Full-stack/Other]
-- Routing decision: [CLAUDE/CODEX/GEMINI/CURSOR/CROSS_VALIDATION]
-- Rationale: ...
+- Routing decision: [CLAUDE/CODEX/GEMINI/CROSS_VALIDATION]
+- Rationale: [one sentence]
 ```
 
-Compact format (Trivial tasks only):
+Compact trivial form:
+
 ```text
 [CP3] Verified: <evidence>
 ```
 
 ## Checkpoint Logic
 
-Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md` at each stage:
-
-- **CP1 (Task Analysis):** Decide routing, invoke external model if needed
-- **CP2 (Mid-Review):** Triggered by uncertainty, stalled debugging, 2+ failed attempts
-- **CP3 (Quality Gate):** Run verification, record evidence, run review chain
+- **CP1:** decide routing and invoke the worker if needed
+- **CP2:** trigger only on real uncertainty, stalled progress, or repeated failures
+- **CP3:** verify the artifact and run the review chain

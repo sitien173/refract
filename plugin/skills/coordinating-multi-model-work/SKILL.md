@@ -1,53 +1,45 @@
 ---
 name: coordinating-multi-model-work
-description: "Routes work to Codex (backend and systems) and Gemini (frontend) via MCP tools. Claude is orchestrator-only — all code goes through external models. Use when: any implementation task, UI/components/styles, APIs/databases/auth/security/performance, DevOps/CI/scripts, or tasks mentioning Codex/Gemini/CCG/multi-model. Keywords: codex mcp, gemini mcp, cross-validation, implementation, api, database, auth, security, performance, ui, component, devops, ci/cd"
----
-
-## Contents
-
-- Overview
-- Core Instructions
-- The Two Rules
-- Checkpoint Workflow
-- Reference Files
-
+description: "Routes bounded implementation tasks to Codex (backend and systems) or Gemini (frontend) via MCP tools. Claude is orchestrator-only and should stay out of the implementation hot path. Use when: implementation, debugging, refactoring, UI work, APIs, databases, scripts, CI/CD, or cross-model arbitration."
 ---
 
 # Coordinating Multi-Model Work
 
 ## Overview
 
-Claude is the **orchestrator**. It routes tasks, coordinates models, and integrates results, but **never writes implementation code**.
+Claude is the orchestrator. It routes tasks, coordinates workers, and integrates results, but never writes implementation code.
 
-Use this module to route implementation to the right external model:
-- **Codex** (`mcp__codex__codex`) — backend and systems: APIs, databases, algorithms, server-side logic, CI/CD, scripts, Dockerfiles, infrastructure
-- **Gemini** (`mcp__gemini__gemini`) — frontend: UI, components, styles, interactions
+Use this module to route one bounded task at a time:
+- **Codex** — backend and systems
+- **Gemini** — frontend
 
-For review chain details, see `coordinating-multi-model-work/review-chain.md`.
+## Core Rules
 
-## Core Instructions
+1. Reduce the current work to one bounded task with a clear file set and verification command.
+2. Route that bounded task to exactly one worker unless there is real architectural uncertainty.
+3. Reuse the same worker `SESSION_ID` for follow-up fixes on that task.
+4. Ask for `diff-or-questions`, not prototypes, essays, or full rewrites.
+5. After the worker completes, review the artifact with Opus.
 
-1. After forming an initial analysis of the user request, share the request and your initial thinking with the appropriate external model and ask it to improve the requirement analysis and implementation plan.
-2. Before implementing any concrete coding task, route to the appropriate external model for implementation. Claude does not write code.
-3. After the external model completes implementation, obtain Opus review per `coordinating-multi-model-work/review-chain.md`.
-4. Think independently and question external model output.
+## Cross-Validation
 
-## The Two Rules
+`CROSS_VALIDATION` is rare. Use it only when:
+- the task genuinely spans frontend and backend at the same time, or
+- two viable designs remain after scope reduction, or
+- the failure mode is still ambiguous after one worker pass.
 
-1. **Main rule (Fail-Closed Gate):** If you decide `Routing != CLAUDE`, you must obtain external output or stop in `BLOCKED`.
-2. **Early exposure:** If you decide `Routing != CLAUDE`, run the external call before doing real work.
+Do not use cross-validation as the default for ordinary implementation work.
 
 ## Checkpoint Workflow
 
-At skill checkpoints (CP1/CP2/CP3):
+At CP1, CP2, and CP3:
+1. Decide routing
+2. Apply `GATE.md`
+3. Continue only with evidence
 
-1. Decide routing using `coordinating-multi-model-work/routing-decision.md`
-2. If `Routing != CLAUDE`, apply `coordinating-multi-model-work/GATE.md` immediately
-3. Continue only after evidence is recorded
+## Response Protocol
 
-## Token Optimization (Response Protocol)
-
-All external model prompts include the response protocol stored in Serena shared memory (`global/response_protocol`).
+All external model prompts must reference Serena memory `global/response_protocol`.
 
 ## Reference Files
 

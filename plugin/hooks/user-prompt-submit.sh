@@ -3,34 +3,29 @@
 
 set -euo pipefail
 
-REMINDER_TEXT="[CP Protocol Threshold (Required)]
+REMINDER_TEXT="[CP Protocol Threshold]
 
-1) Before the first Task call: output a standalone [CP1 Assessment] block (the block itself must not include tool calls)
-2) Before claiming completion / requesting review / claiming verification passed: output a standalone [CP3 Assessment] block (the block itself must not include tool calls)
+Before the first Task call, output a short standalone [CP1 Assessment] block.
+Before claiming completion, output a short standalone [CP3 Assessment] block.
 
-Note: Put the CP block first; tool calls may follow in the same assistant reply.
+Use the minimal format below. Do not add extra narration to the checkpoint itself.
 
 [CP1 Assessment]
 - Task type: [Frontend/Backend/Full-stack/Other]
 - Complexity: [Trivial/Standard/Critical]
-- Enforcement mode: [Strict/Degraded/Incident]
-- Routing decision: [CLAUDE/CODEX/GEMINI/CURSOR/CROSS_VALIDATION]
-- Rationale: ...
+- Routing decision: [CLAUDE/CODEX/GEMINI/CROSS_VALIDATION]
+- Rationale: [one sentence]
 
-Compact format (Trivial tasks only):
+Compact trivial form:
 [CP1] Routing: CLAUDE | Trivial: <reason>
 
 [CP3 Assessment]
 - Task type: [Frontend/Backend/Full-stack/Other]
-- Routing decision: [CLAUDE/CODEX/GEMINI/CURSOR/CROSS_VALIDATION]
-- Rationale: ...
+- Routing decision: [CLAUDE/CODEX/GEMINI/CROSS_VALIDATION]
+- Rationale: [one sentence]
 
-Compact format (Trivial tasks only):
+Compact trivial form:
 [CP3] Verified: <evidence>
-
-If unmet -> immediately perform the CP assessment, then continue the flow right away; do not stop or interrupt.
 "
 
-# Claude Code hooks event JSON is passed via stdin; UserPromptSubmit stdout is appended to context.
-# Therefore we print the reminder directly and no longer rely on /tmp/prompt.json.
 printf '%s\n' "$REMINDER_TEXT"

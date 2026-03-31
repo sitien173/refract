@@ -54,6 +54,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Tests:"
             echo "  test-namespace-consistency.sh       Lint: no stale superpowers-ccg: namespace"
+            echo "  test-token-efficiency-guards.sh     Lint: bounded worker and anti-token-bomb rules"
             echo "  test-subagent-driven-development.sh  Test skill loading and requirements"
             echo ""
             echo "Integration Tests (use --integration):"
@@ -71,12 +72,14 @@ done
 # List of skill tests to run (fast unit tests)
 tests=(
     "test-namespace-consistency.sh"
+    "test-token-efficiency-guards.sh"
     "test-subagent-driven-development.sh"
 )
 
 # Tests that do not require the Claude Code CLI (safe for CI without claude installed)
 static_tests=(
     "test-namespace-consistency.sh"
+    "test-token-efficiency-guards.sh"
 )
 
 # Integration tests (slow, full execution)

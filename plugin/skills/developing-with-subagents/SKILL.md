@@ -1,33 +1,32 @@
 ---
 name: developing-with-subagents
-description: "Executes plans by dispatching a fresh subagent per task with spec review and quality review. Use when: executing implementation plans in the current session with independent tasks."
+description: "Executes plans in the current session by dispatching one worker-owned task at a time with spec review and Opus review. Use when: you want same-session execution without turning the main thread into a long narrative log."
 ---
 
 # Subagent-Driven Development
 
 ## Overview
 
-Execute a plan by routing each task to the appropriate external model (Codex or Gemini based on domain), with spec compliance review first (Opus), then Opus code quality review on every code-changing path.
+Execute one bounded task at a time by routing it to Codex or Gemini, then review the resulting artifact.
 
-## When to Use
+## Process
 
-- You already have an implementation plan
-- Tasks are mostly independent
-- You want to stay in the current session
+1. Read the plan once.
+2. Extract the current bounded task only.
+3. Route that task to one worker.
+4. Reuse the same worker session for follow-up fixes on that task.
+5. Run spec review.
+6. Run Opus quality review.
+7. Mark the task complete.
+8. Move to the next bounded task.
 
-## The Process
+## Rules
 
-```text
-Read plan → extract tasks → create TodoWrite
-For each task:
-  Route to external model (Codex/Gemini)
-  Answer questions if needed
-  External model implements, tests, commits
-  Spec reviewer checks compliance
-  Opus performs quality review
-  Mark task complete
-Finish with final review and finishing-development-branches
-```
+- Keep the controller thread small.
+- Do not accumulate rich summaries for every step.
+- Do not ask workers for draft-only outputs.
+- Ask workers for `diff-or-questions`.
+- `CROSS_VALIDATION` is for unresolved design conflicts, not routine implementation.
 
 ## Model Strategy
 
@@ -38,11 +37,11 @@ Finish with final review and finishing-development-branches
 | Spec Reviewer | Opus | Always Opus |
 | Quality Reviewer | Opus | Always Opus |
 
-## Collaboration Checkpoints
+## Checkpoints
 
-- **CP1** before dispatching the implementer
-- **CP2** during execution if stalled or uncertain
-- **CP3** after implementation, before completion
+- CP1 before dispatching the worker
+- CP2 only when the current bounded task stalls
+- CP3 after implementation, before completion
 
 ## Integration
 

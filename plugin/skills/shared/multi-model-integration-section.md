@@ -1,32 +1,32 @@
 # Multi-Model Integration (Shared Reference)
 
-All skills that invoke external models MUST follow this integration pattern.
+All skills that invoke external models must follow this pattern.
 
 **Related skill:** `superpowers-ccg:coordinating-multi-model-work`
 
 ## Integration Steps
 
-1. **Analyze task domain** using `coordinating-multi-model-work/routing-decision.md`
-2. **Notify user:** "I will use [model] to [task purpose]"
-3. **Invoke model** via MCP tools:
-   - Backend → `mcp__codex__codex`
+1. Analyze the task domain using `coordinating-multi-model-work/routing-decision.md`.
+2. Reduce scope to one bounded task with a clear file set and verification command.
+3. Invoke exactly one worker for implementation:
+   - Backend and systems → `mcp__codex__codex`
    - Frontend → `mcp__gemini__gemini`
-   - Backend and systems (API, DB, scripts, CI/CD, infrastructure) → `mcp__codex__codex`
-   - Full-stack/uncertain → Call multiple MCP tools (CROSS_VALIDATION)
-4. **Run the review chain** per `coordinating-multi-model-work/review-chain.md`
-5. **Integrate results** before proceeding
+4. Reuse the same worker `SESSION_ID` for follow-up fixes on that task only.
+5. Use `CROSS_VALIDATION` only for architectural uncertainty or true multi-domain conflicts.
+6. Run the Opus review chain on the resulting artifact.
 
 ## Invocation
 
-Use English prompts. See `coordinating-multi-model-work/INTEGRATION.md` for templates.
+- Use English prompts.
+- Ask for `diff-or-questions`, not prose design output.
+- Do not ask the worker for draft code that the orchestrator will re-implement.
 
 ## Checkpoint Integration
 
-At skill checkpoints, apply routing from `coordinating-multi-model-work/checkpoints.md`:
-- CP1: Decide routing, invoke external model if `Routing != CLAUDE`
-- CP2: Re-evaluate on stalls, cross-validate on ambiguity
-- CP3: Run review chain, record evidence
+- CP1: route the current bounded task
+- CP2: narrow scope before escalating to cross-validation
+- CP3: review the artifact, not the whole narrative
 
-## Fallback (Fail-Closed)
+## Fallback
 
-If `Routing != CLAUDE` and the MCP call fails or times out, **STOP** and follow `coordinating-multi-model-work/GATE.md`. Do not proceed with a final answer.
+If `Routing != CLAUDE` and the MCP call fails or times out, stop and follow `coordinating-multi-model-work/GATE.md`.
