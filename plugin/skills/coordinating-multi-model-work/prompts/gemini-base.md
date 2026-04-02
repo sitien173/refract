@@ -7,23 +7,53 @@
 ## Bounded Implementation Template
 
 ```text
-## Task
-{task_description}
+## Original User Request
+{user_request}
+
+## Context Package
+{context_package}
+
+## CP1 Task Summary
+{task_summary}
 
 ## Files
 {file_list}
 
-## Acceptance
-{acceptance_criteria}
+## Success Criteria
+{success_criteria}
 
 ## Verify
 {verify_command}
 
 ## Response Protocol
 FIRST: Read Serena memory 'global/response_protocol' for full format rules.
-FALLBACK: Return exactly one of:
-1. ## DIFF → ## VERIFY → ## ISSUES
-2. ## QUESTIONS
+FALLBACK: Use exactly this structure:
+
+# EXTERNAL RESPONSE PROTOCOL v1.1
+
+## SUMMARY
+One-sentence summary of what you did.
+
+## FILES MODIFIED
+| Action  | File Path          | Description of Change |
+|---------|--------------------|-----------------------|
+| Created | src/...            | ...                   |
+| Edited  | src/...            | ...                   |
+
+## FILE CONTENTS
+For each file listed in FILES MODIFIED, return either:
+1. the complete final file content (preferred), or
+2. a unified diff patch if full content is impractical.
+
+## SPEC COMPLIANCE
+- Meets Spec? YES / PARTIAL / NO
+- Explanation: ...
+
+## CLARIFICATIONS NEEDED
+None (or list questions)
+
+## NEXT STEPS / CONTINUATION
+TASK_COMPLETE / CONTINUE_SESSION / HANDOVER_TO_CLAUDE
 ```
 
 ## Narrow Analysis Template

@@ -10,14 +10,13 @@ echo ""
 
 echo "Test 1: Skill loading..."
 output=$(run_claude "What is the developing-with-subagents skill? Describe its key steps briefly." 60)
-assert_contains "$output" "developing-with-subagents|Subagent-Driven Development|Subagent-Driven" "Skill is recognized" || exit 1
+assert_contains "$output" "[Dd]eveloping-with-[Ss]ubagents|[Ss]ubagent-[Dd]riven [Dd]evelopment|[Ss]ubagent-[Dd]riven" "Skill is recognized" || exit 1
 assert_contains "$output" "one bounded task|one task at a time|bounded task" "Bounded task focus" || exit 1
 echo ""
 
-echo "Test 2: Review ordering..."
-output=$(run_claude "In the developing-with-subagents skill, what comes first: spec review or Opus quality review?" 60)
-assert_contains "$output" "spec" "Mentions spec review" || exit 1
-assert_contains "$output" "Opus" "Mentions Opus review" || exit 1
+echo "Test 2: Final review stage..."
+output=$(run_claude "In the developing-with-subagents skill, what is the final review step: CP4 final spec review, or Sonnet code quality review?" 60)
+assert_contains "$output" "CP4|spec review|PASS|PARTIAL|FAIL" "Mentions CP4 final spec review" || exit 1
 echo ""
 
 echo "Test 3: Worker ownership..."
@@ -33,13 +32,13 @@ echo ""
 
 echo "Test 5: No prototype-then-rewrite..."
 output=$(run_claude "In developing-with-subagents, should Claude ask for a prototype/reference and then rewrite it later?" 60)
-assert_contains "$output" "do not|should not|avoid" "Prohibited pattern is rejected" || exit 1
+assert_contains "$output" "[Dd]o not|should not|avoid" "Prohibited pattern is rejected" || exit 1
 assert_contains "$output" "prototype|reference" "Mentions prototype/reference" || exit 1
 echo ""
 
 echo "Test 6: Output contract..."
-output=$(run_claude "What should the worker return in developing-with-subagents: prose prototype, or diff-or-questions?" 60)
-assert_contains "$output" "diff-or-questions|questions|diff" "Diff-or-questions contract" || exit 1
+output=$(run_claude "What should the worker return in developing-with-subagents: prose prototype, or External Response Protocol v1.1 with final file content or unified diff?" 60)
+assert_contains "$output" "External Response Protocol v1\\.1|file content|unified diff" "External execution contract" || exit 1
 echo ""
 
 echo "Test 7: Cross-validation is rare..."

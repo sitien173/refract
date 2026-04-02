@@ -430,8 +430,8 @@ Find this block in the current Step 2:
 For each task:
 
 1. Mark as in_progress
-2. Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
-3. **► Checkpoint 1 (Task Analysis):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+2. Hard reminder: before your first Task tool call, you must output a standalone `# CP1 ROUTING DECISION` block (fixed format with fields).
+3. **► Checkpoint 1 (Task Assessment & Routing):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 ```
 
 Replace only the "For each task:" list — change it to:
@@ -441,8 +441,8 @@ For each task:
 
 1. Mark as `in_progress` (`TaskUpdate status: in_progress`); sync `.tasks.json` (update `"status"` to `"in_progress"`, set `"lastUpdated"` to current ISO timestamp)
 2. **Parse task metadata:** Extract the `json:metadata` code fence from the task description to get `verifyCommand` and `acceptanceCriteria`
-3. Hard reminder: before your first Task tool call, you must output a standalone `【CP1 Assessment】` block (fixed format with fields).
-4. **► Checkpoint 1 (Task Analysis):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
+3. Hard reminder: before your first Task tool call, you must output a standalone `# CP1 ROUTING DECISION` block (fixed format with fields).
+4. **► Checkpoint 1 (Task Assessment & Routing):** Apply checkpoint logic from `coordinating-multi-model-work/checkpoints.md`:
 ```
 
 Then find the lines at the end of the "For each task:" list:

@@ -1,13 +1,13 @@
 ---
 name: developing-with-subagents
-description: "Executes plans in the current session by dispatching one worker-owned task at a time with spec review and Opus review. Use when: you want same-session execution without turning the main thread into a long narrative log."
+description: "Executes plans in the current session by dispatching one worker-owned task at a time and ending each task with Claude CP4 final spec review. Use when: you want same-session execution without turning the main thread into a long narrative log."
 ---
 
 # Subagent-Driven Development
 
 ## Overview
 
-Execute one bounded task at a time by routing it to Codex or Gemini, then review the resulting artifact.
+Execute one bounded task at a time by routing it to Codex or Gemini, then end with CP4 final spec review.
 
 ## Process
 
@@ -15,18 +15,20 @@ Execute one bounded task at a time by routing it to Codex or Gemini, then review
 2. Extract the current bounded task only.
 3. Route that task to one worker.
 4. Reuse the same worker session for follow-up fixes on that task.
-5. Run spec review.
-6. Run Opus quality review.
-7. Mark the task complete.
-8. Move to the next bounded task.
+5. If CP3 is triggered, reconcile external responses before final review.
+6. Run CP4 Final Spec Review in Claude.
+7. Mark the task complete only if CP4 returns `PASS`.
+8. If CP4 returns `PARTIAL` or `FAIL`, loop back with a bounded follow-up.
+9. Move to the next bounded task only after `PASS`.
 
 ## Rules
 
 - Keep the controller thread small.
 - Do not accumulate rich summaries for every step.
 - Do not ask workers for draft-only outputs.
-- Ask workers for `diff-or-questions`.
+- Ask workers for External Response Protocol v1.1 with full file content first and unified diff second.
 - `CROSS_VALIDATION` is for unresolved design conflicts, not routine implementation.
+- CP4 is spec-only. Do not treat it as a code quality review pass.
 
 ## Model Strategy
 
@@ -34,14 +36,14 @@ Execute one bounded task at a time by routing it to Codex or Gemini, then review
 | ---- | ----- | -------------- |
 | Backend and systems implementation | Codex MCP (`mcp__codex__codex`) | CODEX routing |
 | Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) | GEMINI routing |
-| Spec Reviewer | Opus | Always Opus |
-| Quality Reviewer | Opus | Always Opus |
+| Final Spec Reviewer | Claude main thread | Always CP4 |
 
 ## Checkpoints
 
 - CP1 before dispatching the worker
-- CP2 only when the current bounded task stalls
-- CP3 after implementation, before completion
+- CP2 when CP1 routes the current bounded task to an external model
+- CP3 after CP2 only when reconciliation is needed
+- CP4 as the final step on every task
 
 ## Integration
 

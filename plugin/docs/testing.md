@@ -46,9 +46,9 @@ The integration test verifies the `subagent-driven-development` skill correctly:
 1. **Plan Loading**: Reads the plan once at the beginning
 2. **Full Task Text**: Provides complete task descriptions to subagents (doesn't make them read files)
 3. **Self-Review**: Ensures subagents perform self-review before reporting
-4. **Review Order**: Runs spec compliance review before code quality review
-5. **Review Loops**: Uses review loops when issues are found
-6. **Independent Verification**: Spec reviewer reads code independently, doesn't trust implementer reports
+4. **Final Spec Review**: Runs CP4 spec review as the final workflow step
+5. **Review Loops**: Uses follow-up loops when CP4 finds issues
+6. **Independent Verification**: Final review checks the artifact against the spec, not the implementer summary
 
 ### How It Works
 

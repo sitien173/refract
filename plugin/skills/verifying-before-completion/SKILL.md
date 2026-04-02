@@ -27,7 +27,9 @@ Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders auto
 
 ## The Gate Function
 
-**► CP3 (Quality Gate):** Before claiming completion, apply `coordinating-multi-model-work/checkpoints.md`.
+**CP3 note:** If CP2 produced cross-validation output or other non-trivial external feedback, complete CP3 Reconciliation before making completion claims. CP3 does not replace running verification commands.
+
+**CP4 note:** Always complete CP4 Final Spec Review after verification. CP4 checks spec satisfaction only and does not replace running commands.
 
 ```
 BEFORE claiming any status or expressing satisfaction:

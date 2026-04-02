@@ -1,0 +1,56 @@
+{
+  "name": "@nst173/superpowers-ccg",
+  "version": "1.3.0",
+  "description": "CLI to install Superpowers CCG workflows at project level for Claude Code, Cursor, and Antigravity.",
+  "type": "module",
+  "bin": {
+    "superpowers-ccg": "./cli/superpowers-ccg.mjs",
+    "spccg": "./cli/superpowers-ccg.mjs"
+  },
+  "files": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "LICENSE",
+    "README.md",
+    "agents",
+    "commands",
+    "hooks",
+    "skills",
+    ".cursor",
+    ".agent",
+    "config/antigravity",
+    "cli",
+    "src"
+  ],
+  "scripts": {
+    "test:smoke": "node scripts/smoke-test-cli.mjs",
+    "prepublishOnly": "npm run test:smoke"
+  },
+  "keywords": [
+    "claude-code",
+    "cursor",
+    "antigravity",
+    "workflow",
+    "skills",
+    "orchestrator",
+    "mcp",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "nst173",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sitien173/superpowers-ccg.git"
+  },
+  "homepage": "https://github.com/sitien173/superpowers-ccg#readme",
+  "bugs": {
+    "url": "https://github.com/sitien173/superpowers-ccg/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

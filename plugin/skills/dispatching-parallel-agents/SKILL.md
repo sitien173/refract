@@ -75,15 +75,16 @@ Task("Fix tool-approval-race-conditions.test.ts failures")
 
 | Task Type | Model |
 |-----------|-------|
-| Code fixes, implementations | `model: sonnet` |
-| Architecture review | Opus (default) |
-| Codebase exploration | `model: haiku` |
+| Code fixes, implementations, quality review | `model: sonnet` |
+| Spec review, architecture review | Opus (default) |
+| Trivial tasks, codebase exploration | `model: haiku` |
 
 ```typescript
-// Sonnet for code, Haiku for search, Opus for review
+// Sonnet for code, Haiku for trivial/search work, Opus for spec review
 Task("Fix test failures", model: "sonnet")
+Task("Rename two docs files", model: "haiku")
 Task("Find deprecated API usages", model: "haiku")
-Task("Review architecture")  // Opus default
+Task("Review task against spec")  // Opus default
 ```
 
 ### 4. Review and Integrate

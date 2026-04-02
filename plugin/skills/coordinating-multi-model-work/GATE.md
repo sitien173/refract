@@ -5,7 +5,7 @@ Use this gate whenever a skill decides **Routing != CLAUDE** (`CODEX`, `GEMINI`,
 ## Core Rule
 
 - If `Routing != CLAUDE`, you must obtain external model output via MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`).
-- If code changed, you must run the review chain per `coordinating-multi-model-work/review-chain.md`.
+- You must finish with CP4 Final Spec Review per `coordinating-multi-model-work/review-chain.md`.
 - If you cannot obtain required external output, stop in `BLOCKED`.
 
 ## Evidence Requirement
@@ -20,9 +20,10 @@ Evidence (Implementation):
 - Params: <key MCP parameters used>
 - Result: <3-6 bullets>
 
-Evidence (Opus Review):
-- Reviewer: Opus
-- Artifact: <commit SHA>
+Evidence (CP4 Spec Review):
+- Reviewer: Claude
+- Status: PASS | PARTIAL | FAIL
+- Artifact: <files reviewed>
 - Result: <3-6 bullets>
 ```
 

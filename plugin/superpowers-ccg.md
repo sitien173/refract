@@ -158,15 +158,15 @@ superpowers-ccg:requesting-code-review → [reviewer subagent] → superpowers-c
 
 > **Important:** Claude is the orchestrator. It routes tasks, coordinates models, and integrates results, but never writes implementation code. All coding tasks must route to CODEX or GEMINI.
 
-### Review Chain
+### Final Spec Review
 
-Opus reviews all code-changing paths directly. See `coordinating-multi-model-work/review-chain.md`.
+CP4 is the final workflow step. Claude performs a pure spec review against the original request and CP1 success criteria. See `coordinating-multi-model-work/review-chain.md`.
 
 ### Core Instructions
 
 1. **Route to an external model** after initial analysis.
 2. **Claude does not write code**.
-3. **Opus reviews all code** after implementation.
+3. **Claude performs CP4 final spec review** after implementation.
 4. **Think independently** and challenge external model output.
 5. **Fail closed**: if required MCP evidence is missing, output `BLOCKED`.
 6. **Use the response protocol** from `global/response_protocol`.
@@ -175,9 +175,11 @@ Opus reviews all code-changing paths directly. See `coordinating-multi-model-wor
 
 ## Checkpoints Protocol
 
-- **CP1** — Before first Task call: assess routing and invoke external model if needed
-- **CP2** — Mid-execution: triggered by uncertainty, stalled debugging, or repeated failures
-- **CP3** — Before claiming completion: run verification, record evidence, run review chain
+- **CP0** — Before CP1: acquire only the minimum context needed to route the next bounded task using the Hybrid Context Engine (Auggie → Morph WarpGrep → Serena → Grok Search only for external/current knowledge)
+- **CP1** — Immediately after CP0: perform Task Assessment & Routing using the CP1 routing matrix, then invoke the selected model if needed
+- **CP2** — External Execution: after CP1 routes to Gemini, Codex, or Cross-Validation, the external model performs the task and returns final files or a unified diff via External Response Protocol v1.1
+- **CP3** — Reconciliation: after cross-validation or non-trivial external feedback, resolve conflicts and hand off to CP4
+- **CP4** — Final Spec Review: always run last and determine PASS / PARTIAL / FAIL against the original requirement
 
 ---
 
@@ -200,14 +202,16 @@ Opus reviews all code-changing paths directly. See `coordinating-multi-model-wor
 
 ---
 
-## Model Selection (For Subagents)
+## Default Model Routing
 
 | Task Type | Model |
 |-----------|-------|
 | Backend and systems implementation | Codex MCP (`mcp__codex__codex`) |
 | Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) |
-| Review and architecture | Opus |
-| Exploration and search | `model: haiku` |
+| Full-stack, uncertain, or critical work | Cross-Validation (`CODEX` + `GEMINI`) |
+| Orchestration, clarification, CP3 reconciliation, CP4 spec review | Claude main thread |
+
+Claude `haiku` / `sonnet` / `opus` Task selection is no longer the default implementation route. Only use those legacy Task models when a separate skill explicitly requires them.
 
 ### Shared Context Layer (Serena HTTP)
 

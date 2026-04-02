@@ -42,7 +42,7 @@ echo "  [PASS]"
 echo ""
 
 echo "Test 3: Bounded-task language is present..."
-if ! rg -n 'bounded task|one bounded task|one worker|diff-or-questions|Reuse.*SESSION_ID|same worker `SESSION_ID`|same worker SESSION_ID' "${TARGETS[@]}" >/tmp/token-guards-bounded.txt 2>/dev/null; then
+if ! rg -n 'bounded task|one bounded task|one worker|External Response Protocol v1\.1|Reuse.*SESSION_ID|same worker `SESSION_ID`|same worker SESSION_ID' "${TARGETS[@]}" >/tmp/token-guards-bounded.txt 2>/dev/null; then
   echo "  [FAIL] Missing bounded-task / worker ownership language"
   exit 1
 fi

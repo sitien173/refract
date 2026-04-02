@@ -55,10 +55,18 @@ while [[ $# -gt 0 ]]; do
             echo "Tests:"
             echo "  test-namespace-consistency.sh       Lint: no stale superpowers-ccg: namespace"
             echo "  test-token-efficiency-guards.sh     Lint: bounded worker and anti-token-bomb rules"
+            echo "  test-cp0-context-acquisition-guards.sh  Lint: CP0 hybrid context engine docs stay aligned"
+            echo "  test-cp1-routing-guards.sh          Lint: CP1 routing block and matrix stay aligned"
+            echo "  test-cp2-external-execution-guards.sh  Lint: CP2 external execution protocol stays aligned"
+            echo "  test-cp3-reconciliation-guards.sh  Lint: CP3 reconciliation contract stays aligned"
+            echo "  test-cp4-final-spec-review-guards.sh  Lint: CP4 final spec review contract stays aligned"
             echo "  test-subagent-driven-development.sh  Test skill loading and requirements"
             echo ""
             echo "Integration Tests (use --integration):"
             echo "  test-subagent-driven-development-integration.sh  Full workflow execution"
+            echo "  test-cp1-before-task-integration.sh   CP1 block appears before first subagent dispatch"
+            echo "  test-cp3-before-finish-integration.sh CP3 reconciliation block appears before DONE"
+            echo "  test-cp4-before-done-integration.sh   CP4 spec review block appears before DONE"
             exit 0
             ;;
         *)
@@ -73,6 +81,11 @@ done
 tests=(
     "test-namespace-consistency.sh"
     "test-token-efficiency-guards.sh"
+    "test-cp0-context-acquisition-guards.sh"
+    "test-cp1-routing-guards.sh"
+    "test-cp2-external-execution-guards.sh"
+    "test-cp3-reconciliation-guards.sh"
+    "test-cp4-final-spec-review-guards.sh"
     "test-subagent-driven-development.sh"
 )
 
@@ -80,6 +93,11 @@ tests=(
 static_tests=(
     "test-namespace-consistency.sh"
     "test-token-efficiency-guards.sh"
+    "test-cp0-context-acquisition-guards.sh"
+    "test-cp1-routing-guards.sh"
+    "test-cp2-external-execution-guards.sh"
+    "test-cp3-reconciliation-guards.sh"
+    "test-cp4-final-spec-review-guards.sh"
 )
 
 # Integration tests (slow, full execution)
@@ -87,6 +105,7 @@ integration_tests=(
     "test-subagent-driven-development-integration.sh"
     "test-cp1-before-task-integration.sh"
     "test-cp3-before-finish-integration.sh"
+    "test-cp4-before-done-integration.sh"
 )
 
 # Add integration tests if requested

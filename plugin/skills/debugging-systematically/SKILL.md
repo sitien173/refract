@@ -76,7 +76,7 @@ You MUST complete each phase before proceeding to the next.
 
 ### Phase 1: Root Cause Investigation
 
-**► CP1 (Task Analysis):** Before investigation, apply `coordinating-multi-model-work/checkpoints.md`.
+**► CP1 (Task Assessment & Routing):** Before investigation, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **Supplementary tools (optional, enhance investigation):**
 - **Sequential-Thinking:** For bugs spanning 3+ components/layers, use Sequential-Thinking MCP to systematically decompose the problem, track hypotheses, and validate reasoning chains.
@@ -183,7 +183,7 @@ You MUST complete each phase before proceeding to the next.
 
 ### Phase 3: Hypothesis and Testing
 
-**► CP2 (Mid-Review):** When testing hypothesis, apply `coordinating-multi-model-work/checkpoints.md`.
+**CP2 note:** CP2 is the external execution phase. Use it only after CP1 routes the bounded fix task to an external model.
 
 **Scientific method:**
 

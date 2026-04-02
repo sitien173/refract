@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Task tool - enforce model selection reminder
+# PreToolUse hook for Task tool - keep Task usage aligned with the CP workflow
 
-echo "⚠️ Task model enforcement check: implementation/docs -> model:sonnet, search/exploration -> model:haiku" >&2
+echo "⚠️ CP routing check: use Task for coordination, review, or exploration only; route implementation through CP1 to Codex or Gemini, and keep CP4 Final Spec Review in the Claude main thread." >&2

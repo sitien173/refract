@@ -1,6 +1,6 @@
 # Superpowers-CCG
 
-Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.com/obra/superpowers). It keeps the same skills-driven workflow and adds **CCG multi-model orchestration**: Claude is the **pure orchestrator** (never writes code), routing implementation to **Codex MCP** (backend and systems) and **Gemini MCP** (frontend), with **Opus as the reviewer** for every code-changing path.
+Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.com/obra/superpowers). It keeps the same skills-driven workflow and adds **CCG multi-model orchestration**: Claude is the **pure orchestrator** (never writes code), routing implementation to **Codex MCP** (backend and systems) and **Gemini MCP** (frontend), with **Claude CP4 final spec review** and **Haiku for trivial tasks and fast exploration**.
 
 > **CCG** = **C**laude + **C**odex + **G**emini
 
@@ -8,9 +8,9 @@ Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.
 
 - **Claude as pure orchestrator**: Claude routes, coordinates, and integrates. It never writes implementation code.
 - **Multi-model routing (CCG)**: route tasks to Codex (backend and systems) or Gemini (frontend). Use **CROSS_VALIDATION** for full-stack or critical tasks.
-- **Opus reviewer**: Opus reviews all code-changing paths directly.
+- **Final spec review**: CP4 performs a pure spec check against the original request and CP1 success criteria.
 - **MCP tool integration**: external calls go through `mcp__codex__codex` and `mcp__gemini__gemini`.
-- **Collaboration checkpoints**: CP1/CP2/CP3 checkpoints are embedded in the main skills.
+- **Collaboration checkpoints**: CP0/CP1/CP2/CP3/CP4 checkpoints are embedded in the main skills.
 - **Fail-closed gate**: if a required external model call cannot complete, the workflow stops with `BLOCKED`.
 
 ## Quick Start (Claude Code)
@@ -43,10 +43,10 @@ claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github
 
 You normally do **not** call MCP tools manually. Tell Claude what you want, and the workflow decides when to invoke external models.
 
-- Backend or systems: "Use Codex MCP for the API/database/CI parts, return a patch only."
-- Frontend: "Use Gemini MCP for UI/components/styles, return a patch only."
+- Backend or systems: "Use Codex MCP for the API/database/CI parts and return the final files directly."
+- Frontend: "Use Gemini MCP for UI/components/styles and return the final files directly."
 - Cross-validation: "Do CROSS_VALIDATION for this design and reconcile conflicts."
-- Code review runs automatically after implementation.
+- CP4 final spec review runs automatically at the end of the workflow.
 
 ## Model Selection
 
@@ -63,16 +63,18 @@ The routing and checkpoint rules live in `skills/coordinating-multi-model-work/`
 
 | Checkpoint | When | Purpose |
 |---|---|---|
-| CP1 | Before first Task call | Assess routing, invoke external model early |
-| CP2 | Mid-execution | Triggered by uncertainty, stalled debugging, or repeated failures |
-| CP3 | Before claiming completion | Final domain review and verification |
+| CP0 | Before CP1 | Context acquisition / retrieval using the Hybrid Context Engine |
+| CP1 | Immediately after CP0, before first Task call | Task assessment and routing using the CP1 routing matrix |
+| CP2 | After CP1 when routed externally | External execution via Gemini/Codex/Cross-Validation with final file output |
+| CP3 | After CP2 when reconciliation is needed | Resolve external-model conflicts, gaps, and clarifications before CP4 |
+| CP4 | Final step of every workflow | Pure spec review against the original request and CP1 success criteria |
 
 ## Differences vs Superpowers (obra/superpowers)
 
 - **Claude as orchestrator-only**: Claude never writes implementation code.
 - **Built-in multi-model routing** via MCP tools (Codex, Gemini).
 - **Codex covers systems work**: scripts, CI/CD, Dockerfiles, and infrastructure route to Codex.
-- **Opus reviews all code** directly.
+- **CP4 final spec review is spec-only**: no automatic style, redundancy, or best-practice review is part of the checkpoint flow.
 - **CP checkpoints** enforce evidence-driven collaboration.
 - **Skill set changes** align the plugin with the CCG workflow.
 

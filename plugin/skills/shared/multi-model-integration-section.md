@@ -13,19 +13,20 @@ All skills that invoke external models must follow this pattern.
    - Frontend → `mcp__gemini__gemini`
 4. Reuse the same worker `SESSION_ID` for follow-up fixes on that task only.
 5. Use `CROSS_VALIDATION` only for architectural uncertainty or true multi-domain conflicts.
-6. Run the Opus review chain on the resulting artifact.
+6. Run CP4 Final Spec Review in Claude on the resulting artifact.
 
 ## Invocation
 
 - Use English prompts.
-- Ask for `diff-or-questions`, not prose design output.
+- Ask for `# EXTERNAL RESPONSE PROTOCOL v1.1` with complete final file content preferred and unified diff as fallback.
 - Do not ask the worker for draft code that the orchestrator will re-implement.
 
 ## Checkpoint Integration
 
 - CP1: route the current bounded task
-- CP2: narrow scope before escalating to cross-validation
-- CP3: review the artifact, not the whole narrative
+- CP2: execute the bounded task externally and receive final file content or unified diff
+- CP3: reconcile multiple or non-trivial external responses before final review
+- CP4: perform the final pure spec review
 
 ## Fallback
 

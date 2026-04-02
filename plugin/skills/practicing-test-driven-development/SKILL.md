@@ -89,7 +89,7 @@ digraph tdd_cycle {
 
 Write one minimal test showing what should happen.
 
-**► CP1 (Task Analysis):** Before writing test, apply `coordinating-multi-model-work/checkpoints.md`.
+**► CP1 (Task Assessment & Routing):** Before writing test, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **✅ Good example:**
 
@@ -155,7 +155,9 @@ Confirm:
 
 Write simplest code to pass the test.
 
-**► CP3 (Quality Gate):** After implementation passes, apply `coordinating-multi-model-work/checkpoints.md`.
+**CP3 note:** If external execution returned multiple or non-trivial responses, complete CP3 Reconciliation before final review. CP3 is not part of the RED/GREEN proof itself.
+
+**CP4 note:** After verification, CP4 performs the final spec-only review. CP4 is not part of the RED/GREEN proof itself.
 
 **✅ Good example:**
 

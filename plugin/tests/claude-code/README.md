@@ -89,15 +89,51 @@ Static workflow guard test:
 - Bounded task / worker ownership language exists
 - Cross-validation is explicitly constrained
 
+#### test-cp0-context-acquisition-guards.sh
+Static CP0 guard test:
+- CP0 is explicitly documented as the pre-routing stage
+- Hybrid Context Engine language exists in startup and workflow docs
+- Tool order remains Auggie → Morph WarpGrep → Serena → Grok Search
+- CP0 tool matrix is embedded in the active checkpoint docs
+- Architecture diagram includes CP0
+
+#### test-cp1-routing-guards.sh
+Static CP1 guard test:
+- CP1 is explicitly named Task Assessment & Routing
+- The exact `# CP1 ROUTING DECISION` block exists in hook and threshold docs
+- Detailed and compact CP1 routing matrices are embedded in the active docs
+- The diagram labels CP1 as Task Assessment & Routing
+
+#### test-cp2-external-execution-guards.sh
+Static CP2 guard test:
+- CP2 is explicitly named External Execution
+- External Response Protocol v1.1 exists in the active execution docs
+- `## FILE CONTENTS` is required with full file content preferred and unified diff fallback
+- Legacy `diff-or-questions` / `## DIFF` / `## QUESTIONS` contract is absent from active execution docs
+
+#### test-cp3-reconciliation-guards.sh
+Static CP3 guard test:
+- CP3 is explicitly named Reconciliation
+- The exact `# CP3 RECONCILIATION COMPLETE` block exists in hook and threshold docs
+- Legacy `[CP3 Assessment]` / `[CP3] Verified` formats are absent from active docs
+- The diagram labels CP3 as Reconciliation
+
+#### test-cp4-final-spec-review-guards.sh
+Static CP4 guard test:
+- CP4 is explicitly named Final Spec Review
+- The exact `# CP4 SPEC REVIEW COMPLETE` block exists in hook and threshold docs
+- CP4 is explicitly spec-only and excludes code quality/style review
+- The diagram labels CP4 as Final Spec Review
+
 #### test-subagent-driven-development.sh
 Tests skill content and requirements (~2 minutes):
 - Skill loading and accessibility
 - One bounded task at a time
-- Spec review before Opus quality review
+- CP4 final spec review as the last review stage
 - One worker owner per task
 - Same worker session reuse for fixes
 - No prototype-then-rewrite pattern
-- Diff-or-questions output contract
+- External Response Protocol v1.1 output contract
 
 ### Integration Tests (use --integration flag)
 
@@ -110,8 +146,8 @@ Full workflow execution test (~10-30 minutes):
   - Plan read once at start (not per task)
   - Full task text provided in subagent prompts
   - Subagents perform self-review before reporting
-  - Spec compliance review happens before code quality
-  - Spec reviewer reads code independently
+  - CP4 final spec review happens at the end
+  - Final review checks the artifact against the spec
   - Working implementation is produced
   - Tests pass
   - Proper git commits created
@@ -121,6 +157,13 @@ Full workflow execution test (~10-30 minutes):
 - Our improvements are actually applied
 - Subagents follow the skill correctly
 - Final code is functional and tested
+
+#### test-cp4-before-done-integration.sh
+Focused CP4 integration test:
+- Forces Claude to emit the exact `# CP4 SPEC REVIEW COMPLETE` block
+- Verifies required CP4 fields are present
+- Verifies the CP4 block is a standalone text message
+- Verifies CP4 appears before the final `DONE` marker
 
 ## Adding New Tests
 

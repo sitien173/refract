@@ -32,7 +32,7 @@ Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders auto
 - **Serena:** If the project is large (>10 files involved) — use Serena for semantic codebase exploration to understand existing architecture and symbol relationships.
 - See `skills/shared/supplementary-tools.md` for full reference.
 
-**► CP1 (Task Analysis):** After understanding the idea, apply `coordinating-multi-model-work/checkpoints.md`.
+**► CP1 (Task Assessment & Routing):** After understanding the idea, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **Exploring approaches:**
 
@@ -41,7 +41,7 @@ Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders auto
 - Lead with your recommended option and explain why
 - **Sequential-Thinking (optional):** For complex designs with 3+ interacting components, use Sequential-Thinking MCP to systematically decompose trade-offs and validate reasoning chains before presenting options.
 
-**► CP2 (Mid-Review):** When multiple approaches have significant trade-offs, apply `coordinating-multi-model-work/checkpoints.md`.
+**CP2 note:** CP2 is the external execution phase and starts only after the design is routed into implementation.
 
 **Presenting the design:**
 

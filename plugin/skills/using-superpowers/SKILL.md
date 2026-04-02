@@ -86,15 +86,16 @@ The skill itself tells you which.
 
 Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
-## Claude Model Strategy for Subagents
+## Default Model Routing
 
-| Model | Use For |
+| Route | Use For |
 |-------|---------|
-| Opus (default) | Review, architecture, complex reasoning |
-| `model: sonnet` | Implementation, coding |
-| `model: haiku` | Exploration, search |
+| `Codex MCP` | Backend and systems implementation |
+| `Gemini MCP` | Frontend implementation |
+| `Cross-Validation` | Full-stack, uncertain, or critical tasks |
+| `Claude main thread` | Orchestration, clarification, CP3 reconciliation, CP4 spec review |
 
-See `developing-with-subagents` for details.
+Use `developing-with-subagents` and `coordinating-multi-model-work` for the current routing flow. Treat legacy Claude `haiku` / `sonnet` / `opus` Task selection as optional only when a specific skill explicitly asks for it.
 
 ## Multi-Model Capability
 

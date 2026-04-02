@@ -1,8 +1,8 @@
 # Supplementary MCP Tools (Optional Enhancements)
 
-Supplementary tools enhance Claude's orchestration capabilities. They are **optional** — all workflows work without them via native tool fallbacks. They do NOT replace the primary routing to Codex/Gemini.
+Supplementary tools enhance Claude's orchestration capabilities. They are **optional** for local code work and do NOT replace the primary routing to Codex/Gemini.
 
-**Design principle:** MCPs enhance performance, never block functionality. If unavailable, proceed with native tools.
+**Design principle:** MCPs enhance performance without replacing the core routing workflow. For web research, Grok Search is the required path; if it is unavailable, report the failure explicitly instead of switching to a native web search fallback.
 
 ## Tool Reference
 
@@ -24,7 +24,7 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 **Auto-triggers:** "search", "latest", "current trends", "find error solution", unknown error messages
 
-**Fallback:** Built-in WebSearch / WebFetch (less structured)
+**Fallback:** Report the failure explicitly; do not silently switch to native web search tools
 
 ---
 
@@ -42,6 +42,36 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 **Auto-triggers:** "design", "architecture", "analyze tradeoffs", "complex problem", 3+ interacting parts
 
 **Fallback:** Native reasoning (same quality, ~2x more tokens)
+
+---
+
+### Auggie Code Search (`mcp__auggie__augment_code_search`)
+
+**Purpose:** Semantic "where/what/how" search across a repository.
+
+**Use when:**
+- Starting CP0 context acquisition in an unfamiliar code area
+- You need concept-level search instead of exact keyword grep
+- You want likely implementation anchors before narrowing to symbols
+
+**Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow
+
+**Fallback:** Morph WarpGrep or Serena
+
+---
+
+### Morph WarpGrep / Codebase Search (`mcp__morph_mcp__codebase_search`)
+
+**Purpose:** Fast parallel natural-language search inside the local codebase.
+
+**Use when:**
+- Sweeping many files quickly during CP0
+- Validating or widening Auggie hits
+- Narrowing a bounded file set before symbol-level tracing
+
+**Auto-triggers:** "scan the codebase", "find all places", broad codebase exploration
+
+**Fallback:** Auggie or Serena
 
 ---
 
@@ -92,6 +122,11 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ## Composition Patterns
 
+### CP0 Hybrid Context Engine
+```
+Auggie (semantic "where/what/how") → Morph WarpGrep (fast parallel narrowing) → Serena (symbols, references, memory) → Grok Search (only if external/current knowledge is required)
+```
+
 ### Research Phase (Brainstorming)
 ```
 Grok Search (gather info) → Sequential (analyze & decompose) → Design output
@@ -109,12 +144,12 @@ Sequential (architectural decomposition) → Grok Search (library docs) → Plan
 
 ### Frontend Implementation
 ```
-Magic (component patterns) + Gemini MCP (full implementation) → Opus review
+Magic (component patterns) + Gemini MCP (full implementation) → Claude CP4 final spec review
 ```
 
 ### Bulk Refactoring
 ```
-Serena (scope & analyze) → Morphllm (execute bulk edits) → Opus review
+Serena (scope & analyze) → Morphllm (execute bulk edits) → Claude CP4 final spec review
 ```
 
 ## Integration with Primary Routing
@@ -123,10 +158,10 @@ Supplementary tools operate at the **orchestrator level** — Claude uses them t
 
 ```
 1. Claude receives task
-2. [Optional] Use supplementary tools for research/analysis/planning
-3. Route implementation to Codex/Gemini (primary routing)
+2. CP0: use the Hybrid Context Engine when context acquisition is needed
+3. Route implementation to Codex/Gemini at CP1 (primary routing)
 4. [Optional] Use supplementary tools during review/integration
-5. Opus reviews
+5. Claude runs CP4 final spec review
 ```
 
-**No fail-closed gate** for supplementary tools. If unavailable, proceed without them.
+**No fail-closed gate** for local supplementary tools. If Grok Search is required for web research and unavailable, report the failure instead of using a native web-search fallback.

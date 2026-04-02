@@ -29,7 +29,9 @@ Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders auto
 
 ## How to Request
 
-**► CP3 (Quality Gate):** Before requesting review, apply `coordinating-multi-model-work/checkpoints.md`.
+**CP3 note:** If external-model outputs conflict, overlap, or request continuation, complete CP3 Reconciliation before requesting final review.
+
+**CP4 note:** CP4 Final Spec Review is separate from this skill. Use this skill only when the user also wants optional code quality or broader review feedback.
 
 **1. Get git SHAs:**
 
@@ -42,7 +44,7 @@ HEAD_SHA=$(git rev-parse HEAD)
 
 Use Task tool with superpowers:code-reviewer type, fill template at `code-reviewer.md`
 
-**Note:** Code review is handled by the Opus reviewer agent directly. Opus reviews all code-changing paths.
+**Note:** This skill is optional and separate from the CP4 checkpoint flow.
 
 **Placeholders:**
 

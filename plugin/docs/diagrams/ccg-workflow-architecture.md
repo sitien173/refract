@@ -11,14 +11,14 @@ graph TB
     CLAUDE[Claude Orchestrator]
     CODEX[Codex MCP<br/>Backend and Systems]
     GEMINI[Gemini MCP<br/>Frontend]
-    OPUS[Opus Review]
+    CP4[Claude CP4<br/>Final Spec Review]
 
     USER --> CLAUDE
     CLAUDE --> CODEX
     CLAUDE --> GEMINI
-    CODEX --> OPUS
-    GEMINI --> OPUS
-    OPUS --> CLAUDE
+    CODEX --> CLAUDE
+    GEMINI --> CLAUDE
+    CLAUDE --> CP4
 ```
 
 ## 2. Routing Decision Tree
@@ -36,9 +36,11 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    START[User Request] --> CP1[CP1: Routing]
+    START[User Request] --> CP0[CP0: Context Acquisition]
+    CP0 --> CP1[CP1: Task Assessment & Routing]
     CP1 --> MODEL[External Model]
-    MODEL --> CP2[CP2: Re-evaluate if stalled]
-    CP2 --> CP3[CP3: Verification and Opus review]
-    CP3 --> DONE[Complete]
+    MODEL --> CP2[CP2: External Execution]
+    CP2 --> CP3[CP3: Reconciliation]
+    CP3 --> CP4[CP4: Final Spec Review]
+    CP4 --> DONE[Complete]
 ```

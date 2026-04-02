@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Integration Test: CP3 evaluation must appear before "DONE" marker
+# Integration Test: CP3 reconciliation block must appear before "DONE" marker
 #
 # Purpose:
-# - Ensures Claude outputs a CP3 routing evaluation before claiming completion.
+# - Ensures Claude outputs the new CP3 reconciliation block before claiming completion.
 # - Validates CP3 block formatting and that it is a standalone assistant text message.
 
 set -euo pipefail
@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 echo "========================================"
-echo " Integration Test: CP3 before DONE"
+echo " Integration Test: CP3 reconciliation before DONE"
 echo "========================================"
 echo ""
 
@@ -28,10 +28,16 @@ PROMPT="Change to directory $TEST_PROJECT.
 
 Then do the following strictly:
 1) Output a standalone assistant text block containing the exact lines:
-   [CP3 Assessment]
-   - Task type: Other
-   - Routing decision: CLAUDE
-   - Rationale: test
+   # CP3 RECONCILIATION COMPLETE
+   
+   ## Summary
+   test
+   
+   ## Changes Applied
+   - none
+   
+   ## Status
+   Ready for CP4
    IMPORTANT: This CP3 block must be the only content in that assistant message (no tool calls in the same message).
 2) After that, output the exact text: DONE
 
@@ -55,8 +61,31 @@ echo "==========================================================================
 # Locate session transcript
 # Session dir corresponds to where we run `claude` from (repo root).
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-WORKING_DIR_ESCAPED=$(echo "$REPO_ROOT" | sed 's/\//-/g')
-SESSION_DIR="$HOME/.claude/projects/$WORKING_DIR_ESCAPED"
+REPO_ROOT_WIN="$(cd "$SCRIPT_DIR/../.." && pwd -W 2>/dev/null || true)"
+WORKING_DIR_ESCAPED_UNIX=$(echo "$REPO_ROOT" | sed 's/\//-/g')
+WORKING_DIR_ESCAPED_WIN=""
+if [ -n "$REPO_ROOT_WIN" ]; then
+  WORKING_DIR_ESCAPED_WIN=$(echo "$REPO_ROOT_WIN" | sed -E 's#^([A-Za-z]):[\\/]#\1--#; s#[\\/]#-#g')
+fi
+
+SESSION_DIR=""
+for candidate in \
+  "$HOME/.claude/projects/$WORKING_DIR_ESCAPED_WIN" \
+  "$HOME/.claude/projects/$WORKING_DIR_ESCAPED_UNIX"
+do
+  if [ -n "$candidate" ] && [ -d "$candidate" ]; then
+    SESSION_DIR="$candidate"
+    break
+  fi
+done
+
+if [ -z "$SESSION_DIR" ]; then
+  echo "ERROR: Could not find session directory"
+  echo "Looked for:"
+  echo "  $HOME/.claude/projects/$WORKING_DIR_ESCAPED_WIN"
+  echo "  $HOME/.claude/projects/$WORKING_DIR_ESCAPED_UNIX"
+  exit 1
+fi
 SESSION_FILE=$(python3 - "$SESSION_DIR" <<'PY'
 import glob
 import os
@@ -118,12 +147,13 @@ with open(path, 'r', encoding='utf-8') as f:
             if block.get('type') == 'text':
                 text = block.get('text') or ''
 
-                if cp3_line is None and '[CP3 Assessment]' in text:
+                if cp3_line is None and '# CP3 RECONCILIATION COMPLETE' in text:
                     cp3_line = i
                     cp3_block_ok = (
-                        ('Task type' in text or 'task type' in text)
-                        and ('Routing decision' in text or 'routing decision' in text)
-                        and ('Rationale' in text or 'rationale' in text)
+                        ('## Summary' in text)
+                        and ('## Changes Applied' in text)
+                        and ('## Status' in text)
+                        and ('Ready for CP4' in text)
                     )
                     cp3_is_text_only_block = all(
                         isinstance(b, dict) and b.get('type') != 'tool_use'
@@ -150,7 +180,7 @@ else:
 print('')
 print('Test 2: CP3 evaluation block was output...')
 if cp3_line is None:
-    print('  [FAIL] No "[CP3 Assessment]" block found in assistant messages')
+    print('  [FAIL] No "# CP3 RECONCILIATION COMPLETE" block found in assistant messages')
     failed = True
 else:
     print(f'  [PASS] CP3 evaluation found at transcript line {cp3_line}')
@@ -161,10 +191,10 @@ if cp3_line is None:
     print('  [FAIL] Missing CP3; cannot validate required fields')
     failed = True
 elif cp3_block_ok:
-    print('  [PASS] CP3 contains: Task type / Routing decision / Rationale')
+    print('  [PASS] CP3 contains: Summary / Changes Applied / Status / Ready for CP4')
 else:
     print('  [FAIL] CP3 missing one or more required fields:')
-    print('         - Task type / Routing decision / Rationale')
+    print('         - Summary / Changes Applied / Status / Ready for CP4')
     failed = True
 
 print('')
