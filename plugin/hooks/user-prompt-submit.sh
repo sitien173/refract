@@ -3,7 +3,9 @@
 
 set -euo pipefail
 
-REMINDER_TEXT="[CP Protocol Threshold]
+# Print the reminder as literal text so markdown backticks never trigger shell execution.
+cat <<'EOF'
+[CP Protocol Threshold]
 
 Before the first Task call, do minimal CP0 context acquisition using the Hybrid Context Engine (Auggie -> Morph WarpGrep -> Serena; use Grok Search only for external/current knowledge).
 Immediately after CP0 completes, run CP1 Task Assessment & Routing using the original user request, the full CONTEXT_PACKAGE from CP0, and the routing guide below.
@@ -60,6 +62,4 @@ Ready for CP4
 ## Recommendation
 - If PASS: Task is complete
 - If PARTIAL/FAIL: [Specific gaps + suggested next action (e.g. re-run external model or ask user)]
-"
-
-printf '%s\n' "$REMINDER_TEXT"
+EOF
