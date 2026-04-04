@@ -102,5 +102,6 @@ See `tests/claude-code/README.md` for the Claude Code skills test suite.
 - [obra/superpowers](https://github.com/obra/superpowers) - Original Superpowers project
 - [BryanHoo/superpowers-ccg](https://github.com/BryanHoo/superpowers-ccg) - CCG collaboration fork
 - [fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow) - CCG workflow
+- [Danau5tin/multi-agent-coding-system](https://github.com/Danau5tin/multi-agent-coding-system) - Smart context-sharing inspiration
 - [GuDaStudio/geminimcp](https://github.com/GuDaStudio/geminimcp) - Gemini MCP
 - [GuDaStudio/codexmcp](https://github.com/GuDaStudio/codexmcp) - Codex MCP
