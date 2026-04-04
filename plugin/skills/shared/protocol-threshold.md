@@ -6,21 +6,16 @@ All skills that use checkpoints must follow the CP protocol injected by hooks.
 
 - CP0 happens before CP1.
 - Gather only the minimum context required to route the next bounded task.
-- Use the Hybrid Context Engine:
-  - Auggie for semantic "where/what/how" discovery in the codebase
-  - Morph WarpGrep for fast parallel search and file-set narrowing
-  - Serena for symbol navigation, references, project memory, and graph context
-  - Grok Search only when the task needs external/current knowledge
+- Use Auggie for full local codebase context retrieval.
+- Use Grok Search only when the task needs external/current knowledge or research.
+- Normalize CP0 findings into reusable `CONTEXT_ARTIFACTS`.
 - CP0 is a retrieval phase, not a narration phase. Do not turn it into a long summary.
 
 CP0 tool matrix:
 
 | Need | Primary Tool | When to Trigger Grok Search | Fallback |
 | --- | --- | --- | --- |
-| Semantic "Where/What/How" in codebase | Auggie | Do not trigger Grok Search during normal local-context retrieval | None |
-| Fast parallel search inside the codebase | Morph WarpGrep | Do not trigger Grok Search during normal local-context retrieval | Auggie |
-| Symbol navigation & references | Serena | Do not trigger Grok Search during normal local-context retrieval | Morph WarpGrep |
-| Persistent project memory / graph | Serena | Do not trigger Grok Search during normal local-context retrieval | None |
+| Local codebase context / implementation anchors | Auggie | Do not trigger Grok Search during normal local-context retrieval | None |
 | External / real-world knowledge | Grok Search | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
 
 ## Required Behavior
@@ -44,13 +39,14 @@ Goal: perform a quick, structured task assessment and choose the optimal route u
 
 Task Assessment Process:
 
-1. Read the original user request and the full `CONTEXT_PACKAGE` from CP0.
+1. Read the original user request and the CP0 context artifacts.
 2. Summarize the core task in one English sentence.
 3. Assess clarity and completeness.
 4. If the task is unclear or underspecified, route to `Claude`, output the CP1 block, then immediately ask clarifying questions.
 5. Classify the task against the inline CP1 routing guide below.
 6. Decide the model and whether cross-validation is needed.
-7. Output the exact block below.
+7. Build one `TASK_CONTEXT_BUNDLE` for the next bounded task with `TASK_ID`, `CONTEXT_REFS`, and `HYDRATED_CONTEXT`.
+8. Output the exact block below.
 
 ## CP1 Routing Guide
 
@@ -92,9 +88,14 @@ Goal: the external model performs the actual work and returns the final artifact
 
 Required CP2 input:
 
-1. original user request
-2. full `CONTEXT_PACKAGE` from CP0
+1. compressed original user request
+2. one `TASK_CONTEXT_BUNDLE` containing:
+   - `TASK_ID`
+   - `CONTEXT_REFS`
+   - `HYDRATED_CONTEXT`
 3. CP1 task summary and success criteria
+4. explicit file set and verify command
+5. for same-task follow-ups on the same worker session: deltas only
 
 Direct output mode:
 
@@ -119,6 +120,9 @@ One-sentence summary of what you did.
 For each file listed in FILES MODIFIED, return either:
 1. the complete final file content (preferred), or
 2. a unified diff patch for that file when full content is impractical.
+
+## CONTEXT ARTIFACTS
+[optional reusable artifacts discovered or updated during execution]
 
 ## SPEC COMPLIANCE
 - Meets Spec? YES / PARTIAL / NO

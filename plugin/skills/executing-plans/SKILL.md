@@ -31,9 +31,9 @@ For the current task only:
 
 1. Mark it `in_progress`.
 2. Extract `verifyCommand`, `acceptanceCriteria`, and file set.
-3. Apply CP1.
+3. Apply CP1 and build one task-scoped context bundle.
 4. If routing is not `CLAUDE`, apply CP2 and route to one worker.
-5. Reuse that worker `SESSION_ID` only for fixes on the same task.
+5. Reuse that worker `SESSION_ID` only for fixes on the same task, and send deltas only.
 6. Require External Response Protocol v1.1 with final file content preferred and unified diff fallback.
 7. If CP3 is triggered, reconcile external responses and decide whether to proceed, retry, continue, or ask the user.
 8. Run verification.
@@ -42,6 +42,7 @@ For the current task only:
 11. Persist a tiny handoff summary to `.tasks.json` or project memory:
     - task id
     - worker used
+    - context refs used
     - files changed
     - verify command result
     - CP4 status
@@ -61,6 +62,7 @@ Do not dump prior task history back into the session.
 - Default to one active task, not batches of three.
 - Do not ask a worker for a prototype that Claude will later rewrite.
 - Do not re-explain the whole plan to the worker. Send only the current bounded task.
+- Do not send the full CP0 discovery blob when a task-scoped context bundle will do.
 - Use `CROSS_VALIDATION` only when the current task cannot be narrowed to one owner.
 
 ## Completion

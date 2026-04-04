@@ -5,23 +5,30 @@ Claude is orchestrator-only. All implementation code goes through external model
 ## Standard Pattern
 
 1. Define one bounded task.
-2. Include only the minimum context needed to complete that task.
-3. If routing is not `CLAUDE`, execute CP2 with:
-   - the original user request
-   - the full `CONTEXT_PACKAGE` from CP0
+2. Turn CP0 findings into small reusable `CONTEXT_ARTIFACTS`.
+3. Build one `TASK_CONTEXT_BUNDLE` for the bounded task.
+4. If routing is not `CLAUDE`, execute CP2 with:
+   - a compressed original user request
+   - `CONTEXT_REFS` from the task-scoped bundle
+   - `HYDRATED_CONTEXT` snippets for that task only
    - the CP1 task summary
+   - the explicit file set
    - the success criteria and verify command for the bounded task
-4. Ask the worker to return complete final file content whenever practical, with unified diff patch as fallback, using External Response Protocol v1.1.
-5. Reuse `SESSION_ID` only for follow-up fixes on the same task.
-6. If CP1 chose `Cross-Validation`, or CP2 returned conflicts, overlap, gaps, clarifications, or continuation requests, run CP3 Reconciliation as Claude's decision layer.
-7. Always run CP4 Final Spec Review after CP3, or directly after CP2/Claude-only work when no reconciliation is needed.
-8. Only `PASS` completes the task. `PARTIAL` and `FAIL` require a retry, follow-up, or user clarification.
+5. Ask the worker to return complete final file content whenever practical, with unified diff patch as fallback, using External Response Protocol v1.1.
+6. Reuse `SESSION_ID` only for follow-up fixes on the same task, and send deltas only:
+   - changed refs
+   - new hydrated snippets
+   - updated verification failures or spec gaps
+7. If CP1 chose `Cross-Validation`, or CP2 returned conflicts, overlap, gaps, clarifications, or continuation requests, run CP3 Reconciliation as Claude's decision layer.
+8. Always run CP4 Final Spec Review after CP3, or directly after CP2/Claude-only work when no reconciliation is needed.
+9. Only `PASS` completes the task. `PARTIAL` and `FAIL` require a retry, follow-up, or user clarification.
 
 ## Hard Rules
 
 - Do not ask for draft code that the orchestrator will later re-implement.
 - Do not ask for design prose on an implementation task.
 - Do not restate the whole PRD, plan, or prior conversation in every prompt.
+- Do not repaste the full CP0 discovery output into every worker prompt.
 - Do not send multiple workers the same bounded implementation task.
 - Do not ask for changed hunks only when the worker can return the final file content directly.
 - Do not turn CP4 into a code-quality or best-practice review pass.
@@ -34,8 +41,15 @@ Every implementation prompt should contain:
 ## Original User Request
 [original user request]
 
-## Context Package
-[full CONTEXT_PACKAGE from CP0]
+## Task Context Bundle
+TASK_ID: [stable bounded-task id]
+
+## Context Refs
+- [artifact id]
+- [artifact id]
+
+## Hydrated Context
+[only the small context snippets needed to complete this bounded task]
 
 ## CP1 Task Summary
 [single bounded task]
@@ -50,8 +64,7 @@ Every implementation prompt should contain:
 [exact command]
 
 ## Response Protocol
-FIRST: Read Serena memory 'global/response_protocol' for full format rules.
-FALLBACK: Use exactly this structure:
+Use exactly this structure:
 
 # EXTERNAL RESPONSE PROTOCOL v1.1
 
@@ -66,6 +79,9 @@ FALLBACK: Use exactly this structure:
 
 ## FILE CONTENTS
 [complete final file content for each modified file, preferred; unified diff patch only when full content is impractical]
+
+## CONTEXT ARTIFACTS
+[optional reusable artifacts discovered or updated during execution]
 
 ## SPEC COMPLIANCE
 - Meets Spec? YES / PARTIAL / NO

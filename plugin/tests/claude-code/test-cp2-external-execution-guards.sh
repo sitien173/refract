@@ -34,7 +34,7 @@ echo "  [PASS]"
 echo ""
 
 echo "Test 2: External Response Protocol v1.1 exists in active execution docs..."
-if ! rg -n '^# EXTERNAL RESPONSE PROTOCOL v1\.1|External Response Protocol v1\.1|^## FILE CONTENTS|complete final file content \(preferred\)|unified diff patch' \
+if ! rg -n '^# EXTERNAL RESPONSE PROTOCOL v1\.1|External Response Protocol v1\.1|^## FILE CONTENTS|^## CONTEXT ARTIFACTS|complete final file content \(preferred\)|unified diff patch' \
   "$REPO_ROOT/hooks/user-prompt-submit.sh" \
   "$REPO_ROOT/skills/shared/protocol-threshold.md" \
   "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
@@ -50,7 +50,40 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 3: Legacy diff-or-questions contract is absent from active execution docs..."
+echo "Test 3: Smart context-sharing prompt structure exists in active execution docs..."
+if ! rg -n '## Task Context Bundle|## Context Refs|## Hydrated Context|TASK_CONTEXT_BUNDLE|CONTEXT_REFS|HYDRATED_CONTEXT|send deltas only|deltas only' \
+  "$REPO_ROOT/hooks/user-prompt-submit.sh" \
+  "$REPO_ROOT/skills/shared/protocol-threshold.md" \
+  "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
+  "$REPO_ROOT/skills/developing-with-subagents/SKILL.md" \
+  "$REPO_ROOT/skills/developing-with-subagents/implementer-prompt.md" >/tmp/cp2-guards-context-sharing.txt 2>/dev/null; then
+  echo "  [FAIL] Missing smart context-sharing execution contract"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 4: Full CONTEXT_PACKAGE prompts are absent from active execution docs..."
+if rg -n 'full `CONTEXT_PACKAGE`|FULL CONTEXT_PACKAGE|## Context Package' \
+  "$REPO_ROOT/skills/shared/protocol-threshold.md" \
+  "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
+  "$REPO_ROOT/skills/developing-with-subagents/SKILL.md" \
+  "$REPO_ROOT/skills/developing-with-subagents/implementer-prompt.md" >/tmp/cp2-guards-full-context.txt 2>/dev/null; then
+  echo "  [FAIL] Found stale full CONTEXT_PACKAGE execution contract"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 5: Legacy diff-or-questions contract is absent from active execution docs..."
 if rg -n 'diff-or-questions|## DIFF|## QUESTIONS|patch-ready diff|blocking questions' \
   "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
@@ -65,7 +98,7 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 4: Diagram labels CP2 as External Execution..."
+echo "Test 6: Diagram labels CP2 as External Execution..."
 if ! rg -n 'CP2\[CP2: External Execution\]' "$REPO_ROOT/docs/diagrams/ccg-workflow-architecture.md" >/tmp/cp2-guards-diagram.txt 2>/dev/null; then
   echo "  [FAIL] Missing CP2 External Execution label in diagram"
   exit 1

@@ -10,10 +10,17 @@ External model call:
     You own one bounded implementation task.
 
     ## Original User Request
-    [FULL original user request]
+    [compressed original user request]
 
-    ## Context Package
-    [FULL CONTEXT_PACKAGE from CP0]
+    ## Task Context Bundle
+    TASK_ID: [stable bounded-task id]
+
+    ## Context Refs
+    - [artifact id]
+    - [artifact id]
+
+    ## Hydrated Context
+    [only the small context snippets needed to complete this bounded task]
 
     ## CP1 Task Summary
     [FULL TEXT of the current bounded task only]
@@ -48,6 +55,9 @@ External model call:
 
     ## FILE CONTENTS
     [complete final file content for each modified file, preferred; unified diff patch only when full content is impractical]
+
+    ## CONTEXT ARTIFACTS
+    [optional reusable artifacts discovered or updated during execution]
 
     ## SPEC COMPLIANCE
     - Meets Spec? YES / PARTIAL / NO

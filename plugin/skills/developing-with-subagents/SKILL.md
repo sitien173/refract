@@ -13,18 +13,20 @@ Execute one bounded task at a time by routing it to Codex or Gemini, then end wi
 
 1. Read the plan once.
 2. Extract the current bounded task only.
-3. Route that task to one worker.
-4. Reuse the same worker session for follow-up fixes on that task.
-5. If CP3 is triggered, reconcile external responses before final review.
-6. Run CP4 Final Spec Review in Claude.
-7. Mark the task complete only if CP4 returns `PASS`.
-8. If CP4 returns `PARTIAL` or `FAIL`, loop back with a bounded follow-up.
-9. Move to the next bounded task only after `PASS`.
+3. Build a task-scoped context bundle for that task.
+4. Route that task to one worker.
+5. Reuse the same worker session for follow-up fixes on that task, and send deltas only.
+6. If CP3 is triggered, reconcile external responses before final review.
+7. Run CP4 Final Spec Review in Claude.
+8. Mark the task complete only if CP4 returns `PASS`.
+9. If CP4 returns `PARTIAL` or `FAIL`, loop back with a bounded follow-up.
+10. Move to the next bounded task only after `PASS`.
 
 ## Rules
 
 - Keep the controller thread small.
 - Do not accumulate rich summaries for every step.
+- Do not repaste full CP0 discovery output into each worker prompt.
 - Do not ask workers for draft-only outputs.
 - Ask workers for External Response Protocol v1.1 with full file content first and unified diff second.
 - `CROSS_VALIDATION` is for unresolved design conflicts, not routine implementation.

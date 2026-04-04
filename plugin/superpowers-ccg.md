@@ -169,15 +169,15 @@ CP4 is the final workflow step. Claude performs a pure spec review against the o
 3. **Claude performs CP4 final spec review** after implementation.
 4. **Think independently** and challenge external model output.
 5. **Fail closed**: if required MCP evidence is missing, output `BLOCKED`.
-6. **Use the response protocol** from `global/response_protocol`.
+6. **Use the inline External Response Protocol v1.1** in the active CP2 docs and prompts.
 
 ---
 
 ## Checkpoints Protocol
 
-- **CP0** — Before CP1: acquire only the minimum context needed to route the next bounded task using the Hybrid Context Engine (Auggie → Morph WarpGrep → Serena → Grok Search only for external/current knowledge)
+- **CP0** — Before CP1: acquire only the minimum context needed to route the next bounded task, then normalize useful findings into reusable context artifacts
 - **CP1** — Immediately after CP0: perform Task Assessment & Routing using the CP1 routing matrix, then invoke the selected model if needed
-- **CP2** — External Execution: after CP1 routes to Gemini, Codex, or Cross-Validation, the external model performs the task and returns final files or a unified diff via External Response Protocol v1.1
+- **CP2** — External Execution: after CP1 routes to Gemini, Codex, or Cross-Validation, the external model performs the task using a task-scoped context bundle and returns final files or a unified diff via External Response Protocol v1.1
 - **CP3** — Reconciliation: after cross-validation or non-trivial external feedback, resolve conflicts and hand off to CP4
 - **CP4** — Final Spec Review: always run last and determine PASS / PARTIAL / FAIL against the original requirement
 
@@ -213,9 +213,9 @@ CP4 is the final workflow step. Claude performs a pure spec review against the o
 
 Claude `haiku` / `sonnet` / `opus` Task selection is no longer the default implementation route. Only use those legacy Task models when a separate skill explicitly requires them.
 
-### Shared Context Layer (Serena HTTP)
+### Context Retrieval
 
-All agents (Claude, Codex, Gemini) connect to a single Serena instance via Streamable HTTP (port 9121).
+Use Auggie for full local codebase context retrieval during CP0. Use Grok Search only when the task needs external/current knowledge or web research.
 
 ### Supplementary Tools
 

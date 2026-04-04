@@ -86,14 +86,15 @@ echo "=== All tests passed ==="
 Static workflow guard test:
 - No stale CURSOR routing in active token-path docs
 - No "prototype then rewrite" language
-- Bounded task / worker ownership language exists
+- Bounded task / worker ownership / smart context-sharing language exists
+- Full `CONTEXT_PACKAGE` repetition is absent from active execution docs
 - Cross-validation is explicitly constrained
 
 #### test-cp0-context-acquisition-guards.sh
 Static CP0 guard test:
 - CP0 is explicitly documented as the pre-routing stage
-- Hybrid Context Engine language exists in startup and workflow docs
-- Tool order remains Auggie → Morph WarpGrep → Serena → Grok Search
+- Auggie + Grok Search CP0 language exists in startup and workflow docs
+- Auggie is the only local context-retrieval tool in the active CP0 contract
 - CP0 tool matrix is embedded in the active checkpoint docs
 - Architecture diagram includes CP0
 
@@ -108,6 +109,8 @@ Static CP1 guard test:
 Static CP2 guard test:
 - CP2 is explicitly named External Execution
 - External Response Protocol v1.1 exists in the active execution docs
+- Smart context-sharing prompt structure exists: task bundle, context refs, hydrated context, and delta follow-ups
+- Full `CONTEXT_PACKAGE` worker prompts are absent from active execution docs
 - `## FILE CONTENTS` is required with full file content preferred and unified diff fallback
 - Legacy `diff-or-questions` / `## DIFF` / `## QUESTIONS` contract is absent from active execution docs
 

@@ -16,7 +16,7 @@ You have superpowers.
 
 **Core Rules:**
 1. **1% Rule:** If there is even a 1% chance a skill applies, use the Skill tool to load it before responding.
-2. **CP0 first:** Do minimal context acquisition before routing. Use the Hybrid Context Engine: Auggie for semantic "where/what/how", Morph WarpGrep for fast parallel search, Serena for symbols and memory, Grok Search only for external/current knowledge.
+2. **CP0 first:** Do minimal context acquisition before routing. Use Auggie for full local codebase context retrieval, and use Grok Search only for external/current knowledge or research.
 3. **Claude is orchestrator-only:** All implementation code goes through external models (Codex/Gemini MCP).
 4. **Checkpoint Protocol:** CP1 Task Assessment & Routing before the first Task call, CP2 External Execution when routing to external models, CP3 Reconciliation only after cross-validation or conflicting/non-trivial external feedback, and CP4 Final Spec Review as the last step.
 5. **Fail-Closed:** If Routing != CLAUDE and MCP call fails, output BLOCKED (see GATE.md for tiered policy).
@@ -28,9 +28,7 @@ You have superpowers.
 - Full-stack/uncertain → CROSS_VALIDATION (multiple)
 - Docs/coordination only → CLAUDE
 
-**Shared Serena (HTTP 9121):** All agents share one Serena instance. `global/response_protocol` controls token-efficient agent output format.
-
-**Supplementary Tools (optional):** Grok Search/Tavily (research), Sequential-Thinking (complex reasoning), Serena (shared context bus), Magic (UI components), Morphllm (bulk edits).
+**Supplementary Tools (optional):** Grok Search/Tavily (research), Sequential-Thinking (complex reasoning), Magic (UI components), Morphllm (bulk edits).
 
 **Skill Namespace:** `superpowers-ccg:` — use Skill tool to load any skill by name.
 

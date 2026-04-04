@@ -7,27 +7,22 @@ Checkpoints exist to control routing and keep the orchestrator thread small.
 ## CP0: Context Acquisition
 
 - Gather only the minimum context needed to route the next bounded task.
-- Use the Hybrid Context Engine:
-  - Auggie for semantic "where/what/how" discovery
-  - Morph WarpGrep for fast parallel search inside the codebase
-  - Serena for symbol navigation, references, and project memory
-  - Grok Search only when the task needs external/current knowledge
+- Use Auggie for full local codebase context retrieval.
+- Use Grok Search only when the task needs external/current knowledge or research.
+- Normalize the useful output into small reusable `CONTEXT_ARTIFACTS`.
 - End CP0 as soon as the bounded task and likely owner are clear enough for CP1.
 
 CP0 tool matrix:
 
 | Need | Primary Tool | When to Trigger Grok Search | Fallback |
 | --- | --- | --- | --- |
-| Semantic "Where/What/How" in codebase | Auggie | Do not trigger Grok Search during normal local-context retrieval | None |
-| Fast parallel search inside the codebase | Morph WarpGrep | Do not trigger Grok Search during normal local-context retrieval | Auggie |
-| Symbol navigation & references | Serena | Do not trigger Grok Search during normal local-context retrieval | Morph WarpGrep |
-| Persistent project memory / graph | Serena | Do not trigger Grok Search during normal local-context retrieval | None |
+| Local codebase context / implementation anchors | Auggie | Do not trigger Grok Search during normal local-context retrieval | None |
 | External / real-world knowledge | Grok Search | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
 
 ## CP1: Task Assessment & Routing
 
 - Run immediately after CP0 completes.
-- Read the original user request and the full `CONTEXT_PACKAGE` from CP0.
+- Read the original user request and the CP0 context artifacts.
 - Summarize the core task in one English sentence.
 - Check whether the request is clear and sufficiently scoped.
 - If not clear, route to `Claude`, output the CP1 routing block, and ask clarifying questions immediately.
@@ -35,6 +30,10 @@ CP0 tool matrix:
 - Decide:
   - model ownership
   - whether cross-validation is needed
+- Build one `TASK_CONTEXT_BUNDLE` for the next bounded task:
+  - `TASK_ID`
+  - `CONTEXT_REFS`
+  - `HYDRATED_CONTEXT`
 - Output the exact `# CP1 ROUTING DECISION` block before the first Task call.
 
 | Task Category | Model | Cross-Validation | Notes / Triggers |
@@ -59,15 +58,21 @@ Goal:
 - The external model returns the final code/files directly.
 
 Required CP2 input:
-- original user request
-- full `CONTEXT_PACKAGE` from CP0
+- compressed original user request
+- task-scoped context bundle built from CP0 artifacts:
+  - `TASK_ID`
+  - `CONTEXT_REFS`
+  - `HYDRATED_CONTEXT`
 - CP1 task summary
 - success criteria and verification command for the bounded task
+- explicit file set
+- for follow-up turns on the same worker session: only changed refs, new hydrated snippets, and updated spec gaps
 
 Output contract:
 - Return complete final file content for each modified file whenever practical.
 - If full file content is impractical, return a unified diff patch instead.
 - Use `# EXTERNAL RESPONSE PROTOCOL v1.1`.
+- Allow an optional `## CONTEXT ARTIFACTS` section for reusable discoveries that later tasks can reference.
 
 ## CP3: Reconciliation
 

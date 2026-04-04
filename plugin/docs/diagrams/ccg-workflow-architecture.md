@@ -37,8 +37,10 @@ flowchart LR
 ```mermaid
 flowchart TD
     START[User Request] --> CP0[CP0: Context Acquisition]
-    CP0 --> CP1[CP1: Task Assessment & Routing]
-    CP1 --> MODEL[External Model]
+    CP0 --> ARTIFACTS[CP0 Context Artifacts]
+    ARTIFACTS --> CP1[CP1: Task Assessment & Routing]
+    CP1 --> BUNDLE[Task Context Bundle]
+    BUNDLE --> MODEL[External Model]
     MODEL --> CP2[CP2: External Execution]
     CP2 --> CP3[CP3: Reconciliation]
     CP3 --> CP4[CP4: Final Spec Review]

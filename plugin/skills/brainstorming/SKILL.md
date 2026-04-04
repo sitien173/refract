@@ -29,7 +29,7 @@ Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders auto
 
 **Supplementary tools (optional, enhance research):**
 - **Grok Search (Tavily):** If the idea involves unfamiliar tech, current trends, or competitive analysis — use `mcp__grok-search__web_search` to gather real-time information before proposing approaches. Especially useful when the user references a library, service, or pattern you're uncertain about.
-- **Serena:** If the project is large (>10 files involved) — use Serena for semantic codebase exploration to understand existing architecture and symbol relationships.
+- **Auggie:** If the project is large (>10 files involved) — use Auggie for full-context semantic codebase retrieval to understand the existing architecture and likely implementation anchors.
 - See `skills/shared/supplementary-tools.md` for full reference.
 
 **► CP1 (Task Assessment & Routing):** After understanding the idea, apply `coordinating-multi-model-work/checkpoints.md`.

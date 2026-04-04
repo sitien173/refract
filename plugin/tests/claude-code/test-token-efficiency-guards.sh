@@ -42,14 +42,30 @@ echo "  [PASS]"
 echo ""
 
 echo "Test 3: Bounded-task language is present..."
-if ! rg -n 'bounded task|one bounded task|one worker|External Response Protocol v1\.1|Reuse.*SESSION_ID|same worker `SESSION_ID`|same worker SESSION_ID' "${TARGETS[@]}" >/tmp/token-guards-bounded.txt 2>/dev/null; then
-  echo "  [FAIL] Missing bounded-task / worker ownership language"
+if ! rg -n 'bounded task|one bounded task|one worker|External Response Protocol v1\.1|Reuse.*SESSION_ID|same worker `SESSION_ID`|same worker SESSION_ID|Context Refs|Hydrated Context|task-scoped context bundle|deltas only' "${TARGETS[@]}" >/tmp/token-guards-bounded.txt 2>/dev/null; then
+  echo "  [FAIL] Missing bounded-task / worker ownership / smart context-sharing language"
   exit 1
 fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 4: Cross-validation is explicitly rare..."
+echo "Test 4: Full CONTEXT_PACKAGE repetition is absent from active execution docs..."
+if rg -n 'full `CONTEXT_PACKAGE`|FULL CONTEXT_PACKAGE|## Context Package' \
+  "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
+  "$REPO_ROOT/skills/developing-with-subagents/SKILL.md" \
+  "$REPO_ROOT/skills/developing-with-subagents/implementer-prompt.md" >/tmp/token-guards-context.txt 2>/dev/null; then
+  echo "  [FAIL] Found stale full CONTEXT_PACKAGE repetition"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 5: Cross-validation is explicitly rare..."
 if ! rg -n 'rare|Do not use cross-validation|Before escalating to `CROSS_VALIDATION`|Use `CROSS_VALIDATION` only' "${TARGETS[@]}" >/tmp/token-guards-cross.txt 2>/dev/null; then
   echo "  [FAIL] Missing strict cross-validation limits"
   exit 1

@@ -11,6 +11,7 @@ Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.
 - **Final spec review**: CP4 performs a pure spec check against the original request and CP1 success criteria.
 - **MCP tool integration**: external calls go through `mcp__codex__codex` and `mcp__gemini__gemini`.
 - **Collaboration checkpoints**: CP0/CP1/CP2/CP3/CP4 checkpoints are embedded in the main skills.
+- **Smart context sharing**: CP0 produces reusable context artifacts, CP1 builds task-scoped bundles, and same-task follow-ups send deltas only.
 - **Fail-closed gate**: if a required external model call cannot complete, the workflow stops with `BLOCKED`.
 
 ## Quick Start (Claude Code)
@@ -63,7 +64,7 @@ The routing and checkpoint rules live in `skills/coordinating-multi-model-work/`
 
 | Checkpoint | When | Purpose |
 |---|---|---|
-| CP0 | Before CP1 | Context acquisition / retrieval using the Hybrid Context Engine |
+| CP0 | Before CP1 | Context acquisition with Auggie for local code context and Grok Search for external research |
 | CP1 | Immediately after CP0, before first Task call | Task assessment and routing using the CP1 routing matrix |
 | CP2 | After CP1 when routed externally | External execution via Gemini/Codex/Cross-Validation with final file output |
 | CP3 | After CP2 when reconciliation is needed | Resolve external-model conflicts, gaps, and clarifications before CP4 |

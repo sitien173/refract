@@ -56,38 +56,7 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 **Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow
 
-**Fallback:** Morph WarpGrep or Serena
-
----
-
-### Morph WarpGrep / Codebase Search (`mcp__morph_mcp__codebase_search`)
-
-**Purpose:** Fast parallel natural-language search inside the local codebase.
-
-**Use when:**
-- Sweeping many files quickly during CP0
-- Validating or widening Auggie hits
-- Narrowing a bounded file set before symbol-level tracing
-
-**Auto-triggers:** "scan the codebase", "find all places", broad codebase exploration
-
-**Fallback:** Auggie or Serena
-
----
-
-### Serena (`mcp__serena__*`)
-
-**Purpose:** Semantic code understanding with project memory.
-
-**Use when:**
-- Symbol-aware navigation (find references, trace dependencies)
-- Large codebase exploration (>10 files involved)
-- Cross-session project memory and persistence
-- Refactoring with dependency tracking
-
-**Auto-triggers:** "refactor", "find all usages", "symbol tracking", file count >10
-
-**Fallback:** Grep + Read + Glob (3x slower, same quality)
+**Fallback:** Native file search (`rg`, `glob`, `read`)
 
 ---
 
@@ -122,9 +91,9 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ## Composition Patterns
 
-### CP0 Hybrid Context Engine
+### CP0 Context Retrieval
 ```
-Auggie (semantic "where/what/how") → Morph WarpGrep (fast parallel narrowing) → Serena (symbols, references, memory) → Grok Search (only if external/current knowledge is required)
+Auggie (full local codebase context retrieval) → Grok Search (only if external/current knowledge or research is required)
 ```
 
 ### Research Phase (Brainstorming)
@@ -134,7 +103,7 @@ Grok Search (gather info) → Sequential (analyze & decompose) → Design output
 
 ### Complex Debugging
 ```
-Sequential (decompose problem) → Grok Search (search known issues) → Serena (trace symbols) → Fix
+Sequential (decompose problem) → Auggie (retrieve local context) → Grok Search (search known issues if needed) → Fix
 ```
 
 ### Plan Writing
@@ -149,7 +118,7 @@ Magic (component patterns) + Gemini MCP (full implementation) → Claude CP4 fin
 
 ### Bulk Refactoring
 ```
-Serena (scope & analyze) → Morphllm (execute bulk edits) → Claude CP4 final spec review
+Auggie (scope & analyze) → Morphllm (execute bulk edits) → Claude CP4 final spec review
 ```
 
 ## Integration with Primary Routing
@@ -158,7 +127,7 @@ Supplementary tools operate at the **orchestrator level** — Claude uses them t
 
 ```
 1. Claude receives task
-2. CP0: use the Hybrid Context Engine when context acquisition is needed
+2. CP0: use Auggie for local context acquisition; use Grok Search only for external/current research
 3. Route implementation to Codex/Gemini at CP1 (primary routing)
 4. [Optional] Use supplementary tools during review/integration
 5. Claude runs CP4 final spec review

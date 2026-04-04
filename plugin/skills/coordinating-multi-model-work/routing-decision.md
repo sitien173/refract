@@ -11,17 +11,18 @@ Invoke this framework immediately after CP0 completes and before the first Task 
 Inputs:
 
 - original user request
-- full `CONTEXT_PACKAGE` from CP0
+- CP0 context artifacts
 - the inline CP1 routing matrices below
 
 ## Task Assessment Steps
 
-1. Read the original request and the CP0 context package.
+1. Read the original request and the CP0 context artifacts.
 2. Summarize the core task in one English sentence.
 3. Check whether the task is clear and sufficiently scoped.
 4. If unclear, route to `Claude`, output the CP1 decision block, and ask clarifying questions immediately.
 5. Classify the task against the inline CP1 routing matrices below.
 6. Decide model ownership and cross-validation.
+7. Build one task-scoped context bundle with `TASK_ID`, `CONTEXT_REFS`, and `HYDRATED_CONTEXT`.
 
 ## Decision Output
 
@@ -51,16 +52,16 @@ Inputs:
 
 | Task Category | Examples | CP0 Context Tools | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- | --- | --- |
-| Pure Frontend / UI / Styling | CSS, React/Vue components, Tailwind, animations | Hybrid (Auggie + Morph + Serena) | Gemini | No | Fastest path |
-| Pure Backend / Logic / API | API endpoints, business logic, DB queries, auth | Hybrid (Auggie + Morph + Serena) | Codex | No | Use cross-validation only if the task becomes high-impact or architecture-heavy |
-| Full-Stack / Architecture | New feature spanning FE + BE, major refactors | Hybrid (Auggie + Morph + Serena) | Cross-Validation (Codex + Gemini) | Yes | Both models run in parallel |
-| Docs / Comments / Simple Fix | README updates, typo fixes, minor config | Auggie only (Serena optional) | Claude | No | Usually no external models |
-| Debugging / Performance | Bug fixes, optimization, slow queries | Hybrid (Auggie + Morph + Serena) | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
-| Infrastructure / DevOps | Docker, CI/CD, deployment scripts | Hybrid (Auggie + Morph + Serena) | Codex | No | Use cross-validation only for high-risk changes |
-| Data / ML / Analytics | Data pipelines, queries, simple ML logic | Hybrid (Auggie + Morph + Serena) | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Unit tests, integration tests, E2E | Hybrid (Auggie + Morph + Serena) | Cross-Validation (Codex + Gemini) | Yes | Useful when tests span frontend and backend behavior |
-| Cross-Cutting / Security | Auth, encryption, compliance, rate-limiting | Hybrid (Auggie + Morph + Serena) | Codex | Yes | Extra safety layer |
-| Uncategorized / Ambiguous | Request unclear or spans many areas | Hybrid (Auggie + Morph + Serena + Grok Search if needed) | Claude | No | Fail-closed: ask clarifying questions immediately |
+| Pure Frontend / UI / Styling | CSS, React/Vue components, Tailwind, animations | Auggie | Gemini | No | Fastest path |
+| Pure Backend / Logic / API | API endpoints, business logic, DB queries, auth | Auggie | Codex | No | Use cross-validation only if the task becomes high-impact or architecture-heavy |
+| Full-Stack / Architecture | New feature spanning FE + BE, major refactors | Auggie | Cross-Validation (Codex + Gemini) | Yes | Both models run in parallel |
+| Docs / Comments / Simple Fix | README updates, typo fixes, minor config | Auggie | Claude | No | Usually no external models |
+| Debugging / Performance | Bug fixes, optimization, slow queries | Auggie | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
+| Infrastructure / DevOps | Docker, CI/CD, deployment scripts | Auggie | Codex | No | Use cross-validation only for high-risk changes |
+| Data / ML / Analytics | Data pipelines, queries, simple ML logic | Auggie | Codex | No | Use cross-validation only if the task becomes unusually complex |
+| Testing / Test Coverage | Unit tests, integration tests, E2E | Auggie | Cross-Validation (Codex + Gemini) | Yes | Useful when tests span frontend and backend behavior |
+| Cross-Cutting / Security | Auth, encryption, compliance, rate-limiting | Auggie | Codex | Yes | Extra safety layer |
+| Uncategorized / Ambiguous | Request unclear or spans many areas | Auggie + Grok Search if needed | Claude | No | Fail-closed: ask clarifying questions immediately |
 
 ## Compact Routing Matrix
 

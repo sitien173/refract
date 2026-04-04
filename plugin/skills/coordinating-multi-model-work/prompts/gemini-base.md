@@ -8,10 +8,16 @@
 
 ```text
 ## Original User Request
-{user_request}
+{compressed_user_request}
 
-## Context Package
-{context_package}
+## Task Context Bundle
+TASK_ID: {task_id}
+
+## Context Refs
+{context_refs}
+
+## Hydrated Context
+{hydrated_context}
 
 ## CP1 Task Summary
 {task_summary}
@@ -26,8 +32,7 @@
 {verify_command}
 
 ## Response Protocol
-FIRST: Read Serena memory 'global/response_protocol' for full format rules.
-FALLBACK: Use exactly this structure:
+Use exactly this structure:
 
 # EXTERNAL RESPONSE PROTOCOL v1.1
 
@@ -44,6 +49,9 @@ One-sentence summary of what you did.
 For each file listed in FILES MODIFIED, return either:
 1. the complete final file content (preferred), or
 2. a unified diff patch if full content is impractical.
+
+## CONTEXT ARTIFACTS
+Optional reusable artifacts discovered or updated during execution.
 
 ## SPEC COMPLIANCE
 - Meets Spec? YES / PARTIAL / NO
@@ -66,6 +74,5 @@ TASK_COMPLETE / CONTINUE_SESSION / HANDOVER_TO_CLAUDE
 {file_list}
 
 ## Response Protocol
-FIRST: Read Serena memory 'global/response_protocol' for full format rules.
-FALLBACK: Output ## ANALYSIS (<=120 words) → ## ISSUES (<=3) → ## VERDICT (one line).
+Output exactly: ## ANALYSIS (<=120 words) → ## ISSUES (<=3) → ## VERDICT (one line).
 ```

@@ -7,8 +7,8 @@ set -euo pipefail
 cat <<'EOF'
 [CP Protocol Threshold]
 
-Before the first Task call, do minimal CP0 context acquisition using the Hybrid Context Engine (Auggie -> Morph WarpGrep -> Serena; use Grok Search only for external/current knowledge).
-Immediately after CP0 completes, run CP1 Task Assessment & Routing using the original user request, the full CONTEXT_PACKAGE from CP0, and the routing guide below.
+Before the first Task call, do minimal CP0 context acquisition using Auggie for full local context retrieval and Grok Search only for external/current knowledge or research.
+Immediately after CP0 completes, run CP1 Task Assessment & Routing using the original user request and the CP0 context artifacts, then build one task-scoped context bundle for the next bounded task.
 CP1 routing guide:
 | Task Category | Model | Cross-Validation | Notes / Triggers |
 |---|---|---|---|
@@ -23,7 +23,7 @@ CP1 routing guide:
 | Cross-Cutting / Security | Codex | Yes | Extra safety layer |
 | Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions immediately |
 If the request is unclear or incomplete, route to Claude, output the CP1 block below, and then immediately ask clarifying questions.
-If CP1 routes to Gemini, Codex, or Cross-Validation, run CP2 External Execution using the original user request, the full CONTEXT_PACKAGE from CP0, and the CP1 task summary plus success criteria. Require final file contents directly (preferred) or a unified diff patch using External Response Protocol v1.1.
+If CP1 routes to Gemini, Codex, or Cross-Validation, run CP2 External Execution using a task-scoped context bundle: compressed original request, context refs, hydrated context snippets, and the CP1 task summary plus success criteria. Reuse the same worker SESSION_ID only for follow-up fixes on that bounded task, and send deltas only on follow-up turns. Require final file contents directly (preferred) or a unified diff patch using External Response Protocol v1.1.
 If CP1 chose Cross-Validation or CP2 returned conflicts, overlap, PARTIAL/NO spec compliance, clarifications, CONTINUE_SESSION, or other non-trivial feedback, run CP3 Reconciliation. In CP3, parse every External Response Protocol block, resolve conflicts against the original requirement, decide whether to proceed, retry, continue, or ask the user, and do not apply file edits yourself.
 Always run CP4 Final Spec Review as the final step, after CP3 when reconciliation is needed or directly after Claude-only / non-reconciled work. In CP4, use the original user request, the CP1 task summary, and the files changed by the workflow to judge spec satisfaction only. Do not perform code quality, style, redundancy, or best-practice review in CP4.
 

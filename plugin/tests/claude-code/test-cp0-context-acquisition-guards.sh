@@ -28,16 +28,16 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 2: Hybrid Context Engine tool order is documented..."
-if ! rg -n 'Auggie.*Morph WarpGrep.*Serena.*Grok Search|Auggie → Morph WarpGrep → Serena → Grok Search' "${TARGETS[@]}" >/tmp/cp0-guards-order.txt 2>/dev/null; then
-  echo "  [FAIL] Missing Hybrid Context Engine order"
+echo "Test 2: CP0 tool contract is documented..."
+if ! rg -n 'Auggie.*full local.*Grok Search|Auggie.*local code.*Grok Search|Auggie \(full local codebase context retrieval\) → Grok Search' "${TARGETS[@]}" >/tmp/cp0-guards-order.txt 2>/dev/null; then
+  echo "  [FAIL] Missing Auggie + Grok Search CP0 contract"
   exit 1
 fi
 echo "  [PASS]"
 echo ""
 
 echo "Test 3: CP0 tool matrix is embedded in active docs..."
-if ! rg -n '\| Need \| Primary Tool \| When to Trigger Grok Search \| Fallback \||Semantic "Where/What/How" in codebase \| Auggie \||Fast parallel search inside the codebase \| Morph WarpGrep \||Symbol navigation & references \| Serena \||Persistent project memory / graph \| Serena \||External / real-world knowledge \| Grok Search \|' \
+if ! rg -n '\| Need \| Primary Tool \| When to Trigger Grok Search \| Fallback \||Local codebase context / implementation anchors \| Auggie \||External / real-world knowledge \| Grok Search \|' \
   "$REPO_ROOT/skills/shared/protocol-threshold.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" >/tmp/cp0-guards-csv.txt 2>/dev/null; then
   echo "  [FAIL] Active docs do not include the expected CP0 tool matrix"
