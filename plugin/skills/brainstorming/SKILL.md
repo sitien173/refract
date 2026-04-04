@@ -102,8 +102,7 @@ Before handing off to writing-plans, run `TaskList` to display the complete task
 
 **Implementation (if continuing):**
 
-- Ask: "Ready to set up for implementation?"
-- Use superpowers:using-git-worktrees to create isolated workspace
+- Ask: "Ready to turn this into an implementation plan?"
 - Use superpowers:writing-plans to create detailed implementation plan
 
 ## Key Principles

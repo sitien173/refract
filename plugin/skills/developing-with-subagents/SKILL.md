@@ -50,6 +50,5 @@ Execute one bounded task at a time by routing it to Codex or Gemini, then end wi
 ## Integration
 
 - `superpowers:writing-plans`
-- `superpowers:requesting-code-review`
-- `superpowers:finishing-development-branches`
+- `superpowers:verifying-before-completion`
 - `superpowers:coordinating-multi-model-work`

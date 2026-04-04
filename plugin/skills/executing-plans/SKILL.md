@@ -68,4 +68,4 @@ Do not dump prior task history back into the session.
 ## Completion
 
 After all tasks complete:
-- use `superpowers:finishing-development-branches`
+- use `superpowers:verifying-before-completion`

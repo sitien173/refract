@@ -32,7 +32,7 @@ You have superpowers.
 
 **Skill Namespace:** `superpowers-ccg:` — use Skill tool to load any skill by name.
 
-**To learn more:** Load `superpowers-ccg:using-superpowers` or `superpowers-ccg:coordinating-multi-model-work` for full instructions.
+**To learn more:** Load `superpowers-ccg:coordinating-multi-model-work` for the full orchestration workflow.
 ENDOFCOMPACT
 )"
 

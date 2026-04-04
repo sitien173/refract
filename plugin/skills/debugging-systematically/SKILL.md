@@ -217,7 +217,6 @@ You MUST complete each phase before proceeding to the next.
    - Automated test if possible
    - One-off test script if no framework
    - MUST have before fixing
-   - Use the `superpowers:practicing-test-driven-development` skill for writing proper failing tests
 
 2. **Implement Single Fix**
    - Address the root cause identified
@@ -316,7 +315,6 @@ These techniques are part of systematic debugging and available in this director
 
 **Related skills:**
 
-- **superpowers:practicing-test-driven-development** - For creating failing test case (Phase 4, Step 1)
 - **superpowers:verifying-before-completion** - Verify fix worked before claiming success
 - **superpowers:coordinating-multi-model-work** - For multi-model cross-validation diagnosis
 

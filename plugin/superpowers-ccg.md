@@ -33,12 +33,11 @@
 
 ## Iron Laws
 
-| Iron Law | Skill | Consequence |
-|----------|-------|-------------|
-| `NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST` | TDD | Delete code, start over |
+| Iron Law | Enforced By | Consequence |
+|----------|-------------|-------------|
+| `NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST` | Testing discipline | Delete code, start over |
 | `NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST` | Debugging | Return to Phase 1 |
 | `NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE` | Verification | Run command, read output |
-| `NO SKILL WITHOUT A FAILING TEST FIRST` | Writing Skills | Delete skill, start over |
 
 ---
 
@@ -69,7 +68,7 @@ BEFORE any response or action:
 ### Workflow 1: Creating Features
 
 ```text
-superpowers-ccg:brainstorming → superpowers-ccg:writing-plans → [superpowers-ccg:using-git-worktrees] → superpowers-ccg:executing-plans OR superpowers-ccg:developing-with-subagents → superpowers-ccg:finishing-development-branches
+superpowers-ccg:brainstorming → superpowers-ccg:writing-plans → superpowers-ccg:executing-plans OR superpowers-ccg:developing-with-subagents → superpowers-ccg:verifying-before-completion
 ```
 
 ### Workflow 2: Debugging
@@ -77,14 +76,6 @@ superpowers-ccg:brainstorming → superpowers-ccg:writing-plans → [superpowers
 ```text
 superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:verifying-before-completion
 ```
-
-### Workflow 3: Code Review
-
-```text
-superpowers-ccg:requesting-code-review → [reviewer subagent] → superpowers-ccg:receiving-code-review → [implement fixes]
-```
-
----
 
 ## Skills Reference
 
@@ -94,7 +85,6 @@ superpowers-ccg:requesting-code-review → [reviewer subagent] → superpowers-c
 |-------|---------|---------|
 | `superpowers-ccg:brainstorming` | Creating features, building components, starting creative work | Explore requirements and design before implementation |
 | `superpowers-ccg:debugging-systematically` | Bugs, test failures, unexpected behavior, errors | Find root cause through four-phase investigation |
-| `superpowers-ccg:practicing-test-driven-development` | Implementing features, fixing bugs, refactoring | Red-green-refactor cycle |
 | `superpowers-ccg:verifying-before-completion` | About to claim work is done | Ensure evidence before assertions |
 
 ### Planning Skills
@@ -105,32 +95,10 @@ superpowers-ccg:requesting-code-review → [reviewer subagent] → superpowers-c
 | `superpowers-ccg:executing-plans` | Have a plan document | Execute plan in batches |
 | `superpowers-ccg:developing-with-subagents` | Have a plan and independent tasks | Fresh subagent per task with review |
 
-### Git/Workspace Skills
-
-| Skill | Trigger | Purpose |
-|-------|---------|---------|
-| `superpowers-ccg:using-git-worktrees` | Starting feature work needing isolation | Create isolated git worktree |
-| `superpowers-ccg:finishing-development-branches` | Implementation complete, tests pass | Guide merge/PR/cleanup |
-
-### Review Skills
-
-| Skill | Trigger | Purpose |
-|-------|---------|---------|
-| `superpowers-ccg:requesting-code-review` | Completing tasks before merge | Dispatch code reviewer subagent |
-| `superpowers-ccg:receiving-code-review` | Got review feedback | Evaluate feedback with rigor |
-
-### Parallel Execution
-
-| Skill | Trigger | Purpose |
-|-------|---------|---------|
-| `superpowers-ccg:dispatching-parallel-agents` | 2+ independent tasks | One agent per problem domain |
-
 ### Meta Skills
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `superpowers-ccg:using-superpowers` | Starting conversation, need skill guidance | How to find and use skills |
-| `superpowers-ccg:writing-skills` | Creating/editing skills | TDD for process documentation |
 | `superpowers-ccg:coordinating-multi-model-work` | Any implementation work, cross-validation needed | Route to Codex/Gemini via MCP |
 
 ---

@@ -9,11 +9,8 @@ PROMPTS_DIR="$SCRIPT_DIR/prompts"
 
 SKILLS=(
     "debugging-systematically"
-    "practicing-test-driven-development"
     "writing-plans"
-    "dispatching-parallel-agents"
     "executing-plans"
-    "requesting-code-review"
     "coordinating-multi-model-work"
 )
 
@@ -21,9 +18,6 @@ prompt_file_for_skill() {
     case "$1" in
         debugging-systematically)
             echo "$PROMPTS_DIR/systematic-debugging.txt"
-            ;;
-        practicing-test-driven-development)
-            echo "$PROMPTS_DIR/test-driven-development.txt"
             ;;
         *)
             echo "$PROMPTS_DIR/$1.txt"
