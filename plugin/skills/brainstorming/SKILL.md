@@ -83,7 +83,7 @@ TaskCreate:
     **Verify:** [How to test this component works]
 
     ```json:metadata
-    {"files": ["path/from/design"], "verifyCommand": "command to verify", "acceptanceCriteria": ["criterion 1", "criterion 2"]}
+    {"files": ["path/from/design"], "verifyCommand": "command to verify", "acceptanceCriteria": ["criterion 1", "criterion 2"], "contextRefs": ["req/core", "files/hotspots"], "hydratedContext": ["key requirements summary"]}
     ```
   activeForm: "Implementing [Component Name]"
 ~~~

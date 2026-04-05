@@ -37,6 +37,9 @@ Embed metadata as a `json:metadata` code fence at the end of the TaskCreate desc
 | `verifyCommand` | string | yes | Command to verify task completion |
 | `acceptanceCriteria` | string[] | yes | List of testable criteria |
 | `estimatedScope` | "small" \| "medium" \| "large" | no | Relative effort indicator |
+| `contextRefs` | string[] | no | CONTEXT_REFS artifact IDs from CP0/Auggie |
+| `hydratedContext` | string[] | no | Hydrated snippets for TASK_CONTEXT_BUNDLE |
+| `contextBundle` | object | no | Full task-scoped bundle summary for deltas |
 
 ### Example
 
