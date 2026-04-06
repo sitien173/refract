@@ -38,6 +38,7 @@ Execute one bounded task at a time by routing it to Codex or Gemini, then end wi
 | ---- | ----- | -------------- |
 | Backend and systems implementation | Codex MCP (`mcp__codex__codex`) | CODEX routing |
 | Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) | GEMINI routing |
+| Fallback implementation | Sonnet subagent (`Agent` tool, `model: "sonnet"`) | When Codex/Gemini MCP unavailable after 2 retries |
 | Final Spec Reviewer | Claude main thread | Always CP4 |
 
 ## Checkpoints

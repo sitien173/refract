@@ -23,6 +23,7 @@ Use this module to route one bounded task at a time:
 6. Use CP3 as a Claude-only reconciliation layer when cross-validation or other non-trivial external feedback appears.
 7. Always run CP4 Final Spec Review as the last step.
 8. Keep CP4 focused on spec satisfaction only, not code quality or style feedback.
+9. If a Codex/Gemini MCP call fails with `timeout` or `tool-unavailable`, retry up to 2 times, then fall back to a Sonnet subagent (`Agent` tool, `model: "sonnet"`) for direct file editing. See `checkpoints.md` CP2 Failure & Fallback for the full policy.
 
 ## Cross-Validation
 

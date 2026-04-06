@@ -74,6 +74,40 @@ Output contract:
 - Use `# EXTERNAL RESPONSE PROTOCOL v1.1`.
 - Allow an optional `## CONTEXT ARTIFACTS` section for reusable discoveries that later tasks can reference.
 
+## CP2 Failure & Fallback
+
+When a CP2 MCP call (`mcp__codex__codex` or `mcp__gemini__gemini`) fails:
+
+### Tiered failure handling
+
+1. **Retry** — If the failure reason is `timeout` or `tool-unavailable`, retry the same MCP call with identical parameters (including `SESSION_ID` if it was a follow-up). Retry up to 2 times with no delay.
+2. **Fallback** — If both retries fail, dispatch a Sonnet subagent to implement the task directly:
+   - Use the `Agent` tool with `model: "sonnet"` and `subagent_type: "general-purpose"`.
+   - Send the same task context bundle using `prompts/sonnet-fallback-base.md`.
+   - The subagent edits files directly via Edit/Write/Bash (no External Response Protocol).
+   - After the subagent completes, proceed to CP4 as normal.
+3. **Hard BLOCKED** — If the failure reason is `permission-blocked`, do not retry or fall back. Output the `BLOCKED` evidence block per `GATE.md`. The user deliberately denied the tool.
+
+### Cross-validation fallback
+
+If CP1 chose `Cross-Validation` and both Codex and Gemini fail after retries, dispatch ONE Sonnet subagent (not two). The fallback handles the task as a single bounded implementation.
+
+### Evidence format
+
+When fallback triggers, output:
+
+```text
+[Multi-Model Gate]
+Routing: CODEX | GEMINI
+Status: FALLBACK
+Reason: tool-unavailable | timeout (after 2 retries)
+Fallback: Sonnet subagent (direct file editing)
+```
+
+### CP4 after fallback
+
+CP4 runs identically regardless of whether the MCP worker or the Sonnet subagent performed the work. If CP4 returns `PARTIAL` or `FAIL`, dispatch a new Sonnet subagent with delta context (not session reuse — subagents are one-shot).
+
 ## CP3: Reconciliation
 
 Run CP3 only after CP2 when:

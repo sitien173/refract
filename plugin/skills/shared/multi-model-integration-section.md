@@ -32,4 +32,9 @@ All skills that invoke external models must follow this pattern.
 
 ## Fallback
 
-If `Routing != CLAUDE` and the MCP call fails or times out, stop and follow `coordinating-multi-model-work/GATE.md`.
+If `Routing != CLAUDE` and the MCP call fails with `timeout` or `tool-unavailable`:
+1. Retry the same MCP call up to 2 times with identical parameters.
+2. If still failing, fall back to a Sonnet subagent (`Agent` tool, `model: "sonnet"`) that implements the task via direct file editing. Use `coordinating-multi-model-work/prompts/sonnet-fallback-base.md` as the prompt template.
+3. CP4 runs identically after Sonnet fallback.
+
+If the failure reason is `permission-blocked`, do not retry or fall back — output `BLOCKED` per `coordinating-multi-model-work/GATE.md`.
