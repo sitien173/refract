@@ -1,11 +1,7 @@
 {
   "name": "@nst173/superpowers-ccg",
-  "version": "1.3.2",
-  "description": "Superpowers CCG workflows for Claude Code, Cursor, and Antigravity.",
-  "type": "module",
-  "bin": {
-    "superpowers-ccg": "./bin/cli.js"
-  },
+  "version": "1.4.0",
+  "description": "Superpowers CCG multi-model orchestration plugin for Claude Code.",
   "files": [
     "AGENTS.md",
     "CLAUDE.md",
@@ -15,15 +11,10 @@
     "agents",
     "commands",
     "hooks",
-    "skills",
-    "bin",
-    "lib",
-    "templates"
+    "skills"
   ],
   "keywords": [
     "claude-code",
-    "cursor",
-    "antigravity",
     "workflow",
     "skills",
     "orchestrator",
@@ -38,12 +29,6 @@
   "homepage": "https://github.com/sitien173/superpowers-ccg#readme",
   "bugs": {
     "url": "https://github.com/sitien173/superpowers-ccg/issues"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "dependencies": {
-    "prompts": "2.4.2"
   },
   "publishConfig": {
     "access": "public"
