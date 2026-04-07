@@ -28,7 +28,7 @@ You have superpowers.
 - Full-stack/uncertain → CROSS_VALIDATION (multiple)
 - Docs/coordination only → CLAUDE
 
-**Supplementary Tools (optional):** Grok Search/Tavily (research), Sequential-Thinking (complex reasoning), Magic (UI components), Morphllm (bulk edits).
+**Supplementary Tools (optional):** Grok Search/Tavily (research), Magic (UI components), Morphllm (bulk edits).
 
 **Skill Namespace:** `superpowers-ccg:` — use Skill tool to load any skill by name.
 

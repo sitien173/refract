@@ -5,33 +5,11 @@ description: "Find root cause before attempting fixes through four-phase investi
 
 # Systematic Debugging
 
-## Contents
-
-- [Systematic Debugging](#systematic-debugging)
-  - [Contents](#contents)
-  - [Overview](#overview)
-  - [Protocol Threshold (Required)](#protocol-threshold-required)
-  - [The Iron Law](#the-iron-law)
-  - [When to Use](#when-to-use)
-  - [The Four Phases](#the-four-phases)
-    - [Phase 1: Root Cause Investigation](#phase-1-root-cause-investigation)
-    - [Phase 2: Pattern Analysis](#phase-2-pattern-analysis)
-    - [Phase 3: Hypothesis and Testing](#phase-3-hypothesis-and-testing)
-    - [Phase 4: Implementation](#phase-4-implementation)
-  - [Red Flags - STOP and Follow Process](#red-flags---stop-and-follow-process)
-  - [Common Rationalizations](#common-rationalizations)
-  - [Quick Reference](#quick-reference)
-  - [When Process Reveals "No Root Cause"](#when-process-reveals-no-root-cause)
-  - [Supporting Techniques](#supporting-techniques)
-  - [Multi-Model Cross-Validation](#multi-model-cross-validation)
-
 ## Overview
 
 Random fixes waste time and create new bugs. Quick patches mask underlying issues.
 
 **Core principle:** ALWAYS find root cause before attempting fixes. Symptom fixes are failure.
-
-**Violating the letter of this process is violating the spirit of debugging.**
 
 ## Protocol Threshold (Required)
 
@@ -56,19 +34,10 @@ Use for ANY technical issue:
 - Build failures
 - Integration issues
 
-**Use this ESPECIALLY when:**
-
-- Under time pressure (emergencies make guessing tempting)
-- "Just one quick fix" seems obvious
-- You've already tried multiple fixes
-- Previous fix didn't work
-- You don't fully understand the issue
-
-**Don't skip when:**
-
-- Issue seems simple (simple bugs have root causes too)
-- You're in a hurry (rushing guarantees rework)
-- Manager wants it fixed NOW (systematic is faster than thrashing)
+- Under time pressure
+- After one or more failed fixes
+- When the failure spans multiple components
+- When the issue seems obvious but you have not traced it yet
 
 ## The Four Phases
 
@@ -79,7 +48,6 @@ You MUST complete each phase before proceeding to the next.
 **► CP1 (Task Assessment & Routing):** Before investigation, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **Supplementary tools (optional, enhance investigation):**
-- **Sequential-Thinking:** For bugs spanning 3+ components/layers, use Sequential-Thinking MCP to systematically decompose the problem, track hypotheses, and validate reasoning chains.
 - **Grok Search (Tavily):** For unknown error messages or library-specific bugs, use `mcp__grok-search__web_search` to search for known issues, workarounds, and recent bug reports.
 - **Auggie:** For large codebases, use Auggie to retrieve the relevant local context before tracing the failure path or narrowing the fix area.
 - See `skills/shared/supplementary-tools.md` for full reference.
@@ -272,27 +240,12 @@ If you catch yourself thinking:
 
 **If 3+ fixes failed:** Question the architecture (see Phase 4.5)
 
-## Common Rationalizations
-
-| Excuse                                       | Reality                                                                 |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| "Issue is simple, don't need process"        | Simple issues have root causes too. Process is fast for simple bugs.    |
-| "Emergency, no time for process"             | Systematic debugging is FASTER than guess-and-check thrashing.          |
-| "Just try this first, then investigate"      | First fix sets the pattern. Do it right from the start.                 |
-| "I'll write test after confirming fix works" | Untested fixes don't stick. Test first proves it.                       |
-| "Multiple fixes at once saves time"          | Can't isolate what worked. Causes new bugs.                             |
-| "Reference too long, I'll adapt the pattern" | Partial understanding guarantees bugs. Read it completely.              |
-| "I see the problem, let me fix it"           | Seeing symptoms ≠ understanding root cause.                             |
-| "One more fix attempt" (after 2+ failures)   | 3+ failures = architectural problem. Question pattern, don't fix again. |
-
 ## Quick Reference
 
-| Phase                 | Key Activities                                         | Success Criteria            |
-| --------------------- | ------------------------------------------------------ | --------------------------- |
-| **1. Root Cause**     | Read errors, reproduce, check changes, gather evidence | Understand WHAT and WHY     |
-| **2. Pattern**        | Find working examples, compare                         | Identify differences        |
-| **3. Hypothesis**     | Form theory, test minimally                            | Confirmed or new hypothesis |
-| **4. Implementation** | Create test, fix, verify                               | Bug resolved, tests pass    |
+- Phase 1 Root Cause: read errors, reproduce, inspect recent changes, trace the failure path
+- Phase 2 Pattern: compare against working examples or full references
+- Phase 3 Hypothesis: state one cause and test it with the smallest possible change
+- Phase 4 Implementation: write the failing test, fix the root cause, verify the result
 
 ## When Process Reveals "No Root Cause"
 
@@ -303,7 +256,7 @@ If systematic investigation reveals issue is truly environmental, timing-depende
 3. Implement appropriate handling (retry, timeout, error message)
 4. Add monitoring/logging for future investigation
 
-**But:** 95% of "no root cause" cases are incomplete investigation.
+Most "no root cause" outcomes are actually incomplete investigation.
 
 ## Supporting Techniques
 

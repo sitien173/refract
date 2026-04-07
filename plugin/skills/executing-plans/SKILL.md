@@ -13,40 +13,37 @@ Load the plan, then execute exactly one active task at a time.
 
 ## Process
 
-### Step 0: Load Persisted Tasks
+### Step 0: Load the Plan
 
-1. Call `TaskList`.
-2. Load `<plan-path>.tasks.json` if present.
-3. Resume from the first `pending` or `in_progress` task.
+1. Read the plan file once.
+2. Identify the single bounded task to execute in this session.
+3. Prefer an explicitly requested task; otherwise use the next task that is not already reflected in the repo state.
 
 ### Step 1: Read the Plan Once
 
-1. Read the plan file once.
-2. Validate the next task only.
+1. Validate the active task only.
+2. Extract its owner, file set, acceptance criteria, and verify command.
 3. Do not keep a running narrative for completed tasks in the main thread.
 
 ### Step 2: Execute One Task
 
 For the current task only:
 
-1. Mark it `in_progress`.
-2. Extract `verifyCommand`, `acceptanceCriteria`, and file set.
-3. Apply CP1 and build one task-scoped context bundle.
-4. If routing is not `CLAUDE`, apply CP2 and route to one worker.
-5. Reuse that worker `SESSION_ID` only for fixes on the same task, and send deltas only.
-6. Require External Response Protocol v1.1 with final file content preferred and unified diff fallback.
-7. If CP3 is triggered, reconcile external responses and decide whether to proceed, retry, continue, or ask the user.
-8. Run verification.
-9. Run CP4 Final Spec Review.
-10. Mark the task `completed` only if CP4 returns `PASS`.
-11. Persist a tiny handoff summary to `.tasks.json` or project memory:
-    - task id
-    - worker used
-    - context refs used
-    - files changed
-    - verify command result
-    - CP4 status
-    - open follow-ups
+1. Apply CP1 and build one task-scoped context bundle.
+2. If routing is not `CLAUDE`, apply CP2 and route to one worker.
+3. Reuse that worker `SESSION_ID` only for fixes on the same task, and send deltas only.
+4. Require External Response Protocol v1.1 with final file content preferred and unified diff fallback.
+5. If CP3 is triggered, reconcile external responses and decide whether to proceed, retry, continue, or ask the user.
+6. Run verification.
+7. Run CP4 Final Spec Review.
+8. Treat the task as complete only if CP4 returns `PASS`.
+9. Capture a brief handoff note in the assistant response:
+   - task completed
+   - worker used
+   - files changed
+   - verify command result
+   - CP4 status
+   - open follow-ups
 
 ### Step 3: Report Briefly
 
@@ -56,6 +53,8 @@ After each completed task:
 - next task
 
 Do not dump prior task history back into the session.
+
+If task completion cannot be inferred from the plan and repo state alone, stop and ask the user which task to execute next.
 
 ## Rules
 

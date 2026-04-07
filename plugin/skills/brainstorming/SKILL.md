@@ -39,7 +39,6 @@ Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders auto
 - Propose 2-3 different approaches with trade-offs
 - Present options conversationally with your recommendation and reasoning
 - Lead with your recommended option and explain why
-- **Sequential-Thinking (optional):** For complex designs with 3+ interacting components, use Sequential-Thinking MCP to systematically decompose trade-offs and validate reasoning chains before presenting options.
 
 **CP2 note:** CP2 is the external execution phase and starts only after the design is routed into implementation.
 
@@ -62,43 +61,6 @@ Once the user confirms the design looks right, do ALL of the following:
 3. Then tell the user the file path you wrote
 
 Only commit if the user explicitly asks you to commit.
-
-**Native Task Integration (must not be skipped):**
-
-After each design section is confirmed by the user, create a native task using Claude Code's TaskCreate tool. Follow the format in `skills/shared/task-format-reference.md`.
-
-~~~yaml
-TaskCreate:
-  subject: "Implement [Component Name]"
-  description: |
-    **Goal:** [What this component produces — one sentence]
-
-    **Files:**
-    - Create/Modify: [paths identified during design]
-
-    **Acceptance Criteria:**
-    - [ ] [Criterion from design validation]
-    - [ ] [Criterion from design validation]
-
-    **Verify:** [How to test this component works]
-
-    ```json:metadata
-    {"files": ["path/from/design"], "verifyCommand": "command to verify", "acceptanceCriteria": ["criterion 1", "criterion 2"], "contextRefs": ["req/core", "files/hotspots"], "hydratedContext": ["key requirements summary"]}
-    ```
-  activeForm: "Implementing [Component Name]"
-~~~
-
-Track all returned task IDs.
-
-After **all** components are validated, wire dependency relationships:
-
-~~~yaml
-TaskUpdate:
-  taskId: [dependent-task-id]
-  addBlockedBy: [prerequisite-task-ids]
-~~~
-
-Before handing off to writing-plans, run `TaskList` to display the complete task tree with dependency status so the user can confirm it looks right.
 
 **Implementation (if continuing):**
 

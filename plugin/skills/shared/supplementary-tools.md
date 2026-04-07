@@ -28,23 +28,6 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ---
 
-### Sequential-Thinking (`mcp__mcp-sequentialthinking-tools__sequentialthinking_tools`)
-
-**Purpose:** Multi-step structured reasoning for complex analysis.
-
-**Use when:**
-- Debugging spans 3+ components or layers
-- Architectural analysis or system design decisions
-- Cross-validation arbitration (divergent model outputs)
-- Complex plan decomposition with interdependencies
-- Hypothesis testing with multiple variables
-
-**Auto-triggers:** "design", "architecture", "analyze tradeoffs", "complex problem", 3+ interacting parts
-
-**Fallback:** Native reasoning (same quality, ~2x more tokens)
-
----
-
 ### Auggie Code Search (`mcp__auggie__augment_code_search`)
 
 **Purpose:** Semantic "where/what/how" search across a repository.
@@ -98,17 +81,17 @@ Auggie (full local codebase context retrieval) → Grok Search (only if external
 
 ### Research Phase (Brainstorming)
 ```
-Grok Search (gather info) → Sequential (analyze & decompose) → Design output
+Grok Search (gather info) → Design output
 ```
 
 ### Complex Debugging
 ```
-Sequential (decompose problem) → Auggie (retrieve local context) → Grok Search (search known issues if needed) → Fix
+Auggie (retrieve local context) → Grok Search (search known issues if needed) → Fix
 ```
 
 ### Plan Writing
 ```
-Sequential (architectural decomposition) → Grok Search (library docs) → Plan output
+Grok Search (library docs if needed) → Plan output
 ```
 
 ### Frontend Implementation
