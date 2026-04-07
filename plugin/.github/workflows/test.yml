@@ -12,10 +12,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       # Static checks from the fast suite (no Claude Code CLI on GitHub-hosted runners).
       # Run the full fast suite locally: ./tests/claude-code/run-skill-tests.sh
-      - name: Run fast static checks
+      - name: Run Claude Code static checks
         run: |
           chmod +x tests/claude-code/run-skill-tests.sh
           chmod +x tests/claude-code/test-*.sh
-          ./tests/claude-code/run-skill-tests.sh --test test-namespace-consistency.sh
+          ./tests/claude-code/run-skill-tests.sh
+
+      - name: Run OpenCode static checks
+        run: |
+          chmod +x tests/opencode/run-tests.sh
+          chmod +x tests/opencode/setup.sh
+          chmod +x tests/opencode/test-*.sh
+          ./tests/opencode/run-tests.sh

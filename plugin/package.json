@@ -1,20 +1,24 @@
 {
   "name": "@nst173/superpowers-ccg",
   "version": "1.4.0",
-  "description": "Superpowers CCG multi-model orchestration plugin for Claude Code.",
+  "description": "Superpowers CCG multi-model orchestration workflows for Claude Code and OpenCode.",
   "files": [
-    "AGENTS.md",
     "CLAUDE.md",
-    "GEMINI.md",
     "LICENSE",
     "README.md",
+    "superpowers-ccg.md",
+    ".claude-plugin",
+    ".opencode",
     "agents",
     "commands",
+    "docs/README.opencode.md",
     "hooks",
+    "lib",
     "skills"
   ],
   "keywords": [
     "claude-code",
+    "opencode",
     "workflow",
     "skills",
     "orchestrator",

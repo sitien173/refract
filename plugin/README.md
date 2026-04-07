@@ -10,27 +10,37 @@ Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.
 - **Multi-model routing (CCG)**: route tasks to Codex (backend and systems) or Gemini (frontend). Use **CROSS_VALIDATION** for full-stack or critical tasks.
 - **Final spec review**: CP4 performs a pure spec check against the original request and CP1 success criteria.
 - **MCP tool integration**: external calls go through `mcp__codex__codex` and `mcp__gemini__gemini`.
+- **OpenCode support**: the same workflows and skills can be loaded through the OpenCode plugin entrypoint at `.opencode/plugin/superpowers.js`.
 - **Collaboration checkpoints**: CP0/CP1/CP2/CP3/CP4 checkpoints are embedded in the main skills.
 - **Smart context sharing**: CP0 produces reusable context artifacts, CP1 builds task-scoped bundles, and same-task follow-ups send deltas only.
 - **Fail-closed gate**: if a required external model call cannot complete, the workflow stops with `BLOCKED`.
 
-## Quick Start (Claude Code)
+## Platform Support
 
-### Prerequisites
+| Platform | Entry Point | What You Install |
+|---|---|---|
+| Claude Code | Claude plugin | `.claude-plugin/` + hooks + skills |
+| OpenCode | OpenCode plugin | `.opencode/plugin/superpowers.js` + `lib/skills-core.js` + skills |
+
+## Quick Start
+
+### Claude Code
+
+#### Prerequisites
 
 - [Claude Code](https://docs.claude.com/docs/claude-code) installed (`claude --version`)
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated (`gemini --version`)
 - [Codex CLI](https://developers.openai.com/codex/quickstart) installed and authenticated (`codex --version`)
 - `uv` / `uvx` available
 
-### Install
+#### Install
 
 ```bash
 claude plugin marketplace add https://github.com/sitien173/superpowers-ccg
 claude plugin install superpowers-ccg
 ```
 
-### MCP Setup
+#### MCP Setup
 
 ```bash
 # Backend and systems specialist
@@ -39,6 +49,30 @@ claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.
 # Frontend specialist
 claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/geminimcp.git geminimcp
 ```
+
+### OpenCode
+
+#### Install
+
+```bash
+mkdir -p ~/.config/opencode/superpowers
+git clone https://github.com/sitien173/superpowers-ccg.git ~/.config/opencode/superpowers
+
+mkdir -p ~/.config/opencode/plugin
+ln -sf ~/.config/opencode/superpowers/.opencode/plugin/superpowers.js ~/.config/opencode/plugin/superpowers.js
+```
+
+Restart OpenCode after creating the symlink.
+
+#### What OpenCode Gets
+
+- Workflow bootstrap from `superpowers-ccg.md`
+- Bundled skills from `skills/`
+- Shared skill resolution from `lib/skills-core.js`
+- Custom tools: `use_skill` and `find_skills`
+- Skill priority: `project:` > personal > `superpowers:`
+
+Detailed OpenCode usage is in `docs/README.opencode.md`.
 
 ## Using External Models
 
@@ -87,10 +121,28 @@ claude plugin update superpowers-ccg
 
 ## Testing
 
-See `tests/claude-code/README.md` for the Claude Code skills test suite.
+### Claude Code
 
 ```bash
 ./tests/claude-code/run-skill-tests.sh
+```
+
+See `tests/claude-code/README.md` for the Claude Code suite, including slower integration coverage.
+
+### OpenCode Static Tests
+
+These do not require the `opencode` binary:
+
+```bash
+./tests/opencode/run-tests.sh
+```
+
+### OpenCode Integration Tests
+
+These require OpenCode to be installed:
+
+```bash
+./tests/opencode/run-tests.sh --integration
 ```
 
 ## Support
