@@ -71,6 +71,20 @@ ${sections.join('\n\n---\n\n')}
 </EXTREMELY_IMPORTANT>`;
 }
 
+function getVisibleStartupMessage() {
+  return `Superpowers-CCG is loaded for this session.
+
+Available custom tools:
+- find_skills
+- use_skill
+
+Examples:
+- "Call the find_skills tool and show the raw output."
+- "Call the use_skill tool with skill_name \\"superpowers:brainstorming\\"."
+
+Note: this plugin adds tools and workflow bootstrap guidance. It does not add Claude-style slash commands.`;
+}
+
 export const SuperpowersPlugin = async ({ client, directory }) => {
   const homeDir = os.homedir();
   const projectDir = directory || process.cwd();
@@ -88,6 +102,21 @@ export const SuperpowersPlugin = async ({ client, directory }) => {
         body: {
           noReply: true,
           parts: [{ type: 'text', text: bootstrap, synthetic: true }]
+        }
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const injectVisibleStartupMessage = async (sessionID) => {
+    try {
+      await client.session.prompt({
+        path: { id: sessionID },
+        body: {
+          noReply: true,
+          parts: [{ type: 'text', text: getVisibleStartupMessage() }]
         }
       });
       return true;
@@ -201,6 +230,7 @@ export const SuperpowersPlugin = async ({ client, directory }) => {
 
       if (event.type === 'session.created') {
         await injectBootstrap(sessionID, false);
+        await injectVisibleStartupMessage(sessionID);
       }
 
       if (event.type === 'session.compacted') {

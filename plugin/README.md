@@ -10,7 +10,7 @@ Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.
 - **Multi-model routing (CCG)**: route tasks to Codex (backend and systems) or Gemini (frontend). Use **CROSS_VALIDATION** for full-stack or critical tasks.
 - **Final spec review**: CP4 performs a pure spec check against the original request and CP1 success criteria.
 - **MCP tool integration**: external calls go through `mcp__codex__codex` and `mcp__gemini__gemini`.
-- **OpenCode support**: the same workflows and skills can be loaded through the OpenCode plugin entrypoint at `.opencode/plugin/superpowers.js`.
+- **OpenCode support**: the same workflows and skills can be loaded through the OpenCode plugin entrypoint at `.opencode/plugin/superpowers.js`, with visible slash commands exposed through OpenCode's commands directory.
 - **Collaboration checkpoints**: CP0/CP1/CP2/CP3/CP4 checkpoints are embedded in the main skills.
 - **Smart context sharing**: CP0 produces reusable context artifacts, CP1 builds task-scoped bundles, and same-task follow-ups send deltas only.
 - **Fail-closed gate**: if a required external model call cannot complete, the workflow stops with `BLOCKED`.
@@ -20,7 +20,7 @@ Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.
 | Platform | Entry Point | What You Install |
 |---|---|---|
 | Claude Code | Claude plugin | `.claude-plugin/` + hooks + skills |
-| OpenCode | OpenCode plugin | `.opencode/plugin/superpowers.js` + `lib/skills-core.js` + skills |
+| OpenCode | OpenCode plugin + command files | `plugins/superpowers-ccg.js` + `lib/skills-core.js` + skills + `commands/` symlinks |
 
 ## Quick Start
 
@@ -52,14 +52,29 @@ claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github
 
 ### OpenCode
 
+#### Prerequisites
+
+- [OpenCode](https://opencode.ai/docs/) installed
+- Node.js available
+- Git available
+
 #### Install
 
 ```bash
-mkdir -p ~/.config/opencode/superpowers
-git clone https://github.com/sitien173/superpowers-ccg.git ~/.config/opencode/superpowers
+mkdir -p ~/.config/opencode
+cd ~/.config/opencode
+npm install @opencode-ai/plugin
 
-mkdir -p ~/.config/opencode/plugin
-ln -sf ~/.config/opencode/superpowers/.opencode/plugin/superpowers.js ~/.config/opencode/plugin/superpowers.js
+git clone https://github.com/sitien173/superpowers-ccg.git ~/.config/opencode/superpowers-ccg
+
+mkdir -p ~/.config/opencode/plugins
+ln -sf ~/.config/opencode/superpowers-ccg/.opencode/plugin/superpowers.js ~/.config/opencode/plugins/superpowers-ccg.js
+
+mkdir -p ~/.config/opencode/commands
+ln -sf ~/.config/opencode/superpowers-ccg/.opencode/commands/brainstorm.md ~/.config/opencode/commands/brainstorm.md
+ln -sf ~/.config/opencode/superpowers-ccg/.opencode/commands/write-plan.md ~/.config/opencode/commands/write-plan.md
+ln -sf ~/.config/opencode/superpowers-ccg/.opencode/commands/execute-plan.md ~/.config/opencode/commands/execute-plan.md
+ln -sf ~/.config/opencode/superpowers-ccg/.opencode/commands/debug.md ~/.config/opencode/commands/debug.md
 ```
 
 Restart OpenCode after creating the symlink.
@@ -70,7 +85,15 @@ Restart OpenCode after creating the symlink.
 - Bundled skills from `skills/`
 - Shared skill resolution from `lib/skills-core.js`
 - Custom tools: `use_skill` and `find_skills`
+- Native slash commands linked into `~/.config/opencode/commands/`
 - Skill priority: `project:` > personal > `superpowers:`
+
+Visible commands after setup:
+
+- `/brainstorm`
+- `/write-plan`
+- `/execute-plan`
+- `/debug`
 
 Detailed OpenCode usage is in `docs/README.opencode.md`.
 

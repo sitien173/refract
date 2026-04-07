@@ -15,15 +15,15 @@ trap cleanup_test_env EXIT
 
 # Test 1: Verify plugin file exists and is registered
 echo "Test 1: Checking plugin registration..."
-if [ -L "$HOME/.config/opencode/plugin/superpowers.js" ]; then
+if [ -L "$HOME/.config/opencode/plugins/superpowers-ccg.js" ]; then
     echo "  [PASS] Plugin symlink exists"
 else
-    echo "  [FAIL] Plugin symlink not found at $HOME/.config/opencode/plugin/superpowers.js"
+    echo "  [FAIL] Plugin symlink not found at $HOME/.config/opencode/plugins/superpowers-ccg.js"
     exit 1
 fi
 
 # Verify symlink target exists
-if [ -f "$(readlink -f "$HOME/.config/opencode/plugin/superpowers.js")" ]; then
+if [ -f "$(readlink -f "$HOME/.config/opencode/plugins/superpowers-ccg.js")" ]; then
     echo "  [PASS] Plugin symlink target exists"
 else
     echo "  [FAIL] Plugin symlink target does not exist"
@@ -32,7 +32,7 @@ fi
 
 # Test 2: Verify lib/skills-core.js is in place
 echo "Test 2: Checking skills-core.js..."
-if [ -f "$HOME/.config/opencode/superpowers/lib/skills-core.js" ]; then
+if [ -f "$HOME/.config/opencode/superpowers-ccg/lib/skills-core.js" ]; then
     echo "  [PASS] skills-core.js exists"
 else
     echo "  [FAIL] skills-core.js not found"
@@ -41,7 +41,7 @@ fi
 
 # Test 3: Verify skills directory is populated
 echo "Test 3: Checking skills directory..."
-skill_count=$(find "$HOME/.config/opencode/superpowers/skills" -name "SKILL.md" | wc -l)
+skill_count=$(find "$HOME/.config/opencode/superpowers-ccg/skills" -name "SKILL.md" | wc -l)
 if [ "$skill_count" -gt 0 ]; then
     echo "  [PASS] Found $skill_count skills installed"
 else
@@ -51,7 +51,7 @@ fi
 
 # Test 4: Check coordinating-multi-model-work skill exists
 echo "Test 4: Checking coordinating-multi-model-work skill..."
-if [ -f "$HOME/.config/opencode/superpowers/skills/coordinating-multi-model-work/SKILL.md" ]; then
+if [ -f "$HOME/.config/opencode/superpowers-ccg/skills/coordinating-multi-model-work/SKILL.md" ]; then
     echo "  [PASS] coordinating-multi-model-work skill exists"
 else
     echo "  [FAIL] coordinating-multi-model-work skill not found"
@@ -60,7 +60,7 @@ fi
 
 # Test 5: Verify plugin JavaScript syntax (basic check)
 echo "Test 5: Checking plugin JavaScript syntax..."
-plugin_file="$HOME/.config/opencode/superpowers/.opencode/plugin/superpowers.js"
+plugin_file="$HOME/.config/opencode/superpowers-ccg/.opencode/plugin/superpowers.js"
 if node --check "$plugin_file" 2>/dev/null; then
     echo "  [PASS] Plugin JavaScript syntax is valid"
 else
@@ -74,6 +74,18 @@ if [ -f "$HOME/.config/opencode/skills/personal-test/SKILL.md" ]; then
     echo "  [PASS] Personal test skill fixture created"
 else
     echo "  [FAIL] Personal test skill fixture not found"
+    exit 1
+fi
+
+# Test 7: Verify global command symlinks exist
+echo "Test 7: Checking global command registration..."
+if [ -L "$HOME/.config/opencode/commands/brainstorm.md" ] && \
+   [ -L "$HOME/.config/opencode/commands/write-plan.md" ] && \
+   [ -L "$HOME/.config/opencode/commands/execute-plan.md" ] && \
+   [ -L "$HOME/.config/opencode/commands/debug.md" ]; then
+    echo "  [PASS] Global slash command symlinks exist"
+else
+    echo "  [FAIL] One or more global slash command symlinks are missing"
     exit 1
 fi
 
