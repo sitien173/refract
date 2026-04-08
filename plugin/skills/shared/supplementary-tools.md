@@ -58,6 +58,28 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ---
 
+### Prompt Enhancer (`mcp__prompt-enahncer__enhance_prompt`)
+
+**Purpose:** Inject codebase context, structure, and conventions into a raw or vague prompt before task routing.
+
+**Tools:**
+- `mcp__prompt-enahncer__enhance_prompt` — enriches a prompt with project-aware context
+
+**Parameters:**
+- `prompt` (required) — the raw prompt to enhance
+- `workspacePath` (optional) — absolute path to project root for richer context injection
+
+**Use when:**
+- A task prompt is thin, ambiguous, or lacks project-specific context
+- Before routing a task to Codex/Gemini to improve instruction quality at CP2
+- User explicitly calls `/enhance-prompt`
+
+**Auto-triggers:** `/enhance-prompt`, vague task descriptions, "improve this prompt", "clarify"
+
+**Fallback:** Proceed with the original prompt unchanged; never block the workflow on enhancement failure
+
+---
+
 ### Morphllm Fast-Apply (`mcp__morph-mcp__*`)
 
 **Purpose:** Pattern-based bulk code editing with token efficiency.
