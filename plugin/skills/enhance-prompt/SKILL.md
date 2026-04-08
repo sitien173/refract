@@ -7,7 +7,7 @@ description: "Enhances a user prompt with codebase context, structure, and conve
 
 ## Overview
 
-Improve a raw or vague prompt by injecting relevant codebase context, structure, and conventions via the `mcp__prompt-enahncer__enhance_prompt` MCP tool. Use this to sharpen task descriptions before routing them through the CP workflow.
+Improve a raw or vague prompt by injecting relevant codebase context, structure, and conventions via the `mcp__prompt-enhancer__enhance_prompt` MCP tool. Use this to sharpen task descriptions before routing them through the CP workflow.
 
 ## When to Use
 
@@ -25,7 +25,7 @@ Take the user's raw prompt as-is. If invoked standalone (via `/enhance-prompt`),
 **Step 2 — Call the MCP tool**
 
 ```
-mcp__prompt-enahncer__enhance_prompt
+mcp__prompt-enhancer__enhance_prompt
   prompt: <raw user prompt>
   workspacePath: <current working directory, if known>
 ```

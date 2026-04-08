@@ -41,29 +41,12 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 **Fallback:** Native file search (`rg`, `glob`, `read`)
 
----
-
-### Magic (`mcp__magic__*`)
-
-**Purpose:** Modern UI component generation from 21st.dev patterns.
-
-**Use when:**
-- Generating frontend UI components (forms, navbars, modals, tables, cards)
-- Design system integration with accessibility and responsiveness
-- Complements Gemini MCP for frontend routing — use Magic for component patterns, Gemini for full-page layouts and styling
-
-**Auto-triggers:** UI component requests, "button", "form", "modal", "card", "table"
-
-**Fallback:** Gemini MCP handles all frontend work (Magic adds design-system patterns)
-
----
-
-### Prompt Enhancer (`mcp__prompt-enahncer__enhance_prompt`)
+### Prompt Enhancer (`mcp__prompt-enhancer__enhance_prompt`)
 
 **Purpose:** Inject codebase context, structure, and conventions into a raw or vague prompt before task routing.
 
 **Tools:**
-- `mcp__prompt-enahncer__enhance_prompt` — enriches a prompt with project-aware context
+- `mcp__prompt-enhancer__enhance_prompt` — enriches a prompt with project-aware context
 
 **Parameters:**
 - `prompt` (required) — the raw prompt to enhance
