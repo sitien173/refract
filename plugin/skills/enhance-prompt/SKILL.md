@@ -7,7 +7,7 @@ description: "Enhances a user prompt with codebase context, structure, and conve
 
 ## Overview
 
-Improve a raw or vague prompt by injecting relevant codebase context, structure, and conventions via the `mcp__prompt-enhancer__enhance_prompt` MCP tool. Use this to sharpen task descriptions before routing them through the CP workflow.
+Improve a raw or vague prompt by injecting relevant codebase context, structure, and conventions via the `mcp__prompt-enhancer__qoder` MCP tool. Use this to sharpen task descriptions before routing them through the CP workflow.
 
 ## When to Use
 
@@ -25,12 +25,12 @@ Take the user's raw prompt as-is. If invoked standalone (via `/enhance-prompt`),
 **Step 2 — Call the MCP tool**
 
 ```
-mcp__prompt-enhancer__enhance_prompt
-  prompt: <raw user prompt>
-  workspacePath: <current working directory, if known>
+mcp__prompt-enhancer__qoder
+  PROMPT: <raw user prompt>
+  cd: <current working directory, if known>
 ```
 
-- Always pass `workspacePath` when you know the project root (use the active working directory).
+- Always pass `cd` when you know the project root (use the active working directory).
 - Pass the prompt verbatim — do not pre-process or summarize it before sending.
 
 **Step 3 — Present the enhanced prompt**
@@ -65,4 +65,4 @@ When used inline, do not ask for confirmation — apply the enhancement and cont
 - **Verbatim input** — Never alter the prompt before sending to the MCP; let the tool do the enrichment.
 - **Transparent output** — Always show the enhanced prompt; never apply it silently in standalone mode.
 - **Non-blocking** — Enhancement failure must not stop the workflow.
-- **Workspace-aware** — Pass `workspacePath` whenever available for better context injection.
+- **Workspace-aware** — Pass `cd` whenever available for better context injection.
