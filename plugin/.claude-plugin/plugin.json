@@ -1,7 +1,7 @@
 {
   "name": "superpowers-ccg",
   "description": "Superpowers-CCG: Skills-driven development workflow with CCG multi-model orchestration (Claude orchestrator + Codex backend/systems + Gemini frontend)",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "author": {
     "name": "sitien173"
   },
