@@ -3,6 +3,40 @@
 > Invoke via `mcp__codex__codex`.
 > All prompts in English.
 
+## Prompt Discipline
+
+Follow these rules when filling in the template below:
+
+- `{hydrated_context}` contains excerpts from **existing files only**. Never pre-write new file contents here.
+- For greenfield or scaffold tasks with no relevant existing code: set `{hydrated_context}` to the existing directory structure only (e.g. `ls` output), or omit it entirely.
+- Keep `{hydrated_context}` under ~300 tokens. Exceeding this means you are over-specifying.
+- `{compressed_user_request}` is one or two sentences — the what and the constraint, not the how.
+- `{task_summary}` is the CP1 Task Summary sentence verbatim — not a re-expanded spec.
+- `{file_list}` is a flat list of file paths — not file contents.
+- Let Codex decide implementation details. It knows standard patterns for common stacks.
+
+**Anti-pattern (do not do this):**
+```
+## Hydrated Context
+### package.json
+{ "name": "my-app", "scripts": { "dev": "vite" }, "dependencies": { ... } }
+### vite.config.ts
+import { defineConfig } from "vite"; export default defineConfig({ ... })
+```
+
+**Correct — greenfield task:**
+```
+## Hydrated Context
+Existing directory: .git/, docs/ — do not modify. No source files exist yet.
+```
+
+**Correct — modification task:**
+```
+## Hydrated Context
+- src/api/auth.ts line 42: uses `withRetry(fn, 3)` pattern for all external calls
+- Error convention: throw `AppError` with `{ code, message, context }` shape
+```
+
 ## Bounded Implementation Template
 
 ```text

@@ -34,6 +34,13 @@ External model call:
     ## Verify
     [exact verify command]
 
+    ## Prompt Discipline
+    - `Hydrated Context` = excerpts from existing files only. Never pre-write new file contents here.
+    - For scaffold or greenfield tasks: set Hydrated Context to existing directory structure only, or omit it.
+    - Keep Hydrated Context under ~300 tokens. Over that means over-specifying.
+    - `Files` = flat list of paths only, not file contents.
+    - Pre-writing implementation in the prompt defeats the purpose of routing. Let the worker implement.
+
     ## Rules
     - If anything is unclear, record it under CLARIFICATIONS NEEDED.
     - Do not redesign the task.

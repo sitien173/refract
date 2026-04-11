@@ -69,3 +69,33 @@ Workers still return External Response Protocol v1.1, but they may also emit:
 ```
 
 These artifacts can then be reused by later tasks instead of rediscovering the same information.
+
+## Anti-Patterns
+
+### Do NOT pre-write implementation in HYDRATED_CONTEXT
+
+`HYDRATED_CONTEXT` is for existing code context only. Pre-writing new file contents here is the worker's job — doing it inflates prompts 10–20× with no benefit.
+
+**Wrong** — pre-written file contents:
+```text
+HYDRATED_CONTEXT:
+- package.json: { "name": "my-app", "scripts": { "dev": "vite" }, "dependencies": { ... full 40-line file ... } }
+- vite.config.ts: import { defineConfig } from "vite"; export default defineConfig({ ... full file ... })
+- tsconfig.json: { "compilerOptions": { "target": "ES2020", ... full file ... } }
+```
+
+**Correct** — greenfield task, no existing code:
+```text
+HYDRATED_CONTEXT:
+- Existing directory: .git/, docs/ — do not modify
+- No source files exist yet
+```
+
+**Correct** — modification task, existing patterns:
+```text
+HYDRATED_CONTEXT:
+- src/api/auth.ts line 42: uses `withRetry(fn, 3)` pattern for all external calls
+- Error type convention: throw `AppError` with `{ code, message, context }` shape
+```
+
+Keep `HYDRATED_CONTEXT` under ~300 tokens. If you are over that, you are over-specifying.

@@ -4,6 +4,40 @@
 > All prompts in English.
 > Keep prompts narrow.
 
+## Prompt Discipline
+
+Follow these rules when filling in the template below:
+
+- `{hydrated_context}` contains excerpts from **existing files only**. Never pre-write new file contents here.
+- For greenfield or scaffold tasks with no relevant existing code: set `{hydrated_context}` to the existing directory structure only (e.g. `ls` output), or omit it entirely.
+- Keep `{hydrated_context}` under ~300 tokens. Exceeding this means you are over-specifying.
+- `{compressed_user_request}` is one or two sentences — the what and the constraint, not the how.
+- `{task_summary}` is the CP1 Task Summary sentence verbatim — not a re-expanded spec.
+- `{file_list}` is a flat list of file paths — not file contents.
+- Let Gemini decide implementation details. It knows standard patterns for common UI stacks.
+
+**Anti-pattern (do not do this):**
+```
+## Hydrated Context
+### App.tsx
+export default function App() { return <div className="...">...</div> }
+### tailwind.config.ts
+const config: Config = { content: [...], theme: { extend: {} } }
+```
+
+**Correct — greenfield task:**
+```
+## Hydrated Context
+Existing directory: src/ is empty. Tailwind and Vite are already configured.
+```
+
+**Correct — modification task:**
+```
+## Hydrated Context
+- src/components/Button.tsx: uses `variant` prop with "primary" | "ghost" union type
+- Color tokens defined in tailwind.config.ts under theme.extend.colors
+```
+
 ## Bounded Implementation Template
 
 ```text
