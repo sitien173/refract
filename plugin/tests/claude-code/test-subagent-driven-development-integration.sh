@@ -11,10 +11,10 @@ echo " Integration Test: subagent-driven-development"
 echo "========================================"
 echo ""
 echo "This test executes a real plan using the skill and verifies:"
-echo "  1. Plan is read once (not per task)"
-echo "  2. Full task text provided to subagents"
+echo "  1. Plan is read once (not per phase)"
+echo "  2. Full phase text provided to executors"
 echo "  3. Subagents perform self-review"
-echo "  4. CP4 final spec review runs at the end"
+echo "  4. CP4 phase review runs after phase output"
 echo "  5. Follow-up loops happen when review finds issues"
 echo "  6. Final review checks the artifact against the spec"
 echo ""
@@ -127,7 +127,7 @@ IMPORTANT: Follow the skill exactly. I will be verifying that you:
 1. Read the plan once at the beginning
 2. Provide full task text to subagents (don't make them read files)
 3. Ensure subagents do self-review before reporting
-4. Run CP4 final spec review as the final step
+4. Run CP4 phase review after phase output
 5. Use review loops when issues are found
 
 Begin now. Execute the plan.
@@ -142,7 +142,7 @@ IMPORTANT: Follow the skill exactly. I will be verifying that you:
 1. Read the plan once at the beginning
 2. Provide full task text to subagents (don't make them read files)
 3. Ensure subagents do self-review before reporting
-4. Run CP4 final spec review as the final step
+4. Run CP4 phase review after phase output
 5. Use review loops when issues are found
 
 Begin now. Execute the plan."
@@ -313,7 +313,7 @@ if [ $FAILED -eq 0 ]; then
     echo "  ✓ Reads plan once at start"
     echo "  ✓ Provides full task text to subagents"
     echo "  ✓ Enforces self-review"
-    echo "  ✓ Runs CP4 final spec review"
+    echo "  ✓ Runs CP4 phase review"
     echo "  ✓ Final review verifies against the spec"
     echo "  ✓ Produces working implementation"
     exit 0

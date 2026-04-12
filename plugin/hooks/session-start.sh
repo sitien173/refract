@@ -17,16 +17,16 @@ You have superpowers.
 **Core Rules:**
 1. **1% Rule:** If there is even a 1% chance a skill applies, use the Skill tool to load it before responding.
 2. **CP0 first:** Do minimal context acquisition before routing. Use Auggie for full local codebase context retrieval, and use Grok Search only for external/current knowledge or research.
-3. **Claude is orchestrator-only:** All implementation code goes through external models (Codex/Gemini MCP).
-4. **Checkpoint Protocol:** CP1 Task Assessment & Routing before the first Task call, CP2 External Execution when routing to external models, CP3 Reconciliation only after cross-validation or conflicting/non-trivial external feedback, and CP4 Final Spec Review as the last step.
-5. **Fail-Closed:** If Routing != CLAUDE and MCP call fails, output BLOCKED (see GATE.md for tiered policy).
+3. **Claude is planner/reviewer/integrator:** Codex is the default executor; Gemini is only for UI-heavy phases.
+4. **Checkpoint Protocol:** CP1 Phase Assessment & Routing before the first executor call, CP2 External Execution when routing to external models, CP3 Reconciliation only after cross-validation or conflicting/non-trivial external feedback, and CP4 Phase Review after each phase.
+5. **Fallback:** If Gemini fails once, fall back to Codex or Claude-code. If Codex fails, retry once, then fall back to Claude-code/Sonnet. Permission-blocked stays BLOCKED.
+6. **Smart Context Budget:** Planner phase context <=1500 tokens, executor prompt context <=2500 tokens, HYDRATED_CONTEXT <=800 tokens and preferably <=300 tokens, follow-up <=1000 tokens with deltas only.
 
 **Multi-Model Routing:**
-- Backend (API, DB, auth) → CODEX (`mcp__codex__codex`)
-- Frontend (UI, styles) → GEMINI (`mcp__gemini__gemini`)
-- Backend and systems (API, DB, auth, CI/CD, scripts, infrastructure) → CODEX (`mcp__codex__codex`)
-- Full-stack/uncertain → CROSS_VALIDATION (multiple)
-- Docs/coordination only → CLAUDE
+- Most implementation (backend, full-stack, tests, debugging, scripts, CI/CD, infrastructure) → CODEX (`mcp__codex__codex`)
+- UI-heavy visual phases (layout, styling, motion, canvas/SVG, interactions) → GEMINI (`mcp__gemini__gemini`)
+- Unresolved architecture conflict → CROSS_VALIDATION (multiple)
+- Planning/review/integration/docs/coordination → CLAUDE
 
 **Supplementary Tools (optional):** Grok Search/Tavily (research), Magic (UI components), Morphllm (bulk edits).
 

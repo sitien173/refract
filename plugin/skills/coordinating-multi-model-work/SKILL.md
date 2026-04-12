@@ -1,29 +1,31 @@
 ---
 name: coordinating-multi-model-work
-description: "Routes bounded implementation tasks to Codex (backend and systems) or Gemini (frontend) via MCP tools. Claude is orchestrator-only and should stay out of the implementation hot path. Use when: implementation, debugging, refactoring, UI work, APIs, databases, scripts, CI/CD, or cross-model arbitration."
+description: "Routes implementation phases to Codex first, Gemini only for UI-heavy work, with Claude as planner, reviewer, and integrator. Use when: implementation, debugging, refactoring, UI work, APIs, databases, scripts, CI/CD, or cross-model arbitration."
 ---
 
 # Coordinating Multi-Model Work
 
 ## Overview
 
-Claude is the orchestrator. It routes tasks, coordinates workers, and integrates results, but never writes implementation code.
+Claude is the orchestrator, reviewer, and integrator. It plans phases, routes execution, reviews output, and runs integration checks.
 
-Use this module to route one bounded task at a time:
-- **Codex** — backend and systems
-- **Gemini** — frontend
+Use this module to route one implementation phase at a time:
+- **Codex** — default executor for most implementation
+- **Gemini** — UI-heavy executor only
+- **Claude** — planner, reviewer, integrator, docs, clarification, or explicit Claude-code fallback
 
 ## Core Rules
 
-1. Reduce the current work to one bounded task with a clear file set and verification command.
-2. Route that bounded task to exactly one worker unless there is real architectural uncertainty.
-3. Turn CP0 findings into reusable context artifacts, then build one task-scoped context bundle for the bounded task.
-4. Reuse the same worker `SESSION_ID` for follow-up fixes on that task, and send deltas only.
+1. Reduce the current work to one implementation phase with 2-4 related tasks, a clear file set, reviewer checklist, and integration checks.
+2. Route that phase to exactly one primary worker unless there is real architectural uncertainty.
+3. Turn CP0 findings into reusable context artifacts, then build one phase-scoped context bundle.
+4. Reuse the same worker `SESSION_ID` for follow-up fixes on that phase, and send deltas only.
 5. Ask for the actual final artifact using External Response Protocol v1.1: full file content first, unified diff second, never prototypes or design prose.
 6. Use CP3 as a Claude-only reconciliation layer when cross-validation or other non-trivial external feedback appears.
-7. Always run CP4 Final Spec Review as the last step.
-8. Keep CP4 focused on spec satisfaction only, not code quality or style feedback.
-9. If a Codex/Gemini MCP call fails with `timeout` or `tool-unavailable`, retry up to 2 times, then fall back to a Sonnet subagent (`Agent` tool, `model: "sonnet"`) for direct file editing. See `checkpoints.md` CP2 Failure & Fallback for the full policy.
+7. Always run Claude review after executor output and integration checks after every phase.
+8. Review returns `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
+9. If a Gemini MCP call fails once with `timeout`, `tool-unavailable`, or session/tool instability, fall back to Codex or Claude-code. Do not spend multiple retries on Gemini.
+10. If a Codex MCP call fails with `timeout` or `tool-unavailable`, retry once, then fall back to Claude-code. See `checkpoints.md` CP2 Failure & Fallback for the full policy.
 
 ## Cross-Validation
 
@@ -41,26 +43,26 @@ Before CP1, do CP0 context acquisition with:
 - Grok Search only for external/current knowledge or research
 - Normalize CP0 findings into reusable context artifacts before routing
 
-At CP1, perform Task Assessment & Routing using the original request and the CP0 context artifacts, then build a task-scoped context bundle and emit the exact `# CP1 ROUTING DECISION` block.
+At CP1, perform Phase Assessment & Routing using the original request and the CP0 context artifacts, then build a phase-scoped context bundle and emit the exact `# CP1 ROUTING DECISION` block.
 
 | Task Category | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- |
-| Pure Frontend / UI / Styling | Gemini | No | Fastest path |
-| Pure Backend / Logic / API | Codex | No | Use cross-validation only if the task becomes high-impact or architecture-heavy |
-| Full-Stack / Architecture | Cross-Validation (Codex + Gemini) | Yes | Both models run in parallel |
-| Docs / Comments / Simple Fix | Claude | No | Usually no external models |
+| UI-heavy visual implementation | Gemini | No | Use only when visual layout, styling, motion, canvas/SVG, or interactions dominate |
+| Backend / Logic / API | Codex | No | Default implementation route |
+| Full-Stack / Architecture | Codex | No | Use cross-validation only for unresolved architecture conflict |
+| Docs / Comments / Coordination | Claude | No | No external executor needed |
 | Debugging / Performance | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
 | Infrastructure / DevOps | Codex | No | Use cross-validation only for high-risk changes |
 | Data / ML / Analytics | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Cross-Validation (Codex + Gemini) | Yes | Useful when tests span frontend and backend behavior |
-| Cross-Cutting / Security | Codex | Yes | Extra safety layer |
+| Testing / Test Coverage | Codex | No | Gemini only if the tests are mainly visual/UI behavior |
+| Cross-Cutting / Security | Codex | No | Add human/Claude review instead of default cross-validation |
 | Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions immediately |
 
-At CP2, if routing is not `Claude`, send a task-scoped context bundle to the chosen external model: compressed original request, context refs, hydrated context snippets, the CP1 task summary, explicit files, success criteria, and the verify command. Reuse the same worker session for follow-up fixes on that task and send deltas only. Require External Response Protocol v1.1 with complete final file content preferred and unified diff acceptable.
+At CP2, if routing is not `Claude`, send a phase-scoped context bundle to the chosen external model: compressed original request, context refs, hydrated context snippets, the CP1 phase summary, explicit files, success criteria, reviewer checklist, and integration checks. Reuse the same worker session for follow-up fixes on that phase and send deltas only. Require External Response Protocol v1.1 with complete final file content preferred and unified diff acceptable.
 
 At CP3, parse every external response block, resolve conflicts or clarifications, and decide whether the task is ready for CP4, needs a retry, or needs user input.
 
-At CP4, use the original user request, the CP1 task summary, the CP1 success criteria, and the modified files to decide `PASS`, `PARTIAL`, or `FAIL`. Do not perform code-quality, style, redundancy, or best-practice review in CP4.
+At CP4, use the original user request, the CP1 phase summary, the CP1 success criteria, the reviewer checklist, integration results, and modified files to decide `PASS`, `PASS_WITH_DEBT`, or `FAIL`. Do not perform broad style review unless style is part of the phase checklist.
 
 ## Response Protocol
 

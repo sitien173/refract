@@ -99,14 +99,14 @@ Auggie (retrieve local context) → Grok Search (search known issues if needed) 
 Grok Search (library docs if needed) → Plan output
 ```
 
-### Frontend Implementation
+### UI-Heavy Implementation
 ```
-Magic (component patterns) + Gemini MCP (full implementation) → Claude CP4 final spec review
+Magic (component patterns) + Gemini MCP (full implementation) → Claude CP4 phase review
 ```
 
 ### Bulk Refactoring
 ```
-Auggie (scope & analyze) → Morphllm (execute bulk edits) → Claude CP4 final spec review
+Auggie (scope & analyze) → Morphllm (execute bulk edits) → Claude CP4 phase review
 ```
 
 ## Integration with Primary Routing
@@ -116,9 +116,9 @@ Supplementary tools operate at the **orchestrator level** — Claude uses them t
 ```
 1. Claude receives task
 2. CP0: use Auggie for local context acquisition; use Grok Search only for external/current research
-3. Route implementation to Codex/Gemini at CP1 (primary routing)
+3. Route implementation to Codex first or Gemini for UI-heavy phases at CP1 (primary routing)
 4. [Optional] Use supplementary tools during review/integration
-5. Claude runs CP4 final spec review
+5. Claude runs CP4 phase review
 ```
 
 **No fail-closed gate** for local supplementary tools. If Grok Search is required for web research and unavailable, report the failure instead of using a native web-search fallback.

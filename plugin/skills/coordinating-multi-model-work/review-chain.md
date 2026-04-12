@@ -1,11 +1,11 @@
-# Final Spec Review (Canonical Reference)
+# Phase Review (Canonical Reference)
 
-This is the single source of truth for CP4 Final Spec Review.
+This is the single source of truth for CP4 Phase Review.
 
 ## The Rule
 
 ```text
-FinalSpecReviewer = Claude
+PhaseReviewer = Claude
 ```
 
 ## What This Means
@@ -16,8 +16,9 @@ FinalSpecReviewer = Claude
 
 ## Key Rules
 
-- CP4 always runs as the final workflow step.
-- CP4 checks only whether the result satisfies the original request and CP1 success criteria.
-- CP4 does not perform code quality, style, redundancy, or best-practice review.
-- `PASS` completes the task.
-- `PARTIAL` or `FAIL` require a retry, follow-up, or user clarification.
+- CP4 runs after each implementation phase.
+- CP4 checks whether the result satisfies the original request, CP1 success criteria, reviewer checklist, and integration expectations.
+- CP4 does not perform broad code quality, style, redundancy, or best-practice review unless listed in the phase checklist.
+- `PASS` completes the phase.
+- `PASS_WITH_DEBT` completes the phase with explicit non-blocking debt.
+- `FAIL` requires a retry, follow-up, or user clarification before integration can continue.

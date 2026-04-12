@@ -2,11 +2,11 @@
 
 ## Overview
 
-This framework defines CP1 Task Assessment & Routing for multi-model task distribution.
+This framework defines CP1 Phase Assessment & Routing for multi-model execution.
 
 ## When to Use
 
-Invoke this framework immediately after CP0 completes and before the first Task call.
+Invoke this framework immediately after CP0 completes and before the first executor call for a phase.
 
 Inputs:
 
@@ -14,15 +14,15 @@ Inputs:
 - CP0 context artifacts
 - the inline CP1 routing matrices below
 
-## Task Assessment Steps
+## Phase Assessment Steps
 
 1. Read the original request and the CP0 context artifacts.
-2. Summarize the core task in one English sentence.
-3. Check whether the task is clear and sufficiently scoped.
+2. Summarize the active phase in one English sentence.
+3. Check whether the phase is clear, sufficiently scoped, and contains 2-4 related tasks.
 4. If unclear, route to `Claude`, output the CP1 decision block, and ask clarifying questions immediately.
 5. Classify the task against the inline CP1 routing matrices below.
 6. Decide model ownership and cross-validation.
-7. Build one task-scoped context bundle with `TASK_ID`, `CONTEXT_REFS`, and `HYDRATED_CONTEXT`.
+7. Build one phase-scoped context bundle with `TASK_ID`, `CONTEXT_REFS`, and `HYDRATED_CONTEXT`.
 
 ## Decision Output
 
@@ -30,7 +30,7 @@ Inputs:
 # CP1 ROUTING DECISION
 
 ## Task Summary
-[One-sentence English summary of the request]
+[One-sentence English summary of the phase]
 
 ## Route
 - Model: Gemini / Codex / Cross-Validation (Codex + Gemini) / Claude
@@ -43,47 +43,47 @@ Inputs:
 
 ## Routing Targets
 
-- `Codex` - Backend and systems expert for APIs, databases, algorithms, server-side logic, CI/CD, scripts, Dockerfiles, infrastructure, and repo tooling
-- `Gemini` - Frontend expert for UI, components, styles, interactions
-- `Cross-Validation (Codex + Gemini)` - Multiple models for full-stack tasks, architectural decisions, or high uncertainty
-- `Claude` - Orchestrator only: routing decisions, coordination, documentation edits, or clarification handling
+- `Codex` - Default implementation executor for backend, full-stack, tests, debugging, infrastructure, repo tooling, and most coding phases
+- `Gemini` - UI-heavy executor for visual layout, styling, motion, canvas/SVG, and complex interactions
+- `Cross-Validation (Codex + Gemini)` - Rare arbitration for unresolved architecture or true multi-domain uncertainty
+- `Claude` - Orchestrator, reviewer, integrator, documentation editor, or clarification handler
 
 ## Detailed Task Matrix
 
 | Task Category | Examples | CP0 Context Tools | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- | --- | --- |
-| Pure Frontend / UI / Styling | CSS, React/Vue components, Tailwind, animations | Auggie | Gemini | No | Fastest path |
-| Pure Backend / Logic / API | API endpoints, business logic, DB queries, auth | Auggie | Codex | No | Use cross-validation only if the task becomes high-impact or architecture-heavy |
-| Full-Stack / Architecture | New feature spanning FE + BE, major refactors | Auggie | Cross-Validation (Codex + Gemini) | Yes | Both models run in parallel |
-| Docs / Comments / Simple Fix | README updates, typo fixes, minor config | Auggie | Claude | No | Usually no external models |
+| UI-heavy visual implementation | CSS, React/Vue components, Tailwind, animations, canvas/SVG, interactions | Auggie | Gemini | No | Use only when UI dominates the phase |
+| Backend / Logic / API | API endpoints, business logic, DB queries, auth | Auggie | Codex | No | Default implementation route |
+| Full-Stack / Architecture | New feature spanning FE + BE, major refactors | Auggie | Codex | No | Cross-validate only for unresolved architecture conflict |
+| Docs / Comments / Coordination | README updates, typo fixes, minor config, workflow edits | Auggie | Claude | No | Usually no external executor |
 | Debugging / Performance | Bug fixes, optimization, slow queries | Auggie | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
 | Infrastructure / DevOps | Docker, CI/CD, deployment scripts | Auggie | Codex | No | Use cross-validation only for high-risk changes |
 | Data / ML / Analytics | Data pipelines, queries, simple ML logic | Auggie | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Unit tests, integration tests, E2E | Auggie | Cross-Validation (Codex + Gemini) | Yes | Useful when tests span frontend and backend behavior |
-| Cross-Cutting / Security | Auth, encryption, compliance, rate-limiting | Auggie | Codex | Yes | Extra safety layer |
+| Testing / Test Coverage | Unit tests, integration tests, E2E | Auggie | Codex | No | Gemini only for visual/UI-heavy tests |
+| Cross-Cutting / Security | Auth, encryption, compliance, rate-limiting | Auggie | Codex | No | Add Claude/human review instead of default cross-validation |
 | Uncategorized / Ambiguous | Request unclear or spans many areas | Auggie + Grok Search if needed | Claude | No | Fail-closed: ask clarifying questions immediately |
 
 ## Compact Routing Matrix
 
 | Task Category | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- |
-| Pure Frontend / UI / Styling | Gemini | No | Fastest path |
-| Pure Backend / Logic / API | Codex | No | Use cross-validation only if the task becomes high-impact or architecture-heavy |
-| Full-Stack / Architecture | Cross-Validation (Codex + Gemini) | Yes | Both models run in parallel |
-| Docs / Comments / Simple Fix | Claude | No | Usually no external models |
+| UI-heavy visual implementation | Gemini | No | Use only when UI dominates the phase |
+| Backend / Logic / API | Codex | No | Default implementation route |
+| Full-Stack / Architecture | Codex | No | Cross-validate only for unresolved architecture conflict |
+| Docs / Comments / Coordination | Claude | No | Usually no external executor |
 | Debugging / Performance | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
 | Infrastructure / DevOps | Codex | No | Use cross-validation only for high-risk changes |
 | Data / ML / Analytics | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Cross-Validation (Codex + Gemini) | Yes | Useful when tests span frontend and backend behavior |
-| Cross-Cutting / Security | Codex | Yes | Extra safety layer |
+| Testing / Test Coverage | Codex | No | Gemini only for visual/UI-heavy tests |
+| Cross-Cutting / Security | Codex | No | Add Claude/human review instead of default cross-validation |
 | Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions immediately |
 
 ## Decision Guidelines
 
-- Strong backend or systems signals and weak/no frontend signals → `Codex`
-- Strong frontend signals and weak/no backend signals → `Gemini`
-- Strong signals in both domains or high uncertainty → `Cross-Validation (Codex + Gemini)`
-- Documentation-only or pure coordination → `Claude`
+- Default implementation route → `Codex`
+- UI-heavy phase where visual work dominates → `Gemini`
+- Unresolved architecture or true multi-domain uncertainty → `Cross-Validation (Codex + Gemini)`
+- Documentation-only, review, integration, or pure coordination → `Claude`
 - If the task is ambiguous or underspecified, fail closed to `Claude` and ask clarifying questions
 
 ## Example

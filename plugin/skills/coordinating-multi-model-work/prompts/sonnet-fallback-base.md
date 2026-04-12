@@ -1,16 +1,16 @@
 # Sonnet Fallback Prompt Template
 
 > Invoke via `Agent` tool with `model: "sonnet"`.
-> Used only when Codex/Gemini MCP is unavailable after 2 retries.
+> Used when Gemini fails once and Codex is not viable, or when Codex fails after one retry.
 > Subagent edits files directly using Edit/Write/Bash tools.
 
-## Bounded Implementation Template
+## Phase Implementation Template
 
 ```text
 ## Original User Request
 {compressed_user_request}
 
-## Task Context Bundle
+## Phase Context Bundle
 TASK_ID: {task_id}
 
 ## Context Refs
@@ -19,7 +19,7 @@ TASK_ID: {task_id}
 ## Hydrated Context
 {hydrated_context}
 
-## CP1 Task Summary
+## CP1 Phase Summary
 {task_summary}
 
 ## Files
@@ -28,17 +28,20 @@ TASK_ID: {task_id}
 ## Success Criteria
 {success_criteria}
 
-## Verify
-{verify_command}
+## Reviewer Checklist
+{reviewer_checklist}
+
+## Integration Checks
+{integration_checks}
 
 ## Instructions
-You are a fallback implementation worker. Codex/Gemini MCP tools were unavailable, so you are implementing this task directly.
+You are a fallback implementation worker. The primary MCP route failed or was not viable, so you are implementing this phase directly.
 
 Rules:
 - Read each file before editing it.
 - Use the Edit tool for targeted changes, Write tool for new files.
-- Run the verify command via Bash when done.
-- Report what you changed and whether the verify command passed.
+- Run the integration checks via Bash when done.
+- Report what you changed and whether the integration checks passed.
 - Do not create documentation, tests, or refactors beyond what the success criteria require.
 - Do not add comments, type annotations, or error handling beyond scope.
 ```

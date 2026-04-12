@@ -91,9 +91,9 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `superpowers-ccg:writing-plans` | Have spec/requirements before coding | Create detailed implementation plan |
-| `superpowers-ccg:executing-plans` | Have a plan document | Execute plan in batches |
-| `superpowers-ccg:developing-with-subagents` | Have a plan and independent tasks | Fresh subagent per task with review |
+| `superpowers-ccg:writing-plans` | Have spec/requirements before coding | Create phase-based implementation plan |
+| `superpowers-ccg:executing-plans` | Have a plan document | Execute one phase at a time |
+| `superpowers-ccg:developing-with-subagents` | Have a plan and implementation phases | Route one phase at a time with review and integration |
 
 ### Meta Skills
 
@@ -109,7 +109,7 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 |---------|---------------|---------|
 | `/brainstorm` | `superpowers-ccg:brainstorming` | Start creative exploration |
 | `/write-plan` | `superpowers-ccg:writing-plans` | Create implementation plan |
-| `/execute-plan` | `superpowers-ccg:executing-plans` | Execute plan in batches |
+| `/execute-plan` | `superpowers-ccg:executing-plans` | Execute one phase at a time |
 
 ---
 
@@ -119,35 +119,36 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 
 | Label | When to Use | MCP Tool |
 |-------|-------------|----------|
-| `CODEX` | Backend and systems: API, database, auth, shell scripts, Dockerfiles, CI/CD, infrastructure, repo tooling | `mcp__codex__codex` |
-| `GEMINI` | Frontend: UI, components, styles, interactions | `mcp__gemini__gemini` |
-| `CROSS_VALIDATION` | Full-stack, uncertain, or critical tasks | Multiple MCP tools |
-| `CLAUDE` | Orchestration only: routing, coordination, docs editing (no implementation code) | No MCP call |
+| `CODEX` | Default implementation: backend, full-stack, tests, debugging, shell scripts, Dockerfiles, CI/CD, infrastructure, repo tooling | `mcp__codex__codex` |
+| `GEMINI` | UI-heavy visual phases: layout, components, styles, interactions, motion, canvas/SVG | `mcp__gemini__gemini` |
+| `CROSS_VALIDATION` | Unresolved architecture or true multi-domain conflict | Multiple MCP tools |
+| `CLAUDE` | Planning, review, integration, routing, coordination, docs editing, or clarification | No MCP call |
 
-> **Important:** Claude is the orchestrator. It routes tasks, coordinates models, and integrates results, but never writes implementation code. All coding tasks must route to CODEX or GEMINI.
+> **Important:** Claude is the planner, orchestrator, reviewer, and integrator. Codex is the default executor. Gemini is only for UI-heavy phases. If Gemini fails once, fall back to Codex or Claude-code.
 
-### Final Spec Review
+### Phase Review
 
-CP4 is the final workflow step. Claude performs a pure spec review against the original request and CP1 success criteria. See `coordinating-multi-model-work/review-chain.md`.
+CP4 runs after each implementation phase. Claude reviews against the original request, CP1 success criteria, reviewer checklist, and integration results. Status is `PASS`, `PASS_WITH_DEBT`, or `FAIL`. See `coordinating-multi-model-work/review-chain.md`.
 
 ### Core Instructions
 
-1. **Route to an external model** after initial analysis.
-2. **Claude does not write code**.
-3. **Claude performs CP4 final spec review** after implementation.
-4. **Think independently** and challenge external model output.
-5. **Fail closed**: if required MCP evidence is missing, output `BLOCKED`.
-6. **Use the inline External Response Protocol v1.1** in the active CP2 docs and prompts.
+1. **Route to an executor** after initial analysis.
+2. **Codex first for most implementation**.
+3. **Gemini only for UI-heavy phases**.
+4. **Claude performs CP4 phase review** after implementation.
+5. **Think independently** and challenge external model output.
+6. **Fail closed**: if required MCP evidence is missing and fallback is not permitted, output `BLOCKED`.
+7. **Use the inline External Response Protocol v1.1** in the active CP2 docs and prompts.
 
 ---
 
 ## Checkpoints Protocol
 
-- **CP0** — Before CP1: acquire only the minimum context needed to route the next bounded task, then normalize useful findings into reusable context artifacts
-- **CP1** — Immediately after CP0: perform Task Assessment & Routing using the CP1 routing matrix, then invoke the selected model if needed
-- **CP2** — External Execution: after CP1 routes to Gemini, Codex, or Cross-Validation, the external model performs the task using a task-scoped context bundle and returns final files or a unified diff via External Response Protocol v1.1
+- **CP0** — Before CP1: acquire only the minimum context needed to route the next phase, then normalize useful findings into reusable context artifacts
+- **CP1** — Immediately after CP0: perform Phase Assessment & Routing using the CP1 routing matrix, then invoke the selected executor if needed
+- **CP2** — External Execution: after CP1 routes to Codex, Gemini, or Cross-Validation, the executor performs the phase using a phase-scoped context bundle and returns final files or a unified diff via External Response Protocol v1.1
 - **CP3** — Reconciliation: after cross-validation or non-trivial external feedback, resolve conflicts and hand off to CP4
-- **CP4** — Final Spec Review: always run last and determine PASS / PARTIAL / FAIL against the original requirement
+- **CP4** — Phase Review: run after each phase and determine PASS / PASS_WITH_DEBT / FAIL against the original requirement, reviewer checklist, and integration results
 
 ---
 
@@ -174,10 +175,10 @@ CP4 is the final workflow step. Claude performs a pure spec review against the o
 
 | Task Type | Model |
 |-----------|-------|
-| Backend and systems implementation | Codex MCP (`mcp__codex__codex`) |
-| Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) |
-| Full-stack, uncertain, or critical work | Cross-Validation (`CODEX` + `GEMINI`) |
-| Orchestration, clarification, CP3 reconciliation, CP4 spec review | Claude main thread |
+| Most implementation | Codex MCP (`mcp__codex__codex`) |
+| UI-heavy visual implementation | Gemini MCP (`mcp__gemini__gemini`) |
+| Unresolved architecture conflict | Cross-Validation (`CODEX` + `GEMINI`) |
+| Planning, orchestration, clarification, CP3 reconciliation, CP4 phase review, integration | Claude main thread |
 
 Claude `haiku` / `sonnet` / `opus` Task selection is no longer the default implementation route. Only use those legacy Task models when a separate skill explicitly requires them.
 

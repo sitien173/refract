@@ -32,7 +32,7 @@ Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders auto
 - **Auggie:** If the project is large (>10 files involved) — use Auggie for full-context semantic codebase retrieval to understand the existing architecture and likely implementation anchors.
 - See `skills/shared/supplementary-tools.md` for full reference.
 
-**► CP1 (Task Assessment & Routing):** After understanding the idea, apply `coordinating-multi-model-work/checkpoints.md`.
+**CP1 (Phase Assessment & Routing):** After understanding the idea, apply `coordinating-multi-model-work/checkpoints.md`.
 
 **Exploring approaches:**
 
@@ -65,7 +65,7 @@ Only commit if the user explicitly asks you to commit.
 **Implementation (if continuing):**
 
 - Ask: "Ready to turn this into an implementation plan?"
-- Use superpowers:writing-plans to create detailed implementation plan
+- Use superpowers:writing-plans to create a phase-based implementation plan
 
 ## Key Principles
 

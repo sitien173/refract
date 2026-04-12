@@ -12,7 +12,7 @@ Cross-validation is for arbitration, not for routine implementation.
 
 - one worker can own the task cleanly
 - you only want a prototype or a second opinion
-- the implementation can be split into smaller bounded tasks
+- the implementation can be split into smaller phases
 
 ## Pattern
 

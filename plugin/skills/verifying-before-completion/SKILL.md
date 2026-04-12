@@ -1,104 +1,50 @@
 ---
 name: verifying-before-completion
-description: "Requires running verification commands and confirming output before making success claims. Use when: about to claim work is complete, fixed, or passing, before committing or creating PRs. Keywords: verify, evidence, completion check, test output, proof"
+description: "Final verification before marking work complete. Use when: finishing a task, completing a plan, or before reporting success. Keywords: verify, check, complete, done, finish"
 ---
 
-# Verification Before Completion
+# Verifying Before Completion
 
 ## Overview
 
-Do not claim completion without fresh verification evidence.
+Never declare work complete without verification. Run tests, check the original requirements, and confirm no regressions.
 
-**Core principle:** Evidence before claims, always.
+## Verification Checklist
 
-## The Iron Law
+### 1. Run Integration Checks
 
-```
-NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
-```
+- Execute the exact integration checks from the phase or final plan
+- All tests must pass
+- No new errors or warnings
 
-If you haven't run the verification command in this message, you cannot claim it passes.
+### 2. Check Original Requirements
 
-## Protocol Threshold (Required)
+- Review the original user request
+- Verify each acceptance criterion is met
+- Confirm file changes match expected scope
 
-Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
+### 3. Run CP4 Phase Review
 
-## The Gate Function
+Apply CP4 to determine:
+- `PASS` - Spec fully satisfied
+- `PASS_WITH_DEBT` - Usable with explicit non-blocking debt
+- `FAIL` - Does not satisfy original request
 
-**CP3 note:** If CP2 produced cross-validation output or other non-trivial external feedback, complete CP3 Reconciliation before making completion claims. CP3 does not replace running verification commands.
+### 4. Check for Regressions
 
-**CP4 note:** Always complete CP4 Final Spec Review after verification. CP4 checks spec satisfaction only and does not replace running commands.
+- Run related test suites
+- Verify no unintended side effects
+- Check that existing functionality still works
 
-```
-BEFORE claiming any status or expressing satisfaction:
+## Completion Report
 
-1. IDENTIFY: What command proves this claim?
-2. RUN: Execute the FULL command (fresh, complete)
-3. READ: Full output, check exit code, count failures
-4. VERIFY: Does output confirm the claim?
-   - If NO: State actual status with evidence
-   - If YES: State claim WITH evidence
-5. ONLY THEN: Make the claim
-```
+After verification, report:
+- Task completed
+- Files changed
+- Integration check result
+- CP4 status
+- Any open follow-ups
 
-## Minimum Evidence
+## Rule
 
-- Tests pass: fresh test output with zero failures
-- Build succeeds: fresh build command with exit code 0
-- Bug fixed: reproduction or regression check now passes
-- Requirements met: compare the result against the request or plan, not just test output
-- Agent completed: inspect the diff and run your own verification
-
-## Red Flags
-
-- Using "should", "probably", "seems to"
-- Expressing completion before running the command
-- About to commit, open a PR, or move on without verification
-- Trusting an agent or prior run instead of fresh output
-- Using partial checks to justify a broader claim
-
-## Key Patterns
-
-**Tests:**
-
-```
-✅ [Run test command] [See: 34/34 pass] "All tests pass"
-❌ "Should pass now" / "Looks correct"
-```
-
-**Build:**
-
-```
-✅ [Run build] [See: exit 0] "Build passes"
-❌ "Linter passed" (linter doesn't check compilation)
-```
-
-**Requirements:**
-
-```
-✅ Re-read plan → Create checklist → Verify each → Report gaps or completion
-❌ "Tests pass, phase complete"
-```
-
-**Agent delegation:**
-
-```
-✅ Agent reports success → Check VCS diff → Verify changes → Report actual state
-❌ Trust agent report
-```
-
-## When To Apply
-
-**ALWAYS before:**
-
-- completion claims
-- commit or PR messages
-- handoffs to the next task
-- bug-fix confirmations
-- "all good" or equivalent status updates
-
-## Multi-Model Cross-Verification
-
-See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.
-
-**CRITICAL:** Cross-model verification is additional to, not a replacement for running actual commands. Never claim success based solely on model confirmation.
+Do not report final completion until all phases return `PASS` or `PASS_WITH_DEBT` and final integration checks pass. If CP4 returns `FAIL`, address gaps before completion.

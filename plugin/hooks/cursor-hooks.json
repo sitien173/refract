@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "echo CCG workflow activated - Claude orchestrates, Codex handles backend/systems, Gemini handles frontend"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "echo Remember: Run verify command before marking task complete"
+      }
+    ]
+  }
+}

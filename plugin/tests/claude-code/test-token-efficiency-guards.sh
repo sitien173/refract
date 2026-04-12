@@ -41,9 +41,9 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 3: Bounded-task language is present..."
-if ! rg -n 'bounded task|one bounded task|one worker|External Response Protocol v1\.1|Reuse.*SESSION_ID|same worker `SESSION_ID`|same worker SESSION_ID|Context Refs|Hydrated Context|task-scoped context bundle|deltas only' "${TARGETS[@]}" >/tmp/token-guards-bounded.txt 2>/dev/null; then
-  echo "  [FAIL] Missing bounded-task / worker ownership / smart context-sharing language"
+echo "Test 3: Phase-scoped language is present..."
+if ! rg -n 'implementation phase|one phase|one primary executor|External Response Protocol v1\.1|Reuse.*SESSION_ID|same worker `SESSION_ID`|same worker SESSION_ID|Context Refs|Hydrated Context|phase-scoped context bundle|deltas only|Smart Context Budget|HYDRATED_CONTEXT.*800|2500 tokens|1000 tokens' "${TARGETS[@]}" >/tmp/token-guards-bounded.txt 2>/dev/null; then
+  echo "  [FAIL] Missing phase / executor ownership / smart context-sharing language"
   exit 1
 fi
 echo "  [PASS]"

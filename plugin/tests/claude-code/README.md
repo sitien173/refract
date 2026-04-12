@@ -86,7 +86,7 @@ echo "=== All tests passed ==="
 Static workflow guard test:
 - No stale CURSOR routing in active token-path docs
 - No "prototype then rewrite" language
-- Bounded task / worker ownership / smart context-sharing language exists
+- Phase / executor ownership / smart context-sharing language exists
 - Full `CONTEXT_PACKAGE` repetition is absent from active execution docs
 - Cross-validation is explicitly constrained
 
@@ -100,10 +100,10 @@ Static CP0 guard test:
 
 #### test-cp1-routing-guards.sh
 Static CP1 guard test:
-- CP1 is explicitly named Task Assessment & Routing
+- CP1 is explicitly named Phase Assessment & Routing
 - The exact `# CP1 ROUTING DECISION` block exists in hook and threshold docs
 - Detailed and compact CP1 routing matrices are embedded in the active docs
-- The diagram labels CP1 as Task Assessment & Routing
+- The diagram labels CP1 as Phase Assessment & Routing
 
 #### test-cp2-external-execution-guards.sh
 Static CP2 guard test:
@@ -123,17 +123,17 @@ Static CP3 guard test:
 
 #### test-cp4-final-spec-review-guards.sh
 Static CP4 guard test:
-- CP4 is explicitly named Final Spec Review
+- CP4 is explicitly named Phase Review
 - The exact `# CP4 SPEC REVIEW COMPLETE` block exists in hook and threshold docs
-- CP4 is explicitly spec-only and excludes code quality/style review
-- The diagram labels CP4 as Final Spec Review
+- CP4 avoids broad code quality/style review unless the phase checklist requires it
+- The diagram labels CP4 as Phase Review
 
 #### test-subagent-driven-development.sh
 Tests skill content and requirements (~2 minutes):
 - Skill loading and accessibility
-- One bounded task at a time
-- CP4 final spec review as the last review stage
-- One worker owner per task
+- One phase at a time
+- CP4 phase review after executor output
+- One primary executor per phase
 - Same worker session reuse for fixes
 - No prototype-then-rewrite pattern
 - External Response Protocol v1.1 output contract
@@ -149,7 +149,7 @@ Full workflow execution test (~10-30 minutes):
   - Plan read once at start (not per task)
   - Full task text provided in subagent prompts
   - Subagents perform self-review before reporting
-  - CP4 final spec review happens at the end
+  - CP4 phase review happens after phase output
   - Final review checks the artifact against the spec
   - Working implementation is produced
   - Tests pass

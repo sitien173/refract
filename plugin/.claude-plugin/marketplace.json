@@ -7,8 +7,8 @@
   "plugins": [
     {
       "name": "superpowers-ccg",
-      "description": "Skills-driven development workflow with CCG multi-model orchestration (Claude orchestrator + Codex backend/systems + Gemini frontend)",
-      "version": "1.5.1",
+      "description": "Skills-driven development workflow with CCG phase orchestration (Claude planner/reviewer/integrator + Codex default executor + Gemini UI-heavy executor)",
+      "version": "1.5.5",
       "source": {
         "source": "url",
         "url": "https://github.com/sitien173/superpowers-ccg.git"

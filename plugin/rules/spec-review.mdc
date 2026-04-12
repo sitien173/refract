@@ -1,0 +1,36 @@
+---
+description: CP4 Phase Review rules - spec satisfaction plus explicit phase debt, no broad style or quality feedback
+alwaysApply: true
+---
+
+## CP4 Phase Review
+
+### What CP4 Checks
+
+- Does the implementation satisfy the **original user request**?
+- Does it meet the **CP1 success criteria**?
+- Does it satisfy the **phase reviewer checklist**?
+- Did the **integration checks** pass or produce explicit debt?
+- Are the **modified files** consistent with the phase scope?
+
+### What CP4 Does NOT Check
+
+- Code quality
+- Style consistency
+- Redundancy
+- Best practices
+- Performance optimization
+
+Unless one of those items is explicitly part of the phase reviewer checklist.
+
+### CP4 Outcomes
+
+| Status | Meaning |
+|--------|---------|
+| `PASS` | Spec fully satisfied |
+| `PASS_WITH_DEBT` | Usable, integration may continue, and non-blocking debt is explicit |
+| `FAIL` | Does not satisfy original request |
+
+### Rule
+
+Keep CP4 focused on **spec satisfaction only**. Quality and style concerns belong in separate review passes, not the checkpoint workflow.

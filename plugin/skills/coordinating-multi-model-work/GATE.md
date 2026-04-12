@@ -5,8 +5,9 @@ Use this gate whenever a skill decides **Routing != CLAUDE** (`CODEX`, `GEMINI`,
 ## Core Rule
 
 - If `Routing != CLAUDE`, you must obtain external model output via MCP tools (`mcp__codex__codex`, `mcp__gemini__gemini`).
-- You must finish with CP4 Final Spec Review per `coordinating-multi-model-work/review-chain.md`.
-- If an MCP call fails with `timeout` or `tool-unavailable`, retry up to 2 times. If still failing, fall back to a Sonnet subagent (`Agent` tool, `model: "sonnet"`) that implements the task via direct file editing. See `coordinating-multi-model-work/checkpoints.md` CP2 Failure & Fallback.
+- You must finish the phase with CP4 Phase Review per `coordinating-multi-model-work/review-chain.md`.
+- If a Gemini MCP call fails once with `timeout`, `tool-unavailable`, or session/tool instability, fall back to Codex or Claude-code. Do not retry Gemini multiple times.
+- If a Codex MCP call fails with `timeout` or `tool-unavailable`, retry once. If still failing, fall back to a Sonnet subagent (`Agent` tool, `model: "sonnet"`) that implements the phase via direct file editing. See `coordinating-multi-model-work/checkpoints.md` CP2 Failure & Fallback.
 - If an MCP call fails with `permission-blocked`, stop in `BLOCKED` immediately. Do not retry or fall back.
 
 ## Evidence Requirement
@@ -23,21 +24,21 @@ Evidence (Implementation):
 
 Evidence (CP4 Spec Review):
 - Reviewer: Claude
-- Status: PASS | PARTIAL | FAIL
+- Status: PASS | PASS_WITH_DEBT | FAIL
 - Artifact: <files reviewed>
 - Result: <3-6 bullets>
 ```
 
 ## Failure Handling
 
-### Fallback (after 2 retries of timeout or tool-unavailable)
+### Fallback
 
 ```text
 [Multi-Model Gate]
 Routing: CODEX | GEMINI
 Status: FALLBACK
-Reason: tool-unavailable | timeout (after 2 retries)
-Fallback: Sonnet subagent (direct file editing)
+Reason: tool-unavailable | timeout | session-failed
+Fallback: Codex | Claude-code/Sonnet subagent
 ```
 
 ### Blocked (permission-blocked — no retry, no fallback)

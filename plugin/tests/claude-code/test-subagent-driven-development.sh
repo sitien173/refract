@@ -11,22 +11,22 @@ echo ""
 echo "Test 1: Skill loading..."
 output=$(run_claude "What is the developing-with-subagents skill? Describe its key steps briefly." 60)
 assert_contains "$output" "[Dd]eveloping-with-[Ss]ubagents|[Ss]ubagent-[Dd]riven [Dd]evelopment|[Ss]ubagent-[Dd]riven" "Skill is recognized" || exit 1
-assert_contains "$output" "one bounded task|one task at a time|bounded task" "Bounded task focus" || exit 1
+assert_contains "$output" "one implementation phase|one phase at a time|2-4 related tasks|phase" "Phase focus" || exit 1
 echo ""
 
 echo "Test 2: Final review stage..."
-output=$(run_claude "In the developing-with-subagents skill, what is the final review step: CP4 final spec review, or Sonnet code quality review?" 60)
-assert_contains "$output" "CP4|spec review|PASS|PARTIAL|FAIL" "Mentions CP4 final spec review" || exit 1
+output=$(run_claude "In the developing-with-subagents skill, what is the review step: CP4 phase review, or Sonnet code quality review?" 60)
+assert_contains "$output" "CP4|phase review|PASS|PASS_WITH_DEBT|FAIL" "Mentions CP4 phase review" || exit 1
 echo ""
 
 echo "Test 3: Worker ownership..."
-output=$(run_claude "How should developing-with-subagents assign implementation work: one worker per bounded task, or multiple workers on the same implementation task?" 60)
-assert_contains "$output" "one worker|single worker" "Single worker ownership" || exit 1
+output=$(run_claude "How should developing-with-subagents assign implementation work: one primary executor per phase, or multiple workers on the same implementation phase?" 60)
+assert_contains "$output" "one primary executor|one worker|single worker" "Single executor ownership" || exit 1
 assert_not_contains "$output" "multiple workers on the same task" "No duplicate worker ownership" || exit 1
 echo ""
 
 echo "Test 4: Session reuse..."
-output=$(run_claude "Does developing-with-subagents say to reuse the same worker SESSION_ID for fixes on the same task?" 60)
+output=$(run_claude "Does developing-with-subagents say to reuse the same worker SESSION_ID for fixes on the same phase?" 60)
 assert_contains "$output" "same worker|SESSION_ID|reuse" "Session reuse mentioned" || exit 1
 echo ""
 

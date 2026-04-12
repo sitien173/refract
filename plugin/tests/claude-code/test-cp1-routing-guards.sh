@@ -19,9 +19,9 @@ TARGETS=(
   "$REPO_ROOT/docs/diagrams/ccg-workflow-architecture.md"
 )
 
-echo "Test 1: CP1 is explicitly named Task Assessment & Routing..."
-if ! rg -n 'CP1: Task Assessment & Routing|CP1 \(Task Assessment & Routing\)|Task assessment and routing' "${TARGETS[@]}" >/tmp/cp1-guards-name.txt 2>/dev/null; then
-  echo "  [FAIL] Missing CP1 Task Assessment & Routing language"
+echo "Test 1: CP1 is explicitly named Phase Assessment & Routing..."
+if ! rg -n 'CP1: Phase Assessment & Routing|CP1 \(Phase Assessment & Routing\)|Phase assessment and routing' "${TARGETS[@]}" >/tmp/cp1-guards-name.txt 2>/dev/null; then
+  echo "  [FAIL] Missing CP1 Phase Assessment & Routing language"
   exit 1
 fi
 echo "  [PASS]"
@@ -55,7 +55,7 @@ if ! rg -n '^\| Task Category \| Examples \| CP0 Context Tools \| Model \| Cross
   echo "  [FAIL] Detailed CP1 routing matrix is missing"
   exit 1
 fi
-if ! rg -n '^\| Task Category \| Model \| Cross-Validation \| Notes / Triggers \|$|Pure Frontend / UI / Styling \| Gemini \| No \||Pure Backend / Logic / API \| Codex \| No \||Uncategorized / Ambiguous \| Claude \| No \|' \
+if ! rg -n '^\| Task Category \| Model \| Cross-Validation \| Notes / Triggers \|$|UI-heavy visual implementation \| Gemini \| No \||Backend / Logic / API \| Codex \| No \||Uncategorized / Ambiguous \| Claude \| No \|' \
   "$REPO_ROOT/skills/coordinating-multi-model-work/routing-decision.md" \
   "$REPO_ROOT/skills/shared/protocol-threshold.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" \
@@ -66,9 +66,9 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 5: Diagram labels CP1 as Task Assessment & Routing..."
-if ! rg -n 'CP1\[CP1: Task Assessment & Routing\]' "$REPO_ROOT/docs/diagrams/ccg-workflow-architecture.md" >/tmp/cp1-guards-diagram.txt 2>/dev/null; then
-  echo "  [FAIL] Missing CP1 Task Assessment & Routing label in diagram"
+echo "Test 5: Diagram labels CP1 as Phase Assessment & Routing..."
+if ! rg -n 'CP1\[CP1: Phase Assessment & Routing\]' "$REPO_ROOT/docs/diagrams/ccg-workflow-architecture.md" >/tmp/cp1-guards-diagram.txt 2>/dev/null; then
+  echo "  [FAIL] Missing CP1 Phase Assessment & Routing label in diagram"
   exit 1
 fi
 echo "  [PASS]"

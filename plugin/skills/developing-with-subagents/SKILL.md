@@ -1,55 +1,88 @@
 ---
 name: developing-with-subagents
-description: "Executes plans in the current session by dispatching one worker-owned task at a time and ending each task with Claude CP4 final spec review. Use when: you want same-session execution without turning the main thread into a long narrative log."
+description: "Executes implementation phases in the current session by routing one phase at a time to Codex or Gemini, then running Claude review and integration gates."
 ---
 
-# Subagent-Driven Development
+# Developing With Subagents
 
 ## Overview
 
-Execute one bounded task at a time by routing it to Codex or Gemini, then end with CP4 final spec review.
+Use subagents or external workers to execute one implementation phase at a time.
 
-## Process
+Claude stays in the orchestrator, reviewer, and integrator roles. The executor role goes to Codex by default, or Gemini when the phase is UI-heavy.
 
-1. Read the plan once.
-2. Extract the current bounded task only.
-3. Build a task-scoped context bundle for that task.
-4. Route that task to one worker.
-5. Reuse the same worker session for follow-up fixes on that task, and send deltas only.
-6. If CP3 is triggered, reconcile external responses before final review.
-7. Run CP4 Final Spec Review in Claude.
-8. Mark the task complete only if CP4 returns `PASS`.
-9. If CP4 returns `PARTIAL` or `FAIL`, loop back with a bounded follow-up.
-10. Move to the next bounded task only after `PASS`.
+## Phase Execution Flow
 
-## Rules
+1. **Planner** - Use the written plan phases. Each phase should contain 2-4 related tasks.
+2. **Executor** - Route the active phase to Codex or Gemini.
+3. **Reviewer** - Claude reviews the output against the phase checklist and returns `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
+4. **Integrator** - Run integration checks after every phase.
+5. **Final Summary** - Summarize only after all phases complete.
 
-- Keep the controller thread small.
-- Do not accumulate rich summaries for every step.
-- Do not repaste full CP0 discovery output into each worker prompt.
-- Do not ask workers for draft-only outputs.
-- Ask workers for External Response Protocol v1.1 with full file content first and unified diff second.
-- `CROSS_VALIDATION` is for unresolved design conflicts, not routine implementation.
-- CP4 is spec-only. Do not treat it as a code quality review pass.
+## Routing Rules
 
-## Model Strategy
+- Codex first for most implementation: backend, full-stack, tests, refactors, debugging, infrastructure, scripts, and repo tooling.
+- Gemini only when the phase is UI-heavy: visual design, component layout, styling, motion, canvas/SVG, or complex interactions dominate the work.
+- Claude handles orchestration, review, integration checks, docs, and clarification. Claude may implement only when the plan explicitly routes to `claude` or fallback says `Claude-code`.
+- Cross-validation is rare and only for unresolved architecture or true multi-domain conflict.
+- If Gemini fails a tool/session once, fall back to Codex or Claude-code. Do not retry Gemini multiple times.
 
-| Role | Model | Selection Rule |
-| ---- | ----- | -------------- |
-| Backend and systems implementation | Codex MCP (`mcp__codex__codex`) | CODEX routing |
-| Frontend implementation | Gemini MCP (`mcp__gemini__gemini`) | GEMINI routing |
-| Fallback implementation | Sonnet subagent (`Agent` tool, `model: "sonnet"`) | When Codex/Gemini MCP unavailable after 2 retries |
-| Final Spec Reviewer | Claude main thread | Always CP4 |
+## Phase Handoff Format
 
-## Checkpoints
+Provide each executor with:
 
-- CP1 before dispatching the worker
-- CP2 when CP1 routes the current bounded task to an external model
-- CP3 after CP2 only when reconciliation is needed
-- CP4 as the final step on every task
+```markdown
+## Phase
+[Phase N and short outcome]
 
-## Integration
+## Goal
+[One clear phase goal]
 
-- `superpowers:writing-plans`
-- `superpowers:verifying-before-completion`
-- `superpowers:coordinating-multi-model-work`
+## Files
+- Modify: `path/to/file`
+- Create: `path/to/new/file`
+
+## Tasks
+1. [related task]
+2. [related task]
+3. [optional related task]
+4. [optional related task]
+
+## Acceptance Criteria
+- [Testable criterion 1]
+- [Testable criterion 2]
+
+## Reviewer Checklist
+- [spec requirement]
+- [regression risk]
+- [verification expectation]
+
+## Integration Checks
+- `exact command`
+```
+
+## Orchestration Rules
+
+1. Execute one phase at a time.
+2. Keep the controller thread small: no full-plan restatement for every worker call.
+3. Send only phase-scoped context, relevant refs, changed snippets, and verification commands.
+4. Reuse the same worker `SESSION_ID` only for fixes on the same phase.
+5. Ask workers for final file content or unified diff, never prototype-only prose.
+6. Move to the next phase only after review and integration return `PASS` or `PASS_WITH_DEBT`.
+
+## Reviewer Gate
+
+Claude reviews the phase output and returns:
+
+- `PASS` - phase satisfies the checklist and integration can continue.
+- `PASS_WITH_DEBT` - phase is usable, debt is explicit, and integration can continue.
+- `FAIL` - blocking gap; route one bounded fix before integration.
+
+## Integrator Gate
+
+After each phase:
+
+- Run the phase integration checks.
+- Confirm the repo is still coherent at the required build/test level.
+- Record changed files, worker used, review status, integration result, and debt.
+- Do not produce the project final summary until the final integration checks pass.

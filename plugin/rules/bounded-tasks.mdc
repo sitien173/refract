@@ -1,0 +1,35 @@
+---
+description: Enforce phase discipline - one phase, one primary executor, one review, one integration gate
+alwaysApply: true
+---
+
+## Phase Rules
+
+### One Phase at a Time
+
+- Reduce work to **one implementation phase** with 2-4 related tasks, clear file set, reviewer checklist, and integration checks
+- Route to **exactly one primary executor** unless genuine architectural uncertainty exists
+- Reuse same worker `SESSION_ID` for follow-up fixes on the same phase, send **deltas only**
+
+### Phase Shape
+
+Every phase must have:
+- Clear goal (one sentence)
+- Explicit file set (modify/create)
+- 2-4 related tasks
+- Acceptance criteria (testable)
+- Reviewer checklist
+- Integration checks
+
+### Avoid Anti-Patterns
+
+- No two-pass tasks where one worker drafts and Claude rewrites
+- No full CP0 discovery blobs when phase-scoped bundles suffice
+- No `CROSS_VALIDATION` as default - use only when narrowing fails
+- No re-explaining the whole plan to workers
+
+### Context Sharing
+
+- Turn CP0 findings into reusable context artifacts
+- Build one phase-scoped context bundle per phase
+- Same-phase follow-ups send deltas only

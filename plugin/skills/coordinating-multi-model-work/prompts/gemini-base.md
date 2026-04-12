@@ -10,11 +10,14 @@ Follow these rules when filling in the template below:
 
 - `{hydrated_context}` contains excerpts from **existing files only**. Never pre-write new file contents here.
 - For greenfield or scaffold tasks with no relevant existing code: set `{hydrated_context}` to the existing directory structure only (e.g. `ls` output), or omit it entirely.
-- Keep `{hydrated_context}` under ~300 tokens. Exceeding this means you are over-specifying.
+- Keep `{hydrated_context}` under 800 tokens, preferably under 300 tokens. Exceeding this means you are over-specifying.
+- Keep the total executor prompt context under 2500 tokens when practical.
+- Same-phase follow-up prompts must send deltas only and stay under 1000 tokens when practical.
 - `{compressed_user_request}` is one or two sentences — the what and the constraint, not the how.
-- `{task_summary}` is the CP1 Task Summary sentence verbatim — not a re-expanded spec.
+- `{task_summary}` is the CP1 phase summary sentence verbatim — not a re-expanded spec.
 - `{file_list}` is a flat list of file paths — not file contents.
 - Let Gemini decide implementation details. It knows standard patterns for common UI stacks.
+- Use Gemini only for UI-heavy phases. If the tool/session fails once, route the phase back to Codex or Claude-code.
 
 **Anti-pattern (do not do this):**
 ```
@@ -38,13 +41,13 @@ Existing directory: src/ is empty. Tailwind and Vite are already configured.
 - Color tokens defined in tailwind.config.ts under theme.extend.colors
 ```
 
-## Bounded Implementation Template
+## Phase Implementation Template
 
 ```text
 ## Original User Request
 {compressed_user_request}
 
-## Task Context Bundle
+## Phase Context Bundle
 TASK_ID: {task_id}
 
 ## Context Refs
@@ -53,7 +56,7 @@ TASK_ID: {task_id}
 ## Hydrated Context
 {hydrated_context}
 
-## CP1 Task Summary
+## CP1 Phase Summary
 {task_summary}
 
 ## Files
@@ -62,8 +65,11 @@ TASK_ID: {task_id}
 ## Success Criteria
 {success_criteria}
 
-## Verify
-{verify_command}
+## Reviewer Checklist
+{reviewer_checklist}
+
+## Integration Checks
+{integration_checks}
 
 ## Response Protocol
 Use exactly this structure:
@@ -88,7 +94,7 @@ For each file listed in FILES MODIFIED, return either:
 Optional reusable artifacts discovered or updated during execution.
 
 ## SPEC COMPLIANCE
-- Meets Spec? YES / PARTIAL / NO
+- Meets Spec? YES / WITH_DEBT / NO
 - Explanation: ...
 
 ## CLARIFICATIONS NEEDED

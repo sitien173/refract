@@ -1,68 +1,60 @@
 ---
 name: enhance-prompt
-description: "Enhances a user prompt with codebase context, structure, and conventions using the prompt-enhancer MCP. Use when: prompt is vague, task needs context injection, or before routing to external models. Keywords: enhance, improve prompt, clarify, context, refine request"
+description: "Enhances user prompts with codebase context and conventions before routing. Use when: the user provides a brief request that needs context enrichment, or when preparing a prompt for external model routing."
 ---
 
 # Enhance Prompt
 
 ## Overview
 
-Improve a raw or vague prompt by injecting relevant codebase context, structure, and conventions via the `mcp__prompt-enhancer__qoder` MCP tool. Use this to sharpen task descriptions before routing them through the CP workflow.
+Take a raw user prompt and enrich it with codebase context, conventions, and relevant file references before routing through the CCG workflow.
+
+## Process
+
+### Step 1: Understand Intent
+
+- Parse the user's request
+- Identify the core goal
+- Note any mentioned files or features
+
+### Step 2: Gather Context
+
+Use CP0-style context acquisition:
+- **Auggie** for local codebase context
+- **Grok Search** for external/current knowledge (if needed)
+- Identify relevant files, patterns, and conventions
+
+### Step 3: Enrich the Prompt
+
+Add to the original request:
+- Relevant file paths
+- Existing patterns to follow
+- Project conventions
+- Constraints or dependencies
+
+### Step 4: Format for Routing
+
+Produce an enhanced prompt ready for CP1 routing:
+
+```markdown
+## Original Request
+[User's original prompt]
+
+## Context
+- Files in scope: [list]
+- Patterns to follow: [patterns]
+- Conventions: [conventions]
+
+## Enhanced Request
+[Enriched version of the request with full context]
+```
 
 ## When to Use
 
-- The user's prompt is ambiguous or lacks architectural context
-- You are about to route a task to Codex or Gemini and want to improve signal quality
-- The user explicitly invokes `/enhance-prompt`
-- A task description would benefit from referencing existing patterns, conventions, or file structure
+- Brief user requests lacking context
+- Before routing to Codex/Gemini
+- When the user says "enhance" or asks for context enrichment
 
-## The Process
+## Output
 
-**Step 1 — Capture the prompt**
-
-Take the user's raw prompt as-is. If invoked standalone (via `/enhance-prompt`), ask for the prompt if not already provided.
-
-**Step 2 — Call the MCP tool**
-
-```
-mcp__prompt-enhancer__qoder
-  PROMPT: <raw user prompt>
-  cd: <current working directory, if known>
-```
-
-- Always pass `cd` when you know the project root (use the active working directory).
-- Pass the prompt verbatim — do not pre-process or summarize it before sending.
-
-**Step 3 — Present the enhanced prompt**
-
-Show the enhanced prompt to the user in a fenced block. Ask:
-
-> "Does this look right? Should I proceed with this enhanced prompt, adjust it, or use the original?"
-
-**Step 4 — Proceed or hand off**
-
-- If the user confirms → use the enhanced prompt as the active task description going forward.
-- If the user adjusts → incorporate their edit and re-present.
-- If the user declines → fall back to the original prompt.
-- If continuing into implementation → apply CP1 routing using the (now enhanced) prompt.
-
-## Integration with CP Workflow
-
-This skill can be called:
-
-1. **Standalone** via `/enhance-prompt` before the user starts a task
-2. **Inline at CP0** — Claude may invoke it silently when a task prompt is thin, then use the result as the CP1 task summary
-
-When used inline, do not ask for confirmation — apply the enhancement and continue. Surface the enhanced prompt in the CP1 task summary block so the user can see what was used.
-
-## Error Handling
-
-- If the MCP call fails, log a warning and proceed with the original prompt unchanged.
-- Do not block the workflow on enhancement failure — it is a quality improvement, not a gate.
-
-## Key Principles
-
-- **Verbatim input** — Never alter the prompt before sending to the MCP; let the tool do the enrichment.
-- **Transparent output** — Always show the enhanced prompt; never apply it silently in standalone mode.
-- **Non-blocking** — Enhancement failure must not stop the workflow.
-- **Workspace-aware** — Pass `cd` whenever available for better context injection.
+Return the enhanced prompt ready for CP1 task assessment and routing.

@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
             echo "  test-cp1-routing-guards.sh          Lint: CP1 routing block and matrix stay aligned"
             echo "  test-cp2-external-execution-guards.sh  Lint: CP2 external execution protocol stays aligned"
             echo "  test-cp3-reconciliation-guards.sh  Lint: CP3 reconciliation contract stays aligned"
-            echo "  test-cp4-final-spec-review-guards.sh  Lint: CP4 final spec review contract stays aligned"
+            echo "  test-cp4-final-spec-review-guards.sh  Lint: CP4 phase review contract stays aligned"
             echo "  test-subagent-driven-development.sh  Test skill loading and requirements"
             echo ""
             echo "Integration Tests (use --integration):"

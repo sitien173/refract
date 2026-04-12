@@ -1,27 +1,28 @@
 # Multi-Model Integration Guide
 
-Claude is orchestrator-only. All implementation code goes through external models.
+Claude is planner, orchestrator, reviewer, and integrator. Implementation normally goes through an executor, with Codex as the default route and Gemini reserved for UI-heavy phases.
 
 ## Standard Pattern
 
-1. Define one bounded task.
+1. Define one implementation phase with 2-4 related tasks.
 2. Turn CP0 findings into small reusable `CONTEXT_ARTIFACTS`.
-3. Build one `TASK_CONTEXT_BUNDLE` for the bounded task.
+3. Build one `PHASE_CONTEXT_BUNDLE` for the phase.
 4. If routing is not `CLAUDE`, execute CP2 with:
    - a compressed original user request
-   - `CONTEXT_REFS` from the task-scoped bundle
-   - `HYDRATED_CONTEXT` snippets for that task only
-   - the CP1 task summary
+   - `CONTEXT_REFS` from the phase-scoped bundle
+   - `HYDRATED_CONTEXT` snippets for that phase only
+   - the CP1 phase summary
    - the explicit file set
-   - the success criteria and verify command for the bounded task
+   - the success criteria, reviewer checklist, and integration checks for the phase
 5. Ask the worker to return complete final file content whenever practical, with unified diff patch as fallback, using External Response Protocol v1.1.
-6. Reuse `SESSION_ID` only for follow-up fixes on the same task, and send deltas only:
+6. Reuse `SESSION_ID` only for follow-up fixes on the same phase, and send deltas only:
    - changed refs
    - new hydrated snippets
    - updated verification failures or spec gaps
 7. If CP1 chose `Cross-Validation`, or CP2 returned conflicts, overlap, gaps, clarifications, or continuation requests, run CP3 Reconciliation as Claude's decision layer.
-8. Always run CP4 Final Spec Review after CP3, or directly after CP2/Claude-only work when no reconciliation is needed.
-9. Only `PASS` completes the task. `PARTIAL` and `FAIL` require a retry, follow-up, or user clarification.
+8. Always run CP4 Phase Review after CP3, or directly after CP2/Claude-only work when no reconciliation is needed.
+9. Run integration checks after each phase review.
+10. `PASS` completes the phase. `PASS_WITH_DEBT` completes the phase with explicit non-blocking debt. `FAIL` requires a retry, follow-up, or user clarification.
 
 ## Hard Rules
 
@@ -29,7 +30,7 @@ Claude is orchestrator-only. All implementation code goes through external model
 - Do not ask for design prose on an implementation task.
 - Do not restate the whole PRD, plan, or prior conversation in every prompt.
 - Do not repaste the full CP0 discovery output into every worker prompt.
-- Do not send multiple workers the same bounded implementation task.
+- Do not send multiple workers the same implementation phase unless cross-validation is explicitly selected.
 - Do not ask for changed hunks only when the worker can return the final file content directly.
 - Do not turn CP4 into a code-quality or best-practice review pass.
 
@@ -41,7 +42,7 @@ Every implementation prompt should contain:
 ## Original User Request
 [original user request]
 
-## Task Context Bundle
+## Phase Context Bundle
 TASK_ID: [stable bounded-task id]
 
 ## Context Refs
@@ -49,10 +50,10 @@ TASK_ID: [stable bounded-task id]
 - [artifact id]
 
 ## Hydrated Context
-[only the small context snippets needed to complete this bounded task]
+[only the small context snippets needed to complete this phase]
 
-## CP1 Task Summary
-[single bounded task]
+## CP1 Phase Summary
+[single phase summary]
 
 ## Files
 [explicit file set]
@@ -60,8 +61,11 @@ TASK_ID: [stable bounded-task id]
 ## Success Criteria
 [2-5 concrete checks]
 
-## Verify
-[exact command]
+## Reviewer Checklist
+[phase review checklist]
+
+## Integration Checks
+[exact commands or repo-state checks]
 
 ## Response Protocol
 Use exactly this structure:
@@ -84,7 +88,7 @@ Use exactly this structure:
 [optional reusable artifacts discovered or updated during execution]
 
 ## SPEC COMPLIANCE
-- Meets Spec? YES / PARTIAL / NO
+- Meets Spec? YES / WITH_DEBT / NO
 - Explanation: ...
 
 ## CLARIFICATIONS NEEDED
@@ -101,15 +105,17 @@ Use `CROSS_VALIDATION` only for design arbitration or unresolved multi-domain am
 - compare only the meaningful divergences
 - return one reconciled artifact in External Response Protocol v1.1, not two unrelated implementations
 
-## CP4 Final Spec Review
+## CP4 Phase Review
 
 Claude performs CP4 in the main thread using:
 - the original user request
-- the CP1 task summary
+- the CP1 phase summary
 - the CP1 success criteria
+- the reviewer checklist
+- the integration check results
 - the files modified by the workflow
 
 CP4 returns:
-- `PASS` when the implementation fully satisfies the spec
-- `PARTIAL` when some required behavior is missing or incomplete
-- `FAIL` when a core requirement is not satisfied
+- `PASS` when the phase fully satisfies the checklist
+- `PASS_WITH_DEBT` when the phase is usable and debt is explicit
+- `FAIL` when a blocking requirement is not satisfied

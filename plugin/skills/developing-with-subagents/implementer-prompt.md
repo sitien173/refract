@@ -1,18 +1,18 @@
 # Implementer Prompt Template
 
-Use this template when dispatching a worker for one bounded task.
+Use this template when dispatching a worker for one implementation phase.
 
 ```text
 External model call:
   target: Codex MCP or Gemini MCP (follow the CP1 route)
-  description: "Implement Task N: [task name]"
+  description: "Implement Phase N: [phase name]"
   prompt: |
-    You own one bounded implementation task.
+    You own one implementation phase with 2-4 related tasks.
 
     ## Original User Request
     [compressed original user request]
 
-    ## Task Context Bundle
+    ## Phase Context Bundle
     TASK_ID: [stable bounded-task id]
 
     ## Context Refs
@@ -20,10 +20,10 @@ External model call:
     - [artifact id]
 
     ## Hydrated Context
-    [only the small context snippets needed to complete this bounded task]
+    [only the small context snippets needed to complete this phase]
 
-    ## CP1 Task Summary
-    [FULL TEXT of the current bounded task only]
+    ## CP1 Phase Summary
+    [FULL TEXT of the current phase only]
 
     ## Files
     [explicit file set]
@@ -31,19 +31,24 @@ External model call:
     ## Success Criteria
     [acceptance criteria]
 
-    ## Verify
-    [exact verify command]
+    ## Reviewer Checklist
+    [phase reviewer checklist]
+
+    ## Integration Checks
+    [exact commands or repo-state checks]
 
     ## Prompt Discipline
     - `Hydrated Context` = excerpts from existing files only. Never pre-write new file contents here.
     - For scaffold or greenfield tasks: set Hydrated Context to existing directory structure only, or omit it.
-    - Keep Hydrated Context under ~300 tokens. Over that means over-specifying.
+    - Keep Hydrated Context under 800 tokens, preferably under 300 tokens. Over that means over-specifying.
+    - Keep the total executor prompt context under 2500 tokens when practical.
+    - Same-phase follow-up prompts must send deltas only and stay under 1000 tokens when practical.
     - `Files` = flat list of paths only, not file contents.
     - Pre-writing implementation in the prompt defeats the purpose of routing. Let the worker implement.
 
     ## Rules
     - If anything is unclear, record it under CLARIFICATIONS NEEDED.
-    - Do not redesign the task.
+    - Do not redesign the phase.
     - Do not produce a reference prototype.
     - Return complete final file content whenever practical.
     - Use unified diff patch only when full content is impractical.
@@ -67,7 +72,7 @@ External model call:
     [optional reusable artifacts discovered or updated during execution]
 
     ## SPEC COMPLIANCE
-    - Meets Spec? YES / PARTIAL / NO
+    - Meets Spec? YES / WITH_DEBT / NO
     - Explanation: ...
 
     ## CLARIFICATIONS NEEDED

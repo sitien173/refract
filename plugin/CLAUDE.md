@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Global code style, error-handling rules, CP0–CP4 workflow details, required tools (`auggie`, `grok-search`, `codex`, `gemini`), RTK shell prefix, and Morph edit policy live in `rules/global-claude-workflow.mdc` (also applied when using the Cursor plugin rules pack).
+
 ## Common Commands
 
 - Run skill tests: `./tests/claude-code/run-skill-tests.sh`
@@ -12,9 +14,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## High-Level Architecture
 
-Superpowers-CCG enhances Claude Code with CCG multi-model orchestration (Claude as pure orchestrator routing bounded tasks to Codex for backend/systems and Gemini for frontend via MCP tools). 
+Superpowers-CCG enhances Claude Code with CCG multi-model orchestration: Claude plans phases, routes execution, reviews outputs, and runs integration checks. Codex is the default executor for most implementation. Gemini is reserved for UI-heavy phases.
 
-Core workflow uses strict CP0 (Auggie context) → CP1 (routing matrix) → CP2 (external execution) → CP3 (reconciliation if needed) → CP4 (spec-only review).
+Core workflow uses strict CP0 (Auggie context) → CP1 (phase routing) → CP2 (external execution) → CP3 (reconciliation if needed) → CP4 (phase review: `PASS`, `PASS_WITH_DEBT`, or `FAIL`) → integration checks after every phase.
 
 Key areas:
 - `skills/coordinating-multi-model-work/`: routing, checkpoints, CP protocol, external response format
