@@ -5,6 +5,8 @@ description: "Routes implementation phases to Codex first, Gemini only for UI-he
 
 # Coordinating Multi-Model Work
 
+> Tier-prompt rules, budgets, `SESSION_POLICY` decisions, and the Tier 3 freshness check are canonical in `context-sharing.md`. Other sections in this skill restate parts for in-place legibility; on conflict, `context-sharing.md` wins.
+
 ## Overview
 
 Claude is the orchestrator, reviewer, and integrator. It plans phases, routes execution, reviews output, and runs integration checks.
@@ -18,9 +20,9 @@ Use this module to route one implementation phase at a time:
 
 1. Reduce the current work to one implementation phase with 2-4 related tasks, a clear file set, reviewer checklist, and integration checks.
 2. Route that phase to exactly one primary worker unless there is real architectural uncertainty.
-3. Turn CP0 findings into reusable context artifacts, then build one phase-scoped context bundle.
-4. Reuse the same worker `SESSION_ID` for follow-up fixes on that phase, and send deltas only.
-5. Ask for the actual final artifact using External Response Protocol v1.1: full file content first, unified diff second, never prototypes or design prose.
+3. Turn CP0 findings into reusable context artifacts, then build the right executor prompt tier for that phase.
+4. Reuse the same worker `SESSION_ID` for Tier 2 follow-up fixes on that phase, or Tier 3 cross-phase continuation when CP1 keeps the same worker on a related subsystem. Send deltas only.
+5. Ask for the actual final artifact using External Response Protocol v1.1. Workers edit files directly via MCP write tools; the response reports changes in `## FILES MODIFIED` without duplicating file content. Never accept prototypes or design prose.
 6. Use CP3 as a Claude-only reconciliation layer when cross-validation or other non-trivial external feedback appears.
 7. Always run Claude review after executor output and integration checks after every phase.
 8. Review returns `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
@@ -43,7 +45,7 @@ Before CP1, do CP0 context acquisition with:
 - Grok Search only for external/current knowledge or research
 - Normalize CP0 findings into reusable context artifacts before routing
 
-At CP1, perform Phase Assessment & Routing using the original request and the CP0 context artifacts, then build a phase-scoped context bundle and emit the exact `# CP1 ROUTING DECISION` block.
+At CP1, perform Phase Assessment & Routing using the original request and the CP0 context artifacts, decide `SESSION_POLICY`, then build the right executor prompt tier and emit the exact `# CP1 ROUTING DECISION` block.
 
 | Task Category | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- |
@@ -58,7 +60,7 @@ At CP1, perform Phase Assessment & Routing using the original request and the CP
 | Cross-Cutting / Security | Codex | No | Add human/Claude review instead of default cross-validation |
 | Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions immediately |
 
-At CP2, if routing is not `Claude`, send a phase-scoped context bundle to the chosen external model: compressed original request, context refs, hydrated context snippets, the CP1 phase summary, explicit files, success criteria, reviewer checklist, and integration checks. Reuse the same worker session for follow-up fixes on that phase and send deltas only. Require External Response Protocol v1.1 with complete final file content preferred and unified diff acceptable.
+At CP2, if routing is not `Claude`, use the 3-tier system: Tier 1 for a fresh session, Tier 2 for same-phase follow-up fixes, and Tier 3 for cross-phase continuation with `SESSION_POLICY: CONTINUE`. Keep `HYDRATED_CONTEXT` under 300 tokens hard cap. Do not exceed 2 Tier-2 follow-ups on the same phase. Require External Response Protocol v1.1; workers edit files directly via MCP write tools, so responses list `## FILES MODIFIED` without duplicating file content.
 
 At CP3, parse every external response block, resolve conflicts or clarifications, and decide whether the task is ready for CP4, needs a retry, or needs user input.
 

@@ -21,8 +21,11 @@ Inputs:
 3. Check whether the phase is clear, sufficiently scoped, and contains 2-4 related tasks.
 4. If unclear, route to `Claude`, output the CP1 decision block, and ask clarifying questions immediately.
 5. Classify the task against the inline CP1 routing matrices below.
-6. Decide model ownership and cross-validation.
-7. Build one phase-scoped context bundle with `TASK_ID`, `CONTEXT_REFS`, and `HYDRATED_CONTEXT`.
+6. Decide model ownership, cross-validation, and `SESSION_POLICY`.
+7. Build the next executor prompt tier:
+   - Tier 1 for a fresh worker session
+   - Tier 3 when continuing a related phase on the same worker session
+8. Keep `HYDRATED_CONTEXT` under 300 tokens hard cap when preparing worker context.
 
 ## Decision Output
 
@@ -35,6 +38,7 @@ Inputs:
 ## Route
 - Model: Gemini / Codex / Cross-Validation (Codex + Gemini) / Claude
 - Cross-Validation: Yes / No
+- Session-Policy: CONTINUE / FRESH
 - Reason: [short 1-line justification]
 
 ## Next Action
@@ -47,6 +51,16 @@ Inputs:
 - `Gemini` - UI-heavy executor for visual layout, styling, motion, canvas/SVG, and complex interactions
 - `Cross-Validation (Codex + Gemini)` - Rare arbitration for unresolved architecture or true multi-domain uncertainty
 - `Claude` - Orchestrator, reviewer, integrator, documentation editor, or clarification handler
+- `Session-Policy` defaults to `FRESH`. Use `CONTINUE` only when the next phase stays with the same worker and the files or subsystem materially overlap.
+
+## Session Policy
+
+| Condition | SESSION_POLICY |
+| --- | --- |
+| Same worker + overlapping files or same subsystem | `CONTINUE` |
+| Same worker + different subsystem | `FRESH` |
+| Different worker | `FRESH` |
+| Previous phase `FAIL` after 2 Tier-2 retries | `FRESH` |
 
 ## Detailed Task Matrix
 
@@ -100,6 +114,7 @@ Fix the flaky CI pipeline test and restore reliable verification.
 ## Route
 - Model: Codex
 - Cross-Validation: No
+- Session-Policy: FRESH
 - Reason: CI/CD debugging is a backend and systems task with a single clear owner.
 
 ## Next Action

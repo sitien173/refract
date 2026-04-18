@@ -37,8 +37,8 @@ assert_contains "$output" "prototype|reference" "Mentions prototype/reference" |
 echo ""
 
 echo "Test 6: Output contract..."
-output=$(run_claude "What should the worker return in developing-with-subagents: prose prototype, or External Response Protocol v1.1 with final file content or unified diff?" 60)
-assert_contains "$output" "External Response Protocol v1\\.1|file content|unified diff" "External execution contract" || exit 1
+output=$(run_claude "In developing-with-subagents, how does the worker return its work: by pasting a prose prototype, or by editing files directly via MCP write tools and reporting via External Response Protocol v1.1?" 60)
+assert_contains "$output" "External Response Protocol v1\\.1|MCP|edit files|FILES MODIFIED" "External execution contract" || exit 1
 echo ""
 
 echo "Test 7: Cross-validation is rare..."

@@ -111,7 +111,7 @@ Static CP2 guard test:
 - External Response Protocol v1.1 exists in the active execution docs
 - Smart context-sharing prompt structure exists: task bundle, context refs, hydrated context, and delta follow-ups
 - Full `CONTEXT_PACKAGE` worker prompts are absent from active execution docs
-- `## FILE CONTENTS` is required with full file content preferred and unified diff fallback
+- Workers edit files directly via MCP write tools; the response lists `## FILES MODIFIED` without duplicating file content
 - Legacy `diff-or-questions` / `## DIFF` / `## QUESTIONS` contract is absent from active execution docs
 
 #### test-cp3-reconciliation-guards.sh

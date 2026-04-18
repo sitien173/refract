@@ -50,8 +50,7 @@ External model call:
     - If anything is unclear, record it under CLARIFICATIONS NEEDED.
     - Do not redesign the phase.
     - Do not produce a reference prototype.
-    - Return complete final file content whenever practical.
-    - Use unified diff patch only when full content is impractical.
+    - Edit files directly with your write tools. The on-disk files are the source of truth — do not duplicate file content in the response.
 
     ## Report Format
     # EXTERNAL RESPONSE PROTOCOL v1.1
@@ -64,9 +63,6 @@ External model call:
     |---------|--------------------|-----------------------|
     | Created | src/...            | ...                   |
     | Edited  | src/...            | ...                   |
-
-    ## FILE CONTENTS
-    [complete final file content for each modified file, preferred; unified diff patch only when full content is impractical]
 
     ## CONTEXT ARTIFACTS
     [optional reusable artifacts discovered or updated during execution]

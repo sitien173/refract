@@ -29,10 +29,10 @@ Claude is the **planner, orchestrator, reviewer, and integrator**. It routes exe
 
 ### External Response Protocol v1.1
 
-All external model calls must return:
-- Complete final file content (preferred)
-- OR unified diff (acceptable fallback)
-- Never prototypes or design prose
+All external model calls must:
+- Edit files directly via MCP write tools (the on-disk files are the source of truth)
+- Respond using ERP v1.1 with `## FILES MODIFIED` listing every changed file, but no duplicated file content
+- Never return prototypes or design prose
 
 ### Failure Handling
 

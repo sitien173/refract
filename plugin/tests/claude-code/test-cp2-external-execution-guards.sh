@@ -34,7 +34,7 @@ echo "  [PASS]"
 echo ""
 
 echo "Test 2: External Response Protocol v1.1 exists in active execution docs..."
-if ! rg -n '^# EXTERNAL RESPONSE PROTOCOL v1\.1|External Response Protocol v1\.1|^## FILE CONTENTS|^## CONTEXT ARTIFACTS|complete final file content \(preferred\)|unified diff patch' \
+if ! rg -n '^# EXTERNAL RESPONSE PROTOCOL v1\.1|External Response Protocol v1\.1|^## FILES MODIFIED|^## CONTEXT ARTIFACTS|edit files directly via MCP|MCP write tools' \
   "$REPO_ROOT/hooks/user-prompt-submit.sh" \
   "$REPO_ROOT/skills/shared/protocol-threshold.md" \
   "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \

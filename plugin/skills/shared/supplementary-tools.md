@@ -41,42 +41,6 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 **Fallback:** Native file search (`rg`, `glob`, `read`)
 
-### Prompt Enhancer (`mcp__prompt-enhancer__enhance_prompt`)
-
-**Purpose:** Inject codebase context, structure, and conventions into a raw or vague prompt before task routing.
-
-**Tools:**
-- `mcp__prompt-enhancer__enhance_prompt` — enriches a prompt with project-aware context
-
-**Parameters:**
-- `prompt` (required) — the raw prompt to enhance
-- `workspacePath` (optional) — absolute path to project root for richer context injection
-
-**Use when:**
-- A task prompt is thin, ambiguous, or lacks project-specific context
-- Before routing a task to Codex/Gemini to improve instruction quality at CP2
-- User explicitly calls `/enhance-prompt`
-
-**Auto-triggers:** `/enhance-prompt`, vague task descriptions, "improve this prompt", "clarify"
-
-**Fallback:** Proceed with the original prompt unchanged; never block the workflow on enhancement failure
-
----
-
-### Morphllm Fast-Apply (`mcp__morph-mcp__*`)
-
-**Purpose:** Pattern-based bulk code editing with token efficiency.
-
-**Use when:**
-- Repeated edits across multiple files (style migration, framework updates)
-- Pattern-driven transformations (rename patterns, enforce conventions)
-- Bulk refactoring where semantic context is less important than pattern matching
-- Token-efficient editing during plan execution
-
-**Auto-triggers:** Multi-file pattern edits, framework migrations, style enforcement
-
-**Fallback:** Edit tool (more manual, same result)
-
 ## Composition Patterns
 
 ### CP0 Context Retrieval
@@ -97,16 +61,6 @@ Auggie (retrieve local context) → Grok Search (search known issues if needed) 
 ### Plan Writing
 ```
 Grok Search (library docs if needed) → Plan output
-```
-
-### UI-Heavy Implementation
-```
-Magic (component patterns) + Gemini MCP (full implementation) → Claude CP4 phase review
-```
-
-### Bulk Refactoring
-```
-Auggie (scope & analyze) → Morphllm (execute bulk edits) → Claude CP4 phase review
 ```
 
 ## Integration with Primary Routing

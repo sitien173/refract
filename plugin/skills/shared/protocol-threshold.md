@@ -1,5 +1,7 @@
 # Protocol Threshold (Shared Reference)
 
+> Tier-prompt rules, budgets, `SESSION_POLICY` decisions, and the Tier 3 freshness check are canonical in `skills/coordinating-multi-model-work/context-sharing.md`. This file restates only what the hook needs to surface at prompt-submit time.
+
 All skills that use checkpoints must follow the CP protocol injected by hooks.
 
 ## CP0: Context Acquisition
@@ -21,7 +23,7 @@ CP0 tool matrix:
 ## Required Behavior
 
 - Before the first executor call, output a standalone `# CP1 ROUTING DECISION` block.
-- When CP2 is invoked, require `# EXTERNAL RESPONSE PROTOCOL v1.1` with final file content preferred and unified diff fallback.
+- When CP2 is invoked, require `# EXTERNAL RESPONSE PROTOCOL v1.1`. Workers edit files directly via MCP write tools; the response lists changed files in `## FILES MODIFIED` but does not duplicate file content.
 - When CP3 is triggered, output a standalone `# CP3 RECONCILIATION COMPLETE` block.
 - Always review each phase with a standalone `# CP4 SPEC REVIEW COMPLETE` block.
 - Keep checkpoint blocks minimal. The checkpoint is a gate, not a summary.
@@ -29,7 +31,7 @@ CP0 tool matrix:
 - Legacy `[CP3 Assessment]` and `[CP3] Verified` formats are invalid for CP3.
 - Do not rename the CP4 headings or bullets.
 - Use the literal CP1 headings and field labels exactly as written. Do not bold or rename them.
-- The route bullets must begin exactly with `- Model:`, `- Cross-Validation:`, and `- Reason:`.
+- The route bullets must begin exactly with `- Model:`, `- Cross-Validation:`, `- Session-Policy:`, and `- Reason:`.
 
 ## CP1: Phase Assessment & Routing
 
@@ -44,9 +46,12 @@ Phase Assessment Process:
 3. Assess clarity and completeness.
 4. If the task is unclear or underspecified, route to `Claude`, output the CP1 block, then immediately ask clarifying questions.
 5. Classify the task against the inline CP1 routing guide below.
-6. Decide the model and whether cross-validation is needed.
-7. Build one `PHASE_CONTEXT_BUNDLE` for the next phase with `TASK_ID`, `CONTEXT_REFS`, and `HYDRATED_CONTEXT`.
-8. Output the exact block below.
+6. Decide the model, whether cross-validation is needed, and `Session-Policy`.
+7. Build the right executor prompt tier for the next phase:
+   - Tier 1 for a fresh worker session
+   - Tier 3 when continuing a related phase on the same worker session
+8. Keep `HYDRATED_CONTEXT` under 300 tokens hard cap.
+9. Output the exact block below.
 
 ## CP1 Routing Guide
 
@@ -74,6 +79,7 @@ Phase Assessment Process:
 ## Route
 - Model: Gemini / Codex / Cross-Validation (Codex + Gemini) / Claude
 - Cross-Validation: Yes / No
+- Session-Policy: CONTINUE / FRESH
 - Reason: [short 1-line justification]
 
 ## Next Action
@@ -86,29 +92,25 @@ When it runs: only when CP1 routes the phase to `Gemini`, `Codex`, or `Cross-Val
 
 Goal: the external model performs the actual work and returns the final artifact directly.
 
-Required CP2 input:
+CP2 uses the 3-tier prompt system:
 
-1. compressed original user request
-2. one `PHASE_CONTEXT_BUNDLE` containing:
-   - `TASK_ID`
-   - `CONTEXT_REFS`
-   - `HYDRATED_CONTEXT`
-3. CP1 phase summary, success criteria, and reviewer checklist
-4. explicit file set and integration checks
-5. for same-phase follow-ups on the same worker session: deltas only
+1. Tier 1 initial call: `Task`, `Phase` (`TASK_ID` + `SESSION_POLICY: FRESH`), `Context`, `Files`, `Done When`, and full ERP v1.1
+2. Tier 2 same-phase follow-up: `SESSION_ID`, `FIX`, `DELTA_FILES`, `DELTA_CONTEXT`, and `Respond using ERP v1.1`
+3. Tier 3 cross-phase continuation: `SESSION_ID`, `SESSION_POLICY: CONTINUE`, `PHASE`, `New Phase`, `New/Changed Files`, `Delta Context`, `Done When`, and `Respond using ERP v1.1`
+4. Tier 2 is for same-phase fixes only; do not exceed 2 Tier-2 follow-ups on one phase
 
 Context budget:
 
-- Planner phase context: <= 1500 tokens
-- Executor prompt context: <= 2500 tokens when practical
-- `HYDRATED_CONTEXT`: <= 800 tokens, preferably <= 300 tokens
-- Same-phase follow-up: <= 1000 tokens
-- If the budget is exceeded, narrow the phase or replace snippets with `CONTEXT_REFS`
+- Tier 1 initial call: <= 1500 tokens
+- Tier 2 same-phase follow-up: <= 400 tokens
+- Tier 3 cross-phase continuation: <= 600 tokens
+- `HYDRATED_CONTEXT`: <= 300 tokens hard cap
+- If the budget is exceeded, narrow the phase or shrink the hydrated snippets
 
 Direct output mode:
 
-- Prefer complete final file content.
-- Allow a unified diff patch when full file content is not practical.
+- Workers edit files directly via MCP write tools. The on-disk files are the source of truth.
+- The response must list every changed file in `## FILES MODIFIED` but does not duplicate file content.
 
 ## External Response Protocol v1.1
 
@@ -123,11 +125,6 @@ One-sentence summary of what you did.
 |---------|--------------------|-----------------------|
 | Created | src/...            | ...                   |
 | Edited  | src/...            | ...                   |
-
-## FILE CONTENTS
-For each file listed in FILES MODIFIED, return either:
-1. the complete final file content (preferred), or
-2. a unified diff patch for that file when full content is impractical.
 
 ## CONTEXT ARTIFACTS
 [optional reusable artifacts discovered or updated during execution]

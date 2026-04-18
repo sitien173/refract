@@ -41,9 +41,51 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 3: Phase-scoped language is present..."
-if ! rg -n 'implementation phase|one phase|one primary executor|External Response Protocol v1\.1|Reuse.*SESSION_ID|same worker `SESSION_ID`|same worker SESSION_ID|Context Refs|Hydrated Context|phase-scoped context bundle|deltas only|Smart Context Budget|HYDRATED_CONTEXT.*800|2500 tokens|1000 tokens' "${TARGETS[@]}" >/tmp/token-guards-bounded.txt 2>/dev/null; then
-  echo "  [FAIL] Missing phase / executor ownership / smart context-sharing language"
+echo "Test 3: Phase-scoped and 3-tier language is present..."
+if ! rg -n 'implementation phase|one phase|one primary executor|External Response Protocol v1\.1|SESSION_ID|SESSION_POLICY|Tier 1|Tier 2|Tier 3|Done When|HYDRATED_CONTEXT.*300|deltas only|300 tokens' "${TARGETS[@]}" >/tmp/token-guards-bounded.txt 2>/dev/null; then
+  echo "  [FAIL] Missing phase / executor ownership / 3-tier prompt language"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 3b: No stale budget numbers in active docs..."
+if rg -n '2500 tokens|<= 800 tokens|1000 tokens' \
+  "$REPO_ROOT/hooks/user-prompt-submit.sh" \
+  "$REPO_ROOT/hooks/session-start.sh" \
+  "$REPO_ROOT/skills/shared/protocol-threshold.md" \
+  "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/context-sharing.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
+  "$REPO_ROOT/rules/bounded-tasks.mdc" >/tmp/token-guards-stale-budget.txt 2>/dev/null; then
+  echo "  [FAIL] Found stale budget numbers (2500/800/1000):"
+  sed 's/^/    /' /tmp/token-guards-stale-budget.txt
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 3c: SESSION_POLICY present in routing docs..."
+if ! rg -n 'Session-Policy|SESSION_POLICY' \
+  "$REPO_ROOT/skills/shared/protocol-threshold.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/routing-decision.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" >/tmp/token-guards-session-policy.txt 2>/dev/null; then
+  echo "  [FAIL] SESSION_POLICY missing from routing docs"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 3d: Worker templates use Done When, not separate Reviewer Checklist..."
+if rg -n '## Reviewer Checklist|## Integration Checks|## Success Criteria' \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" >/tmp/token-guards-old-sections.txt 2>/dev/null; then
+  echo "  [FAIL] Found old sections in worker templates:"
+  sed 's/^/    /' /tmp/token-guards-old-sections.txt
   exit 1
 fi
 echo "  [PASS]"

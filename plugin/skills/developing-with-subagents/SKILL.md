@@ -67,7 +67,7 @@ Provide each executor with:
 2. Keep the controller thread small: no full-plan restatement for every worker call.
 3. Send only phase-scoped context, relevant refs, changed snippets, and verification commands.
 4. Reuse the same worker `SESSION_ID` only for fixes on the same phase.
-5. Ask workers for final file content or unified diff, never prototype-only prose.
+5. Workers edit files directly via MCP write tools and respond with the changed-file list (no duplicated content); never accept prototype-only prose.
 6. Move to the next phase only after review and integration return `PASS` or `PASS_WITH_DEBT`.
 
 ## Reviewer Gate

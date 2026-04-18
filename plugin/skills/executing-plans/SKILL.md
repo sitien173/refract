@@ -36,7 +36,7 @@ For the current phase only:
 4. Route to `Gemini` only when the phase is UI-heavy: visual layout, components, styling, interactions, or animation dominate the work.
 5. If a Gemini tool/session fails once, fall back to Codex or Claude-code. Do not spend multiple retries on Gemini.
 6. Reuse the worker `SESSION_ID` only for fixes on the same phase, and send deltas only.
-7. Require External Response Protocol v1.1 with final file content preferred and unified diff fallback.
+7. Workers edit files directly via MCP write tools and respond using External Response Protocol v1.1; the response lists `## FILES MODIFIED` without duplicating file content.
 
 ### Step 3: Reviewer
 

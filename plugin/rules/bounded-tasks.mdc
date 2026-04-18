@@ -9,7 +9,9 @@ alwaysApply: true
 
 - Reduce work to **one implementation phase** with 2-4 related tasks, clear file set, reviewer checklist, and integration checks
 - Route to **exactly one primary executor** unless genuine architectural uncertainty exists
-- Reuse same worker `SESSION_ID` for follow-up fixes on the same phase, send **deltas only**
+- Use the **3-tier prompt system** for executor calls
+- Reuse same worker `SESSION_ID` for Tier 2 follow-up fixes on the same phase, or Tier 3 cross-phase continuation when CP1 keeps the same worker on a related subsystem
+- Do not exceed **2 Tier-2 follow-ups** on one phase; then re-scope or reset with `SESSION_POLICY: FRESH`
 
 ### Phase Shape
 
@@ -31,5 +33,5 @@ Every phase must have:
 ### Context Sharing
 
 - Turn CP0 findings into reusable context artifacts
-- Build one phase-scoped context bundle per phase
-- Same-phase follow-ups send deltas only
+- Tier 1 starts fresh, Tier 2 sends deltas only, and Tier 3 continues a related phase with `SESSION_POLICY: CONTINUE`
+- Keep `HYDRATED_CONTEXT` under 300 tokens hard cap

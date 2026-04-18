@@ -146,7 +146,7 @@ CP4 runs after each implementation phase. Claude reviews against the original re
 
 - **CP0** — Before CP1: acquire only the minimum context needed to route the next phase, then normalize useful findings into reusable context artifacts
 - **CP1** — Immediately after CP0: perform Phase Assessment & Routing using the CP1 routing matrix, then invoke the selected executor if needed
-- **CP2** — External Execution: after CP1 routes to Codex, Gemini, or Cross-Validation, the executor performs the phase using a phase-scoped context bundle and returns final files or a unified diff via External Response Protocol v1.1
+- **CP2** — External Execution: after CP1 routes to Codex, Gemini, or Cross-Validation, the executor performs the phase using a phase-scoped context bundle, edits files directly via MCP write tools, and reports the changed-file list via External Response Protocol v1.1
 - **CP3** — Reconciliation: after cross-validation or non-trivial external feedback, resolve conflicts and hand off to CP4
 - **CP4** — Phase Review: run after each phase and determine PASS / PASS_WITH_DEBT / FAIL against the original requirement, reviewer checklist, and integration results
 
