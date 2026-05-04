@@ -55,6 +55,7 @@ while [[ $# -gt 0 ]]; do
             echo "Tests:"
             echo "  test-namespace-consistency.sh       Lint: no stale superpowers-ccg: namespace"
             echo "  test-token-efficiency-guards.sh     Lint: bounded worker and anti-token-bomb rules"
+            echo "  test-skill-structure-guards.sh      Lint: skill frontmatter, line budgets, and references"
             echo "  test-cp0-context-acquisition-guards.sh  Lint: CP0 hybrid context engine docs stay aligned"
             echo "  test-cp1-routing-guards.sh          Lint: CP1 routing block and matrix stay aligned"
             echo "  test-cp2-external-execution-guards.sh  Lint: CP2 external execution protocol stays aligned"
@@ -82,6 +83,7 @@ done
 tests=(
     "test-namespace-consistency.sh"
     "test-token-efficiency-guards.sh"
+    "test-skill-structure-guards.sh"
     "test-cp0-context-acquisition-guards.sh"
     "test-cp1-routing-guards.sh"
     "test-cp2-external-execution-guards.sh"
@@ -95,6 +97,7 @@ tests=(
 static_tests=(
     "test-namespace-consistency.sh"
     "test-token-efficiency-guards.sh"
+    "test-skill-structure-guards.sh"
     "test-cp0-context-acquisition-guards.sh"
     "test-cp1-routing-guards.sh"
     "test-cp2-external-execution-guards.sh"

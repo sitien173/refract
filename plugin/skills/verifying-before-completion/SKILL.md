@@ -1,50 +1,34 @@
 ---
 name: verifying-before-completion
-description: "Final verification before marking work complete. Use when: finishing a task, completing a plan, or before reporting success. Keywords: verify, check, complete, done, finish"
+description: "Final verification before marking work complete. Use when finishing a task, completing a plan, checking done status, validating success, or before reporting completion."
 ---
 
 # Verifying Before Completion
 
-## Overview
+## Use When
 
-Never declare work complete without verification. Run tests, check the original requirements, and confirm no regressions.
+- Work appears complete and the user expects a final status.
+- A phase, plan, bug fix, refactor, or implementation is about to be marked done.
+- Tests or acceptance criteria need final confirmation.
 
-## Verification Checklist
+## Workflow
 
-### 1. Run Integration Checks
+1. Run declared integration checks for the phase or final plan.
+2. Compare results against the original user request and acceptance criteria.
+3. Confirm file changes match expected scope.
+4. Run CP4 Phase Review and return `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
+5. Check for targeted regressions relevant to the changed area.
+6. Report task status, files changed, integration result, CP4 status, and open follow-ups.
 
-- Execute the exact integration checks from the phase or final plan
-- All tests must pass
-- No new errors or warnings
+## Hard Rules
 
-### 2. Check Original Requirements
+- Do not report final completion until all required checks pass or CP4 returns `PASS_WITH_DEBT` with explicit non-blocking debt.
+- If CP4 returns `FAIL`, address the gap before completion.
+- Do not treat unrun tests as passed.
+- Do not broaden CP4 into general style or best-practice review unless the phase checklist requires it.
 
-- Review the original user request
-- Verify each acceptance criterion is met
-- Confirm file changes match expected scope
+## References
 
-### 3. Run CP4 Phase Review
-
-Apply CP4 to determine:
-- `PASS` - Spec fully satisfied
-- `PASS_WITH_DEBT` - Usable with explicit non-blocking debt
-- `FAIL` - Does not satisfy original request
-
-### 4. Check for Regressions
-
-- Run related test suites
-- Verify no unintended side effects
-- Check that existing functionality still works
-
-## Completion Report
-
-After verification, report:
-- Task completed
-- Files changed
-- Integration check result
-- CP4 status
-- Any open follow-ups
-
-## Rule
-
-Do not report final completion until all phases return `PASS` or `PASS_WITH_DEBT` and final integration checks pass. If CP4 returns `FAIL`, address gaps before completion.
+- `skills/shared/protocol-threshold.md` — exact CP4 response block.
+- `skills/coordinating-multi-model-work/review-chain.md` — canonical phase review outcomes.
+- `skills/coordinating-multi-model-work/checkpoints.md` — CP3.5 integration checks and CP4 rules.

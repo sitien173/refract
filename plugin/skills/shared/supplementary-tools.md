@@ -28,7 +28,7 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ---
 
-### Auggie Code Search (`mcp__auggie__augment_code_search`)
+### Auggie Code Search (`mcp__auggie__codebase-retrieval`)
 
 **Purpose:** Semantic "where/what/how" search across a repository.
 
@@ -39,7 +39,7 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 **Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow
 
-**Fallback:** Native file search (`rg`, `glob`, `read`)
+**Fallback:** None for CP0 routing; use targeted file tools only after Auggie narrows the area.
 
 ## Composition Patterns
 

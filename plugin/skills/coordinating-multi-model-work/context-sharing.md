@@ -4,6 +4,17 @@
 
 This workflow uses orchestrator-managed smart context sharing to keep worker prompts narrow without losing important information.
 
+## Contents
+
+- Core Model
+- Artifact Guidelines
+- Smart Context Budget
+- Tier 1: Initial Call
+- Tier 2: Same-Phase Follow-Up
+- Tier 3: Cross-Phase Continuation
+- Worker Output
+- Anti-Patterns
+
 ## Core Model
 
 1. CP0 decides whether `docs/wiki/` durable knowledge is useful, then selectively queries it when relevant.
@@ -14,7 +25,7 @@ This workflow uses orchestrator-managed smart context sharing to keep worker pro
    - Tier 1 initial call: `Task`, `Phase`, `Context`, `Files`, `Done When`, and full ERP v1.1
    - Tier 2 same-phase follow-up: `SESSION_ID`, `FIX`, `DELTA_FILES`, `DELTA_CONTEXT`
    - Tier 3 cross-phase continuation: `SESSION_ID`, `SESSION_POLICY: CONTINUE`, `PHASE`, `New Phase`, `New/Changed Files`, `Delta Context`, `Done When`
-5. If the same worker session continues, send only the minimum delta context needed for that tier.
+6. If the same worker session continues, send only the minimum delta context needed for that tier.
 
 ## Artifact Guidelines
 

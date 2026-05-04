@@ -1,5 +1,17 @@
 # Collaboration Checkpoints
 
+## Contents
+
+- Overview
+- CP0: Context Acquisition
+- CP1: Phase Assessment & Routing
+- CP2: External Execution
+- CP2 Failure Handling
+- CP3: Reconciliation
+- CP3.5: Integration Checks
+- CP4: Phase Review
+- User Override
+
 ## Overview
 
 Checkpoints exist to control routing and keep the orchestrator thread small.

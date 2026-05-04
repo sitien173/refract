@@ -1,81 +1,37 @@
 ---
 name: brainstorming
-description: "Explores user intent, requirements and design through collaborative dialogue before implementation. Use when: creating features, building components, adding functionality, modifying behavior, or starting any creative work. Keywords: design, requirements, spec, ideation, planning"
+description: "Explores user intent, requirements, and design through collaborative dialogue before implementation. Use when creating features, building components, adding functionality, modifying behavior, designing specs, ideating, or planning creative work."
 ---
 
 # Brainstorming Ideas Into Designs
 
-## Overview
+## Use When
 
-Help turn ideas into fully formed designs and specs through natural collaborative dialogue.
+- User has an idea but not a complete spec.
+- User asks for design, requirements, ideation, or planning before implementation.
+- Task needs current project context, trade-offs, or success criteria clarified.
 
-Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design in small sections (200-300 words), checking after each section whether it looks right so far.
+## Workflow
 
-## Protocol Threshold (Required)
+1. Inspect current project state first: relevant files, docs, recent commits, and Auggie context when the project area is broad.
+2. Ask one question at a time; prefer multiple choice when useful.
+3. Clarify purpose, constraints, non-goals, success criteria, and user preferences.
+4. Propose 2-3 approaches with trade-offs; lead with the recommended option.
+5. Present the design in 200-300 word sections and ask whether each section looks right so far.
+6. Cover architecture, components, data flow, error handling, and testing.
+7. After confirmation, create `docs/plans/YYYY-MM-DD-<topic>-design.md` and report the path.
+8. Ask whether the user is ready to turn the design into an implementation plan.
 
-Follow `skills/shared/protocol-threshold.md`. The hook injects CP reminders automatically.
+## Hard Rules
 
-## The Process
+- Follow `skills/shared/protocol-threshold.md` when routing toward implementation.
+- One question per message during clarification.
+- CP2 starts only after the design is routed into implementation.
+- Do not skip writing the final confirmed design document.
+- Only commit if the user explicitly asks.
 
-**Understanding the idea:**
+## References
 
-- Check out the current project state first (files, docs, recent commits)
-- Ask questions one at a time to refine the idea
-- Prefer multiple choice questions when possible, but open-ended is fine too
-- Only one question per message - if a topic needs more exploration, break it into multiple questions
-- Focus on understanding: purpose, constraints, success criteria
-
-**Model tip for exploration:** When dispatching workers to explore the codebase, use `model: haiku` for fast, cost-effective searches. Haiku excels at file pattern matching and quick lookups.
-
-**Supplementary tools (optional, enhance research):**
-- **Grok Search (Tavily):** If the idea involves unfamiliar tech, current trends, or competitive analysis — use `mcp__grok-search__web_search` to gather real-time information before proposing approaches. Especially useful when the user references a library, service, or pattern you're uncertain about.
-- **Auggie:** If the project is large (>10 files involved) — use Auggie for full-context semantic codebase retrieval to understand the existing architecture and likely implementation anchors.
-- See `skills/shared/supplementary-tools.md` for full reference.
-
-**CP1 (Phase Assessment & Routing):** After understanding the idea, apply `coordinating-multi-model-work/checkpoints.md`.
-
-**Exploring approaches:**
-
-- Propose 2-3 different approaches with trade-offs
-- Present options conversationally with your recommendation and reasoning
-- Lead with your recommended option and explain why
-
-**CP2 note:** CP2 is the external execution phase and starts only after the design is routed into implementation.
-
-**Presenting the design:**
-
-- Once you believe you understand what you're building, present the design
-- Break it into sections of 200-300 words
-- Ask after each section whether it looks right so far
-- Cover: architecture, components, data flow, error handling, testing
-- Be ready to go back and clarify if something doesn't make sense
-
-## After the Design
-
-**Documentation (must not be skipped):**
-
-Once the user confirms the design looks right, do ALL of the following:
-
-1. Ensure the output directory exists (create `docs/plans/` if missing)
-2. Write the final design content to `docs/plans/YYYY-MM-DD-<topic>-design.md`
-3. Then tell the user the file path you wrote
-
-Only commit if the user explicitly asks you to commit.
-
-**Implementation (if continuing):**
-
-- Ask: "Ready to turn this into an implementation plan?"
-- Use superpowers:writing-plans to create a phase-based implementation plan
-
-## Key Principles
-
-- **One question at a time** - Don't overwhelm with multiple questions
-- **Multiple choice preferred** - Easier to answer than open-ended when possible
-- **YAGNI ruthlessly** - Remove unnecessary features from all designs
-- **Explore alternatives** - Always propose 2-3 approaches before settling
-- **Incremental validation** - Present design in sections, validate each
-- **Be flexible** - Go back and clarify when something doesn't make sense
-
-## Multi-Model Design Validation
-
-See `skills/shared/multi-model-integration-section.md` for routing, invocation, and fallback rules.
+- `skills/shared/protocol-threshold.md` — CP0-CP4 gates for implementation routing.
+- `skills/shared/supplementary-tools.md` — optional Auggie and Grok Search research guidance.
+- `skills/shared/multi-model-integration-section.md` — multi-model validation when design work becomes implementation.

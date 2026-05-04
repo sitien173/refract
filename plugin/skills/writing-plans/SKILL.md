@@ -1,28 +1,39 @@
 ---
 name: writing-plans
-description: "Creates implementation plans made of coarse implementation phases, each with 2-4 related tasks, explicit routing, review checklist, and integration checks."
+description: "Creates implementation plans made of executable phases with 2-4 related tasks, explicit owners, file sets, acceptance criteria, reviewer checklists, and integration checks. Use when turning a confirmed design into a phase-based implementation plan."
 ---
 
 # Writing Plans
 
-## Overview
+## Use When
 
-Write plans for execution by external workers, not for a human narrator.
+- User confirms a design and wants an implementation plan.
+- Work needs phase boundaries before execution.
+- A plan must be executable by Claude, Codex, or Gemini one phase at a time.
 
-Plans are organized into implementation phases. Each phase should be large enough to make meaningful progress, but small enough that one worker can implement it and Claude can review it without restating the whole project.
+## Workflow
 
-## Rules
+1. Read only the design docs and code context needed to scope phases.
+2. Break work into coarse implementation phases, not tiny task lists.
+3. Put 2-4 related implementation tasks in each phase.
+4. Assign one owner per phase: `codex`, `gemini`, or `claude`.
+5. Include file set, acceptance criteria, reviewer checklist, and integration checks for every phase.
+6. Add routing notes only when the phase owner is `gemini` or `claude`.
+7. Save the plan, then offer same-session execution with `executing-phases` or dedicated execution with `executing-plans`.
 
-1. Read the codebase and design docs only as much as needed.
-2. Break work into phases, not tiny task lists.
-3. Each phase must contain 2-4 related implementation tasks.
-4. Prefer one owner per phase:
-   - `codex` first for most implementation
-   - `gemini` only for UI-heavy phases
-   - `claude` only for orchestration, review, docs, or clarification
-5. Avoid two-pass tasks where one worker drafts code and Claude re-implements it.
-6. Use `cross-validation` only for architecture or genuine multi-domain conflicts.
-7. Each phase must include acceptance criteria, reviewer checklist, and integration checks.
+## Hard Rules
+
+- Default owner is `codex` for most implementation.
+- Use `gemini` only for UI-heavy visual phases.
+- Use `claude` only for orchestration, review, docs, clarification, or when the user overrides routing.
+- Use `cross-validation` only for architecture or genuine multi-domain conflicts.
+- Do not create two-pass tasks where one worker drafts code and Claude re-implements it.
+
+## References
+
+- `skills/coordinating-multi-model-work/routing-decision.md` — owner and route selection.
+- `skills/coordinating-multi-model-work/checkpoints.md` — checkpoint and phase requirements.
+- `skills/shared/protocol-threshold.md` — exact CP response blocks.
 
 ## Phase Shape
 
@@ -45,7 +56,6 @@ Plans are organized into implementation phases. Each phase should be large enoug
 
 **Acceptance Criteria:**
 - [criterion]
-- [criterion]
 
 **Reviewer Checklist:**
 - [spec requirement]
@@ -54,22 +64,4 @@ Plans are organized into implementation phases. Each phase should be large enoug
 
 **Integration Checks:**
 - `exact command`
-- [manual or repo-state check if needed]
 ```
-
-## Planner Output
-
-The final plan should contain:
-
-1. A short phase table with phase number, owner, and outcome.
-2. The full phase details using the phase shape above.
-3. Routing notes only when a phase is `gemini` or `claude`.
-4. A final integration section that runs only after all phases pass.
-
-## Execution Handoff
-
-Plans should be executable one phase at a time.
-
-After saving the plan, offer:
-1. Same-session execution with `executing-phases`
-2. Dedicated execution session with `executing-plans`

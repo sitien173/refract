@@ -1,56 +1,36 @@
 ---
 name: debugging-systematically
-description: "Systematic debugging with evidence-based root cause analysis. Use when: fixing bugs, investigating failures, diagnosing test failures, or tracing unexpected behavior. Keywords: debug, fix, error, failing, broken, investigate"
+description: "Systematic debugging with evidence-based root cause analysis. Use when fixing bugs, investigating failures, diagnosing test failures, tracing unexpected behavior, or handling debug, fix, error, failing, broken, and investigate requests."
 ---
 
 # Debugging Systematically
 
-## Overview
+## Use When
 
-Debug with evidence, not guesses. Gather facts, form hypotheses, test them, and trace to root cause.
+- User reports a bug, failure, broken behavior, or test failure.
+- Root cause is unknown.
+- A fix needs evidence rather than guessing.
 
-## Process
+## Workflow
 
-### Step 1: Reproduce
+1. Reproduce: collect exact steps, error messages, stack traces, logs, and minimal failing case.
+2. Gather evidence: read relevant paths, test outputs, CI logs, and Auggie context when scope is broad.
+3. Form 2-3 ranked, testable hypotheses.
+4. Test the most likely hypothesis first with targeted checks, assertions, logs, or focused tests.
+5. Fix the root cause with the smallest safe change.
+6. Verify with the failing repro, targeted tests, and regression checks.
 
-- Get exact reproduction steps
-- Capture error messages, stack traces, logs
-- Identify minimal reproduction case
+## Hard Rules
 
-### Step 2: Gather Evidence
+- Evidence over intuition.
+- Fix root cause, not symptoms.
+- Do not make broad refactors while debugging unless required by the root cause.
+- For complex debugging, route through CP0-CP4 and use Codex by default.
+- Use cross-validation only if the failure mode stays ambiguous after one pass.
+- Do not report completion before verification.
 
-- Read relevant code paths
-- Check test outputs and CI logs
-- Use Auggie for broader context if needed
+## References
 
-### Step 3: Form Hypotheses
-
-- List 2-3 possible causes ranked by likelihood
-- Each hypothesis must be testable
-- Start with the most likely
-
-### Step 4: Test Hypotheses
-
-- Add diagnostic logging or assertions
-- Run targeted tests
-- Eliminate hypotheses with evidence
-
-### Step 5: Fix and Verify
-
-- Fix the root cause, not symptoms
-- Run verification command
-- Confirm no regressions
-
-## Multi-Model Integration
-
-For complex debugging:
-- Route to **Codex** for backend/systems issues
-- Use **cross-validation** only if failure mode stays ambiguous after one pass
-- Apply CP workflow: CP0 context → CP1 routing → CP2 execution → CP4 verification
-
-## Key Principles
-
-- Evidence over intuition
-- Smallest possible fix
-- Verify before declaring done
-- Document root cause for future reference
+- `skills/shared/protocol-threshold.md` — CP0-CP4 routing and review gates.
+- `skills/shared/supplementary-tools.md` — Auggie and Grok Search for broad context or external issue research.
+- `skills/verifying-before-completion/SKILL.md` — final verification rules.

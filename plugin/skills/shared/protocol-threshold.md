@@ -1,8 +1,19 @@
 # Protocol Threshold (Shared Reference)
 
-> Tier-prompt rules, budgets, `SESSION_POLICY` decisions, and the Tier 3 freshness check are canonical in `skills/coordinating-multi-model-work/context-sharing.md`. This file restates only what the hook needs to surface at prompt-submit time.
+> Exact CP1, CP3, and CP4 response blocks are canonical here for hook injection. Tier-prompt rules, budgets, `SESSION_POLICY` decisions, and the Tier 3 freshness check are canonical in `skills/coordinating-multi-model-work/context-sharing.md`.
 
 All skills that use checkpoints must follow the CP protocol injected by hooks.
+
+## Contents
+
+- CP0: Context Acquisition
+- Required Behavior
+- CP1: Phase Assessment & Routing
+- CP2: External Execution
+- External Response Protocol v1.1
+- CP3: Reconciliation
+- CP4: Phase Review
+- Checkpoint Logic
 
 ## CP0: Context Acquisition
 
@@ -180,7 +191,7 @@ CP4 rules:
 - **Explanation**: [Clear, concise explanation]
 
 ## Recommendation
-- If PASS: Task is complete
+- If PASS: Phase is complete
 - If PASS_WITH_DEBT: [Non-blocking debt + owner/timing]
 - If FAIL: [Specific gaps + suggested next action (e.g. re-run external model or ask user)]
 ```

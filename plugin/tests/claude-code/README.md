@@ -90,6 +90,15 @@ Static workflow guard test:
 - Full `CONTEXT_PACKAGE` repetition is absent from active execution docs
 - Cross-validation is explicitly constrained
 
+#### test-skill-structure-guards.sh
+Static skill authoring guard test:
+- `SKILL.md` frontmatter names are lowercase hyphenated and descriptions are third person
+- Descriptions are non-empty, under the Claude Skills limit, and contain no XML tags
+- `SKILL.md` files stay within the line budget
+- Markdown links use forward slashes and stay one direct reference level deep
+- Compact contract sections are all present when a skill opts into the new structure
+- `REQUIRE_COMPACT_CONTRACT=1` enforces compact sections for every skill after the refactor
+
 #### test-cp0-context-acquisition-guards.sh
 Static CP0 guard test:
 - CP0 is explicitly documented as the pre-routing stage

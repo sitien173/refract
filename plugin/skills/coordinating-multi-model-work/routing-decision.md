@@ -1,5 +1,18 @@
 # CP1 Routing Decision Framework
 
+## Contents
+
+- Overview
+- When to Use
+- Phase Assessment Steps
+- Decision Output
+- Routing Targets
+- Session Policy
+- Detailed Task Matrix
+- Compact Routing Matrix
+- Decision Guidelines
+- Example
+
 ## Overview
 
 This framework defines CP1 Phase Assessment & Routing for multi-model execution.
