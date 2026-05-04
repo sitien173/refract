@@ -34,7 +34,7 @@ For the current phase only:
 2. If routing is not `CLAUDE`, apply CP2 and route to one worker.
 3. Route to `Codex` first for most implementation.
 4. Route to `Gemini` only when the phase is UI-heavy: visual layout, components, styling, interactions, or animation dominate the work.
-5. If a Gemini tool/session fails once, fall back to Codex or Claude-code. Do not spend multiple retries on Gemini.
+5. If any Codex or Gemini MCP call fails, output `BLOCKED`; do not retry or switch executors.
 6. Reuse the worker `SESSION_ID` only for fixes on the same phase, and send deltas only.
 7. Workers edit files directly via MCP write tools and respond using External Response Protocol v1.1; the response lists `## FILES MODIFIED` without duplicating file content.
 
@@ -48,7 +48,7 @@ Claude reviews the executor output against the phase reviewer checklist.
    - `PASS` - phase fully satisfies the checklist
    - `PASS_WITH_DEBT` - phase is usable, integration can continue, and debt is explicit
    - `FAIL` - phase has a blocking gap that must be fixed before integration
-4. If status is `FAIL`, send one bounded follow-up to the executor or fallback route.
+4. If status is `FAIL`, send one bounded follow-up to the same executor session.
 
 ### Step 4: Integrator
 

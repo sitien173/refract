@@ -1,7 +1,7 @@
 {
   "name": "superpowers-ccg",
   "description": "Superpowers-CCG: Skills-driven development workflow with CCG phase orchestration (Claude planner/reviewer/integrator + Codex default executor + Gemini UI-heavy executor)",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "author": {
     "name": "sitien173"
   },

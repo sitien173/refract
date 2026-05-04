@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Integration Test: CP1 evaluation must appear before first subagent dispatch tool use
+# Integration Test: CP1 evaluation must appear before first worker dispatch tool use
 #
 # Purpose:
-# - Reproduces the failure mode where Claude dispatches subagents without
+# - Reproduces the failure mode where Claude dispatches workers without
 #   explicitly outputting a CP1 routing evaluation.
 # - Validates the improved skill/hook prompts enforce an explicit CP1 block
-#   before any subagent dispatch tool call.
+#   before any worker dispatch tool call.
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 echo "========================================"
-echo " Integration Test: CP1 before subagent dispatch"
+echo " Integration Test: CP1 before worker dispatch"
 echo "========================================"
 echo ""
 
@@ -26,7 +26,7 @@ mkdir -p "$TEST_PROJECT"
 
 # Run Claude from repo root so local dev skills/hooks are loaded.
 # The prompt explicitly requests using Task so we can verify ordering in transcript.
-PROMPT="Change to directory $TEST_PROJECT, then use the developing-with-subagents skill to execute the following plan.
+PROMPT="Change to directory $TEST_PROJECT, then use the executing-phases skill to execute the following plan.
 
 IMPORTANT (protocol):
 - Before the first Task tool call, you MUST output a standalone assistant text message that begins with # CP1 ROUTING DECISION and includes these required sections and fields:
@@ -40,14 +40,14 @@ IMPORTANT (protocol):
 - That CP1 message must NOT include any tool calls.
 
 PLAN:
-- Task 1: Dispatch ONE implementer subagent using the Task tool (not internal reasoning), whose only job is to reply with the exact text: pong
-  Constraints for the implementer subagent:
+- Task 1: Dispatch ONE implementer worker using the Task tool (not internal reasoning), whose only job is to reply with the exact text: pong
+  Constraints for the implementer worker:
   - Do not read or write any files
   - Do not run Bash
   - Do not call any tools
 
 IMPORTANT:
-- You MUST use the Task tool for the implementer subagent.
+- You MUST use the Task tool for the implementer worker.
 - Do not complete the task yourself.
 
 After the implementer responds, stop."
@@ -184,7 +184,7 @@ with open(path, 'r', encoding='utf-8') as f:
 
 failed = False
 
-print('Test 1: Subagent dispatch tool was used...')
+print('Test 1: Worker dispatch tool was used...')
 if first_dispatch_line is None:
     print('  [FAIL] No Task or Agent tool call found in transcript')
     failed = True
@@ -231,7 +231,7 @@ else:
     failed = True
 
 print('')
-print('Test 6: CP1 appears BEFORE first subagent dispatch tool call...')
+print('Test 6: CP1 appears BEFORE first worker dispatch tool call...')
 if cp1_line is None or first_dispatch_line is None:
     print('  [FAIL] Missing CP1 or Task/Agent line; cannot verify order')
     failed = True

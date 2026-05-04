@@ -22,7 +22,7 @@ Follow these rules when filling in the template below:
 - `Done When` replaces separate `Success Criteria` and `Reviewer Checklist` sections.
 - Use at most 2 Tier-2 follow-ups per phase. If the phase still fails after that, re-scope or escalate.
 - Let Gemini decide implementation details. It knows standard patterns for common UI stacks.
-- Use Gemini only for UI-heavy phases. If the tool/session fails once, route the phase back to Codex or Claude-code.
+- Use Gemini only for UI-heavy phases. If the MCP call fails, output `BLOCKED`; do not retry or switch executors.
 
 **Anti-pattern (do not do this):**
 ```

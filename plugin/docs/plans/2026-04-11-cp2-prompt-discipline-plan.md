@@ -79,7 +79,7 @@ Apply the identical `## Prompt Discipline` section as Task 1, inserted before `#
 
 ### Task 3 — Add Prompt Discipline to `implementer-prompt.md`
 
-**File:** `skills/developing-with-subagents/implementer-prompt.md`
+**File:** `skills/executing-phases/implementer-prompt.md`
 
 Add a `## Prompt Discipline` note inside the template block, after the `## Rules` section:
 

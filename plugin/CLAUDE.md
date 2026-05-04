@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Global code style, error-handling rules, CP0–CP4 workflow details, required tools (`auggie`, `grok-search`, `codex`, `gemini`), RTK shell prefix, and Morph edit policy live in `rules/global-claude-workflow.mdc` (also applied when using the Cursor plugin rules pack).
+Global code style, error-handling rules, CP0–CP4 workflow details, required tools (`auggie`, `grok-search`, `codex`, `gemini`), RTK shell prefix, and Morph edit policy live in `rules/global-claude-workflow.mdc`.
 
 ## Common Commands
 
 - Run skill tests: `./tests/claude-code/run-skill-tests.sh`
 - Run integration tests: `./tests/claude-code/run-skill-tests.sh --integration`
-- Run specific test: `./tests/claude-code/run-skill-tests.sh --test test-subagent-driven-development.sh`
+- Run specific test: `./tests/claude-code/run-skill-tests.sh --test test-executing-phases.sh`
 - Update plugin: `claude plugin update superpowers-ccg`
 - Install MCPs: `claude mcp add codex ...` and `claude mcp add gemini ...` (see README.md)
 

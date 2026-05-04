@@ -1,13 +1,13 @@
 ---
-name: developing-with-subagents
-description: "Executes implementation phases in the current session by routing one phase at a time to Codex or Gemini, then running Claude review and integration gates."
+name: executing-phases
+description: "Executes one active implementation phase in the current session by routing to Codex or Gemini, then running Claude review and integration gates. Use when: executing-phases, phase execution, run this phase, continue current phase."
 ---
 
-# Developing With Subagents
+# Executing Phases
 
 ## Overview
 
-Use subagents or external workers to execute one implementation phase at a time.
+Execute one implementation phase at a time with Codex or Gemini as the primary executor.
 
 Claude stays in the orchestrator, reviewer, and integrator roles. The executor role goes to Codex by default, or Gemini when the phase is UI-heavy.
 
@@ -23,9 +23,9 @@ Claude stays in the orchestrator, reviewer, and integrator roles. The executor r
 
 - Codex first for most implementation: backend, full-stack, tests, refactors, debugging, infrastructure, scripts, and repo tooling.
 - Gemini only when the phase is UI-heavy: visual design, component layout, styling, motion, canvas/SVG, or complex interactions dominate the work.
-- Claude handles orchestration, review, integration checks, docs, and clarification. Claude may implement only when the plan explicitly routes to `claude` or fallback says `Claude-code`.
+- Claude handles orchestration, review, integration checks, docs, and clarification. Claude may implement only when the plan explicitly routes to `claude` or the user overrides routing.
 - Cross-validation is rare and only for unresolved architecture or true multi-domain conflict.
-- If Gemini fails a tool/session once, fall back to Codex or Claude-code. Do not retry Gemini multiple times.
+- If any Codex or Gemini MCP call fails, output `BLOCKED`; do not retry or switch executors.
 
 ## Phase Handoff Format
 

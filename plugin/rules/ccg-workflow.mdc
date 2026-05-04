@@ -36,7 +36,4 @@ All external model calls must:
 
 ### Failure Handling
 
-If MCP tools fail:
-1. If Gemini fails once, fall back to Codex or Claude-code
-2. If Codex fails, retry once, then fall back to Claude-code/Sonnet
-3. If permission-blocked, fail-closed with `BLOCKED` status
+If Codex or Gemini MCP execution fails, output `BLOCKED` immediately. Do not retry, switch executors, or dispatch another worker.

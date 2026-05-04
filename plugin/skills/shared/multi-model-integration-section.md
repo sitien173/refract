@@ -37,12 +37,10 @@ All skills that invoke external models must follow this pattern.
 - CP3: reconcile multiple or non-trivial external responses before final review
 - CP4: perform Claude phase review
 
-## Fallback
+## Failure Handling
 
-If `Routing == Gemini` and Gemini fails once with `timeout`, `tool-unavailable`, or session/tool instability, fall back to Codex or Claude-code. Do not retry Gemini multiple times.
+If any Codex or Gemini MCP call fails with `timeout`, `tool-unavailable`, `session-failed`, session instability, model error, or `permission-blocked`, output `BLOCKED` per `coordinating-multi-model-work/GATE.md`.
 
-If `Routing == Codex` and Codex fails with `timeout` or `tool-unavailable`, retry once with identical parameters. If still failing, fall back to a Sonnet subagent (`Agent` tool, `model: "sonnet"`) that implements the phase via direct file editing. Use `coordinating-multi-model-work/prompts/sonnet-fallback-base.md` as the prompt template.
+Do not retry or switch executors after executor MCP failure.
 
-CP4 runs identically after fallback.
-
-If the failure reason is `permission-blocked`, do not retry or fall back — output `BLOCKED` per `coordinating-multi-model-work/GATE.md`.
+CP4 runs only when executor output exists.

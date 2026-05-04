@@ -23,10 +23,3 @@ jobs:
           chmod +x tests/claude-code/run-skill-tests.sh
           chmod +x tests/claude-code/test-*.sh
           ./tests/claude-code/run-skill-tests.sh
-
-      - name: Run OpenCode static checks
-        run: |
-          chmod +x tests/opencode/run-tests.sh
-          chmod +x tests/opencode/setup.sh
-          chmod +x tests/opencode/test-*.sh
-          ./tests/opencode/run-tests.sh

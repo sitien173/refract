@@ -14,7 +14,7 @@ Claude is the orchestrator, reviewer, and integrator. It plans phases, routes ex
 Use this module to route one implementation phase at a time:
 - **Codex** — default executor for most implementation
 - **Gemini** — UI-heavy executor only
-- **Claude** — planner, reviewer, integrator, docs, clarification, or explicit Claude-code fallback
+- **Claude** — planner, reviewer, integrator, docs, or clarification
 
 ## Core Rules
 
@@ -26,8 +26,7 @@ Use this module to route one implementation phase at a time:
 6. Use CP3 as a Claude-only reconciliation layer when cross-validation or other non-trivial external feedback appears.
 7. Always run Claude review after executor output and integration checks after every phase.
 8. Review returns `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
-9. If a Gemini MCP call fails once with `timeout`, `tool-unavailable`, or session/tool instability, fall back to Codex or Claude-code. Do not spend multiple retries on Gemini.
-10. If a Codex MCP call fails with `timeout` or `tool-unavailable`, retry once, then fall back to Claude-code. See `checkpoints.md` CP2 Failure & Fallback for the full policy.
+9. If any Codex or Gemini MCP call fails with `timeout`, `tool-unavailable`, `session-failed`, session instability, or `permission-blocked`, output `BLOCKED`; do not retry or switch executors.
 
 ## Cross-Validation
 

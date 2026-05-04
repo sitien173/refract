@@ -68,7 +68,7 @@ BEFORE any response or action:
 ### Workflow 1: Creating Features
 
 ```text
-superpowers-ccg:brainstorming → superpowers-ccg:writing-plans → superpowers-ccg:executing-plans OR superpowers-ccg:developing-with-subagents → superpowers-ccg:verifying-before-completion
+superpowers-ccg:brainstorming → superpowers-ccg:writing-plans → superpowers-ccg:executing-plans OR superpowers-ccg:executing-phases → superpowers-ccg:verifying-before-completion
 ```
 
 ### Workflow 2: Debugging
@@ -93,7 +93,7 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 |-------|---------|---------|
 | `superpowers-ccg:writing-plans` | Have spec/requirements before coding | Create phase-based implementation plan |
 | `superpowers-ccg:executing-plans` | Have a plan document | Execute one phase at a time |
-| `superpowers-ccg:developing-with-subagents` | Have a plan and implementation phases | Route one phase at a time with review and integration |
+| `superpowers-ccg:executing-phases` | Have a plan and implementation phases | Route one phase at a time with review and integration |
 
 ### Meta Skills
 
@@ -124,7 +124,7 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 | `CROSS_VALIDATION` | Unresolved architecture or true multi-domain conflict | Multiple MCP tools |
 | `CLAUDE` | Planning, review, integration, routing, coordination, docs editing, or clarification | No MCP call |
 
-> **Important:** Claude is the planner, orchestrator, reviewer, and integrator. Codex is the default executor. Gemini is only for UI-heavy phases. If Gemini fails once, fall back to Codex or Claude-code.
+> **Important:** Claude is the planner, orchestrator, reviewer, and integrator. Codex is the default executor. Gemini is only for UI-heavy phases. If Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`.
 
 ### Phase Review
 
@@ -137,7 +137,7 @@ CP4 runs after each implementation phase. Claude reviews against the original re
 3. **Gemini only for UI-heavy phases**.
 4. **Claude performs CP4 phase review** after implementation.
 5. **Think independently** and challenge external model output.
-6. **Fail closed**: if required MCP evidence is missing and fallback is not permitted, output `BLOCKED`.
+6. **Fail closed**: if required MCP evidence is missing or executor MCP execution fails, output `BLOCKED`.
 7. **Use the inline External Response Protocol v1.1** in the active CP2 docs and prompts.
 
 ---

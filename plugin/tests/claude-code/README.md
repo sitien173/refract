@@ -25,7 +25,7 @@ This test suite verifies that skills are loaded correctly and Claude follows the
 
 ### Run specific test:
 ```bash
-./run-skill-tests.sh --test test-subagent-driven-development.sh
+./run-skill-tests.sh --test test-executing-phases.sh
 ```
 
 ### Run with verbose output:
@@ -137,7 +137,7 @@ Static wiki integration guard test:
 - CP0 wiki lookup remains selective, advisory, and budget-safe; current files override wiki content
 - README documents ingest, query, lint, `docs/wiki/`, and current-code-wins behavior
 
-#### test-subagent-driven-development.sh
+#### test-executing-phases.sh
 Tests skill content and requirements (~2 minutes):
 - Skill loading and accessibility
 - One phase at a time
@@ -149,15 +149,15 @@ Tests skill content and requirements (~2 minutes):
 
 ### Integration Tests (use --integration flag)
 
-#### test-subagent-driven-development-integration.sh
+#### test-executing-phases-integration.sh
 Full workflow execution test (~10-30 minutes):
 - Creates real test project with Node.js setup
 - Creates implementation plan with 2 tasks
-- Executes plan using subagent-driven-development
+- Executes plan using executing-phases
 - Verifies actual behaviors:
   - Plan read once at start (not per task)
-  - Full task text provided in subagent prompts
-  - Subagents perform self-review before reporting
+  - Full task text provided in worker prompts
+  - Workers perform self-review before reporting
   - CP4 phase review happens after phase output
   - Final review checks the artifact against the spec
   - Working implementation is produced
@@ -167,7 +167,7 @@ Full workflow execution test (~10-30 minutes):
 **What it tests:**
 - The workflow actually works end-to-end
 - Our improvements are actually applied
-- Subagents follow the skill correctly
+- Workers follow the skill correctly
 - Final code is functional and tested
 
 #### test-cp4-before-done-integration.sh
@@ -196,7 +196,7 @@ Focused CP4 integration test:
 
 With `--verbose`, you'll see full Claude output:
 ```bash
-./run-skill-tests.sh --verbose --test test-subagent-driven-development.sh
+./run-skill-tests.sh --verbose --test test-executing-phases.sh
 ```
 
 Without verbose, only failures show output.

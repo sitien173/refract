@@ -1,10 +1,10 @@
 # Testing Superpowers Skills
 
-This document describes how to test Superpowers skills, particularly the integration tests for complex skills like `subagent-driven-development`.
+This document describes how to test Superpowers skills, particularly the integration tests for complex skills like `executing-phases`.
 
 ## Overview
 
-Testing skills that involve subagents, workflows, and complex interactions requires running actual Claude Code sessions in headless mode and verifying their behavior through session transcripts.
+Testing skills that involve workers, workflows, and complex interactions requires running actual Claude Code sessions in headless mode and verifying their behavior through session transcripts.
 
 ## Test Structure
 
@@ -12,7 +12,7 @@ Testing skills that involve subagents, workflows, and complex interactions requi
 tests/
 ├── claude-code/
 │   ├── test-helpers.sh                    # Shared test utilities
-│   ├── test-subagent-driven-development-integration.sh
+│   ├── test-executing-phases-integration.sh
 │   ├── analyze-token-usage.py             # Token analysis tool
 │   └── run-skill-tests.sh                 # Test runner (if exists)
 ```
@@ -24,12 +24,12 @@ tests/
 Integration tests execute real Claude Code sessions with actual skills:
 
 ```bash
-# Run the subagent-driven-development integration test
+# Run the executing-phases integration test
 cd tests/claude-code
-./test-subagent-driven-development-integration.sh
+./test-executing-phases-integration.sh
 ```
 
-**Note:** Integration tests can take 10-30 minutes as they execute real implementation plans with multiple subagents.
+**Note:** Integration tests can take 10-30 minutes as they execute real implementation plans with multiple workers.
 
 ### Requirements
 
@@ -37,15 +37,15 @@ cd tests/claude-code
 - Claude Code must be installed and available as `claude` command
 - Local dev marketplace must be enabled: `"superpowers@superpowers-dev": true` in `~/.claude/settings.json`
 
-## Integration Test: subagent-driven-development
+## Integration Test: executing-phases
 
 ### What It Tests
 
-The integration test verifies the `subagent-driven-development` skill correctly:
+The integration test verifies the `executing-phases` skill correctly:
 
 1. **Plan Loading**: Reads the plan once at the beginning
-2. **Full Task Text**: Provides complete task descriptions to subagents (doesn't make them read files)
-3. **Self-Review**: Ensures subagents perform self-review before reporting
+2. **Full Task Text**: Provides complete task descriptions to workers (doesn't make them read files)
+3. **Self-Review**: Ensures workers perform self-review before reporting
 4. **Phase Review**: Runs CP4 phase review after each implementation phase
 5. **Review Loops**: Uses follow-up loops when CP4 finds issues
 6. **Independent Verification**: Final review checks the artifact against the spec, not the implementer summary
@@ -56,18 +56,18 @@ The integration test verifies the `subagent-driven-development` skill correctly:
 2. **Execution**: Runs Claude Code in headless mode with the skill
 3. **Verification**: Parses the session transcript (`.jsonl` file) to verify:
    - Skill tool was invoked
-   - Subagents were dispatched (Task tool)
+   - Workers were dispatched (Task tool)
    - TodoWrite was used for tracking
    - Implementation files were created
    - Tests pass
    - Git commits show proper workflow
-4. **Token Analysis**: Shows token usage breakdown by subagent
+4. **Token Analysis**: Shows token usage breakdown by worker
 
 ### Test Output
 
 ```
 ========================================
- Integration Test: subagent-driven-development
+ Integration Test: executing-phases
 ========================================
 
 Test project: /tmp/tmp.xyz123
@@ -75,10 +75,10 @@ Test project: /tmp/tmp.xyz123
 === Verification Tests ===
 
 Test 1: Skill tool invoked...
-  [PASS] subagent-driven-development skill was invoked
+  [PASS] executing-phases skill was invoked
 
-Test 2: Subagents dispatched...
-  [PASS] 7 subagents dispatched
+Test 2: Workers dispatched...
+  [PASS] 7 workers dispatched
 
 Test 3: Task tracking...
   [PASS] TodoWrite used 5 time(s)
@@ -159,7 +159,7 @@ ls -lt "$SESSION_DIR"/*.jsonl | head -5
 ### What It Shows
 
 - **Main session usage**: Token usage by the coordinator (you or main Claude instance)
-- **Per-subagent breakdown**: Each Task invocation with:
+- **Per-worker breakdown**: Each Task invocation with:
   - Agent ID
   - Description (extracted from prompt)
   - Message count
@@ -172,8 +172,8 @@ ls -lt "$SESSION_DIR"/*.jsonl | head -5
 
 - **High cache reads**: Good - means prompt caching is working
 - **High input tokens on main**: Expected - coordinator has full context
-- **Similar costs per subagent**: Expected - each gets similar task complexity
-- **Cost per task**: Typical range is $0.05-$0.15 per subagent depending on task
+- **Similar costs per worker**: Expected - each gets similar task complexity
+- **Cost per task**: Typical range is $0.05-$0.15 per worker depending on task
 
 ## Troubleshooting
 
@@ -202,7 +202,7 @@ ls -lt "$SESSION_DIR"/*.jsonl | head -5
 **Solutions**:
 1. Increase timeout: `timeout 1800 claude ...` (30 minutes)
 2. Check for infinite loops in skill logic
-3. Review subagent task complexity
+3. Review worker task complexity
 
 ### Session File Not Found
 
@@ -300,4 +300,4 @@ Session transcripts are JSONL (JSON Lines) files where each line is a JSON objec
 }
 ```
 
-The `agentId` field links to subagent sessions, and the `usage` field contains token usage for that specific subagent invocation.
+The `agentId` field links to worker sessions, and the `usage` field contains token usage for that specific worker invocation.

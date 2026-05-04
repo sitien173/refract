@@ -6,7 +6,7 @@
 
 **Strengthened using-superpowers skill for explicit skill requests**
 
-Addressed a failure mode where Claude would skip invoking a skill even when the user explicitly requested it by name (e.g., "subagent-driven-development, please"). Claude would think "I know what that means" and start working directly instead of loading the skill.
+Addressed a failure mode where Claude would skip invoking a skill even when the user explicitly requested it by name (e.g., "executing-phases, please"). Claude would think "I know what that means" and start working directly instead of loading the skill.
 
 Changes:
 - Updated "The Rule" to say "Invoke relevant or requested skills" instead of "Check for skills" - emphasizing active invocation over passive checking
@@ -52,9 +52,9 @@ Added guidance that mechanical constraints should be automated, not documented�
 
 ### New Features
 
-**Two-stage code review in subagent-driven-development**
+**Two-stage code review in executing-phases**
 
-Subagent workflows now use two separate review stages after each task:
+Worker workflows now use two separate review stages after each task:
 
 1. **Spec compliance review** - Skeptical reviewer verifies implementation matches spec exactly. Catches missing requirements AND over-building. Won't trust implementer's report—reads actual code.
 
@@ -62,13 +62,13 @@ Subagent workflows now use two separate review stages after each task:
 
 This catches the common failure mode where code is well-written but doesn't match what was requested. Reviews are loops, not one-shot: if reviewer finds issues, implementer fixes them, then reviewer checks again.
 
-Other subagent workflow improvements:
+Other worker workflow improvements:
 - Controller provides full task text to workers (not file references)
 - Workers can ask clarifying questions before AND during work
 - Self-review checklist before reporting completion
 - Plan read once at start, extracted to TodoWrite
 
-New prompt templates in `skills/subagent-driven-development/`:
+New prompt templates in `skills/executing-phases/`:
 - `implementer-prompt.md` - Includes self-review checklist, encourages questions
 - `spec-reviewer-prompt.md` - Skeptical verification against requirements
 - `code-quality-reviewer-prompt.md` - Standard code review
@@ -98,7 +98,7 @@ Three new test frameworks for validating skill behavior:
 
 `tests/claude-code/` - Integration tests using `claude -p` for headless testing. Verifies skill usage via session transcript (JSONL) analysis. Includes `analyze-token-usage.py` for cost tracking.
 
-`tests/subagent-driven-dev/` - End-to-end workflow validation with two complete test projects:
+`tests/executing-phases-dev/` - End-to-end workflow validation with two complete test projects:
 - `go-fractals/` - CLI tool with Sierpinski/Mandelbrot (10 tasks)
 - `svelte-todo/` - CRUD app with localStorage and Playwright (12 tasks)
 
@@ -122,7 +122,7 @@ Description changed to imperative: "You MUST use this before any creative work�
 
 **Skill consolidation** - Six standalone skills merged:
 - `root-cause-tracing`, `defense-in-depth`, `condition-based-waiting` → bundled in `systematic-debugging/`
-- `testing-skills-with-subagents` → bundled in `writing-skills/`
+- `testing-skills-with-workers` → bundled in `writing-skills/`
 - `testing-anti-patterns` → bundled in `test-driven-development/`
 - `sharing-skills` removed (obsolete)
 
@@ -145,39 +145,9 @@ Description changed to imperative: "You MUST use this before any creative work�
 
 ---
 
-## v3.5.1 (2025-11-24)
-
-### Changed
-
-- **OpenCode Bootstrap Refactor**: Switched from `chat.message` hook to `session.created` event for bootstrap injection
-  - Bootstrap now injects at session creation via `session.prompt()` with `noReply: true`
-  - Explicitly tells the model that using-superpowers is already loaded to prevent redundant skill loading
-  - Consolidated bootstrap content generation into shared `getBootstrapContent()` helper
-  - Cleaner single-implementation approach (removed fallback pattern)
-
----
-
 ## v3.5.0 (2025-11-23)
 
-### Added
-
-- **OpenCode Support**: Native JavaScript plugin for OpenCode.ai
-  - Custom tools: `use_skill` and `find_skills`
-  - Message insertion pattern for skill persistence across context compaction
-  - Automatic context injection via chat.message hook
-  - Auto re-injection on session.compacted events
-  - Three-tier skill priority: project > personal > superpowers
-  - Project-local skills support (`.opencode/skills/`)
-  - Shared core module (`lib/skills-core.js`) for code reuse with Codex
-  - Automated test suite with proper isolation (`tests/opencode/`)
-  - Platform-specific documentation (`docs/README.opencode.md`, `docs/README.codex.md`)
-
 ### Changed
-
-- **Refactored Codex Implementation**: Now uses shared `lib/skills-core.js` ES module
-  - Eliminates code duplication between Codex MCP and OpenCode
-  - Single source of truth for skill discovery and parsing
-  - Codex MCP successfully loads ES modules via Node.js interop
 
 - **Improved Documentation**: Rewrote README to explain problem/solution clearly
   - Removed duplicate sections and conflicting information
@@ -221,14 +191,14 @@ Description changed to imperative: "You MUST use this before any creative work�
 - Personal skills override superpowers skills when names match
 - Clean skill display: shows name/description without raw frontmatter
 - Helpful context: shows supporting files directory for each skill
-- Tool mapping for Codex: TodoWrite→update_plan, subagents→manual fallback, etc.
+- Tool mapping for Codex: TodoWrite→update_plan, workers→manual fallback, etc.
 - Bootstrap integration with minimal AGENTS.md for automatic startup
 - Complete installation guide and bootstrap instructions specific to Codex
 
 **Key differences from Claude Code integration:**
 - Single unified script instead of separate tools
 - Tool substitution system for Codex-specific equivalents
-- Simplified subagent handling (manual work instead of delegation)
+- Simplified worker handling (manual work instead of delegation)
 - Updated terminology: "Superpowers skills" instead of "Core skills"
 
 ### Files Added
@@ -275,22 +245,6 @@ These changes address observed agent behavior where they rationalize around skil
 ### Files Changed
 - Updated: `skills/using-superpowers/SKILL.md` - Added three layers of enforcement to prevent skill-skipping rationalization
 
-## v3.2.1 (2025-10-20)
-
-### New Features
-
-**Code reviewer agent now included in plugin**
-- Added `superpowers:code-reviewer` agent to plugin's `agents/` directory
-- Agent provides systematic code review against plans and coding standards
-- Previously required users to have personal agent configuration
-- All skill references updated to use namespaced `superpowers:code-reviewer`
-- Fixes #55
-
-### Files Changed
-- New: `agents/code-reviewer.md` - Agent definition with review checklist and output format
-- Updated: `skills/requesting-code-review/SKILL.md` - References to `superpowers:code-reviewer`
-- Updated: `skills/subagent-driven-development/SKILL.md` - References to `superpowers:code-reviewer`
-
 ## v3.2.0 (2025-10-18)
 
 ### New Features
@@ -300,7 +254,7 @@ These changes address observed agent behavior where they rationalize around skil
 - Design documents now written to `docs/plans/YYYY-MM-DD-<topic>-design.md` before implementation
 - Restores functionality from original brainstorming command that was lost during skill conversion
 - Documents written before worktree setup and implementation planning
-- Tested with subagent to verify compliance under time pressure
+- Tested with worker to verify compliance under time pressure
 
 ### Breaking Changes
 
@@ -309,7 +263,7 @@ These changes address observed agent behavior where they rationalize around skil
 - Updated format: `superpowers:test-driven-development` (previously just `test-driven-development`)
 - Affects all REQUIRED SUB-SKILL, RECOMMENDED SUB-SKILL, and REQUIRED BACKGROUND references
 - Aligns with how skills are invoked using the Skill tool
-- Files updated: brainstorming, executing-plans, subagent-driven-development, systematic-debugging, testing-skills-with-subagents, writing-plans, writing-skills
+- Files updated: brainstorming, executing-plans, executing-phases, systematic-debugging, testing-skills-with-workers, writing-plans, writing-skills
 
 ### Improvements
 

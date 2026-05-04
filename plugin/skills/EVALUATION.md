@@ -96,17 +96,17 @@ Use evaluation scenarios (per Anthropic best practices) to validate skill effect
 }
 ```
 
-### developing-with-subagents
+### executing-phases
 
 ```json
 {
-  "skill": "developing-with-subagents",
-  "query": "Execute this plan using subagents",
+  "skill": "executing-phases",
+  "query": "Execute this plan using workers",
   "context": "docs/plans/feature.md",
   "expected_behavior": [
     "Read the plan once and extract all tasks",
-    "Dispatch a separate subagent for each task",
-    "Answer subagent questions before proceeding",
+    "Dispatch a separate worker for each task",
+    "Answer worker questions before proceeding",
     "Run spec review before code quality review",
     "Iterate on fixes until the reviewer passes"
   ]

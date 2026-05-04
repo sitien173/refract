@@ -104,50 +104,33 @@ Output contract:
 - The response uses `# EXTERNAL RESPONSE PROTOCOL v1.1` and lists every changed file in `## FILES MODIFIED`, but does not duplicate file content.
 - Allow an optional `## CONTEXT ARTIFACTS` section for reusable discoveries that later tasks can reference.
 
-## CP2 Failure & Fallback
+## CP2 Failure Handling
 
-When a CP2 MCP call (`mcp__codex__codex` or `mcp__gemini__gemini`) fails:
+When a CP2 MCP call (`mcp__codex__codex` or `mcp__gemini__gemini`) fails, stop the phase immediately with `BLOCKED`.
 
-### Failure classification (run before any retry/fallback)
+Blocking reasons:
 
-On any CP2 error, classify first, then act:
+- `permission-blocked`
+- `tool-unavailable`
+- `timeout`
+- `session-failed`
+- session instability
+- model error
 
-1. If error class is `permission-blocked` → jump to step 5 (Hard BLOCKED). Do not retry, do not auto-downgrade.
-2. Else if error class is `session-not-found` / `session-expired` / "no such SESSION_ID" → step 1 below (auto-downgrade). Does **not** consume the Tier-2 retry budget.
-3. Else (timeout / tool-unavailable / model error) → step 2 or 3 below. **Does** consume the Tier-2 retry budget when the failed call was a Tier-2 follow-up.
-
-### Tiered failure handling
-
-1. **Session-not-found auto-downgrade** — Transparently rebuild the call as Tier 1 (`SESSION_POLICY: FRESH`) with a new `SESSION_ID` and the full phase context bundle. Uncounted against the 2-retry Tier-2 budget.
-2. **Gemini fallback** — If Gemini fails once with `timeout`, `tool-unavailable`, or session/tool instability, stop using Gemini for that phase and fall back to Codex or Claude-code. Do not spend multiple retries on Gemini.
-3. **Codex retry** — If Codex fails with `timeout` or `tool-unavailable`, retry once with identical parameters (including `SESSION_ID` if it was a Tier-2 follow-up or Tier-3 continuation).
-4. **Fallback** — If Codex still fails, dispatch a Claude-code/Sonnet subagent to implement the phase directly:
-   - Use the `Agent` tool with `model: "sonnet"` and `subagent_type: "general-purpose"`.
-   - Send the same task context bundle using `prompts/sonnet-fallback-base.md`.
-   - The subagent edits files directly via Edit/Write/Bash.
-   - The subagent must emit a minimal ERP v1.1 block (`## SUMMARY`, `## FILES MODIFIED`, `## SPEC COMPLIANCE`, `## NEXT STEPS / CONTINUATION`) so CP4 has uniform input regardless of who executed.
-   - After the subagent completes, proceed to CP4 as normal.
-5. **Hard BLOCKED** — If the failure reason is `permission-blocked`, do not retry or fall back. Output the `BLOCKED` evidence block per `GATE.md`. The user deliberately denied the tool.
-
-### Cross-validation fallback
-
-If CP1 chose `Cross-Validation` and Gemini fails once, continue with Codex if Codex is available. If Codex also fails after one retry, dispatch ONE Sonnet subagent (not two). The fallback handles the phase as a single implementation.
+Do not retry the same tool, switch executors, auto-downgrade `SESSION_POLICY`, or dispatch alternate worker execution.
 
 ### Evidence format
 
-When fallback triggers, output:
-
 ```text
 [Multi-Model Gate]
-Routing: CODEX | GEMINI
-Status: FALLBACK
-Reason: tool-unavailable | timeout | session-failed
-Fallback: Codex | Claude-code/Sonnet subagent
+Routing: CODEX | GEMINI | CROSS_VALIDATION
+Status: BLOCKED
+Reason: permission-blocked | tool-unavailable | timeout | session-failed
 ```
 
-### CP4 after fallback
+### CP4 after blocked execution
 
-CP4 runs identically regardless of whether the MCP worker or the Sonnet subagent performed the work. If CP4 returns `FAIL`, dispatch a bounded Tier-2 follow-up with delta context only. Do not exceed 2 Tier-2 follow-ups on the same phase. If CP4 returns `PASS_WITH_DEBT`, continue only when the debt is explicit and non-blocking.
+CP4 does not run when CP2 blocks before executor output exists. Resolve the MCP failure or ask the user before attempting the phase again.
 
 ## CP3: Reconciliation
 

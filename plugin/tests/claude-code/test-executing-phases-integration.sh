@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Integration Test: subagent-driven-development workflow
+# Integration Test: executing-phases workflow
 # Actually executes a plan and verifies the new workflow behaviors
 set -euo pipefail
 
@@ -7,13 +7,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 echo "========================================"
-echo " Integration Test: subagent-driven-development"
+echo " Integration Test: executing-phases"
 echo "========================================"
 echo ""
 echo "This test executes a real plan using the skill and verifies:"
 echo "  1. Plan is read once (not per phase)"
 echo "  2. Full phase text provided to executors"
-echo "  3. Subagents perform self-review"
+echo "  3. Workers perform self-review"
 echo "  4. CP4 phase review runs after phase output"
 echo "  5. Follow-up loops happen when review finds issues"
 echo "  6. Final review checks the artifact against the spec"
@@ -48,7 +48,7 @@ mkdir -p src test docs/plans
 cat > docs/plans/implementation-plan.md <<'EOF'
 # Test Implementation Plan
 
-This is a minimal plan to test the subagent-driven-development workflow.
+This is a minimal plan to test the executing-phases workflow.
 
 ## Task 1: Create Add Function
 
@@ -115,18 +115,18 @@ echo ""
 echo "Project setup complete. Starting execution..."
 echo ""
 
-# Run Claude with subagent-driven-development
+# Run Claude with executing-phases
 # Capture full output to analyze
 OUTPUT_FILE="$TEST_PROJECT/claude-output.txt"
 
 # Create prompt file
 cat > "$TEST_PROJECT/prompt.txt" <<'EOF'
-I want you to execute the implementation plan at docs/plans/implementation-plan.md using the subagent-driven-development skill.
+I want you to execute the implementation plan at docs/plans/implementation-plan.md using the executing-phases skill.
 
 IMPORTANT: Follow the skill exactly. I will be verifying that you:
 1. Read the plan once at the beginning
-2. Provide full task text to subagents (don't make them read files)
-3. Ensure subagents do self-review before reporting
+2. Provide full task text to workers (don't make them read files)
+3. Ensure workers do self-review before reporting
 4. Run CP4 phase review after phase output
 5. Use review loops when issues are found
 
@@ -136,12 +136,12 @@ EOF
 # Note: We use a longer timeout since this is integration testing
 # Use --allowed-tools to enable tool usage in headless mode
 # IMPORTANT: Run from superpowers directory so local dev skills are available
-PROMPT="Change to directory $TEST_PROJECT and then execute the implementation plan at docs/plans/implementation-plan.md using the subagent-driven-development skill.
+PROMPT="Change to directory $TEST_PROJECT and then execute the implementation plan at docs/plans/implementation-plan.md using the executing-phases skill.
 
 IMPORTANT: Follow the skill exactly. I will be verifying that you:
 1. Read the plan once at the beginning
-2. Provide full task text to subagents (don't make them read files)
-3. Ensure subagents do self-review before reporting
+2. Provide full task text to workers (don't make them read files)
+3. Ensure workers do self-review before reporting
 4. Run CP4 phase review after phase output
 5. Use review loops when issues are found
 
@@ -200,21 +200,21 @@ echo ""
 
 # Test 1: Skill was invoked
 echo "Test 1: Skill tool invoked..."
-if grep -q '"name":"Skill".*"skill":"superpowers:subagent-driven-development"' "$SESSION_FILE"; then
-    echo "  [PASS] subagent-driven-development skill was invoked"
+if grep -q '"name":"Skill".*"skill":"superpowers:executing-phases"' "$SESSION_FILE"; then
+    echo "  [PASS] executing-phases skill was invoked"
 else
     echo "  [FAIL] Skill was not invoked"
     FAILED=$((FAILED + 1))
 fi
 echo ""
 
-# Test 2: Subagents were used (Task tool)
-echo "Test 2: Subagents dispatched..."
+# Test 2: Workers were used (Task tool)
+echo "Test 2: Workers dispatched..."
 task_count=$(grep -c '"name":"Task"' "$SESSION_FILE" || echo "0")
 if [ "$task_count" -ge 2 ]; then
-    echo "  [PASS] $task_count subagents dispatched"
+    echo "  [PASS] $task_count workers dispatched"
 else
-    echo "  [FAIL] Only $task_count subagent(s) dispatched (expected >= 2)"
+    echo "  [FAIL] Only $task_count worker(s) dispatched (expected >= 2)"
     FAILED=$((FAILED + 1))
 fi
 echo ""
@@ -309,9 +309,9 @@ if [ $FAILED -eq 0 ]; then
     echo "STATUS: PASSED"
     echo "All verification tests passed!"
     echo ""
-    echo "The subagent-driven-development skill correctly:"
+    echo "The executing-phases skill correctly:"
     echo "  ✓ Reads plan once at start"
-    echo "  ✓ Provides full task text to subagents"
+    echo "  ✓ Provides full task text to workers"
     echo "  ✓ Enforces self-review"
     echo "  ✓ Runs CP4 phase review"
     echo "  ✓ Final review verifies against the spec"

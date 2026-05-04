@@ -19,7 +19,7 @@ You have superpowers.
 2. **CP0 first:** Do minimal context acquisition before routing. Selectively check `docs/wiki/` for durable project knowledge, then use Auggie for current local code context; use Grok Search only for external/current research.
 3. **Claude is planner/reviewer/integrator:** Codex is the default executor; Gemini is only for UI-heavy phases.
 4. **Checkpoint Protocol:** CP1 Phase Assessment & Routing before the first executor call, including `Session-Policy` selection, CP2 External Execution when routing to external models, CP3 Reconciliation only after cross-validation or conflicting/non-trivial external feedback, and CP4 Phase Review after each phase.
-5. **Fallback:** If Gemini fails once, fall back to Codex or Claude-code. If Codex fails, retry once, then fall back to Claude-code/Sonnet. Permission-blocked stays BLOCKED.
+5. **Fail closed:** If Codex or Gemini MCP execution fails, output BLOCKED. Do not retry or switch executors.
 6. **Smart Context Budget:** Tier 1 initial call <=1500 tokens, Tier 2 same-phase follow-up <=400 tokens, Tier 3 cross-phase continuation <=600 tokens, HYDRATED_CONTEXT <=300 tokens hard cap.
 
 **Multi-Model Routing:**

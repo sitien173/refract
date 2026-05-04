@@ -284,7 +284,7 @@ Update the context sharing rules, checkpoint docs, and routing decision format.
 
 ### Phase 3: Hooks, Shared Docs & Rules (Codex)
 
-Update the hook scripts, shared skill docs, and Cursor rules to reflect the new system.
+Update the hook scripts, shared skill docs, and rules to reflect the new system.
 
 **Files:**
 - `hooks/user-prompt-submit.sh`

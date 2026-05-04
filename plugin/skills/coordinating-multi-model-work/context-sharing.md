@@ -154,7 +154,7 @@ Use this decision table at CP1. Evaluate top-down; first match wins.
 
 ### Tier 3 freshness check (mandatory)
 
-Before dispatching Tier 3, verify that no file the worker is assumed to "remember" has been modified outside the worker session (human edits, `git pull`, prior Sonnet fallback, sibling agent). For each file the prior worker touched:
+Before dispatching Tier 3, verify that no file the worker is assumed to "remember" has been modified outside the worker session (human edits, `git pull`, sibling agent). For each file the prior worker touched:
 
 - If its content hash differs from the version the worker last produced, force-include that file's current content (or a delta excerpt) in `New/Changed Files`.
 - If more than half the prior file set has changed, prefer Tier 1 (`SESSION_POLICY: FRESH`) over Tier 3 — the worker's session memory is no longer a reliable anchor.

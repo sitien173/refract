@@ -18,8 +18,8 @@ TARGETS=(
   "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md"
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md"
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md"
-  "$REPO_ROOT/skills/developing-with-subagents/SKILL.md"
-  "$REPO_ROOT/skills/developing-with-subagents/implementer-prompt.md"
+  "$REPO_ROOT/skills/executing-phases/SKILL.md"
+  "$REPO_ROOT/skills/executing-phases/implementer-prompt.md"
   "$REPO_ROOT/README.md"
   "$REPO_ROOT/superpowers-ccg.md"
   "$REPO_ROOT/docs/diagrams/ccg-workflow-architecture.md"
@@ -42,8 +42,8 @@ if ! rg -n '^# EXTERNAL RESPONSE PROTOCOL v1\.1|External Response Protocol v1\.1
   "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
-  "$REPO_ROOT/skills/developing-with-subagents/SKILL.md" \
-  "$REPO_ROOT/skills/developing-with-subagents/implementer-prompt.md" >/tmp/cp2-guards-protocol.txt 2>/dev/null; then
+  "$REPO_ROOT/skills/executing-phases/SKILL.md" \
+  "$REPO_ROOT/skills/executing-phases/implementer-prompt.md" >/tmp/cp2-guards-protocol.txt 2>/dev/null; then
   echo "  [FAIL] Missing CP2 external response protocol language"
   exit 1
 fi
@@ -59,8 +59,8 @@ if ! rg -n '## Task Context Bundle|## Context Refs|## Hydrated Context|TASK_CONT
   "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
-  "$REPO_ROOT/skills/developing-with-subagents/SKILL.md" \
-  "$REPO_ROOT/skills/developing-with-subagents/implementer-prompt.md" >/tmp/cp2-guards-context-sharing.txt 2>/dev/null; then
+  "$REPO_ROOT/skills/executing-phases/SKILL.md" \
+  "$REPO_ROOT/skills/executing-phases/implementer-prompt.md" >/tmp/cp2-guards-context-sharing.txt 2>/dev/null; then
   echo "  [FAIL] Missing smart context-sharing execution contract"
   exit 1
 fi
@@ -75,8 +75,8 @@ if rg -n 'full `CONTEXT_PACKAGE`|FULL CONTEXT_PACKAGE|## Context Package' \
   "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
-  "$REPO_ROOT/skills/developing-with-subagents/SKILL.md" \
-  "$REPO_ROOT/skills/developing-with-subagents/implementer-prompt.md" >/tmp/cp2-guards-full-context.txt 2>/dev/null; then
+  "$REPO_ROOT/skills/executing-phases/SKILL.md" \
+  "$REPO_ROOT/skills/executing-phases/implementer-prompt.md" >/tmp/cp2-guards-full-context.txt 2>/dev/null; then
   echo "  [FAIL] Found stale full CONTEXT_PACKAGE execution contract"
   exit 1
 fi
@@ -90,8 +90,8 @@ if rg -n 'diff-or-questions|## DIFF|## QUESTIONS|patch-ready diff|blocking quest
   "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
-  "$REPO_ROOT/skills/developing-with-subagents/SKILL.md" \
-  "$REPO_ROOT/skills/developing-with-subagents/implementer-prompt.md" >/tmp/cp2-guards-legacy.txt 2>/dev/null; then
+  "$REPO_ROOT/skills/executing-phases/SKILL.md" \
+  "$REPO_ROOT/skills/executing-phases/implementer-prompt.md" >/tmp/cp2-guards-legacy.txt 2>/dev/null; then
   echo "  [FAIL] Found legacy CP2 execution contract language"
   exit 1
 fi

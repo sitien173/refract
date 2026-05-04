@@ -71,5 +71,5 @@ The final plan should contain:
 Plans should be executable one phase at a time.
 
 After saving the plan, offer:
-1. Same-session execution with `developing-with-subagents`
+1. Same-session execution with `executing-phases`
 2. Dedicated execution session with `executing-plans`
