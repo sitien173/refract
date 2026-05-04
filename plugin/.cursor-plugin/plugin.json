@@ -1,7 +1,7 @@
 {
   "name": "superpowers-ccg",
   "description": "Skills-driven development with CCG phase orchestration: Claude plans/reviews/integrates, Codex is default executor, Gemini handles UI-heavy phases",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "author": {
     "name": "sitien173"
   },

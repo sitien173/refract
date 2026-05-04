@@ -60,6 +60,7 @@ while [[ $# -gt 0 ]]; do
             echo "  test-cp2-external-execution-guards.sh  Lint: CP2 external execution protocol stays aligned"
             echo "  test-cp3-reconciliation-guards.sh  Lint: CP3 reconciliation contract stays aligned"
             echo "  test-cp4-final-spec-review-guards.sh  Lint: CP4 phase review contract stays aligned"
+            echo "  test-karpathy-llm-wiki-integration.sh  Lint: wiki skill and CP0 integration stay aligned"
             echo "  test-subagent-driven-development.sh  Test skill loading and requirements"
             echo ""
             echo "Integration Tests (use --integration):"
@@ -86,6 +87,7 @@ tests=(
     "test-cp2-external-execution-guards.sh"
     "test-cp3-reconciliation-guards.sh"
     "test-cp4-final-spec-review-guards.sh"
+    "test-karpathy-llm-wiki-integration.sh"
     "test-subagent-driven-development.sh"
 )
 
@@ -98,6 +100,7 @@ static_tests=(
     "test-cp2-external-execution-guards.sh"
     "test-cp3-reconciliation-guards.sh"
     "test-cp4-final-spec-review-guards.sh"
+    "test-karpathy-llm-wiki-integration.sh"
 )
 
 # Integration tests (slow, full execution)

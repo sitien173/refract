@@ -13,6 +13,7 @@ Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.
 - **OpenCode support**: the same workflows and skills can be loaded through the OpenCode plugin entrypoint at `.opencode/plugin/superpowers.js`, with visible slash commands exposed through OpenCode's commands directory.
 - **Collaboration checkpoints**: CP0/CP1/CP2/CP3/CP4 checkpoints are embedded in the main skills.
 - **Smart context sharing**: CP0 produces reusable context artifacts, CP1 builds budgeted phase-scoped bundles, and same-phase follow-ups send deltas only.
+- **Project-local LLM wiki**: optional `karpathy-llm-wiki` skill stores durable knowledge under `docs/wiki/` and lets CP0 selectively use it when useful.
 - **Practical fallback**: if Gemini fails once, fall back to Codex or Claude-code instead of retrying repeatedly. Permission blocks still stop with `BLOCKED`.
 
 ## Platform Support
@@ -126,11 +127,21 @@ The routing and checkpoint rules live in `skills/coordinating-multi-model-work/`
 
 | Checkpoint | When | Purpose |
 |---|---|---|
-| CP0 | Before CP1 | Context acquisition with Auggie for local code context and Grok Search for external research |
+| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, then Auggie for current local code context and Grok Search for external research |
 | CP1 | Immediately after CP0, before first executor call | Phase assessment and routing using the CP1 routing matrix |
 | CP2 | After CP1 when routed externally | External execution via Codex/Gemini/Cross-Validation with final file output |
 | CP3 | After CP2 when reconciliation is needed | Resolve external-model conflicts, gaps, and clarifications before CP4 |
 | CP4 | After each phase | Phase review against the original request, CP1 success criteria, reviewer checklist, and integration results |
+
+## Project-local LLM Wiki
+
+The bundled `karpathy-llm-wiki` skill keeps optional durable project knowledge in `docs/wiki/`:
+
+- **Ingest** source material into `docs/wiki/raw/<topic>/YYYY-MM-DD-slug.md`, then compile or update cited articles under `docs/wiki/<topic>/`.
+- **Query** initialized wiki pages for prompts like "what do we know about X" and answer with `docs/wiki/...` citations.
+- **Lint** wiki structure, citations, and index links; deterministic fixes are separate from heuristic report-only findings.
+
+`docs/wiki/` is created only on first ingest. CP0 uses it selectively for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what was known/decided/tried. Trivial edits and tasks answerable from current files skip wiki lookup. Current files, tests, and the current user request override wiki content; Auggie remains the source for current code context.
 
 ## Differences vs Superpowers (obra/superpowers)
 

@@ -128,6 +128,15 @@ Static CP4 guard test:
 - CP4 avoids broad code quality/style review unless the phase checklist requires it
 - The diagram labels CP4 as Phase Review
 
+#### test-karpathy-llm-wiki-integration.sh
+Static wiki integration guard test:
+- `karpathy-llm-wiki` skill and reference templates exist
+- Trigger wording covers LLM wiki, Karpathy wiki, ingest, add to wiki, what do we know, and lint wiki
+- Storage stays under `docs/wiki/` and `docs/wiki/raw/`
+- Query answers require citations and uninitialized query/lint tells users to run ingest first
+- CP0 wiki lookup remains selective, advisory, and budget-safe; current files override wiki content
+- README documents ingest, query, lint, `docs/wiki/`, and current-code-wins behavior
+
 #### test-subagent-driven-development.sh
 Tests skill content and requirements (~2 minutes):
 - Skill loading and accessibility

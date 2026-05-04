@@ -7,7 +7,8 @@ set -euo pipefail
 cat <<'EOF'
 [CP Protocol Threshold]
 
-Before the first executor call, do minimal CP0 context acquisition using Auggie for full local context retrieval and Grok Search only for external/current knowledge or research.
+Before the first executor call, do minimal CP0 context acquisition: decide if selective `docs/wiki/` durable knowledge lookup is useful, use it only for complex planning/architecture/debugging/refactors or prompts asking what was known/decided/tried, skip it for trivial/current-file tasks, then use Auggie for current local context; use Grok Search only for external/current research.
+Normalize wiki findings as `wiki/relevant`, `wiki/decisions`, `wiki/conflicts`, or `wiki/sources`; wiki is advisory and citation-backed, while current files/tests and the current user request override it. Do not dump full wiki pages into worker prompts; keep `HYDRATED_CONTEXT` <= 300 tokens.
 Immediately after CP0 completes, run CP1 Phase Assessment & Routing using the original user request and the CP0 context artifacts, then choose `Session-Policy` and the right prompt tier for the next implementation phase.
 CP1 routing guide:
 | Task Category | Model | Cross-Validation | Notes / Triggers |

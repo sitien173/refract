@@ -6,10 +6,11 @@ This workflow uses orchestrator-managed smart context sharing to keep worker pro
 
 ## Core Model
 
-1. CP0 uses Auggie to retrieve the minimum local code context needed for routing.
-2. The orchestrator stores the useful output as small reusable `CONTEXT_ARTIFACTS`.
-3. CP1 chooses `SESSION_POLICY` for the next executor turn: `FRESH` for Tier 1, or `CONTINUE` for Tier 3 when the next phase stays with the same worker and subsystem.
-4. CP2 uses a 3-tier prompt system:
+1. CP0 decides whether `docs/wiki/` durable knowledge is useful, then selectively queries it when relevant.
+2. CP0 uses Auggie to retrieve the minimum current local code context needed for routing.
+3. The orchestrator stores the useful output as small reusable `CONTEXT_ARTIFACTS`.
+4. CP1 chooses `SESSION_POLICY` for the next executor turn: `FRESH` for Tier 1, or `CONTINUE` for Tier 3 when the next phase stays with the same worker and subsystem.
+5. CP2 uses a 3-tier prompt system:
    - Tier 1 initial call: `Task`, `Phase`, `Context`, `Files`, `Done When`, and full ERP v1.1
    - Tier 2 same-phase follow-up: `SESSION_ID`, `FIX`, `DELTA_FILES`, `DELTA_CONTEXT`
    - Tier 3 cross-phase continuation: `SESSION_ID`, `SESSION_POLICY: CONTINUE`, `PHASE`, `New Phase`, `New/Changed Files`, `Delta Context`, `Done When`
@@ -29,6 +30,12 @@ Good artifact ids are short, stable, and reusable:
 - `debt/known`
 - `research/notes`
 - `debug/root_cause`
+- `wiki/relevant`
+- `wiki/decisions`
+- `wiki/conflicts`
+- `wiki/sources`
+
+Wiki artifacts come from selective `docs/wiki/` lookup only. They are advisory and citation-backed; current files, tests, and current user requests override them.
 
 Each artifact should contain one focused piece of information, not a narrative dump.
 
@@ -52,6 +59,7 @@ Budget rules:
 
 - Keep reusable artifact ids inside Claude's context graph. Workers should receive only the hydrated facts they need for the current tier.
 - `HYDRATED_CONTEXT` contains existing code snippets, repo facts, command output summaries, or artifact excerpts only.
+- `HYDRATED_CONTEXT` may include citation-backed wiki excerpts, but never full `docs/wiki/` pages or raw source dumps.
 - Never pre-write new implementation inside `HYDRATED_CONTEXT`.
 - Do not send full files unless the file is very small or the phase explicitly requires whole-file replacement.
 - If the budget is exceeded, narrow the phase or replace snippets with smaller artifact excerpts.

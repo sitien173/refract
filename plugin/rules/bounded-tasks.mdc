@@ -26,7 +26,7 @@ Every phase must have:
 ### Avoid Anti-Patterns
 
 - No two-pass tasks where one worker drafts and Claude rewrites
-- No full CP0 discovery blobs when phase-scoped bundles suffice
+- No full CP0 discovery blobs or full `docs/wiki/` dumps when phase-scoped bundles suffice
 - No `CROSS_VALIDATION` as default - use only when narrowing fails
 - No re-explaining the whole plan to workers
 

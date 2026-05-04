@@ -8,15 +8,20 @@ All skills that use checkpoints must follow the CP protocol injected by hooks.
 
 - CP0 happens before CP1.
 - Gather only the minimum context required to route the next phase.
-- Use Auggie for full local codebase context retrieval.
+- Decide whether `docs/wiki/` durable knowledge is useful before code retrieval.
+- Selectively consult `docs/wiki/` for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what the project knows, decided, or tried.
+- Skip wiki lookup for trivial edits, simple version bumps, formatting, and tasks answerable from current files.
+- Use Auggie for full local codebase context retrieval after any useful wiki lookup.
 - Use Grok Search only when the task needs external/current knowledge or research.
 - Normalize CP0 findings into reusable `CONTEXT_ARTIFACTS`.
+- Treat wiki content as advisory and citation-backed; current files, tests, and current user request override it.
 - CP0 is a retrieval phase, not a narration phase. Do not turn it into a long summary.
 
 CP0 tool matrix:
 
 | Need | Primary Tool | When to Trigger Grok Search | Fallback |
 | --- | --- | --- | --- |
+| Durable project knowledge / prior decisions | `docs/wiki/` selective lookup | Do not trigger Grok Search for project-local wiki lookup | Skip when uninitialized or irrelevant |
 | Local codebase context / implementation anchors | Auggie | Do not trigger Grok Search during normal local-context retrieval | None |
 | External / real-world knowledge | Grok Search | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
 

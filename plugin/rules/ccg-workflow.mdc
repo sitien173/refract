@@ -9,7 +9,7 @@ Claude is the **planner, orchestrator, reviewer, and integrator**. It routes exe
 
 ### Checkpoint Protocol
 
-1. **CP0** - Context acquisition with Auggie (local codebase) and Grok Search (external research)
+1. **CP0** - Selective `docs/wiki/` durable knowledge lookup when useful, then Auggie current local codebase context and Grok Search external research only when needed
 2. **CP1** - Phase assessment and routing using the routing matrix
 3. **CP2** - External execution via Codex/Gemini with final file output
 4. **CP3** - Reconciliation when needed (conflicts, gaps, clarifications)

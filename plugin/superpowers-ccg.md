@@ -144,7 +144,7 @@ CP4 runs after each implementation phase. Claude reviews against the original re
 
 ## Checkpoints Protocol
 
-- **CP0** — Before CP1: acquire only the minimum context needed to route the next phase, then normalize useful findings into reusable context artifacts
+- **CP0** — Before CP1: decide whether selective `docs/wiki/` durable knowledge lookup is useful, then acquire only the minimum current code context needed to route the next phase, and normalize useful findings into reusable context artifacts
 - **CP1** — Immediately after CP0: perform Phase Assessment & Routing using the CP1 routing matrix, then invoke the selected executor if needed
 - **CP2** — External Execution: after CP1 routes to Codex, Gemini, or Cross-Validation, the executor performs the phase using a phase-scoped context bundle, edits files directly via MCP write tools, and reports the changed-file list via External Response Protocol v1.1
 - **CP3** — Reconciliation: after cross-validation or non-trivial external feedback, resolve conflicts and hand off to CP4

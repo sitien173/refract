@@ -19,15 +19,20 @@ The word "phase" appears in three distinct senses; do not conflate them:
 ## CP0: Context Acquisition
 
 - Gather only the minimum context needed to route the next phase.
-- Use Auggie for full local codebase context retrieval.
+- Decide whether `docs/wiki/` durable knowledge is useful before code retrieval.
+- Selectively consult `docs/wiki/` for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what the project knows, decided, or tried.
+- Skip wiki lookup for trivial edits, simple version bumps, formatting, and tasks answerable from current files.
+- Use Auggie for full local codebase context retrieval after any useful wiki lookup.
 - Use Grok Search only when the task needs external/current knowledge or research.
 - Normalize the useful output into small reusable `CONTEXT_ARTIFACTS`.
+- Treat wiki content as advisory and citation-backed; current files, tests, and current user request override it.
 - End CP0 as soon as the phase and likely owner are clear enough for CP1.
 
 CP0 tool matrix:
 
 | Need | Primary Tool | When to Trigger Grok Search | Fallback |
 | --- | --- | --- | --- |
+| Durable project knowledge / prior decisions | `docs/wiki/` selective lookup | Do not trigger Grok Search for project-local wiki lookup | Skip when uninitialized or irrelevant |
 | Local codebase context / implementation anchors | Auggie | Do not trigger Grok Search during normal local-context retrieval | None |
 | External / real-world knowledge | Grok Search | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
 

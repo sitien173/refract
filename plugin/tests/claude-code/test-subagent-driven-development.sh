@@ -21,7 +21,7 @@ echo ""
 
 echo "Test 3: Worker ownership..."
 output=$(run_claude "How should developing-with-subagents assign implementation work: one primary executor per phase, or multiple workers on the same implementation phase?" 60)
-assert_contains "$output" "one primary executor|one worker|single worker" "Single executor ownership" || exit 1
+assert_contains "$output" "[Oo]ne primary executor|one worker|single worker" "Single executor ownership" || exit 1
 assert_not_contains "$output" "multiple workers on the same task" "No duplicate worker ownership" || exit 1
 echo ""
 
@@ -32,7 +32,7 @@ echo ""
 
 echo "Test 5: No prototype-then-rewrite..."
 output=$(run_claude "In developing-with-subagents, should Claude ask for a prototype/reference and then rewrite it later?" 60)
-assert_contains "$output" "[Dd]o not|should not|avoid" "Prohibited pattern is rejected" || exit 1
+assert_contains "$output" "[Dd]o not|should not|avoid|[Nn]o\.|[Nn]ever" "Prohibited pattern is rejected" || exit 1
 assert_contains "$output" "prototype|reference" "Mentions prototype/reference" || exit 1
 echo ""
 
