@@ -13,7 +13,7 @@ description: "Routes implementation phases to Codex first, Gemini only for UI-he
 
 ## Workflow
 
-1. Run CP0: gather minimal context, use selective `docs/wiki/` lookup when useful, then Auggie for local code context; use Grok Search only for external/current research.
+1. Run CP0: gather minimal context, use selective `docs/wiki/` lookup when useful, then context-retrieval for local code context; use Grok Search only for external/current research.
 2. Reduce work to one implementation phase with 2-4 related tasks, file set, reviewer checklist, and integration checks.
 3. Run CP1 and output the exact `# CP1 ROUTING DECISION` block.
 4. If routing is not Claude, run CP2 with the 3-tier prompt system and External Response Protocol v1.1.

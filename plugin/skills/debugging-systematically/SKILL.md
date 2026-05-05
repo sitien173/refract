@@ -14,7 +14,7 @@ description: "Systematic debugging with evidence-based root cause analysis. Use 
 ## Workflow
 
 1. Reproduce: collect exact steps, error messages, stack traces, logs, and minimal failing case.
-2. Gather evidence: read relevant paths, test outputs, CI logs, and Auggie context when scope is broad.
+2. Gather evidence: read relevant paths, test outputs, CI logs, and context-retrieval context when scope is broad.
 3. Form 2-3 ranked, testable hypotheses.
 4. Test the most likely hypothesis first with targeted checks, assertions, logs, or focused tests.
 5. Fix the root cause with the smallest safe change.
@@ -32,5 +32,5 @@ description: "Systematic debugging with evidence-based root cause analysis. Use 
 ## References
 
 - `skills/shared/protocol-threshold.md` — CP0-CP4 routing and review gates.
-- `skills/shared/supplementary-tools.md` — Auggie and Grok Search for broad context or external issue research.
+- `skills/shared/supplementary-tools.md` — context-retrieval and Grok Search for broad context or external issue research.
 - `skills/verifying-before-completion/SKILL.md` — final verification rules.

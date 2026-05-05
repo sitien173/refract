@@ -13,7 +13,7 @@ description: "Explores user intent, requirements, and design through collaborati
 
 ## Workflow
 
-1. Inspect current project state first: relevant files, docs, recent commits, and Auggie context when the project area is broad.
+1. Inspect current project state first: relevant files, docs, recent commits, and context-retrieval context when the project area is broad.
 2. Ask one question at a time; prefer multiple choice when useful.
 3. Clarify purpose, constraints, non-goals, success criteria, and user preferences.
 4. Propose 2-3 approaches with trade-offs; lead with the recommended option.
@@ -33,5 +33,5 @@ description: "Explores user intent, requirements, and design through collaborati
 ## References
 
 - `skills/shared/protocol-threshold.md` — CP0-CP4 gates for implementation routing.
-- `skills/shared/supplementary-tools.md` — optional Auggie and Grok Search research guidance.
+- `skills/shared/supplementary-tools.md` — optional context-retrieval and Grok Search research guidance.
 - `skills/shared/multi-model-integration-section.md` — multi-model validation when design work becomes implementation.

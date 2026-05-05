@@ -79,16 +79,16 @@ Inputs:
 
 | Task Category | Examples | CP0 Context Tools | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- | --- | --- |
-| UI-heavy visual implementation | CSS, React/Vue components, Tailwind, animations, canvas/SVG, interactions | Auggie | Gemini | No | Use only when UI dominates the phase |
-| Backend / Logic / API | API endpoints, business logic, DB queries, auth | Auggie | Codex | No | Default implementation route |
-| Full-Stack / Architecture | New feature spanning FE + BE, major refactors | Auggie | Codex | No | Cross-validate only for unresolved architecture conflict |
-| Docs / Comments / Coordination | README updates, typo fixes, minor config, workflow edits | Auggie | Claude | No | Usually no external executor |
-| Debugging / Performance | Bug fixes, optimization, slow queries | Auggie | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
-| Infrastructure / DevOps | Docker, CI/CD, deployment scripts | Auggie | Codex | No | Use cross-validation only for high-risk changes |
-| Data / ML / Analytics | Data pipelines, queries, simple ML logic | Auggie | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Unit tests, integration tests, E2E | Auggie | Codex | No | Gemini only for visual/UI-heavy tests |
-| Cross-Cutting / Security | Auth, encryption, compliance, rate-limiting | Auggie | Codex | No | Add Claude/human review instead of default cross-validation |
-| Uncategorized / Ambiguous | Request unclear or spans many areas | Auggie + Grok Search if needed | Claude | No | Fail-closed: ask clarifying questions immediately |
+| UI-heavy visual implementation | CSS, React/Vue components, Tailwind, animations, canvas/SVG, interactions | context-retrieval | Gemini | No | Use only when UI dominates the phase |
+| Backend / Logic / API | API endpoints, business logic, DB queries, auth | context-retrieval | Codex | No | Default implementation route |
+| Full-Stack / Architecture | New feature spanning FE + BE, major refactors | context-retrieval | Codex | No | Cross-validate only for unresolved architecture conflict |
+| Docs / Comments / Coordination | README updates, typo fixes, minor config, workflow edits | context-retrieval | Claude | No | Usually no external executor |
+| Debugging / Performance | Bug fixes, optimization, slow queries | context-retrieval | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
+| Infrastructure / DevOps | Docker, CI/CD, deployment scripts | context-retrieval | Codex | No | Use cross-validation only for high-risk changes |
+| Data / ML / Analytics | Data pipelines, queries, simple ML logic | context-retrieval | Codex | No | Use cross-validation only if the task becomes unusually complex |
+| Testing / Test Coverage | Unit tests, integration tests, E2E | context-retrieval | Codex | No | Gemini only for visual/UI-heavy tests |
+| Cross-Cutting / Security | Auth, encryption, compliance, rate-limiting | context-retrieval | Codex | No | Add Claude/human review instead of default cross-validation |
+| Uncategorized / Ambiguous | Request unclear or spans many areas | context-retrieval + Grok Search if external/current research is needed | Claude | No | Fail-closed: ask clarifying questions immediately |
 
 ## Compact Routing Matrix
 

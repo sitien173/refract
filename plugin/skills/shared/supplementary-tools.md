@@ -28,24 +28,29 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ---
 
-### Auggie Code Search (`mcp__auggie__codebase-retrieval`)
+### Context-Retrieval Code Search (`mcp__context-retrieval__codebase_retrieve`, `mcp__context-retrieval__codebase_map`, `mcp__context-retrieval__codebase_grep`)
 
-**Purpose:** Semantic "where/what/how" search across a repository.
+**Purpose:** Current local code context retrieval across a repository.
 
 **Use when:**
 - Starting CP0 context acquisition in an unfamiliar code area
-- You need concept-level search instead of exact keyword grep
-- You want likely implementation anchors before narrowing to symbols
+- You need semantic anchors, architecture relationships, or exact references before routing
+- You want likely implementation anchors before narrowing with file tools
 
-**Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow
+**Tool roles:**
+- `codebase_retrieve` — semantic search for where/how/what-handles questions and implementation anchors
+- `codebase_map` — architecture and component relationship mapping for broad refactors or unclear boundaries
+- `codebase_grep` — exact search for known identifiers, stale wording checks, and reference sweeps
 
-**Fallback:** None for CP0 routing; use targeted file tools only after Auggie narrows the area.
+**Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow, known identifier sweeps
+
+**Fallback:** None for CP0 routing; use targeted file tools only after context-retrieval narrows the area.
 
 ## Composition Patterns
 
 ### CP0 Context Retrieval
 ```
-Auggie (full local codebase context retrieval) → Grok Search (only if external/current knowledge or research is required)
+context-retrieval (current local code context retrieval) → Grok Search (only if external/current knowledge or research is required)
 ```
 
 ### Research Phase (Brainstorming)
@@ -55,7 +60,7 @@ Grok Search (gather info) → Design output
 
 ### Complex Debugging
 ```
-Auggie (retrieve local context) → Grok Search (search known issues if needed) → Fix
+context-retrieval (retrieve local context) → Grok Search (search known issues if needed) → Fix
 ```
 
 ### Plan Writing
@@ -69,7 +74,7 @@ Supplementary tools operate at the **orchestrator level** — Claude uses them t
 
 ```
 1. Claude receives task
-2. CP0: use Auggie for local context acquisition; use Grok Search only for external/current research
+2. CP0: use context-retrieval for local context acquisition; use Grok Search only for external/current research
 3. Route implementation to Codex first or Gemini for UI-heavy phases at CP1 (primary routing)
 4. [Optional] Use supplementary tools during review/integration
 5. Claude runs CP4 phase review

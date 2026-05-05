@@ -69,7 +69,7 @@ The routing and checkpoint rules live in `skills/coordinating-multi-model-work/`
 
 | Checkpoint | When | Purpose |
 |---|---|---|
-| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, then Auggie for current local code context and Grok Search for external research |
+| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, then context-retrieval for current local code context and Grok Search for external research |
 | CP1 | Immediately after CP0, before first executor call | Phase assessment and routing using the CP1 routing matrix |
 | CP2 | After CP1 when routed externally | External execution via Codex/Gemini/Cross-Validation with final file output |
 | CP3 | After CP2 when reconciliation is needed | Resolve external-model conflicts, gaps, and clarifications before CP4 |
@@ -83,7 +83,7 @@ The bundled `karpathy-llm-wiki` skill keeps optional durable project knowledge i
 - **Query** initialized wiki pages for prompts like "what do we know about X" and answer with `docs/wiki/...` citations.
 - **Lint** wiki structure, citations, and index links; deterministic fixes are separate from heuristic report-only findings.
 
-`docs/wiki/` is created only on first ingest. CP0 uses it selectively for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what was known/decided/tried. Trivial edits and tasks answerable from current files skip wiki lookup. Current files, tests, and the current user request override wiki content; Auggie remains the source for current code context.
+`docs/wiki/` is created only on first ingest. CP0 uses it selectively for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what was known/decided/tried. Trivial edits and tasks answerable from current files skip wiki lookup. Current files, tests, and the current user request override wiki content; context-retrieval remains the source for current code context.
 
 ## Differences vs Superpowers (obra/superpowers)
 

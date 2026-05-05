@@ -18,7 +18,7 @@ This workflow uses orchestrator-managed smart context sharing to keep worker pro
 ## Core Model
 
 1. CP0 decides whether `docs/wiki/` durable knowledge is useful, then selectively queries it when relevant.
-2. CP0 uses Auggie to retrieve the minimum current local code context needed for routing.
+2. CP0 uses context-retrieval to retrieve the minimum current local code context needed for routing.
 3. The orchestrator stores the useful output as small reusable `CONTEXT_ARTIFACTS`.
 4. CP1 chooses `SESSION_POLICY` for the next executor turn: `FRESH` for Tier 1, or `CONTINUE` for Tier 3 when the next phase stays with the same worker and subsystem.
 5. CP2 uses a 3-tier prompt system:

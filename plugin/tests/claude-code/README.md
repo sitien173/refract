@@ -102,9 +102,10 @@ Static skill authoring guard test:
 #### test-cp0-context-acquisition-guards.sh
 Static CP0 guard test:
 - CP0 is explicitly documented as the pre-routing stage
-- Auggie + Grok Search CP0 language exists in startup and workflow docs
-- Auggie is the only local context-retrieval tool in the active CP0 contract
-- CP0 tool matrix is embedded in the active checkpoint docs
+- context-retrieval + Grok Search CP0 ordering exists in startup and workflow docs
+- `codebase_retrieve`, `codebase_map`, and `codebase_grep` roles are documented
+- Grok Search remains external/current-only
+- Active CP0 docs do not mention the legacy local tool
 - Architecture diagram includes CP0
 
 #### test-cp1-routing-guards.sh
