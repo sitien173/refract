@@ -1,6 +1,6 @@
 # Testing Superpowers Skills
 
-This document describes how to test Superpowers skills, particularly the integration tests for complex skills like `executing-phases`.
+This document describes how to test Superpowers skills, particularly the integration tests for complex skills like `executing-plans`.
 
 ## Overview
 
@@ -12,7 +12,7 @@ Testing skills that involve workers, workflows, and complex interactions require
 tests/
 ├── claude-code/
 │   ├── test-helpers.sh                    # Shared test utilities
-│   ├── test-executing-phases-integration.sh
+│   ├── test-executing-plans-integration.sh
 │   ├── analyze-token-usage.py             # Token analysis tool
 │   └── run-skill-tests.sh                 # Test runner (if exists)
 ```
@@ -24,9 +24,9 @@ tests/
 Integration tests execute real Claude Code sessions with actual skills:
 
 ```bash
-# Run the executing-phases integration test
+# Run the executing-plans integration test
 cd tests/claude-code
-./test-executing-phases-integration.sh
+./test-executing-plans-integration.sh
 ```
 
 **Note:** Integration tests can take 10-30 minutes as they execute real implementation plans with multiple workers.
@@ -37,11 +37,11 @@ cd tests/claude-code
 - Claude Code must be installed and available as `claude` command
 - Local dev marketplace must be enabled: `"superpowers@superpowers-dev": true` in `~/.claude/settings.json`
 
-## Integration Test: executing-phases
+## Integration Test: executing-plans
 
 ### What It Tests
 
-The integration test verifies the `executing-phases` skill correctly:
+The integration test verifies the `executing-plans` skill correctly:
 
 1. **Plan Loading**: Reads the plan once at the beginning
 2. **Full Task Text**: Provides complete task descriptions to workers (doesn't make them read files)
@@ -67,7 +67,7 @@ The integration test verifies the `executing-phases` skill correctly:
 
 ```
 ========================================
- Integration Test: executing-phases
+ Integration Test: executing-plans
 ========================================
 
 Test project: /tmp/tmp.xyz123
@@ -75,7 +75,7 @@ Test project: /tmp/tmp.xyz123
 === Verification Tests ===
 
 Test 1: Skill tool invoked...
-  [PASS] executing-phases skill was invoked
+  [PASS] executing-plans skill was invoked
 
 Test 2: Workers dispatched...
   [PASS] 7 workers dispatched

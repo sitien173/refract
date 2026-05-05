@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Integration Test: executing-phases workflow
+# Integration Test: executing-plans workflow
 # Actually executes a plan and verifies the new workflow behaviors
 set -euo pipefail
 
@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 echo "========================================"
-echo " Integration Test: executing-phases"
+echo " Integration Test: executing-plans"
 echo "========================================"
 echo ""
 echo "This test executes a real plan using the skill and verifies:"
@@ -48,7 +48,7 @@ mkdir -p src test docs/plans
 cat > docs/plans/implementation-plan.md <<'EOF'
 # Test Implementation Plan
 
-This is a minimal plan to test the executing-phases workflow.
+This is a minimal plan to test the executing-plans workflow.
 
 ## Task 1: Create Add Function
 
@@ -115,13 +115,13 @@ echo ""
 echo "Project setup complete. Starting execution..."
 echo ""
 
-# Run Claude with executing-phases
+# Run Claude with executing-plans
 # Capture full output to analyze
 OUTPUT_FILE="$TEST_PROJECT/claude-output.txt"
 
 # Create prompt file
 cat > "$TEST_PROJECT/prompt.txt" <<'EOF'
-I want you to execute the implementation plan at docs/plans/implementation-plan.md using the executing-phases skill.
+I want you to execute the implementation plan at docs/plans/implementation-plan.md using the executing-plans skill.
 
 IMPORTANT: Follow the skill exactly. I will be verifying that you:
 1. Read the plan once at the beginning
@@ -136,7 +136,7 @@ EOF
 # Note: We use a longer timeout since this is integration testing
 # Use --allowed-tools to enable tool usage in headless mode
 # IMPORTANT: Run from superpowers directory so local dev skills are available
-PROMPT="Change to directory $TEST_PROJECT and then execute the implementation plan at docs/plans/implementation-plan.md using the executing-phases skill.
+PROMPT="Change to directory $TEST_PROJECT and then execute the implementation plan at docs/plans/implementation-plan.md using the executing-plans skill.
 
 IMPORTANT: Follow the skill exactly. I will be verifying that you:
 1. Read the plan once at the beginning
@@ -200,8 +200,8 @@ echo ""
 
 # Test 1: Skill was invoked
 echo "Test 1: Skill tool invoked..."
-if grep -q '"name":"Skill".*"skill":"superpowers:executing-phases"' "$SESSION_FILE"; then
-    echo "  [PASS] executing-phases skill was invoked"
+if grep -q '"name":"Skill".*"skill":"superpowers:executing-plans"' "$SESSION_FILE"; then
+    echo "  [PASS] executing-plans skill was invoked"
 else
     echo "  [FAIL] Skill was not invoked"
     FAILED=$((FAILED + 1))
@@ -309,7 +309,7 @@ if [ $FAILED -eq 0 ]; then
     echo "STATUS: PASSED"
     echo "All verification tests passed!"
     echo ""
-    echo "The executing-phases skill correctly:"
+    echo "The executing-plans skill correctly:"
     echo "  ✓ Reads plan once at start"
     echo "  ✓ Provides full task text to workers"
     echo "  ✓ Enforces self-review"

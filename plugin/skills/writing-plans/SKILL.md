@@ -19,7 +19,7 @@ description: "Creates implementation plans made of executable phases with 2-4 re
 4. Assign one owner per phase: `codex`, `gemini`, or `claude`.
 5. Include file set, acceptance criteria, reviewer checklist, and integration checks for every phase.
 6. Add routing notes only when the phase owner is `gemini` or `claude`.
-7. Save the plan, then offer same-session execution with `executing-phases` or dedicated execution with `executing-plans`.
+7. Save the plan, then offer execution with `executing-plans` for same-session or dedicated phase-by-phase work.
 
 ## Hard Rules
 

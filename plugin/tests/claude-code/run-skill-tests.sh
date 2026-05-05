@@ -62,10 +62,10 @@ while [[ $# -gt 0 ]]; do
             echo "  test-cp3-reconciliation-guards.sh  Lint: CP3 reconciliation contract stays aligned"
             echo "  test-cp4-final-spec-review-guards.sh  Lint: CP4 phase review contract stays aligned"
             echo "  test-karpathy-llm-wiki-integration.sh  Lint: wiki skill and CP0 integration stay aligned"
-            echo "  test-executing-phases.sh  Test skill loading and requirements"
+            echo "  test-executing-plans.sh  Test skill loading and requirements"
             echo ""
             echo "Integration Tests (use --integration):"
-            echo "  test-executing-phases-integration.sh  Full workflow execution"
+            echo "  test-executing-plans-integration.sh  Full workflow execution"
             echo "  test-cp1-before-task-integration.sh   CP1 block appears before first worker dispatch"
             echo "  test-cp3-before-finish-integration.sh CP3 reconciliation block appears before DONE"
             echo "  test-cp4-before-done-integration.sh   CP4 spec review block appears before DONE"
@@ -90,7 +90,7 @@ tests=(
     "test-cp3-reconciliation-guards.sh"
     "test-cp4-final-spec-review-guards.sh"
     "test-karpathy-llm-wiki-integration.sh"
-    "test-executing-phases.sh"
+    "test-executing-plans.sh"
 )
 
 # Tests that do not require the Claude Code CLI (safe for CI without claude installed)
@@ -108,7 +108,7 @@ static_tests=(
 
 # Integration tests (slow, full execution)
 integration_tests=(
-    "test-executing-phases-integration.sh"
+    "test-executing-plans-integration.sh"
     "test-cp1-before-task-integration.sh"
     "test-cp3-before-finish-integration.sh"
     "test-cp4-before-done-integration.sh"

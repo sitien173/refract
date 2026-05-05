@@ -8,7 +8,7 @@ Global code style, error-handling rules, CP0–CP4 workflow details, required to
 
 - Run skill tests: `./tests/claude-code/run-skill-tests.sh`
 - Run integration tests: `./tests/claude-code/run-skill-tests.sh --integration`
-- Run specific test: `./tests/claude-code/run-skill-tests.sh --test test-executing-phases.sh`
+- Run specific test: `./tests/claude-code/run-skill-tests.sh --test test-executing-plans.sh`
 - Update plugin: `claude plugin update superpowers-ccg`
 - Install MCPs: `claude mcp add codex ...` and `claude mcp add gemini ...` (see README.md)
 

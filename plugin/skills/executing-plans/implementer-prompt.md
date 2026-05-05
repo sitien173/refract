@@ -1,6 +1,6 @@
 # Implementer Prompt Template
 
-Use this template when dispatching a worker for one implementation phase.
+Use this template from `executing-plans` when dispatching a worker for one implementation phase.
 
 ```text
 External model call:
@@ -12,7 +12,7 @@ External model call:
     ## Original User Request
     [compressed original user request]
 
-    ## Phase Context Bundle
+    ## Task Context Bundle
     TASK_ID: [stable bounded-task id]
 
     ## Context Refs
@@ -40,9 +40,9 @@ External model call:
     ## Prompt Discipline
     - `Hydrated Context` = excerpts from existing files only. Never pre-write new file contents here.
     - For scaffold or greenfield tasks: set Hydrated Context to existing directory structure only, or omit it.
-    - Keep Hydrated Context under 800 tokens, preferably under 300 tokens. Over that means over-specifying.
-    - Keep the total executor prompt context under 2500 tokens when practical.
-    - Same-phase follow-up prompts must send deltas only and stay under 1000 tokens when practical.
+    - Keep Hydrated Context under 300 tokens.
+    - Keep Tier 1 initial prompts under 1500 tokens when practical.
+    - Same-phase Tier 2 follow-up prompts must send deltas only and stay under 400 tokens.
     - `Files` = flat list of paths only, not file contents.
     - Pre-writing implementation in the prompt defeats the purpose of routing. Let the worker implement.
 

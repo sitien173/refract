@@ -26,7 +26,7 @@ mkdir -p "$TEST_PROJECT"
 
 # Run Claude from repo root so local dev skills/hooks are loaded.
 # The prompt explicitly requests using Task so we can verify ordering in transcript.
-PROMPT="Change to directory $TEST_PROJECT, then use the executing-phases skill to execute the following plan.
+PROMPT="Change to directory $TEST_PROJECT, then use the executing-plans skill to execute the following plan.
 
 IMPORTANT (protocol):
 - Before the first Task tool call, you MUST output a standalone assistant text message that begins with # CP1 ROUTING DECISION and includes these required sections and fields:

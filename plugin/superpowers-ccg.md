@@ -68,7 +68,7 @@ BEFORE any response or action:
 ### Workflow 1: Creating Features
 
 ```text
-superpowers-ccg:brainstorming → superpowers-ccg:writing-plans → superpowers-ccg:executing-plans OR superpowers-ccg:executing-phases → superpowers-ccg:verifying-before-completion
+superpowers-ccg:brainstorming → superpowers-ccg:writing-plans → superpowers-ccg:executing-plans → superpowers-ccg:verifying-before-completion
 ```
 
 ### Workflow 2: Debugging
@@ -92,8 +92,7 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
 | `superpowers-ccg:writing-plans` | Have spec/requirements before coding | Create phase-based implementation plan |
-| `superpowers-ccg:executing-plans` | Have a plan document | Execute one phase at a time |
-| `superpowers-ccg:executing-phases` | Have a plan and implementation phases | Route one phase at a time with review and integration |
+| `superpowers-ccg:executing-plans` | Have a plan document, active phase, or same-session execution request | Route one phase at a time with review and integration |
 
 ### Meta Skills
 

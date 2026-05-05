@@ -18,8 +18,8 @@ TARGETS=(
   "$REPO_ROOT/skills/coordinating-multi-model-work/cross-validation.md"
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md"
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md"
-  "$REPO_ROOT/skills/executing-phases/SKILL.md"
-  "$REPO_ROOT/skills/executing-phases/implementer-prompt.md"
+  "$REPO_ROOT/skills/executing-plans/SKILL.md"
+  "$REPO_ROOT/skills/executing-plans/implementer-prompt.md"
   "$REPO_ROOT/skills/writing-plans/SKILL.md"
 )
 
@@ -90,8 +90,8 @@ if rg -n 'full `CONTEXT_PACKAGE`|FULL CONTEXT_PACKAGE|## Context Package' \
   "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
   "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
-  "$REPO_ROOT/skills/executing-phases/SKILL.md" \
-  "$REPO_ROOT/skills/executing-phases/implementer-prompt.md" >/tmp/token-guards-context.txt 2>/dev/null; then
+  "$REPO_ROOT/skills/executing-plans/SKILL.md" \
+  "$REPO_ROOT/skills/executing-plans/implementer-prompt.md" >/tmp/token-guards-context.txt 2>/dev/null; then
   echo "  [FAIL] Found stale full CONTEXT_PACKAGE repetition"
   exit 1
 fi

@@ -87,28 +87,11 @@ Use evaluation scenarios (per Anthropic best practices) to validate skill effect
   "skill": "executing-plans",
   "query": "Execute the plan in docs/plans/feature.md",
   "expected_behavior": [
-    "Read the plan first and review it critically",
-    "Ask questions before starting if anything is unclear",
-    "Use a checklist to track progress",
-    "Report after each batch and wait for feedback",
-    "Do not skip verification steps in the plan"
-  ]
-}
-```
-
-### executing-phases
-
-```json
-{
-  "skill": "executing-phases",
-  "query": "Execute this plan using workers",
-  "context": "docs/plans/feature.md",
-  "expected_behavior": [
-    "Read the plan once and extract all tasks",
-    "Dispatch a separate worker for each task",
-    "Answer worker questions before proceeding",
-    "Run spec review before code quality review",
-    "Iterate on fixes until the reviewer passes"
+    "Read the plan once and select one active phase",
+    "Ask questions before starting if the active phase is unclear",
+    "Route one primary executor per phase",
+    "Run CP4 phase review after executor output",
+    "Do not skip integration checks in the plan"
   ]
 }
 ```

@@ -25,7 +25,7 @@ This test suite verifies that skills are loaded correctly and Claude follows the
 
 ### Run specific test:
 ```bash
-./run-skill-tests.sh --test test-executing-phases.sh
+./run-skill-tests.sh --test test-executing-plans.sh
 ```
 
 ### Run with verbose output:
@@ -146,7 +146,7 @@ Static wiki integration guard test:
 - CP0 wiki lookup remains selective, advisory, and budget-safe; current files override wiki content
 - README documents ingest, query, lint, `docs/wiki/`, and current-code-wins behavior
 
-#### test-executing-phases.sh
+#### test-executing-plans.sh
 Tests skill content and requirements (~2 minutes):
 - Skill loading and accessibility
 - One phase at a time
@@ -158,11 +158,11 @@ Tests skill content and requirements (~2 minutes):
 
 ### Integration Tests (use --integration flag)
 
-#### test-executing-phases-integration.sh
+#### test-executing-plans-integration.sh
 Full workflow execution test (~10-30 minutes):
 - Creates real test project with Node.js setup
 - Creates implementation plan with 2 tasks
-- Executes plan using executing-phases
+- Executes plan using executing-plans
 - Verifies actual behaviors:
   - Plan read once at start (not per task)
   - Full task text provided in worker prompts
@@ -205,7 +205,7 @@ Focused CP4 integration test:
 
 With `--verbose`, you'll see full Claude output:
 ```bash
-./run-skill-tests.sh --verbose --test test-executing-phases.sh
+./run-skill-tests.sh --verbose --test test-executing-plans.sh
 ```
 
 Without verbose, only failures show output.
