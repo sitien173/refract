@@ -43,17 +43,15 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 3: Context-retrieval tool roles are documented..."
-if ! rg -n 'codebase_retrieve.*semantic|semantic.*codebase_retrieve' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-retrieve.txt 2>/dev/null; then
-  echo "  [FAIL] Missing codebase_retrieve semantic role"
+echo "Test 3: Context-retrieval single-tool role is documented..."
+if ! rg -n 'codebase-retrieval.*semantic|semantic.*codebase-retrieval|codebase-retrieval.*local codebase|local codebase.*codebase-retrieval' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-codebase-retrieval.txt 2>/dev/null; then
+  echo "  [FAIL] Missing codebase-retrieval semantic/local codebase role"
   exit 1
 fi
-if ! rg -n 'codebase_map.*architecture|architecture.*codebase_map|codebase_map.*relationship|relationship.*codebase_map' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-map.txt 2>/dev/null; then
-  echo "  [FAIL] Missing codebase_map architecture/relationship role"
-  exit 1
-fi
-if ! rg -n 'codebase_grep.*exact|exact.*codebase_grep|codebase_grep.*known identifier|known identifier.*codebase_grep' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-grep.txt 2>/dev/null; then
-  echo "  [FAIL] Missing codebase_grep exact-search role"
+LEGACY_CONTEXT_TOOL_PATTERN='codebase_''retrieve|codebase_''map|codebase_''grep'
+if rg -n "$LEGACY_CONTEXT_TOOL_PATTERN" "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-legacy-context-retrieval.txt 2>/dev/null; then
+  echo "  [FAIL] Active CP0 docs still mention obsolete context-retrieval tool names"
+  cat /tmp/cp0-guards-legacy-context-retrieval.txt
   exit 1
 fi
 echo "  [PASS]"

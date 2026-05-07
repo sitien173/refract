@@ -28,7 +28,7 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ---
 
-### Context-Retrieval Code Search (`mcp__context-retrieval__codebase_retrieve`, `mcp__context-retrieval__codebase_map`, `mcp__context-retrieval__codebase_grep`)
+### Context-Retrieval Code Search (mcp__context-retrieval__codebase-retrieval)
 
 **Purpose:** Current local code context retrieval across a repository.
 
@@ -37,10 +37,8 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 - You need semantic anchors, architecture relationships, or exact references before routing
 - You want likely implementation anchors before narrowing with file tools
 
-**Tool roles:**
-- `codebase_retrieve` — semantic search for where/how/what-handles questions and implementation anchors
-- `codebase_map` — architecture and component relationship mapping for broad refactors or unclear boundaries
-- `codebase_grep` — exact search for known identifiers, stale wording checks, and reference sweeps
+**Tool role:**
+- `codebase-retrieval` - semantic search for where/how/what-handles questions, implementation anchors, architecture relationships, and reference sweeps
 
 **Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow, known identifier sweeps
 

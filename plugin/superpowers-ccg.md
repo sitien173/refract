@@ -202,7 +202,7 @@ Claude `haiku` / `sonnet` / `opus` Task selection is no longer the default imple
 
 ### Context Retrieval
 
-Use context-retrieval for current local codebase context during CP0: `codebase_retrieve` for semantic anchors, `codebase_map` for architecture relationships, and `codebase_grep` for exact references. Use Grok Search only when the task needs external/current knowledge or web research.
+Use context-retrieval via `codebase-retrieval` for current local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks during CP0. Use Grok Search only when the task needs external/current knowledge or web research.
 
 ### Supplementary Tools
 

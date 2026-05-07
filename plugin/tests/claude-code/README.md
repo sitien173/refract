@@ -103,7 +103,7 @@ Static skill authoring guard test:
 Static CP0 guard test:
 - CP0 is explicitly documented as the pre-routing stage
 - context-retrieval + Grok Search CP0 ordering exists in startup and workflow docs
-- `codebase_retrieve`, `codebase_map`, and `codebase_grep` roles are documented
+- `codebase-retrieval` role is documented
 - Grok Search remains external/current-only
 - Active CP0 docs do not mention the legacy local tool
 - Architecture diagram includes CP0
