@@ -8,9 +8,11 @@
 - Decision Output
 - Routing Targets
 - Session Policy
+- New Routing Axes
 - Detailed Task Matrix
 - Compact Routing Matrix
 - Decision Guidelines
+- Tiebreaker Order
 - Example
 
 ## Overview
@@ -73,45 +75,72 @@ Inputs:
 | Same worker + overlapping files or same subsystem | `CONTINUE` |
 | Same worker + different subsystem | `FRESH` |
 | Different worker | `FRESH` |
+| Long-horizon Codex run already active (>1hr) | `CONTINUE` |
+| Multimodal artifact carryover (Gemini parsed PDF/screenshot reused next phase) | `CONTINUE` |
 | Previous phase `FAIL` after 2 Tier-2 retries | `FRESH` |
+
+## New Routing Axes
+
+1. Context size — >200K tokens routes to Gemini (1M ctx, cost-optimal tier).
+2. Multimodal input — screenshots, PDFs, video, design mocks route to Gemini (only true multimodal frontier).
+3. Horizon length — >1 hr autonomous chain routes to Codex (validated 7+ hr sustained).
 
 ## Detailed Task Matrix
 
 | Task Category | Examples | CP0 Context Tools | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- | --- | --- |
-| UI-heavy visual implementation | CSS, React/Vue components, Tailwind, animations, canvas/SVG, interactions | context-retrieval | Gemini | No | Use only when UI dominates the phase |
-| Backend / Logic / API | API endpoints, business logic, DB queries, auth | context-retrieval | Codex | No | Default implementation route |
-| Full-Stack / Architecture | New feature spanning FE + BE, major refactors | context-retrieval | Codex | No | Cross-validate only for unresolved architecture conflict |
-| Docs / Comments / Coordination | README updates, typo fixes, minor config, workflow edits | context-retrieval | Claude | No | Usually no external executor |
-| Debugging / Performance | Bug fixes, optimization, slow queries | context-retrieval | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
-| Infrastructure / DevOps | Docker, CI/CD, deployment scripts | context-retrieval | Codex | No | Use cross-validation only for high-risk changes |
-| Data / ML / Analytics | Data pipelines, queries, simple ML logic | context-retrieval | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Unit tests, integration tests, E2E | context-retrieval | Codex | No | Gemini only for visual/UI-heavy tests |
-| Cross-Cutting / Security | Auth, encryption, compliance, rate-limiting | context-retrieval | Codex | No | Add Claude/human review instead of default cross-validation |
-| Uncategorized / Ambiguous | Request unclear or spans many areas | context-retrieval + Grok Search if external/current research is needed | Claude | No | Fail-closed: ask clarifying questions immediately |
+| Backend / Logic / API | API endpoints, business logic, DB, auth | context-retrieval | Codex | No | Default implementation route |
+| Tests / CI / Terminal / Infra-DevOps | unit/integration/E2E tests, CI scripts, Docker, deploy scripts | context-retrieval | Codex | No | Terminal-Bench leader |
+| Large refactor (>=10 files or >1K LOC) | multi-package refactor, migrations | context-retrieval | Codex | No | 7-hr horizon validated |
+| Bug fix / Debugging / Performance | crashes, regressions, slow queries | context-retrieval | Codex | No | Snappy small + sustained deep |
+| Data / ML / Analytics | pipelines, queries, simple ML | context-retrieval | Codex | No | Logic-heavy |
+| UI components / CSS / animation / canvas / SVG | React/Vue components, Tailwind, motion | context-retrieval | Gemini | No | WebDev Arena leader |
+| Multimodal input -> code | screenshot/PDF/video/mock to code | context-retrieval | Gemini | No | Only multimodal frontier |
+| Large-context sweep (>200K tokens) | repo-wide analysis, long docs | context-retrieval | Gemini | No | 1M ctx, cheapest tier |
+| Visual regression / screen automation / OCR | snapshot diffs, screen scraping | context-retrieval | Gemini | No | ScreenSpot-Pro 72.7% |
+| Doc / spec extraction from PDFs / diagrams | requirement extraction | context-retrieval | Gemini | No | Document understanding |
+| Security / compliance / legal-sensitive code | auth, encryption, PII | context-retrieval | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
+| Architecture conflict / true multi-domain | UI+BE+data design, risky migration | context-retrieval | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
+| Docs / Comments / Coordination / Simple edits | README, typo, config | context-retrieval | Claude | No | Per user constraint |
+| Orchestration / Review / Integration / Planning | review, merge, plan | context-retrieval | Claude | No | Per user constraint |
+| Uncategorized / Ambiguous | unclear or spans many areas | context-retrieval + Grok Search if external research needed | Claude | No | Fail-closed: ask clarifying questions |
 
 ## Compact Routing Matrix
 
 | Task Category | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- |
-| UI-heavy visual implementation | Gemini | No | Use only when UI dominates the phase |
 | Backend / Logic / API | Codex | No | Default implementation route |
-| Full-Stack / Architecture | Codex | No | Cross-validate only for unresolved architecture conflict |
-| Docs / Comments / Coordination | Claude | No | Usually no external executor |
-| Debugging / Performance | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
-| Infrastructure / DevOps | Codex | No | Use cross-validation only for high-risk changes |
-| Data / ML / Analytics | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Codex | No | Gemini only for visual/UI-heavy tests |
-| Cross-Cutting / Security | Codex | No | Add Claude/human review instead of default cross-validation |
-| Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions immediately |
+| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
+| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon validated |
+| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
+| Data / ML / Analytics | Codex | No | Logic-heavy |
+| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
+| Multimodal input -> code | Gemini | No | Only multimodal frontier |
+| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
+| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
+| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
+| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
+| Architecture conflict / true multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
+| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
+| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
+| Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions |
 
 ## Decision Guidelines
 
-- Default implementation route → `Codex`
-- UI-heavy phase where visual work dominates → `Gemini`
-- Unresolved architecture or true multi-domain uncertainty → `Cross-Validation (Codex + Gemini)`
-- Documentation-only, review, integration, or pure coordination → `Claude`
+- Default implementation route -> `Codex`
+- UI-heavy phase where visual work dominates -> `Gemini`
+- Unresolved architecture or true multi-domain uncertainty -> `Cross-Validation (Codex + Gemini)`
+- Documentation-only, review, integration, or pure coordination -> `Claude`
 - If the task is ambiguous or underspecified, fail closed to `Claude` and ask clarifying questions
+- If multiple triggers fire, apply Tiebreaker Order section.
+
+## Tiebreaker Order
+
+1. Hallucination-sensitive (security/compliance/legal/medical) -> Codex + mandatory Claude review gate.
+2. Multimodal input present -> Gemini.
+3. Context >200K tokens -> Gemini.
+4. UI-dominant phase -> Gemini.
+5. Else -> Codex.
 
 ## Example
 

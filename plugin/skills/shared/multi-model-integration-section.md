@@ -13,11 +13,13 @@ All skills that invoke external models must follow this pattern.
 3. Choose the right prompt tier for the phase and send only the hydrated snippets needed for that tier.
 4. Invoke exactly one primary worker for implementation:
    - Default implementation → `mcp__codex__codex`
-   - UI-heavy visual implementation → `mcp__gemini__gemini`
+   - UI components/CSS/animation/canvas/SVG, multimodal input->code, large-context visual-document sweeps, or visual regression/OCR → `mcp__gemini__gemini`
 5. Reuse the same worker `SESSION_ID` for Tier 2 follow-up fixes on that phase, or Tier 3 cross-phase continuation when CP1 sets `SESSION_POLICY: CONTINUE`.
-6. Use `CROSS_VALIDATION` only for architectural uncertainty or true multi-domain conflicts.
+6. Use `CROSS_VALIDATION` only for architecture conflict / multi-domain arbitration.
 7. Run Claude review on the resulting artifact and return `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
 8. Run integration checks after every phase.
+
+Routing matrix, new routing axes (context-size, multimodal input, horizon length), and tiebreakers are canonical in `skills/coordinating-multi-model-work/routing-decision.md`.
 
 ## Invocation
 

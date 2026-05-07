@@ -1,5 +1,5 @@
 ---
-description: CCG phase orchestration workflow - Claude planner/reviewer/integrator, Codex first, Gemini only for UI-heavy phases
+description: CCG phase orchestration workflow - Claude planner/reviewer/integrator with CP1 canonical routing matrix and tiebreakers
 alwaysApply: true
 ---
 
@@ -17,15 +17,37 @@ Claude is the **planner, orchestrator, reviewer, and integrator**. It routes exe
 
 ### Routing Matrix
 
-| Task Type | Route To | Notes |
-|-----------|----------|-------|
-| UI-heavy visual implementation | Gemini | Only when UI dominates the phase |
-| Backend / API / Logic | Codex | Default implementation route |
-| Full-Stack / Architecture | Codex | Cross-validate only for unresolved architecture conflict |
-| Docs / Comments / Coordination | Claude | No external executor needed |
-| Debugging / Performance | Codex | Escalate if ambiguous |
-| Infrastructure / DevOps | Codex | Cross-validate for high-risk changes |
-| Scripts / CI/CD / Docker | Codex | Systems work routes to Codex |
+| Task Category | Model | Cross-Validation | Notes / Triggers |
+| --- | --- | --- | --- |
+| Backend / Logic / API | Codex | No | Default implementation route |
+| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
+| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon |
+| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
+| Data / ML / Analytics | Codex | No | Logic-heavy |
+| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
+| Multimodal input -> code | Gemini | No | Only multimodal frontier |
+| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
+| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
+| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
+| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
+| Architecture conflict / multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
+| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
+| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
+| Uncategorized / Ambiguous | Claude | No | Fail-closed; clarify |
+
+### New Routing Axes
+
+1. Context size: >200K tokens routes to Gemini.
+2. Multimodal input: screenshots, PDFs, video, and design mocks route to Gemini.
+3. Horizon length: >1 hour autonomous chain routes to Codex.
+
+### Tiebreaker Order
+
+1. Hallucination-sensitive -> Codex + mandatory Claude review gate
+2. Multimodal input -> Gemini
+3. Context >200K -> Gemini
+4. UI-dominant -> Gemini
+5. Else -> Codex
 
 ### External Response Protocol v1.1
 

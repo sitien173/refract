@@ -70,16 +70,23 @@ CP0 tool matrix:
 
 | Task Category | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- |
-| UI-heavy visual implementation | Gemini | No | Use only when visual layout, styling, motion, canvas/SVG, or interactions dominate |
 | Backend / Logic / API | Codex | No | Default implementation route |
-| Full-Stack / Architecture | Codex | No | Use cross-validation only for unresolved architecture conflict |
-| Docs / Comments / Coordination | Claude | No | No external executor needed |
-| Debugging / Performance | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
-| Infrastructure / DevOps | Codex | No | Use cross-validation only for high-risk changes |
-| Data / ML / Analytics | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Codex | No | Gemini only if tests are mainly visual/UI behavior |
-| Cross-Cutting / Security | Codex | No | Add Claude/human review instead of default cross-validation |
-| Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions immediately |
+| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
+| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon |
+| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
+| Data / ML / Analytics | Codex | No | Logic-heavy |
+| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
+| Multimodal input -> code | Gemini | No | Only multimodal frontier |
+| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
+| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
+| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
+| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
+| Architecture conflict / multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
+| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
+| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
+| Uncategorized / Ambiguous | Claude | No | Fail-closed; clarify |
+
+New routing axes are context-size (>200K tokens), multimodal input, and horizon length (>1 hour autonomous chain). For multiple simultaneous triggers, apply `## Tiebreaker Order` in `routing-decision.md`.
 
 ## CP2: External Execution
 

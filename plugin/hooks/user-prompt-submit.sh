@@ -13,16 +13,23 @@ Immediately after CP0 completes, run CP1 Phase Assessment & Routing using the or
 CP1 routing guide:
 | Task Category | Model | Cross-Validation | Notes / Triggers |
 |---|---|---|---|
-| UI-heavy visual implementation | Gemini | No | Use only when UI dominates the phase |
 | Backend / Logic / API | Codex | No | Default implementation route |
-| Full-Stack / Architecture | Codex | No | Cross-validate only for unresolved architecture conflict |
-| Docs / Comments / Coordination | Claude | No | Usually no external executor |
-| Debugging / Performance | Codex | No | Escalate to cross-validation only if the failure mode stays ambiguous |
-| Infrastructure / DevOps | Codex | No | Use cross-validation only for high-risk changes |
-| Data / ML / Analytics | Codex | No | Use cross-validation only if the task becomes unusually complex |
-| Testing / Test Coverage | Codex | No | Gemini only for visual/UI-heavy tests |
-| Cross-Cutting / Security | Codex | No | Add Claude/human review instead of default cross-validation |
-| Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions immediately |
+| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
+| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon |
+| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
+| Data / ML / Analytics | Codex | No | Logic-heavy |
+| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
+| Multimodal input -> code | Gemini | No | Only multimodal frontier |
+| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
+| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
+| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
+| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
+| Architecture conflict / multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
+| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
+| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
+| Uncategorized / Ambiguous | Claude | No | Fail-closed; clarify |
+New routing axes: context-size (>200K) -> Gemini; multimodal input -> Gemini; horizon length (>1 hour autonomous chain) -> Codex.
+Tiebreaker order: (1) Hallucination-sensitive -> Codex + Claude review gate, (2) Multimodal input -> Gemini, (3) Context >200K -> Gemini, (4) UI-dominant -> Gemini, (5) Else -> Codex.
 If the request is unclear or incomplete, route to Claude, output the CP1 block below, and then immediately ask clarifying questions.
 If CP1 routes to Gemini, Codex, or Cross-Validation, run CP2 External Execution using the 3-tier prompt system: Tier 1 initial call for fresh sessions, Tier 2 for same-phase follow-up fixes, and Tier 3 for cross-phase continuation when `Session-Policy` is `CONTINUE`. Reuse the same worker `SESSION_ID` for Tier 2 fixes on that phase or Tier 3 continuation on a related phase, and send deltas only when continuing. Workers edit files directly via MCP write tools and respond using External Response Protocol v1.1; the response lists `## FILES MODIFIED` without duplicating file content.
 Smart context budget: Tier 1 initial call <= 1500 tokens, Tier 2 same-phase follow-up <= 400 tokens, Tier 3 cross-phase continuation <= 600 tokens, `HYDRATED_CONTEXT` <= 300 tokens hard cap. If over budget, narrow the phase or shrink the hydrated snippets. Never pre-write new implementation inside `HYDRATED_CONTEXT`.

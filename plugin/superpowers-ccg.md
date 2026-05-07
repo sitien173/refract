@@ -119,11 +119,11 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 | Label | When to Use | MCP Tool |
 |-------|-------------|----------|
 | `CODEX` | Default implementation: backend, full-stack, tests, debugging, shell scripts, Dockerfiles, CI/CD, infrastructure, repo tooling | `mcp__codex__codex` |
-| `GEMINI` | UI-heavy visual phases: layout, components, styles, interactions, motion, canvas/SVG | `mcp__gemini__gemini` |
+| `GEMINI` | UI components/CSS/animation/canvas/SVG, multimodal input->code, large-context sweeps, visual regression/OCR, PDF/diagram extraction | `mcp__gemini__gemini` |
 | `CROSS_VALIDATION` | Unresolved architecture or true multi-domain conflict | Multiple MCP tools |
 | `CLAUDE` | Planning, review, integration, routing, coordination, docs editing, or clarification | No MCP call |
 
-> **Important:** Claude is the planner, orchestrator, reviewer, and integrator. Codex is the default executor. Gemini is only for UI-heavy phases. If Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`.
+> **Important:** Claude is the planner, orchestrator, reviewer, and integrator. Codex is the default executor. Gemini owns UI, multimodal, and large-context visual/document phases. If Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`.
 
 ### Phase Review
 
@@ -133,7 +133,7 @@ CP4 runs after each implementation phase. Claude reviews against the original re
 
 1. **Route to an executor** after initial analysis.
 2. **Codex first for most implementation**.
-3. **Gemini only for UI-heavy phases**.
+3. **Gemini for UI/multimodal/large-context visual-document phases**.
 4. **Claude performs CP4 phase review** after implementation.
 5. **Think independently** and challenge external model output.
 6. **Fail closed**: if required MCP evidence is missing or executor MCP execution fails, output `BLOCKED`.
@@ -172,12 +172,31 @@ CP4 runs after each implementation phase. Claude reviews against the original re
 
 ## Default Model Routing
 
-| Task Type | Model |
-|-----------|-------|
-| Most implementation | Codex MCP (`mcp__codex__codex`) |
-| UI-heavy visual implementation | Gemini MCP (`mcp__gemini__gemini`) |
-| Unresolved architecture conflict | Cross-Validation (`CODEX` + `GEMINI`) |
-| Planning, orchestration, clarification, CP3 reconciliation, CP4 phase review, integration | Claude main thread |
+| Task Category | Model | Cross-Validation | Notes / Triggers |
+| --- | --- | --- | --- |
+| Backend / Logic / API | Codex | No | Default implementation route |
+| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
+| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon |
+| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
+| Data / ML / Analytics | Codex | No | Logic-heavy |
+| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
+| Multimodal input -> code | Gemini | No | Only multimodal frontier |
+| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
+| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
+| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
+| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
+| Architecture conflict / multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
+| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
+| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
+| Uncategorized / Ambiguous | Claude | No | Fail-closed; clarify |
+
+### Tiebreaker Order
+
+1. Hallucination-sensitive -> Codex + Claude review gate
+2. Multimodal input -> Gemini
+3. Context >200K -> Gemini
+4. UI-dominant -> Gemini
+5. Else -> Codex
 
 Claude `haiku` / `sonnet` / `opus` Task selection is no longer the default implementation route. Only use those legacy Task models when a separate skill explicitly requires them.
 
