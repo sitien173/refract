@@ -19,11 +19,13 @@ All skills that use checkpoints must follow the CP protocol injected by hooks.
 
 - CP0 happens before CP1.
 - Gather only the minimum context required to route the next phase.
-- Decide whether `docs/wiki/` durable knowledge is useful before code retrieval.
+- Decide whether `docs/wiki/` durable knowledge is useful before local code retrieval.
 - Selectively consult `docs/wiki/` for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what the project knows, decided, or tried.
 - Skip wiki lookup for trivial edits, simple version bumps, formatting, and tasks answerable from current files.
-- Use context-retrieval via `codebase-retrieval` for local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks.
-- Use Grok Search only when the task needs external/current knowledge or research.
+- MUST run context-retrieval via `codebase-retrieval` for local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks before CP1 on every task (including trivial/current-file tasks).
+- If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, immediately output `BLOCKED` and stop before CP1.
+- Do not switch to file tools, Grok Search, or executors when `codebase-retrieval` fails.
+- Use Grok Search only when the task needs external/current knowledge or research, and only after mandatory local retrieval succeeds.
 - Normalize CP0 findings into reusable `CONTEXT_ARTIFACTS`.
 - Treat wiki content as advisory and citation-backed; current files, tests, and current user request override it.
 - CP0 is a retrieval phase, not a narration phase. Do not turn it into a long summary.
@@ -33,7 +35,7 @@ CP0 tool matrix:
 | Need | Primary Tool | When to Trigger Grok Search | Fallback |
 | --- | --- | --- | --- |
 | Durable project knowledge / prior decisions | `docs/wiki/` selective lookup | Do not trigger Grok Search for project-local wiki lookup | Skip when uninitialized or irrelevant |
-| Local codebase context / references / architecture relationships | `codebase-retrieval` | Do not trigger Grok Search during normal local-context retrieval | None |
+| Local codebase context / references / architecture relationships | `codebase-retrieval` (mandatory before CP1) | Do not trigger Grok Search during mandatory local-context retrieval | `BLOCKED` (none; stop before CP1) |
 | External / real-world knowledge | Grok Search | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
 
 ## Required Behavior
@@ -134,6 +136,9 @@ Direct output mode:
 
 - Workers edit files directly via MCP write tools. The on-disk files are the source of truth.
 - The response must list every changed file in `## FILES MODIFIED` but does not duplicate file content.
+- Keep MCP `PROMPT` small: long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be stored in repo-local artifact files (prefer `docs/plans/`) and referenced by path with concise instructions.
+- Do not place long raw material in `PROMPT` or `HYDRATED_CONTEXT`; workers should read long context from disk files.
+- If MCP returns `command line is too long`, treat as prompt-packaging failure: output `BLOCKED` with no retry/switch and request file-backed input.
 
 ## External Response Protocol v1.1
 
@@ -210,3 +215,4 @@ CP4 rules:
 - **CP2:** execute the routed phase externally and collect the returned artifact
 - **CP3:** reconcile cross-validation output or other non-trivial external feedback before CP4
 - **CP4:** perform the phase review and decide PASS / PASS_WITH_DEBT / FAIL
+

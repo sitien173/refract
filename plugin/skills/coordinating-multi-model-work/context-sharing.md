@@ -18,14 +18,15 @@ This workflow uses orchestrator-managed smart context sharing to keep worker pro
 ## Core Model
 
 1. CP0 decides whether `docs/wiki/` durable knowledge is useful, then selectively queries it when relevant.
-2. CP0 uses context-retrieval to retrieve the minimum current local code context needed for routing.
-3. The orchestrator stores the useful output as small reusable `CONTEXT_ARTIFACTS`.
-4. CP1 chooses `SESSION_POLICY` for the next executor turn: `FRESH` for Tier 1, or `CONTINUE` for Tier 3 when the next phase stays with the same worker and subsystem.
-5. CP2 uses a 3-tier prompt system:
+2. CP0 MUST run context-retrieval via `codebase-retrieval` to retrieve the minimum current local code context needed for routing before CP1 on every task, including trivial/current-file edits.
+3. If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, CP0 fail-closes with `BLOCKED` and stops before CP1; do not switch to file tools, Grok Search, or executors.
+4. The orchestrator stores the useful output as small reusable `CONTEXT_ARTIFACTS`.
+5. CP1 chooses `SESSION_POLICY` for the next executor turn: `FRESH` for Tier 1, or `CONTINUE` for Tier 3 when the next phase stays with the same worker and subsystem.
+6. CP2 uses a 3-tier prompt system:
    - Tier 1 initial call: `Task`, `Phase`, `Context`, `Files`, `Done When`, and full ERP v1.1
    - Tier 2 same-phase follow-up: `SESSION_ID`, `FIX`, `DELTA_FILES`, `DELTA_CONTEXT`
    - Tier 3 cross-phase continuation: `SESSION_ID`, `SESSION_POLICY: CONTINUE`, `PHASE`, `New Phase`, `New/Changed Files`, `Delta Context`, `Done When`
-6. If the same worker session continues, send only the minimum delta context needed for that tier.
+7. If the same worker session continues, send only the minimum delta context needed for that tier.
 
 ## Artifact Guidelines
 
@@ -74,6 +75,11 @@ Budget rules:
 - Never pre-write new implementation inside `HYDRATED_CONTEXT`.
 - Do not send full files unless the file is very small or the phase explicitly requires whole-file replacement.
 - If the budget is exceeded, narrow the phase or replace snippets with smaller artifact excerpts.
+- MCP `PROMPT` must remain small. Long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be stored as repo-local artifact files and referenced by path.
+- Prefer `docs/plans/` or task-specific existing input/output files for long-material artifacts.
+- Workers should read long material from disk using file paths passed in the prompt; include only concise summaries in `PROMPT` and `HYDRATED_CONTEXT`.
+- If long user-provided text is required and no suitable file exists, write it to a local artifact file first, then send the file path.
+- If MCP returns `command line is too long`, treat it as prompt-packaging failure: output `BLOCKED`, do not retry/switch executors, and request file-backed input.
 
 Refresh local context only when:
 

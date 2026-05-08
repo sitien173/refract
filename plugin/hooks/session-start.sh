@@ -16,11 +16,12 @@ You have superpowers.
 
 **Core Rules:**
 1. **1% Rule:** If there is even a 1% chance a skill applies, use the Skill tool to load it before responding.
-2. **CP0 first:** Do minimal context acquisition before routing. Selectively check `docs/wiki/` for durable project knowledge, then use context-retrieval for current local code context; use Grok Search only for external/current research.
+2. **CP0 first:** Do minimal context acquisition before routing. Optionally check `docs/wiki/` for durable project knowledge, then MUST run context-retrieval via `codebase-retrieval` for current local code context before CP1 on every task (no trivial/current-file skip). If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; Do not switch to file tools, Grok Search, or executors. Use Grok Search only for external/current research after mandatory local retrieval succeeds.
 3. **Claude is planner/reviewer/integrator:** Codex is the default executor; Gemini is only for UI-heavy phases.
 4. **Checkpoint Protocol:** CP1 Phase Assessment & Routing before the first executor call, including `Session-Policy` selection, CP2 External Execution when routing to external models, CP3 Reconciliation only after cross-validation or conflicting/non-trivial external feedback, and CP4 Phase Review after each phase.
-5. **Fail closed:** If Codex or Gemini MCP execution fails, output BLOCKED. Do not retry or switch executors.
+5. **Fail closed:** If Codex or Gemini MCP execution fails, output `BLOCKED` immediately and ask the human to retry or explicitly consent to an alternate route. Do not retry, switch executors, spawn subagents/Task/Agent fallback, or handle implementation directly without explicit human consent after the block.
 6. **Smart Context Budget:** Tier 1 initial call <=1500 tokens, Tier 2 same-phase follow-up <=400 tokens, Tier 3 cross-phase continuation <=600 tokens, HYDRATED_CONTEXT <=300 tokens hard cap.
+7. **Long input handling:** Never paste long guides/reports/specs/raw source into MCP `PROMPT` or `HYDRATED_CONTEXT`; store long material in repo-local files (prefer `docs/plans/`) and pass file paths plus concise instructions.
 
 **Multi-Model Routing:**
 - Most implementation (backend, full-stack, tests, debugging, scripts, CI/CD, infrastructure) → CODEX (`mcp__codex__codex`)
@@ -69,3 +70,4 @@ cat <<EOF
 EOF
 
 exit 0
+

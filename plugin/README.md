@@ -13,7 +13,7 @@ Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.
 - **Collaboration checkpoints**: CP0/CP1/CP2/CP3/CP4 checkpoints are embedded in the main skills.
 - **Smart context sharing**: CP0 produces reusable context artifacts, CP1 builds budgeted phase-scoped bundles, and same-phase follow-ups send deltas only.
 - **Project-local LLM wiki**: optional `karpathy-llm-wiki` skill stores durable knowledge under `docs/wiki/` and lets CP0 selectively use it when useful.
-- **Fail-closed executor gate**: if Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`; no retry or executor switch.
+- **Fail-closed executor gate**: if Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`, asks the human to retry or explicitly consent to an alternate route, and does not retry/switch/spawn fallback/handle directly without explicit consent after the block.
 
 ## Platform Support
 
@@ -69,7 +69,7 @@ The routing and checkpoint rules live in `skills/coordinating-multi-model-work/`
 
 | Checkpoint | When | Purpose |
 |---|---|---|
-| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, then context-retrieval for current local code context and Grok Search for external research |
+| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, mandatory `codebase-retrieval` for current local code context, then Grok Search only for external research; `codebase-retrieval` failure blocks before CP1 |
 | CP1 | Immediately after CP0, before first executor call | Phase assessment and routing using the CP1 routing matrix |
 | CP2 | After CP1 when routed externally | External execution via Codex/Gemini/Cross-Validation with final file output |
 | CP3 | After CP2 when reconciliation is needed | Resolve external-model conflicts, gaps, and clarifications before CP4 |
@@ -83,7 +83,7 @@ The bundled `karpathy-llm-wiki` skill keeps optional durable project knowledge i
 - **Query** initialized wiki pages for prompts like "what do we know about X" and answer with `docs/wiki/...` citations.
 - **Lint** wiki structure, citations, and index links; deterministic fixes are separate from heuristic report-only findings.
 
-`docs/wiki/` is created only on first ingest. CP0 uses it selectively for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what was known/decided/tried. Trivial edits and tasks answerable from current files skip wiki lookup. Current files, tests, and the current user request override wiki content; context-retrieval remains the source for current code context.
+`docs/wiki/` is created only on first ingest. CP0 uses it selectively for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what was known/decided/tried. Trivial edits and tasks answerable from current files skip wiki lookup. CP0 still must run `codebase-retrieval` for current local code context before CP1; any `codebase-retrieval` failure outputs `BLOCKED` and stops. Current files, tests, and the current user request override wiki content.
 
 ## Differences vs Superpowers (obra/superpowers)
 

@@ -106,4 +106,72 @@ fi
 echo "  [PASS]"
 echo ""
 
+echo "Test 7: Long prompt material is file-backed and monolithic raw prompt anti-pattern is absent..."
+if ! rg -n 'file-backed|artifact file|referenced by path|read from disk|docs/plans/' \
+  "$REPO_ROOT/hooks/session-start.sh" \
+  "$REPO_ROOT/hooks/user-prompt-submit.sh" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/context-sharing.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
+  "$REPO_ROOT/skills/shared/protocol-threshold.md" \
+  "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
+  "$REPO_ROOT/skills/executing-plans/SKILL.md" \
+  "$REPO_ROOT/skills/executing-plans/implementer-prompt.md" \
+  "$REPO_ROOT/rules/bounded-tasks.mdc" >/tmp/cp2-guards-file-backed.txt 2>/dev/null; then
+  echo "  [FAIL] Missing file-backed long-material CP2 guidance"
+  exit 1
+fi
+if rg -n 'ship full report in prompt|embed full research in prompt|monolithic raw prompt (bundle|payload)|single giant prompt blob' \
+  "$REPO_ROOT/hooks/session-start.sh" \
+  "$REPO_ROOT/hooks/user-prompt-submit.sh" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/context-sharing.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/INTEGRATION.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/codex-base.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/prompts/gemini-base.md" \
+  "$REPO_ROOT/skills/shared/protocol-threshold.md" \
+  "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
+  "$REPO_ROOT/skills/executing-plans/SKILL.md" \
+  "$REPO_ROOT/skills/executing-plans/implementer-prompt.md" \
+  "$REPO_ROOT/rules/bounded-tasks.mdc" >/tmp/cp2-guards-long-raw-antipattern.txt 2>/dev/null; then
+  echo "  [FAIL] Found monolithic long raw prompt anti-pattern language"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 8: MCP failure docs require BLOCKED plus human retry/consent and reject automatic fallback/direct handling..."
+if ! rg -n 'BLOCKED.*ask the human to retry|ask the human to retry|consent to an alternate route|consent to alternate route|explicit human consent after the block' \
+  "$REPO_ROOT/hooks/session-start.sh" \
+  "$REPO_ROOT/hooks/user-prompt-submit.sh" \
+  "$REPO_ROOT/rules/ccg-workflow.mdc" \
+  "$REPO_ROOT/README.md" \
+  "$REPO_ROOT/superpowers-ccg.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/GATE.md" \
+  "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
+  "$REPO_ROOT/skills/executing-plans/SKILL.md" >/tmp/cp2-guards-blocked-consent.txt 2>/dev/null; then
+  echo "  [FAIL] Missing BLOCKED + human retry/consent wording in active docs"
+  exit 1
+fi
+if ! rg -n 'do not retry|do not switch|do not spawn|subagents?/Task/Agent fallback|do not handle implementation directly|without explicit human consent after the block' \
+  "$REPO_ROOT/hooks/session-start.sh" \
+  "$REPO_ROOT/hooks/user-prompt-submit.sh" \
+  "$REPO_ROOT/rules/ccg-workflow.mdc" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/SKILL.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/checkpoints.md" \
+  "$REPO_ROOT/skills/coordinating-multi-model-work/GATE.md" \
+  "$REPO_ROOT/skills/shared/multi-model-integration-section.md" \
+  "$REPO_ROOT/skills/executing-plans/SKILL.md" >/tmp/cp2-guards-no-auto-fallback.txt 2>/dev/null; then
+  echo "  [FAIL] Missing no-retry/no-switch/no-fallback/no-direct-handling guard wording"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
 echo "=== CP2 external execution guard tests passed ==="

@@ -29,9 +29,11 @@ Every phase must have:
 - No full CP0 discovery blobs or full `docs/wiki/` dumps when phase-scoped bundles suffice
 - No `CROSS_VALIDATION` as default - use only when narrowing fails
 - No re-explaining the whole plan to workers
+- No monolithic raw prompt dumps of long guides/research/reports/specs; use file-backed artifacts and pass file paths
 
 ### Context Sharing
 
 - Turn CP0 findings into reusable context artifacts
 - Tier 1 starts fresh, Tier 2 sends deltas only, and Tier 3 continues a related phase with `SESSION_POLICY: CONTINUE`
 - Keep `HYDRATED_CONTEXT` under 300 tokens hard cap
+- Keep MCP `PROMPT` small; long material should live in repo-local files (prefer `docs/plans/`) referenced by path

@@ -31,11 +31,13 @@ The word "phase" appears in three distinct senses; do not conflate them:
 ## CP0: Context Acquisition
 
 - Gather only the minimum context needed to route the next phase.
-- Decide whether `docs/wiki/` durable knowledge is useful before code retrieval.
+- Decide whether `docs/wiki/` durable knowledge is useful before local code retrieval.
 - Selectively consult `docs/wiki/` for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what the project knows, decided, or tried.
 - Skip wiki lookup for trivial edits, simple version bumps, formatting, and tasks answerable from current files.
-- Use context-retrieval via `codebase-retrieval` for local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks.
-- Use Grok Search only when the task needs external/current knowledge or research.
+- MUST run context-retrieval via `codebase-retrieval` for local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks before CP1 on every task (including trivial/current-file tasks).
+- If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, immediately output `BLOCKED` and stop before CP1.
+- Do not switch to file tools, Grok Search, or executors when `codebase-retrieval` fails.
+- Use Grok Search only when the task needs external/current knowledge or research, and only after mandatory local retrieval succeeds.
 - Normalize the useful output into small reusable `CONTEXT_ARTIFACTS`.
 - Treat wiki content as advisory and citation-backed; current files, tests, and current user request override it.
 - End CP0 as soon as the phase and likely owner are clear enough for CP1.
@@ -45,7 +47,7 @@ CP0 tool matrix:
 | Need | Primary Tool | When to Trigger Grok Search | Fallback |
 | --- | --- | --- | --- |
 | Durable project knowledge / prior decisions | `docs/wiki/` selective lookup | Do not trigger Grok Search for project-local wiki lookup | Skip when uninitialized or irrelevant |
-| Local codebase context / references / architecture relationships | `codebase-retrieval` | Do not trigger Grok Search during normal local-context retrieval | None |
+| Local codebase context / references / architecture relationships | `codebase-retrieval` (mandatory before CP1) | Do not trigger Grok Search during mandatory local-context retrieval | `BLOCKED` (none; stop before CP1) |
 | External / real-world knowledge | Grok Search | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
 
 ## CP1: Phase Assessment & Routing
@@ -99,6 +101,8 @@ CP2 uses the 3-tier prompt system:
 - Tier 2 same-phase follow-up: `SESSION_ID`, `FIX`, `DELTA_FILES`, `DELTA_CONTEXT`, and `Respond using ERP v1.1`
 - Tier 3 cross-phase continuation: `SESSION_ID`, `SESSION_POLICY: CONTINUE`, `PHASE`, `New Phase`, `New/Changed Files`, `Delta Context`, `Done When`, and `Respond using ERP v1.1`
 - `HYDRATED_CONTEXT` is existing-code context only and stays under 300 tokens hard cap in every tier.
+- Keep MCP `PROMPT` compact. Long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be file-backed artifacts (prefer `docs/plans/` or named task files), passed as file paths with concise instructions.
+- Do not paste long raw material into `PROMPT`/`HYDRATED_CONTEXT`; workers must read long material from disk.
 
 Session continuation policy:
 
@@ -135,8 +139,12 @@ Blocking reasons:
 - `session-failed`
 - session instability
 - model error
+- `command line is too long` / prompt packaging failure
 
-Do not retry the same tool, switch executors, auto-downgrade `SESSION_POLICY`, or dispatch alternate worker execution.
+Ask the human to retry or explicitly consent to an alternate route before any continuation.
+Do not retry the same tool, switch executors, auto-downgrade `SESSION_POLICY`, spawn subagents/Task/Agent fallback, dispatch alternate worker execution, or handle implementation directly without explicit human consent after the block.
+
+If the failure indicates `command line is too long`, tell the user to store long input in a repo-local file (or ask permission to create one) and re-run with path-based context, or explicitly consent to an alternate route.
 
 ### Evidence format
 
@@ -145,6 +153,7 @@ Do not retry the same tool, switch executors, auto-downgrade `SESSION_POLICY`, o
 Routing: CODEX | GEMINI | CROSS_VALIDATION
 Status: BLOCKED
 Reason: permission-blocked | tool-unavailable | timeout | session-failed
+Next action: ask human to retry or consent to alternate route
 ```
 
 ### CP4 after blocked execution
@@ -225,3 +234,4 @@ Output contract:
 
 - "Use Codex" / "Use Gemini" / "Cross-validate" force corresponding routing.
 - "Do not use external models" forces `CLAUDE` for docs and coordination only.
+

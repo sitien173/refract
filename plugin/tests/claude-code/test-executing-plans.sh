@@ -47,9 +47,10 @@ assert_contains "$output" "rare|only when|unresolved|ambigu" "Cross-validation i
 echo ""
 
 echo "Test 8: MCP failure blocks..."
-output=$(run_claude "In executing-plans, what happens if the Codex or Gemini MCP call fails: retry/fallback, or BLOCKED?" 60)
+output=$(run_claude "Using skills/executing-plans/SKILL.md in this repository, what happens if a Codex or Gemini MCP call fails: retry/fallback, or BLOCKED?" 60)
 assert_contains "$output" "BLOCKED|blocked" "MCP failure blocks phase" || exit 1
-assert_contains "$output" "do not retry|no retry|not retry|do not switch|no fallback|do not fall back" "No retry or fallback" || exit 1
+assert_contains "$output" "do not retry|no retry|not retry|do not switch|no fallback|do not fall back|do not spawn|subagent|Task|Agent|do not handle directly" "No retry or fallback/direct handling" || exit 1
+assert_contains "$output" "ask (the )?human to retry|ask (the )?user to retry|explicit(ly)? consent|consent to alternate route|retry or consent" "Human retry/consent gate is required" || exit 1
 echo ""
 
 echo "=== All executing-plans skill tests passed ==="

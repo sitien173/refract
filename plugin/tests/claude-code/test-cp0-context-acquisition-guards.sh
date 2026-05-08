@@ -57,7 +57,32 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 4: Grok Search remains external/current-only..."
+echo "Test 4: codebase-retrieval is mandatory before CP1..."
+if ! rg -n 'codebase-retrieval.*(mandatory|required|must)|\b(mandatory|required|must)\b.*codebase-retrieval' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-mandatory.txt 2>/dev/null; then
+  echo "  [FAIL] Missing mandatory codebase-retrieval wording"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 5: codebase-retrieval fail-closed BLOCKED behavior is documented..."
+if ! rg -n 'codebase-retrieval.*(error|unavailable|permission-blocked|tool failure).*BLOCKED|BLOCKED.*codebase-retrieval|stop before CP1.*codebase-retrieval|codebase-retrieval.*stop before CP1' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-blocked.txt 2>/dev/null; then
+  echo "  [FAIL] Missing fail-closed BLOCKED behavior for codebase-retrieval failures"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 6: Active CP0 docs do not contain fail-open skip/fallback wording..."
+if rg -n -e 'skip[^[:cntrl:]\n]{0,40}context-retrieval' -e 'context-retrieval[^[:cntrl:]\n]{0,40}(when useful|optional)' -e 'fallback to[^[:cntrl:]\n]*(Grok Search|file tools|grep|glob|read tools)' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-fail-open.txt 2>/dev/null; then
+  echo "  [FAIL] Active CP0 docs contain fail-open skip/fallback wording"
+  cat /tmp/cp0-guards-fail-open.txt
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 7: Grok Search remains external/current-only..."
 if ! rg -n 'Grok Search.*external|Grok Search.*current|external.*Grok Search|current.*Grok Search' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-grok.txt 2>/dev/null; then
   echo "  [FAIL] Missing Grok Search external/current-only guidance"
   exit 1
@@ -65,7 +90,7 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 5: Active CP0 docs do not mention the legacy local tool..."
+echo "Test 8: Active CP0 docs do not mention the legacy local tool..."
 LEGACY_LOCAL_TOOL_PATTERN='Aug''gie|aug''gie'
 if rg -n "$LEGACY_LOCAL_TOOL_PATTERN" "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-legacy-local-tool.txt 2>/dev/null; then
   echo "  [FAIL] Active CP0 docs still mention the legacy local tool"
@@ -75,7 +100,7 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 6: Architecture diagram includes CP0 before CP1..."
+echo "Test 9: Architecture diagram includes CP0 before CP1..."
 if ! rg -n 'CP0: Context Acquisition.*CP1: Routing|START\[User Request\] --> CP0' "$REPO_ROOT/docs/diagrams/ccg-workflow-architecture.md" >/tmp/cp0-guards-diagram.txt 2>/dev/null; then
   echo "  [FAIL] Missing CP0 in architecture diagram"
   exit 1

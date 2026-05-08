@@ -33,22 +33,21 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 **Purpose:** Current local code context retrieval across a repository.
 
 **Use when:**
-- Starting CP0 context acquisition in an unfamiliar code area
+- Mandatory CP0 local context acquisition before CP1 on every task, including trivial/current-file tasks
 - You need semantic anchors, architecture relationships, or exact references before routing
-- You want likely implementation anchors before narrowing with file tools
 
 **Tool role:**
 - `codebase-retrieval` - semantic search for where/how/what-handles questions, implementation anchors, architecture relationships, and reference sweeps
 
 **Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow, known identifier sweeps
 
-**Fallback:** None for CP0 routing; use targeted file tools only after context-retrieval narrows the area.
+**Fail-closed rule:** If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure during CP0, output `BLOCKED` and stop before CP1. Do not switch to file tools, Grok Search, or executors.
 
 ## Composition Patterns
 
 ### CP0 Context Retrieval
 ```
-context-retrieval (current local code context retrieval) → Grok Search (only if external/current knowledge or research is required)
+context-retrieval via `codebase-retrieval` (mandatory current local code context retrieval) → Grok Search (only if external/current knowledge or research is required after local retrieval succeeds)
 ```
 
 ### Research Phase (Brainstorming)
@@ -58,7 +57,7 @@ Grok Search (gather info) → Design output
 
 ### Complex Debugging
 ```
-context-retrieval (retrieve local context) → Grok Search (search known issues if needed) → Fix
+context-retrieval via `codebase-retrieval` (mandatory local context) → Grok Search (search known issues if needed) → Fix
 ```
 
 ### Plan Writing
@@ -72,10 +71,11 @@ Supplementary tools operate at the **orchestrator level** — Claude uses them t
 
 ```
 1. Claude receives task
-2. CP0: use context-retrieval for local context acquisition; use Grok Search only for external/current research
+2. CP0: MUST use context-retrieval via `codebase-retrieval` for local context acquisition before CP1 on every task; use Grok Search only for external/current research after local retrieval succeeds
 3. Route implementation to Codex first or Gemini for UI-heavy phases at CP1 (primary routing)
 4. [Optional] Use supplementary tools during review/integration
 5. Claude runs CP4 phase review
 ```
 
-**No fail-closed gate** for local supplementary tools. If Grok Search is required for web research and unavailable, report the failure instead of using a native web-search fallback.
+`codebase-retrieval` is fail-closed in CP0: on retrieval failure, output `BLOCKED` and stop before CP1. Do not switch to file tools, Grok Search, or executors. Grok Search remains external/current-only and should be used only after mandatory local retrieval succeeds.
+

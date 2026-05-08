@@ -29,6 +29,8 @@ Routing matrix, new routing axes (context-size, multimodal input, horizon length
 - Tier 1 initial call should stay under 1500 tokens when practical.
 - Tier 2 same-phase follow-up should stay under 400 tokens and send deltas only.
 - Tier 3 cross-phase continuation should stay under 600 tokens and include `SESSION_POLICY: CONTINUE`.
+- Keep MCP `PROMPT` small. Long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be in repo-local artifact files (prefer `docs/plans/`) and referenced by file path plus concise instructions.
+- Do not paste long raw material into `PROMPT` or `HYDRATED_CONTEXT`; workers should read long inputs from disk.
 - Workers edit files directly via MCP write tools and respond using `# EXTERNAL RESPONSE PROTOCOL v1.1`; responses list `## FILES MODIFIED` without duplicating file content.
 - Do not ask the worker for draft code that the orchestrator will re-implement.
 
@@ -41,8 +43,8 @@ Routing matrix, new routing axes (context-size, multimodal input, horizon length
 
 ## Failure Handling
 
-If any Codex or Gemini MCP call fails with `timeout`, `tool-unavailable`, `session-failed`, session instability, model error, or `permission-blocked`, output `BLOCKED` per `coordinating-multi-model-work/GATE.md`.
+If any Codex or Gemini MCP call fails with `timeout`, `tool-unavailable`, `session-failed`, session instability, model error, `permission-blocked`, or `command line is too long` prompt-packaging failure, output `BLOCKED` per `coordinating-multi-model-work/GATE.md`, ask the human to retry or explicitly consent to an alternate route, and pause.
 
-Do not retry or switch executors after executor MCP failure.
+Do not retry, switch executors, spawn subagents/Task/Agent fallback, or handle implementation directly after executor MCP failure without explicit human consent after the block.
 
 CP4 runs only when executor output exists.

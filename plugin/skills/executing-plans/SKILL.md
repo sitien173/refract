@@ -26,10 +26,14 @@ description: "Executes written plans or active implementation phases one phase a
 ## Hard Rules
 
 - One active phase, one primary executor, one Claude review, one integration gate.
+- CP0 before CP1 is mandatory: after optional `docs/wiki/` decision, MUST run context-retrieval via `codebase-retrieval` for current local code context on every task.
+- If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; do not fall back to file tools, Grok Search, or executors.
 - Do not re-explain the whole plan to workers.
+- Keep MCP `PROMPT` small; long guides/reports/research/specs/raw source must be file-backed repo artifacts (prefer `docs/plans/`) and passed by path.
 - Do not request draft handoffs; worker output must be final file edits.
 - Use `CROSS_VALIDATION` only when the current phase cannot be narrowed to one owner.
-- If any Codex or Gemini MCP call fails, output `BLOCKED`; do not retry or switch executors.
+- If any Codex or Gemini MCP call fails, output `BLOCKED` immediately, ask the human to retry or explicitly consent to an alternate route, and do not retry/switch/spawn subagents-Task-Agent fallback/handle implementation directly without explicit human consent after the block.
+- If MCP fails with `command line is too long`, treat it as prompt-packaging failure: keep `BLOCKED`, ask the human to retry with file-backed input or explicitly consent to an alternate route, and do not retry/switch/spawn fallback/handle directly without explicit human consent after the block.
 - Do not produce the project final summary until all phases complete.
 
 ## References

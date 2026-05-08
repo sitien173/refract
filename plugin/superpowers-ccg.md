@@ -123,7 +123,7 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 | `CROSS_VALIDATION` | Unresolved architecture or true multi-domain conflict | Multiple MCP tools |
 | `CLAUDE` | Planning, review, integration, routing, coordination, docs editing, or clarification | No MCP call |
 
-> **Important:** Claude is the planner, orchestrator, reviewer, and integrator. Codex is the default executor. Gemini owns UI, multimodal, and large-context visual/document phases. If Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`.
+> **Important:** Claude is the planner, orchestrator, reviewer, and integrator. Codex is the default executor. Gemini owns UI, multimodal, and large-context visual/document phases. If Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`, asks the human to retry or explicitly consent to an alternate route, and does not retry/switch/spawn fallback/handle directly without explicit consent after the block.
 
 ### Phase Review
 
@@ -136,14 +136,14 @@ CP4 runs after each implementation phase. Claude reviews against the original re
 3. **Gemini for UI/multimodal/large-context visual-document phases**.
 4. **Claude performs CP4 phase review** after implementation.
 5. **Think independently** and challenge external model output.
-6. **Fail closed**: if required MCP evidence is missing or executor MCP execution fails, output `BLOCKED`.
+6. **Fail closed**: if required MCP evidence is missing or executor MCP execution fails, output `BLOCKED`, ask the human to retry or explicitly consent to an alternate route, and do not retry/switch/spawn fallback/handle directly without explicit consent after the block.
 7. **Use the inline External Response Protocol v1.1** in the active CP2 docs and prompts.
 
 ---
 
 ## Checkpoints Protocol
 
-- **CP0** — Before CP1: decide whether selective `docs/wiki/` durable knowledge lookup is useful, then acquire only the minimum current code context needed to route the next phase, and normalize useful findings into reusable context artifacts
+- **CP0** - Before CP1: optionally decide whether selective `docs/wiki/` durable knowledge lookup is useful, then MUST run context-retrieval via `codebase-retrieval` for minimum current local code context on every task (no trivial/current-file skip), normalize useful findings into reusable context artifacts, and fail closed: if `codebase-retrieval` errors/unavailable/permission-blocked/tool-failure, output `BLOCKED` and stop before CP1; do not switch to file tools, Grok Search, or executors
 - **CP1** — Immediately after CP0: perform Phase Assessment & Routing using the CP1 routing matrix, then invoke the selected executor if needed
 - **CP2** — External Execution: after CP1 routes to Codex, Gemini, or Cross-Validation, the executor performs the phase using a phase-scoped context bundle, edits files directly via MCP write tools, and reports the changed-file list via External Response Protocol v1.1
 - **CP3** — Reconciliation: after cross-validation or non-trivial external feedback, resolve conflicts and hand off to CP4
@@ -202,7 +202,7 @@ Claude `haiku` / `sonnet` / `opus` Task selection is no longer the default imple
 
 ### Context Retrieval
 
-Use context-retrieval via `codebase-retrieval` for current local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks during CP0. Use Grok Search only when the task needs external/current knowledge or web research.
+During CP0, use context-retrieval via `codebase-retrieval` as a mandatory step before CP1 for every task, including trivial/current-file edits. If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop immediately; do not switch to file tools, Grok Search, or executors. Use Grok Search only when the task needs external/current knowledge or web research, and only after mandatory local retrieval succeeds.
 
 ### Supplementary Tools
 

@@ -103,7 +103,9 @@ Static skill authoring guard test:
 Static CP0 guard test:
 - CP0 is explicitly documented as the pre-routing stage
 - context-retrieval + Grok Search CP0 ordering exists in startup and workflow docs
-- `codebase-retrieval` role is documented
+- `codebase-retrieval` is mandatory/required before CP1
+- `codebase-retrieval` fail-closed behavior is documented (`BLOCKED` and stop before CP1 on retrieval failure)
+- Active CP0 docs reject fail-open skip/fallback wording for context-retrieval
 - Grok Search remains external/current-only
 - Active CP0 docs do not mention the legacy local tool
 - Architecture diagram includes CP0
@@ -123,6 +125,8 @@ Static CP2 guard test:
 - Full `CONTEXT_PACKAGE` worker prompts are absent from active execution docs
 - Workers edit files directly via MCP write tools; the response lists `## FILES MODIFIED` without duplicating file content
 - Legacy `diff-or-questions` / `## DIFF` / `## QUESTIONS` contract is absent from active execution docs
+- Long prompt material guidance is file-backed/path-based and monolithic long raw prompt anti-patterns are rejected
+- MCP failure policy is fail-closed: `BLOCKED` + ask human retry/explicit consent; no auto retry/switch/subagent fallback/direct handling without consent
 
 #### test-cp3-reconciliation-guards.sh
 Static CP3 guard test:
@@ -156,6 +160,7 @@ Tests skill content and requirements (~2 minutes):
 - Same worker session reuse for fixes
 - No prototype-then-rewrite pattern
 - External Response Protocol v1.1 output contract
+- MCP failure response blocks with human retry/consent gate and no automatic fallback
 
 ### Integration Tests (use --integration flag)
 

@@ -20,11 +20,12 @@ Claude is planner, orchestrator, reviewer, and integrator. Implementation normal
    - Tier 2 follow-up fixes on the same phase, with delta files and delta context only
    - Tier 3 cross-phase continuation when CP1 keeps the same worker on the same subsystem
 7. Keep `HYDRATED_CONTEXT` under 300 tokens hard cap and avoid resending context the worker already has.
-8. Do not exceed 2 Tier-2 follow-ups on the same phase. If the phase still fails, re-scope, ask the user, or restart with `SESSION_POLICY: FRESH`.
-9. If CP1 chose `Cross-Validation`, or CP2 returned conflicts, overlap, gaps, clarifications, or continuation requests, run CP3 Reconciliation as Claude's decision layer.
-10. Always run CP4 Phase Review after CP3, or directly after CP2/Claude-only work when no reconciliation is needed.
-11. Run integration checks after each phase review.
-12. `PASS` completes the phase. `PASS_WITH_DEBT` completes the phase with explicit non-blocking debt. `FAIL` requires a retry, follow-up, or user clarification.
+8. Keep MCP `PROMPT` small. Long guides/reports/research/specs/raw source (>~8KB or likely >1500 tokens) must be stored in repo-local artifact files (prefer `docs/plans/`) and referenced by file path plus concise instructions.
+9. Do not exceed 2 Tier-2 follow-ups on the same phase. If the phase still fails, re-scope, ask the user, or restart with `SESSION_POLICY: FRESH`.
+10. If CP1 chose `Cross-Validation`, or CP2 returned conflicts, overlap, gaps, clarifications, or continuation requests, run CP3 Reconciliation as Claude's decision layer.
+11. Always run CP4 Phase Review after CP3, or directly after CP2/Claude-only work when no reconciliation is needed.
+12. Run integration checks after each phase review.
+13. `PASS` completes the phase. `PASS_WITH_DEBT` completes the phase with explicit non-blocking debt. `FAIL` requires a retry, follow-up, or user clarification.
 
 ## Hard Rules
 
@@ -32,6 +33,7 @@ Claude is planner, orchestrator, reviewer, and integrator. Implementation normal
 - Do not ask for design prose on an implementation task.
 - Do not restate the whole PRD, plan, or prior conversation in every prompt.
 - Do not repaste the full CP0 discovery output into every worker prompt.
+- Do not paste long raw guides/research/reports/specs into worker `PROMPT`/`HYDRATED_CONTEXT`; store as local artifact files and pass paths.
 - Do not send multiple workers the same implementation phase unless cross-validation is explicitly selected.
 - Do not ask the worker to paste file content back into the response; the on-disk files written via MCP are the source of truth.
 - Do not turn CP4 into a code-quality or best-practice review pass.

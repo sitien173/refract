@@ -9,7 +9,7 @@ Claude is the **planner, orchestrator, reviewer, and integrator**. It routes exe
 
 ### Checkpoint Protocol
 
-1. **CP0** - Selective `docs/wiki/` durable knowledge lookup when useful, then context-retrieval current local codebase context and Grok Search external research only when needed
+1. **CP0** - Optional selective `docs/wiki/` durable knowledge lookup, then mandatory context-retrieval via `codebase-retrieval` for current local codebase context before CP1 on every task; if `codebase-retrieval` fails, output `BLOCKED` and stop (do not use file tools, Grok Search, or executors instead); Grok Search remains external/current-only after local retrieval succeeds
 2. **CP1** - Phase assessment and routing using the routing matrix
 3. **CP2** - External execution via Codex/Gemini with final file output
 4. **CP3** - Reconciliation when needed (conflicts, gaps, clarifications)
@@ -58,4 +58,4 @@ All external model calls must:
 
 ### Failure Handling
 
-If Codex or Gemini MCP execution fails, output `BLOCKED` immediately. Do not retry, switch executors, or dispatch another worker.
+If Codex or Gemini MCP execution fails, output `BLOCKED` immediately and ask the human to retry or explicitly consent to an alternate route. Do not retry, switch executors, spawn subagents/Task/Agent fallback, dispatch another worker, or handle implementation directly without explicit human consent after the block.

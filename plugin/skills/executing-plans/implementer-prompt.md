@@ -43,6 +43,8 @@ External model call:
     - Keep Hydrated Context under 300 tokens.
     - Keep Tier 1 initial prompts under 1500 tokens when practical.
     - Same-phase Tier 2 follow-up prompts must send deltas only and stay under 400 tokens.
+    - Keep MCP `PROMPT` compact: long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be stored in a repo-local artifact file (prefer `docs/plans/`) and referenced by path.
+    - Never paste long raw source text into the prompt or Hydrated Context; provide file paths and concise instructions so the worker reads from disk.
     - `Files` = flat list of paths only, not file contents.
     - Pre-writing implementation in the prompt defeats the purpose of routing. Let the worker implement.
 

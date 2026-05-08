@@ -14,6 +14,8 @@ Follow these rules when filling in the template below:
 - Tier 2 same-phase follow-up prompts: **target** ≤ 400 tokens (deltas only).
 - Tier 3 cross-phase continuation prompts: **target** ≤ 600 tokens.
 - "Target" = soft goal; if you exceed it, narrow the phase or shrink hydrated snippets. "Limit" = hard ceiling; do not exceed.
+- MCP `PROMPT` must stay compact. Long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be saved as repo-local artifact files (prefer `docs/plans/`) and referenced by path.
+- Never paste long raw material into `{compressed_user_request}` or `{hydrated_context}`; provide file paths and concise worker instructions to read from disk.
 - `{compressed_user_request}` is one or two sentences — the what and the constraint, not the how.
 - `{task_summary}` is the phase summary sentence verbatim — not a re-expanded spec.
 - `{file_list}` is a flat list of file paths — not file contents.
