@@ -1,42 +1,8 @@
 # Protocol Threshold (Shared Reference)
 
-> Exact CP1, CP3, and CP4 response blocks are canonical here for hook injection. Tier-prompt rules, budgets, `SESSION_POLICY` decisions, and the Tier 3 freshness check are canonical in `skills/coordinating-multi-model-work/context-sharing.md`.
+> Exact CP1, CP3, and CP4 response blocks and ERP v1.1 format are canonical here for hook injection. All other checkpoint rules are canonical in `skills/coordinating-multi-model-work/checkpoints.md`, routing in `rules/ccg-workflow.mdc`, tier budgets and `SESSION_POLICY` in `skills/coordinating-multi-model-work/context-sharing.md`.
 
 All skills that use checkpoints must follow the CP protocol injected by hooks.
-
-## Contents
-
-- CP0: Context Acquisition
-- Required Behavior
-- CP1: Phase Assessment & Routing
-- CP2: External Execution
-- External Response Protocol v1.1
-- CP3: Reconciliation
-- CP4: Phase Review
-- Checkpoint Logic
-
-## CP0: Context Acquisition
-
-- CP0 happens before CP1.
-- Gather only the minimum context required to route the next phase.
-- Decide whether `docs/wiki/` durable knowledge is useful before local code retrieval.
-- Selectively consult `docs/wiki/` for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what the project knows, decided, or tried.
-- Skip wiki lookup for trivial edits, simple version bumps, formatting, and tasks answerable from current files.
-- MUST run context-retrieval via `codebase-retrieval` for local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks before CP1 on every task (including trivial/current-file tasks).
-- If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, immediately output `BLOCKED` and stop before CP1.
-- Do not switch to file tools, Grok Search, or executors when `codebase-retrieval` fails.
-- Use Grok Search only when the task needs external/current knowledge or research, and only after mandatory local retrieval succeeds.
-- Normalize CP0 findings into reusable `CONTEXT_ARTIFACTS`.
-- Treat wiki content as advisory and citation-backed; current files, tests, and current user request override it.
-- CP0 is a retrieval phase, not a narration phase. Do not turn it into a long summary.
-
-CP0 tool matrix:
-
-| Need | Primary Tool | When to Trigger Grok Search | Fallback |
-| --- | --- | --- | --- |
-| Durable project knowledge / prior decisions | `docs/wiki/` selective lookup | Do not trigger Grok Search for project-local wiki lookup | Skip when uninitialized or irrelevant |
-| Local codebase context / references / architecture relationships | `codebase-retrieval` (mandatory before CP1) | Do not trigger Grok Search during mandatory local-context retrieval | `BLOCKED` (none; stop before CP1) |
-| External / real-world knowledge | Grok Search | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
 
 ## Required Behavior
 
@@ -50,48 +16,6 @@ CP0 tool matrix:
 - Do not rename the CP4 headings or bullets.
 - Use the literal CP1 headings and field labels exactly as written. Do not bold or rename them.
 - The route bullets must begin exactly with `- Model:`, `- Cross-Validation:`, `- Session-Policy:`, and `- Reason:`.
-
-## CP1: Phase Assessment & Routing
-
-When it runs: immediately after CP0 completes.
-
-Goal: perform a quick, structured phase assessment and choose the optimal route using the inline CP1 routing guide below.
-
-Phase Assessment Process:
-
-1. Read the original user request and the CP0 context artifacts.
-2. Summarize the active phase in one English sentence.
-3. Assess clarity and completeness.
-4. If the task is unclear or underspecified, route to `Claude`, output the CP1 block, then immediately ask clarifying questions.
-5. Classify the task against the inline CP1 routing guide below.
-6. Decide the model, whether cross-validation is needed, and `Session-Policy`.
-7. Build the right executor prompt tier for the next phase:
-   - Tier 1 for a fresh worker session
-   - Tier 3 when continuing a related phase on the same worker session
-8. Keep `HYDRATED_CONTEXT` under 300 tokens hard cap.
-9. Output the exact block below.
-
-## CP1 Routing Guide
-
-| Task Category | Model | Cross-Validation | Notes / Triggers |
-| --- | --- | --- | --- |
-| Backend / Logic / API | Codex | No | Default implementation route |
-| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
-| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon |
-| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
-| Data / ML / Analytics | Codex | No | Logic-heavy |
-| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
-| Multimodal input -> code | Gemini | No | Only multimodal frontier |
-| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
-| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
-| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
-| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
-| Architecture conflict / multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
-| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
-| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
-| Uncategorized / Ambiguous | Claude | No | Fail-closed; clarify |
-
-New routing axes are context-size (>200K tokens), multimodal input, and horizon length (>1 hour autonomous chain). If multiple triggers fire, apply `## Tiebreaker Order` in `skills/coordinating-multi-model-work/routing-decision.md`.
 
 ## CP1 Routing Decision Format
 
@@ -110,35 +34,6 @@ New routing axes are context-size (>200K tokens), multimodal input, and horizon 
 ## Next Action
 [Proceed to CP2 with the chosen model(s) OR handle directly OR ask user]
 ```
-
-## CP2: External Execution
-
-When it runs: only when CP1 routes the phase to `Gemini`, `Codex`, or `Cross-Validation`.
-
-Goal: the external model performs the actual work and returns the final artifact directly.
-
-CP2 uses the 3-tier prompt system:
-
-1. Tier 1 initial call: `Task`, `Phase` (`TASK_ID` + `SESSION_POLICY: FRESH`), `Context`, `Files`, `Done When`, and full ERP v1.1
-2. Tier 2 same-phase follow-up: `SESSION_ID`, `FIX`, `DELTA_FILES`, `DELTA_CONTEXT`, and `Respond using ERP v1.1`
-3. Tier 3 cross-phase continuation: `SESSION_ID`, `SESSION_POLICY: CONTINUE`, `PHASE`, `New Phase`, `New/Changed Files`, `Delta Context`, `Done When`, and `Respond using ERP v1.1`
-4. Tier 2 is for same-phase fixes only; do not exceed 2 Tier-2 follow-ups on one phase
-
-Context budget:
-
-- Tier 1 initial call: <= 1500 tokens
-- Tier 2 same-phase follow-up: <= 400 tokens
-- Tier 3 cross-phase continuation: <= 600 tokens
-- `HYDRATED_CONTEXT`: <= 300 tokens hard cap
-- If the budget is exceeded, narrow the phase or shrink the hydrated snippets
-
-Direct output mode:
-
-- Workers edit files directly via MCP write tools. The on-disk files are the source of truth.
-- The response must list every changed file in `## FILES MODIFIED` but does not duplicate file content.
-- Keep MCP `PROMPT` small: long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be stored in repo-local artifact files (prefer `docs/plans/`) and referenced by path with concise instructions.
-- Do not place long raw material in `PROMPT` or `HYDRATED_CONTEXT`; workers should read long context from disk files.
-- If MCP returns `command line is too long`, treat as prompt-packaging failure: output `BLOCKED` with no retry/switch and request file-backed input.
 
 ## External Response Protocol v1.1
 
@@ -168,7 +63,7 @@ None (or list questions)
 TASK_COMPLETE / CONTINUE_SESSION / HANDOVER_TO_CLAUDE
 ```
 
-## CP3: Reconciliation
+## CP3 Reconciliation Format
 
 ```text
 # CP3 RECONCILIATION COMPLETE
@@ -183,17 +78,7 @@ TASK_COMPLETE / CONTINUE_SESSION / HANDOVER_TO_CLAUDE
 Ready for CP4
 ```
 
-## CP4: Phase Review
-
-When it runs: after each phase, after CP3 when reconciliation was needed or directly after Claude-only / non-reconciled work.
-
-Goal: perform a phase review against the original user request, CP1 success criteria, reviewer checklist, and integration results.
-
-CP4 rules:
-
-- Review only spec satisfaction.
-- Do not perform broad code quality, style, redundancy, or best-practice review unless listed in the phase checklist.
-- Return `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
+## CP4 Phase Review Format
 
 ```text
 # CP4 SPEC REVIEW COMPLETE
@@ -207,12 +92,3 @@ CP4 rules:
 - If PASS_WITH_DEBT: [Non-blocking debt + owner/timing]
 - If FAIL: [Specific gaps + suggested next action (e.g. re-run external model or ask user)]
 ```
-
-## Checkpoint Logic
-
-- **CP0:** gather only the context needed to define the next phase
-- **CP1:** assess the phase, choose the route, and invoke the worker if needed
-- **CP2:** execute the routed phase externally and collect the returned artifact
-- **CP3:** reconcile cross-validation output or other non-trivial external feedback before CP4
-- **CP4:** perform the phase review and decide PASS / PASS_WITH_DEBT / FAIL
-

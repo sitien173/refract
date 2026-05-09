@@ -33,15 +33,12 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 **Purpose:** Current local code context retrieval across a repository.
 
 **Use when:**
-- Mandatory CP0 local context acquisition before CP1 on every task, including trivial/current-file tasks
+- Mandatory CP0 local context acquisition before CP1 on every task
 - You need semantic anchors, architecture relationships, or exact references before routing
-
-**Tool role:**
-- `codebase-retrieval` - semantic search for where/how/what-handles questions, implementation anchors, architecture relationships, and reference sweeps
 
 **Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow, known identifier sweeps
 
-**Fail-closed rule:** If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure during CP0, output `BLOCKED` and stop before CP1. Do not switch to file tools, Grok Search, or executors.
+**Fail-closed:** `BLOCKED` on failure per `skills/coordinating-multi-model-work/checkpoints.md` CP0 section.
 
 ## Composition Patterns
 
@@ -67,15 +64,5 @@ Grok Search (library docs if needed) → Plan output
 
 ## Integration with Primary Routing
 
-Supplementary tools operate at the **orchestrator level** — Claude uses them to enhance its own analysis before/alongside routing to Codex/Gemini.
-
-```
-1. Claude receives task
-2. CP0: MUST use context-retrieval via `codebase-retrieval` for local context acquisition before CP1 on every task; use Grok Search only for external/current research after local retrieval succeeds
-3. Route implementation to Codex first or Gemini for UI-heavy phases at CP1 (primary routing)
-4. [Optional] Use supplementary tools during review/integration
-5. Claude runs CP4 phase review
-```
-
-`codebase-retrieval` is fail-closed in CP0: on retrieval failure, output `BLOCKED` and stop before CP1. Do not switch to file tools, Grok Search, or executors. Grok Search remains external/current-only and should be used only after mandatory local retrieval succeeds.
+Supplementary tools operate at the **orchestrator level** — Claude uses them to enhance its own analysis before/alongside routing to Codex/Gemini. They do not replace the primary CP0→CP4 workflow in `skills/coordinating-multi-model-work/checkpoints.md`.
 

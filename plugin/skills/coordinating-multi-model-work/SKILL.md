@@ -13,7 +13,7 @@ description: "Routes implementation phases to Codex first, Gemini only for UI-he
 
 ## Workflow
 
-1. Run CP0: gather minimal context, optionally use selective `docs/wiki/` lookup, then MUST run context-retrieval via `codebase-retrieval` for local code context before CP1 on every task. No trivial/current-file skip. If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; Do not switch to file tools, Grok Search, or executors. Use Grok Search only for external/current research after local retrieval succeeds.
+1. Run CP0: gather minimal context per `checkpoints.md` CP0 section. Mandatory `codebase-retrieval` before CP1; `BLOCKED` on failure.
 2. Reduce work to one implementation phase with 2-4 related tasks, file set, reviewer checklist, and integration checks.
 3. Run CP1 and output the exact `# CP1 ROUTING DECISION` block.
 4. If routing is not Claude, run CP2 with the 3-tier prompt system and External Response Protocol v1.1.
@@ -27,10 +27,8 @@ description: "Routes implementation phases to Codex first, Gemini only for UI-he
 - Gemini is only for UI-heavy visual layout, styling, motion, canvas/SVG, or complex interactions.
 - Claude handles planning, review, integration, docs, and clarification.
 - Cross-validation is rare; use only for unresolved architecture or true multi-domain uncertainty.
-- Keep `HYDRATED_CONTEXT` under 300 tokens hard cap.
-- Keep MCP `PROMPT` small. Store long guides/reports/research/specs/raw source in repo-local artifact files (prefer `docs/plans/`) and pass file paths plus concise instructions.
-- If any Codex or Gemini MCP call fails with `timeout`, `tool-unavailable`, `session-failed`, session instability, model error, or `permission-blocked`, output `BLOCKED` immediately and ask the human to retry or explicitly consent to an alternate route; do not retry, switch executors, spawn subagents/Task/Agent fallback, or handle implementation directly without explicit human consent after the block.
-- Treat `command line is too long` as prompt-packaging failure: output `BLOCKED` immediately, ask the human to retry with file-backed input or explicitly consent to an alternate route, and do not retry/switch/spawn fallback/handle directly without explicit human consent after the block.
+- `HYDRATED_CONTEXT` ≤300 tokens hard cap. Budget details in `context-sharing.md`.
+- MCP failure → `BLOCKED` per `GATE.md`. No retry/switch/fallback without human consent.
 - Never accept prototype-only prose for implementation work.
 
 ## References

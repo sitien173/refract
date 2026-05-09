@@ -2,7 +2,7 @@
 
 > **Naming note.** "Integration" in this filename means **integrating multiple models** (Claude + Codex + Gemini) into one workflow. It is **not** the build/test "integration checks" gate that runs at CP3.5 — that lives in `checkpoints.md`.
 >
-> Tier rules, budgets, and `SESSION_POLICY` decisions are canonical in `context-sharing.md`. This file restates the workflow shape; if details diverge, `context-sharing.md` wins.
+> Tier rules, budgets, and `SESSION_POLICY` decisions are canonical in `context-sharing.md`. Failure handling in `GATE.md`. Format blocks in `shared/protocol-threshold.md`. This file covers workflow shape only.
 
 Claude is planner, orchestrator, reviewer, and integrator. Implementation normally goes through an executor, with Codex as the default route and Gemini reserved for UI-heavy phases.
 
@@ -38,18 +38,6 @@ Claude is planner, orchestrator, reviewer, and integrator. Implementation normal
 - Do not ask the worker to paste file content back into the response; the on-disk files written via MCP are the source of truth.
 - Do not turn CP4 into a code-quality or best-practice review pass.
 
-## Prompt Structure
-
-Every implementation prompt should use one of these tiers:
-
-```text
-Tier 1: Task + Phase + Context + Files + Done When + full ERP v1.1
-Tier 2: SESSION_ID + FIX + DELTA_FILES + DELTA_CONTEXT + "Respond using ERP v1.1"
-Tier 3: SESSION_ID + SESSION_POLICY: CONTINUE + PHASE + New Phase + New/Changed Files + Delta Context + Done When + "Respond using ERP v1.1"
-```
-
-Keep `Done When` as the worker-facing checklist. Claude retains reviewer and integration checks for CP4.
-
 ## When To Cross-Validate
 
 Use `CROSS_VALIDATION` only for design arbitration or unresolved multi-domain ambiguity. When you do:
@@ -59,15 +47,4 @@ Use `CROSS_VALIDATION` only for design arbitration or unresolved multi-domain am
 
 ## CP4 Phase Review
 
-Claude performs CP4 in the main thread using:
-- the original user request
-- the CP1 phase summary
-- the CP1 success criteria
-- the reviewer checklist
-- the integration check results
-- the files modified by the workflow
-
-CP4 returns:
-- `PASS` when the phase fully satisfies the checklist
-- `PASS_WITH_DEBT` when the phase is usable and debt is explicit
-- `FAIL` when a blocking requirement is not satisfied
+CP4 rules and outcomes are canonical in `review-chain.md`.

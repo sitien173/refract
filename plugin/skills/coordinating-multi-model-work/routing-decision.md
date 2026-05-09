@@ -70,14 +70,7 @@ Inputs:
 
 ## Session Policy
 
-| Condition | SESSION_POLICY |
-| --- | --- |
-| Same worker + overlapping files or same subsystem | `CONTINUE` |
-| Same worker + different subsystem | `FRESH` |
-| Different worker | `FRESH` |
-| Long-horizon Codex run already active (>1hr) | `CONTINUE` |
-| Multimodal artifact carryover (Gemini parsed PDF/screenshot reused next phase) | `CONTINUE` |
-| Previous phase `FAIL` after 2 Tier-2 retries | `FRESH` |
+`SESSION_POLICY` decision table is canonical in `context-sharing.md`. Default is `FRESH`; use `CONTINUE` when same worker and overlapping files/subsystem.
 
 ## New Routing Axes
 
@@ -104,26 +97,6 @@ Inputs:
 | Docs / Comments / Coordination / Simple edits | README, typo, config | context-retrieval | Claude | No | Per user constraint |
 | Orchestration / Review / Integration / Planning | review, merge, plan | context-retrieval | Claude | No | Per user constraint |
 | Uncategorized / Ambiguous | unclear or spans many areas | context-retrieval + Grok Search if external research needed | Claude | No | Fail-closed: ask clarifying questions |
-
-## Compact Routing Matrix
-
-| Task Category | Model | Cross-Validation | Notes / Triggers |
-| --- | --- | --- | --- |
-| Backend / Logic / API | Codex | No | Default implementation route |
-| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
-| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon validated |
-| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
-| Data / ML / Analytics | Codex | No | Logic-heavy |
-| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
-| Multimodal input -> code | Gemini | No | Only multimodal frontier |
-| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
-| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
-| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
-| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
-| Architecture conflict / true multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
-| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
-| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
-| Uncategorized / Ambiguous | Claude | No | Fail-closed: ask clarifying questions |
 
 ## Decision Guidelines
 

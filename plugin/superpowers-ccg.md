@@ -16,7 +16,6 @@
 - Skills Reference
 - Commands Reference
 - Multi-Model Coordination
-- Checkpoints Protocol
 - Red Flags
 
 ---
@@ -114,40 +113,16 @@ superpowers-ccg:debugging-systematically → [TDD for fix] → superpowers-ccg:v
 
 ## Multi-Model Coordination
 
-### Routing Labels
+Routing matrix, tiebreakers, and failure handling: `rules/ccg-workflow.mdc` (always loaded).
+Checkpoint protocol details: `skills/coordinating-multi-model-work/checkpoints.md`.
+Phase review: `skills/coordinating-multi-model-work/review-chain.md`.
 
-| Label | When to Use | MCP Tool |
-|-------|-------------|----------|
-| `CODEX` | Default implementation: backend, full-stack, tests, debugging, shell scripts, Dockerfiles, CI/CD, infrastructure, repo tooling | `mcp__codex__codex` |
-| `GEMINI` | UI components/CSS/animation/canvas/SVG, multimodal input->code, large-context sweeps, visual regression/OCR, PDF/diagram extraction | `mcp__gemini__gemini` |
-| `CROSS_VALIDATION` | Unresolved architecture or true multi-domain conflict | Multiple MCP tools |
-| `CLAUDE` | Planning, review, integration, routing, coordination, docs editing, or clarification | No MCP call |
-
-> **Important:** Claude is the planner, orchestrator, reviewer, and integrator. Codex is the default executor. Gemini owns UI, multimodal, and large-context visual/document phases. If Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`, asks the human to retry or explicitly consent to an alternate route, and does not retry/switch/spawn fallback/handle directly without explicit consent after the block.
-
-### Phase Review
-
-CP4 runs after each implementation phase. Claude reviews against the original request, CP1 success criteria, reviewer checklist, and integration results. Status is `PASS`, `PASS_WITH_DEBT`, or `FAIL`. See `coordinating-multi-model-work/review-chain.md`.
-
-### Core Instructions
-
-1. **Route to an executor** after initial analysis.
-2. **Codex first for most implementation**.
-3. **Gemini for UI/multimodal/large-context visual-document phases**.
-4. **Claude performs CP4 phase review** after implementation.
-5. **Think independently** and challenge external model output.
-6. **Fail closed**: if required MCP evidence is missing or executor MCP execution fails, output `BLOCKED`, ask the human to retry or explicitly consent to an alternate route, and do not retry/switch/spawn fallback/handle directly without explicit consent after the block.
-7. **Use the inline External Response Protocol v1.1** in the active CP2 docs and prompts.
-
----
-
-## Checkpoints Protocol
-
-- **CP0** - Before CP1: optionally decide whether selective `docs/wiki/` durable knowledge lookup is useful, then MUST run context-retrieval via `codebase-retrieval` for minimum current local code context on every task (no trivial/current-file skip), normalize useful findings into reusable context artifacts, and fail closed: if `codebase-retrieval` errors/unavailable/permission-blocked/tool-failure, output `BLOCKED` and stop before CP1; do not switch to file tools, Grok Search, or executors
-- **CP1** — Immediately after CP0: perform Phase Assessment & Routing using the CP1 routing matrix, then invoke the selected executor if needed
-- **CP2** — External Execution: after CP1 routes to Codex, Gemini, or Cross-Validation, the executor performs the phase using a phase-scoped context bundle, edits files directly via MCP write tools, and reports the changed-file list via External Response Protocol v1.1
-- **CP3** — Reconciliation: after cross-validation or non-trivial external feedback, resolve conflicts and hand off to CP4
-- **CP4** — Phase Review: run after each phase and determine PASS / PASS_WITH_DEBT / FAIL against the original requirement, reviewer checklist, and integration results
+| Label | MCP Tool |
+|-------|----------|
+| `CODEX` | `mcp__codex__codex` — default executor |
+| `GEMINI` | `mcp__gemini__gemini` — UI/multimodal/large-context |
+| `CROSS_VALIDATION` | Both — rare arbitration only |
+| `CLAUDE` | None — planning, review, integration, docs |
 
 ---
 
@@ -170,44 +145,4 @@ CP4 runs after each implementation phase. Claude reviews against the original re
 
 ---
 
-## Default Model Routing
-
-| Task Category | Model | Cross-Validation | Notes / Triggers |
-| --- | --- | --- | --- |
-| Backend / Logic / API | Codex | No | Default implementation route |
-| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
-| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon |
-| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
-| Data / ML / Analytics | Codex | No | Logic-heavy |
-| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
-| Multimodal input -> code | Gemini | No | Only multimodal frontier |
-| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
-| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
-| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
-| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
-| Architecture conflict / multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
-| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
-| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
-| Uncategorized / Ambiguous | Claude | No | Fail-closed; clarify |
-
-### Tiebreaker Order
-
-1. Hallucination-sensitive -> Codex + Claude review gate
-2. Multimodal input -> Gemini
-3. Context >200K -> Gemini
-4. UI-dominant -> Gemini
-5. Else -> Codex
-
-Claude `haiku` / `sonnet` / `opus` Task selection is no longer the default implementation route. Only use those legacy Task models when a separate skill explicitly requires them.
-
-### Context Retrieval
-
-During CP0, use context-retrieval via `codebase-retrieval` as a mandatory step before CP1 for every task, including trivial/current-file edits. If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop immediately; do not switch to file tools, Grok Search, or executors. Use Grok Search only when the task needs external/current knowledge or web research, and only after mandatory local retrieval succeeds.
-
-### Supplementary Tools
-
-Supplementary tools are optional enhancements. See `skills/shared/supplementary-tools.md`.
-
----
-
-*This document is the authoritative reference for agent behavior in superpowers-ccg.*
+*This document is the authoritative reference for agent behavior in superpowers-ccg. Routing, checkpoints, and failure handling are canonical in `rules/ccg-workflow.mdc` and `skills/coordinating-multi-model-work/`.*

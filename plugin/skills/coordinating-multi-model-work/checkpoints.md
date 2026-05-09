@@ -57,35 +57,10 @@ CP0 tool matrix:
 - Summarize the active phase in one English sentence.
 - Check whether the phase is clear, sufficiently scoped, and contains 2-4 related tasks.
 - If not clear, route to `Claude`, output the CP1 routing block, and ask clarifying questions immediately.
-- Classify the task using the inline CP1 routing guide below.
-- Decide:
-  - model ownership
-  - whether cross-validation is needed
-  - `SESSION_POLICY` for the next executor turn
-- Build one `PHASE_CONTEXT_BUNDLE` for the next phase:
-  - `TASK_ID`
-  - `HYDRATED_CONTEXT`
+- Classify the task using the routing matrix in `rules/ccg-workflow.mdc`. For detailed examples, see `routing-decision.md`.
+- Decide model ownership, cross-validation, and `SESSION_POLICY` (see `context-sharing.md` for the decision table).
+- Build one `PHASE_CONTEXT_BUNDLE` with `TASK_ID` and `HYDRATED_CONTEXT`.
 - Output the exact `# CP1 ROUTING DECISION` block before the first executor call.
-
-| Task Category | Model | Cross-Validation | Notes / Triggers |
-| --- | --- | --- | --- |
-| Backend / Logic / API | Codex | No | Default implementation route |
-| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
-| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon |
-| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
-| Data / ML / Analytics | Codex | No | Logic-heavy |
-| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
-| Multimodal input -> code | Gemini | No | Only multimodal frontier |
-| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
-| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
-| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
-| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
-| Architecture conflict / multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
-| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
-| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
-| Uncategorized / Ambiguous | Claude | No | Fail-closed; clarify |
-
-New routing axes are context-size (>200K tokens), multimodal input, and horizon length (>1 hour autonomous chain). For multiple simultaneous triggers, apply `## Tiebreaker Order` in `routing-decision.md`.
 
 ## CP2: External Execution
 
@@ -95,70 +70,18 @@ Goal:
 - The external model performs the actual work.
 - The external model returns the final code/files directly.
 
-CP2 uses the 3-tier prompt system:
-
-- Tier 1 initial call: `Task`, `Phase` (`TASK_ID` + `SESSION_POLICY: FRESH`), `Context`, `Files`, `Done When`, and full ERP v1.1
-- Tier 2 same-phase follow-up: `SESSION_ID`, `FIX`, `DELTA_FILES`, `DELTA_CONTEXT`, and `Respond using ERP v1.1`
-- Tier 3 cross-phase continuation: `SESSION_ID`, `SESSION_POLICY: CONTINUE`, `PHASE`, `New Phase`, `New/Changed Files`, `Delta Context`, `Done When`, and `Respond using ERP v1.1`
-- `HYDRATED_CONTEXT` is existing-code context only and stays under 300 tokens hard cap in every tier.
-- Keep MCP `PROMPT` compact. Long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be file-backed artifacts (prefer `docs/plans/` or named task files), passed as file paths with concise instructions.
-- Do not paste long raw material into `PROMPT`/`HYDRATED_CONTEXT`; workers must read long material from disk.
-
-Session continuation policy:
-
-Evaluate top-down; first match wins.
-
-| # | Condition | SESSION_POLICY |
-| --- | --- | --- |
-| 1 | Different worker than the prior phase | `FRESH` |
-| 2 | Previous phase ended `FAIL` after 2 Tier-2 retries | `FRESH` |
-| 3 | Same worker AND new phase touches ≥1 file from the prior phase's file set | `CONTINUE` |
-| 4 | Same worker AND no file overlap, but same subsystem (same top-level dir or shared module boundary) | `CONTINUE` |
-| 5 | Otherwise | `FRESH` |
-
-Tier 2 retry rules:
-
-- Use Tier 2 only for the same phase on the same worker session.
-- Send only the delta files and new context the worker does not already have.
-- Do not exceed 2 Tier-2 follow-ups on the same phase. If CP4 still returns `FAIL`, re-scope the phase, ask the user, or reset with `SESSION_POLICY: FRESH`.
+CP2 uses the 3-tier prompt system. Tier templates, budgets, `SESSION_POLICY` decision table, and retry rules are canonical in `context-sharing.md`. ERP v1.1 format is in `shared/protocol-threshold.md`.
 
 Output contract:
 - Workers edit files directly via MCP write tools. The on-disk files are the source of truth.
-- The response uses `# EXTERNAL RESPONSE PROTOCOL v1.1` and lists every changed file in `## FILES MODIFIED`, but does not duplicate file content.
-- Allow an optional `## CONTEXT ARTIFACTS` section for reusable discoveries that later tasks can reference.
+- The response uses ERP v1.1 and lists every changed file in `## FILES MODIFIED`, but does not duplicate file content.
+- Optional `## CONTEXT ARTIFACTS` section for reusable discoveries.
 
 ## CP2 Failure Handling
 
-When a CP2 MCP call (`mcp__codex__codex` or `mcp__gemini__gemini`) fails, stop the phase immediately with `BLOCKED`.
+Failure handling rules, blocking reasons, evidence format, and the no-retry policy are canonical in `GATE.md`.
 
-Blocking reasons:
-
-- `permission-blocked`
-- `tool-unavailable`
-- `timeout`
-- `session-failed`
-- session instability
-- model error
-- `command line is too long` / prompt packaging failure
-
-Ask the human to retry or explicitly consent to an alternate route before any continuation.
-Do not retry the same tool, switch executors, auto-downgrade `SESSION_POLICY`, spawn subagents/Task/Agent fallback, dispatch alternate worker execution, or handle implementation directly without explicit human consent after the block.
-
-If the failure indicates `command line is too long`, tell the user to store long input in a repo-local file (or ask permission to create one) and re-run with path-based context, or explicitly consent to an alternate route.
-
-### Evidence format
-
-```text
-[Multi-Model Gate]
-Routing: CODEX | GEMINI | CROSS_VALIDATION
-Status: BLOCKED
-Reason: permission-blocked | tool-unavailable | timeout | session-failed
-Next action: ask human to retry or consent to alternate route
-```
-
-### CP4 after blocked execution
-
-CP4 does not run when CP2 blocks before executor output exists. Resolve the MCP failure or ask the user before attempting the phase again.
+CP4 does not run when CP2 blocks before executor output exists.
 
 ## CP3: Reconciliation
 
@@ -201,34 +124,11 @@ Integration checks here mean **build/test pipeline** checks, not the multi-model
 
 ## CP4: Phase Review
 
-Run CP4 as the reviewer step for the phase:
-- after CP3.5 integration checks complete
-- after CP3 when reconciliation was needed (then CP3.5 still runs before CP4)
-- directly after CP3.5 when no reconciliation was needed
-- directly after `Claude`-only tasks (CP3.5 may be a no-op)
+Run CP4 after CP3.5 integration checks complete (or directly after Claude-only tasks).
 
-Goal:
-- perform a phase review against the plan
-- verify whether the result satisfies the original user requirement, CP1 success criteria, and reviewer checklist
+CP4 reviews: original user request, CP1 success criteria, reviewer checklist, and integration results. Returns `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
 
-Required CP4 input:
-- original user request
-- CP1 phase summary
-- CP1 success criteria
-- reviewer checklist
-- integration check results
-- all files modified by CP2 and reconciled by CP3, if any
-
-CP4 rules:
-- review spec satisfaction only
-- do not review broad style, redundancy, or best practices unless they are in the phase checklist
-- return one of `PASS`, `PASS_WITH_DEBT`, or `FAIL`
-
-Output contract:
-- output the exact `# CP4 SPEC REVIEW COMPLETE` block
-- if `PASS`, the task is complete
-- if `PASS_WITH_DEBT`, the phase can integrate but debt must be listed
-- if `FAIL`, identify the missing or incorrect requirements and recommend the next action
+CP4 scope and outcomes are canonical in `review-chain.md`. Format block in `shared/protocol-threshold.md`.
 
 ## User Override
 
