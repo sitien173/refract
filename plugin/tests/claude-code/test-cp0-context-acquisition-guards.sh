@@ -108,4 +108,20 @@ fi
 echo "  [PASS]"
 echo ""
 
+echo "Test 10: Stellaris is documented as optional secondary CP0 source..."
+if ! rg -n 'stellaris.*optional|optional.*stellaris|stellaris.*secondary|secondary.*stellaris|stellaris.*parallel|parallel.*stellaris' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-stellaris.txt 2>/dev/null; then
+  echo "  [FAIL] Missing stellaris as optional/secondary/parallel CP0 source"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 11: Stellaris failure is explicitly non-blocking..."
+if ! rg -n 'stellaris.*NOT.*BLOCKED|[Ss]tellaris failure.*non-blocking|[Ss]tellaris failure does NOT' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-stellaris-nonblocking.txt 2>/dev/null; then
+  echo "  [FAIL] Missing stellaris non-blocking failure documentation"
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
 echo "=== CP0 context acquisition guard tests passed ==="

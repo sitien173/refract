@@ -40,11 +40,33 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 **Fail-closed:** `BLOCKED` on failure per `skills/coordinating-multi-model-work/checkpoints.md` CP0 section.
 
+---
+
+### Stellaris Code Search (`mcp__stellaris__search_code`, `mcp__stellaris__get_file_outline`, `mcp__stellaris__get_file_folded`, `mcp__stellaris__get_symbol`)
+
+**Purpose:** Optional secondary CP0 local code context retrieval using LanceDB + tree-sitter + FTS5 + vector search + RRF (Reciprocal Rank Fusion). Uses Voyage AI voyage-code-3 embeddings with optional Voyage/Cohere reranking.
+
+**Tools:**
+- `mcp__stellaris__search_code` — semantic code search (code-specific embeddings, AST-aware)
+- `mcp__stellaris__get_file_outline` — file structure with top-level symbols and line ranges
+- `mcp__stellaris__get_file_folded` — signatures + JSDoc under a token budget (no bodies)
+- `mcp__stellaris__get_symbol` — full source of one symbol with file context
+
+**Use when:**
+- CP0 local context acquisition alongside mandatory `codebase-retrieval` (run both in parallel)
+- Symbol-level precision needed (function signatures, class outlines, type definitions)
+- AST-aware search for code structure relationships
+- Token-efficient file exploration (outline → folded → symbol drill-down)
+
+**Auto-triggers:** symbol lookup, function signature, class hierarchy, type definition, code structure exploration
+
+**Not fail-closed:** Stellaris failure does NOT block CP0. Only `codebase-retrieval` failure triggers `BLOCKED`.
+
 ## Composition Patterns
 
 ### CP0 Context Retrieval
 ```
-context-retrieval via `codebase-retrieval` (mandatory current local code context retrieval) → Grok Search (only if external/current knowledge or research is required after local retrieval succeeds)
+codebase-retrieval (mandatory) + stellaris search_code (optional, parallel) → merge into CONTEXT_ARTIFACTS → Grok Search (only if external/current knowledge or research is required after local retrieval succeeds)
 ```
 
 ### Research Phase (Brainstorming)

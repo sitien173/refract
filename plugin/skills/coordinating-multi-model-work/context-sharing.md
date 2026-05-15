@@ -18,9 +18,9 @@ This workflow uses orchestrator-managed smart context sharing to keep worker pro
 ## Core Model
 
 1. CP0 decides whether `docs/wiki/` durable knowledge is useful, then selectively queries it when relevant.
-2. CP0 MUST run context-retrieval via `codebase-retrieval` to retrieve the minimum current local code context needed for routing before CP1 on every task, including trivial/current-file edits.
-3. If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, CP0 fail-closes with `BLOCKED` and stops before CP1; do not switch to file tools, Grok Search, or executors.
-4. The orchestrator stores the useful output as small reusable `CONTEXT_ARTIFACTS`.
+2. CP0 MUST run context-retrieval via `codebase-retrieval` to retrieve the minimum current local code context needed for routing before CP1 on every task, including trivial/current-file edits. Optionally run `stellaris search_code` in parallel as a secondary source for code-specific symbol-level precision (AST-aware, voyage-code-3 embeddings).
+3. If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, CP0 fail-closes with `BLOCKED` and stops before CP1; do not switch to file tools, Grok Search, or executors. Stellaris failure does NOT trigger `BLOCKED`.
+4. The orchestrator merges useful output from both sources into small reusable `CONTEXT_ARTIFACTS`.
 5. CP1 chooses `SESSION_POLICY` for the next executor turn: `FRESH` for Tier 1, or `CONTINUE` for Tier 3 when the next phase stays with the same worker and subsystem.
 6. CP2 uses a 3-tier prompt system:
    - Tier 1 initial call: `Task`, `Phase`, `Context`, `Files`, `Done When`, and full ERP v1.1

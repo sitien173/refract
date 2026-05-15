@@ -109,6 +109,8 @@ Static CP0 guard test:
 - Grok Search remains external/current-only
 - Active CP0 docs do not mention the legacy local tool
 - Architecture diagram includes CP0
+- Stellaris is documented as optional/secondary/parallel CP0 source
+- Stellaris failure is explicitly documented as non-blocking
 
 #### test-cp1-routing-guards.sh
 Static CP1 guard test:

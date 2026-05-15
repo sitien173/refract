@@ -34,21 +34,22 @@ The word "phase" appears in three distinct senses; do not conflate them:
 - Decide whether `docs/wiki/` durable knowledge is useful before local code retrieval.
 - Selectively consult `docs/wiki/` for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what the project knows, decided, or tried.
 - Skip wiki lookup for trivial edits, simple version bumps, formatting, and tasks answerable from current files.
-- MUST run context-retrieval via `codebase-retrieval` for local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks before CP1 on every task (including trivial/current-file tasks).
-- If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, immediately output `BLOCKED` and stop before CP1.
+- MUST run context-retrieval via `codebase-retrieval` for local semantic anchors, unfamiliar subsystems, architecture relationships, exact references, and stale wording checks before CP1 on every task (including trivial/current-file tasks). Optionally run `stellaris search_code` in parallel for code-specific symbol-level precision (AST-aware, voyage-code-3 embeddings, RRF fusion).
+- If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, immediately output `BLOCKED` and stop before CP1. Stellaris failure does NOT trigger `BLOCKED`.
 - Do not switch to file tools, Grok Search, or executors when `codebase-retrieval` fails.
 - Use Grok Search only when the task needs external/current knowledge or research, and only after mandatory local retrieval succeeds.
-- Normalize the useful output into small reusable `CONTEXT_ARTIFACTS`.
+- Merge useful output from both retrieval sources into small reusable `CONTEXT_ARTIFACTS`.
 - Treat wiki content as advisory and citation-backed; current files, tests, and current user request override it.
 - End CP0 as soon as the phase and likely owner are clear enough for CP1.
 
 CP0 tool matrix:
 
-| Need | Primary Tool | When to Trigger Grok Search | Fallback |
-| --- | --- | --- | --- |
-| Durable project knowledge / prior decisions | `docs/wiki/` selective lookup | Do not trigger Grok Search for project-local wiki lookup | Skip when uninitialized or irrelevant |
-| Local codebase context / references / architecture relationships | `codebase-retrieval` (mandatory before CP1) | Do not trigger Grok Search during mandatory local-context retrieval | `BLOCKED` (none; stop before CP1) |
-| External / real-world knowledge | Grok Search | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
+| Need | Primary Tool | Secondary Tool | When to Trigger Grok Search | Fallback |
+| --- | --- | --- | --- | --- |
+| Durable project knowledge / prior decisions | `docs/wiki/` selective lookup | — | Do not trigger Grok Search for project-local wiki lookup | Skip when uninitialized or irrelevant |
+| Local codebase context / references / architecture relationships | `codebase-retrieval` (mandatory before CP1) | `stellaris search_code` (optional, parallel) | Do not trigger Grok Search during mandatory local-context retrieval | `BLOCKED` for codebase-retrieval failure only; stellaris failure is non-blocking |
+| Symbol-level code precision / AST-aware structure | `stellaris search_code` + `get_file_outline` / `get_symbol` | — | Do not trigger Grok Search for local symbol lookup | Skip if stellaris unavailable |
+| External / real-world knowledge | Grok Search | — | When the task mentions "latest", "current", "best practice", an unknown library, or a raw error that needs external research | None |
 
 ## CP1: Phase Assessment & Routing
 

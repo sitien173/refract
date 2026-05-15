@@ -69,7 +69,7 @@ The routing and checkpoint rules live in `skills/coordinating-multi-model-work/`
 
 | Checkpoint | When | Purpose |
 |---|---|---|
-| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, mandatory `codebase-retrieval` for current local code context, then Grok Search only for external research; `codebase-retrieval` failure blocks before CP1 |
+| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, mandatory `codebase-retrieval` for current local code context (optionally `stellaris search_code` in parallel as secondary source), then Grok Search only for external research; `codebase-retrieval` failure blocks before CP1; stellaris failure is non-blocking |
 | CP1 | Immediately after CP0, before first executor call | Phase assessment and routing using the CP1 routing matrix |
 | CP2 | After CP1 when routed externally | External execution via Codex/Gemini/Cross-Validation with final file output |
 | CP3 | After CP2 when reconciliation is needed | Resolve external-model conflicts, gaps, and clarifications before CP4 |

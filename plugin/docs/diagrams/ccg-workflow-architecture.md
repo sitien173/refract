@@ -36,7 +36,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    START[User Request] --> CP0[CP0: Context Acquisition]
+    START[User Request] --> CP0[CP0: Context Acquisition<br/>codebase-retrieval + stellaris]
     CP0 --> ARTIFACTS[CP0 Context Artifacts]
     ARTIFACTS --> CP1[CP1: Phase Assessment & Routing]
     CP1 --> BUNDLE[Phase Context Bundle]
