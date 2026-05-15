@@ -82,21 +82,21 @@ Inputs:
 
 | Task Category | Examples | CP0 Context Tools | Model | Cross-Validation | Notes / Triggers |
 | --- | --- | --- | --- | --- | --- |
-| Backend / Logic / API | API endpoints, business logic, DB, auth | context-retrieval | Codex | No | Default implementation route |
-| Tests / CI / Terminal / Infra-DevOps | unit/integration/E2E tests, CI scripts, Docker, deploy scripts | context-retrieval | Codex | No | Terminal-Bench leader |
-| Large refactor (>=10 files or >1K LOC) | multi-package refactor, migrations | context-retrieval | Codex | No | 7-hr horizon validated |
-| Bug fix / Debugging / Performance | crashes, regressions, slow queries | context-retrieval | Codex | No | Snappy small + sustained deep |
-| Data / ML / Analytics | pipelines, queries, simple ML | context-retrieval | Codex | No | Logic-heavy |
-| UI components / CSS / animation / canvas / SVG | React/Vue components, Tailwind, motion | context-retrieval | Gemini | No | WebDev Arena leader |
-| Multimodal input -> code | screenshot/PDF/video/mock to code | context-retrieval | Gemini | No | Only multimodal frontier |
-| Large-context sweep (>200K tokens) | repo-wide analysis, long docs | context-retrieval | Gemini | No | 1M ctx, cheapest tier |
-| Visual regression / screen automation / OCR | snapshot diffs, screen scraping | context-retrieval | Gemini | No | ScreenSpot-Pro 72.7% |
-| Doc / spec extraction from PDFs / diagrams | requirement extraction | context-retrieval | Gemini | No | Document understanding |
-| Security / compliance / legal-sensitive code | auth, encryption, PII | context-retrieval | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
-| Architecture conflict / true multi-domain | UI+BE+data design, risky migration | context-retrieval | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
-| Docs / Comments / Coordination / Simple edits | README, typo, config | context-retrieval | Claude | No | Per user constraint |
-| Orchestration / Review / Integration / Planning | review, merge, plan | context-retrieval | Claude | No | Per user constraint |
-| Uncategorized / Ambiguous | unclear or spans many areas | context-retrieval + Grok Search if external research needed | Claude | No | Fail-closed: ask clarifying questions |
+| Backend / Logic / API | API endpoints, business logic, DB, auth | stellaris | Codex | No | Default implementation route |
+| Tests / CI / Terminal / Infra-DevOps | unit/integration/E2E tests, CI scripts, Docker, deploy scripts | stellaris | Codex | No | Terminal-Bench leader |
+| Large refactor (>=10 files or >1K LOC) | multi-package refactor, migrations | stellaris | Codex | No | 7-hr horizon validated |
+| Bug fix / Debugging / Performance | crashes, regressions, slow queries | stellaris | Codex | No | Snappy small + sustained deep |
+| Data / ML / Analytics | pipelines, queries, simple ML | stellaris | Codex | No | Logic-heavy |
+| UI components / CSS / animation / canvas / SVG | React/Vue components, Tailwind, motion | stellaris | Gemini | No | WebDev Arena leader |
+| Multimodal input -> code | screenshot/PDF/video/mock to code | stellaris | Gemini | No | Only multimodal frontier |
+| Large-context sweep (>200K tokens) | repo-wide analysis, long docs | stellaris | Gemini | No | 1M ctx, cheapest tier |
+| Visual regression / screen automation / OCR | snapshot diffs, screen scraping | stellaris | Gemini | No | ScreenSpot-Pro 72.7% |
+| Doc / spec extraction from PDFs / diagrams | requirement extraction | stellaris | Gemini | No | Document understanding |
+| Security / compliance / legal-sensitive code | auth, encryption, PII | stellaris | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
+| Architecture conflict / true multi-domain | UI+BE+data design, risky migration | stellaris | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
+| Docs / Comments / Coordination / Simple edits | README, typo, config | stellaris | Claude | No | Per user constraint |
+| Orchestration / Review / Integration / Planning | review, merge, plan | stellaris | Claude | No | Per user constraint |
+| Uncategorized / Ambiguous | unclear or spans many areas | stellaris + Grok Search if external research needed | Claude | No | Fail-closed: ask clarifying questions |
 
 ## Decision Guidelines
 

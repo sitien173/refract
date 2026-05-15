@@ -16,7 +16,7 @@ You have superpowers.
 
 **Core Rules:**
 1. **1% Rule:** If there is even a 1% chance a skill applies, use the Skill tool to load it before responding.
-2. **CP0 first:** Do minimal context acquisition before routing. Optionally check `docs/wiki/` for durable project knowledge, then MUST run context-retrieval via `codebase-retrieval` for current local code context before CP1 on every task (no trivial/current-file skip). Optionally run `stellaris search_code` in parallel as secondary source for code-specific symbol-level precision. If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; Do not switch to file tools, Grok Search, or executors. Stellaris failure does NOT trigger `BLOCKED`. Use Grok Search only for external/current research after mandatory local retrieval succeeds.
+2. **CP0 first:** Do minimal context acquisition before routing. Optionally check `docs/wiki/` for durable project knowledge, then MUST run stellaris via `search_code` for current local code context before CP1 on every task (no trivial/current-file skip). Use `get_file_outline`, `get_file_folded`, and `get_symbol` for token-efficient drill-down after initial search. If `stellaris search_code` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; Do not switch to file tools, Grok Search, or executors. Use Grok Search only for external/current research after mandatory local retrieval succeeds.
 3. **Claude is planner/reviewer/integrator:** Codex is the default executor; Gemini is only for UI-heavy phases.
 4. **Checkpoint Protocol:** CP1 Phase Assessment & Routing before the first executor call, including `Session-Policy` selection, CP2 External Execution when routing to external models, CP3 Reconciliation only after cross-validation or conflicting/non-trivial external feedback, and CP4 Phase Review after each phase.
 5. **Fail closed:** If Codex or Gemini MCP execution fails, output `BLOCKED` immediately and ask the human to retry or explicitly consent to an alternate route. Do not retry, switch executors, spawn subagents/Task/Agent fallback, or handle implementation directly without explicit human consent after the block.
@@ -29,7 +29,7 @@ You have superpowers.
 - Unresolved architecture conflict → CROSS_VALIDATION (multiple)
 - Planning/review/integration/docs/coordination → CLAUDE
 
-**Supplementary Tools (optional):** Grok Search/Tavily (research), Stellaris (secondary CP0 code search), Magic (UI components), Morphllm (bulk edits).
+**Supplementary Tools (optional):** Grok Search/Tavily (research), Magic (UI components), Morphllm (bulk edits).
 
 **Skill Namespace:** `superpowers-ccg:` — use Skill tool to load any skill by name.
 

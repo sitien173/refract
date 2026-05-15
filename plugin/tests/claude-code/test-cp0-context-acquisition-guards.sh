@@ -36,45 +36,39 @@ echo "  [PASS]"
 echo ""
 
 echo "Test 2: CP0 tool ordering is documented..."
-if ! rg -n 'context-retrieval.*Grok Search|Grok Search.*context-retrieval' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-order.txt 2>/dev/null; then
-  echo "  [FAIL] Missing context-retrieval + Grok Search CP0 ordering"
+if ! rg -n 'stellaris.*Grok Search|Grok Search.*stellaris' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-order.txt 2>/dev/null; then
+  echo "  [FAIL] Missing stellaris + Grok Search CP0 ordering"
   exit 1
 fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 3: Context-retrieval single-tool role is documented..."
-if ! rg -n 'codebase-retrieval.*semantic|semantic.*codebase-retrieval|codebase-retrieval.*local codebase|local codebase.*codebase-retrieval' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-codebase-retrieval.txt 2>/dev/null; then
-  echo "  [FAIL] Missing codebase-retrieval semantic/local codebase role"
-  exit 1
-fi
-LEGACY_CONTEXT_TOOL_PATTERN='codebase_''retrieve|codebase_''map|codebase_''grep'
-if rg -n "$LEGACY_CONTEXT_TOOL_PATTERN" "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-legacy-context-retrieval.txt 2>/dev/null; then
-  echo "  [FAIL] Active CP0 docs still mention obsolete context-retrieval tool names"
-  cat /tmp/cp0-guards-legacy-context-retrieval.txt
+echo "Test 3: Stellaris search_code role is documented..."
+if ! rg -n 'stellaris.*search_code.*local|stellaris.*search_code.*semantic|stellaris.*search_code.*code context|stellaris.*search_code.*mandatory|mandatory.*stellaris' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-stellaris-role.txt 2>/dev/null; then
+  echo "  [FAIL] Missing stellaris search_code local/semantic/mandatory role"
   exit 1
 fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 4: codebase-retrieval is mandatory before CP1..."
-if ! rg -n 'codebase-retrieval.*(mandatory|required|must)|\b(mandatory|required|must)\b.*codebase-retrieval' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-mandatory.txt 2>/dev/null; then
-  echo "  [FAIL] Missing mandatory codebase-retrieval wording"
+echo "Test 4: Stellaris is mandatory before CP1..."
+if ! rg -n 'stellaris.*(mandatory|required|[Mm][Uu][Ss][Tt])|\b(mandatory|required|MUST)\b.*stellaris' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-mandatory.txt 2>/dev/null; then
+  echo "  [FAIL] Missing mandatory stellaris wording"
   exit 1
 fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 5: codebase-retrieval fail-closed BLOCKED behavior is documented..."
-if ! rg -n 'codebase-retrieval.*(error|unavailable|permission-blocked|tool failure).*BLOCKED|BLOCKED.*codebase-retrieval|stop before CP1.*codebase-retrieval|codebase-retrieval.*stop before CP1' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-blocked.txt 2>/dev/null; then
-  echo "  [FAIL] Missing fail-closed BLOCKED behavior for codebase-retrieval failures"
+echo "Test 5: Stellaris fail-closed BLOCKED behavior is documented..."
+if ! rg -n 'stellaris.*(error|unavailable|permission-blocked|tool failure).*BLOCKED|BLOCKED.*stellaris|stop before CP1.*stellaris|stellaris.*stop before CP1' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-blocked.txt 2>/dev/null; then
+  echo "  [FAIL] Missing fail-closed BLOCKED behavior for stellaris failures"
   exit 1
 fi
 echo "  [PASS]"
 echo ""
 
 echo "Test 6: Active CP0 docs do not contain fail-open skip/fallback wording..."
-if rg -n -e 'skip[^[:cntrl:]\n]{0,40}context-retrieval' -e 'context-retrieval[^[:cntrl:]\n]{0,40}(when useful|optional)' -e 'fallback to[^[:cntrl:]\n]*(Grok Search|file tools|grep|glob|read tools)' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-fail-open.txt 2>/dev/null; then
+if rg -n -e 'skip[^[:cntrl:]\n]{0,40}stellaris' -e 'stellaris[^[:cntrl:]\n]{0,40}(when useful|optional)' -e 'fallback to[^[:cntrl:]\n]*(Grok Search|file tools|grep|glob|read tools)' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-fail-open.txt 2>/dev/null; then
   echo "  [FAIL] Active CP0 docs contain fail-open skip/fallback wording"
   cat /tmp/cp0-guards-fail-open.txt
   exit 1
@@ -90,17 +84,26 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 8: Active CP0 docs do not mention the legacy local tool..."
+echo "Test 8: Active CP0 docs do not mention legacy local tools..."
 LEGACY_LOCAL_TOOL_PATTERN='Aug''gie|aug''gie'
 if rg -n "$LEGACY_LOCAL_TOOL_PATTERN" "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-legacy-local-tool.txt 2>/dev/null; then
-  echo "  [FAIL] Active CP0 docs still mention the legacy local tool"
+  echo "  [FAIL] Active CP0 docs still mention a legacy local tool"
   cat /tmp/cp0-guards-legacy-local-tool.txt
   exit 1
 fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 9: Architecture diagram includes CP0 before CP1..."
+echo "Test 9: Active CP0 docs do not reference codebase-retrieval as mandatory..."
+if rg -n 'codebase-retrieval.*(mandatory|required|must)|mandatory.*codebase-retrieval|MUST.*codebase-retrieval' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-legacy-codebase-retrieval.txt 2>/dev/null; then
+  echo "  [FAIL] Active CP0 docs still reference codebase-retrieval as mandatory (replaced by stellaris)"
+  cat /tmp/cp0-guards-legacy-codebase-retrieval.txt
+  exit 1
+fi
+echo "  [PASS]"
+echo ""
+
+echo "Test 10: Architecture diagram includes CP0 before CP1..."
 if ! rg -n 'CP0: Context Acquisition.*CP1: Routing|START\[User Request\] --> CP0' "$REPO_ROOT/docs/diagrams/ccg-workflow-architecture.md" >/tmp/cp0-guards-diagram.txt 2>/dev/null; then
   echo "  [FAIL] Missing CP0 in architecture diagram"
   exit 1
@@ -108,17 +111,9 @@ fi
 echo "  [PASS]"
 echo ""
 
-echo "Test 10: Stellaris is documented as optional secondary CP0 source..."
-if ! rg -n 'stellaris.*optional|optional.*stellaris|stellaris.*secondary|secondary.*stellaris|stellaris.*parallel|parallel.*stellaris' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-stellaris.txt 2>/dev/null; then
-  echo "  [FAIL] Missing stellaris as optional/secondary/parallel CP0 source"
-  exit 1
-fi
-echo "  [PASS]"
-echo ""
-
-echo "Test 11: Stellaris failure is explicitly non-blocking..."
-if ! rg -n 'stellaris.*NOT.*BLOCKED|[Ss]tellaris failure.*non-blocking|[Ss]tellaris failure does NOT' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-stellaris-nonblocking.txt 2>/dev/null; then
-  echo "  [FAIL] Missing stellaris non-blocking failure documentation"
+echo "Test 11: Stellaris drill-down tools documented..."
+if ! rg -n 'get_file_outline|get_file_folded|get_symbol' "${ACTIVE_CP0_TARGETS[@]}" >/tmp/cp0-guards-stellaris-drilldown.txt 2>/dev/null; then
+  echo "  [FAIL] Missing stellaris drill-down tools (get_file_outline/get_file_folded/get_symbol)"
   exit 1
 fi
 echo "  [PASS]"

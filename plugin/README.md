@@ -69,7 +69,7 @@ The routing and checkpoint rules live in `skills/coordinating-multi-model-work/`
 
 | Checkpoint | When | Purpose |
 |---|---|---|
-| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, mandatory `codebase-retrieval` for current local code context (optionally `stellaris search_code` in parallel as secondary source), then Grok Search only for external research; `codebase-retrieval` failure blocks before CP1; stellaris failure is non-blocking |
+| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, mandatory stellaris `search_code` for current local code context (with `get_file_outline` / `get_file_folded` / `get_symbol` for drill-down), then Grok Search only for external research; stellaris failure blocks before CP1 |
 | CP1 | Immediately after CP0, before first executor call | Phase assessment and routing using the CP1 routing matrix |
 | CP2 | After CP1 when routed externally | External execution via Codex/Gemini/Cross-Validation with final file output |
 | CP3 | After CP2 when reconciliation is needed | Resolve external-model conflicts, gaps, and clarifications before CP4 |
@@ -83,7 +83,7 @@ The bundled `karpathy-llm-wiki` skill keeps optional durable project knowledge i
 - **Query** initialized wiki pages for prompts like "what do we know about X" and answer with `docs/wiki/...` citations.
 - **Lint** wiki structure, citations, and index links; deterministic fixes are separate from heuristic report-only findings.
 
-`docs/wiki/` is created only on first ingest. CP0 uses it selectively for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what was known/decided/tried. Trivial edits and tasks answerable from current files skip wiki lookup. CP0 still must run `codebase-retrieval` for current local code context before CP1; any `codebase-retrieval` failure outputs `BLOCKED` and stops. Current files, tests, and the current user request override wiki content.
+`docs/wiki/` is created only on first ingest. CP0 uses it selectively for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what was known/decided/tried. Trivial edits and tasks answerable from current files skip wiki lookup. CP0 still must run stellaris `search_code` for current local code context before CP1; any stellaris failure outputs `BLOCKED` and stops. Current files, tests, and the current user request override wiki content.
 
 ## Differences vs Superpowers (obra/superpowers)
 

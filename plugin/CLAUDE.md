@@ -16,7 +16,7 @@ Global orchestration rules, routing matrix, tiebreakers, and failure handling li
 
 Superpowers-CCG enhances Claude Code with CCG multi-model orchestration: Claude plans phases, routes execution, reviews outputs, and runs integration checks. Codex is the default executor for most implementation. Gemini handles UI, multimodal, and large-context visual/document phases.
 
-Core workflow uses strict CP0 (context-retrieval context) → CP1 (phase routing) → CP2 (external execution) → CP3 (reconciliation if needed) → CP4 (phase review: `PASS`, `PASS_WITH_DEBT`, or `FAIL`) → integration checks after every phase.
+Core workflow uses strict CP0 (stellaris context) → CP1 (phase routing) → CP2 (external execution) → CP3 (reconciliation if needed) → CP4 (phase review: `PASS`, `PASS_WITH_DEBT`, or `FAIL`) → integration checks after every phase.
 
 Key areas:
 - `skills/coordinating-multi-model-work/`: routing, checkpoints, CP protocol, external response format

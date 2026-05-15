@@ -26,8 +26,8 @@ description: "Executes written plans or active implementation phases one phase a
 ## Hard Rules
 
 - One active phase, one primary executor, one Claude review, one integration gate.
-- CP0 before CP1 is mandatory: after optional `docs/wiki/` decision, MUST run context-retrieval via `codebase-retrieval` for current local code context on every task.
-- If `codebase-retrieval` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; do not fall back to file tools, Grok Search, or executors.
+- CP0 before CP1 is mandatory: after optional `docs/wiki/` decision, MUST run stellaris via `search_code` for current local code context on every task.
+- If `stellaris search_code` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; do not fall back to file tools, Grok Search, or executors.
 - Do not re-explain the whole plan to workers.
 - Keep MCP `PROMPT` small; long guides/reports/research/specs/raw source must be file-backed repo artifacts (prefer `docs/plans/`) and passed by path.
 - Do not request draft handoffs; worker output must be final file edits.

@@ -9,7 +9,7 @@ Claude is the **planner, orchestrator, reviewer, and integrator**. It routes exe
 
 ### Checkpoint Protocol
 
-1. **CP0** - Optional selective `docs/wiki/` durable knowledge lookup, then mandatory context-retrieval via `codebase-retrieval` for current local codebase context before CP1 on every task (optionally run `stellaris search_code` in parallel as secondary source for code-specific symbol-level precision); if `codebase-retrieval` fails, output `BLOCKED` and stop (do not use file tools, Grok Search, or executors instead); stellaris failure does NOT trigger `BLOCKED`; Grok Search remains external/current-only after local retrieval succeeds
+1. **CP0** - Optional selective `docs/wiki/` durable knowledge lookup, then mandatory stellaris via `search_code` for current local codebase context before CP1 on every task (use `get_file_outline`, `get_file_folded`, `get_symbol` for token-efficient drill-down); if `stellaris search_code` fails, output `BLOCKED` and stop (do not use file tools, Grok Search, or executors instead); Grok Search remains external/current-only after local retrieval succeeds
 2. **CP1** - Phase assessment and routing using the routing matrix
 3. **CP2** - External execution via Codex/Gemini with final file output
 4. **CP3** - Reconciliation when needed (conflicts, gaps, clarifications)

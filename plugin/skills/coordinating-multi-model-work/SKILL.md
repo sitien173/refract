@@ -13,7 +13,7 @@ description: "Routes implementation phases to Codex first, Gemini only for UI-he
 
 ## Workflow
 
-1. Run CP0: gather minimal context per `checkpoints.md` CP0 section. Mandatory `codebase-retrieval` before CP1; `BLOCKED` on failure. Optionally run `stellaris search_code` in parallel (non-blocking).
+1. Run CP0: gather minimal context per `checkpoints.md` CP0 section. Mandatory stellaris `search_code` before CP1; `BLOCKED` on failure. Use `get_file_outline` / `get_file_folded` / `get_symbol` for token-efficient drill-down.
 2. Reduce work to one implementation phase with 2-4 related tasks, file set, reviewer checklist, and integration checks.
 3. Run CP1 and output the exact `# CP1 ROUTING DECISION` block.
 4. If routing is not Claude, run CP2 with the 3-tier prompt system and External Response Protocol v1.1.

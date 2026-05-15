@@ -28,45 +28,38 @@ Supplementary tools enhance Claude's orchestration capabilities. They are **opti
 
 ---
 
-### Context-Retrieval Code Search (mcp__context-retrieval__codebase-retrieval)
+### Stellaris Code Search (`mcp__stellaris__search_code`, `mcp__stellaris__get_file_outline`, `mcp__stellaris__get_file_folded`, `mcp__stellaris__get_symbol`)
 
-**Purpose:** Current local code context retrieval across a repository.
+**Purpose:** Mandatory CP0 local code context retrieval using LanceDB + tree-sitter + FTS5 + vector search + RRF (Reciprocal Rank Fusion). Uses Voyage AI voyage-code-3 embeddings with optional Voyage/Cohere reranking.
+
+**Tools:**
+- `mcp__stellaris__search_code` — semantic code search (code-specific embeddings, AST-aware, hybrid FTS5 + vector + RRF)
+- `mcp__stellaris__get_file_outline` — file structure with top-level symbols and line ranges (~200 tokens)
+- `mcp__stellaris__get_file_folded` — signatures + JSDoc under a token budget (no function bodies)
+- `mcp__stellaris__get_symbol` — full source of one symbol with file context (imports, siblings, warnings)
+
+**Recommended workflow:**
+1. `search_code` — find features by natural language description (mandatory CP0 step)
+2. `get_file_outline` — view symbols + imports/exports in matched files
+3. `get_file_folded` — signatures + JSDoc under token budget
+4. `get_symbol` — full source of specific symbol (only step that returns full code)
 
 **Use when:**
 - Mandatory CP0 local context acquisition before CP1 on every task
 - You need semantic anchors, architecture relationships, or exact references before routing
-
-**Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow, known identifier sweeps
-
-**Fail-closed:** `BLOCKED` on failure per `skills/coordinating-multi-model-work/checkpoints.md` CP0 section.
-
----
-
-### Stellaris Code Search (`mcp__stellaris__search_code`, `mcp__stellaris__get_file_outline`, `mcp__stellaris__get_file_folded`, `mcp__stellaris__get_symbol`)
-
-**Purpose:** Optional secondary CP0 local code context retrieval using LanceDB + tree-sitter + FTS5 + vector search + RRF (Reciprocal Rank Fusion). Uses Voyage AI voyage-code-3 embeddings with optional Voyage/Cohere reranking.
-
-**Tools:**
-- `mcp__stellaris__search_code` — semantic code search (code-specific embeddings, AST-aware)
-- `mcp__stellaris__get_file_outline` — file structure with top-level symbols and line ranges
-- `mcp__stellaris__get_file_folded` — signatures + JSDoc under a token budget (no bodies)
-- `mcp__stellaris__get_symbol` — full source of one symbol with file context
-
-**Use when:**
-- CP0 local context acquisition alongside mandatory `codebase-retrieval` (run both in parallel)
 - Symbol-level precision needed (function signatures, class outlines, type definitions)
 - AST-aware search for code structure relationships
 - Token-efficient file exploration (outline → folded → symbol drill-down)
 
-**Auto-triggers:** symbol lookup, function signature, class hierarchy, type definition, code structure exploration
+**Auto-triggers:** "where does", "what handles", "how is", unfamiliar subsystem or workflow, known identifier sweeps, symbol lookup, function signature, class hierarchy, type definition
 
-**Not fail-closed:** Stellaris failure does NOT block CP0. Only `codebase-retrieval` failure triggers `BLOCKED`.
+**Fail-closed:** `BLOCKED` on failure per `skills/coordinating-multi-model-work/checkpoints.md` CP0 section.
 
 ## Composition Patterns
 
 ### CP0 Context Retrieval
 ```
-codebase-retrieval (mandatory) + stellaris search_code (optional, parallel) → merge into CONTEXT_ARTIFACTS → Grok Search (only if external/current knowledge or research is required after local retrieval succeeds)
+stellaris search_code (mandatory current local code context retrieval) → get_file_outline / get_file_folded / get_symbol (token-efficient drill-down) → Grok Search (only if external/current knowledge or research is required after local retrieval succeeds)
 ```
 
 ### Research Phase (Brainstorming)
@@ -76,7 +69,7 @@ Grok Search (gather info) → Design output
 
 ### Complex Debugging
 ```
-context-retrieval via `codebase-retrieval` (mandatory local context) → Grok Search (search known issues if needed) → Fix
+stellaris search_code (mandatory local context) → Grok Search (search known issues if needed) → Fix
 ```
 
 ### Plan Writing
@@ -87,4 +80,3 @@ Grok Search (library docs if needed) → Plan output
 ## Integration with Primary Routing
 
 Supplementary tools operate at the **orchestrator level** — Claude uses them to enhance its own analysis before/alongside routing to Codex/Gemini. They do not replace the primary CP0→CP4 workflow in `skills/coordinating-multi-model-work/checkpoints.md`.
-

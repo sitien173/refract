@@ -102,15 +102,16 @@ Static skill authoring guard test:
 #### test-cp0-context-acquisition-guards.sh
 Static CP0 guard test:
 - CP0 is explicitly documented as the pre-routing stage
-- context-retrieval + Grok Search CP0 ordering exists in startup and workflow docs
-- `codebase-retrieval` is mandatory/required before CP1
-- `codebase-retrieval` fail-closed behavior is documented (`BLOCKED` and stop before CP1 on retrieval failure)
-- Active CP0 docs reject fail-open skip/fallback wording for context-retrieval
+- stellaris + Grok Search CP0 ordering exists in startup and workflow docs
+- stellaris `search_code` role is documented (local/semantic/mandatory)
+- stellaris is mandatory/required before CP1
+- stellaris fail-closed behavior is documented (`BLOCKED` and stop before CP1 on retrieval failure)
+- Active CP0 docs reject fail-open skip/fallback wording for stellaris
 - Grok Search remains external/current-only
-- Active CP0 docs do not mention the legacy local tool
+- Active CP0 docs do not mention legacy local tools (Auggie)
+- Active CP0 docs do not reference codebase-retrieval as mandatory (replaced by stellaris)
 - Architecture diagram includes CP0
-- Stellaris is documented as optional/secondary/parallel CP0 source
-- Stellaris failure is explicitly documented as non-blocking
+- Stellaris drill-down tools documented (get_file_outline/get_file_folded/get_symbol)
 
 #### test-cp1-routing-guards.sh
 Static CP1 guard test:
