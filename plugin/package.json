@@ -1,6 +1,6 @@
 {
   "name": "@nst173/superpowers-ccg",
-  "version": "1.5.16",
+  "version": "1.5.17",
   "description": "Superpowers CCG multi-model orchestration workflows for Claude Code.",
   "files": [
     "CLAUDE.md",

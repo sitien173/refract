@@ -10,6 +10,7 @@
 - CP3: Reconciliation
 - CP3.5: Integration Checks
 - CP4: Phase Review
+- CP4.5: Quality Review
 - User Override
 
 ## Overview
@@ -78,6 +79,15 @@ Output contract:
 - The response uses ERP v1.1 and lists every changed file in `## FILES MODIFIED`, but does not duplicate file content.
 - Optional `## CONTEXT ARTIFACTS` section for reusable discoveries.
 
+### Stellaris Index Refresh
+
+After receiving a successful CP2 response, parse every file path listed in the ERP `## FILES MODIFIED` section and call `mcp__stellaris__reindex_file` for each one. This keeps the stellaris index current for CP3.5 integration checks and subsequent CP0 lookups. External workers edit files via their own MCP write tools, which do not trigger Claude's PostToolUse hooks — so Claude must reindex explicitly.
+
+- Call `reindex_file` once per modified file, using absolute paths.
+- Run all reindex calls in parallel (no dependencies between files).
+- If `reindex_file` errors on a file, log and continue — do not block the phase.
+- Skip this step when CP2 reports no files modified or when CP2 failed/blocked.
+
 ## CP2 Failure Handling
 
 Failure handling rules, blocking reasons, evidence format, and the no-retry policy are canonical in `GATE.md`.
@@ -130,6 +140,55 @@ Run CP4 after CP3.5 integration checks complete (or directly after Claude-only t
 CP4 reviews: original user request, CP1 success criteria, reviewer checklist, and integration results. Returns `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
 
 CP4 scope and outcomes are canonical in `review-chain.md`. Format block in `shared/protocol-threshold.md`.
+
+## CP4.5: Quality Review
+
+Run CP4.5 after CP4 returns `PASS` or `PASS_WITH_DEBT`. Skip when CP4 returns `FAIL` (no point reviewing failed work).
+
+### Purpose
+
+CP4 answers "did the worker meet spec?" — CP4.5 answers "is the code good?" These are distinct concerns. CP4.5 catches quality issues that spec compliance alone misses.
+
+### Trigger
+
+CP4.5 runs on every phase. For docs/coordination phases, scope narrows to clarity and completeness only.
+
+### Execution
+
+Spawn a `cavecrew-reviewer` subagent with the list of files from `## FILES MODIFIED`. The reviewer checks:
+
+| Category | What to look for |
+| --- | --- |
+| Edge cases | Missing null/undefined checks, empty arrays, boundary conditions, off-by-one |
+| Error handling | Swallowed errors, missing catch blocks, unhelpful error messages, unhandled promise rejections |
+| Security | Injection vectors (SQL, XSS, command), hardcoded secrets, unsafe deserialization, missing input validation at system boundaries |
+| Naming & clarity | Misleading names, ambiguous abbreviations, functions doing more than their name says |
+| Duplication | Copy-pasted logic that should be extracted, near-identical blocks across files |
+| Correctness | Logic errors, race conditions, resource leaks, incorrect type narrowing |
+
+The reviewer subagent receives only the changed file paths (not full content — it reads files itself). Reviewer output uses `cavecrew-reviewer` compressed format: `path:line: <severity>: <problem>. <fix>.`
+
+### Severity levels
+
+| Severity | Meaning | Effect on phase |
+| --- | --- | --- |
+| `CRITICAL` | Bug, security vulnerability, data loss risk | Downgrades to `FAIL` |
+| `HIGH` | Likely bug or significant quality gap | Downgrades to `FAIL` |
+| `MEDIUM` | Code smell, missing edge case, unclear logic | Downgrades to `PASS_WITH_DEBT` (if was `PASS`) |
+| `LOW` | Minor naming, style, or minor duplication | No downgrade — noted only |
+
+### Outcome
+
+Claude evaluates reviewer findings against the phase context and outputs the `# CP4.5 QUALITY REVIEW COMPLETE` block.
+
+- If no `CRITICAL` or `HIGH` findings → phase result unchanged, note any `MEDIUM` debt.
+- If `CRITICAL` or `HIGH` findings exist → downgrade phase result. Dispatch Tier-2 fix to the same worker session for `HIGH`; for `CRITICAL`, ask user before proceeding.
+- Findings that contradict the user's explicit request or project conventions are discarded with explanation.
+
+### Skip conditions
+
+- User says "skip review" or "no quality review" → skip CP4.5 for that phase.
+- CP4 returned `FAIL` → skip (work needs redo, not polish).
 
 ## User Override
 

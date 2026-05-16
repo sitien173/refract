@@ -39,8 +39,9 @@ If any Codex or Gemini MCP call fails with timeout, tool-unavailable, session-fa
 If an MCP call returns `command line is too long` or equivalent prompt-packaging failure, output `BLOCKED` immediately and ask the human to retry with file-backed input or explicitly consent to an alternate route; do not retry/switch/spawn fallback/handle directly without explicit human consent after the block.
 Run CP3 Reconciliation only when at least one deterministic trigger holds: CP1 chose Cross-Validation; OR any returned ERP block has `Meets Spec? NO` or `WITH_DEBT`; OR any block has non-empty `## CLARIFICATIONS NEEDED`; OR any block has `NEXT STEPS / CONTINUATION = CONTINUE_SESSION`; OR two workers' `## FILES MODIFIED` lists overlap. Otherwise skip CP3 and proceed to CP3.5 integration checks. In CP3, parse every External Response Protocol block, resolve conflicts against the original requirement, decide whether to proceed, retry, continue, or ask the user, and do not apply file edits yourself. After CP3 (or directly after CP2 if CP3 was skipped), run the phase's declared build/lint/test integration checks before CP4.
 Run CP4 Phase Review after each phase, after CP3 when reconciliation is needed or directly after Claude-only / non-reconciled work. In CP4, use the original user request, the CP1 phase summary, reviewer checklist, integration results, and files changed by the workflow to judge phase satisfaction. Do not perform broad code quality, style, redundancy, or best-practice review in CP4 unless listed in the phase checklist.
+After CP4 returns `PASS` or `PASS_WITH_DEBT`, run CP4.5 Quality Review: spawn `cavecrew-reviewer` subagent on files from `## FILES MODIFIED` to check edge cases, error handling, security, naming, duplication, and correctness. Findings use severity: CRITICAL/HIGH → downgrade to FAIL, MEDIUM → downgrade PASS to PASS_WITH_DEBT, LOW → noted only. Output `# CP4.5 QUALITY REVIEW COMPLETE` block. Skip CP4.5 when CP4 returns FAIL or user says "skip review".
 
-Use the exact CP1, CP3, and CP4 formats below. Do not add extra narration inside those blocks. Use the literal headings and field labels exactly as written. Do not rename them. The CP1 route bullets must begin exactly with `- Model:`, `- Cross-Validation:`, `- Session-Policy:`, and `- Reason:`. Legacy `[CP1 Assessment]`, `[CP1] Routing`, `[CP3 Assessment]`, and `[CP3] Verified` formats are invalid.
+Use the exact CP1, CP3, CP4, and CP4.5 formats below. Do not add extra narration inside those blocks. Use the literal headings and field labels exactly as written. Do not rename them. The CP1 route bullets must begin exactly with `- Model:`, `- Cross-Validation:`, `- Session-Policy:`, and `- Reason:`. Legacy `[CP1 Assessment]`, `[CP1] Routing`, `[CP3 Assessment]`, and `[CP3] Verified` formats are invalid.
 
 # CP1 ROUTING DECISION
 
@@ -77,5 +78,24 @@ Ready for CP4
 - If PASS: Phase is complete
 - If PASS_WITH_DEBT: [Non-blocking debt + owner/timing]
 - If FAIL: [Specific gaps + suggested next action (e.g. re-run external model or ask user)]
+
+# CP4.5 QUALITY REVIEW COMPLETE
+
+## Findings
+| Severity | File:Line | Problem | Fix |
+|----------|-----------|---------|-----|
+| CRITICAL/HIGH/MEDIUM/LOW | path:line | ... | ... |
+
+(or "No findings" if clean)
+
+## Phase Result
+- **Original CP4 Status**: [PASS / PASS_WITH_DEBT from CP4]
+- **Final Status**: [PASS / PASS_WITH_DEBT / FAIL — after applying downgrades]
+- **Explanation**: [What changed and why, or "No downgrade"]
+
+## Action
+- If unchanged: Phase is complete
+- If downgraded to PASS_WITH_DEBT: [Debt items + owner/timing]
+- If downgraded to FAIL: [Specific CRITICAL/HIGH findings + next action]
 EOF
 

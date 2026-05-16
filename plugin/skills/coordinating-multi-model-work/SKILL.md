@@ -18,8 +18,10 @@ description: "Routes implementation phases to Codex first, Gemini only for UI-he
 3. Run CP1 and output the exact `# CP1 ROUTING DECISION` block.
 4. If routing is not Claude, run CP2 with the 3-tier prompt system and External Response Protocol v1.1.
 5. Workers edit files directly via MCP write tools and report `## FILES MODIFIED` without duplicating file content.
-6. Run CP3 only for cross-validation, failed/debt ERP output, clarifications, continuation requests, or overlapping worker edits.
-7. Run integration checks, then CP4 Phase Review with `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
+6. Parse `## FILES MODIFIED` from ERP and call `reindex_file` for each file (parallel, non-blocking on error). External workers bypass Claude's PostToolUse hooks.
+7. Run CP3 only for cross-validation, failed/debt ERP output, clarifications, continuation requests, or overlapping worker edits.
+8. Run integration checks, then CP4 Phase Review with `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
+9. Run CP4.5 Quality Review: spawn `cavecrew-reviewer` on `## FILES MODIFIED`, evaluate findings, output `# CP4.5 QUALITY REVIEW COMPLETE`. Can downgrade CP4 result based on severity.
 
 ## Hard Rules
 
