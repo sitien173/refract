@@ -4,7 +4,7 @@
 set -euo pipefail
 
 COMPACT_CONTEXT="$(cat <<'ENDOFCOMPACT'
-You have superpowers.
+You have superpowers. Your Role is planner, orchestrator, reviewer, integrator. Use English with tools/models. Make targeted changes. If context insufficient, ask.
 
 **Workflow: 3 gates — Plan → Execute → Review.**
 
