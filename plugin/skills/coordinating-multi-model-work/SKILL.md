@@ -128,6 +128,101 @@ Two sub-steps: **(a) Spec** → **(b) Quality**.
 - Next owner: Codex | Gemini | Claude
 ```
 
+## Session-Resume Artifacts
+
+Plans that span multiple Claude sessions persist three files alongside the plan doc. Resume artifacts are opt-in per plan; flat single-file plans need none.
+
+### `.sessions.json` — worker session cache
+
+```json
+{
+  "schema_version": 1,
+  "plan_path": "docs/plans/<slug>",
+  "current_phase": 2,
+  "phase_owner": "codex",
+  "sessions": {
+    "codex":  "<SESSION_ID or null>",
+    "gemini": "<SESSION_ID or null>"
+  },
+  "last_updated": "<ISO8601>"
+}
+```
+
+- Read on plan load + before every MCP call.
+- Write after every MCP call that returns a `SESSION_ID`.
+- No TTL. MCP rejection is the only invalidation signal.
+- Cache miss → fresh session allowed.
+- Cache present but rejected by MCP → `BLOCKED`. User clears the offending id (`rm` file or edit) before retry.
+- Gitignored — local worker state, not durable repo content.
+
+### `.handover.md` — terse resume pointer
+
+≤500 tokens. Frontmatter + body. Always Claude-authored at end of every turn that changes plan state (route set, phase change, BLOCKED, phase done). Hook cannot synthesize.
+
+```markdown
+---
+plan: docs/plans/<slug>
+updated_at: <ISO8601>
+current_phase: <N>
+status: ACTIVE   # ACTIVE | BLOCKED | DONE
+owner: claude | codex | gemini
+session_refs:
+  codex: <id or null>
+  gemini: <id or null>
+---
+
+## next_action
+<one to three sentences — exact next step>
+
+## read_first
+- docs/plans/<slug>/PHASE-<N>.md
+
+## blockers
+<empty | one line per blocker>
+
+## decisions_delta
+<empty | new decisions since prior handover>
+
+## uncommitted_files
+<empty | paths edited but not yet reviewed>
+```
+
+### `PHASE-<N>.md` — durable phase journal
+
+Created at phase start with Route skeleton. Finalized immediately after the Review gate.
+
+```markdown
+# Phase <N> — <title>
+
+- Status: ACTIVE | DONE | BLOCKED
+- Owner: Claude | Codex | Gemini
+- Started: <ISO>
+- Finished: <ISO>
+
+## Route
+- Reason: ...
+- Done When: ...
+- Files: ...
+
+## Files Modified
+| Action | Path | Change |
+
+## Review
+- Spec Status: ...
+- Quality Findings: ...
+- Final Status: ...
+
+## Decisions
+- <decision>: <rationale> → <impact>
+
+## Handoff
+<what next phase or new session must do>
+```
+
+### Resume rule
+
+New session reads `.handover.md` first, then only the files listed in `read_first`. Never scans every `PHASE-<N>.md` unless the handover is missing or corrupt.
+
 ## Hard Rules
 
 - One phase, one primary owner, one review.
