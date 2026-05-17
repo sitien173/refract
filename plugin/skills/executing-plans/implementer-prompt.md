@@ -1,81 +1,63 @@
 # Implementer Prompt Template
 
-Use this template from `executing-plans` when dispatching a worker for one implementation phase.
+Use this when dispatching a Codex or Gemini worker for one phase.
 
 ```text
 External model call:
-  target: Codex MCP or Gemini MCP (follow the CP1 route)
+  target: mcp__codex__codex (back-side) or mcp__gemini__gemini (front-side)
   description: "Implement Phase N: [phase name]"
   prompt: |
-    You own one implementation phase with 2-4 related tasks.
+    You own one implementation phase with 2–4 related tasks.
 
     ## Original User Request
-    [compressed original user request]
+    [one or two compressed sentences]
 
-    ## Task Context Bundle
-    TASK_ID: [stable bounded-task id]
+    ## Phase
+    [phase summary — one sentence]
 
-    ## Context Refs
-    - [artifact id]
-    - [artifact id]
-
-    ## Hydrated Context
-    [only the small context snippets needed to complete this phase]
-
-    ## CP1 Phase Summary
-    [FULL TEXT of the current phase only]
+    ## Context
+    [small snippets from existing files only — no pre-written implementation]
 
     ## Files
-    [explicit file set]
+    [flat list of file paths]
 
-    ## Success Criteria
-    [acceptance criteria]
-
-    ## Reviewer Checklist
-    [phase reviewer checklist]
-
-    ## Integration Checks
-    [exact commands or repo-state checks]
-
-    ## Prompt Discipline
-    - `Hydrated Context` = excerpts from existing files only. Never pre-write new file contents here.
-    - For scaffold or greenfield tasks: set Hydrated Context to existing directory structure only, or omit it.
-    - Keep Hydrated Context under 300 tokens.
-    - Keep Tier 1 initial prompts under 1500 tokens when practical.
-    - Same-phase Tier 2 follow-up prompts must send deltas only and stay under 400 tokens.
-    - Keep MCP `PROMPT` compact: long guides/research/reports/specs/raw source (>~8KB or likely >1500 tokens) must be stored in a repo-local artifact file (prefer `docs/plans/`) and referenced by path.
-    - Never paste long raw source text into the prompt or Hydrated Context; provide file paths and concise instructions so the worker reads from disk.
-    - `Files` = flat list of paths only, not file contents.
-    - Pre-writing implementation in the prompt defeats the purpose of routing. Let the worker implement.
+    ## Done When
+    - [acceptance criterion]
+    - [integration check command]
 
     ## Rules
-    - If anything is unclear, record it under CLARIFICATIONS NEEDED.
-    - Do not redesign the phase.
-    - Do not produce a reference prototype.
-    - Edit files directly with your write tools. The on-disk files are the source of truth — do not duplicate file content in the response.
+    - Edit files directly with your write tools; on-disk files are the source of truth.
+    - Do not duplicate file content in the response.
+    - Do not redesign the phase or produce a reference prototype.
+    - If anything is unclear, list it under CLARIFICATIONS NEEDED.
+    - Context excerpts are reference only — never pre-write new file contents in the prompt.
+    - Keep the response compact.
 
     ## Report Format
-    # EXTERNAL RESPONSE PROTOCOL v1.1
+    # EXTERNAL RESPONSE
 
     ## SUMMARY
     [one sentence]
 
     ## FILES MODIFIED
-    | Action  | File Path          | Description of Change |
-    |---------|--------------------|-----------------------|
-    | Created | src/...            | ...                   |
-    | Edited  | src/...            | ...                   |
-
-    ## CONTEXT ARTIFACTS
-    [optional reusable artifacts discovered or updated during execution]
+    | Action  | Path     | Change |
+    |---------|----------|--------|
+    | Created | src/...  | ...    |
+    | Edited  | src/...  | ...    |
 
     ## SPEC COMPLIANCE
-    - Meets Spec? YES / WITH_DEBT / NO
-    - Explanation: ...
+    - Meets Spec? YES | WITH_DEBT | NO
+    - Explanation: [one line]
 
     ## CLARIFICATIONS NEEDED
     None (or list questions)
 
-    ## NEXT STEPS / CONTINUATION
-    TASK_COMPLETE / CONTINUE_SESSION / HANDOVER_TO_CLAUDE
+    ## NEXT
+    TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
 ```
+
+## Prompt discipline
+
+- Keep prompt compact. Long input (>~8KB / >1500 tokens) → write to a repo file (prefer `docs/plans/`), pass the path.
+- Same-phase fix: reuse `SESSION_ID`, send `FIX:` + delta files + delta context only.
+- One phase, one owner. Never send the whole plan to a worker.

@@ -1,98 +1,55 @@
 # Superpowers-CCG
 
-Superpowers-CCG is a fork/enhanced variant of [obra/superpowers](https://github.com/obra/superpowers). It keeps the same skills-driven workflow and adds **CCG multi-model orchestration**: Claude plans phases, routes execution, reviews outputs, and runs integration checks. **Codex MCP** is the default executor for most implementation. **Gemini MCP** is reserved for UI-heavy phases.
+Multi-model orchestration plugin for [Claude Code](https://docs.claude.com/docs/claude-code). Claude plans, routes, reviews, and handles simple tasks. **Codex MCP** owns back-side (backend, database, system, infra). **Gemini MCP** owns front-side (UI, CSS, motion, multimodal). New features run CROSS_VALIDATION first.
 
 > **CCG** = **C**laude + **C**odex + **G**emini
 
-## What You Get
+## Workflow
 
-- **Claude as planner/reviewer/integrator**: Claude creates phases, routes execution, reviews output, and runs integration gates.
-- **Practical model routing (CCG)**: Codex first for most implementation. Gemini only for UI-heavy phases. Use **CROSS_VALIDATION** only for unresolved architecture conflicts.
-- **Phase review**: CP4 returns `PASS`, `PASS_WITH_DEBT`, or `FAIL` against the original request, CP1 success criteria, reviewer checklist, and integration checks.
-- **MCP tool integration**: external calls go through `mcp__codex__codex` and `mcp__gemini__gemini`.
-- **Collaboration checkpoints**: CP0/CP1/CP2/CP3/CP4 checkpoints are embedded in the main skills.
-- **Smart context sharing**: CP0 produces reusable context artifacts, CP1 builds budgeted phase-scoped bundles, and same-phase follow-ups send deltas only.
-- **Project-local LLM wiki**: optional `karpathy-llm-wiki` skill stores durable knowledge under `docs/wiki/` and lets CP0 selectively use it when useful.
-- **Fail-closed executor gate**: if Codex or Gemini MCP execution fails, the phase stops with `BLOCKED`, asks the human to retry or explicitly consent to an alternate route, and does not retry/switch/spawn fallback/handle directly without explicit consent after the block.
+Three gates: **Plan → Execute → Review**.
 
-## Platform Support
+1. **Plan** — for new features / ideation / proposals, run CROSS_VALIDATION first (Codex + Gemini, reconcile). Otherwise Claude gathers minimum context, defines one phase (2–4 tasks, file set, Done When), picks an owner by side.
+2. **Execute** — Claude (simple), Codex (back-side), or Gemini (front-side) does the work. Worker edits files via its MCP write tools and returns `## FILES MODIFIED`.
+3. **Review** — (a) Spec: Claude runs build/lint/test; (b) Quality scan on changed files (edge cases, error handling, security, naming, duplication, correctness). CRITICAL/HIGH → FAIL; MEDIUM → PASS_WITH_DEBT; LOW noted. Final status: `PASS`, `PASS_WITH_DEBT`, or `FAIL`. Quality scan skipped for docs-only / trivial Claude edits.
 
-Superpowers-CCG supports Claude Code through the Claude plugin, hooks, commands, agents, and skills in this repository.
+Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 
-## Quick Start
+## Routing (by side, no default)
 
-#### Prerequisites
+| Phase | Owner | MCP Tool |
+|---|---|---|
+| Simple/trivial — one-line edit, rename, doc tweak, clarification | Claude | none |
+| **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts, server-side tests | Codex | `mcp__codex__codex` |
+| **Front-side**: UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__gemini__gemini` |
+| New feature / ideation / proposal (before plan) | Cross-Validation → assign side | both |
+| Full-stack | Split into back-side + front-side sub-phases | both |
 
-- [Claude Code](https://docs.claude.com/docs/claude-code) installed (`claude --version`)
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated (`gemini --version`)
-- [Codex CLI](https://developers.openai.com/codex/quickstart) installed and authenticated (`codex --version`)
-- `uv` / `uvx` available
+User overrides ("use Codex" / "use Gemini" / "skip cross-validation") always win.
 
-#### Install
+## Install
 
 ```bash
 claude plugin marketplace add https://github.com/sitien173/superpowers-ccg
 claude plugin install superpowers-ccg
 ```
 
-#### MCP Setup
+### Prerequisites
+
+- [Claude Code](https://docs.claude.com/docs/claude-code) (`claude --version`)
+- [Codex CLI](https://developers.openai.com/codex/quickstart) (`codex --version`)
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini --version`)
+- `uv` / `uvx`
+
+### MCP setup
 
 ```bash
-# Backend and systems specialist
 claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/codexmcp.git codexmcp
-
-# UI-heavy specialist
 claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/geminimcp.git geminimcp
 ```
 
-## Using External Models
+## Fail-Closed Rule
 
-You normally do **not** call MCP tools manually. Tell Claude what you want, and the workflow decides when to invoke external models.
-
-- Default implementation: "Use Codex MCP and return the final files directly."
-- UI-heavy phase: "Use Gemini MCP for visual layout/components/styles/interactions and return the final files directly."
-- Cross-validation: "Do CROSS_VALIDATION for this design and reconcile conflicts."
-- CP4 phase review and integration checks run after every phase. Final summary happens after all phases.
-
-## Model Selection
-
-| Task type | Routing | MCP Tool |
-|---|---|---|
-| Backend, full-stack, tests, debugging, scripts, CI/CD, Docker, infrastructure | CODEX | `mcp__codex__codex` |
-| UI-heavy visual work (layout, styling, motion, canvas/SVG, interactions) | GEMINI | `mcp__gemini__gemini` |
-| Unresolved architecture conflict | CROSS_VALIDATION | multiple |
-| Planning, review, integration, docs, coordination | CLAUDE | none |
-
-The routing and checkpoint rules live in `skills/coordinating-multi-model-work/`.
-
-## Checkpoint Protocol
-
-| Checkpoint | When | Purpose |
-|---|---|---|
-| CP0 | Before CP1 | Selective `docs/wiki/` durable knowledge lookup when useful, mandatory stellaris `search_code` for current local code context (with `get_file_outline` / `get_file_folded` / `get_symbol` for drill-down), then Grok Search only for external research; stellaris failure blocks before CP1 |
-| CP1 | Immediately after CP0, before first executor call | Phase assessment and routing using the CP1 routing matrix |
-| CP2 | After CP1 when routed externally | External execution via Codex/Gemini/Cross-Validation with final file output |
-| CP3 | After CP2 when reconciliation is needed | Resolve external-model conflicts, gaps, and clarifications before CP4 |
-| CP4 | After each phase | Phase review against the original request, CP1 success criteria, reviewer checklist, and integration results |
-
-## Project-local LLM Wiki
-
-The bundled `karpathy-llm-wiki` skill keeps optional durable project knowledge in `docs/wiki/`:
-
-- **Ingest** source material into `docs/wiki/raw/<topic>/YYYY-MM-DD-slug.md`, then compile or update cited articles under `docs/wiki/<topic>/`.
-- **Query** initialized wiki pages for prompts like "what do we know about X" and answer with `docs/wiki/...` citations.
-- **Lint** wiki structure, citations, and index links; deterministic fixes are separate from heuristic report-only findings.
-
-`docs/wiki/` is created only on first ingest. CP0 uses it selectively for complex planning, architecture, debugging, refactors with prior decisions, or prompts asking what was known/decided/tried. Trivial edits and tasks answerable from current files skip wiki lookup. CP0 still must run stellaris `search_code` for current local code context before CP1; any stellaris failure outputs `BLOCKED` and stops. Current files, tests, and the current user request override wiki content.
-
-## Differences vs Superpowers (obra/superpowers)
-
-- **Claude as planner/reviewer/integrator**: Claude owns orchestration, review, integration, and final summary.
-- **Built-in multi-model routing** via MCP tools (Codex, Gemini).
-- **Codex-first routing**: most implementation routes to Codex; Gemini is for UI-heavy phases only.
-- **CP4 phase review**: review returns `PASS`, `PASS_WITH_DEBT`, or `FAIL`; broad style review is not part of the checkpoint flow unless the phase checklist requires it.
-- **CP checkpoints** enforce evidence-driven collaboration.
-- **Skill set changes** align the plugin with the CCG workflow.
+Any Codex/Gemini MCP failure (timeout, unavailable, session-failed, permission-blocked, prompt too long) → workflow outputs `BLOCKED` and asks for human consent before retry or alternate route. No silent fallback.
 
 ## Update
 
@@ -100,23 +57,14 @@ The bundled `karpathy-llm-wiki` skill keeps optional durable project knowledge i
 claude plugin update superpowers-ccg
 ```
 
-## Testing
-
-```bash
-./tests/claude-code/run-skill-tests.sh
-```
-
-See `tests/claude-code/README.md` for the Claude Code suite, including slower integration coverage.
-
 ## Support
 
-- Issues: https://github.com/sitien173/superpowers-ccg/issues
+Issues: https://github.com/sitien173/superpowers-ccg/issues
 
 ## Acknowledgments
 
-- [obra/superpowers](https://github.com/obra/superpowers) - Original Superpowers project
-- [BryanHoo/superpowers-ccg](https://github.com/BryanHoo/superpowers-ccg) - CCG collaboration fork
-- [fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow) - CCG workflow
-- [Danau5tin/multi-agent-coding-system](https://github.com/Danau5tin/multi-agent-coding-system) - Smart context-sharing inspiration
-- [GuDaStudio/geminimcp](https://github.com/GuDaStudio/geminimcp) - Gemini MCP
-- [GuDaStudio/codexmcp](https://github.com/GuDaStudio/codexmcp) - Codex MCP
+- [obra/superpowers](https://github.com/obra/superpowers) — original Superpowers
+- [BryanHoo/superpowers-ccg](https://github.com/BryanHoo/superpowers-ccg) — CCG fork
+- [fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow) — CCG workflow
+- [GuDaStudio/codexmcp](https://github.com/GuDaStudio/codexmcp) — Codex MCP
+- [GuDaStudio/geminimcp](https://github.com/GuDaStudio/geminimcp) — Gemini MCP

@@ -1,45 +1,137 @@
 ---
 name: coordinating-multi-model-work
-description: "Routes implementation phases to Codex first, Gemini only for UI-heavy work, with Claude as planner, reviewer, and integrator. Use for implementation, debugging, refactoring, UI work, APIs, databases, scripts, CI/CD, security work, or cross-model arbitration."
+description: "Three-gate workflow (Plan → Execute → Review). Claude handles simple tasks directly; Codex owns back-end/data/infra; Gemini owns front-end. CROSS_VALIDATION mandatory before planning any new feature or ideation."
 ---
 
 # Coordinating Multi-Model Work
 
-## Use When
+Claude plans, routes, reviews, integrates, and handles simple tasks directly. Codex owns back-side (backend, database, system, infra, CI/CD, scripts). Gemini owns front-side (UI, CSS, motion, canvas/SVG, multimodal, large-context sweeps). Workers edit files via their own write tools.
 
-- Work must be routed through CCG checkpoints.
-- A phase needs Codex, Gemini, Claude-only handling, or rare cross-validation.
-- User asks for implementation, debugging, refactoring, tests, CI/CD, infrastructure, UI-heavy work, or arbitration.
+## Gates
 
-## Workflow
+### 1. Plan
 
-1. Run CP0: gather minimal context per `checkpoints.md` CP0 section. Mandatory stellaris `search_code` before CP1; `BLOCKED` on failure. Use `get_file_outline` / `get_file_folded` / `get_symbol` for token-efficient drill-down.
-2. Reduce work to one implementation phase with 2-4 related tasks, file set, reviewer checklist, and integration checks.
-3. Run CP1 and output the exact `# CP1 ROUTING DECISION` block.
-4. If routing is not Claude, run CP2 with the 3-tier prompt system and External Response Protocol v1.1.
-5. Workers edit files directly via MCP write tools and report `## FILES MODIFIED` without duplicating file content.
-6. Parse `## FILES MODIFIED` from ERP and call `reindex_file` for each file (parallel, non-blocking on error). External workers bypass Claude's PostToolUse hooks.
-7. Run CP3 only for cross-validation, failed/debt ERP output, clarifications, continuation requests, or overlapping worker edits.
-8. Run integration checks, then CP4 Phase Review with `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
-9. Run CP4.5 Quality Review: spawn `cavecrew-reviewer` on `## FILES MODIFIED`, evaluate findings, output `# CP4.5 QUALITY REVIEW COMPLETE`. Can downgrade CP4 result based on severity.
+- **New feature / ideation / proposal** → run **CROSS_VALIDATION** first (Codex + Gemini narrow question), reconcile divergences, then plan. Mandatory before any planning gate for new work.
+- Gather minimum context needed to route. Use any tool that fits (Read, Grep, Glob, Bash, prior knowledge). Skip ceremony for trivial tasks.
+- Frame work as one phase with 2–4 related tasks, file set, and `Done When` checks (build/lint/test).
+- Decide owner by **side**, not by default. Output the routing block:
+
+```text
+# ROUTE
+- Owner: Claude | Codex | Gemini | Cross-Validation
+- Reason: [one line — back-side / front-side / simple / new-feature ideation]
+- Done When: [build/test/lint commands or acceptance bullets]
+```
+
+**Routing rules (side-based):**
+
+| Phase | Owner |
+|---|---|
+| Simple/trivial task Claude can do directly (one-line edit, rename, doc tweak, single-file fix, clarification) | Claude |
+| **Back-side**: backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests, debugging back-end | Codex |
+| **Front-side**: UI components, CSS, layout, motion, canvas/SVG, client-side interactions, multimodal input, front-end tests, >200K-token UI/doc sweeps | Gemini |
+| New feature, ideation, proposal, design exploration (before plan exists) | **Cross-Validation** (Codex + Gemini) → reconcile → assign side owner |
+| Full-stack phase spanning both sides | Split into back-side + front-side sub-phases; route each |
+| Ambiguous side | Ask user |
+
+### 2. Execute
+
+- **Claude-owned (simple):** edit directly with built-in tools.
+- **Codex / Gemini:** call `mcp__codex__codex` / `mcp__gemini__gemini`. Send: task summary, files, `Done When`, and minimum hydrated context (no full files, no pre-written implementation).
+- **Cross-Validation:** ask Codex and Gemini the same narrow question, compare answers, pick a direction, then route implementation to the side owner. Do not run two parallel implementations.
+- Worker edits files via MCP write tools. Response must list every changed file under `## FILES MODIFIED`.
+- **Same-phase fix:** reuse `SESSION_ID`, send only `FIX:` + delta context.
+- **MCP failure** (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED`, ask user. No retry, no executor switch, no Task/Agent fallback without explicit consent.
+- **Long input** (>~8KB, >1500 tokens): write to a repo file (prefer `docs/plans/`), pass the path. Never paste raw guides/specs/research into the MCP `PROMPT`.
+
+**Worker response format:**
+
+```text
+# EXTERNAL RESPONSE
+
+## SUMMARY
+[one sentence]
+
+## FILES MODIFIED
+| Action  | Path     | Change |
+|---------|----------|--------|
+| Created | src/...  | ...    |
+| Edited  | src/...  | ...    |
+
+## SPEC COMPLIANCE
+- Meets Spec? YES | WITH_DEBT | NO
+- Explanation: [one line]
+
+## NEXT
+TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
+```
+
+### 3. Review
+
+Two sub-steps: **(a) Spec** → **(b) Quality**.
+
+**(a) Spec & Integration**
+
+- Run the phase's `Done When` checks (build/lint/test).
+- Compare result vs original request, file scope, integration output.
+- Initial status: `PASS` | `PASS_WITH_DEBT` | `FAIL`.
+
+**(b) Quality scan**
+
+- Scan every file in `## FILES MODIFIED` for:
+
+| Category | Check |
+|---|---|
+| Edge cases | null/undefined, empty arrays, boundaries, off-by-one |
+| Error handling | swallowed errors, missing catch, unhandled rejections |
+| Security | injection (SQL/XSS/cmd), hardcoded secrets, unsafe deserialization, missing input validation at boundaries |
+| Naming & clarity | misleading names, ambiguous abbreviations, functions doing more than the name says |
+| Duplication | copy-paste logic that should be extracted |
+| Correctness | logic errors, race conditions, resource leaks, bad type narrowing |
+
+- Severity → status downgrade:
+
+| Severity | Effect |
+|---|---|
+| CRITICAL — bug, security vuln, data-loss risk | Force `FAIL` |
+| HIGH — likely bug or significant quality gap | Force `FAIL` |
+| MEDIUM — code smell, missed edge case, unclear logic | Downgrade `PASS` → `PASS_WITH_DEBT` |
+| LOW — minor naming, style, small duplication | Noted only |
+
+- Skip Quality scan when: phase is docs/coordination only, owner was Claude on a one-line/trivial edit, or `## FILES MODIFIED` is empty. Required for every Codex / Gemini phase.
+- Findings that contradict user's explicit request or project conventions are discarded with explanation.
+
+**Output:**
+
+```text
+# REVIEW
+- Spec Status: PASS | PASS_WITH_DEBT | FAIL
+- Quality Findings:
+  | Severity | path:line | Problem | Fix |
+  |----------|-----------|---------|-----|
+  (or "No findings" / "Skipped: <reason>")
+- Final Status: PASS | PASS_WITH_DEBT | FAIL
+- Explanation: [one line — what changed from spec status and why]
+- Next: [done | debt + owner | retry/clarify]
+```
+
+- `PASS_WITH_DEBT` requires explicit non-blocking debt note (spec or MEDIUM quality).
+- `FAIL` blocks completion: re-route the gap or ask user.
+- Quality scan stays scoped to the changed files — no broader audit.
+
+## Cross-Validation Output
+
+```text
+# CROSS-VALIDATION
+- Agreement: [shared conclusions]
+- Divergences: [one line per disagreement + chosen resolution]
+- Next owner: Codex | Gemini | Claude
+```
 
 ## Hard Rules
 
-- Codex is default for most implementation.
-- Gemini is only for UI-heavy visual layout, styling, motion, canvas/SVG, or complex interactions.
-- Claude handles planning, review, integration, docs, and clarification.
-- Cross-validation is rare; use only for unresolved architecture or true multi-domain uncertainty.
-- `HYDRATED_CONTEXT` ≤300 tokens hard cap. Budget details in `context-sharing.md`.
-- MCP failure → `BLOCKED` per `GATE.md`. No retry/switch/fallback without human consent.
-- Never accept prototype-only prose for implementation work.
-
-## References
-
-- `skills/coordinating-multi-model-work/checkpoints.md` — CP0-CP4 workflow and failure handling.
-- `skills/coordinating-multi-model-work/context-sharing.md` — canonical tier budgets, `SESSION_POLICY`, and Tier 3 freshness.
-- `skills/coordinating-multi-model-work/routing-decision.md` — CP1 routing framework.
-- `skills/coordinating-multi-model-work/GATE.md` — fail-closed multi-model gate.
-- `skills/coordinating-multi-model-work/INTEGRATION.md` — multi-model integration guide.
-- `skills/coordinating-multi-model-work/cross-validation.md` — arbitration-only cross-validation pattern.
-- `skills/coordinating-multi-model-work/review-chain.md` — CP4 review owner and outcomes.
-
+- One phase, one primary owner, one review.
+- No draft-then-reimplement handoffs — worker output is the final edit.
+- Cross-Validation is **mandatory for new features / ideation / proposals before planning**; otherwise skip it.
+- Route by side (back vs front), not by default — never auto-route to one executor.
+- User overrides ("use Codex" / "use Gemini" / "no external models" / "skip cross-validation") win.

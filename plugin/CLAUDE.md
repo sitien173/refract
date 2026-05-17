@@ -1,30 +1,35 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repo.
 
-Global orchestration rules, routing matrix, tiebreakers, and failure handling live in `rules/ccg-workflow.mdc` (always loaded). Phase discipline in `rules/bounded-tasks.mdc`. CP4 review scope in `rules/spec-review.mdc`.
+## Workflow
+
+3 gates: **Plan → Execute → Review**. Full details in `skills/coordinating-multi-model-work/SKILL.md`.
+
+- **Plan** — new feature / ideation → CROSS_VALIDATION first (Codex + Gemini). Otherwise gather minimum context, define one phase (2–4 tasks, file set, Done When), output `# ROUTE`.
+- **Execute** — route by side: Claude for simple tasks; Codex (`mcp__codex__codex`) for back-side (backend, database, system, infra); Gemini (`mcp__gemini__gemini`) for front-side (UI, CSS, motion, multimodal). No default executor.
+- **Review** — (a) Spec: run Done When checks; (b) Quality scan on changed files (edge cases, error handling, security, naming, duplication, correctness). Severity downgrade: CRITICAL/HIGH → FAIL, MEDIUM → PASS_WITH_DEBT, LOW noted. Skip Quality for docs-only / trivial Claude edits.
+
+## Hard Rules
+
+- MCP failure → `BLOCKED`, ask the human. No silent retry, executor switch, or Task/Agent fallback.
+- Long input → write to a repo file (prefer `docs/plans/`) and pass the path.
+- One phase, one owner, one review. No draft-then-reimplement handoffs.
+
+## Skills
+
+- `brainstorming` — new features / ideation (runs Cross-Validation first).
+- `writing-plans` — design → phase-based plan.
+- `executing-plans` — run plan one phase at a time.
+- `debugging-systematically` — evidence-based root cause.
+- `verifying-before-completion` — final check before reporting done.
+- `coordinating-multi-model-work` — canonical 3-gate workflow + routing.
+
+## Commands
+
+- `/brainstorm`, `/write-plan`, `/execute-plan`.
 
 ## Common Commands
 
-- Run skill tests: `./tests/claude-code/run-skill-tests.sh`
-- Run integration tests: `./tests/claude-code/run-skill-tests.sh --integration`
-- Run specific test: `./tests/claude-code/run-skill-tests.sh --test test-executing-plans.sh`
-- Update plugin: `claude plugin update superpowers-ccg`
-- Install MCPs: `claude mcp add codex ...` and `claude mcp add gemini ...` (see README.md)
-
-## High-Level Architecture
-
-Superpowers-CCG enhances Claude Code with CCG multi-model orchestration: Claude plans phases, routes execution, reviews outputs, and runs integration checks. Codex is the default executor for most implementation. Gemini handles UI, multimodal, and large-context visual/document phases.
-
-Core workflow uses strict CP0 (stellaris context) → CP1 (phase routing) → CP2 (external execution) → CP3 (reconciliation if needed) → CP4 (phase review: `PASS`, `PASS_WITH_DEBT`, or `FAIL`) → integration checks after every phase.
-
-Key areas:
-- `skills/coordinating-multi-model-work/`: routing, checkpoints, CP protocol, external response format
-- `skills/`: domain-specific skills (debugging-systematically, writing-plans, etc.)
-- `tests/claude-code/`: bash-based skill behavior verification using headless `claude -p`
-
-See README.md for full CCG details, model routing matrix, and differences from original superpowers. All changes must follow the checkpoint protocol in skills/coordinating-multi-model-work/SKILL.md.
-
-## Routing
-
-Routing matrix, tiebreakers, and new routing axes are in `rules/ccg-workflow.mdc` (always loaded). Detailed matrix with examples and session policy in `skills/coordinating-multi-model-work/routing-decision.md`.
+- Install MCPs: `claude mcp add codex ...` / `claude mcp add gemini ...` (see README.md).
+- Update plugin: `claude plugin update superpowers-ccg`.

@@ -3,41 +3,32 @@
 
 set -euo pipefail
 
-# Check if legacy skills directory exists and build warning
-warning_message=""
-legacy_skills_dir="${HOME}/.config/superpowers/skills"
-if [ -d "$legacy_skills_dir" ]; then
-    warning_message="\n\n<important-reminder>IN YOUR FIRST REPLY AFTER SEEING THIS MESSAGE YOU MUST TELL THE USER:⚠️ **WARNING:** Superpowers now uses Claude Code's skills system. Custom skills in ~/.config/superpowers/skills will not be read. Move custom skills to ~/.claude/skills instead. To make this message go away, remove ~/.config/superpowers/skills</important-reminder>"
-fi
-
-# Compact session context (~300 tokens); load full skills on demand via Skill tool
 COMPACT_CONTEXT="$(cat <<'ENDOFCOMPACT'
 You have superpowers.
 
-**Core Rules:**
-1. **1% Rule:** If there is even a 1% chance a skill applies, use the Skill tool to load it before responding.
-2. **CP0 first:** Do minimal context acquisition before routing. Optionally check `docs/wiki/` for durable project knowledge, then MUST run stellaris via `search_code` for current local code context before CP1 on every task (no trivial/current-file skip). Use `get_file_outline`, `get_file_folded`, and `get_symbol` for token-efficient drill-down after initial search. If `stellaris search_code` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; Do not switch to file tools, Grok Search, or executors. Use Grok Search only for external/current research after mandatory local retrieval succeeds.
-3. **Claude is planner/reviewer/integrator:** Codex is the default executor; Gemini is only for UI-heavy phases.
-4. **Checkpoint Protocol:** CP1 Phase Assessment & Routing before the first executor call, including `Session-Policy` selection, CP2 External Execution when routing to external models, CP3 Reconciliation only after cross-validation or conflicting/non-trivial external feedback, CP4 Phase Review after each phase, and CP4.5 Quality Review (spawn `cavecrew-reviewer` on changed files, severity-based downgrade).
-5. **Fail closed:** If Codex or Gemini MCP execution fails, output `BLOCKED` immediately and ask the human to retry or explicitly consent to an alternate route. Do not retry, switch executors, spawn subagents/Task/Agent fallback, or handle implementation directly without explicit human consent after the block.
-6. **Smart Context Budget:** Tier 1 initial call <=1500 tokens, Tier 2 same-phase follow-up <=400 tokens, Tier 3 cross-phase continuation <=600 tokens, HYDRATED_CONTEXT <=300 tokens hard cap.
-7. **Long input handling:** Never paste long guides/reports/specs/raw source into MCP `PROMPT` or `HYDRATED_CONTEXT`; store long material in repo-local files (prefer `docs/plans/`) and pass file paths plus concise instructions.
+**Workflow: 3 gates — Plan → Execute → Review.**
 
-**Multi-Model Routing:**
-- Most implementation (backend, full-stack, tests, debugging, scripts, CI/CD, infrastructure) → CODEX (`mcp__codex__codex`)
-- UI-heavy visual phases (layout, styling, motion, canvas/SVG, interactions) → GEMINI (`mcp__gemini__gemini`)
-- Unresolved architecture conflict → CROSS_VALIDATION (multiple)
-- Planning/review/integration/docs/coordination → CLAUDE
+1. **Plan.** New feature / ideation / proposal → run CROSS_VALIDATION first (Codex + Gemini narrow question), reconcile, then plan. Otherwise gather minimum context with whatever tool fits. Define one phase: 2-4 tasks, file set, Done When. Output the `# ROUTE` block.
+2. **Execute.** Route by side (no default):
+   - Claude — simple tasks Claude can do directly (one-line edits, doc tweaks, rename, clarification).
+   - Codex (`mcp__codex__codex`) — **back-side**: backend, API, business logic, database, system, infra, CI/CD, scripts, server-side tests.
+   - Gemini (`mcp__gemini__gemini`) — **front-side**: UI, CSS, motion, canvas/SVG, client interactions, multimodal input, large-context UI/doc sweeps.
+   - Cross-Validation — new-feature ideation only; reconcile then assign side owner.
+   Worker edits files via its own MCP write tools and returns `## FILES MODIFIED`.
+3. **Review.** Two sub-steps:
+   - (a) Spec: run Done When checks; PASS / PASS_WITH_DEBT / FAIL.
+   - (b) Quality scan on `## FILES MODIFIED` (edge cases, error handling, security, naming, duplication, correctness). CRITICAL/HIGH → force FAIL; MEDIUM → downgrade PASS to PASS_WITH_DEBT; LOW noted. Skip for docs-only or trivial Claude direct edits; required for Codex/Gemini phases.
+   Output `# REVIEW` with Spec Status, Quality Findings, Final Status.
 
-**Supplementary Tools (optional):** Grok Search/Tavily (research), Magic (UI components), Morphllm (bulk edits).
+**Hard rules:**
+- MCP failure (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED`, ask the human. No retry, no executor switch, no Task/Agent fallback without explicit consent.
+- Long input (>~8KB / >1500 tokens) → write to a repo file (prefer `docs/plans/`), pass the path. Never paste raw guides/specs/research into the MCP `PROMPT`.
+- One phase, one owner, one review. No draft-then-reimplement handoffs.
 
-**Skill Namespace:** `superpowers-ccg:` — use Skill tool to load any skill by name.
-
-**To learn more:** Load `superpowers-ccg:coordinating-multi-model-work` for the full orchestration workflow.
+**Skill namespace:** `superpowers-ccg:` — use Skill tool to load `coordinating-multi-model-work` for full details.
 ENDOFCOMPACT
 )"
 
-# Escape outputs for JSON using pure bash
 escape_for_json() {
     local input="$1"
     local output=""
@@ -57,17 +48,14 @@ escape_for_json() {
 }
 
 compact_escaped=$(escape_for_json "$COMPACT_CONTEXT")
-warning_escaped=$(escape_for_json "$warning_message")
 
-# Output context injection as JSON
 cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": "<EXTREMELY_IMPORTANT>\n${compact_escaped}\n\n${warning_escaped}\n</EXTREMELY_IMPORTANT>"
+    "additionalContext": "<EXTREMELY_IMPORTANT>\n${compact_escaped}\n</EXTREMELY_IMPORTANT>"
   }
 }
 EOF
 
 exit 0
-

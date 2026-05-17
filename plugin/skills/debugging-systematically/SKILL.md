@@ -1,36 +1,39 @@
 ---
 name: debugging-systematically
-description: "Systematic debugging with evidence-based root cause analysis. Use when fixing bugs, investigating failures, diagnosing test failures, tracing unexpected behavior, or handling debug, fix, error, failing, broken, and investigate requests."
+description: "Evidence-based root-cause debugging. Use for bugs, test failures, regressions, unexpected behaviour, or any debug/fix/error/broken/investigate request."
 ---
 
 # Debugging Systematically
 
 ## Use When
 
-- User reports a bug, failure, broken behavior, or test failure.
+- User reports a bug, failure, broken behaviour, or test failure.
 - Root cause is unknown.
-- A fix needs evidence rather than guessing.
+- Fix needs evidence, not guessing.
 
 ## Workflow
 
-1. Reproduce: collect exact steps, error messages, stack traces, logs, and minimal failing case.
-2. Gather evidence: read relevant paths, test outputs, CI logs, and CP0 via mandatory stellaris `search_code` before CP1.
-3. Form 2-3 ranked, testable hypotheses.
-4. Test the most likely hypothesis first with targeted checks, assertions, logs, or focused tests.
-5. Fix the root cause with the smallest safe change.
-6. Verify with the failing repro, targeted tests, and regression checks.
+1. **Reproduce.** Collect exact steps, error messages, stack traces, logs, minimal failing case.
+2. **Gather evidence.** Read relevant paths, test output, CI logs. Use Grep/Glob/Read freely.
+3. **Hypothesise.** Form 2–3 ranked, testable hypotheses.
+4. **Test the top hypothesis.** Targeted assertions, logs, or focused tests confirm or eliminate it.
+5. **Fix root cause.** Smallest safe change. Route by side via `coordinating-multi-model-work`:
+   - Claude — single-file or trivial fix.
+   - Codex — back-side bug (logic, database, system, infra).
+   - Gemini — front-side bug (UI, CSS, layout, interaction).
+6. **Verify.** Failing repro now passes; targeted tests + regression checks pass.
 
 ## Hard Rules
 
 - Evidence over intuition.
 - Fix root cause, not symptoms.
-- Do not make broad refactors while debugging unless required by the root cause.
-- For complex debugging, route through CP0-CP4 and use Codex by default.
-- Use cross-validation only if the failure mode stays ambiguous after one pass.
-- Do not report completion before verification.
+- No broad refactor while debugging unless the root cause demands it.
+- No completion claim before verification.
 
 ## References
 
-- `skills/shared/protocol-threshold.md` — CP0-CP4 routing and review gates.
-- `skills/shared/supplementary-tools.md` — mandatory CP0 stellaris `search_code` fail-closed rule and Grok Search external/current-only guidance.
-- `skills/verifying-before-completion/SKILL.md` — final verification rules.
+- `skills/coordinating-multi-model-work/SKILL.md` — routing and Review gate.
+- `skills/debugging-systematically/root-cause-tracing.md` — root-cause technique.
+- `skills/debugging-systematically/condition-based-waiting.md` — flake debugging.
+- `skills/debugging-systematically/defense-in-depth.md` — guard layers.
+- `skills/verifying-before-completion/SKILL.md` — final verification.

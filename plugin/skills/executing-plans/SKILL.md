@@ -1,45 +1,42 @@
 ---
 name: executing-plans
-description: "Executes written plans or active implementation phases one phase at a time with CP1 routing, external execution when needed, CP4 review, and integration gates. Use when executing a plan, executing a current phase, continuing a phase, or same-session implementation is requested."
+description: "Executes a written plan one phase at a time with Plan → Execute → Review gates. Use when running a plan, advancing the current phase, or continuing implementation in this session."
 ---
 
 # Executing Plans
 
 ## Use When
 
-- User wants a written implementation plan executed in this session or a dedicated session.
-- User asks to run the current phase, continue the active phase, or use same-session execution.
-- Work should advance one selected implementation phase at a time.
+- A plan document exists and user wants it executed.
+- User asks to run the current phase or continue the active phase.
+- Work should advance one phase at a time.
 
 ## Workflow
 
-1. Read the plan once and select the explicitly requested phase, active phase, or next phase not already reflected in the repo.
-2. Validate only that phase: 2-4 related tasks, owner, file set, acceptance criteria, reviewer checklist, and integration checks.
-3. Apply CP1 to the active phase and build one phase-scoped context bundle.
-4. Route to one primary executor: Codex by default, Gemini only for UI-heavy work, or Claude when the plan or user says so.
-5. Reuse the same worker `SESSION_ID` only for fixes on the same phase; send deltas only.
-6. Workers edit files directly via MCP write tools and return External Response Protocol v1.1 with `## FILES MODIFIED`.
-7. Claude runs CP4 phase review and returns `PASS`, `PASS_WITH_DEBT`, or `FAIL`.
-8. Run integration checks after each reviewed phase and before moving on.
-9. Run final integration and summary only after all phases complete.
+1. Read the plan once. Select the requested phase, active phase, or next phase not yet in the repo.
+2. Validate the phase: 2–4 related tasks, owner, file set, acceptance criteria, integration checks.
+3. **Plan gate** — apply `coordinating-multi-model-work` Plan gate to the active phase; output the `# ROUTE` block.
+4. **Execute gate** — route by side:
+   - `claude` — simple tasks; edit directly.
+   - `codex` (`mcp__codex__codex`) — back-side phases.
+   - `gemini` (`mcp__gemini__gemini`) — front-side phases.
+   Worker edits files via its MCP write tools and returns `## FILES MODIFIED`. Reuse `SESSION_ID` for same-phase fixes; send deltas only.
+5. **Review gate** — (a) run the phase's integration checks for Spec status; (b) Quality scan on `## FILES MODIFIED` (skip for trivial Claude edits / docs-only). Output `# REVIEW` with Spec Status, Quality Findings, Final Status.
+6. Move to the next phase only after Review passes.
+7. After the last phase, hand off to `verifying-before-completion` for final verification.
 
 ## Hard Rules
 
-- One active phase, one primary executor, one Claude review, one integration gate.
-- CP0 before CP1 is mandatory: after optional `docs/wiki/` decision, MUST run stellaris via `search_code` for current local code context on every task.
-- If `stellaris search_code` errors, is unavailable, permission-blocked, or returns tool failure, output `BLOCKED` and stop before CP1; do not fall back to file tools, Grok Search, or executors.
-- Do not re-explain the whole plan to workers.
-- Keep MCP `PROMPT` small; long guides/reports/research/specs/raw source must be file-backed repo artifacts (prefer `docs/plans/`) and passed by path.
-- Do not request draft handoffs; worker output must be final file edits.
-- Use `CROSS_VALIDATION` only when the current phase cannot be narrowed to one owner.
-- If any Codex or Gemini MCP call fails, output `BLOCKED` immediately, ask the human to retry or explicitly consent to an alternate route, and do not retry/switch/spawn subagents-Task-Agent fallback/handle implementation directly without explicit human consent after the block.
-- If MCP fails with `command line is too long`, treat it as prompt-packaging failure: keep `BLOCKED`, ask the human to retry with file-backed input or explicitly consent to an alternate route, and do not retry/switch/spawn fallback/handle directly without explicit human consent after the block.
-- Do not produce the project final summary until all phases complete.
+- One active phase, one owner, one review.
+- Route by side; no default executor.
+- Do not re-explain the whole plan to workers — phase-scoped prompts only.
+- Long input (>~8KB / >1500 tokens) → write to a repo file (prefer `docs/plans/`), pass the path.
+- MCP failure → output `BLOCKED`, ask the human. No silent retry, switch, or Task/Agent fallback.
+- Worker output is the final edit. No draft handoffs.
+- Final project summary only after all phases complete.
 
 ## References
 
-- `skills/executing-plans/implementer-prompt.md` — phase executor prompt template and ERP format.
-- `skills/coordinating-multi-model-work/checkpoints.md` — phase gates and failure handling.
-- `skills/coordinating-multi-model-work/context-sharing.md` — phase-scoped context and tier prompts.
-- `skills/coordinating-multi-model-work/routing-decision.md` — CP1 routing.
-- `skills/verifying-before-completion/SKILL.md` — final verification before completion.
+- `skills/coordinating-multi-model-work/SKILL.md` — 3-gate workflow and routing.
+- `skills/executing-plans/implementer-prompt.md` — phase executor prompt template.
+- `skills/verifying-before-completion/SKILL.md` — final verification.

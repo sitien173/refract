@@ -3,99 +3,57 @@
 
 set -euo pipefail
 
-# Print the reminder as literal text so markdown backticks never trigger shell execution.
 cat <<'EOF'
-[CP Protocol Threshold]
+[CCG Workflow — 3 gates]
 
-Before the first executor call, do minimal CP0 context acquisition: decide if selective `docs/wiki/` durable knowledge lookup is useful, use it only for complex planning/architecture/debugging/refactors or prompts asking what was known/decided/tried, then MUST run stellaris via `search_code` for current local context before CP1 on every task (no trivial/current-file skip). Use `get_file_outline`, `get_file_folded`, and `get_symbol` for token-efficient drill-down after initial search. If `stellaris search_code` errors, is unavailable, permission-blocked, or returns tool failure, immediately output `BLOCKED` and stop before CP1. Do not switch to file tools, Grok Search, or executors. Use Grok Search only for external/current research after mandatory local retrieval succeeds.
-Normalize wiki findings as `wiki/relevant`, `wiki/decisions`, `wiki/conflicts`, or `wiki/sources`; wiki is advisory and citation-backed, while current files/tests and the current user request override it. Do not dump full wiki pages into worker prompts; keep `HYDRATED_CONTEXT` <= 300 tokens.
-Immediately after CP0 completes, run CP1 Phase Assessment & Routing using the original user request and the CP0 context artifacts, then choose `Session-Policy` and the right prompt tier for the next implementation phase.
-CP1 routing guide:
-| Task Category | Model | Cross-Validation | Notes / Triggers |
-|---|---|---|---|
-| Backend / Logic / API | Codex | No | Default implementation route |
-| Tests / CI / Terminal / Infra-DevOps | Codex | No | Terminal-Bench leader |
-| Large refactor (>=10 files or >1K LOC) | Codex | No | 7-hr horizon |
-| Bug fix / Debugging / Performance | Codex | No | Snappy small + sustained deep |
-| Data / ML / Analytics | Codex | No | Logic-heavy |
-| UI components / CSS / animation / canvas / SVG | Gemini | No | WebDev Arena leader |
-| Multimodal input -> code | Gemini | No | Only multimodal frontier |
-| Large-context sweep (>200K tokens) | Gemini | No | 1M ctx, cheapest tier |
-| Visual regression / screen automation / OCR | Gemini | No | ScreenSpot-Pro 72.7% |
-| Doc / spec extraction from PDFs / diagrams | Gemini | No | Document understanding |
-| Security / compliance / legal-sensitive code | Codex | No (mandatory Claude review gate) | Hallucination guardrail |
-| Architecture conflict / multi-domain | Cross-Validation (Codex + Gemini) | Yes | Rare arbitration |
-| Docs / Comments / Coordination / Simple edits | Claude | No | Per user constraint |
-| Orchestration / Review / Integration / Planning | Claude | No | Per user constraint |
-| Uncategorized / Ambiguous | Claude | No | Fail-closed; clarify |
-New routing axes: context-size (>200K) -> Gemini; multimodal input -> Gemini; horizon length (>1 hour autonomous chain) -> Codex.
-Tiebreaker order: (1) Hallucination-sensitive -> Codex + Claude review gate, (2) Multimodal input -> Gemini, (3) Context >200K -> Gemini, (4) UI-dominant -> Gemini, (5) Else -> Codex.
-If the request is unclear or incomplete, route to Claude, output the CP1 block below, and then immediately ask clarifying questions.
-If CP1 routes to Gemini, Codex, or Cross-Validation, run CP2 External Execution using the 3-tier prompt system: Tier 1 initial call for fresh sessions, Tier 2 for same-phase follow-up fixes, and Tier 3 for cross-phase continuation when `Session-Policy` is `CONTINUE`. Reuse the same worker `SESSION_ID` for Tier 2 fixes on that phase or Tier 3 continuation on a related phase, and send deltas only when continuing. Workers edit files directly via MCP write tools and respond using External Response Protocol v1.1; the response lists `## FILES MODIFIED` without duplicating file content.
-Smart context budget: Tier 1 initial call <= 1500 tokens, Tier 2 same-phase follow-up <= 400 tokens, Tier 3 cross-phase continuation <= 600 tokens, `HYDRATED_CONTEXT` <= 300 tokens hard cap. If over budget, narrow the phase or shrink the hydrated snippets. Never pre-write new implementation inside `HYDRATED_CONTEXT`.
-For CP2 prompts, keep MCP `PROMPT` small: never paste long guides/research/reports/specs/raw source into `PROMPT` or `HYDRATED_CONTEXT`. Put long material in repo-local artifact files (prefer `docs/plans/` or the task's existing input/output file), then pass file paths plus short summary/instructions so the worker reads from disk.
-If user-provided long text is needed and no suitable file exists, create a local artifact file first, then prompt with its path.
-If any Codex or Gemini MCP call fails with timeout, tool-unavailable, session-failed, session/tool instability, model error, or permission-blocked, output `BLOCKED` immediately and ask the human to retry or explicitly consent to an alternate route. Do not retry, switch executors, spawn subagents/Task/Agent fallback, or handle implementation directly without explicit human consent after the block.
-If an MCP call returns `command line is too long` or equivalent prompt-packaging failure, output `BLOCKED` immediately and ask the human to retry with file-backed input or explicitly consent to an alternate route; do not retry/switch/spawn fallback/handle directly without explicit human consent after the block.
-Run CP3 Reconciliation only when at least one deterministic trigger holds: CP1 chose Cross-Validation; OR any returned ERP block has `Meets Spec? NO` or `WITH_DEBT`; OR any block has non-empty `## CLARIFICATIONS NEEDED`; OR any block has `NEXT STEPS / CONTINUATION = CONTINUE_SESSION`; OR two workers' `## FILES MODIFIED` lists overlap. Otherwise skip CP3 and proceed to CP3.5 integration checks. In CP3, parse every External Response Protocol block, resolve conflicts against the original requirement, decide whether to proceed, retry, continue, or ask the user, and do not apply file edits yourself. After CP3 (or directly after CP2 if CP3 was skipped), run the phase's declared build/lint/test integration checks before CP4.
-Run CP4 Phase Review after each phase, after CP3 when reconciliation is needed or directly after Claude-only / non-reconciled work. In CP4, use the original user request, the CP1 phase summary, reviewer checklist, integration results, and files changed by the workflow to judge phase satisfaction. Do not perform broad code quality, style, redundancy, or best-practice review in CP4 unless listed in the phase checklist.
-After CP4 returns `PASS` or `PASS_WITH_DEBT`, run CP4.5 Quality Review: spawn `cavecrew-reviewer` subagent on files from `## FILES MODIFIED` to check edge cases, error handling, security, naming, duplication, and correctness. Findings use severity: CRITICAL/HIGH → downgrade to FAIL, MEDIUM → downgrade PASS to PASS_WITH_DEBT, LOW → noted only. Output `# CP4.5 QUALITY REVIEW COMPLETE` block. Skip CP4.5 when CP4 returns FAIL or user says "skip review".
+Use Plan → Execute → Review for any implementation work.
 
-Use the exact CP1, CP3, CP4, and CP4.5 formats below. Do not add extra narration inside those blocks. Use the literal headings and field labels exactly as written. Do not rename them. The CP1 route bullets must begin exactly with `- Model:`, `- Cross-Validation:`, `- Session-Policy:`, and `- Reason:`. Legacy `[CP1 Assessment]`, `[CP1] Routing`, `[CP3 Assessment]`, and `[CP3] Verified` formats are invalid.
+1. **Plan.** New feature / ideation / proposal → CROSS_VALIDATION first (Codex + Gemini narrow question, reconcile, then plan). Otherwise gather minimum context with whatever tool fits. Define one phase: 2-4 tasks, file set, Done When. Output:
 
-# CP1 ROUTING DECISION
+# ROUTE
+- Owner: Claude | Codex | Gemini | Cross-Validation
+- Reason: [one line — back-side / front-side / simple / new-feature ideation]
+- Done When: [commands or acceptance bullets]
 
-## Task Summary
-[One-sentence English summary of the phase]
+Routing by side (no default):
+- Claude — simple tasks handled directly (one-line edit, rename, doc tweak, clarification).
+- Codex — back-side: backend, API, logic, database, system, infra, CI/CD, scripts, server-side tests.
+- Gemini — front-side: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps.
+- Cross-Validation — mandatory for new features / ideation / proposals before planning; reconcile, then assign side owner.
+- Full-stack phase → split into back-side + front-side sub-phases. Ambiguous side → ask user.
 
-## Route
-- Model: Gemini / Codex / Cross-Validation (Codex + Gemini) / Claude
-- Cross-Validation: Yes / No
-- Session-Policy: CONTINUE / FRESH
-- Reason: [short 1-line justification]
+2. **Execute.** Claude edits directly for simple tasks. Otherwise invoke `mcp__codex__codex` (back-side) or `mcp__gemini__gemini` (front-side). For Cross-Validation: ask both the same narrow question, reconcile divergences, then route implementation to one side owner. Worker returns:
 
-## Next Action
-[Proceed to CP2 with the chosen model(s) OR handle directly OR ask user]
+# EXTERNAL RESPONSE
+## SUMMARY
+[one sentence]
+## FILES MODIFIED
+| Action | Path | Change |
+## SPEC COMPLIANCE
+- Meets Spec? YES | WITH_DEBT | NO
+- Explanation: ...
+## NEXT
+TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
 
-# CP3 RECONCILIATION COMPLETE
+Same-phase fix: reuse `SESSION_ID`, send `FIX:` + delta only.
 
-## Summary
-[One-sentence summary of what was merged/applied]
+3. **Review.** Two sub-steps:
+   (a) Spec — run Done When checks (build/lint/test).
+   (b) Quality scan on `## FILES MODIFIED` — edge cases, error handling, security, naming, duplication, correctness. CRITICAL/HIGH → force FAIL; MEDIUM → downgrade PASS to PASS_WITH_DEBT; LOW noted only. Skip for docs-only / trivial Claude direct edits; required for every Codex / Gemini phase.
 
-## Changes Applied
-- [List of files created/edited/deleted]
+Output:
 
-## Status
-Ready for CP4
+# REVIEW
+- Spec Status: PASS | PASS_WITH_DEBT | FAIL
+- Quality Findings:
+  | Severity | path:line | Problem | Fix |
+  (or "No findings" / "Skipped: <reason>")
+- Final Status: PASS | PASS_WITH_DEBT | FAIL
+- Explanation: [one line]
+- Next: [done | debt + owner | retry/clarify]
 
-# CP4 SPEC REVIEW COMPLETE
-
-## Result
-- **Status**: PASS / PASS_WITH_DEBT / FAIL
-- **Explanation**: [Clear, concise explanation]
-
-## Recommendation
-- If PASS: Phase is complete
-- If PASS_WITH_DEBT: [Non-blocking debt + owner/timing]
-- If FAIL: [Specific gaps + suggested next action (e.g. re-run external model or ask user)]
-
-# CP4.5 QUALITY REVIEW COMPLETE
-
-## Findings
-| Severity | File:Line | Problem | Fix |
-|----------|-----------|---------|-----|
-| CRITICAL/HIGH/MEDIUM/LOW | path:line | ... | ... |
-
-(or "No findings" if clean)
-
-## Phase Result
-- **Original CP4 Status**: [PASS / PASS_WITH_DEBT from CP4]
-- **Final Status**: [PASS / PASS_WITH_DEBT / FAIL — after applying downgrades]
-- **Explanation**: [What changed and why, or "No downgrade"]
-
-## Action
-- If unchanged: Phase is complete
-- If downgraded to PASS_WITH_DEBT: [Debt items + owner/timing]
-- If downgraded to FAIL: [Specific CRITICAL/HIGH findings + next action]
+Hard rules:
+- MCP failure (timeout, unavailable, session-failed, permission-blocked, prompt too long) → `BLOCKED`, ask the human. No retry, no executor switch, no Task/Agent fallback without explicit consent.
+- Long input (>~8KB / >1500 tokens) → write to a repo file (prefer `docs/plans/`), pass the path. Never paste raw guides/specs/research into the MCP `PROMPT`.
+- One phase, one owner, one review. No draft-then-reimplement handoffs.
 EOF
-
