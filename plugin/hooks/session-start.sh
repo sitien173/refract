@@ -6,6 +6,17 @@ set -euo pipefail
 COMPACT_CONTEXT="$(cat <<'ENDOFCOMPACT'
 You have superpowers. Your Role is planner, orchestrator, reviewer, integrator. Use English with tools/models. Make targeted changes. If context insufficient, ask.
 
+**MANDATORY skill load before first Plan or Execute action this session:**
+- Call `Skill` tool with `superpowers-ccg:coordinating-multi-model-work` (canonical 3-gate workflow + routing + resume artifacts).
+- Call `Skill` tool with `superpowers-ccg:writing-plans` before any plan-writing.
+- Call `Skill` tool with `superpowers-ccg:executing-plans` before any phase execution.
+- Compact summary below is a pointer only; the Skill body is authoritative.
+
+**Resume-first protocol:**
+- If a `<RESUME>` block follows this context, treat it as an active plan signal. Read `.handover.md` and every file listed in `read_first` BEFORE proposing a new plan or executing a phase. Honor cached `SESSION_ID`s in `.sessions.json`.
+- If user requests plan/execute work and `docs/plans/<slug>/.handover.md` with `status: ACTIVE` exists for that topic, resume that plan instead of starting a new one.
+- Never silently start fresh when an ACTIVE handover exists for the same topic — ask the user if unsure.
+
 **Workflow: 3 gates — Plan → Execute → Review.**
 
 1. **Plan.** New feature / ideation / proposal → run CROSS_VALIDATION first (Codex + Gemini narrow question), reconcile, then plan. Otherwise gather minimum context with whatever tool fits. Define one phase: 2-4 tasks, file set, Done When. Output the `# ROUTE` block.
@@ -24,8 +35,9 @@ You have superpowers. Your Role is planner, orchestrator, reviewer, integrator. 
 - MCP failure (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED`, ask the human. No retry, no executor switch, no Task/Agent fallback without explicit consent.
 - Long input (>~8KB / >1500 tokens) → write to a repo file (prefer `docs/plans/`), pass the path. Never paste raw guides/specs/research into the MCP `PROMPT`.
 - One phase, one owner, one review. No draft-then-reimplement handoffs.
+- After any Codex/Gemini MCP call that returns `SESSION_ID`, write it to `<plan-dir>/.sessions.json`. After any plan-state change, rewrite `<plan-dir>/.handover.md`.
 
-**Skill namespace:** `superpowers-ccg:` — use Skill tool to load `coordinating-multi-model-work` for full details.
+**Skill namespace:** `superpowers-ccg:` — Skill load is mandatory per the directives above, not optional.
 ENDOFCOMPACT
 )"
 
