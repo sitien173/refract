@@ -1,6 +1,6 @@
 # Implementer Prompt Template
 
-Use this when dispatching a Codex or Gemini worker for one phase.
+Use when dispatching Codex or Gemini worker for one phase.
 
 ```text
 External model call:
@@ -58,6 +58,6 @@ External model call:
 
 ## Prompt discipline
 
-- Keep prompt compact. Long input (>~8KB / >1500 tokens) → write to a repo file (prefer `docs/plans/`), pass the path.
+- Keep prompt compact. Long input (>~8KB / >1500 tokens) → write to repo file (prefer `docs/plans/`), pass path.
 - Same-phase fix: reuse `SESSION_ID`, send `FIX:` + delta files + delta context only.
-- One phase, one owner. Never send the whole plan to a worker.
+- One phase, one owner. Never send whole plan to worker.

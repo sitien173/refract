@@ -5,16 +5,16 @@ description: "Three-gate workflow (Plan → Execute → Review). Claude handles 
 
 # Coordinating Multi-Model Work
 
-Claude plans, routes, reviews, integrates, and handles simple tasks directly. Codex owns back-side (backend, database, system, infra, CI/CD, scripts). Gemini owns front-side (UI, CSS, motion, canvas/SVG, multimodal, large-context sweeps). Workers edit files via their own write tools.
+Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex owns back-side (backend, database, system, infra, CI/CD, scripts). Gemini owns front-side (UI, CSS, motion, canvas/SVG, multimodal, large-context sweeps). Workers edit files via own write tools.
 
 ## Gates
 
 ### 1. Plan
 
 - **New feature / ideation / proposal** → run **CROSS_VALIDATION** first (Codex + Gemini narrow question), reconcile divergences, then plan. Mandatory before any planning gate for new work.
-- Gather minimum context needed to route. Use any tool that fits (Read, Grep, Glob, Bash, prior knowledge). Skip ceremony for trivial tasks.
-- Frame work as one phase with 2–4 related tasks, file set, and `Done When` checks (build/lint/test).
-- Decide owner by **side**, not by default. Output the routing block:
+- Gather minimum context needed to route. Use any fitting tool (Read, Grep, Glob, Bash, prior knowledge). Skip ceremony for trivial tasks.
+- Frame work as one phase: 2–4 related tasks, file set, `Done When` checks (build/lint/test).
+- Decide owner by **side**, not default. Output routing block:
 
 ```text
 # ROUTE
@@ -27,8 +27,8 @@ Claude plans, routes, reviews, integrates, and handles simple tasks directly. Co
 
 | Phase | Owner |
 |---|---|
-| Simple/trivial task Claude can do directly (one-line edit, rename, doc tweak, single-file fix, clarification) | Claude |
-| **Back-side**: backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests, debugging back-end | Codex |
+| Simple/trivial task Claude handles directly (one-line edit, rename, doc tweak, single-file fix, clarification) | Claude |
+| **Back-side**: backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests, back-end debugging | Codex |
 | **Front-side**: UI components, CSS, layout, motion, canvas/SVG, client-side interactions, multimodal input, front-end tests, >200K-token UI/doc sweeps | Gemini |
 | New feature, ideation, proposal, design exploration (before plan exists) | **Cross-Validation** (Codex + Gemini) → reconcile → assign side owner |
 | Full-stack phase spanning both sides | Split into back-side + front-side sub-phases; route each |
@@ -37,12 +37,12 @@ Claude plans, routes, reviews, integrates, and handles simple tasks directly. Co
 ### 2. Execute
 
 - **Claude-owned (simple):** edit directly with built-in tools.
-- **Codex / Gemini:** call `mcp__codex__codex` / `mcp__gemini__gemini`. Send: task summary, files, `Done When`, and minimum hydrated context (no full files, no pre-written implementation).
-- **Cross-Validation:** ask Codex and Gemini the same narrow question, compare answers, pick a direction, then route implementation to the side owner. Do not run two parallel implementations.
+- **Codex / Gemini:** call `mcp__codex__codex` / `mcp__gemini__gemini`. Send: task summary, files, `Done When`, minimum hydrated context (no full files, no pre-written implementation).
+- **Cross-Validation:** ask Codex and Gemini same narrow question, compare answers, pick direction, route implementation to side owner. No two parallel implementations.
 - Worker edits files via MCP write tools. Response must list every changed file under `## FILES MODIFIED`.
 - **Same-phase fix:** reuse `SESSION_ID`, send only `FIX:` + delta context.
 - **MCP failure** (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED`, ask user. No retry, no executor switch, no Task/Agent fallback without explicit consent.
-- **Long input** (>~8KB, >1500 tokens): write to a repo file (prefer `docs/plans/`), pass the path. Never paste raw guides/specs/research into the MCP `PROMPT`.
+- **Long input** (>~8KB, >1500 tokens): write to repo file (prefer `docs/plans/`), pass path. Never paste raw guides/specs/research into MCP `PROMPT`.
 
 **Worker response format:**
 
@@ -72,7 +72,7 @@ Two sub-steps: **(a) Spec** → **(b) Quality**.
 
 **(a) Spec & Integration**
 
-- Run the phase's `Done When` checks (build/lint/test).
+- Run phase's `Done When` checks (build/lint/test).
 - Compare result vs original request, file scope, integration output.
 - Initial status: `PASS` | `PASS_WITH_DEBT` | `FAIL`.
 
@@ -85,7 +85,7 @@ Two sub-steps: **(a) Spec** → **(b) Quality**.
 | Edge cases | null/undefined, empty arrays, boundaries, off-by-one |
 | Error handling | swallowed errors, missing catch, unhandled rejections |
 | Security | injection (SQL/XSS/cmd), hardcoded secrets, unsafe deserialization, missing input validation at boundaries |
-| Naming & clarity | misleading names, ambiguous abbreviations, functions doing more than the name says |
+| Naming & clarity | misleading names, ambiguous abbreviations, functions doing more than name says |
 | Duplication | copy-paste logic that should be extracted |
 | Correctness | logic errors, race conditions, resource leaks, bad type narrowing |
 
@@ -98,8 +98,8 @@ Two sub-steps: **(a) Spec** → **(b) Quality**.
 | MEDIUM — code smell, missed edge case, unclear logic | Downgrade `PASS` → `PASS_WITH_DEBT` |
 | LOW — minor naming, style, small duplication | Noted only |
 
-- Skip Quality scan when: phase is docs/coordination only, owner was Claude on a one-line/trivial edit, or `## FILES MODIFIED` is empty. Required for every Codex / Gemini phase.
-- Findings that contradict user's explicit request or project conventions are discarded with explanation.
+- Skip Quality scan when: phase is docs/coordination only, owner was Claude on one-line/trivial edit, or `## FILES MODIFIED` empty. Required for every Codex / Gemini phase.
+- Findings contradicting user's explicit request or project conventions discarded with explanation.
 
 **Output:**
 
@@ -116,8 +116,8 @@ Two sub-steps: **(a) Spec** → **(b) Quality**.
 ```
 
 - `PASS_WITH_DEBT` requires explicit non-blocking debt note (spec or MEDIUM quality).
-- `FAIL` blocks completion: re-route the gap or ask user.
-- Quality scan stays scoped to the changed files — no broader audit.
+- `FAIL` blocks completion: re-route gap or ask user.
+- Quality scan stays scoped to changed files — no broader audit.
 
 ## Cross-Validation Output
 
@@ -130,7 +130,7 @@ Two sub-steps: **(a) Spec** → **(b) Quality**.
 
 ## Session-Resume Artifacts
 
-Plans that span multiple Claude sessions persist three files alongside the plan doc. Resume artifacts are opt-in per plan; flat single-file plans need none.
+Plans spanning multiple Claude sessions persist three files alongside plan doc. Resume artifacts opt-in per plan; flat single-file plans need none.
 
 ### `.sessions.json` — worker session cache
 
@@ -149,15 +149,15 @@ Plans that span multiple Claude sessions persist three files alongside the plan 
 ```
 
 - Read on plan load + before every MCP call.
-- Write after every MCP call that returns a `SESSION_ID`.
-- No TTL. MCP rejection is the only invalidation signal.
+- Write after every MCP call returning `SESSION_ID`.
+- No TTL. MCP rejection only invalidation signal.
 - Cache miss → fresh session allowed.
-- Cache present but rejected by MCP → `BLOCKED`. User clears the offending id (`rm` file or edit) before retry.
+- Cache present but MCP rejects → `BLOCKED`. User clears offending id (`rm` file or edit) before retry.
 - Gitignored — local worker state, not durable repo content.
 
 ### `.handover.md` — terse resume pointer
 
-≤500 tokens. Frontmatter + body. Always Claude-authored at end of every turn that changes plan state (route set, phase change, BLOCKED, phase done). Hook cannot synthesize.
+≤500 tokens. Frontmatter + body. Always Claude-authored at end of every turn changing plan state (route set, phase change, BLOCKED, phase done). Hook cannot synthesize.
 
 ```markdown
 ---
@@ -189,7 +189,7 @@ session_refs:
 
 ### `PHASE-<N>.md` — durable phase journal
 
-Created at phase start with Route skeleton. Finalized immediately after the Review gate.
+Created at phase start with Route skeleton. Finalized immediately after Review gate.
 
 ```markdown
 # Phase <N> — <title>
@@ -221,12 +221,12 @@ Created at phase start with Route skeleton. Finalized immediately after the Revi
 
 ### Resume rule
 
-New session reads `.handover.md` first, then only the files listed in `read_first`. Never scans every `PHASE-<N>.md` unless the handover is missing or corrupt.
+New session reads `.handover.md` first, then only files listed in `read_first`. Never scans every `PHASE-<N>.md` unless handover missing or corrupt.
 
 ## Hard Rules
 
 - One phase, one primary owner, one review.
-- No draft-then-reimplement handoffs — worker output is the final edit.
-- Cross-Validation is **mandatory for new features / ideation / proposals before planning**; otherwise skip it.
-- Route by side (back vs front), not by default — never auto-route to one executor.
+- No draft-then-reimplement handoffs — worker output is final edit.
+- Cross-Validation **mandatory for new features / ideation / proposals before planning**; otherwise skip.
+- Route by side (back vs front), not default — never auto-route to one executor.
 - User overrides ("use Codex" / "use Gemini" / "no external models" / "skip cross-validation") win.

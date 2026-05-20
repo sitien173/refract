@@ -7,8 +7,8 @@ description: "Evidence-based root-cause debugging. Use for bugs, test failures, 
 
 ## Use When
 
-- User reports a bug, failure, broken behaviour, or test failure.
-- Root cause is unknown.
+- User reports bug, failure, broken behaviour, or test failure.
+- Root cause unknown.
 - Fix needs evidence, not guessing.
 
 ## Workflow
@@ -16,7 +16,7 @@ description: "Evidence-based root-cause debugging. Use for bugs, test failures, 
 1. **Reproduce.** Collect exact steps, error messages, stack traces, logs, minimal failing case.
 2. **Gather evidence.** Read relevant paths, test output, CI logs. Use Grep/Glob/Read freely.
 3. **Hypothesise.** Form 2–3 ranked, testable hypotheses.
-4. **Test the top hypothesis.** Targeted assertions, logs, or focused tests confirm or eliminate it.
+4. **Test top hypothesis.** Targeted assertions, logs, or focused tests confirm or eliminate.
 5. **Fix root cause.** Smallest safe change. Route by side via `coordinating-multi-model-work`:
    - Claude — single-file or trivial fix.
    - Codex — back-side bug (logic, database, system, infra).
@@ -27,7 +27,7 @@ description: "Evidence-based root-cause debugging. Use for bugs, test failures, 
 
 - Evidence over intuition.
 - Fix root cause, not symptoms.
-- No broad refactor while debugging unless the root cause demands it.
+- No broad refactor while debugging unless root cause demands it.
 - No completion claim before verification.
 
 ## References
