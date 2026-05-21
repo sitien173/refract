@@ -42,7 +42,43 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 - Worker edits files via MCP write tools. Response must list every changed file under `## FILES MODIFIED`.
 - **Same-phase fix:** reuse `SESSION_ID`, send only `FIX:` + delta context.
 - **MCP failure** (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED`, ask user. No retry, no executor switch, no Task/Agent fallback without explicit consent.
-- **Long input** (>~8KB, >1500 tokens): write to repo file (prefer `docs/plans/`), pass path. Never paste raw guides/specs/research into MCP `PROMPT`.
+- **Prompt-to-file by default:** write every dispatch prompt to `docs/plans/<slug>/prompts/<task-id>.md` and pass that path to the worker. Inline-in-MCP-`PROMPT` allowed only for one- or two-sentence asks with no context block.
+
+**Per-task git commits (required for Codex / Gemini phases):**
+
+- Worker commits its own changes per task — one commit per task in the phase, message prefix `phase-<N>.task-<M>: <summary>`.
+- Worker returns commit hashes in `## COMMITS`. Claude does not commit on the worker's behalf.
+- Claude reviews diff via `git show <hash>` per task during the Review gate.
+- Claude-owned simple edits: commit per logical change, no enforced format.
+
+**Per-task decision notes (required for Codex / Gemini phases):**
+
+Worker writes `docs/plans/<slug>/notes/phase-<N>.task-<M>.md` capturing anything outside the spec:
+
+```markdown
+# phase-<N>.task-<M> — Decision Note
+
+## Decisions made (not in spec)
+- <decision>: <why>
+
+## Spec deviations
+- <what changed vs Phase doc>: <why>
+
+## Tradeoffs accepted
+- <tradeoff>: <alternative rejected + reason>
+
+## Assumptions
+- <assumption>
+
+## Follow-ups for human
+- <thing the human should know>
+```
+
+Empty sections written as `- none`. File required even when all sections are `none` (proves worker considered each).
+
+**Phase response file (required for Codex / Gemini phases):**
+
+After all tasks in the phase are done, worker writes the full `# EXTERNAL RESPONSE` block to `docs/plans/<slug>/responses/phase-<N>.md` in addition to returning it inline. One file per phase — it already aggregates per-task commits. Survives session compaction.
 
 **Worker response format:**
 
@@ -58,6 +94,10 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 | Created | src/...  | ...    |
 | Edited  | src/...  | ...    |
 
+## COMMITS
+- phase-<N>.task-<M>: <hash>  <subject>
+- phase-<N>.task-<M+1>: <hash>  <subject>
+
 ## SPEC COMPLIANCE
 - Meets Spec? YES | WITH_DEBT | NO
 - Explanation: [one line]
@@ -65,6 +105,14 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 ## NEXT
 TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
 ```
+
+Final worker line (after the `# EXTERNAL RESPONSE` block):
+
+```text
+<task or phase id> completed. Commit hashes: ["<hash>", ...]. SessionID: "<id>". Note file: <path>. Response file: <path>.
+```
+
+This single line is the trigger Claude scans for to mark a task complete and pull artifacts into `.handover.md`.
 
 ### 3. Review
 
@@ -177,6 +225,13 @@ session_refs:
 ## read_first
 - docs/plans/<slug>/PHASE-<N>.md
 
+## completed_tasks
+- id: phase-<N>.task-<M>
+  owner: codex | gemini | claude
+  commit: <hash>
+  note: docs/plans/<slug>/notes/phase-<N>.task-<M>.md
+- (one row per task; phase response file lives at responses/phase-<N>.md)
+
 ## blockers
 <empty | one line per blocker>
 
@@ -184,8 +239,23 @@ session_refs:
 <empty | new decisions since prior handover>
 
 ## uncommitted_files
-<empty | paths edited but not yet reviewed>
+<empty | paths edited but not yet committed by worker>
 ```
+
+### Plan directory layout
+
+```
+docs/plans/<slug>/
+  PLAN.md
+  PHASE-<N>.md
+  .handover.md
+  .sessions.json          # gitignored — worker session id cache
+  prompts/phase-<N>.md    # dispatch prompt, per phase (per-task only when fanning out)
+  notes/phase-<N>.task-<M>.md   # decision note, per task
+  responses/phase-<N>.md  # EXTERNAL RESPONSE, per phase
+```
+
+`prompts/`, `notes/`, `responses/` are committed alongside `PLAN.md` — they are the durable audit trail.
 
 ### `PHASE-<N>.md` — durable phase journal
 
@@ -207,13 +277,16 @@ Created at phase start with Route skeleton. Finalized immediately after Review g
 ## Files Modified
 | Action | Path | Change |
 
+## Commits
+- phase-<N>.task-<M>: <hash>  <subject>
+
 ## Review
 - Spec Status: ...
 - Quality Findings: ...
 - Final Status: ...
 
 ## Decisions
-- <decision>: <rationale> → <impact>
+- See `notes/phase-<N>.task-*.md` for per-task decisions. Cross-task or phase-level decisions noted here only.
 
 ## Handoff
 <what next phase or new session must do>
@@ -229,4 +302,7 @@ New session reads `.handover.md` first, then only files listed in `read_first`. 
 - No draft-then-reimplement handoffs — worker output is final edit.
 - Cross-Validation **mandatory for new features / ideation / proposals before planning**; otherwise skip.
 - Route by side (back vs front), not default — never auto-route to one executor.
+- One commit per task by the worker; missing commit hashes in `## COMMITS` block Review.
+- Per-task decision note + response file written before worker emits the final completion line.
+- Dispatch prompts written to `prompts/<task-id>.md` by default; inline only for trivial one-liner asks.
 - User overrides ("use Codex" / "use Gemini" / "no external models" / "skip cross-validation") win.

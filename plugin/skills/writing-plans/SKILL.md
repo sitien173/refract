@@ -24,7 +24,11 @@ description: "Turns a confirmed design into a phase-based implementation plan. E
    - Full-stack work → split into back-side + front-side sub-phases.
 6. Include file set, acceptance criteria, reviewer checklist, integration checks per phase.
 7. **Pick storage layout:**
-   - Multi-phase / multi-session → folder `docs/plans/YYYY-MM-DD-<slug>/PLAN.md` + empty `.handover.md` skeleton (status `ACTIVE`, current_phase `0`, next_action "Execute Phase 1") + `.sessions.json` skeleton (`{ "schema_version": 1, "plan_path": "...", "sessions": { "codex": null, "gemini": null } }`).
+   - Multi-phase / multi-session → folder `docs/plans/YYYY-MM-DD-<slug>/` containing:
+     - `PLAN.md`
+     - `.handover.md` skeleton (status `ACTIVE`, current_phase `0`, next_action "Execute Phase 1", `completed_tasks:` empty)
+     - `.sessions.json` skeleton (`{ "schema_version": 1, "plan_path": "...", "sessions": { "codex": null, "gemini": null } }`)
+     - empty dirs `prompts/`, `notes/`, `responses/` (with `.gitkeep`) — dispatch prompts (per phase), decision notes (per task), EXTERNAL RESPONSE files (per phase)
    - Single-phase / docs-only → flat file `docs/plans/YYYY-MM-DD-<slug>-implementation-plan.md` (no resume artifacts).
 8. Offer execution with `executing-plans`.
 
@@ -34,7 +38,7 @@ description: "Turns a confirmed design into a phase-based implementation plan. E
 - No draft-then-reimplement handoffs.
 - Cross-Validation only when phase straddles unresolved architecture spanning both sides.
 - Resume check mandatory before any new plan write. Never start fresh when ACTIVE handover covers topic.
-- Folder-layout plans MUST create `.handover.md` + `.sessions.json` skeletons at plan-write time so future sessions can resume.
+- Folder-layout plans scaffold all resume artifacts at write time: `.handover.md`, `.sessions.json`, and `prompts/`, `notes/`, `responses/` dirs (with `.gitkeep`).
 
 ## Phase Shape
 
