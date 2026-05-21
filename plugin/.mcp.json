@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "codex": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "uvx",
+        "--from",
+        "git+https://github.com/sitien173/codexmcp.git",
+        "codexmcp"
+      ]
+    },
+    "gemini": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "uvx",
+        "--from",
+        "git+https://github.com/sitien173/geminimcp.git",
+        "geminimcp"
+      ]
+    }
+  }
+}

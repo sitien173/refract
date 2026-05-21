@@ -1,14 +1,12 @@
 {
   "name": "superpowers-ccg",
   "description": "Superpowers-CCG: 3-gate (Plan → Execute → Review) workflow.",
-  "version": "1.7.5",
+  "version": "1.7.6",
   "author": {
     "name": "sitien173"
   },
   "homepage": "https://github.com/sitien173/superpowers-ccg",
   "repository": "https://github.com/sitien173/superpowers-ccg",
-  "mcpServers": "../mcp_config.json",
-  "hooks": "../hooks.json",
   "license": "MIT",
   "keywords": [
     "skills",

@@ -1,16 +1,20 @@
 {
   "mcpServers": {
     "codex": {
-      "command": "uvx",
+      "command": "cmd",
       "args": [
+        "/c",
+        "uvx",
         "--from",
         "git+https://github.com/sitien173/codexmcp.git",
         "codexmcp"
       ]
     },
     "gemini": {
-      "command": "uvx",
+      "command": "cmd",
       "args": [
+	"/c",
+	"uvx",
         "--from",
         "git+https://github.com/sitien173/geminimcp.git",
         "geminimcp"
