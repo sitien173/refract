@@ -67,6 +67,14 @@ For each task in order:
 ## Report Format
 # EXTERNAL RESPONSE
 
+## META
+- Phase: <N>
+- Owner: codex | gemini
+- SessionID: <your current session id>
+- Started: <ISO8601 when you began the phase>
+- Finished: <ISO8601 when you finished>
+- Plan dir: docs/plans/<slug>
+
 ## SUMMARY
 [one sentence]
 
@@ -80,18 +88,22 @@ For each task in order:
 - phase-<N>.task-1: <hash>  <subject>
 - phase-<N>.task-2: <hash>  <subject>
 
+## NOTES
+- docs/plans/<slug>/notes/phase-<N>.task-1.md
+- docs/plans/<slug>/notes/phase-<N>.task-2.md
+
 ## SPEC COMPLIANCE
 - Meets Spec? YES | WITH_DEBT | NO
 - Explanation: [one line]
 
 ## CLARIFICATIONS NEEDED
-None (or list questions)
+None (or list questions; emit and stop if any)
 
 ## NEXT
 TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
 
 ---
-Phase <N> completed. Commit hashes: ["<hash1>", "<hash2>"]. SessionID: "<id>". Note files: ["docs/plans/<slug>/notes/phase-<N>.task-1.md", ...]. Response file: docs/plans/<slug>/responses/phase-<N>.md.
+Phase <N> completed. Response file: docs/plans/<slug>/responses/phase-<N>.md.
 ```
 
 ## Prompt discipline

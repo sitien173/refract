@@ -19,10 +19,10 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 - **Prompts to file.** Dispatch prompt body lives at `docs/plans/<slug>/prompts/phase-<N>.md`; the MCP `PROMPT` field is just a pointer. Inline allowed only for one- or two-sentence asks with no context.
 - **One commit per task** by the worker, message prefix `phase-<N>.task-<M>: <subject>`. Claude does not commit on the worker's behalf.
 - **Decision note per task** at `notes/phase-<N>.task-<M>.md` — captures decisions made outside the spec, deviations, tradeoffs, assumptions, follow-ups. Empty sections written as `- none`.
-- **One EXTERNAL RESPONSE per phase** at `responses/phase-<N>.md` (aggregates per-task commits, files modified, spec compliance).
-- **Completion line** as the final line of the worker reply:
+- **One EXTERNAL RESPONSE per phase** at `responses/phase-<N>.md`. Required sections: `## META` (Phase, Owner, SessionID, Started, Finished, Plan dir), `## SUMMARY`, `## FILES MODIFIED`, `## COMMITS`, `## NOTES`, `## SPEC COMPLIANCE`, `## CLARIFICATIONS NEEDED`, `## NEXT`.
+- **Completion line** as the final line of the worker reply (META carries the structured fields, so the line stays terse):
   ```
-  Phase <N> completed. Commit hashes: ["<hash>"]. SessionID: "<id>". Note files: [...]. Response file: docs/plans/<slug>/responses/phase-<N>.md.
+  Phase <N> completed. Response file: docs/plans/<slug>/responses/phase-<N>.md.
   ```
 
 ### Example plan layout

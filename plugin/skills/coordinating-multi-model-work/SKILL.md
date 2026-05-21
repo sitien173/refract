@@ -85,6 +85,14 @@ After all tasks in the phase are done, worker writes the full `# EXTERNAL RESPON
 ```text
 # EXTERNAL RESPONSE
 
+## META
+- Phase: <N>
+- Owner: codex | gemini
+- SessionID: <id>
+- Started: <ISO8601>
+- Finished: <ISO8601>
+- Plan dir: docs/plans/<slug>
+
 ## SUMMARY
 [one sentence]
 
@@ -98,9 +106,16 @@ After all tasks in the phase are done, worker writes the full `# EXTERNAL RESPON
 - phase-<N>.task-<M>: <hash>  <subject>
 - phase-<N>.task-<M+1>: <hash>  <subject>
 
+## NOTES
+- notes/phase-<N>.task-<M>.md
+- notes/phase-<N>.task-<M+1>.md
+
 ## SPEC COMPLIANCE
 - Meets Spec? YES | WITH_DEBT | NO
 - Explanation: [one line]
+
+## CLARIFICATIONS NEEDED
+None (or list questions; emit and stop if any)
 
 ## NEXT
 TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
@@ -109,10 +124,10 @@ TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
 Final worker line (after the `# EXTERNAL RESPONSE` block):
 
 ```text
-<task or phase id> completed. Commit hashes: ["<hash>", ...]. SessionID: "<id>". Note file: <path>. Response file: <path>.
+Phase <N> completed. Response file: docs/plans/<slug>/responses/phase-<N>.md.
 ```
 
-This single line is the trigger Claude scans for to mark a task complete and pull artifacts into `.handover.md`.
+Single-line trigger Claude scans for; all structured fields (commits, session id, notes, owner) already live in `## META` / `## COMMITS` / `## NOTES`, so the line stays terse.
 
 ### 3. Review
 
