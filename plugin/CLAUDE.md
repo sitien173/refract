@@ -7,7 +7,7 @@ Guidance for Claude Code working in this repo.
 3 gates: **Plan → Execute → Review**. Full details in `skills/coordinating-multi-model-work/SKILL.md`.
 
 - **Plan** — new feature / ideation → CROSS_VALIDATION first (Codex + Gemini). Otherwise gather minimum context, define one phase (2–4 tasks, file set, Done When), output `# ROUTE`.
-- **Execute** — route by side: Claude for simple tasks; Codex (`mcp__codex__codex`) for back-side (backend, database, system, infra); Gemini (`mcp__gemini__gemini`) for front-side (UI, CSS, motion, multimodal). No default executor.
+- **Execute** — route by side: Claude for simple tasks; Codex (`mcp__openmcp__run(backend="codex", ...)`) for back-side (backend, database, system, infra); Gemini (`mcp__openmcp__run(backend="agy", ...)`) for front-side (UI, CSS, motion, multimodal). No default executor.
 - **Review** — (a) Spec: run Done When checks; (b) Quality scan on changed files (edge cases, error handling, security, naming, duplication, correctness). Severity downgrade: CRITICAL/HIGH → FAIL, MEDIUM → PASS_WITH_DEBT, LOW noted. Skip Quality for docs-only / trivial Claude edits.
 
 ## Hard Rules

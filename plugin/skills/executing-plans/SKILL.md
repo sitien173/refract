@@ -19,8 +19,8 @@ description: "Executes a written plan one phase at a time with Plan → Execute 
 4. **Plan gate** — apply `coordinating-multi-model-work` Plan gate to active phase; output `# ROUTE` block. Create `PHASE-<N>.md` skeleton with Route section. Ensure `<plan-dir>/prompts/`, `notes/`, `responses/` dirs exist.
 5. **Execute gate** — route by side:
    - `claude` — simple tasks; edit directly. Commit per logical change.
-   - `codex` (`mcp__codex__codex`) — back-side phases.
-   - `gemini` (`mcp__gemini__gemini`) — front-side phases.
+   - `codex` (`mcp__openmcp__run(backend="codex", ...)`) — back-side phases.
+   - `gemini` (`mcp__openmcp__run(backend="agy", ...)`) — front-side phases.
 
    For Codex / Gemini:
    1. Write dispatch prompt to `<plan-dir>/prompts/phase-<N>.md`; pass the path.

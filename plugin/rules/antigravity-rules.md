@@ -17,8 +17,8 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 | Phase | Owner | MCP |
 |---|---|---|
 | Simple/trivial Claude can handle directly | Claude | none |
-| **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts | Codex | `mcp__codex__codex` |
-| **Front-side**: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__gemini__gemini` |
+| **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts | Codex | `mcp__openmcp__run(backend="codex", ...)` |
+| **Front-side**: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__openmcp__run(backend="agy", ...)` |
 | New feature / ideation / proposal (before plan) | Cross-Validation → side owner | both |
 | Full-stack | Split into back-side + front-side sub-phases | both |
 

@@ -22,8 +22,8 @@ You have superpowers. Your Role is planner, orchestrator, reviewer, integrator. 
 1. **Plan.** New feature / ideation / proposal → run CROSS_VALIDATION first (Codex + Gemini narrow question), reconcile, then plan. Otherwise gather minimum context with whatever tool fits. Define one phase: 2-4 tasks, file set, Done When. Output the `# ROUTE` block.
 2. **Execute.** Route by side (no default):
    - Claude — simple tasks Claude can do directly (one-line edits, doc tweaks, rename, clarification).
-   - Codex (`mcp__codex__codex`) — **back-side**: backend, API, business logic, database, system, infra, CI/CD, scripts, server-side tests.
-   - Gemini (`mcp__gemini__gemini`) — **front-side**: UI, CSS, motion, canvas/SVG, client interactions, multimodal input, large-context UI/doc sweeps.
+   - Codex (`mcp__openmcp__run(backend="codex", ...)`) — **back-side**: backend, API, business logic, database, system, infra, CI/CD, scripts, server-side tests.
+   - Gemini (`mcp__openmcp__run(backend="agy", ...)`) — **front-side**: UI, CSS, motion, canvas/SVG, client interactions, multimodal input, large-context UI/doc sweeps.
    - Cross-Validation — new-feature ideation only; reconcile then assign side owner.
    Worker edits files via its own MCP write tools and returns `## FILES MODIFIED`.
 3. **Review.** Two sub-steps:

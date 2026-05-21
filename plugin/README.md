@@ -57,7 +57,7 @@ User: *"Add user auth with email + password. UI on the settings page."*
    - Phase 1 (Codex / back-side): hash + verify, sessions table, login/logout endpoints.
    - Phase 2 (Gemini / front-side): settings-page form, validation, error states.
    Scaffolds `.handover.md`, `.sessions.json`, and `prompts/` `notes/` `responses/` dirs.
-3. **`/execute-plan` Phase 1** — Claude writes `prompts/phase-1.md`, calls `mcp__codex__codex` with the path. Codex implements three tasks, commits each (`phase-1.task-1: add bcrypt helper`, …), drops three notes in `notes/`, writes the phase response to `responses/phase-1.md`, returns the completion line.
+3. **`/execute-plan` Phase 1** — Claude writes `prompts/phase-1.md`, calls `mcp__openmcp__run(backend="codex", PROMPT="Read spec: docs/plans/.../prompts/phase-1.md", cd="...")`. Codex implements three tasks, commits each (`phase-1.task-1: add bcrypt helper`, …), drops three notes in `notes/`, writes the phase response to `responses/phase-1.md`, returns the completion line.
 4. **Review Phase 1** — Claude runs `git show` per commit + integration tests, scans changed files, marks PHASE-1.md `DONE`, updates `.handover.md` `completed_tasks`.
 5. **Phase 2** — same loop with Gemini.
 6. **Verify** — `verifying-before-completion` runs the full Done When across both phases.
@@ -69,8 +69,8 @@ If a session breaks at any point, the next session reads `.handover.md` first an
 | Phase | Owner | MCP Tool |
 |---|---|---|
 | Simple/trivial — one-line edit, rename, doc tweak, clarification | Claude | none |
-| **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts, server-side tests | Codex | `mcp__codex__codex` |
-| **Front-side**: UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__gemini__gemini` |
+| **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts, server-side tests | Codex | `mcp__openmcp__run(backend="codex", ...)` |
+| **Front-side**: UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__openmcp__run(backend="agy", ...)` |
 | New feature / ideation / proposal (before plan) | Cross-Validation → assign side | both |
 | Full-stack | Split into back-side + front-side sub-phases | both |
 
@@ -87,14 +87,22 @@ claude plugin install superpowers-ccg
 
 - [Claude Code](https://docs.claude.com/docs/claude-code) (`claude --version`)
 - [Codex CLI](https://developers.openai.com/codex/quickstart) (`codex --version`)
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini --version`)
+- [Antigravity CLI](https://github.com/google-gemini/gemini-cli) — used as the `agy` backend for the front-side role (`agy --version`)
 - `uv` / `uvx`
 
 ### MCP setup
 
+Single unified server — [openmcp](https://github.com/sitien173/openmcp) — exposes one tool (`mcp__openmcp__run`) with a `backend` field (`"codex"` or `"agy"`):
+
 ```bash
-claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.com/sitien173/codexmcp.git codexmcp
-claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github.com/sitien173/geminimcp.git geminimcp
+claude mcp add openmcp -s user --transport stdio -- uvx --from "git+https://github.com/sitien173/openmcp.git#subdirectory=openmcp" openmcp
+```
+
+If you had `codexmcp` / `geminimcp` from a previous install, remove them:
+
+```bash
+claude mcp remove codex
+claude mcp remove gemini
 ```
 
 ## Fail-Closed Rule
@@ -116,5 +124,4 @@ Issues: https://github.com/sitien173/superpowers-ccg/issues
 - [obra/superpowers](https://github.com/obra/superpowers) — original Superpowers
 - [BryanHoo/superpowers-ccg](https://github.com/BryanHoo/superpowers-ccg) — CCG fork
 - [fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow) — CCG workflow
-- [sitien173/codexmcp](https://github.com/sitien173/codexmcp) — Codex MCP
-- [sitien173/geminimcp](https://github.com/sitien173/geminimcp) — Gemini MCP
+- [sitien173/openmcp](https://github.com/sitien173/openmcp) — unified Codex + Antigravity (agy) MCP server

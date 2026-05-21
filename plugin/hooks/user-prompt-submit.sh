@@ -22,7 +22,7 @@ Routing by side (no default):
 - Cross-Validation — mandatory for new features / ideation / proposals before planning; reconcile, then assign side owner.
 - Full-stack phase → split into back-side + front-side sub-phases. Ambiguous side → ask user.
 
-2. **Execute.** Claude edits directly for simple tasks. Otherwise invoke `mcp__codex__codex` (back-side) or `mcp__gemini__gemini` (front-side). For Cross-Validation: ask both the same narrow question, reconcile divergences, then route implementation to one side owner. Worker returns:
+2. **Execute.** Claude edits directly for simple tasks. Otherwise invoke `mcp__openmcp__run(backend="codex", ...)` (back-side, Codex) or `mcp__openmcp__run(backend="agy", ...)` (front-side, Gemini). For Cross-Validation: ask both the same narrow question, reconcile divergences, then route implementation to one side owner. Worker returns:
 
 # EXTERNAL RESPONSE
 ## SUMMARY

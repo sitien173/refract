@@ -37,7 +37,7 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 ### 2. Execute
 
 - **Claude-owned (simple):** edit directly with built-in tools.
-- **Codex / Gemini:** call `mcp__codex__codex` / `mcp__gemini__gemini`. Send: task summary, files, `Done When`, minimum hydrated context (no full files, no pre-written implementation).
+- **Codex / Gemini:** call `mcp__openmcp__run` with `backend="codex"` (back-side) or `backend="agy"` (front-side, Gemini via Antigravity CLI). Send: task summary, files, `Done When`, minimum hydrated context (no full files, no pre-written implementation). Default `debug=False` — worker writes its own `responses/phase-<N>.md`, no need to inflate the MCP reply.
 - **Cross-Validation:** ask Codex and Gemini same narrow question, compare answers, pick direction, route implementation to side owner. No two parallel implementations.
 - Worker edits files via MCP write tools. Response must list every changed file under `## FILES MODIFIED`.
 - **Same-phase fix:** reuse `SESSION_ID`, send only `FIX:` + delta context.

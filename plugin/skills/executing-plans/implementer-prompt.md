@@ -6,7 +6,7 @@ By default, write the prompt body to `docs/plans/<slug>/prompts/phase-<N>.md` (o
 
 ```text
 External model call:
-  target: mcp__codex__codex (back-side) or mcp__gemini__gemini (front-side)
+  target: mcp__openmcp__run with backend="codex" (back-side) or backend="agy" (front-side, Gemini)
   description: "Implement Phase N: [phase name]"
   prompt: |
     Read your full task spec from: docs/plans/<slug>/prompts/phase-<N>.md
