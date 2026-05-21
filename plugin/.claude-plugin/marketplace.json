@@ -7,8 +7,8 @@
   "plugins": [
     {
       "name": "superpowers-ccg",
-      "description": "3-gate (Plan → Execute → Review) workflow. Claude handles simple tasks; Codex owns back-side; Gemini owns front-side; CROSS_VALIDATION before new-feature planning.",
-      "version": "1.7.3",
+      "description": "3-gate (Plan → Execute → Review) workflow.",
+      "version": "1.7.5",
       "source": {
         "source": "url",
         "url": "https://github.com/sitien173/superpowers-ccg.git"

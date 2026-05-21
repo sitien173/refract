@@ -3,5 +3,6 @@
 .claude/
 *.DS_Store
 .ace-tool/
+.antigravitycli/
 node_modules/
 docs/plans/**/.sessions.json
