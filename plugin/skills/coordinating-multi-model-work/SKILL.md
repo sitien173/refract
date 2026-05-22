@@ -43,6 +43,7 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 - **Same-phase fix:** reuse `SESSION_ID`, send only `FIX:` + delta context.
 - **MCP failure** (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED`, ask user. No retry, no executor switch, no Task/Agent fallback without explicit consent.
 - **Prompt-to-file by default:** write every dispatch prompt to `docs/plans/<slug>/prompts/<task-id>.md` and pass that path to the worker. Inline-in-MCP-`PROMPT` allowed only for one- or two-sentence asks with no context block.
+- **Always pass ABSOLUTE paths to MCP workers.** Workers (especially Gemini/agy) do not reliably resolve relative paths against Claude's CWD — a relative path like `docs/plans/.../phase-1.md` can trigger a full-device scan or wrong-repo resolution. Resolve every path (dispatch prompt, input files, plan dir, output targets) to an absolute path before placing it in the MCP `PROMPT`. Use forward slashes on Windows (e.g. `F:/projects/.../prompts/phase-1.md`). Also pass `cd` to `mcp__openmcp__run` as an absolute path. This rule applies to every file path mentioned inside the dispatch prompt body as well — input file lists, output targets, decision-note paths, response paths.
 
 **Per-task git commits (required for Codex / Gemini phases):**
 

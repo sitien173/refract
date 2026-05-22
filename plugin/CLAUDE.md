@@ -14,6 +14,7 @@ Guidance for Claude Code working in this repo.
 
 - MCP failure → `BLOCKED`, ask the human. No silent retry, executor switch, or Task/Agent fallback.
 - Long input → write to a repo file (prefer `docs/plans/`) and pass the path.
+- **Absolute paths only when calling `mcp__openmcp__run`.** The dispatch prompt pointer, the `cd` arg, and every file path inside the prompt body must be absolute (forward slashes on Windows). Gemini/agy mis-resolves relative paths and will scan the whole device. Resolve before sending.
 - One phase, one owner, one review. No draft-then-reimplement handoffs.
 
 ## Skills

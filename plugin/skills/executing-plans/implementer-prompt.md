@@ -4,16 +4,20 @@ Use when dispatching Codex or Gemini worker for one phase.
 
 By default, write the prompt body to `docs/plans/<slug>/prompts/phase-<N>.md` (or per-task `phase-<N>.task-<M>.md` for fan-out) and pass that file path to the worker. Only inline the prompt in MCP `PROMPT` when it is one or two sentences with no context block.
 
+**Absolute paths required.** Resolve `docs/plans/<slug>/...` to an absolute path before sending it through `mcp__openmcp__run`. Gemini (agy) does not reliably resolve relative paths against Claude's CWD and will scan the device looking for the file. Use forward slashes on Windows (e.g. `F:/projects/<repo>/docs/plans/<slug>/prompts/phase-<N>.md`). Pass the `cd` argument as an absolute path as well, and make every file path inside the prompt body (inputs, outputs, notes, responses, plan dir) absolute.
+
 ```text
 External model call:
   target: mcp__openmcp__run with backend="codex" (back-side) or backend="agy" (front-side, Gemini)
   description: "Implement Phase N: [phase name]"
+  cd: <ABSOLUTE repo root, e.g. F:/projects/<repo>>
   prompt: |
-    Read your full task spec from: docs/plans/<slug>/prompts/phase-<N>.md
-    Plan dir: docs/plans/<slug>
+    Read your full task spec from: <ABSOLUTE>/docs/plans/<slug>/prompts/phase-<N>.md
+    Plan dir: <ABSOLUTE>/docs/plans/<slug>
     Phase: <N>
     Owner: codex | gemini
     Follow every rule in the spec file. Emit the completion line when done.
+    All file paths in this prompt and in the spec file are absolute — do not reinterpret them as relative.
 ```
 
 ## Prompt file contents (`docs/plans/<slug>/prompts/phase-<N>.md`)
@@ -109,6 +113,7 @@ Phase <N> completed. Response file: docs/plans/<slug>/responses/phase-<N>.md.
 ## Prompt discipline
 
 - Default: prompt body lives in `prompts/phase-<N>.md`; MCP `PROMPT` field is a pointer.
+- All paths handed to MCP workers (the pointer, `cd`, and every file path inside the prompt body) must be absolute with forward slashes. Relative paths are forbidden — Gemini will mis-resolve them.
 - Inline allowed only for trivial one- or two-sentence asks with no context.
 - Same-phase fix: reuse `SESSION_ID`, send `FIX:` + delta files + delta context only. Fix still produces its own commit + (if it changes a decision) appended note section.
 - One phase, one owner. Never send whole plan to worker.

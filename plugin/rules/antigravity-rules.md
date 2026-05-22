@@ -50,7 +50,6 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 ## Hard Rules
 
 - MCP failure → `BLOCKED`, ask the human. No silent retry, executor switch, or Task/Agent fallback.
-- Long input (>~8KB / >1500 tokens) → write to a repo file (prefer `docs/plans/`), pass the path.
 - One phase, one owner, one review. No draft-then-reimplement handoffs.
 - Cross-Validation is mandatory for new features / ideation / proposals before planning; otherwise skip.
 - Route by side, not by default — never auto-route to one executor.
