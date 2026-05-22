@@ -7,6 +7,13 @@
         "git+https://github.com/sitien173/openmcp.git#subdirectory=openmcp",
         "openmcp"
       ]
+    },
+    "context-retrieval": {
+      "command": "auggie",
+      "args": [
+        "--mcp",
+        "--mcp-auto-workspace"
+      ]
     }
   }
 }
