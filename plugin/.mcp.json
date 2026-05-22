@@ -14,6 +14,25 @@
         "--mcp",
         "--mcp-auto-workspace"
       ]
+    },
+    "serena": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@respawn-app/tool-filter-mcp",
+        "--upstream-stdio",
+        "--deny",
+        "replace_.*,insert_.*,rename_.*,safe_delete_symbol,.*memor.*,onboarding",
+        "--",
+        "uvx",
+        "--from",
+        "git+https://github.com/oraios/serena",
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "ide-assistant",
+        "--project-from-cwd"
+      ]
     }
   }
 }
