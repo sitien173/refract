@@ -10,6 +10,12 @@ Guidance for Claude Code working in this repo.
 - **Execute** — route by side: Claude for simple tasks; Codex (`mcp__openmcp__run(backend="codex", ...)`) for back-side (backend, database, system, infra); Gemini (`mcp__openmcp__run(backend="agy", ...)`) for front-side (UI, CSS, motion, multimodal). No default executor.
 - **Review** — (a) Spec: run Done When checks; (b) Quality scan on changed files (edge cases, error handling, security, naming, duplication, correctness). Severity downgrade: CRITICAL/HIGH → FAIL, MEDIUM → PASS_WITH_DEBT, LOW noted. Skip Quality for docs-only / trivial Claude edits.
 
+## Context Tools
+
+- **`mcp__context-retrieval__codebase-retrieval`** (Augment) — semantic, relationship-aware codebase search. Use for natural-language "where/how/what touches" questions, architecture mapping, cross-file flow, cross-repo context.
+- **`mcp__serena__*`** — IDE-grade symbol retrieval: `find_symbol`, `find_referencing_symbols`, `find_implementations`, `find_declaration`, `get_symbols_overview`, `get_diagnostics_for_file`. Use when the question is structural and exact identifiers are known.
+- Typical flow: context-retrieval to map, Serena to pin, Grep/Read to finalize. Pass findings into Codex/Gemini dispatch prompts — don't make workers re-discover.
+
 ## Hard Rules
 
 - MCP failure → `BLOCKED`, ask the human. No silent retry, executor switch, or Task/Agent fallback.

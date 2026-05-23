@@ -8,6 +8,13 @@
         "openmcp"
       ]
     },
+    "context-retrieval": {
+      "command": "auggie",
+      "args": [
+        "--mcp",
+        "--mcp-auto-workspace"
+      ]
+    },
     "serena": {
       "command": "npx",
       "args": [
