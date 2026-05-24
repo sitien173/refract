@@ -10,7 +10,8 @@
       "env": {
         "OPENMCP_AGY_MODEL_DEFAULT": "gemini-3.5-flash",
         "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.3-codex",
-        "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution"
+        "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
+	"OPENMCP_AGY_DISABLE_PLUGIN": "superpowers-ccg"
       }
     }
   }

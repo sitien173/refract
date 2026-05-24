@@ -265,3 +265,44 @@ async def test_explicit_model_and_profile_override_env_defaults(monkeypatch) -> 
     )
     assert captured["model"] == "gpt-5-mini"
     assert captured["profile"] == "custom-profile"
+
+
+def test_agy_plugin_temporarily_disabled_and_restored(monkeypatch) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(agy_backend.subprocess, "run", fake_run)
+
+    with agy_backend._temporary_disabled_plugin("superpowers-ccg"):
+        pass
+
+    assert calls == [
+        ["agy", "plugin", "disable", "superpowers-ccg"],
+        ["agy", "plugin", "enable", "superpowers-ccg"],
+    ]
+
+
+def test_agy_plugin_restored_when_execution_fails(monkeypatch) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(agy_backend.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError):
+        with agy_backend._temporary_disabled_plugin("superpowers-ccg"):
+            raise RuntimeError("boom")
+
+    assert calls == [
+        ["agy", "plugin", "disable", "superpowers-ccg"],
+        ["agy", "plugin", "enable", "superpowers-ccg"],
+    ]

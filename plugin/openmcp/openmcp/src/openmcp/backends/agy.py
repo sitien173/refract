@@ -24,6 +24,7 @@ log = get_logger("agy")
 
 _SETTINGS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
 _settings_lock = threading.Lock()
+_DISABLED_PLUGIN_NAME = os.environ.get("OPENMCP_AGY_DISABLE_PLUGIN", "superpowers-ccg").strip()
 
 
 @dataclass(slots=True)
@@ -76,6 +77,41 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[\?0-9;]*[a-zA-Z]|\x1b[()][AB012]|\x1b\][^\x07
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE.sub("", text)
+
+
+def _run_plugin_command(command: str, plugin_name: str) -> None:
+    subprocess.run(
+        ["agy", "plugin", command, plugin_name],
+        check=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+@contextlib.contextmanager
+def _temporary_disabled_plugin(plugin_name: str):
+    if not plugin_name:
+        yield
+        return
+
+    disabled = False
+    try:
+        _run_plugin_command("disable", plugin_name)
+        disabled = True
+    except (subprocess.SubprocessError, OSError) as exc:
+        log.warning("agy: failed to disable plugin %r before run: %s", plugin_name, exc)
+
+    try:
+        yield
+    finally:
+        if not disabled:
+            return
+        try:
+            _run_plugin_command("enable", plugin_name)
+        except (subprocess.SubprocessError, OSError) as exc:
+            log.warning("agy: failed to re-enable plugin %r after run: %s", plugin_name, exc)
 
 
 def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, None, None]:
@@ -280,7 +316,7 @@ async def execute(params: AgyParams) -> BackendResult:
     )
 
     try:
-        with _patch_model(params.model):
+        with _temporary_disabled_plugin(_DISABLED_PLUGIN_NAME), _patch_model(params.model):
             if os.name == "nt":
                 cmd = [
                     "agy", "--print", augmented_prompt,
