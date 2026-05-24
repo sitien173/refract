@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "plan_path": "docs/plans/2026-05-23-openmcp-live-integration-test",
+  "current_phase": 1,
+  "phase_owner": "codex",
+  "sessions": {
+    "codex": "019e5327-29c8-7031-8a43-95fed738a882",
+    "gemini": null
+  },
+  "last_updated": "2026-05-23T12:30:00+07:00"
+}

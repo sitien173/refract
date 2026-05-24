@@ -4,36 +4,14 @@
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/sitien173/openmcp.git#subdirectory=openmcp",
+        "git+https://github.com/sitien173/superpowers-ccg#subdirectory=openmcp/openmcp",
         "openmcp"
-      ]
-    },
-    "context-retrieval": {
-      "command": "auggie",
-      "args": [
-        "--mcp",
-        "--mcp-auto-workspace"
-      ]
-    },
-    "serena": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@respawn-app/tool-filter-mcp",
-        "--upstream-stdio",
-        "--deny",
-        "replace_.*,insert_.*,rename_.*,safe_delete_symbol,.*memor.*,onboarding",
-        "--",
-        "uvx",
-        "--from",
-        "git+https://github.com/oraios/serena",
-        "serena",
-        "start-mcp-server",
-        "--context",
-        "ide-assistant",
-        "--project",
-        "."
-      ]
+      ],
+      "env": {
+        "OPENMCP_AGY_MODEL_DEFAULT": "gemini-3.5-flash",
+        "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.3-codex",
+        "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution"
+      }
     }
   }
 }

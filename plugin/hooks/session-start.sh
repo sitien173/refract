@@ -17,17 +17,6 @@ You have superpowers. Your Role is planner, orchestrator, reviewer, integrator. 
 - If user requests plan/execute work and `docs/plans/<slug>/.handover.md` with `status: ACTIVE` exists for that topic, resume that plan instead of starting a new one.
 - Never silently start fresh when an ACTIVE handover exists for the same topic — ask the user if unsure.
 
-**Contextual Retrieval Protocol:**
-
-Two MCP context tools assist Claude across all gates. Use both — they answer different questions and combine well (broad map → precise pin).
-
-| Tool | Use for | Don't use for |
-|---|---|---|
-| `mcp__context-retrieval__codebase-retrieval` | Semantic, relationship-aware codebase search. Natural-language questions about architecture, cross-file flow, dependencies, "where does X happen", "what touches Y", cross-repo context. | Locating a known symbol or string (use Grep). Reading a known file (use Read). |
-| `mcp__serena__*` | IDE-grade symbol-level retrieval: `find_symbol`, `find_referencing_symbols`, `find_implementations`, `find_declaration`, `get_symbols_overview`, `get_diagnostics_for_file`. Use when the question is structural (definitions, callers, class/method hierarchy) and exact identifiers are known. | Free-text or conceptual queries (use context-retrieval). Bulk file reads. |
-
-Typical flow: context-retrieval to map an unfamiliar area, Serena to pin exact symbols once identifiers are known. Pass any non-trivial findings into the dispatch prompt for Codex/Gemini — don't expect workers to re-discover context.
-
 **Workflow: 3 gates — Plan → Execute → Review.**
 
 1. **Plan.** New feature / ideation / proposal → run CROSS_VALIDATION first (Codex + Gemini narrow question), reconcile, then plan. Otherwise gather minimum context with whatever tool fits. Define one phase: 2-4 tasks, file set, Done When. Output the `# ROUTE` block.

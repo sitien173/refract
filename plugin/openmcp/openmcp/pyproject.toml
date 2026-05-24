@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openmcp"
+version = "0.1.0"
+description = "Unified backend package for agy and codex execution."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=1.21.2",
+    "pydantic>=2",
+    "pywinpty>=2.0; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+openmcp = "openmcp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openmcp"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+addopts = "-m 'not live'"
+markers = [
+    "live: marks tests that require live backend CLIs",
+]
