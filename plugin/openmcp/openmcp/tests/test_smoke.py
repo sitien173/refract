@@ -306,3 +306,41 @@ def test_agy_plugin_restored_when_execution_fails(monkeypatch) -> None:
         ["agy", "plugin", "disable", "superpowers-ccg"],
         ["agy", "plugin", "enable", "superpowers-ccg"],
     ]
+
+
+def test_agy_patch_model_maps_gemini_id_to_display_name(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"model": "Gemini 3.5 Flash (Low)", "other": "keep"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agy_backend, "_SETTINGS_PATH", settings_path)
+
+    with agy_backend._patch_model("gemini-3.5-flash"):
+        patched = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert patched["model"] == "Gemini 3.5 Flash (Medium)"
+        assert patched["other"] == "keep"
+
+    restored = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert restored["model"] == "Gemini 3.5 Flash (Low)"
+    assert restored["other"] == "keep"
+
+
+def test_agy_patch_model_accepts_supported_display_name(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"model": "Gemini 3.5 Flash (Low)"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agy_backend, "_SETTINGS_PATH", settings_path)
+
+    with agy_backend._patch_model("Gemini 3.1 Pro (High)"):
+        patched = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert patched["model"] == "Gemini 3.1 Pro (High)"
+
+    restored = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert restored["model"] == "Gemini 3.5 Flash (Low)"

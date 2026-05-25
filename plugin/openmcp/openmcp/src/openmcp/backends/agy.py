@@ -37,10 +37,46 @@ class AgyParams:
 
 _VALID_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
 
+_AGY_GEMINI_MODEL_NAME_BY_ID = {
+    "gemini-3.5-flash": "Gemini 3.5 Flash (Medium)",
+    "gemini-3.5-flash-high": "Gemini 3.5 Flash (High)",
+    "gemini-3.5-flash-low": "Gemini 3.5 Flash (Low)",
+    "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)",
+    "gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",
+}
+_AGY_SUPPORTED_MODEL_NAMES = frozenset(_AGY_GEMINI_MODEL_NAME_BY_ID.values())
+
 
 def _is_valid_agy_model_id(model: str) -> bool:
     """Reject display names ('Gemini 3.5 Flash (High)') and accept model ids."""
     return bool(model) and bool(_VALID_MODEL_ID_RE.match(model.strip()))
+
+
+def _resolve_agy_model_setting(model: str) -> str:
+    """Resolve incoming model value to an Antigravity settings display name."""
+    normalized = model.strip()
+    if not normalized:
+        return ""
+
+    mapped_name = _AGY_GEMINI_MODEL_NAME_BY_ID.get(normalized.lower())
+    if mapped_name:
+        return mapped_name
+
+    if normalized in _AGY_SUPPORTED_MODEL_NAMES:
+        return normalized
+
+    if _is_valid_agy_model_id(normalized):
+        log.warning(
+            "agy: unsupported Gemini model id %r; using agy's configured default instead",
+            model,
+        )
+        return ""
+
+    log.warning(
+        "agy: unsupported model name %r; using agy's configured default instead",
+        model,
+    )
+    return ""
 
 
 @contextlib.contextmanager
@@ -50,12 +86,8 @@ def _patch_model(model: str):
         yield
         return
 
-    if not _is_valid_agy_model_id(model):
-        log.warning(
-            "agy: ignoring invalid model id %r (looks like a display name, not a model id); "
-            "using agy's configured default instead",
-            model,
-        )
+    resolved_model_name = _resolve_agy_model_setting(model)
+    if not resolved_model_name:
         yield
         return
 
@@ -63,7 +95,7 @@ def _patch_model(model: str):
         original_text = _SETTINGS_PATH.read_text(encoding="utf-8") if _SETTINGS_PATH.exists() else "{}"
         settings = json.loads(original_text)
         original_model = settings.get("model")
-        settings["model"] = model
+        settings["model"] = resolved_model_name
         _SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
         try:
             yield

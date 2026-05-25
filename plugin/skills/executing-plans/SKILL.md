@@ -26,7 +26,7 @@ description: "Executes a written plan one phase at a time with Plan → Execute 
    1. Write dispatch prompt to `<plan-dir>/prompts/phase-<N>.md`; pass the **absolute** path to the worker (Gemini/agy mis-resolves relative paths against unknown CWDs). Every file path inside the prompt body (inputs, outputs, plan dir, notes, responses) must also be absolute. Use forward slashes on Windows. Pass `cd` to `mcp__openmcp__run` as an absolute path too.
    2. Worker commits per task, writes one decision note per task (`notes/phase-<N>.task-<M>.md`), writes the phase response file (`responses/phase-<N>.md`), emits the completion line. Spec in `implementer-prompt.md`.
    3. Reuse cached `SESSION_ID` from `.sessions.json` if present; same-phase fix → `FIX:` + delta. Write returned `SESSION_ID` back after every MCP call.
-6. **Review gate** — (a) `git show <hash>` per commit + run phase integration checks → Spec status; (b) Quality scan on `## FILES MODIFIED` (skip for trivial Claude edits / docs-only). Reject phase if commits or note/response files missing. Output `# REVIEW`. Finalize `PHASE-<N>.md`.
+6. **Review gate** — (a) `git show <hash>` per commit + run phase integration checks → Spec status; (b) Quality scan on `## FILES MODIFIED` (skip for trivial Claude edits / docs-only). Reject phase if commits or note/response files missing. Output `# REVIEW`. Finalize `PHASE-<N>.md`. On Review PASS, squash all phase task commits: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"` — task commits are review artifacts, squash is final history.
 7. **Update handover** — rewrite `.handover.md` with current phase, status, next action, `read_first`, and append a `completed_tasks` row per finished task.
 8. Move to next phase only after Review passes.
 9. After last phase, set `.handover.md` status to `DONE`, hand off to `verifying-before-completion` for final verification.
@@ -38,7 +38,7 @@ description: "Executes a written plan one phase at a time with Plan → Execute 
 - No re-explaining whole plan to workers — phase-scoped prompts only.
 - Dispatch prompts written to `<plan-dir>/prompts/<task-id>.md` by default; inline allowed only for trivial one-liners.
 - **Absolute paths only when talking to MCP workers.** The dispatch-prompt path passed in `PROMPT`, the `cd` arg, and every file path mentioned inside the prompt body must be absolute (forward slashes on Windows). Never pass relative paths — Gemini in particular will fall back to a device-wide scan.
-- One commit per task by the worker. Missing commit hashes in `## COMMITS` blocks the Review gate.
+- One commit per task by the worker. Missing commit hashes in `## COMMITS` blocks the Review gate. Task commits are review artifacts only — Claude squashes to one `phase-<N>: <summary>` commit after Review PASS.
 - Per-task decision note (`notes/phase-<N>.task-<M>.md`) + per-phase response file (`responses/phase-<N>.md`) required before phase is marked complete.
 - MCP failure → output `BLOCKED`, ask human. No silent retry, switch, or Task/Agent fallback.
 - MCP rejects cached `SESSION_ID` (`.sessions.json` present but worker says invalid/expired) → `BLOCKED`. Ask user to clear offending id; no silent re-create.

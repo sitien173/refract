@@ -50,6 +50,7 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 - Worker commits its own changes per task — one commit per task in the phase, message prefix `phase-<N>.task-<M>: <summary>`.
 - Worker returns commit hashes in `## COMMITS`. Claude does not commit on the worker's behalf.
 - Claude reviews diff via `git show <hash>` per task during the Review gate.
+- **After Review PASS**, Claude squashes all phase task commits into one: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"`. Task-level commits are review artifacts only — not preserved in final history.
 - Claude-owned simple edits: commit per logical change, no enforced format.
 
 **Per-task decision notes (required for Codex / Gemini phases):**
@@ -294,7 +295,8 @@ Created at phase start with Route skeleton. Finalized immediately after Review g
 | Action | Path | Change |
 
 ## Commits
-- phase-<N>.task-<M>: <hash>  <subject>
+- phase-<N>.task-<M>: <hash>  <subject>   # review artifact
+- phase-<N> (squash): <hash>  <subject>   # final history
 
 ## Review
 - Spec Status: ...
@@ -318,7 +320,8 @@ New session reads `.handover.md` first, then only files listed in `read_first`. 
 - No draft-then-reimplement handoffs — worker output is final edit.
 - Cross-Validation **mandatory for new features / ideation / proposals before planning**; otherwise skip.
 - Route by side (back vs front), not default — never auto-route to one executor.
-- One commit per task by the worker; missing commit hashes in `## COMMITS` block Review.
+- One commit per task by the worker; missing commit hashes in `## COMMITS` block Review. Task commits are review artifacts only.
+- After Review PASS, Claude squashes all phase task commits into one `phase-<N>: <summary>` commit. Final history = one squash commit per phase.
 - Per-task decision note + response file written before worker emits the final completion line.
 - Dispatch prompts written to `prompts/<task-id>.md` by default; inline only for trivial one-liner asks.
 - User overrides ("use Codex" / "use Gemini" / "no external models" / "skip cross-validation") win.
