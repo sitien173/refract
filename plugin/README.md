@@ -32,8 +32,7 @@ docs/plans/2026-05-21-user-auth/
   PLAN.md                            # phases, ownership, Done When
   PHASE-1.md                         # phase journal (Route → Files → Commits → Review → Decisions → Handoff)
   PHASE-2.md
-  .handover.md                       # terse resume pointer (Claude-authored, ≤500 tokens)
-  .sessions.json                     # gitignored — Codex/Gemini SESSION_ID cache
+  .handover.md                       # terse resume pointer + session_refs for worker SESSION IDs
   prompts/
     phase-1.md                       # full dispatch spec for Phase 1 (Codex)
     phase-2.md                       # full dispatch spec for Phase 2 (Gemini)
@@ -46,7 +45,7 @@ docs/plans/2026-05-21-user-auth/
     phase-2.md                       # full EXTERNAL RESPONSE from Gemini
 ```
 
-`prompts/`, `notes/`, `responses/`, `PHASE-*.md`, `PLAN.md`, `.handover.md` are committed — durable audit trail. Only `.sessions.json` is gitignored (local worker state).
+`prompts/`, `notes/`, `responses/`, `PHASE-*.md`, `PLAN.md`, `.handover.md` are committed — durable audit trail.
 
 ### End-to-end example
 
@@ -56,9 +55,9 @@ User: *"Add user auth with email + password. UI on the settings page."*
 2. **`/write-plan`** — Claude writes `docs/plans/2026-05-21-user-auth/PLAN.md` with two phases:
    - Phase 1 (Codex / back-side): hash + verify, sessions table, login/logout endpoints.
    - Phase 2 (Gemini / front-side): settings-page form, validation, error states.
-   Scaffolds `.handover.md`, `.sessions.json`, and `prompts/` `notes/` `responses/` dirs.
+   Scaffolds `.handover.md` (with `session_refs`) and `prompts/` `notes/` `responses/` dirs.
 3. **`/execute-plan` Phase 1** — Claude writes `prompts/phase-1.md`, calls `mcp__openmcp__run(backend="codex", PROMPT="Read spec: docs/plans/.../prompts/phase-1.md", cd="...")`. Codex implements three tasks, commits each (`phase-1.task-1: add bcrypt helper`, …), drops three notes in `notes/`, writes the phase response to `responses/phase-1.md`, returns the completion line.
-4. **Review Phase 1** — Claude runs `git show` per commit + integration tests, scans changed files, marks PHASE-1.md `DONE`, updates `.handover.md` `completed_tasks`.
+4. **Review Phase 1** — Claude runs `git show` per commit + integration tests, scans changed files; on PASS squashes task commits into one (`git reset --soft HEAD~N && git commit -m "phase-1: …"`), marks PHASE-1.md `DONE`, updates `.handover.md` `completed_tasks`.
 5. **Phase 2** — same loop with Gemini.
 6. **Verify** — `verifying-before-completion` runs the full Done When across both phases.
 

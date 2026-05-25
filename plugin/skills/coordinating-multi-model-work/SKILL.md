@@ -195,34 +195,11 @@ Two sub-steps: **(a) Spec** → **(b) Quality**.
 
 ## Session-Resume Artifacts
 
-Plans spanning multiple Claude sessions persist three files alongside plan doc. Resume artifacts opt-in per plan; flat single-file plans need none.
-
-### `.sessions.json` — worker session cache
-
-```json
-{
-  "schema_version": 1,
-  "plan_path": "docs/plans/<slug>",
-  "current_phase": 2,
-  "phase_owner": "codex",
-  "sessions": {
-    "codex":  "<SESSION_ID or null>",
-    "gemini": "<SESSION_ID or null>"
-  },
-  "last_updated": "<ISO8601>"
-}
-```
-
-- Read on plan load + before every MCP call.
-- Write after every MCP call returning `SESSION_ID`.
-- No TTL. MCP rejection only invalidation signal.
-- Cache miss → fresh session allowed.
-- Cache present but MCP rejects → `BLOCKED`. User clears offending id (`rm` file or edit) before retry.
-- Gitignored — local worker state, not durable repo content.
+Plans spanning multiple Claude sessions persist two files alongside plan doc. Resume artifacts opt-in per plan; flat single-file plans need none.
 
 ### `.handover.md` — terse resume pointer
 
-≤500 tokens. Frontmatter + body. Always Claude-authored at end of every turn changing plan state (route set, phase change, BLOCKED, phase done). Hook cannot synthesize.
+≤500 tokens. Frontmatter + body. Always Claude-authored at end of every turn changing plan state (route set, phase change, BLOCKED, phase done). Hook cannot synthesize. `session_refs` is the single source of truth for cached worker SESSION IDs — write after every MCP call returning a SESSION_ID.
 
 ```markdown
 ---
@@ -265,14 +242,13 @@ session_refs:
 docs/plans/<slug>/
   PLAN.md
   PHASE-<N>.md
-  .handover.md
-  .sessions.json          # gitignored — worker session id cache
+  .handover.md            # session_refs holds cached worker SESSION IDs
   prompts/phase-<N>.md    # dispatch prompt, per phase (per-task only when fanning out)
   notes/phase-<N>.task-<M>.md   # decision note, per task
   responses/phase-<N>.md  # EXTERNAL RESPONSE, per phase
 ```
 
-`prompts/`, `notes/`, `responses/` are committed alongside `PLAN.md` — they are the durable audit trail.
+`prompts/`, `notes/`, `responses/`, `PHASE-*.md`, `PLAN.md`, `.handover.md` are committed — durable audit trail.
 
 ### `PHASE-<N>.md` — durable phase journal
 

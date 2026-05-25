@@ -13,7 +13,7 @@ You have superpowers. Your Role is planner, orchestrator, reviewer, integrator. 
 - Compact summary below is a pointer only; the Skill body is authoritative.
 
 **Resume-first protocol:**
-- If a `<RESUME>` block follows this context, treat it as an active plan signal. Read `.handover.md` and every file listed in `read_first` BEFORE proposing a new plan or executing a phase. Honor cached `SESSION_ID`s in `.sessions.json`.
+- If a `<RESUME>` block follows this context, treat it as an active plan signal. Read `.handover.md` and every file listed in `read_first` BEFORE proposing a new plan or executing a phase. Honor cached `SESSION_ID`s in `.handover.md` frontmatter (`session_refs`).
 - If user requests plan/execute work and `docs/plans/<slug>/.handover.md` with `status: ACTIVE` exists for that topic, resume that plan instead of starting a new one.
 - Never silently start fresh when an ACTIVE handover exists for the same topic — ask the user if unsure.
 
@@ -34,7 +34,8 @@ You have superpowers. Your Role is planner, orchestrator, reviewer, integrator. 
 **Hard rules:**
 - MCP failure (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED`, ask the human. No retry, no executor switch, no Task/Agent fallback without explicit consent.
 - One phase, one owner, one review. No draft-then-reimplement handoffs.
-- After any Codex/Gemini MCP call that returns `SESSION_ID`, write it to `<plan-dir>/.sessions.json`. After any plan-state change, rewrite `<plan-dir>/.handover.md`.
+- After any Codex/Gemini MCP call that returns `SESSION_ID`, write it to `.handover.md` frontmatter (`session_refs`). After any plan-state change, rewrite `<plan-dir>/.handover.md`.
+- After Review PASS on any Codex/Gemini phase, squash task commits: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"`. Task commits (`phase-N.task-M:`) are review artifacts only.
 
 **Skill namespace:** `superpowers-ccg:` — Skill load is mandatory per the directives above, not optional.
 ENDOFCOMPACT
@@ -97,7 +98,7 @@ extract_frontmatter_value() {
 build_resume_context() {
     local handovers active active_file status
     local plan current_phase owner next_action read_first
-    local sessions_file codex_state gemini_state
+    local codex_state gemini_state codex_val gemini_val
     local files_list
 
     shopt -s nullglob
@@ -157,21 +158,28 @@ build_resume_context() {
         ' "$active_file" 2>/dev/null || true
     )"
 
-    sessions_file="$(dirname "$active_file")/.sessions.json"
     codex_state="absent"
     gemini_state="absent"
-    if [ -f "$sessions_file" ]; then
-        if grep -Eq '"codex"[[:space:]]*:' "$sessions_file"; then
-            if ! grep -Eq '"codex"[[:space:]]*:[[:space:]]*null([[:space:]]*[,}])?' "$sessions_file"; then
-                codex_state="present"
-            fi
-        fi
-        if grep -Eq '"gemini"[[:space:]]*:' "$sessions_file"; then
-            if ! grep -Eq '"gemini"[[:space:]]*:[[:space:]]*null([[:space:]]*[,}])?' "$sessions_file"; then
-                gemini_state="present"
-            fi
-        fi
-    fi
+    codex_val="$(awk '
+        BEGIN{fm=0;refs=0}
+        /^---[[:space:]]*$/{if(fm==0){fm=1;next}else exit}
+        fm&&/^session_refs[[:space:]]*:/{refs=1;next}
+        refs&&/^[[:space:]]+codex[[:space:]]*:/{
+            v=$0;sub(/^[^:]*:[[:space:]]*/,"",v);sub(/[[:space:]]*#.*/,"",v)
+            gsub(/^[[:space:]]+|[[:space:]]+$/,"",v);print v;exit}
+        refs&&/^[^[:space:]]/{exit}
+    ' "$active_file" 2>/dev/null || true)"
+    gemini_val="$(awk '
+        BEGIN{fm=0;refs=0}
+        /^---[[:space:]]*$/{if(fm==0){fm=1;next}else exit}
+        fm&&/^session_refs[[:space:]]*:/{refs=1;next}
+        refs&&/^[[:space:]]+gemini[[:space:]]*:/{
+            v=$0;sub(/^[^:]*:[[:space:]]*/,"",v);sub(/[[:space:]]*#.*/,"",v)
+            gsub(/^[[:space:]]+|[[:space:]]+$/,"",v);print v;exit}
+        refs&&/^[^[:space:]]/{exit}
+    ' "$active_file" 2>/dev/null || true)"
+    [ -n "$codex_val" ] && [ "$codex_val" != "null" ] && codex_state="present"
+    [ -n "$gemini_val" ] && [ "$gemini_val" != "null" ] && gemini_state="present"
 
     cat <<EOF
 <RESUME>
