@@ -23,6 +23,7 @@ from openmcp.session_marker import augment_prompt, extract_marker_session_id, st
 log = get_logger("agy")
 
 _SETTINGS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
+_CONVERSATIONS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
 _settings_lock = threading.Lock()
 _DISABLED_PLUGIN_NAME = os.environ.get("OPENMCP_AGY_DISABLE_PLUGIN", "superpowers-ccg").strip()
 
@@ -104,7 +105,19 @@ def _patch_model(model: str):
             _SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-_ANSI_ESCAPE = re.compile(r"\x1b\[[\?0-9;]*[a-zA-Z]|\x1b[()][AB012]|\x1b\][^\x07]*\x07|\r")
+_ANSI_ESCAPE = re.compile(
+    r"\x1b\[[\?0-9;]*[a-zA-Z]"
+    r"|\x1b[()][AB012]"
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+    r"|\r"
+)
+_UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+_SESSION_ID_PATTERNS = (
+    re.compile(rf"--conversation[= ]{_UUID_PATTERN}", re.IGNORECASE),
+    re.compile(rf"\bconversation(?:Id|_id)?\b[\"'\s:=]+{_UUID_PATTERN}", re.IGNORECASE),
+    re.compile(rf"\bsession(?:Id|_id)?\b[\"'\s:=]+{_UUID_PATTERN}", re.IGNORECASE),
+    re.compile(rf"\bthread(?:Id|_id)?\b[\"'\s:=]+{_UUID_PATTERN}", re.IGNORECASE),
+)
 
 
 def _strip_ansi(text: str) -> str:
@@ -226,12 +239,38 @@ def run_shell_command_pty(cmd: list[str], cwd: str | None = None) -> str:
 
 
 def _extract_session_id(text: str) -> str:
-    pattern = re.compile(
-        r"--conversation[= ]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
-        re.IGNORECASE,
-    )
-    match = pattern.search(text)
-    return match.group(1) if match else ""
+    for pattern in _SESSION_ID_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
+    if not _CONVERSATIONS_PATH.exists():
+        return ""
+
+    try:
+        conversation_files = sorted(
+            _CONVERSATIONS_PATH.glob("*.pb"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return ""
+
+    for conversation_path in conversation_files[:20]:
+        try:
+            stat = conversation_path.stat()
+        except OSError:
+            continue
+        if stat.st_mtime < started_at - 30:
+            break
+
+        conversation_id = conversation_path.stem
+        if re.fullmatch(_UUID_PATTERN, conversation_id, re.IGNORECASE):
+            return conversation_id
+    return ""
 
 
 def _extract_session_id_from_latest_log() -> str:
@@ -338,6 +377,7 @@ async def execute(params: AgyParams) -> BackendResult:
     error_text = ""
     agent_messages = ""
     augmented_prompt = augment_prompt(params.PROMPT)
+    started_at = time.time()
 
     log.info(
         "agy.execute start cwd=%s model=%s session_id=%s prompt_len=%d",
@@ -396,7 +436,9 @@ async def execute(params: AgyParams) -> BackendResult:
     else:
         extracted_session_id = (
             _extract_session_id(agent_messages)
+            or _extract_session_id_from_recent_conversation_file(started_at)
             or _extract_session_id_from_latest_log()
+            or params.SESSION_ID
         )
         if extracted_session_id:
             log.info("agy: extracted session id via fallback: %s", extracted_session_id)
@@ -413,6 +455,19 @@ async def execute(params: AgyParams) -> BackendResult:
     )
     if result.error:
         log.warning("agy.execute error_text: %s", result.error[:500])
+    if result.outcome == "RETRYABLE" and result.error_class == "no_agent_messages" and params.model:
+        log.warning(
+            "agy: model override %r produced no output; retrying once with agy's configured default model",
+            params.model,
+        )
+        return await execute(
+            AgyParams(
+                PROMPT=params.PROMPT,
+                cd=cd,
+                SESSION_ID=result.SESSION_ID or params.SESSION_ID,
+                model="",
+            )
+        )
     return result
 
 

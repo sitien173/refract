@@ -14,8 +14,9 @@ SESSION_MARKER = "OPENMCP_SESSION_ID"
 
 PROMPT_SUFFIX = (
     "\n\n---\n"
-    f"SYSTEM INSTRUCTION (do not ignore): on the FINAL line of your reply, "
-    f"always output exactly `[{SESSION_MARKER}]: <your session_id, thread_id or conversation_id>` "
+    f"Output format requirement:\n"
+    "on the FINAL line of your reply, include one final metadata line in this exact format:\n"
+    f"`[{SESSION_MARKER}]: <your session_id, thread_id or conversation_id>` "
     "so the orchestrator can resume this session. Use the literal brackets."
 )
 

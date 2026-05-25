@@ -1,4 +1,4 @@
-"""Unified FastMCP server surface for agy and codex backends."""
+"""Unified FastMCP server surface for agy, codex, and gemini backends."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
+from openmcp.backends.gemini import GeminiParams, execute as gemini_execute
 from openmcp.logging_setup import configure as configure_logging, get_logger
 from openmcp.retry import run_with_retry
 
@@ -21,14 +22,28 @@ mcp = FastMCP("openmcp")
 
 _ENV_AGY_MODEL_DEFAULT = "OPENMCP_AGY_MODEL_DEFAULT"
 _ENV_CODEX_MODEL_DEFAULT = "OPENMCP_CODEX_MODEL_DEFAULT"
+_ENV_GEMINI_MODEL_DEFAULT = "OPENMCP_GEMINI_MODEL_DEFAULT"
 _ENV_CODEX_PROFILE_DEFAULT = "OPENMCP_CODEX_PROFILE_DEFAULT"
+_ENV_GEMINI_ROUTE_TO_AGY = "OPENMCP_GEMINI_ROUTE_TO_AGY"
 
 
-def _resolve_model(backend: Literal["agy", "codex"], model: str) -> str:
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _effective_backend(backend: Literal["agy", "codex", "gemini"]) -> Literal["agy", "codex", "gemini"]:
+    if backend == "gemini" and _env_truthy(_ENV_GEMINI_ROUTE_TO_AGY):
+        return "agy"
+    return backend
+
+
+def _resolve_model(backend: Literal["agy", "codex", "gemini"], model: str) -> str:
     if model:
         return model
     if backend == "agy":
         return os.environ.get(_ENV_AGY_MODEL_DEFAULT, "")
+    if backend == "gemini":
+        return os.environ.get(_ENV_GEMINI_MODEL_DEFAULT, "")
     return os.environ.get(_ENV_CODEX_MODEL_DEFAULT, "")
 
 
@@ -41,7 +56,7 @@ def _resolve_profile(profile: str) -> str:
 @mcp.tool(
     name="run",
     description=(
-        "Run either agy or codex backend with retry support. "
+        "Run an agy, codex, or gemini backend with retry support. "
         "When retries occur, SESSION_ID from the previous attempt is reused "
         "to preserve backend conversation continuity. "
         "Response shape depends on `debug`: when False (default), returns only "
@@ -50,7 +65,7 @@ def _resolve_profile(profile: str) -> str:
     ),
 )
 async def run(
-    backend: Literal["agy", "codex"],
+    backend: Literal["agy", "codex", "gemini"],
     PROMPT: str,
     cd: Path,
     SESSION_ID: str = "",
@@ -60,18 +75,19 @@ async def run(
     retry_base_ms: int = 1000,
     debug: bool = False,
 ) -> Dict[str, Any]:
-    """Dispatch a prompt to agy/codex backend with retry and SESSION_ID continuity."""
-    resolved_model = _resolve_model(backend, model)
+    """Dispatch a prompt to agy/codex/gemini backend with retry and SESSION_ID continuity."""
+    effective_backend = _effective_backend(backend)
+    resolved_model = _resolve_model(effective_backend, model)
     resolved_profile = _resolve_profile(profile)
     log.info(
-        "run() backend=%s session_id=%s model=%s profile=%s max_retries=%d debug=%s",
-        backend, SESSION_ID or "<new>", resolved_model, resolved_profile, max_retries, debug,
+        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s max_retries=%d debug=%s",
+        backend, effective_backend, SESSION_ID or "<new>", resolved_model, resolved_profile, max_retries, debug,
     )
     try:
-        if backend == "agy":
+        if effective_backend == "agy":
             params = AgyParams(PROMPT=PROMPT, cd=cd, SESSION_ID=SESSION_ID, model=resolved_model)
             result = await run_with_retry(agy_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
-        else:
+        elif effective_backend == "codex":
             params = CodexParams(
                 PROMPT=PROMPT,
                 cd=cd,
@@ -80,6 +96,9 @@ async def run(
                 profile=resolved_profile,
             )
             result = await run_with_retry(codex_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
+        else:
+            params = GeminiParams(PROMPT=PROMPT, cd=cd, SESSION_ID=SESSION_ID, model=resolved_model)
+            result = await run_with_retry(gemini_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
     except asyncio.CancelledError:
         log.warning(
             "run(): CANCELLED by MCP host (notifications/cancelled or transport closed) "
