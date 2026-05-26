@@ -617,6 +617,82 @@ async def test_explicit_model_and_profile_override_env_defaults(monkeypatch) -> 
     assert captured["profile"] == "custom-profile"
 
 
+@pytest.mark.asyncio
+async def test_env_priority_user_then_openmcp_dotenv_then_plugin(monkeypatch, tmp_path) -> None:
+    import openmcp.server as srv
+
+    captured = {}
+
+    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
+        captured["model"] = params.model
+        captured["profile"] = params.profile
+        return {"success": True, "SESSION_ID": "", "error": ""}
+
+    config = {
+        "mcpServers": {
+            "openmcp": {
+                "env": {
+                    "OPENMCP_CODEX_MODEL_DEFAULT": "plugin-model",
+                    "OPENMCP_CODEX_PROFILE_DEFAULT": "plugin-profile",
+                }
+            }
+        }
+    }
+    (tmp_path / "mcp_config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".openmcp").mkdir(parents=True)
+    (fake_home / ".openmcp" / ".env").write_text(
+        "OPENMCP_CODEX_MODEL_DEFAULT=dotenv-model\nOPENMCP_CODEX_PROFILE_DEFAULT=dotenv-profile\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(srv.Path, "home", lambda: fake_home)
+    monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "user-model")
+    monkeypatch.delenv("OPENMCP_CODEX_PROFILE_DEFAULT", raising=False)
+    monkeypatch.setattr(srv, "run_with_retry", fake)
+
+    await srv.run(backend="codex", PROMPT="x", cd=Path("."))
+
+    assert captured["model"] == "user-model"
+    assert captured["profile"] == "dotenv-profile"
+
+
+@pytest.mark.asyncio
+async def test_env_falls_back_to_plugin_env_when_higher_priorities_missing(monkeypatch, tmp_path) -> None:
+    import openmcp.server as srv
+
+    captured = {}
+
+    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
+        captured["model"] = params.model
+        return {"success": True, "SESSION_ID": "", "error": ""}
+
+    config = {
+        "mcpServers": {
+            "openmcp": {
+                "env": {
+                    "OPENMCP_AGY_MODEL_DEFAULT": "plugin-agy-model",
+                }
+            }
+        }
+    }
+    (tmp_path / "mcp_config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(parents=True)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(srv.Path, "home", lambda: fake_home)
+    monkeypatch.delenv("OPENMCP_AGY_MODEL_DEFAULT", raising=False)
+    monkeypatch.setattr(srv, "run_with_retry", fake)
+
+    await srv.run(backend="agy", PROMPT="x", cd=Path("."))
+
+    assert captured["model"] == "plugin-agy-model"
+
+
 def test_agy_plugin_temporarily_disabled_and_restored(monkeypatch) -> None:
     from openmcp.backends import agy as agy_backend
 

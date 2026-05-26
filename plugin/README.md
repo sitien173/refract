@@ -74,16 +74,63 @@ claude plugin install superpowers-ccg
 - [Claude Code](https://docs.claude.com/docs/claude-code) — `claude --version`
 - [Codex CLI](https://developers.openai.com/codex/quickstart) — `codex --version`
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli) — `gemini --version`
-- [Antigravity CLI](https://github.com/google-gemini/gemini-cli) (the `agy` backend) — `agy --version`
+- [Antigravity CLI] `agy --version`
 - `uv` / `uvx`
 
 ### MCP setup
 
-A single unified server — [openmcp](https://github.com/sitien173/openmcp) — exposes one tool, `mcp__openmcp__run`, with a `backend` field (`"codex"` or `"gemini"` or `"agy"`).
+A single unified server — [openmcp](https://github.com/sitien173/superpowers-ccg/tree/main/openmcp/openmcp) — exposes one tool, `mcp__openmcp__run`, with a `backend` field (`"codex"` or `"gemini"` or `"agy"`).
 
-```bash
-claude mcp add openmcp -s user --transport stdio -- \
-  uvx --from "git+https://github.com/sitien173/openmcp.git#subdirectory=openmcp" openmcp
+Environment resolution priority for OpenMCP defaults:
+
+1. User environment variables
+2. `~/.openmcp/.env`
+
+### OpenMCP environment variables
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `OPENMCP_AGY_MODEL_DEFAULT` | Default `model` when `backend="agy"` and no model arg is passed | empty |
+| `OPENMCP_CODEX_MODEL_DEFAULT` | Default `model` when `backend="codex"` and no model arg is passed | empty |
+| `OPENMCP_GEMINI_MODEL_DEFAULT` | Default `model` when `backend="gemini"` and no model arg is passed | empty |
+| `OPENMCP_CODEX_PROFILE_DEFAULT` | Default `profile` when `backend="codex"` and no profile arg is passed | `mcp-execution` |
+| `OPENMCP_GEMINI_ROUTE_TO_AGY` | Routes `backend="gemini"` calls to `agy` when truthy (`1`, `true`, `yes`, `on`) | `false` |
+| `OPENMCP_AGY_DISABLE_PLUGIN` | Plugin name to disable/restore around `agy` execution | `superpowers-ccg` |
+| `OPENMCP_LOG_FILE` | OpenMCP log file path | `~/.openmcp/openmcp.log` |
+| `OPENMCP_LOG_LEVEL` | OpenMCP log level | `INFO` |
+
+Example `~/.openmcp/.env`:
+
+```env
+OPENMCP_AGY_MODEL_DEFAULT=gemini-3.5-flash
+OPENMCP_CODEX_MODEL_DEFAULT=gpt-5.3-codex
+OPENMCP_GEMINI_MODEL_DEFAULT=gemini-2.5-pro
+OPENMCP_CODEX_PROFILE_DEFAULT=mcp_execution
+OPENMCP_GEMINI_ROUTE_TO_AGY=false
+OPENMCP_AGY_DISABLE_PLUGIN=superpowers-ccg
+OPENMCP_LOG_FILE=~/.openmcp/openmcp.log
+OPENMCP_LOG_LEVEL=INFO
+```
+
+Example plugin env (`mcp_config.json` / `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "openmcp": {
+      "env": {
+        "OPENMCP_AGY_MODEL_DEFAULT": "gemini-3.5-flash",
+        "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.3-codex",
+        "OPENMCP_GEMINI_MODEL_DEFAULT": "gemini-2.5-pro",
+        "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
+        "OPENMCP_GEMINI_ROUTE_TO_AGY": "false",
+        "OPENMCP_AGY_DISABLE_PLUGIN": "superpowers-ccg",
+        "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
+        "OPENMCP_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
 ```
 
 If you previously installed separate `codexmcp` / `geminimcp` servers, remove them:
@@ -143,4 +190,4 @@ Issues: https://github.com/sitien173/superpowers-ccg/issues
 - [obra/superpowers](https://github.com/obra/superpowers) — original Superpowers
 - [BryanHoo/superpowers-ccg](https://github.com/BryanHoo/superpowers-ccg) — CCG fork
 - [fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow) — CCG workflow
-- [sitien173/openmcp](https://github.com/sitien173/openmcp) — unified Codex + Antigravity (agy) MCP server
+- [sitien173/superpowers-ccg (openmcp)](https://github.com/sitien173/superpowers-ccg/tree/main/openmcp/openmcp) — unified Codex + Antigravity (agy) MCP server

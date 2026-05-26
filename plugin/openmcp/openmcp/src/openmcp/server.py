@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Literal
@@ -25,32 +26,94 @@ _ENV_CODEX_MODEL_DEFAULT = "OPENMCP_CODEX_MODEL_DEFAULT"
 _ENV_GEMINI_MODEL_DEFAULT = "OPENMCP_GEMINI_MODEL_DEFAULT"
 _ENV_CODEX_PROFILE_DEFAULT = "OPENMCP_CODEX_PROFILE_DEFAULT"
 _ENV_GEMINI_ROUTE_TO_AGY = "OPENMCP_GEMINI_ROUTE_TO_AGY"
+_PLUGIN_CONFIG_FILES = ("mcp_config.json", ".mcp.json", "mcp.json")
 
 
-def _env_truthy(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+def _openmcp_env_file() -> Path:
+    return Path.home() / ".openmcp" / ".env"
 
 
-def _effective_backend(backend: Literal["agy", "codex", "gemini"]) -> Literal["agy", "codex", "gemini"]:
-    if backend == "gemini" and _env_truthy(_ENV_GEMINI_ROUTE_TO_AGY):
+def _load_plugin_env() -> Dict[str, str]:
+    plugin_env: Dict[str, str] = {}
+    for config_name in _PLUGIN_CONFIG_FILES:
+        config_path = Path.cwd() / config_name
+        if not config_path.exists():
+            continue
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Failed to read plugin config %s: %s", config_path.as_posix(), exc)
+            continue
+        server_env = (
+            config.get("mcpServers", {})
+            .get("openmcp", {})
+            .get("env", {})
+        )
+        if not isinstance(server_env, dict):
+            continue
+        for key, value in server_env.items():
+            if value is None:
+                continue
+            plugin_env[str(key)] = str(value)
+    return plugin_env
+
+
+def _load_openmcp_dotenv() -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    try:
+        lines = _openmcp_env_file().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def _effective_env() -> Dict[str, str]:
+    env = _load_plugin_env()
+    env.update(_load_openmcp_dotenv())
+    env.update(os.environ)
+    return env
+
+
+def _env_truthy(name: str, env: Dict[str, str]) -> bool:
+    return env.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _effective_backend(backend: Literal["agy", "codex", "gemini"], env: Dict[str, str]) -> Literal["agy", "codex", "gemini"]:
+    if backend == "gemini" and _env_truthy(_ENV_GEMINI_ROUTE_TO_AGY, env):
         return "agy"
     return backend
 
 
-def _resolve_model(backend: Literal["agy", "codex", "gemini"], model: str) -> str:
+def _resolve_model(backend: Literal["agy", "codex", "gemini"], model: str, env: Dict[str, str]) -> str:
     if model:
         return model
     if backend == "agy":
-        return os.environ.get(_ENV_AGY_MODEL_DEFAULT, "")
+        return env.get(_ENV_AGY_MODEL_DEFAULT, "")
     if backend == "gemini":
-        return os.environ.get(_ENV_GEMINI_MODEL_DEFAULT, "")
-    return os.environ.get(_ENV_CODEX_MODEL_DEFAULT, "")
+        return env.get(_ENV_GEMINI_MODEL_DEFAULT, "")
+    return env.get(_ENV_CODEX_MODEL_DEFAULT, "")
 
 
-def _resolve_profile(profile: str) -> str:
+def _resolve_profile(profile: str, env: Dict[str, str]) -> str:
     if profile:
         return profile
-    return os.environ.get(_ENV_CODEX_PROFILE_DEFAULT, "mcp-execution")
+    return env.get(_ENV_CODEX_PROFILE_DEFAULT, "mcp-execution")
 
 
 @mcp.tool(
@@ -76,9 +139,10 @@ async def run(
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Dispatch a prompt to agy/codex/gemini backend with retry and SESSION_ID continuity."""
-    effective_backend = _effective_backend(backend)
-    resolved_model = _resolve_model(effective_backend, model)
-    resolved_profile = _resolve_profile(profile)
+    effective_env = _effective_env()
+    effective_backend = _effective_backend(backend, effective_env)
+    resolved_model = _resolve_model(effective_backend, model, effective_env)
+    resolved_profile = _resolve_profile(profile, effective_env)
     log.info(
         "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s max_retries=%d debug=%s",
         backend, effective_backend, SESSION_ID or "<new>", resolved_model, resolved_profile, max_retries, debug,
