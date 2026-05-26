@@ -55,6 +55,36 @@ def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
     assert _extract_session_id_from_latest_session(tmp_path, prompt, time.time() - 1) == session_id
 
 
+def test_codex_session_file_fallback_without_prompt_match(monkeypatch, tmp_path) -> None:
+    from openmcp.backends.codex import _extract_session_id_from_latest_session
+
+    session_id = "019e532a-2d92-7281-8bd1-0110af0a34aa"
+    sessions_dir = tmp_path / "codex-home" / "sessions" / "2026" / "05" / "23"
+    sessions_dir.mkdir(parents=True)
+    session_file = sessions_dir / f"rollout-2026-05-23T11-48-53-{session_id}.jsonl"
+    session_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": session_id,
+                            "cwd": str(tmp_path),
+                            "originator": "codex_exec",
+                        },
+                    }
+                ),
+                json.dumps({"type": "event_msg", "payload": {"message": "different prompt"}}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+    assert _extract_session_id_from_latest_session(tmp_path, "prompt that is not in file", time.time() - 1) == session_id
+
+
 def test_agy_extract_session_id_patterns() -> None:
     from openmcp.backends.agy import _extract_session_id
 
@@ -78,6 +108,110 @@ def test_agy_recent_conversation_file_fallback(monkeypatch, tmp_path) -> None:
     assert agy_backend._extract_session_id_from_recent_conversation_file(time.time() + 120) == ""
 
 
+def test_agy_history_jsonl_extraction(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+    
+    session_id = "f8a70c35-1816-4b97-87b9-ce387e798c37"
+    dot_gemini = tmp_path / ".gemini" / "antigravity-cli"
+    dot_gemini.mkdir(parents=True)
+    history_file = dot_gemini / "history.jsonl"
+    
+    # Write mock history content
+    history_file.write_text(
+        json.dumps({
+            "display": "Read the current README.md and write a plan",
+            "timestamp": int(time.time() * 1000),
+            "workspace": str(tmp_path),
+            "conversationId": session_id
+        }) + "\n",
+        encoding="utf-8"
+    )
+    
+    # Monkeypatch the home path inside agy.py
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    
+    extracted = agy_backend._extract_session_id_from_history(tmp_path, "Read the current")
+    assert extracted == session_id
+    
+    # Try with unmatched prompt snippet
+    extracted_unmatched = agy_backend._extract_session_id_from_history(tmp_path, "unmatched snippet")
+    assert extracted_unmatched == ""
+    
+    # Try with another workspace
+    other_workspace = tmp_path / "other"
+    extracted_other = agy_backend._extract_session_id_from_history(other_workspace)
+    assert extracted_other == ""
+
+
+def test_agy_pb_signature_extraction(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+    
+    session_id = "d597e994-7312-49ec-9317-ce9ae59b38bc"
+    pb_file = tmp_path / f"{session_id}.pb"
+    
+    # Write mock protobuf content containing the workspace path in bytes
+    workspace_bytes = str(tmp_path.resolve()).encode("utf-8")
+    pb_file.write_bytes(b"\x0a\x2fsome-header-bytes\x12\x10" + workspace_bytes + b"\x1a\x08metadata")
+    
+    monkeypatch.setattr(agy_backend, "_CONVERSATIONS_PATH", tmp_path)
+    
+    # Verify signature extraction matches workspace path
+    extracted = agy_backend._extract_session_id_from_pb_signature(tmp_path)
+    assert extracted == session_id
+    
+    # Verify unmatched workspace path returns empty
+    other_workspace = Path("F:/other/workspace")
+    extracted_unmatched = agy_backend._extract_session_id_from_pb_signature(other_workspace)
+    assert extracted_unmatched == ""
+
+
+def test_gemini_history_jsonl_extraction(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import gemini as gemini_backend
+    
+    session_id = "0efd128f-8b9f-4886-9d85-45851b2a2742"
+    dot_gemini = tmp_path / ".gemini" / "antigravity-cli"
+    dot_gemini.mkdir(parents=True)
+    history_file = dot_gemini / "history.jsonl"
+    
+    history_file.write_text(
+        json.dumps({
+            "display": "Explain quantum physics briefly",
+            "timestamp": int(time.time() * 1000),
+            "workspace": str(tmp_path),
+            "conversationId": session_id
+        }) + "\n",
+        encoding="utf-8"
+    )
+    
+    # Monkeypatch home directory for gemini backend history path
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    
+    extracted = gemini_backend._extract_session_id_from_history(tmp_path, "quantum physics")
+    assert extracted == session_id
+    
+    extracted_unmatched = gemini_backend._extract_session_id_from_history(tmp_path, "gravity")
+    assert extracted_unmatched == ""
+
+
+def test_gemini_pb_signature_extraction(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import gemini as gemini_backend
+    
+    session_id = "ff97e5e4-f28b-44c8-a347-f4c7c67e8705"
+    pb_file = tmp_path / f"{session_id}.pb"
+    
+    workspace_bytes = str(tmp_path.resolve()).encode("utf-8")
+    pb_file.write_bytes(b"\x0a\x2fheader\x12\x10" + workspace_bytes + b"\x1a\x08metadata")
+    
+    monkeypatch.setattr(gemini_backend, "_CONVERSATIONS_PATH", tmp_path)
+    
+    extracted = gemini_backend._extract_session_id_from_pb_signature(tmp_path)
+    assert extracted == session_id
+    
+    other_workspace = Path("C:/another/workspace")
+    extracted_unmatched = gemini_backend._extract_session_id_from_pb_signature(other_workspace)
+    assert extracted_unmatched == ""
+
+
 def test_agy_strips_windows_terminal_title_escape() -> None:
     from openmcp.backends.agy import _strip_ansi
 
@@ -88,14 +222,13 @@ def test_agy_strips_windows_terminal_title_escape() -> None:
 @pytest.mark.asyncio
 async def test_agy_falls_back_to_configured_model_when_model_override_has_no_output(monkeypatch, tmp_path) -> None:
     from openmcp.backends import agy as agy_backend
-    from openmcp.session_marker import SESSION_MARKER
 
     calls = []
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
     outputs = iter(
         [
             "",
-            f"PONG\n[{SESSION_MARKER}]: {session_id}",
+            "PONG",
         ]
     )
 
@@ -113,6 +246,7 @@ async def test_agy_falls_back_to_configured_model_when_model_override_has_no_out
     monkeypatch.setattr(agy_backend, "_SETTINGS_PATH", settings_path)
     monkeypatch.setattr(agy_backend, "_temporary_disabled_plugin", noop_context)
     monkeypatch.setattr(agy_backend, "run_shell_command_pty", fake_pty)
+    monkeypatch.setattr(agy_backend, "_extract_session_id_from_history", lambda workspace_path, prompt_snippet="": session_id)
     monkeypatch.setattr(agy_backend, "_extract_session_id_from_recent_conversation_file", lambda started_at: "")
     monkeypatch.setattr(agy_backend, "_extract_session_id_from_latest_log", lambda: "")
     monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
@@ -233,6 +367,50 @@ async def test_bad_cd_codex_fatal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_uses_input_session_id_when_no_extraction_sources_match(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import codex as codex_backend
+
+    def fake_run_shell_command(cmd, cwd=None):
+        yield "PONG"
+
+    monkeypatch.setattr(codex_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
+
+    out = await codex_backend.execute(CodexParams(PROMPT="x", cd=tmp_path, SESSION_ID="resume-session-id"))
+
+    assert out.outcome == "OK"
+    assert out.SESSION_ID == "resume-session-id"
+    assert out.agent_messages == "PONG"
+    assert out.error_class == ""
+
+
+@pytest.mark.asyncio
+async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import codex as codex_backend
+
+    captured = {}
+    session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
+
+    def fake_run_shell_command(cmd, cwd=None):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        yield f"session id: {session_id}"
+        yield "PONG"
+
+    monkeypatch.setattr(codex_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
+
+    out = await codex_backend.execute(CodexParams(PROMPT="x", cd=tmp_path))
+
+    assert captured["cmd"][-1] == "x"
+    assert out.outcome == "OK"
+    assert out.SESSION_ID == session_id
+    assert "PONG" in out.agent_messages
+
+
+@pytest.mark.asyncio
 async def test_bad_cd_gemini_fatal() -> None:
     bad = Path("C:/definitely/not/real/path")
     out = await gemini_execute(GeminiParams(PROMPT="x", cd=bad))
@@ -243,15 +421,14 @@ async def test_bad_cd_gemini_fatal() -> None:
 @pytest.mark.asyncio
 async def test_gemini_uses_plain_output_without_stream_json(monkeypatch, tmp_path) -> None:
     from openmcp.backends import gemini as gemini_backend
-    from openmcp.session_marker import SESSION_MARKER
 
     captured = {}
 
     def fake_run_shell_command(cmd, cwd=None):
         captured["cmd"] = cmd
         captured["cwd"] = cwd
+        yield "session id: sess-marker"
         yield "PONG"
-        yield f"[{SESSION_MARKER}]: sess-marker"
 
     monkeypatch.setattr(gemini_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr(gemini_backend, "run_shell_command", fake_run_shell_command)
@@ -260,7 +437,7 @@ async def test_gemini_uses_plain_output_without_stream_json(monkeypatch, tmp_pat
 
     assert "-o" not in captured["cmd"]
     assert "stream-json" not in captured["cmd"]
-    assert SESSION_MARKER in captured["cmd"][2]
+    assert captured["cmd"][2] == "x"
     assert out.outcome == "OK"
     assert out.SESSION_ID == "sess-marker"
     assert out.agent_messages == "PONG"
@@ -274,6 +451,8 @@ async def test_gemini_plain_output_without_session_id_is_warning(monkeypatch, tm
     def fake_run_shell_command(cmd, cwd=None):
         yield "PONG"
 
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(gemini_backend, "_CONVERSATIONS_PATH", tmp_path / "conversations")
     monkeypatch.setattr(gemini_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr(gemini_backend, "run_shell_command", fake_run_shell_command)
 

@@ -16,13 +16,13 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 
 ### Per-task discipline (Codex / Gemini phases)
 
-- **Prompts to file.** Dispatch prompt body lives at `docs/plans/<slug>/prompts/phase-<N>.md`; the MCP `PROMPT` field is just a pointer. Inline allowed only for one- or two-sentence asks with no context.
+- **Prompts to file.** Dispatch prompt body lives at `docs/plans/<slug>/phase-<NN>/prompt.md` (zero-padded phase id); the MCP `PROMPT` field is just a pointer. Inline allowed only for one- or two-sentence asks with no context.
 - **One commit per task** by the worker, message prefix `phase-<N>.task-<M>: <subject>`. Claude does not commit on the worker's behalf.
-- **Decision note per task** at `notes/phase-<N>.task-<M>.md` — captures decisions made outside the spec, deviations, tradeoffs, assumptions, follow-ups. Empty sections written as `- none`.
-- **One EXTERNAL RESPONSE per phase** at `responses/phase-<N>.md`. Required sections: `## META` (Phase, Owner, SessionID, Started, Finished, Plan dir), `## SUMMARY`, `## FILES MODIFIED`, `## COMMITS`, `## NOTES`, `## SPEC COMPLIANCE`, `## CLARIFICATIONS NEEDED`, `## NEXT`.
+- **Decision notes — one file per phase** at `phase-<NN>/notes.md`. Worker appends a `## Task <M>` block after each task with sub-sections: Decisions, Spec deviations, Tradeoffs, Assumptions, Follow-ups. Empty sub-sections written as `- none`.
+- **Phase journal** at `phase-<NN>/journal.md`. Claude writes the Route skeleton at phase start; worker appends the full `# EXTERNAL RESPONSE` block under `## External Response` at phase end. Claude finalizes Review + Squash Commit sections after Review.
 - **Completion line** as the final line of the worker reply (META carries the structured fields, so the line stays terse):
   ```
-  Phase <N> completed. Response file: docs/plans/<slug>/responses/phase-<N>.md.
+  Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
   ```
 
 ### Example plan layout
@@ -30,22 +30,18 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 ```
 docs/plans/2026-05-21-user-auth/
   PLAN.md                            # phases, ownership, Done When
-  PHASE-1.md                         # phase journal (Route → Files → Commits → Review → Decisions → Handoff)
-  PHASE-2.md
-  .handover.md                       # terse resume pointer + session_refs for worker SESSION IDs
-  prompts/
-    phase-1.md                       # full dispatch spec for Phase 1 (Codex)
-    phase-2.md                       # full dispatch spec for Phase 2 (Gemini)
-  notes/
-    phase-1.task-1.md                # per-task decision notes
-    phase-1.task-2.md
-    phase-2.task-1.md
-  responses/
-    phase-1.md                       # full EXTERNAL RESPONSE from Codex
-    phase-2.md                       # full EXTERNAL RESPONSE from Gemini
+  .handover.md                       # terse resume pointer + session_refs
+  phase-01/                          # created lazily when Phase 1 starts
+    prompt.md                        # full dispatch spec for Phase 1 (Codex)
+    notes.md                         # ## Task 1, ## Task 2, ## Task 3 decision blocks
+    journal.md                       # Route + appended EXTERNAL RESPONSE + Review
+  phase-02/
+    prompt.md                        # Gemini dispatch
+    notes.md
+    journal.md
 ```
 
-`prompts/`, `notes/`, `responses/`, `PHASE-*.md`, `PLAN.md`, `.handover.md` are committed — durable audit trail.
+Phase folders are committed once the phase finishes — durable audit trail. No `.gitkeep`, no pre-scaffolded empty dirs.
 
 ### End-to-end example
 
@@ -55,9 +51,9 @@ User: *"Add user auth with email + password. UI on the settings page."*
 2. **`/write-plan`** — Claude writes `docs/plans/2026-05-21-user-auth/PLAN.md` with two phases:
    - Phase 1 (Codex / back-side): hash + verify, sessions table, login/logout endpoints.
    - Phase 2 (Gemini / front-side): settings-page form, validation, error states.
-   Scaffolds `.handover.md` (with `session_refs`) and `prompts/` `notes/` `responses/` dirs.
-3. **`/execute-plan` Phase 1** — Claude writes `prompts/phase-1.md`, calls `mcp__openmcp__run(backend="codex", PROMPT="Read spec: docs/plans/.../prompts/phase-1.md", cd="...")`. Codex implements three tasks, commits each (`phase-1.task-1: add bcrypt helper`, …), drops three notes in `notes/`, writes the phase response to `responses/phase-1.md`, returns the completion line.
-4. **Review Phase 1** — Claude runs `git show` per commit + integration tests, scans changed files; on PASS squashes task commits into one (`git reset --soft HEAD~N && git commit -m "phase-1: …"`), marks PHASE-1.md `DONE`, updates `.handover.md` `completed_tasks`.
+   Scaffolds `.handover.md` (with `session_refs`). Phase folders are created lazily when each phase starts.
+3. **`/execute-plan` Phase 1** — Claude creates `phase-01/` with `journal.md` (Route skeleton), writes `phase-01/prompt.md`, calls `mcp__openmcp__run(backend="codex", PROMPT="Read spec: <ABS>/docs/plans/.../phase-01/prompt.md", cd="...")`. Codex implements three tasks, commits each (`phase-1.task-1: add bcrypt helper`, …), appends a `## Task <M>` block to `phase-01/notes.md` after each, appends the EXTERNAL RESPONSE to `phase-01/journal.md`, returns the completion line.
+4. **Review Phase 1** — Claude runs `git show` per commit + integration tests, scans changed files; on PASS squashes task commits into one (`git reset --soft HEAD~N && git commit -m "phase-1: …"`), finalizes Review + Squash Commit sections of `phase-01/journal.md`, updates `.handover.md` `completed_tasks`.
 5. **Phase 2** — same loop with Gemini.
 6. **Verify** — `verifying-before-completion` runs the full Done When across both phases.
 

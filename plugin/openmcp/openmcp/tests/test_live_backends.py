@@ -4,6 +4,7 @@ import pytest
 
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
+from openmcp.backends.gemini import GeminiParams, execute as gemini_execute
 from openmcp.server import run as server_run
 
 
@@ -48,3 +49,10 @@ async def test_live_gemini_route_to_agy(monkeypatch) -> None:
     assert out.get("agent_messages", "").strip(), "gemini route returned empty agent_messages"
     assert "PONG" in out.get("agent_messages", "").upper(), "gemini route output missing PONG"
     assert out.get("SESSION_ID", "").strip(), "gemini route returned empty SESSION_ID"
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_live_gemini_execute() -> None:
+    out = await gemini_execute(GeminiParams(PROMPT=PROMPT, cd=Path.cwd(), model="gemini-2.5-flash"))
+    _assert_live_result("gemini", out)

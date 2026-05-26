@@ -18,7 +18,6 @@ from typing import Generator
 
 from . import BackendResult
 from openmcp.logging_setup import get_logger
-from openmcp.session_marker import augment_prompt, extract_marker_session_id, strip_marker
 
 log = get_logger("agy")
 
@@ -246,6 +245,70 @@ def _extract_session_id(text: str) -> str:
     return ""
 
 
+def _extract_session_id_from_history(workspace_path: Path, prompt_snippet: str = "") -> str:
+    history_file = Path.home() / ".gemini" / "antigravity-cli" / "history.jsonl"
+    if not history_file.exists():
+        return ""
+
+    resolved_workspace = str(workspace_path.resolve()).lower()
+    snippet = prompt_snippet.strip()[:60].lower() if prompt_snippet else ""
+
+    try:
+        with history_file.open("r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+            
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                raw_workspace = entry.get("workspace", "")
+                if not raw_workspace:
+                    continue
+                entry_workspace = str(Path(raw_workspace).resolve()).lower()
+                
+                if entry_workspace == resolved_workspace:
+                    if snippet:
+                        display_text = entry.get("display", "").lower()
+                        if snippet in display_text:
+                            return entry.get("conversationId", "")
+                    else:
+                        return entry.get("conversationId", "")
+            except (json.JSONDecodeError, KeyError):
+                continue
+    except OSError:
+        pass
+    return ""
+
+
+def _extract_session_id_from_pb_signature(workspace_path: Path) -> str:
+    if not _CONVERSATIONS_PATH.exists():
+        return ""
+
+    workspace_bytes = str(workspace_path.resolve()).encode("utf-8", errors="ignore")
+
+    try:
+        pb_files = sorted(
+            _CONVERSATIONS_PATH.glob("*.pb"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for pb_path in pb_files[:10]:
+            try:
+                content = pb_path.read_bytes()
+                if workspace_bytes in content:
+                    stem = pb_path.stem
+                    if re.fullmatch(_UUID_PATTERN, stem, re.IGNORECASE):
+                        return stem
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return ""
+
+
+
 def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
     if not _CONVERSATIONS_PATH.exists():
         return ""
@@ -304,6 +367,8 @@ def _extract_session_id_from_latest_log() -> str:
 def _classify_output(agent_messages: str, session_id: str, error_text: str) -> BackendResult:
     full_error = error_text.strip()
     lower = f"{agent_messages}\n{full_error}".lower()
+    # Strip node_tls_reject_unauthorized to avoid false-positive auth failure classification
+    lower = lower.replace("node_tls_reject_unauthorized", "")
 
     if any(token in lower for token in ("invalid model", "unknown model", "not a valid model", "authentication", "unauthorized", "forbidden", "api key", "not logged")):
         return BackendResult(
@@ -376,7 +441,6 @@ async def execute(params: AgyParams) -> BackendResult:
     cwd = cd.absolute().as_posix()
     error_text = ""
     agent_messages = ""
-    augmented_prompt = augment_prompt(params.PROMPT)
     started_at = time.time()
 
     log.info(
@@ -391,7 +455,7 @@ async def execute(params: AgyParams) -> BackendResult:
         with _temporary_disabled_plugin(_DISABLED_PLUGIN_NAME), _patch_model(params.model):
             if os.name == "nt":
                 cmd = [
-                    "agy", "--print", augmented_prompt,
+                    "agy", "--print", params.PROMPT,
                     "--dangerously-skip-permissions",
                     "--add-dir", cwd,
                 ]
@@ -403,7 +467,7 @@ async def execute(params: AgyParams) -> BackendResult:
                     tmp_log_path = tmp.name
                 try:
                     cmd = [
-                        "agy", "--print", augmented_prompt,
+                        "agy", "--print", params.PROMPT,
                         "--dangerously-skip-permissions",
                         "--add-dir", cwd,
                         "--log-file", tmp_log_path,
@@ -428,22 +492,18 @@ async def execute(params: AgyParams) -> BackendResult:
         log.exception("agy: unexpected error during run")
         error_text = str(exc)
 
-    marker_id = extract_marker_session_id(agent_messages)
-    agent_messages = strip_marker(agent_messages)
-    if marker_id:
-        extracted_session_id = marker_id
-        log.info("agy: extracted session id from marker: %s", marker_id)
+    extracted_session_id = (
+        _extract_session_id(agent_messages)
+        or _extract_session_id_from_history(cd, params.PROMPT)
+        or _extract_session_id_from_pb_signature(cd)
+        or _extract_session_id_from_recent_conversation_file(started_at)
+        or _extract_session_id_from_latest_log()
+        or params.SESSION_ID
+    )
+    if extracted_session_id:
+        log.info("agy: extracted session id via fallback: %s", extracted_session_id)
     else:
-        extracted_session_id = (
-            _extract_session_id(agent_messages)
-            or _extract_session_id_from_recent_conversation_file(started_at)
-            or _extract_session_id_from_latest_log()
-            or params.SESSION_ID
-        )
-        if extracted_session_id:
-            log.info("agy: extracted session id via fallback: %s", extracted_session_id)
-        else:
-            log.warning("agy: no session id extracted (marker + fallback both failed)")
+        log.warning("agy: no session id extracted from output/history/pb/log/params")
 
     result = _classify_output(agent_messages, extracted_session_id, error_text)
     log.info(

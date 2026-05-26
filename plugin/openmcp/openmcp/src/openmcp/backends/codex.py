@@ -18,7 +18,6 @@ from typing import Generator
 
 from . import BackendResult
 from openmcp.logging_setup import get_logger
-from openmcp.session_marker import augment_prompt, extract_marker_session_id, strip_marker
 
 log = get_logger("codex")
 
@@ -139,6 +138,10 @@ _SESSION_ID_STDOUT_RE = re.compile(
     r"^\s*session id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+_SESSION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def _codex_config_path() -> Path:
@@ -197,6 +200,7 @@ def _extract_session_id_from_latest_session(cwd: Path, prompt: str, started_at: 
     except OSError:
         return ""
 
+    cwd_match_without_prompt = ""
     for session_path in session_files[:50]:
         try:
             stat = session_path.stat()
@@ -212,21 +216,60 @@ def _extract_session_id_from_latest_session(cwd: Path, prompt: str, started_at: 
         except OSError:
             continue
 
-        try:
-            meta = json.loads(first_line)
-        except json.JSONDecodeError:
+        meta = {}
+        for line in (first_line, *head.splitlines()[:10]):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            if parsed.get("type") == "session_meta":
+                meta = parsed
+                break
+        if not meta:
             continue
 
         payload = meta.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
         session_id = payload.get("id", "")
         session_cwd = payload.get("cwd", "")
-        if not session_id or not session_cwd or not _same_path(session_cwd, cwd):
+        if (
+            not session_id
+            or not _SESSION_ID_RE.fullmatch(session_id)
+            or not session_cwd
+            or not _same_path(session_cwd, cwd)
+        ):
             continue
         if prompt_hint and prompt_hint not in head:
+            if not cwd_match_without_prompt:
+                cwd_match_without_prompt = session_id
             continue
         return session_id
 
-    return ""
+    return cwd_match_without_prompt
+
+
+def _resolve_session_id(
+    *,
+    last_message: str,
+    stdout_text: str,
+    cwd: Path,
+    prompt: str,
+    started_at: float,
+    fallback_session_id: str,
+) -> tuple[str, str]:
+    candidates: tuple[tuple[str, str], ...] = (
+        ("last-message:session-id-line", _extract_session_id_from_stdout(last_message)),
+        ("stdout:session-id-line", _extract_session_id_from_stdout(stdout_text)),
+        ("codex-jsonl", _extract_session_id_from_latest_session(cwd, prompt, started_at)),
+        ("params:SESSION_ID", fallback_session_id.strip()),
+    )
+    for source, value in candidates:
+        if value:
+            return value, source
+    return "", ""
 
 
 def _classify(*, agent_messages: str, session_id: str, error_text: str) -> BackendResult:
@@ -337,8 +380,7 @@ async def execute(params: CodexParams) -> BackendResult:
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])
 
-    augmented_prompt = augment_prompt(params.PROMPT)
-    prompt = _windows_escape(augmented_prompt) if os.name == "nt" else augmented_prompt
+    prompt = _windows_escape(params.PROMPT) if os.name == "nt" else params.PROMPT
     cmd += ["--", prompt]
 
     log.info(
@@ -384,18 +426,21 @@ async def execute(params: CodexParams) -> BackendResult:
         "last_message_file" if last_message.strip() else "stdout_fallback",
     )
 
-    session_id = (
-        extract_marker_session_id(last_message)
-        or extract_marker_session_id(stdout_text)
-        or _extract_session_id_from_stdout(stdout_text)
-        or _extract_session_id_from_latest_session(cd, augmented_prompt, started_at)
+    session_id, session_id_source = _resolve_session_id(
+        last_message=last_message,
+        stdout_text=stdout_text,
+        cwd=cd,
+        prompt=params.PROMPT,
+        started_at=started_at,
+        fallback_session_id=params.SESSION_ID,
     )
-    agent_messages = strip_marker(agent_messages)
 
-    if not session_id:
+    if session_id_source:
+        log.info("codex: resolved session id via %s", session_id_source)
+    else:
         log.warning(
-            "codex: no session id found via marker (last_msg_len=%d stdout_len=%d). "
-            "The agent may not have followed the marker instruction.",
+            "codex: no session id found from stdout/session-file/params "
+            "(last_msg_len=%d stdout_len=%d).",
             len(last_message), len(stdout_text),
         )
 

@@ -15,7 +15,6 @@ from typing import Generator
 
 from . import BackendResult
 from openmcp.logging_setup import get_logger
-from openmcp.session_marker import augment_prompt, extract_marker_session_id, strip_marker
 
 log = get_logger("gemini")
 
@@ -136,8 +135,105 @@ def _message_content(value: object) -> str:
     return str(value)
 
 
+_CONVERSATIONS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+_UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+
+
+def _extract_session_id_from_history(workspace_path: Path, prompt_snippet: str = "") -> str:
+    history_file = Path.home() / ".gemini" / "antigravity-cli" / "history.jsonl"
+    if not history_file.exists():
+        return ""
+
+    resolved_workspace = str(workspace_path.resolve()).lower()
+    snippet = prompt_snippet.strip()[:60].lower() if prompt_snippet else ""
+
+    try:
+        with history_file.open("r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+            
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                raw_workspace = entry.get("workspace", "")
+                if not raw_workspace:
+                    continue
+                entry_workspace = str(Path(raw_workspace).resolve()).lower()
+                
+                if entry_workspace == resolved_workspace:
+                    if snippet:
+                        display_text = entry.get("display", "").lower()
+                        if snippet in display_text:
+                            return entry.get("conversationId", "")
+                    else:
+                        return entry.get("conversationId", "")
+            except (json.JSONDecodeError, KeyError):
+                continue
+    except OSError:
+        pass
+    return ""
+
+
+def _extract_session_id_from_pb_signature(workspace_path: Path) -> str:
+    if not _CONVERSATIONS_PATH.exists():
+        return ""
+
+    workspace_bytes = str(workspace_path.resolve()).encode("utf-8", errors="ignore")
+
+    try:
+        pb_files = sorted(
+            _CONVERSATIONS_PATH.glob("*.pb"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for pb_path in pb_files[:10]:
+            try:
+                content = pb_path.read_bytes()
+                if workspace_bytes in content:
+                    stem = pb_path.stem
+                    if re.fullmatch(_UUID_PATTERN, stem, re.IGNORECASE):
+                        return stem
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return ""
+
+
+def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
+    if not _CONVERSATIONS_PATH.exists():
+        return ""
+
+    try:
+        conversation_files = sorted(
+            _CONVERSATIONS_PATH.glob("*.pb"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return ""
+
+    for conversation_path in conversation_files[:20]:
+        try:
+            stat = conversation_path.stat()
+        except OSError:
+            continue
+        if stat.st_mtime < started_at - 30:
+            break
+
+        conversation_id = conversation_path.stem
+        if re.fullmatch(_UUID_PATTERN, conversation_id, re.IGNORECASE):
+            return conversation_id
+    return ""
+
+
+
 def _classify(*, agent_messages: str, session_id: str, error_text: str) -> BackendResult:
     combined = f"{error_text}\n{agent_messages}".lower()
+    # Strip node_tls_reject_unauthorized to avoid false-positive auth failure classification
+    combined = combined.replace("node_tls_reject_unauthorized", "")
 
     if any(token in combined for token in _FATAL_TOKENS):
         return BackendResult(
@@ -207,13 +303,14 @@ async def execute(params: GeminiParams) -> BackendResult:
             error_class="missing_cli",
         )
 
-    augmented_prompt = augment_prompt(params.PROMPT)
+    started_at = time.time()
     cmd = [
         "gemini",
         "--prompt",
-        augmented_prompt,
+        params.PROMPT,
         "--approval-mode=yolo",
         "--allowed-mcp-server-names=[*]",
+        "--skip-trust",
     ]
     if params.model:
         cmd.extend(["--model", params.model])
@@ -267,16 +364,18 @@ async def execute(params: GeminiParams) -> BackendResult:
         error_text += f"\n\n[unexpected] {exc}"
 
     stdout_text = "\n".join(stdout_lines)
-    marker_id = extract_marker_session_id(agent_messages) or extract_marker_session_id(stdout_text)
-    if marker_id:
-        session_id = marker_id
-        log.info("gemini: extracted session id from marker: %s", marker_id)
-    elif not session_id:
-        log.warning(
-            "gemini: no session id found via marker or stdout. "
-            "The agent may not have followed the marker instruction."
+    if not session_id:
+        session_id = (
+            _extract_session_id_from_history(cd, params.PROMPT)
+            or _extract_session_id_from_pb_signature(cd)
+            or _extract_session_id_from_recent_conversation_file(started_at)
+            or params.SESSION_ID
         )
-    agent_messages = strip_marker(agent_messages)
+        if session_id:
+            log.info("gemini: extracted session id via fallback: %s", session_id)
+        else:
+            log.warning("gemini: no session id found via stdout/history/pb/params")
+    agent_messages = agent_messages.rstrip()
 
     result = _classify(
         agent_messages=agent_messages,
