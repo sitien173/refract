@@ -104,7 +104,6 @@ Design source: `docs/plans/2026-05-04-all-skills-refactor-design.md`
 - Modify: `skills/coordinating-multi-model-work/SKILL.md`
 - Modify: `skills/executing-phases/SKILL.md`
 - Modify: `skills/executing-plans/SKILL.md`
-- Modify: `skills/debugging-systematically/SKILL.md`
 - Modify: `skills/verifying-before-completion/SKILL.md`
 - Modify: `skills/karpathy-llm-wiki/SKILL.md`
 - Create or modify: per-skill `references/*.md` only if needed to preserve details moved out of `SKILL.md`

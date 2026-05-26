@@ -5,40 +5,32 @@ description: "Turns a confirmed design into a phase-based implementation plan. E
 
 # Writing Plans
 
+Phase-plan author. The routing table, owner semantics, and resume artifacts all live in `coordinating-multi-model-work` — load it first.
+
 ## Use When
 
-- Design confirmed, user wants implementation plan.
+- Design is confirmed and the user wants an implementation plan.
 - Work needs phase boundaries before execution.
-- Plan must be executable one phase at a time.
 
 ## Workflow
 
-1. **Resume check first.** Glob `docs/plans/*/.handover.md`. Read frontmatter `plan` + `status`. Any `status: ACTIVE` handover matching user topic (slug overlap or explicit reference) → STOP, hand off to `executing-plans`. If unsure topic matches, ask user.
-2. Read design doc + minimum code context to scope phases.
-3. Break work into coarse implementation phases (not tiny task lists).
-4. Put 2–4 related tasks per phase.
-5. Assign **one owner per phase by side**:
-   - `claude` — simple/trivial tasks Claude handles directly.
-   - `codex` — back-side: backend, API, logic, database, system, infra, CI/CD, scripts, server-side tests.
-   - `gemini` — front-side: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps.
-   - Full-stack work → split into back-side + front-side sub-phases.
-6. Include file set, acceptance criteria, reviewer checklist, integration checks per phase.
-7. **Pick storage layout:**
-   - Multi-phase / multi-session → folder `docs/plans/YYYY-MM-DD-<slug>/` containing:
-     - `PLAN.md`
-     - `.handover.md` skeleton (status `ACTIVE`, current_phase `0`, next_action "Execute Phase 1", `completed_tasks:` empty, `session_refs: {codex: null, gemini: null}`)
-     - **No `phase-NN/` directories at write time.** Each phase folder is created lazily when that phase starts. No `.gitkeep` placeholders.
-   - Single-phase / docs-only → flat file `docs/plans/YYYY-MM-DD-<slug>-implementation-plan.md` (no resume artifacts).
-8. Offer execution with `executing-plans`.
+1. **Resume check first.** Glob `docs/plans/*/.handover.md` and read each frontmatter. Any `status: ACTIVE` handover whose topic overlaps the user request → STOP and hand off to `executing-plans`. Ask the user if the topic match is unclear.
+2. Read the design doc + minimum code context needed to scope phases.
+3. Break the work into coarse phases (not tiny task lists); 2–4 related tasks per phase.
+4. Assign **one owner per phase by side** per `coordinating-multi-model-work` routing rules. Full-stack phases split into back-side + front-side sub-phases.
+5. Each phase specifies: goal, files (modify/create), tasks, acceptance criteria, reviewer checklist, integration checks.
+6. **Pick storage layout:**
+   - Multi-phase / multi-session → folder `docs/plans/YYYY-MM-DD-<slug>/` containing only `PLAN.md` + `.handover.md` skeleton (`status: ACTIVE`, `current_phase: 0`, `next_action: "Execute Phase 1"`, empty `completed_tasks`, `session_refs: {codex: null, gemini: null}`). **No `phase-NN/` directories at write time** — they are created lazily by the executor.
+   - Single-phase / docs-only → flat `docs/plans/YYYY-MM-DD-<slug>-implementation-plan.md` (no resume artifacts).
+7. Offer execution via `executing-plans`.
 
 ## Hard Rules
 
 - Route by side; no default executor.
-- No draft-then-reimplement handoffs.
-- Cross-Validation only when phase straddles unresolved architecture spanning both sides.
-- Resume check mandatory before any new plan write. Never start fresh when ACTIVE handover covers topic.
-- Folder-layout plans scaffold only `PLAN.md` + `.handover.md` at write time. `phase-NN/` directories are created lazily by the executor when each phase starts. No `.gitkeep`, no empty dirs.
-- Phase IDs are zero-padded two digits: `phase-01`, `phase-02`, …, `phase-10`. Keeps lexical order = execution order.
+- Resume check is mandatory — never start fresh when an `ACTIVE` handover covers the topic.
+- Folder-layout plans scaffold only `PLAN.md` + `.handover.md`. No `.gitkeep`, no empty dirs.
+- Phase IDs are zero-padded two digits (`phase-01`, `phase-02`, …) so lexical order = execution order.
+- Cross-Validation in the plan only when a phase straddles unresolved architecture spanning both sides.
 
 ## Phase Shape
 
@@ -70,4 +62,5 @@ description: "Turns a confirmed design into a phase-based implementation plan. E
 
 ## References
 
-- `skills/coordinating-multi-model-work/SKILL.md` — 3-gate workflow, routing, review.
+- `skills/coordinating-multi-model-work/SKILL.md` — canonical 3-gate workflow, routing table, resume-artifact schema.
+- `skills/executing-plans/SKILL.md` — runs the plan one phase at a time.

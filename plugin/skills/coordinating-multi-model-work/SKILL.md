@@ -37,13 +37,13 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 ### 2. Execute
 
 - **Claude-owned (simple):** edit directly with built-in tools.
-- **Codex / Gemini:** call `mcp__openmcp__run` with `backend="codex"` (back-side) or `backend="agy"` (front-side, Gemini via Antigravity CLI). Send: task summary, files, `Done When`, minimum hydrated context (no full files, no pre-written implementation). Default `debug=False` — worker appends its EXTERNAL RESPONSE to `phase-<NN>/journal.md`, no need to inflate the MCP reply.
+- **Codex / Gemini:** call `mcp__openmcp__run` with `backend="codex"` (back-side) or `backend="gemini"`. Send: task summary, files, `Done When`, minimum hydrated context (no full files, no pre-written implementation). Default `debug=False` — worker appends its EXTERNAL RESPONSE to `phase-<NN>/journal.md`, no need to inflate the MCP reply.
 - **Cross-Validation:** ask Codex and Gemini same narrow question, compare answers, pick direction, route implementation to side owner. No two parallel implementations.
-- Worker edits files via MCP write tools. Response must list every changed file under `## FILES MODIFIED`.
+- Worker edits files via own write tools. Response must list every changed file under `## FILES MODIFIED`.
 - **Same-phase fix:** reuse `SESSION_ID`, send only `FIX:` + delta context.
-- **MCP failure** (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED`, ask user. No retry, no executor switch, no Task/Agent fallback without explicit consent.
+- **MCP failure** → output `BLOCKED`, ask user. No retry, no executor switch, no Task/Agent fallback without explicit consent.
 - **Prompt-to-file by default:** write every dispatch prompt to `docs/plans/<slug>/phase-<NN>/prompt.md` (zero-padded phase id) and pass that path to the worker. Inline-in-MCP-`PROMPT` allowed only for one- or two-sentence asks with no context block.
-- **Always pass ABSOLUTE paths to MCP workers.** Workers (especially Gemini/agy) do not reliably resolve relative paths against Claude's CWD — a relative path like `docs/plans/.../phase-1.md` can trigger a full-device scan or wrong-repo resolution. Resolve every path (dispatch prompt, input files, plan dir, output targets) to an absolute path before placing it in the MCP `PROMPT`. Use forward slashes on Windows (e.g. `F:/projects/.../prompts/phase-1.md`). Also pass `cd` to `mcp__openmcp__run` as an absolute path. This rule applies to every file path mentioned inside the dispatch prompt body as well — input file lists, output targets, decision-note paths, response paths.
+- **Always pass ABSOLUTE paths to MCP workers.** pass `cd` to `mcp__openmcp__run` as an absolute path. This rule applies to every file path mentioned inside the dispatch prompt body as well — input file lists, output targets, decision-note paths, response paths.
 
 **Per-task git commits (required for Codex / Gemini phases):**
 

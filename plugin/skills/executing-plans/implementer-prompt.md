@@ -1,31 +1,30 @@
 # Implementer Prompt Template
 
-Use when dispatching Codex or Gemini worker for one phase.
+Dispatch template for Codex / Gemini phase workers. The worker response format (`# EXTERNAL RESPONSE` block, `## COMMITS`, `## NOTES`, completion line) is canonical in `coordinating-multi-model-work` — workers follow that spec; this file is the per-phase **input** spec only.
 
-By default, write the prompt body to `docs/plans/<slug>/phase-<NN>/prompt.md` (zero-padded phase id) and pass that file path to the worker. Only inline the prompt in MCP `PROMPT` when it is one or two sentences with no context block.
+## MCP call
 
-**Absolute paths required.** Resolve `docs/plans/<slug>/...` to an absolute path before sending it through `mcp__openmcp__run`. Gemini (agy) does not reliably resolve relative paths against Claude's CWD and will scan the device looking for the file. Use forward slashes on Windows (e.g. `F:/projects/<repo>/docs/plans/<slug>/phase-01/prompt.md`). Pass the `cd` argument as an absolute path as well, and make every file path inside the prompt body (inputs, outputs, notes, journal, plan dir) absolute.
+Default: prompt body lives in `<plan-dir>/phase-<NN>/prompt.md`; the MCP `PROMPT` field is a thin pointer. Inline only for one- or two-sentence asks with no context block.
 
 ```text
-External model call:
-  target: mcp__openmcp__run with backend="codex" (back-side) or backend="agy" (front-side, Gemini)
-  description: "Implement Phase N: [phase name]"
-  cd: <ABSOLUTE repo root, e.g. F:/projects/<repo>>
-  prompt: |
+mcp__openmcp__run:
+  backend: "codex" (back-side) | "gemini" or "agy" (front-side)
+  cd: <ABSOLUTE repo root>
+  PROMPT: |
+    [one sentence of persona / mindset — e.g. "You are an experienced backend engineer implementing the API endpoints for Phase N with clean code and good test coverage."]
+
     Read your full task spec from: <ABSOLUTE>/docs/plans/<slug>/phase-<NN>/prompt.md
-    Plan dir: <ABSOLUTE>/docs/plans/<slug>
-    Phase dir: <ABSOLUTE>/docs/plans/<slug>/phase-<NN>
-    Phase: <N>
-    Owner: codex | gemini
+    Plan dir:   <ABSOLUTE>/docs/plans/<slug>
+    Phase dir:  <ABSOLUTE>/docs/plans/<slug>/phase-<NN>
+    Phase:      <N>
     Follow every rule in the spec file. Emit the completion line when done.
-    All file paths in this prompt and in the spec file are absolute — do not reinterpret them as relative.
 ```
 
-## Prompt file contents (`docs/plans/<slug>/phase-<NN>/prompt.md`)
+**Absolute paths only.** The pointer path, `cd`, and every path inside the prompt body must be absolute with forward slashes on Windows. Gemini/agy mis-resolves relative paths.
+
+## Prompt file (`<plan-dir>/phase-<NN>/prompt.md`)
 
 ```markdown
-You own one implementation phase with 2–4 related tasks.
-
 ## Original User Request
 [one or two compressed sentences]
 
@@ -52,71 +51,22 @@ You own one implementation phase with 2–4 related tasks.
 - Do not duplicate file content in the response.
 - Do not redesign the phase or produce a reference prototype.
 - If anything is unclear, list it under CLARIFICATIONS NEEDED and stop.
-- Context excerpts are reference only — never pre-write new file contents in the prompt.
 
-## Per-Task Workflow (required)
+## Per-Task Workflow
 For each task in order:
-  1. Implement the task.
-  2. `git add` only files you touched for this task and commit with message
-     `phase-<N>.task-<M>: <one-line subject>`. Capture the commit hash.
-  3. Append a `## Task <M>` block to `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/notes.md`
-     with sub-sections: Decisions made (not in spec), Spec deviations, Tradeoffs
-     accepted, Assumptions, Follow-ups for human. Use `- none` for empty sub-sections.
-     If notes.md does not exist yet, create it with a `# Phase <N> — Decision Notes` heading first.
-  4. Append this task's row to `## COMMITS` in your response.
+  1. Implement.
+  2. `git add` only files touched for this task; commit with subject `phase-<N>.task-<M>: <one-line>`. Capture the hash.
+  3. Append a `## Task <M>` block to `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/notes.md` (create with heading `# Phase <N> — Decision Notes` if missing). Sub-sections: Decisions made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions, Follow-ups for human. Empty sub-sections = `- none`.
+  4. Append the commit row to `## COMMITS` in your response.
 
 ## After All Tasks
-- Append the full `# EXTERNAL RESPONSE` block (same content you return inline)
-  under the `## External Response` heading of
-  `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/journal.md`. Do not overwrite earlier sections.
-- Emit the completion line as the final line of your reply (see Report Format).
+- Append the full `# EXTERNAL RESPONSE` block (same content you return inline) under the `## External Response` heading of `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/journal.md`. Do not overwrite earlier sections.
+- Emit the single-line completion trigger as the final line of your reply.
 
-## Report Format
-# EXTERNAL RESPONSE
-
-## META
-- Phase: <N>
-- Owner: codex | gemini
-- SessionID: <your current session id>
-- Started: <ISO8601 when you began the phase>
-- Finished: <ISO8601 when you finished>
-- Plan dir: docs/plans/<slug>
-- Phase dir: docs/plans/<slug>/phase-<NN>
-
-## SUMMARY
-[one sentence]
-
-## FILES MODIFIED
-| Action  | Path     | Change |
-|---------|----------|--------|
-| Created | src/...  | ...    |
-| Edited  | src/...  | ...    |
-
-## COMMITS
-- phase-<N>.task-1: <hash>  <subject>
-- phase-<N>.task-2: <hash>  <subject>
-
-## NOTES
-- docs/plans/<slug>/phase-<NN>/notes.md  (## Task 1, ## Task 2, …)
-
-## SPEC COMPLIANCE
-- Meets Spec? YES | WITH_DEBT | NO
-- Explanation: [one line]
-
-## CLARIFICATIONS NEEDED
-None (or list questions; emit and stop if any)
-
-## NEXT
-TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
-
----
-Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
+## Response Format
+See `coordinating-multi-model-work` — Execute gate, "Worker response format". Use that schema verbatim.
 ```
 
-## Prompt discipline
+## Same-phase fix
 
-- Default: prompt body lives in `phase-<NN>/prompt.md`; MCP `PROMPT` field is a pointer.
-- All paths handed to MCP workers (the pointer, `cd`, and every file path inside the prompt body) must be absolute with forward slashes. Relative paths are forbidden — Gemini will mis-resolve them.
-- Inline allowed only for trivial one- or two-sentence asks with no context.
-- Same-phase fix: reuse `SESSION_ID`, send `FIX:` + delta files + delta context only. Fix still produces its own commit + (if it changes a decision) appended task-block in `notes.md`.
-- One phase, one owner. Never send whole plan to worker.
+Reuse the cached `SESSION_ID`. Send `FIX:` + only the delta files / delta context. The fix still gets its own task commit and (if it changes a decision) an appended `notes.md` block.

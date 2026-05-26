@@ -18,7 +18,7 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 |---|---|---|
 | Simple/trivial Claude can handle directly | Claude | none |
 | **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts | Codex | `mcp__openmcp__run(backend="codex", ...)` |
-| **Front-side**: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__openmcp__run(backend="agy", ...)` |
+| **Front-side**: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__openmcp__run(backend="gemini", ...)` |
 | New feature / ideation / proposal (before plan) | Cross-Validation → side owner | both |
 | Full-stack | Split into back-side + front-side sub-phases | both |
 
@@ -29,7 +29,6 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 | `superpowers-ccg:brainstorming` | New feature, ideation, design | Cross-validate, clarify, produce design doc |
 | `superpowers-ccg:writing-plans` | Confirmed design needs a plan | Phase-based implementation plan |
 | `superpowers-ccg:executing-plans` | Plan exists, run it | One phase at a time with Plan → Execute → Review |
-| `superpowers-ccg:debugging-systematically` | Bug, failure, regression | Evidence-based root cause |
 | `superpowers-ccg:verifying-before-completion` | About to claim done | Final integration + review |
 | `superpowers-ccg:coordinating-multi-model-work` | Any routing decision | 3-gate workflow, side-based routing |
 

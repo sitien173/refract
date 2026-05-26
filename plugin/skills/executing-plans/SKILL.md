@@ -5,49 +5,37 @@ description: "Executes a written plan one phase at a time with Plan → Execute 
 
 # Executing Plans
 
+Phase-by-phase runner. The Plan / Execute / Review gates, routing table, worker response format, and `.handover.md` schema all live in `coordinating-multi-model-work` — load it first.
+
 ## Use When
 
 - Plan document exists, user wants execution.
 - User asks to run current phase or continue active phase.
-- Work advances one phase at a time.
 
 ## Workflow
 
-1. Read plan once. Select requested, active, or next unstarted phase.
-2. Validate phase: 2–4 related tasks, owner, file set, acceptance criteria, integration checks.
-3. **Load resume artifacts (if present)** — read `<plan-dir>/.handover.md` for current phase, next action, and cached worker `SESSION_ID`s (`session_refs` frontmatter), then `phase-<NN>/journal.md` from `read_first`. Skip if flat single-file plan with no folder.
-4. **Plan gate** — apply `coordinating-multi-model-work` Plan gate to active phase; output `# ROUTE` block. Create `<plan-dir>/phase-<NN>/` directory and `journal.md` skeleton with Route section. No other files pre-created — worker writes `prompt.md`/`notes.md` lazily (Claude writes the prompt before dispatch).
-5. **Execute gate** — route by side:
-   - `claude` — simple tasks; edit directly. Commit per logical change.
-   - `codex` (`mcp__openmcp__run(backend="codex", ...)`) — back-side phases.
-   - `gemini` (`mcp__openmcp__run(backend="agy", ...)`) — front-side phases.
-
-   For Codex / Gemini:
-   1. Write dispatch prompt to `<plan-dir>/phase-<NN>/prompt.md`; pass the **absolute** path to the worker (Gemini/agy mis-resolves relative paths against unknown CWDs). Every file path inside the prompt body (inputs, outputs, plan dir, notes, journal) must also be absolute. Use forward slashes on Windows. Pass `cd` to `mcp__openmcp__run` as an absolute path too.
-   2. Worker commits per task, appends a `## Task <M>` block to `phase-<NN>/notes.md` after each task, appends the full `# EXTERNAL RESPONSE` block to `phase-<NN>/journal.md` at phase end, emits the completion line. Spec in `implementer-prompt.md`.
-   3. Reuse cached `SESSION_ID` from `.handover.md` frontmatter (`session_refs`) if present; same-phase fix → `FIX:` + delta. Write returned `SESSION_ID` back to `session_refs` after every MCP call.
-6. **Review gate** — (a) `git show <hash>` per commit + run phase integration checks → Spec status; (b) Quality scan on `## FILES MODIFIED` (skip for trivial Claude edits / docs-only). Reject phase if commits, notes.md task blocks, or journal EXTERNAL RESPONSE section missing. Output `# REVIEW`. Finalize Review + Squash Commit sections of `phase-<NN>/journal.md`. On Review PASS, squash all phase task commits: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"` — task commits are review artifacts, squash is final history.
-7. **Update handover** — rewrite `.handover.md` with current phase, status, next action, `read_first`, and append a `completed_tasks` row per finished task.
-8. Move to next phase only after Review passes.
-9. After last phase, set `.handover.md` status to `DONE`, hand off to `verifying-before-completion` for final verification.
+1. **Read the plan once.** Select the requested, active, or next unstarted phase. Confirm it has 2–4 tasks, an owner, file set, acceptance criteria, integration checks.
+2. **Load resume artifacts.** For folder-layout plans, read `<plan-dir>/.handover.md` (current phase, next action, cached `session_refs`) then every file in `read_first`. Skip for flat single-file plans.
+3. **Plan gate.** Apply `coordinating-multi-model-work` Plan gate to the active phase and output the `# ROUTE` block. Create `<plan-dir>/phase-<NN>/` lazily — only `journal.md` (with Route skeleton) is pre-written. Worker writes `prompt.md` and `notes.md`; Claude writes `prompt.md` immediately before dispatch for Codex/Gemini phases.
+4. **Execute gate.**
+   - `claude` — edit directly, commit per logical change.
+   - `codex` (`backend="codex"`) / `gemini` (`backend="gemini"` or `"agy"`) — write dispatch prompt to `<plan-dir>/phase-<NN>/prompt.md` (template in `implementer-prompt.md`), pass its **absolute** path to `mcp__openmcp__run`. Every path inside the prompt body and the `cd` argument must also be absolute with forward slashes on Windows. Reuse cached `SESSION_ID` from `session_refs` if present; same-phase fix → `FIX:` + delta. Write the returned `SESSION_ID` back to `session_refs` after every MCP call.
+5. **Review gate.** Run integration checks + `git show` per task commit (Spec), then Quality scan on `## FILES MODIFIED` (skip for trivial Claude / docs-only edits). Reject the phase if commits, `notes.md` `## Task <M>` blocks, or `journal.md` External Response section are missing. Output `# REVIEW`. Finalize the Review and Squash Commit sections of `journal.md`. On `PASS`, squash all phase task commits: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"`.
+6. **Update handover.** Rewrite `.handover.md` with current phase, status, next action, `read_first`, and one `completed_tasks` row per finished task.
+7. Advance to the next phase only after Review passes. After the last phase, set `.handover.md` status to `DONE` and hand off to `verifying-before-completion`.
 
 ## Hard Rules
 
-- One active phase, one owner, one review.
-- Route by side; no default executor.
-- No re-explaining whole plan to workers — phase-scoped prompts only.
-- Dispatch prompts written to `<plan-dir>/phase-<NN>/prompt.md` by default; inline allowed only for trivial one-liners.
-- **Absolute paths only when talking to MCP workers.** The dispatch-prompt path passed in `PROMPT`, the `cd` arg, and every file path mentioned inside the prompt body must be absolute (forward slashes on Windows). Never pass relative paths — Gemini in particular will fall back to a device-wide scan.
-- One commit per task by the worker. Missing commit hashes in `## COMMITS` blocks the Review gate. Task commits are review artifacts only — Claude squashes to one `phase-<N>: <summary>` commit after Review PASS.
-- Per-phase `phase-<NN>/notes.md` (with one `## Task <M>` block per task) + appended `# EXTERNAL RESPONSE` section in `phase-<NN>/journal.md` required before phase is marked complete.
-- MCP failure → output `BLOCKED`, ask human. No silent retry, switch, or Task/Agent fallback.
-- MCP rejects cached `SESSION_ID` (present in `.handover.md` `session_refs` but worker says invalid/expired) → `BLOCKED`. Ask user to clear offending id (set to `null` in `session_refs`); no silent re-create.
-- `.handover.md` always Claude-authored. Never delegate handover writing to hook or worker.
-- Worker output is final edit. No draft handoffs.
-- Final project summary only after all phases complete.
+- One active phase, one owner, one review. No draft-then-reimplement handoffs.
+- Phase-scoped prompts only — never re-explain the whole plan to a worker.
+- Dispatch prompts default to `<plan-dir>/phase-<NN>/prompt.md`; inline `PROMPT` only for one- or two-sentence asks.
+- **Absolute paths only** when talking to MCP workers (`PROMPT` pointer, `cd`, and every path inside the prompt body). Gemini/agy mis-resolves relative paths and may scan the device.
+- Missing commit hashes in `## COMMITS`, missing `notes.md` task blocks, or missing journal External Response → blocks Review.
+- MCP failure or rejected cached `SESSION_ID` → `BLOCKED`; ask the user. No silent retry, switch, or Task/Agent fallback.
+- `.handover.md` is always Claude-authored — never delegate to hook or worker.
 
 ## References
 
-- `skills/coordinating-multi-model-work/SKILL.md` — 3-gate workflow and routing.
-- `skills/executing-plans/implementer-prompt.md` — phase executor prompt template.
-- `skills/verifying-before-completion/SKILL.md` — final verification.
+- `skills/coordinating-multi-model-work/SKILL.md` — canonical gates, routing, worker response format, `.handover.md` schema, squash protocol.
+- `skills/executing-plans/implementer-prompt.md` — dispatch prompt template for Codex / Gemini phases.
+- `skills/verifying-before-completion/SKILL.md` — final verification after the last phase.

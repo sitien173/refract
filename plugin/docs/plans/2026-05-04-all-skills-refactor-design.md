@@ -106,7 +106,6 @@ Preserve behavior-specific constraints:
 - `writing-plans`: phase shape and acceptance/reviewer/integration sections.
 - `executing-phases`: one phase, one executor, review gate, integration gate.
 - `executing-plans`: dedicated-session execution, one active phase, final summary only after final checks.
-- `debugging-systematically`: reproduce → evidence → hypotheses → fix → verify.
 - `verifying-before-completion`: CP4 before completion and no final success before checks.
 - `karpathy-llm-wiki`: ingest/query/lint storage, raw immutability, citations, and report-only unsafe fixes.
 - `coordinating-multi-model-work`: routing, tier prompts, CP3 triggers, CP4 review, and fail-closed rules.
