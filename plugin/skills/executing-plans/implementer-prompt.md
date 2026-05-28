@@ -63,9 +63,39 @@ For each task in order:
 - Append the full `# EXTERNAL RESPONSE` block (same content you return inline) under the `## External Response` heading of `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/journal.md`. Do not overwrite earlier sections.
 
 ## Response Format
-See `coordinating-multi-model-work` — Execute gate, "Worker response format". Use that schema verbatim.
+
+```markdown
+
+## SUMMARY
+[one sentence]
+
+## FILES MODIFIED
+| Action  | Path     | Change |
+|---------|----------|--------|
+| Created | src/...  | ...    |
+| Edited  | src/...  | ...    |
+
+## COMMITS
+- phase-<N>.task-<M>: <hash>  <subject>
+- phase-<N>.task-<M+1>: <hash>  <subject>
+
+## NOTES
+- phase-<NN>/notes.md  (## Task <M>, ## Task <M+1>, …)
+
+## SPEC COMPLIANCE
+- Meets Spec? YES | WITH_DEBT | NO
+- Explanation: [one line]
+
+## CLARIFICATIONS NEEDED
+None (or list questions; emit and stop if any)
+
+## NEXT
+TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
+
 ```
 
 ## Same-phase fix
 
 Reuse the cached `SESSION_ID`. Send `FIX:` + only the delta files / delta context. The fix still gets its own task commit and (if it changes a decision) an appended `notes.md` block.
+
+```
