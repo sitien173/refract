@@ -144,32 +144,6 @@ _SESSION_ID_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-def _codex_config_path() -> Path:
-    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
-    return codex_home / "config.toml"
-
-
-def _profile_exists(profile: str) -> bool:
-    if not profile:
-        return False
-
-    profile_filename = f"{profile}.config.toml"
-
-    # Check project path first
-    project_profile_path = Path.cwd() / ".codex" / profile_filename
-    if project_profile_path.exists():
-        return True
-
-    # Check global codex path
-    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
-    global_profile_path = codex_home / profile_filename
-    if global_profile_path.exists():
-        return True
-
-    return False
-
-
 def _extract_session_id_from_stdout(text: str) -> str:
     if not text:
         return ""
@@ -368,14 +342,8 @@ async def execute(params: CodexParams) -> BackendResult:
             params.profile,
         )
 
-    if params.profile and _profile_exists(params.profile):
+    if params.profile:
         cmd.extend(["--profile", params.profile])
-    elif params.profile:
-        log.warning(
-            "codex: profile %r not found in %s; running without --profile",
-            params.profile,
-            _codex_config_path().as_posix(),
-        )
 
     if params.reasoning_effort:
         cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
