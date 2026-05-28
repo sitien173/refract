@@ -266,10 +266,9 @@ def test_codex_profile_exists_from_config(monkeypatch, tmp_path) -> None:
 
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir(parents=True)
-    (codex_home / "config.toml").write_text(
-        "[profiles]\n"
-        "[profiles.mcp_execution]\n"
-        "model = \"gpt-5\"\n",
+    (codex_home / "mcp_execution.config.toml").write_text(
+        "[model]\n"
+        "name = \"gpt-5\"\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -290,6 +289,7 @@ def test_tool_signature() -> None:
         "SESSION_ID",
         "model",
         "profile",
+        "reasoning",
         "max_retries",
         "retry_base_ms",
         "debug",

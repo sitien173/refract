@@ -34,7 +34,7 @@ class CodexParams:
     cd: Path
     SESSION_ID: str = ""
     model: str = ""
-    profile: str = "mcp-execution"
+    profile: str = ""
     reasoning_effort: str = ""
 
 
@@ -154,21 +154,20 @@ def _profile_exists(profile: str) -> bool:
     if not profile:
         return False
 
-    config_path = _codex_config_path()
-    try:
-        raw = config_path.read_bytes()
-    except OSError:
-        return False
+    profile_filename = f"{profile}.config.toml"
 
-    try:
-        data = tomllib.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
-        return False
+    # Check project path first
+    project_profile_path = Path.cwd() / ".codex" / profile_filename
+    if project_profile_path.exists():
+        return True
 
-    profiles = data.get("profiles")
-    if not isinstance(profiles, dict):
-        return False
-    return profile in profiles
+    # Check global codex path
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    global_profile_path = codex_home / profile_filename
+    if global_profile_path.exists():
+        return True
+
+    return False
 
 
 def _extract_session_id_from_stdout(text: str) -> str:

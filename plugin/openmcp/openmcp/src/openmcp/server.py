@@ -130,38 +130,45 @@ def _resolve_profile(profile: str, env: Dict[str, str]) -> str:
         return profile
     return env.get(_ENV_CODEX_PROFILE_DEFAULT, "mcp-execution")
 
-
-@mcp.tool( 
-    name="run", 
-    description=
-    ( 
-        "Run an agy, codex, or gemini backend with retry support. " 
-        "Retries reuse the previous SESSION_ID to preserve backend conversation context. " 
-        "Use `reasoning` to set reasoning effort (`low`, `medium`, or `high`); default is `medium`. " 
-        "Do not change reasoning level for execution-mode dispatches, as reasoning is intended for narrow Q&A and cross-validation. " "Set `debug=True` to return the full backend payload, including agent_messages, attempts, warnings, and stderr details. " 
-        "By default, returns a compact response: {success, SESSION_ID, error}." 
-    ))
+@mcp.tool(
+    name="run",
+    description=(
+        "Run an agy, codex, or gemini backend with retry support. "
+        "Retries reuse the previous SESSION_ID to preserve conversation context. "
+        "Use reasoning mode only for narrow Q&A or cross-validation. "
+        "Set debug=True to return the full backend payload; otherwise returns "
+        "{success, SESSION_ID, error}."
+    ),
+)
 async def run(
     backend: Literal["agy", "codex", "gemini"],
     PROMPT: str,
-    cd: Path,
+    cd: str,
     SESSION_ID: str = "",
     model: str = "",
     profile: str = "",
-    reasoning: str = "medium",
+    reasoning: Literal["", "low", "medium", "high"] = "",
     max_retries: int = 0,
     retry_base_ms: int = 1000,
     debug: bool = False,
 ) -> Dict[str, Any]:
-    """Dispatch a prompt to agy/codex/gemini backend with retry and SESSION_ID continuity.
-
-    When `reasoning` is a non-empty effort string (e.g. "low" / "medium" / "high"):
-      - codex: uses OPENMCP_CODEX_REASONING_MODEL and passes `-c model_reasoning_effort=<reasoning>`
-      - gemini: uses OPENMCP_GEMINI_REASONING_MODEL
-      - agy: uses `${OPENMCP_AGY_REASONING_MODEL}-<reasoning>`
-    Explicit `model` always wins for the model name. Profile is ignored in reasoning mode
-    for codex (reasoning model + effort override are used instead).
     """
+    Run a backend agent.
+
+    Args:
+        backend: Backend to run.
+        PROMPT: Prompt to execute.
+        cd: Working directory for execution.
+        SESSION_ID: Session ID to reuse. Leave empty to start a new session.
+        model: Model to use. Leave empty to use the backend default.
+        profile: Codex profile to use. Ignored when reasoning is set.
+        reasoning: Reasoning effort. Leave empty to disable reasoning mode.
+        max_retries: Maximum retry attempts for retryable backend failures.
+        retry_base_ms: Base retry delay in milliseconds.
+        debug: Return the full backend payload instead of the compact response.
+    """
+
+    cd_path = Path(cd)
     effective_env = _effective_env()
     effective_backend = _effective_backend(backend, effective_env)
     resolved_model = _resolve_model(effective_backend, model, reasoning, effective_env)
@@ -172,12 +179,12 @@ async def run(
     )
     try:
         if effective_backend == "agy":
-            params = AgyParams(PROMPT=PROMPT, cd=cd, SESSION_ID=SESSION_ID, model=resolved_model)
+            params = AgyParams(PROMPT=PROMPT, cd=cd_path, SESSION_ID=SESSION_ID, model=resolved_model)
             result = await run_with_retry(agy_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
         elif effective_backend == "codex":
             params = CodexParams(
                 PROMPT=PROMPT,
-                cd=cd,
+                cd=cd_path,
                 SESSION_ID=SESSION_ID,
                 model=resolved_model,
                 profile=resolved_profile,
@@ -185,7 +192,7 @@ async def run(
             )
             result = await run_with_retry(codex_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
         else:
-            params = GeminiParams(PROMPT=PROMPT, cd=cd, SESSION_ID=SESSION_ID, model=resolved_model)
+            params = GeminiParams(PROMPT=PROMPT, cd=cd_path, SESSION_ID=SESSION_ID, model=resolved_model)
             result = await run_with_retry(gemini_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
     except asyncio.CancelledError:
         log.warning(
