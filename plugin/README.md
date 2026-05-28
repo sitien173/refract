@@ -94,6 +94,9 @@ Environment resolution priority for OpenMCP defaults:
 | `OPENMCP_CODEX_MODEL_DEFAULT` | Default `model` when `backend="codex"` and no model arg is passed | empty |
 | `OPENMCP_GEMINI_MODEL_DEFAULT` | Default `model` when `backend="gemini"` and no model arg is passed | empty |
 | `OPENMCP_CODEX_PROFILE_DEFAULT` | Default `profile` when `backend="codex"` and no profile arg is passed | `mcp-execution` |
+| `OPENMCP_AGY_REASONING_MODEL` | Base agy model used when `run(reasoning=...)` is non-empty; final model is `<base>-<reasoning>` (e.g. `gemini-3.5-flash-high`) | empty |
+| `OPENMCP_CODEX_REASONING_MODEL` | Codex model used when `run(reasoning=...)` is non-empty; effort passed via `-c model_reasoning_effort=<reasoning>` | empty |
+| `OPENMCP_GEMINI_REASONING_MODEL` | Gemini model used when `run(reasoning=...)` is non-empty | empty |
 | `OPENMCP_GEMINI_ROUTE_TO_AGY` | Routes `backend="gemini"` calls to `agy` when truthy (`1`, `true`, `yes`, `on`) | `false` |
 | `OPENMCP_AGY_DISABLE_PLUGIN` | Plugin name to disable/restore around `agy` execution | `superpowers-ccg` |
 | `OPENMCP_LOG_FILE` | OpenMCP log file path | `~/.openmcp/openmcp.log` |
@@ -106,6 +109,9 @@ OPENMCP_AGY_MODEL_DEFAULT=gemini-3.5-flash
 OPENMCP_CODEX_MODEL_DEFAULT=gpt-5.3-codex
 OPENMCP_GEMINI_MODEL_DEFAULT=gemini-2.5-pro
 OPENMCP_CODEX_PROFILE_DEFAULT=mcp_execution
+OPENMCP_AGY_REASONING_MODEL=gemini-3.5-flash
+OPENMCP_CODEX_REASONING_MODEL=gpt-5.5
+OPENMCP_GEMINI_REASONING_MODEL=gemini-3.1-pro-preview
 OPENMCP_GEMINI_ROUTE_TO_AGY=false
 OPENMCP_AGY_DISABLE_PLUGIN=superpowers-ccg
 OPENMCP_LOG_FILE=~/.openmcp/openmcp.log
@@ -123,6 +129,9 @@ Example plugin env (`mcp_config.json` / `.mcp.json`):
         "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.3-codex",
         "OPENMCP_GEMINI_MODEL_DEFAULT": "gemini-2.5-pro",
         "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
+        "OPENMCP_AGY_REASONING_MODEL": "gemini-3.5-flash",
+        "OPENMCP_CODEX_REASONING_MODEL": "gpt-5.5",
+        "OPENMCP_GEMINI_REASONING_MODEL": "gemini-3.1-pro-preview",
         "OPENMCP_GEMINI_ROUTE_TO_AGY": "false",
         "OPENMCP_AGY_DISABLE_PLUGIN": "superpowers-ccg",
         "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
@@ -145,9 +154,10 @@ claude mcp remove agy
 
 Slash commands (each loads its skill before acting):
 
-- `/brainstorm` — explore intent, requirements, and design via dialogue. Cross-Validation runs first for new features.
+- `/brainstorm` — explore intent, requirements, and design via dialogue. Cross-Validation runs only when work is full-stack, unclear, or high-impact (not every new feature).
 - `/write-plan` — turn a confirmed design into a phase-based plan.
 - `/execute-plan` — run the active phase under the three gates.
+- `/setup-openmcp-env` — interactively configure every `OPENMCP_*` env var and save to `~/.openmcp/.env`.
 
 Skills (namespace `superpowers-ccg:`):
 

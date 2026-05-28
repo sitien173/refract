@@ -26,6 +26,9 @@ _ENV_CODEX_MODEL_DEFAULT = "OPENMCP_CODEX_MODEL_DEFAULT"
 _ENV_GEMINI_MODEL_DEFAULT = "OPENMCP_GEMINI_MODEL_DEFAULT"
 _ENV_CODEX_PROFILE_DEFAULT = "OPENMCP_CODEX_PROFILE_DEFAULT"
 _ENV_GEMINI_ROUTE_TO_AGY = "OPENMCP_GEMINI_ROUTE_TO_AGY"
+_ENV_AGY_REASONING_MODEL = "OPENMCP_AGY_REASONING_MODEL"
+_ENV_CODEX_REASONING_MODEL = "OPENMCP_CODEX_REASONING_MODEL"
+_ENV_GEMINI_REASONING_MODEL = "OPENMCP_GEMINI_REASONING_MODEL"
 _PLUGIN_CONFIG_FILES = ("mcp_config.json", ".mcp.json", "mcp.json")
 
 
@@ -100,9 +103,21 @@ def _effective_backend(backend: Literal["agy", "codex", "gemini"], env: Dict[str
     return backend
 
 
-def _resolve_model(backend: Literal["agy", "codex", "gemini"], model: str, env: Dict[str, str]) -> str:
+def _resolve_model(
+    backend: Literal["agy", "codex", "gemini"],
+    model: str,
+    reasoning: str,
+    env: Dict[str, str],
+) -> str:
     if model:
         return model
+    if reasoning:
+        if backend == "agy":
+            base = env.get(_ENV_AGY_REASONING_MODEL, "")
+            return f"{base}-{reasoning}" if base else ""
+        if backend == "gemini":
+            return env.get(_ENV_GEMINI_REASONING_MODEL, "")
+        return env.get(_ENV_CODEX_REASONING_MODEL, "")
     if backend == "agy":
         return env.get(_ENV_AGY_MODEL_DEFAULT, "")
     if backend == "gemini":
@@ -116,17 +131,16 @@ def _resolve_profile(profile: str, env: Dict[str, str]) -> str:
     return env.get(_ENV_CODEX_PROFILE_DEFAULT, "mcp-execution")
 
 
-@mcp.tool(
-    name="run",
-    description=(
-        "Run an agy, codex, or gemini backend with retry support. "
-        "When retries occur, SESSION_ID from the previous attempt is reused "
-        "to preserve backend conversation continuity. "
-        "Response shape depends on `debug`: when False (default), returns only "
-        "{success, SESSION_ID, error} for token efficiency; when True, returns "
-        "the full payload including agent_messages, attempts, and warning."
-    ),
-)
+@mcp.tool( 
+    name="run", 
+    description=
+    ( 
+        "Run an agy, codex, or gemini backend with retry support. " 
+        "Retries reuse the previous SESSION_ID to preserve backend conversation context. " 
+        "Use `reasoning` to set reasoning effort (`low`, `medium`, or `high`); default is `medium`. " 
+        "Do not change reasoning level for execution-mode dispatches, as reasoning is intended for narrow Q&A and cross-validation. " "Set `debug=True` to return the full backend payload, including agent_messages, attempts, warnings, and stderr details. " 
+        "By default, returns a compact response: {success, SESSION_ID, error}." 
+    ))
 async def run(
     backend: Literal["agy", "codex", "gemini"],
     PROMPT: str,
@@ -134,18 +148,27 @@ async def run(
     SESSION_ID: str = "",
     model: str = "",
     profile: str = "",
+    reasoning: str = "medium",
     max_retries: int = 0,
     retry_base_ms: int = 1000,
     debug: bool = False,
 ) -> Dict[str, Any]:
-    """Dispatch a prompt to agy/codex/gemini backend with retry and SESSION_ID continuity."""
+    """Dispatch a prompt to agy/codex/gemini backend with retry and SESSION_ID continuity.
+
+    When `reasoning` is a non-empty effort string (e.g. "low" / "medium" / "high"):
+      - codex: uses OPENMCP_CODEX_REASONING_MODEL and passes `-c model_reasoning_effort=<reasoning>`
+      - gemini: uses OPENMCP_GEMINI_REASONING_MODEL
+      - agy: uses `${OPENMCP_AGY_REASONING_MODEL}-<reasoning>`
+    Explicit `model` always wins for the model name. Profile is ignored in reasoning mode
+    for codex (reasoning model + effort override are used instead).
+    """
     effective_env = _effective_env()
     effective_backend = _effective_backend(backend, effective_env)
-    resolved_model = _resolve_model(effective_backend, model, effective_env)
-    resolved_profile = _resolve_profile(profile, effective_env)
+    resolved_model = _resolve_model(effective_backend, model, reasoning, effective_env)
+    resolved_profile = "" if reasoning else _resolve_profile(profile, effective_env)
     log.info(
-        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s max_retries=%d debug=%s",
-        backend, effective_backend, SESSION_ID or "<new>", resolved_model, resolved_profile, max_retries, debug,
+        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s max_retries=%d debug=%s",
+        backend, effective_backend, SESSION_ID or "<new>", resolved_model, resolved_profile, reasoning or "<off>", max_retries, debug,
     )
     try:
         if effective_backend == "agy":
@@ -158,6 +181,7 @@ async def run(
                 SESSION_ID=SESSION_ID,
                 model=resolved_model,
                 profile=resolved_profile,
+                reasoning_effort=reasoning,
             )
             result = await run_with_retry(codex_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
         else:

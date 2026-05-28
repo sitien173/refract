@@ -1,18 +1,23 @@
 ---
 name: coordinating-multi-model-work
-description: "Three-gate workflow (Plan → Execute → Review). Claude handles simple tasks directly; Codex owns back-end/data/infra; Gemini owns front-end. CROSS_VALIDATION mandatory before planning any new feature or ideation."
+description: "Three-gate workflow (Plan → Execute → Review)"
 ---
 
 # Coordinating Multi-Model Work
 
-Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex owns back-side (backend, database, system, infra, CI/CD, scripts). Gemini owns front-side (UI, CSS, motion, canvas/SVG, multimodal, large-context sweeps). Workers edit files via own write tools.
+Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex owns back-side (backend, database, system, infra, CI/CD, scripts). Gemini owns front-side (UI, CSS, motion, canvas/SVG, multimodal, large-context sweeps).
 
 ## Gates
 
 ### 1. Plan
 
-- **New feature / ideation / proposal** → run **CROSS_VALIDATION** first (Codex + Gemini narrow question), reconcile divergences, then plan. Mandatory before any planning gate for new work.
-- Gather minimum context needed to route. Use any fitting tool (Read, Grep, Glob, Bash, prior knowledge). Skip ceremony for trivial tasks.
+- **CROSS_VALIDATION trigger (conditional, not default).** Run CV before planning **only** when ANY apply:
+  - **Full-stack**: phase straddles back-side AND front-side with unresolved coupling (API contract, shared schema, auth flow).
+  - **Unclear**: requirements ambiguous, multiple viable architectures, no obvious side owner.
+  - **High-impact**: breaking change, public API, security boundary, data-model migration, irreversible infra, architecture-level decision.
+
+  Otherwise (single-side, clear scope, low blast radius) → skip CV and route directly to the side owner.
+- Gather minimum context needed to route. Skip ceremony for trivial tasks.
 - Frame work as one phase: 2–4 related tasks, file set, `Done When` checks (build/lint/test).
 - Decide owner by **side**, not default. Output routing block:
 
@@ -28,9 +33,10 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 | Phase | Owner |
 |---|---|
 | Simple/trivial task Claude handles directly (one-line edit, rename, doc tweak, single-file fix, clarification) | Claude |
-| **Back-side**: backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests, back-end debugging | Codex |
-| **Front-side**: UI components, CSS, layout, motion, canvas/SVG, client-side interactions, multimodal input, front-end tests, >200K-token UI/doc sweeps | Gemini |
-| New feature, ideation, proposal, design exploration (before plan exists) | **Cross-Validation** (Codex + Gemini) → reconcile → assign side owner |
+| **Back-side**: backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests, back-end debugging, etc | Codex |
+| **Front-side**: UI components, CSS, layout, motion, canvas/SVG, client-side interactions, multimodal input, front-end tests, etc | Gemini |
+| Full-stack / unclear / high-impact new work (per CV triggers above) | **Cross-Validation** (Codex + Gemini) → reconcile → assign side owner |
+| Single-side new feature with clear scope and low blast radius | Skip CV → assign side owner directly |
 | Full-stack phase spanning both sides | Split into back-side + front-side sub-phases; route each |
 | Ambiguous side | Ask user |
 
@@ -38,7 +44,7 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 
 - **Claude-owned (simple):** edit directly with built-in tools.
 - **Codex / Gemini:** call `mcp__openmcp__run` with `backend="codex"` (back-side) or `backend="gemini"`. Send: task summary, files, `Done When`, minimum hydrated context (no full files, no pre-written implementation). Default `debug=False` — worker appends its EXTERNAL RESPONSE to `phase-<NN>/journal.md`, no need to inflate the MCP reply.
-- **Cross-Validation:** ask Codex and Gemini same narrow question, compare answers, pick direction, route implementation to side owner. No two parallel implementations.
+- **Cross-Validation:** ask Codex and Gemini same narrow question, compare answers, pick direction, route implementation to side owner. **CV dispatches MUST pass `reasoning="high"`** and `debug=True` to `mcp__openmcp__run`.
 - Worker edits files via own write tools. Response must list every changed file under `## FILES MODIFIED`.
 - **Same-phase fix:** reuse `SESSION_ID`, send only `FIX:` + delta context.
 - **MCP failure** → output `BLOCKED`, ask user. No retry, no executor switch, no Task/Agent fallback without explicit consent.
@@ -202,7 +208,7 @@ Plans spanning multiple Claude sessions persist two files alongside plan doc. Re
 
 ### `.handover.md` — terse resume pointer
 
-≤500 tokens. Frontmatter + body. Always Claude-authored at end of every turn changing plan state (route set, phase change, BLOCKED, phase done). Hook cannot synthesize. `session_refs` is the single source of truth for cached worker SESSION IDs — write after every MCP call returning a SESSION_ID.
+Claude-authored at end of every turn changing plan state (route set, phase change, BLOCKED, phase done). Hook cannot synthesize. `session_refs` is the single source of truth for cached worker SESSION IDs — write after every MCP call returning a SESSION_ID.
 
 ```markdown
 ---
@@ -283,7 +289,7 @@ Created by Claude at phase start with Route skeleton. Worker appends the `# EXTE
 - Final Status: ...
 
 ## Squash Commit
-- phase-<N>: <hash>  <subject>   # final history after Review PASS
+- `<type>[optional scope]: <description>\n\n[optional body]\n\n[optional footer(s)]` # final history after Review PASS
 
 ## Decisions
 - See `notes.md` (sibling file) for per-task decisions. Cross-task or phase-level decisions noted here only.
@@ -300,10 +306,10 @@ New session reads `.handover.md` first, then only the `journal.md` listed in `re
 
 - One phase, one primary owner, one review.
 - No draft-then-reimplement handoffs — worker output is final edit.
-- Cross-Validation **mandatory for new features / ideation / proposals before planning**; otherwise skip.
+- Cross-Validation runs **only** when the work is full-stack, unclear, or high-impact (see CV trigger list in Plan gate). Skip for clear single-side work — CV is for catching misses via dual review, not a default ceremony.
 - Route by side (back vs front), not default — never auto-route to one executor.
 - One commit per task by the worker; missing commit hashes in `## COMMITS` block Review. Task commits are review artifacts only.
-- After Review PASS, Claude squashes all phase task commits into one `phase-<N>: <summary>` commit. Final history = one squash commit per phase.
+- After Review PASS, Claude squashes all phase task commits into one `<type>[optional scope]: <description>\n\n[optional body]\n\n[optional footer(s)]` commit. Final history = one squash commit per phase.
 - Per-phase `notes.md` (with `## Task <M>` block per task) + appended EXTERNAL RESPONSE in `journal.md` written before worker emits the final completion line.
 - Dispatch prompts written to `phase-<NN>/prompt.md` by default; inline only for trivial one-liner asks.
 - User overrides ("use Codex" / "use Gemini" / "no external models" / "skip cross-validation") win.

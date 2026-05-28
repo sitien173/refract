@@ -8,7 +8,7 @@ Default: prompt body lives in `<plan-dir>/phase-<NN>/prompt.md`; the MCP `PROMPT
 
 ```text
 mcp__openmcp__run:
-  backend: "codex" (back-side) | "gemini" or "agy" (front-side)
+  backend: "codex" (back-side) | "gemini" (front-side)
   cd: <ABSOLUTE repo root>
   PROMPT: |
     [one sentence of persona / mindset — e.g. "You are an experienced backend engineer implementing the API endpoints for Phase N with clean code and good test coverage."]
@@ -61,7 +61,6 @@ For each task in order:
 
 ## After All Tasks
 - Append the full `# EXTERNAL RESPONSE` block (same content you return inline) under the `## External Response` heading of `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/journal.md`. Do not overwrite earlier sections.
-- Emit the single-line completion trigger as the final line of your reply.
 
 ## Response Format
 See `coordinating-multi-model-work` — Execute gate, "Worker response format". Use that schema verbatim.

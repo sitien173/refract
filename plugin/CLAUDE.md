@@ -5,7 +5,7 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 ## Skills (`superpowers-ccg:` namespace)
 
 - `coordinating-multi-model-work` — canonical 3-gate workflow, routing, review, resume artifacts. **Load first.**
-- `brainstorming` — new features / ideation (runs Cross-Validation first).
+- `brainstorming` — new features / ideation (Cross-Validation only if full-stack / unclear / high-impact).
 - `writing-plans` — design → phase-based plan.
 - `executing-plans` — run a plan one phase at a time.
 - `verifying-before-completion` — final check before reporting done.
@@ -15,6 +15,7 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 - `/superpowers-ccg:brainstorm`
 - `/superpowers-ccg:write-plan`
 - `/superpowers-ccg:execute-plan`
+- `/superpowers-ccg:setup-openmcp-env` — configure `OPENMCP_*` env vars → `~/.openmcp/.env`
 
 ## Project-specific rules
 

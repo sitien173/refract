@@ -35,6 +35,7 @@ class CodexParams:
     SESSION_ID: str = ""
     model: str = ""
     profile: str = "mcp-execution"
+    reasoning_effort: str = ""
 
 
 def _windows_escape(prompt: str) -> str:
@@ -377,6 +378,9 @@ async def execute(params: CodexParams) -> BackendResult:
             _codex_config_path().as_posix(),
         )
 
+    if params.reasoning_effort:
+        cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
+
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])
 
@@ -384,10 +388,11 @@ async def execute(params: CodexParams) -> BackendResult:
     cmd += ["--", prompt]
 
     log.info(
-        "codex.execute start cwd=%s model=%s profile=%s session_id=%s prompt_len=%d",
+        "codex.execute start cwd=%s model=%s profile=%s reasoning_effort=%s session_id=%s prompt_len=%d",
         cd.absolute().as_posix(),
         params.model,
         params.profile,
+        params.reasoning_effort or "<off>",
         params.SESSION_ID or "<new>",
         len(params.PROMPT),
     )
