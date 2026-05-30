@@ -5,21 +5,18 @@ description: "Three-gate workflow (Plan → Execute → Review)"
 
 # Coordinating Multi-Model Work
 
-Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex owns back-side (backend, database, system, infra, CI/CD, scripts). Gemini owns front-side (UI, CSS, motion, canvas/SVG, multimodal, large-context sweeps).
+Claude plans, routes, reviews, integrates, and handles simple tasks directly. Codex owns back-side (backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests/debug). Gemini owns front-side (UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, front-end tests, large-context sweeps).
 
-## Gates
+**Cross-Validation (CV)** = ask Codex and Gemini the same narrow question, reconcile divergences, then route implementation to a side owner. Run CV **only** when a phase is:
+- **Full-stack** — straddles both sides with unresolved coupling (API contract, shared schema, auth flow), or
+- **Unclear** — ambiguous requirements, multiple viable architectures, no obvious owner, or
+- **High-impact** — breaking change, public API, security boundary, data migration, irreversible infra, architecture decision.
 
-### 1. Plan
+Otherwise route directly to the side owner. CV dispatches MUST pass `reasoning="high"`.
 
-- **CROSS_VALIDATION trigger (conditional, not default).** Run CV before planning **only** when ANY apply:
-  - **Full-stack**: phase straddles back-side AND front-side with unresolved coupling (API contract, shared schema, auth flow).
-  - **Unclear**: requirements ambiguous, multiple viable architectures, no obvious side owner.
-  - **High-impact**: breaking change, public API, security boundary, data-model migration, irreversible infra, architecture-level decision.
+## Gate 1 — Plan
 
-  Otherwise (single-side, clear scope, low blast radius) → skip CV and route directly to the side owner.
-- Gather minimum context needed to route. Skip ceremony for trivial tasks.
-- Frame work as one phase: 2–4 related tasks, file set, `Done When` checks (build/lint/test).
-- Decide owner by **side**, not default. Output routing block:
+Gather the minimum context to route (skip ceremony for trivial work). Frame work as one phase: 2–4 related tasks, file set, `Done When` checks. Decide owner by **side**, then output:
 
 ```text
 # ROUTE
@@ -28,172 +25,100 @@ Claude plans, routes, reviews, integrates, handles simple tasks directly. Codex 
 - Done When: [build/test/lint commands or acceptance bullets]
 ```
 
-**Routing rules (side-based):**
-
 | Phase | Owner |
 |---|---|
-| Simple/trivial task Claude handles directly (one-line edit, rename, doc tweak, single-file fix, clarification) | Claude |
-| **Back-side**: backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests, back-end debugging, etc | Codex |
-| **Front-side**: UI components, CSS, layout, motion, canvas/SVG, client-side interactions, multimodal input, front-end tests, etc | Gemini |
-| Full-stack / unclear / high-impact new work (per CV triggers above) | **Cross-Validation** (Codex + Gemini) → reconcile → assign side owner |
-| Single-side new feature with clear scope and low blast radius | Skip CV → assign side owner directly |
-| Full-stack phase spanning both sides | Split into back-side + front-side sub-phases; route each |
+| Simple/trivial (one-line edit, rename, doc tweak, single-file fix, clarification) | Claude |
+| Back-side work | Codex |
+| Front-side work | Gemini |
+| Full-stack / unclear / high-impact (per CV triggers) | Cross-Validation → reconcile → side owner |
+| Single-side, clear scope, low blast radius | Skip CV → side owner directly |
+| Full-stack phase spanning both sides | Split into back/front sub-phases; route each |
 | Ambiguous side | Ask user |
 
-### 2. Execute
+## Gate 2 — Execute
 
-- **Claude-owned (simple):** edit directly with built-in tools.
-- **Codex / Gemini:** call `mcp__openmcp__run` with `backend="codex"` (back-side) or `backend="gemini"`. Send: task summary, files, `Done When`, minimum hydrated context (no full files, no pre-written implementation). Default `debug=False` — worker appends its EXTERNAL RESPONSE to `phase-<NN>/journal.md`, no need to inflate the MCP reply.
-- **Cross-Validation:** ask Codex and Gemini same narrow question, compare answers, pick direction, route implementation to side owner. **CV dispatches MUST pass `reasoning="high"`** and `debug=True` to `mcp__openmcp__run`.
-- Worker edits files via own write tools. Response must list every changed file under `## FILES MODIFIED`.
-- **Same-phase fix:** reuse `SESSION_ID`, send only `FIX:` + delta context.
-- **MCP failure** → output `BLOCKED`, ask user. No retry, no executor switch, no Task/Agent fallback without explicit consent.
-- **Prompt-to-file by default:** write every dispatch prompt to `docs/plans/<slug>/phase-<NN>/prompt.md` (zero-padded phase id) and pass that path to the worker. Inline-in-MCP-`PROMPT` allowed only for one- or two-sentence asks with no context block.
-- **Always pass ABSOLUTE paths to MCP workers.** pass `cd` to `mcp__openmcp__run` as an absolute path. This rule applies to every file path mentioned inside the dispatch prompt body as well — input file lists, output targets, decision-note paths, response paths.
+- **Claude (simple):** edit directly; commit per logical change.
+- **Codex / Gemini:** call `mcp__openmcp__run` with `backend="codex"` (back) or `"gemini"`/`"agy"` (front). The worker edits files with its own write tools — on-disk files are the source of truth, never a draft. Reuse cached `SESSION_ID` when present.
+- **Cross-Validation:** same narrow question to both, compare, pick direction, route to the side owner (`reasoning="high"`).
+- **Same-phase fix:** reuse `SESSION_ID`; send only `FIX:` + delta context.
+- **MCP failure / rejected SESSION_ID** → output `BLOCKED`, ask the user. No retry, executor switch, or Task/Agent fallback without explicit consent.
 
-**Per-task git commits (required for Codex / Gemini phases):**
+**Paths:** always pass ABSOLUTE paths (forward slashes on Windows) to MCP workers — the `cd` arg, the `PROMPT` pointer, and every path inside the prompt body. Gemini/agy mis-resolves relative paths.
 
-- Worker commits its own changes per task — one commit per task in the phase, message prefix `phase-<N>.task-<M>: <summary>`.
-- Worker returns commit hashes in `## COMMITS`. Claude does not commit on the worker's behalf.
-- Claude reviews diff via `git show <hash>` per task during the Review gate.
-- **After Review PASS**, Claude squashes all phase task commits into one: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"`. Task-level commits are review artifacts only — not preserved in final history.
-- Claude-owned simple edits: commit per logical change, no enforced format.
+**Dispatch prompt:** write it to `docs/plans/<slug>/phase-<NN>/prompt.md` (template in `implementer-prompt.md`) and pass its absolute path. Inline `PROMPT` only for one- or two-sentence asks with no context block.
 
-**Per-phase decision notes (required for Codex / Gemini phases):**
+**Per-task commits (Codex / Gemini phases):** the worker makes one commit per task, subject `phase-<N>.task-<M>: <summary>`, and returns hashes in `## COMMITS`. Claude never commits on the worker's behalf and reviews each via `git show <hash>`. After Review PASS, Claude squashes the phase into one commit: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"` — task commits are review artifacts only.
 
-Worker writes one file per phase: `docs/plans/<slug>/phase-<NN>/notes.md`. Append a `## Task <M>` block after finishing each task — do not batch-write at phase end. Each task block captures anything outside the spec:
+**Per-phase notes (Codex / Gemini phases):** the worker appends a `## Task <M>` block to `docs/plans/<slug>/phase-<NN>/notes.md` after each task (not batched at phase end). Each block has: Decisions made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions, Follow-ups for human. Empty sub-sections = `- none`; every task gets a block even if all `none`.
 
-```markdown
-# Phase <N> — Decision Notes
+**Phase journal (Codex / Gemini phases):** `docs/plans/<slug>/phase-<NN>/journal.md` is the single durable phase record (survives compaction). Claude creates it at phase start with the Route skeleton; the worker appends its full `# EXTERNAL RESPONSE` block before emitting the completion line.
 
-## Task 1
-### Decisions made (not in spec)
-- <decision>: <why>
-
-### Spec deviations
-- <what changed vs phase journal>: <why>
-
-### Tradeoffs accepted
-- <tradeoff>: <alternative rejected + reason>
-
-### Assumptions
-- <assumption>
-
-### Follow-ups for human
-- <thing the human should know>
-
-## Task 2
-...
-```
-
-Empty sections written as `- none`. Every task gets its own `## Task <M>` block even when all sections are `none` (proves worker considered each).
-
-**Phase journal (required for Codex / Gemini phases):**
-
-`docs/plans/<slug>/phase-<NN>/journal.md` is the single durable phase record. Claude creates it at phase start with the Route skeleton; worker appends the full `# EXTERNAL RESPONSE` block to it (in addition to returning the block inline) before emitting the completion line. Survives session compaction. Replaces the old top-level `PHASE-<N>.md` and `responses/phase-<N>.md` — those are gone.
-
-**Worker response format:**
+### Worker response format
 
 ```text
 # EXTERNAL RESPONSE
-
 ## META
-- Phase: <N>
-- Owner: codex | gemini
-- SessionID: <id>
-- Started: <ISO8601>
-- Finished: <ISO8601>
-- Plan dir: docs/plans/<slug>
-
+- Phase / Owner (codex|gemini) / SessionID / Started / Finished / Plan dir
 ## SUMMARY
 [one sentence]
-
 ## FILES MODIFIED
-| Action  | Path     | Change |
-|---------|----------|--------|
-| Created | src/...  | ...    |
-| Edited  | src/...  | ...    |
-
+| Action | Path | Change |
 ## COMMITS
 - phase-<N>.task-<M>: <hash>  <subject>
-- phase-<N>.task-<M+1>: <hash>  <subject>
-
 ## NOTES
-- phase-<NN>/notes.md  (## Task <M>, ## Task <M+1>, …)
-
+- phase-<NN>/notes.md  (## Task <M>, …)
 ## SPEC COMPLIANCE
-- Meets Spec? YES | WITH_DEBT | NO
-- Explanation: [one line]
-
+- Meets Spec? YES | WITH_DEBT | NO  — [one line]
 ## CLARIFICATIONS NEEDED
 None (or list questions; emit and stop if any)
-
 ## NEXT
 TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
 ```
 
-Final worker line (after the `# EXTERNAL RESPONSE` block):
+Then the single completion line Claude scans for:
 
 ```text
 Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
 ```
 
-Single-line trigger Claude scans for; all structured fields (commits, session id, notes, owner) already live in `## META` / `## COMMITS` / `## NOTES`, so the line stays terse.
+## Gate 3 — Review
 
-### 3. Review
+**(a) Spec & Integration** — run the phase's `Done When` checks; compare result vs request, file scope, integration output. Initial status: `PASS` | `PASS_WITH_DEBT` | `FAIL`.
 
-Two sub-steps: **(a) Spec** → **(b) Quality**.
-
-**(a) Spec & Integration**
-
-- Run phase's `Done When` checks (build/lint/test).
-- Compare result vs original request, file scope, integration output.
-- Initial status: `PASS` | `PASS_WITH_DEBT` | `FAIL`.
-
-**(b) Quality scan**
-
-- Scan every file in `## FILES MODIFIED` for:
+**(b) Quality scan** — scan every file in `## FILES MODIFIED` (stay scoped to changed files — no broader audit):
 
 | Category | Check |
 |---|---|
 | Edge cases | null/undefined, empty arrays, boundaries, off-by-one |
 | Error handling | swallowed errors, missing catch, unhandled rejections |
-| Security | injection (SQL/XSS/cmd), hardcoded secrets, unsafe deserialization, missing input validation at boundaries |
-| Naming & clarity | misleading names, ambiguous abbreviations, functions doing more than name says |
+| Security | injection (SQL/XSS/cmd), hardcoded secrets, unsafe deserialization, missing boundary validation |
+| Naming & clarity | misleading names, ambiguous abbreviations, scope creep vs name |
 | Duplication | copy-paste logic that should be extracted |
 | Correctness | logic errors, race conditions, resource leaks, bad type narrowing |
 
-- Severity → status downgrade:
-
 | Severity | Effect |
 |---|---|
-| CRITICAL — bug, security vuln, data-loss risk | Force `FAIL` |
-| HIGH — likely bug or significant quality gap | Force `FAIL` |
-| MEDIUM — code smell, missed edge case, unclear logic | Downgrade `PASS` → `PASS_WITH_DEBT` |
-| LOW — minor naming, style, small duplication | Noted only |
+| CRITICAL — bug, security vuln, data-loss | Force `FAIL` |
+| HIGH — likely bug / significant gap | Force `FAIL` |
+| MEDIUM — code smell, missed edge case | `PASS` → `PASS_WITH_DEBT` |
+| LOW — minor naming/style | Noted only |
 
-- Skip Quality scan when: phase is docs/coordination only, owner was Claude on one-line/trivial edit, or `## FILES MODIFIED` empty. Required for every Codex / Gemini phase.
-- Findings contradicting user's explicit request or project conventions discarded with explanation.
-
-**Output:**
+Skip the Quality scan only when: docs/coordination-only phase, Claude one-line/trivial edit, or `## FILES MODIFIED` empty. Required for every Codex / Gemini phase. Discard findings that contradict the user's explicit request or project conventions (with explanation).
 
 ```text
 # REVIEW
 - Spec Status: PASS | PASS_WITH_DEBT | FAIL
 - Quality Findings:
   | Severity | path:line | Problem | Fix |
-  |----------|-----------|---------|-----|
   (or "No findings" / "Skipped: <reason>")
 - Final Status: PASS | PASS_WITH_DEBT | FAIL
 - Explanation: [one line — what changed from spec status and why]
 - Next: [done | debt + owner | retry/clarify]
 ```
 
-- `PASS_WITH_DEBT` requires explicit non-blocking debt note (spec or MEDIUM quality).
-- `FAIL` blocks completion: re-route gap or ask user.
-- Quality scan stays scoped to changed files — no broader audit.
+`PASS_WITH_DEBT` requires an explicit non-blocking debt note. `FAIL` blocks completion — re-route the gap or ask the user. Reject the phase if `## COMMITS` hashes, `notes.md` task blocks, or the journal External Response section are missing.
 
-## Cross-Validation Output
+### Cross-Validation output
 
 ```text
 # CROSS-VALIDATION
@@ -204,11 +129,21 @@ Two sub-steps: **(a) Spec** → **(b) Quality**.
 
 ## Session-Resume Artifacts
 
-Plans spanning multiple Claude sessions persist two files alongside plan doc. Resume artifacts opt-in per plan; flat single-file plans need none.
+Opt-in per plan; flat single-file plans need none. Multi-phase / multi-session plans persist `.handover.md` + per-phase `journal.md` alongside `PLAN.md`.
 
-### `.handover.md` — terse resume pointer
+**Plan directory layout** (phase IDs zero-padded to two digits; phase folders created lazily by the executor, never pre-scaffolded):
 
-Claude-authored at end of every turn changing plan state (route set, phase change, BLOCKED, phase done). Hook cannot synthesize. `session_refs` is the single source of truth for cached worker SESSION IDs — write after every MCP call returning a SESSION_ID.
+```
+docs/plans/<slug>/
+  PLAN.md
+  .handover.md
+  phase-01/
+    prompt.md   # dispatch prompt
+    notes.md    # per-task decision notes
+    journal.md  # Route skeleton + appended EXTERNAL RESPONSE + Review
+```
+
+**`.handover.md`** — terse resume pointer, always Claude-authored (a hook cannot synthesize it). Rewrite at the end of every turn that changes plan state (route set, phase change, BLOCKED, phase done). `session_refs` is the single source of truth for cached worker SESSION IDs — update it after every MCP call that returns one.
 
 ```markdown
 ---
@@ -221,95 +156,46 @@ session_refs:
   codex: <id or null>
   gemini: <id or null>
 ---
-
 ## next_action
 <one to three sentences — exact next step>
-
 ## read_first
 - docs/plans/<slug>/phase-<NN>/journal.md
-
 ## completed_tasks
-- id: phase-<N>.task-<M>
-  owner: codex | gemini | claude
-  commit: <hash>
-  notes: docs/plans/<slug>/phase-<NN>/notes.md#task-<M>
-- (one row per task; phase journal lives at phase-<NN>/journal.md)
-
+- id / owner / commit / notes  (one row per finished task)
 ## blockers
 <empty | one line per blocker>
-
 ## decisions_delta
 <empty | new decisions since prior handover>
-
 ## uncommitted_files
-<empty | paths edited but not yet committed by worker>
+<empty | edited-but-not-committed paths>
 ```
 
-### Plan directory layout
-
-```
-docs/plans/<slug>/
-  PLAN.md
-  .handover.md             # session_refs holds cached worker SESSION IDs
-  phase-01/                # created lazily when Phase 1 starts; no .gitkeep
-    prompt.md              # dispatch prompt
-    notes.md               # decision notes, ## Task M sub-headers
-    journal.md             # phase journal + appended EXTERNAL RESPONSE
-  phase-02/
-    ...
-```
-
-- Phase IDs are zero-padded two digits (`phase-01`, `phase-02`, …).
-- Phase folders are created lazily by the executor — never pre-scaffolded.
-- Everything inside is committed once the phase finishes — durable audit trail.
-
-### `phase-<NN>/journal.md` — durable phase journal
-
-Created by Claude at phase start with Route skeleton. Worker appends the `# EXTERNAL RESPONSE` block before completion. Claude finalizes Review section after Review gate. Single file per phase — replaces the old top-level `PHASE-<N>.md` plus `responses/phase-<N>.md`.
+**`phase-<NN>/journal.md`** — durable per-phase record. Claude writes the skeleton at phase start; the worker appends its `# EXTERNAL RESPONSE`; Claude finalizes the Review after the gate.
 
 ```markdown
 # Phase <N> — <title>
-
-- Status: ACTIVE | DONE | BLOCKED
-- Owner: Claude | Codex | Gemini
-- Started: <ISO>
-- Finished: <ISO>
-
+- Status / Owner / Started / Finished
 ## Route
-- Reason: ...
-- Done When: ...
-- Files: ...
-
+- Reason / Done When / Files
 ## External Response
-<worker appends the full `# EXTERNAL RESPONSE` block here at phase end>
-
+<worker appends the full # EXTERNAL RESPONSE block>
 ## Review
-- Spec Status: ...
-- Quality Findings: ...
-- Final Status: ...
-
+- Spec Status / Quality Findings / Final Status
 ## Squash Commit
-- `<type>[optional scope]: <description>\n\n[optional body]\n\n[optional footer(s)]` # final history after Review PASS
-
+- <type>[scope]: <description>   # final history after Review PASS
 ## Decisions
-- See `notes.md` (sibling file) for per-task decisions. Cross-task or phase-level decisions noted here only.
-
+- per-task decisions live in notes.md; cross-task / phase-level noted here
 ## Handoff
-<what next phase or new session must do>
+<what the next phase or session must do>
 ```
 
-### Resume rule
-
-New session reads `.handover.md` first, then only the `journal.md` listed in `read_first`. Never scans every phase folder unless handover missing or corrupt.
+**Resume rule:** a new session reads `.handover.md` first, then only the `journal.md` files listed in `read_first`. Never scan every phase folder unless the handover is missing or corrupt.
 
 ## Hard Rules
 
-- One phase, one primary owner, one review.
-- No draft-then-reimplement handoffs — worker output is final edit.
-- Cross-Validation runs **only** when the work is full-stack, unclear, or high-impact (see CV trigger list in Plan gate). Skip for clear single-side work — CV is for catching misses via dual review, not a default ceremony.
-- Route by side (back vs front), not default — never auto-route to one executor.
-- One commit per task by the worker; missing commit hashes in `## COMMITS` block Review. Task commits are review artifacts only.
-- After Review PASS, Claude squashes all phase task commits into one `<type>[optional scope]: <description>\n\n[optional body]\n\n[optional footer(s)]` commit. Final history = one squash commit per phase.
-- Per-phase `notes.md` (with `## Task <M>` block per task) + appended EXTERNAL RESPONSE in `journal.md` written before worker emits the final completion line.
-- Dispatch prompts written to `phase-<NN>/prompt.md` by default; inline only for trivial one-liner asks.
-- User overrides ("use Codex" / "use Gemini" / "no external models" / "skip cross-validation") win.
+- One phase, one owner, one review. Worker output is the final edit — no draft-then-reimplement.
+- Route by side; never auto-route to one executor. CV only for full-stack / unclear / high-impact work.
+- One commit per task by the worker; missing `## COMMITS` hashes, `notes.md` task blocks, or journal External Response block Review.
+- Notes + journal External Response written before the worker's completion line.
+- Absolute paths only when talking to MCP workers.
+- User overrides ("use Codex/Gemini", "no external models", "skip cross-validation") always win.

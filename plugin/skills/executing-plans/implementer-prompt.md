@@ -64,38 +64,8 @@ For each task in order:
 
 ## Response Format
 
-```markdown
-
-## SUMMARY
-[one sentence]
-
-## FILES MODIFIED
-| Action  | Path     | Change |
-|---------|----------|--------|
-| Created | src/...  | ...    |
-| Edited  | src/...  | ...    |
-
-## COMMITS
-- phase-<N>.task-<M>: <hash>  <subject>
-- phase-<N>.task-<M+1>: <hash>  <subject>
-
-## NOTES
-- phase-<NN>/notes.md  (## Task <M>, ## Task <M+1>, …)
-
-## SPEC COMPLIANCE
-- Meets Spec? YES | WITH_DEBT | NO
-- Explanation: [one line]
-
-## CLARIFICATIONS NEEDED
-None (or list questions; emit and stop if any)
-
-## NEXT
-TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
-
-```
+Return the canonical `# EXTERNAL RESPONSE` block defined in `coordinating-multi-model-work` (META, SUMMARY, FILES MODIFIED, COMMITS, NOTES, SPEC COMPLIANCE, CLARIFICATIONS NEEDED, NEXT), then the single completion line. Do not restate the schema here — follow that spec.
 
 ## Same-phase fix
 
 Reuse the cached `SESSION_ID`. Send `FIX:` + only the delta files / delta context. The fix still gets its own task commit and (if it changes a decision) an appended `notes.md` block.
-
-```

@@ -20,17 +20,16 @@ Phase-plan author. The routing table, owner semantics, and resume artifacts all 
 4. Assign **one owner per phase by side** per `coordinating-multi-model-work` routing rules. Full-stack phases split into back-side + front-side sub-phases.
 5. Each phase specifies: goal, files (modify/create), tasks, acceptance criteria, reviewer checklist, integration checks.
 6. **Pick storage layout:**
-   - Multi-phase / multi-session → folder `docs/plans/YYYY-MM-DD-<slug>/` containing only `PLAN.md` + `.handover.md` skeleton (`status: ACTIVE`, `current_phase: 0`, `next_action: "Execute Phase 1"`, empty `completed_tasks`, `session_refs: {codex: null, gemini: null}`). **No `phase-NN/` directories at write time** — they are created lazily by the executor.
+   - Multi-phase / multi-session → folder `docs/plans/YYYY-MM-DD-<slug>/` containing only `PLAN.md` + a `.handover.md` skeleton per the canonical schema (`status: ACTIVE`, `current_phase: 0`, `next_action: "Execute Phase 1"`, empty `completed_tasks`, null `session_refs`). **No `phase-NN/` directories at write time** — they are created lazily by the executor.
    - Single-phase / docs-only → flat `docs/plans/YYYY-MM-DD-<slug>-implementation-plan.md` (no resume artifacts).
 7. Offer execution via `executing-plans`.
 
 ## Hard Rules
 
-- Route by side; no default executor.
+(Routing, CV triggers, and phase-ID padding are canonical in `coordinating-multi-model-work`. Plan-author specifics:)
+
 - Resume check is mandatory — never start fresh when an `ACTIVE` handover covers the topic.
 - Folder-layout plans scaffold only `PLAN.md` + `.handover.md`. No `.gitkeep`, no empty dirs.
-- Phase IDs are zero-padded two digits (`phase-01`, `phase-02`, …) so lexical order = execution order.
-- Cross-Validation in the plan only when a phase straddles unresolved architecture spanning both sides.
 
 ## Phase Shape
 

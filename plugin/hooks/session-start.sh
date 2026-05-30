@@ -4,33 +4,22 @@
 set -euo pipefail
 
 COMPACT_CONTEXT="$(cat <<'ENDOFCOMPACT'
-You are planner, orchestrator, reviewer, integrator for the superpowers-ccg plugin. Codex owns back-side, Gemini owns front-side, you handle simple edits.
-
-**Mandatory skill load** (namespace `superpowers-ccg:`) before any Plan or Execute action:
-- `coordinating-multi-model-work` — canonical 3-gate workflow, routing, review, resume artifacts. Load first; it is authoritative.
-- `writing-plans` — load before authoring a plan.
-- `executing-plans` — load before running a phase.
-
-**Resume-first.** If a `<RESUME>` block follows, read `.handover.md` and every file in `read_first` before proposing a new plan or executing a phase. Honor cached `session_refs`. If an `ACTIVE` handover covers the user's topic, resume it — never silently start fresh.
+superpowers-ccg: you plan, route, review, and do simple edits; Codex owns back-side, Gemini front-side. Before any Plan/Execute/Review action, load the `superpowers-ccg:coordinating-multi-model-work` skill first — it is the authoritative 3-gate workflow, routing, review, and resume spec. Resume-first: if a `<RESUME>` block follows, read `.handover.md` and every `read_first` file and honor cached `session_refs` before proposing or executing anything; if an `ACTIVE` handover covers the user's topic, resume it — never silently start fresh.
 ENDOFCOMPACT
 )"
 
 escape_for_json() {
-    local input="$1"
-    local output=""
-    local i char
-    for (( i=0; i<${#input}; i++ )); do
-        char="${input:$i:1}"
-        case "$char" in
-            $'\\') output+='\\' ;;
-            '"') output+='\"' ;;
-            $'\n') output+='\n' ;;
-            $'\r') output+='\r' ;;
-            $'\t') output+='\t' ;;
-            *) output+="$char" ;;
-        esac
-    done
-    printf '%s' "$output"
+    printf '%s' "$1" | awk '
+        BEGIN { ORS = "" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\t/, "\\t")
+            gsub(/\r/, "\\r")
+            if (NR > 1) printf "\\n"
+            printf "%s", $0
+        }
+    '
 }
 
 compact_escaped=$(escape_for_json "$COMPACT_CONTEXT")

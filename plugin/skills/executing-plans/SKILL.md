@@ -26,13 +26,10 @@ Phase-by-phase runner. The Plan / Execute / Review gates, routing table, worker 
 
 ## Hard Rules
 
-- One active phase, one owner, one review. No draft-then-reimplement handoffs.
+(Gate semantics, absolute-path rule, blocked-on-missing-artifacts, and MCP-failure handling are canonical in `coordinating-multi-model-work`. Executor specifics:)
+
 - Phase-scoped prompts only — never re-explain the whole plan to a worker.
-- Dispatch prompts default to `<plan-dir>/phase-<NN>/prompt.md`; inline `PROMPT` only for one- or two-sentence asks.
-- **Absolute paths only** when talking to MCP workers (`PROMPT` pointer, `cd`, and every path inside the prompt body). Gemini/agy mis-resolves relative paths and may scan the device.
-- Missing commit hashes in `## COMMITS`, missing `notes.md` task blocks, or missing journal External Response → blocks Review.
-- MCP failure or rejected cached `SESSION_ID` → `BLOCKED`; ask the user. No silent retry, switch, or Task/Agent fallback.
-- `.handover.md` is always Claude-authored — never delegate to hook or worker.
+- Advance to the next phase only after Review passes; `.handover.md` is always Claude-authored, rewritten on every state change.
 
 ## References
 
