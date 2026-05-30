@@ -4,4 +4,5 @@
 *.DS_Store
 .ace-tool/
 .antigravitycli/
+.tgrep/
 node_modules/
