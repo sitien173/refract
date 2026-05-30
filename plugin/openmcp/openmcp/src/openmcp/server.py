@@ -136,8 +136,7 @@ def _resolve_profile(profile: str, env: Dict[str, str]) -> str:
         "Run an agy, codex, or gemini backend with retry support. "
         "Retries reuse the previous SESSION_ID to preserve conversation context. "
         "Use reasoning mode only for narrow Q&A or cross-validation. "
-        "Set debug=True to return the full backend payload; otherwise returns "
-        "{success, SESSION_ID, error}."
+        "Returns {success, SESSION_ID, agent_messages, error}."
     ),
 )
 async def run(
@@ -150,7 +149,6 @@ async def run(
     reasoning: Literal["", "low", "medium", "high"] = "",
     max_retries: int = 0,
     retry_base_ms: int = 1000,
-    debug: bool = False,
 ) -> Dict[str, Any]:
     """
     Run a backend agent.
@@ -165,7 +163,6 @@ async def run(
         reasoning: Reasoning effort. Leave empty to disable reasoning mode.
         max_retries: Maximum retry attempts for retryable backend failures.
         retry_base_ms: Base retry delay in milliseconds.
-        debug: Return the full backend payload instead of the compact response.
     """
 
     cd_path = Path(cd)
@@ -174,8 +171,8 @@ async def run(
     resolved_model = _resolve_model(effective_backend, model, reasoning, effective_env)
     resolved_profile = "" if reasoning else _resolve_profile(profile, effective_env)
     log.info(
-        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s max_retries=%d debug=%s",
-        backend, effective_backend, SESSION_ID or "<new>", resolved_model, resolved_profile, reasoning or "<off>", max_retries, debug,
+        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s max_retries=%d",
+        backend, effective_backend, SESSION_ID or "<new>", resolved_model, resolved_profile, reasoning or "<off>", max_retries,
     )
     try:
         if effective_backend == "agy":
@@ -210,11 +207,10 @@ async def run(
         backend, result.get("success"), result.get("attempts"), result.get("SESSION_ID", ""),
     )
 
-    if debug:
-        return result
     return {
         "success": result.get("success", False),
         "SESSION_ID": result.get("SESSION_ID", "") or "",
+        "agent_messages": result.get("agent_messages", "") or "",
         "error": result.get("error", "") or "",
     }
 

@@ -190,7 +190,7 @@ def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, 
             process.stdout.close()
         output_queue.put(None)
 
-    thread = threading.Thread(target=read_output)
+    thread = threading.Thread(target=read_output, daemon=True)
     thread.start()
 
     while True:
@@ -620,5 +620,3 @@ async def execute(params: AgyParams) -> BackendResult:
 
 
 __all__ = ["AgyParams", "execute"]
-
-

@@ -229,9 +229,7 @@ def test_tool_signature() -> None:
         "reasoning",
         "max_retries",
         "retry_base_ms",
-        "debug",
     ]
-    assert sig.parameters["debug"].default is False
 
 
 @pytest.mark.asyncio
@@ -414,7 +412,7 @@ async def test_gemini_stream_output_without_session_id_is_retryable(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_non_debug_shape_success(monkeypatch) -> None:
+async def test_response_shape_success(monkeypatch) -> None:
     import openmcp.server as srv
 
     async def fake(execute_fn, params, *, max_retries, retry_base_ms):
@@ -427,12 +425,12 @@ async def test_non_debug_shape_success(monkeypatch) -> None:
 
     monkeypatch.setattr(srv, "run_with_retry", fake)
     out = await srv.run(backend="agy", PROMPT="x", cd=Path("."))
-    assert set(out.keys()) == {"success", "SESSION_ID", "error"}
-    assert out == {"success": True, "SESSION_ID": "sess-x", "error": ""}
+    assert set(out.keys()) == {"success", "SESSION_ID", "agent_messages", "error"}
+    assert out == {"success": True, "SESSION_ID": "sess-x", "agent_messages": "lots of text", "error": ""}
 
 
 @pytest.mark.asyncio
-async def test_non_debug_shape_failure(monkeypatch) -> None:
+async def test_response_shape_failure(monkeypatch) -> None:
     import openmcp.server as srv
 
     async def fake(execute_fn, params, *, max_retries, retry_base_ms):
@@ -440,27 +438,8 @@ async def test_non_debug_shape_failure(monkeypatch) -> None:
 
     monkeypatch.setattr(srv, "run_with_retry", fake)
     out = await srv.run(backend="codex", PROMPT="x", cd=Path("."))
-    assert set(out.keys()) == {"success", "SESSION_ID", "error"}
-    assert out == {"success": False, "SESSION_ID": "", "error": "boom"}
-
-
-@pytest.mark.asyncio
-async def test_debug_shape_passthrough(monkeypatch) -> None:
-    import openmcp.server as srv
-
-    full = {
-        "success": True,
-        "SESSION_ID": "sess-x",
-        "agent_messages": "hi",
-        "attempts": 2,
-    }
-
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
-        return full
-
-    monkeypatch.setattr(srv, "run_with_retry", fake)
-    out = await srv.run(backend="agy", PROMPT="x", cd=Path("."), debug=True)
-    assert out == full
+    assert set(out.keys()) == {"success", "SESSION_ID", "agent_messages", "error"}
+    assert out == {"success": False, "SESSION_ID": "", "agent_messages": "", "error": "boom"}
 
 
 @pytest.mark.asyncio
