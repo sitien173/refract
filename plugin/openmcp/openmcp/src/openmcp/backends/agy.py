@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator
 
@@ -23,6 +24,10 @@ log = get_logger("agy")
 
 _SETTINGS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
 _CONVERSATIONS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+_BRAIN_PATH = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+_CONTINUE_PROMPT = "Continue your work. Complete any remaining `[ ]` task items."
+_AGY_MAX_CONTINUATIONS = 3
+_UNCHECKED_RE = re.compile(r"^\s*-\s*`?\[\s\]`?\s", re.MULTILINE)
 _settings_lock = threading.Lock()
 _DISABLED_PLUGIN_NAME = os.environ.get("OPENMCP_AGY_DISABLE_PLUGIN", "superpowers-ccg").strip()
 
@@ -364,6 +369,49 @@ def _extract_session_id_from_latest_log() -> str:
     return ""
 
 
+def _agy_has_pending_tasks(session_id: str, started_at: float) -> bool:
+    """True iff task.md was created/updated this turn AND still has `[ ]` items."""
+    if not session_id:
+        return False
+    task_path = _BRAIN_PATH / session_id / "task.md"
+    meta_path = _BRAIN_PATH / session_id / "task.md.metadata.json"
+    if not task_path.exists():
+        return False
+
+    updated_at: float | None = None
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            iso = str(meta.get("updatedAt", "")).strip()
+            if iso:
+                normalized = iso
+                if normalized.endswith("Z"):
+                    normalized = f"{normalized[:-1]}+00:00"
+                normalized = re.sub(
+                    r"\.(\d{6})\d+(?=(?:[+-]\d{2}:\d{2})$)",
+                    r".\1",
+                    normalized,
+                )
+                dt = datetime.fromisoformat(normalized)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                updated_at = dt.timestamp()
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            updated_at = None
+    if updated_at is None:
+        try:
+            updated_at = task_path.stat().st_mtime
+        except OSError:
+            return False
+    if updated_at < started_at - 2:
+        return False
+    try:
+        content = task_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(_UNCHECKED_RE.search(content))
+
+
 def _classify_output(agent_messages: str, session_id: str, error_text: str) -> BackendResult:
     full_error = error_text.strip()
     lower = f"{agent_messages}\n{full_error}".lower()
@@ -416,8 +464,8 @@ def _classify_output(agent_messages: str, session_id: str, error_text: str) -> B
     )
 
 
-async def execute(params: AgyParams) -> BackendResult:
-    """Execute an agy CLI session and return normalized backend result."""
+async def _execute_once(params: AgyParams) -> BackendResult:
+    """Execute one agy CLI session and return normalized backend result."""
     cd = Path(params.cd)
     if not cd.exists():
         return BackendResult(
@@ -520,7 +568,7 @@ async def execute(params: AgyParams) -> BackendResult:
             "agy: model override %r produced no output; retrying once with agy's configured default model",
             params.model,
         )
-        return await execute(
+        return await _execute_once(
             AgyParams(
                 PROMPT=params.PROMPT,
                 cd=cd,
@@ -528,6 +576,46 @@ async def execute(params: AgyParams) -> BackendResult:
                 model="",
             )
         )
+    return result
+
+
+async def execute(params: AgyParams) -> BackendResult:
+    """Execute an agy CLI session and continue while current-turn tasks remain pending."""
+    outer_started_at = time.time()
+    result = await _execute_once(params)
+    if result.outcome != "OK" or not result.SESSION_ID:
+        return result
+
+    merged_messages = result.agent_messages
+    session_id = result.SESSION_ID
+    continuations = 0
+    while continuations < _AGY_MAX_CONTINUATIONS and _agy_has_pending_tasks(session_id, outer_started_at):
+        continuations += 1
+        log.info("agy: task.md has pending [ ] items; continuation %d/%d", continuations, _AGY_MAX_CONTINUATIONS)
+        continue_started_at = time.time()
+        continuation = await _execute_once(
+            AgyParams(
+                PROMPT=_CONTINUE_PROMPT,
+                cd=Path(params.cd),
+                SESSION_ID=session_id,
+                model="",
+            )
+        )
+        if continuation.outcome != "OK":
+            log.warning("agy: continuation %d returned outcome=%s; stopping loop", continuations, continuation.outcome)
+            result.agent_messages = (merged_messages + "\n\n" + (continuation.agent_messages or "")).strip()
+            result.error = continuation.error or result.error
+            return result
+        if continuation.SESSION_ID:
+            session_id = continuation.SESSION_ID
+        merged_messages = (merged_messages + "\n\n" + continuation.agent_messages).strip()
+        outer_started_at = continue_started_at
+
+    if continuations and _agy_has_pending_tasks(session_id, outer_started_at):
+        log.warning("agy: pending [ ] items remain after %d continuations; returning partial", continuations)
+
+    result.agent_messages = merged_messages
+    result.SESSION_ID = session_id
     return result
 
 
