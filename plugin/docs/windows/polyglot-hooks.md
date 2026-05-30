@@ -49,13 +49,15 @@ CMDBLOCK
 3. `# Unix shell runs from here` - Comment
 4. The script runs directly with the Unix path
 
-## File Structure
+## File Structure (this plugin)
+
+This plugin dispatches hooks through a single bash entry point rather than a per-hook `.cmd` wrapper:
 
 ```
 hooks/
-├── hooks.json           # Points to the .cmd wrapper
-├── session-start.cmd    # Polyglot wrapper (cross-platform entry point)
-└── session-start.sh     # Actual hook logic (bash script)
+├── hooks.json        # invokes run-hook.sh via bash
+├── run-hook.sh       # generic dispatcher: resolves its own dir, execs the named script
+└── session-start.sh  # actual hook logic (bash)
 ```
 
 ### hooks.json
@@ -69,7 +71,7 @@ hooks/
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.cmd\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-.}}/hooks/run-hook.sh\" session-start.sh"
           }
         ]
       }
@@ -78,7 +80,10 @@ hooks/
 }
 ```
 
-Note: The path must be quoted because `${CLAUDE_PLUGIN_ROOT}` may contain spaces on Windows (e.g., `C:\Program Files\...`).
+Notes:
+- The path is quoted because `${CLAUDE_PLUGIN_ROOT}` may contain spaces on Windows (e.g. `C:\Program Files\...`).
+- `${CLAUDE_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-.}}` makes the same file work under both Claude Code and the Antigravity CLI.
+- This relies on `bash` being resolvable when the hook runs. The polyglot `.cmd` wrapper described below is the fallback for environments (raw CMD) where `bash` is not on PATH.
 
 ## Requirements
 
@@ -96,40 +101,28 @@ Note: The path must be quoted because `${CLAUDE_PLUGIN_ROOT}` may contain spaces
 Your actual hook logic goes in the `.sh` file. To ensure it works on Windows (via Git Bash):
 
 ### Do:
-- Use pure bash builtins when possible
 - Use `$(command)` instead of backticks
 - Quote all variable expansions: `"$VAR"`
 - Use `printf` or here-docs for output
+- `sed`/`awk`/`grep` are fine — the hook runs under bash (Git Bash on Windows via the login shell), so the standard Unix toolchain is on PATH
 
-### Avoid:
-- External commands that may not be in PATH (sed, awk, grep)
-- If you must use them, they're available in Git Bash but ensure PATH is set up (use `bash -l`)
+### Example: JSON Escaping with awk
 
-### Example: JSON Escaping Without sed/awk
+The escape order matters: backslash first, then quote, then control chars. `ORS=""` suppresses awk's trailing newline; the `NR>1` guard re-inserts literal `\n` between input lines:
 
-Instead of:
-```bash
-escaped=$(echo "$content" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
-```
-
-Use pure bash:
 ```bash
 escape_for_json() {
-    local input="$1"
-    local output=""
-    local i char
-    for (( i=0; i<${#input}; i++ )); do
-        char="${input:$i:1}"
-        case "$char" in
-            $'\\') output+='\\' ;;
-            '"') output+='\"' ;;
-            $'\n') output+='\n' ;;
-            $'\r') output+='\r' ;;
-            $'\t') output+='\t' ;;
-            *) output+="$char" ;;
-        esac
-    done
-    printf '%s' "$output"
+    printf '%s' "$1" | awk '
+        BEGIN { ORS = "" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\t/, "\\t")
+            gsub(/\r/, "\\r")
+            if (NR > 1) printf "\\n"
+            printf "%s", $0
+        }
+    '
 }
 ```
 

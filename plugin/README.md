@@ -118,7 +118,7 @@ OPENMCP_LOG_FILE=~/.openmcp/openmcp.log
 OPENMCP_LOG_LEVEL=INFO
 ```
 
-Example plugin env (`mcp_config.json` / `.mcp.json`):
+Example plugin env (`.mcp.json`):
 
 ```json
 {
