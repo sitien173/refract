@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import queue
-import re
 import shutil
 import subprocess
 import threading
@@ -51,9 +50,9 @@ def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, 
     def is_turn_completed(line: str) -> bool:
         try:
             data = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError:
             return False
-        return data.get("type") == "turn.completed"
+        return data.get("type") in {"turn.completed", "result"}
 
     def read_output() -> None:
         if process.stdout:
@@ -98,10 +97,6 @@ def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, 
             break
 
 
-_DEPRECATED_PROMPT_WARNING = (
-    "The --prompt (-p) flag has been deprecated and will be removed in a future version."
-)
-
 _FATAL_TOKENS = (
     "invalid model",
     "unknown model",
@@ -124,8 +119,6 @@ _RETRYABLE_TOKENS = (
     "timed out",
 )
 
-_SESSION_ID_STDOUT_RE = re.compile(r"^\s*session id:\s*(\S+)\s*$", re.IGNORECASE)
-
 
 def _message_content(value: object) -> str:
     if isinstance(value, str):
@@ -133,101 +126,6 @@ def _message_content(value: object) -> str:
     if value is None:
         return ""
     return str(value)
-
-
-_CONVERSATIONS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
-_UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
-
-
-def _extract_session_id_from_history(workspace_path: Path, prompt_snippet: str = "") -> str:
-    history_file = Path.home() / ".gemini" / "antigravity-cli" / "history.jsonl"
-    if not history_file.exists():
-        return ""
-
-    resolved_workspace = str(workspace_path.resolve()).lower()
-    snippet = prompt_snippet.strip()[:60].lower() if prompt_snippet else ""
-
-    try:
-        with history_file.open("r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
-            
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                raw_workspace = entry.get("workspace", "")
-                if not raw_workspace:
-                    continue
-                entry_workspace = str(Path(raw_workspace).resolve()).lower()
-                
-                if entry_workspace == resolved_workspace:
-                    if snippet:
-                        display_text = entry.get("display", "").lower()
-                        if snippet in display_text:
-                            return entry.get("conversationId", "")
-                    else:
-                        return entry.get("conversationId", "")
-            except (json.JSONDecodeError, KeyError):
-                continue
-    except OSError:
-        pass
-    return ""
-
-
-def _extract_session_id_from_pb_signature(workspace_path: Path) -> str:
-    if not _CONVERSATIONS_PATH.exists():
-        return ""
-
-    workspace_bytes = str(workspace_path.resolve()).encode("utf-8", errors="ignore")
-
-    try:
-        pb_files = sorted(
-            _CONVERSATIONS_PATH.glob("*.pb"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        for pb_path in pb_files[:10]:
-            try:
-                content = pb_path.read_bytes()
-                if workspace_bytes in content:
-                    stem = pb_path.stem
-                    if re.fullmatch(_UUID_PATTERN, stem, re.IGNORECASE):
-                        return stem
-            except OSError:
-                continue
-    except OSError:
-        pass
-    return ""
-
-
-def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
-    if not _CONVERSATIONS_PATH.exists():
-        return ""
-
-    try:
-        conversation_files = sorted(
-            _CONVERSATIONS_PATH.glob("*.pb"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-    except OSError:
-        return ""
-
-    for conversation_path in conversation_files[:20]:
-        try:
-            stat = conversation_path.stat()
-        except OSError:
-            continue
-        if stat.st_mtime < started_at - 30:
-            break
-
-        conversation_id = conversation_path.stem
-        if re.fullmatch(_UUID_PATTERN, conversation_id, re.IGNORECASE):
-            return conversation_id
-    return ""
-
 
 
 def _classify(*, agent_messages: str, session_id: str, error_text: str) -> BackendResult:
@@ -265,11 +163,11 @@ def _classify(*, agent_messages: str, session_id: str, error_text: str) -> Backe
 
     if not session_id:
         return BackendResult(
-            outcome="OK",
+            outcome="RETRYABLE",
             SESSION_ID="",
             agent_messages=agent_messages,
-            error="warning: no SESSION_ID",
-            error_class="warning",
+            error=error_text or "missing SESSION_ID",
+            error_class="missing_session_id",
         )
 
     return BackendResult(
@@ -303,11 +201,12 @@ async def execute(params: GeminiParams) -> BackendResult:
             error_class="missing_cli",
         )
 
-    started_at = time.time()
     cmd = [
         "gemini",
         "--prompt",
         params.PROMPT,
+        "--output-format",
+        "stream-json",
         "--approval-mode=yolo",
         "--allowed-mcp-server-names=[*]",
         "--skip-trust",
@@ -329,33 +228,26 @@ async def execute(params: GeminiParams) -> BackendResult:
     agent_messages = ""
     error_text = ""
     session_id = ""
-    stdout_lines: list[str] = []
 
     try:
         for line in run_shell_command(cmd, cwd=cd.absolute().as_posix()):
-            stdout_lines.append(line)
             stripped = line.strip()
             try:
                 line_dict = json.loads(stripped)
             except json.JSONDecodeError:
-                if not stripped or _DEPRECATED_PROMPT_WARNING in stripped:
-                    continue
-                match = _SESSION_ID_STDOUT_RE.match(stripped)
-                if match:
-                    session_id = match.group(1)
-                    continue
-                agent_messages += f"{line}\n"
+                if stripped:
+                    log.debug("gemini: skipping non-JSON stdout line: %s", stripped)
                 continue
 
             item_type = line_dict.get("type", "")
             item_role = line_dict.get("role", "")
+            if item_type == "init" and line_dict.get("session_id"):
+                session_id = str(line_dict.get("session_id"))
             if item_type == "message" and item_role == "assistant":
                 content = _message_content(line_dict.get("content", ""))
-                if _DEPRECATED_PROMPT_WARNING in content:
-                    continue
                 agent_messages += content
-            if line_dict.get("session_id") is not None:
-                session_id = str(line_dict.get("session_id"))
+            if item_type == "result":
+                break
     except subprocess.TimeoutExpired as exc:
         log.exception("gemini subprocess timeout")
         error_text += f"\n\n[timeout] {exc}"
@@ -363,18 +255,10 @@ async def execute(params: GeminiParams) -> BackendResult:
         log.exception("gemini: unexpected error during stream")
         error_text += f"\n\n[unexpected] {exc}"
 
-    stdout_text = "\n".join(stdout_lines)
     if not session_id:
-        session_id = (
-            _extract_session_id_from_history(cd, params.PROMPT)
-            or _extract_session_id_from_pb_signature(cd)
-            or _extract_session_id_from_recent_conversation_file(started_at)
-            or params.SESSION_ID
-        )
-        if session_id:
-            log.info("gemini: extracted session id via fallback: %s", session_id)
-        else:
-            log.warning("gemini: no session id found via stdout/history/pb/params")
+        session_id = params.SESSION_ID
+    if session_id:
+        log.info("gemini: resolved session id: %s", session_id)
     agent_messages = agent_messages.rstrip()
 
     result = _classify(

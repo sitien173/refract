@@ -119,7 +119,7 @@ def _resolve_model(
             return env.get(_ENV_GEMINI_REASONING_MODEL, "")
         return env.get(_ENV_CODEX_REASONING_MODEL, "")
     if backend == "agy":
-        return env.get(_ENV_AGY_MODEL_DEFAULT, "")
+        return ""
     if backend == "gemini":
         return env.get(_ENV_GEMINI_MODEL_DEFAULT, "")
     return env.get(_ENV_CODEX_MODEL_DEFAULT, "")

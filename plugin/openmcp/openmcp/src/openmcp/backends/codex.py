@@ -227,6 +227,7 @@ def _extract_session_id_from_latest_session(cwd: Path, prompt: str, started_at: 
 
 def _resolve_session_id(
     *,
+    parsed_session_id: str,
     last_message: str,
     stdout_text: str,
     cwd: Path,
@@ -235,6 +236,7 @@ def _resolve_session_id(
     fallback_session_id: str,
 ) -> tuple[str, str]:
     candidates: tuple[tuple[str, str], ...] = (
+        ("stdout-jsonl:thread.started", parsed_session_id.strip()),
         ("last-message:session-id-line", _extract_session_id_from_stdout(last_message)),
         ("stdout:session-id-line", _extract_session_id_from_stdout(stdout_text)),
         ("codex-jsonl", _extract_session_id_from_latest_session(cwd, prompt, started_at)),
@@ -329,6 +331,7 @@ async def execute(params: CodexParams) -> BackendResult:
         str(cd),
         "--yolo",
         "--skip-git-repo-check",
+        "--json",
         "-o",
         str(last_message_path),
     ]
@@ -380,6 +383,29 @@ async def execute(params: CodexParams) -> BackendResult:
         err_message += f"\n\n[unexpected] {exc}"
 
     stdout_text = "\n".join(stdout_lines)
+    parsed_session_id = ""
+    parsed_agent_messages = ""
+    for line in stdout_lines:
+        stripped = line.strip()
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            if stripped:
+                log.debug("codex: skipping non-JSON stdout line: %s", stripped)
+            continue
+
+        item_type = parsed.get("type", "")
+        if item_type == "thread.started" and parsed.get("thread_id"):
+            parsed_session_id = str(parsed.get("thread_id"))
+            continue
+        if item_type != "item.completed":
+            continue
+        item = parsed.get("item", {})
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "agent_message" and item.get("text"):
+            parsed_agent_messages += str(item.get("text"))
+
     try:
         last_message = last_message_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -391,14 +417,22 @@ async def execute(params: CodexParams) -> BackendResult:
         except OSError:
             pass
 
-    agent_messages = last_message.strip() or stdout_text
+    last_message_text = last_message.strip()
+    parsed_agent_messages = parsed_agent_messages.strip()
+    if last_message_text:
+        agent_messages = last_message_text
+    elif parsed_agent_messages:
+        agent_messages = parsed_agent_messages
+    else:
+        agent_messages = stdout_text
     log.debug(
-        "codex: last_message_len=%d stdout_len=%d using=%s",
-        len(last_message), len(stdout_text),
-        "last_message_file" if last_message.strip() else "stdout_fallback",
+        "codex: last_message_len=%d parsed_msg_len=%d stdout_len=%d using=%s",
+        len(last_message), len(parsed_agent_messages), len(stdout_text),
+        "last_message_file" if last_message_text else ("stdout_jsonl_fallback" if parsed_agent_messages else "stdout_fallback"),
     )
 
     session_id, session_id_source = _resolve_session_id(
+        parsed_session_id=parsed_session_id,
         last_message=last_message,
         stdout_text=stdout_text,
         cwd=cd,
