@@ -229,6 +229,7 @@ async def execute(params: GeminiParams) -> BackendResult:
     error_text = ""
     session_id = ""
 
+    non_json_lines: list[str] = []
     try:
         for line in run_shell_command(cmd, cwd=cd.absolute().as_posix()):
             stripped = line.strip()
@@ -237,6 +238,7 @@ async def execute(params: GeminiParams) -> BackendResult:
             except json.JSONDecodeError:
                 if stripped:
                     log.debug("gemini: skipping non-JSON stdout line: %s", stripped)
+                    non_json_lines.append(stripped)
                 continue
 
             item_type = line_dict.get("type", "")
@@ -260,6 +262,13 @@ async def execute(params: GeminiParams) -> BackendResult:
     if session_id:
         log.info("gemini: resolved session id: %s", session_id)
     agent_messages = agent_messages.rstrip()
+
+    # When stream-json produced no assistant output, surface any non-JSON
+    # stdout/stderr lines so the classifier can spot fatal errors (invalid
+    # model, auth, etc.) and the caller sees the real reason.
+    if not agent_messages and non_json_lines:
+        captured = "\n".join(non_json_lines[-50:])
+        error_text = (error_text + "\n\n[stderr]\n" + captured).strip()
 
     result = _classify(
         agent_messages=agent_messages,

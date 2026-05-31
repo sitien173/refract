@@ -427,7 +427,14 @@ def _classify_output(agent_messages: str, session_id: str, error_text: str) -> B
             error_class="fatal_backend",
         )
 
-    if any(token in lower for token in ("reconnecting...", "rate limit", "429", " 5xx", " 500", " 502", " 503", " 504", "timeout", "timed out")):
+    # Only treat soft retryable tokens as failure when we have no usable output.
+    # The Antigravity CLI prints "Reconnecting..." benignly during normal
+    # websocket reconnects, so matching it in a 5-minute successful run would
+    # discard real work. Real retryable failures typically produce no output.
+    if not agent_messages and any(
+        token in lower
+        for token in ("rate limit", "429", " 5xx", " 500", " 502", " 503", " 504", "timeout", "timed out")
+    ):
         return BackendResult(
             outcome="RETRYABLE",
             SESSION_ID=session_id,
