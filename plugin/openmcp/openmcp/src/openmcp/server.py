@@ -29,6 +29,7 @@ _ENV_GEMINI_ROUTE_TO_AGY = "OPENMCP_GEMINI_ROUTE_TO_AGY"
 _ENV_AGY_REASONING_MODEL = "OPENMCP_AGY_REASONING_MODEL"
 _ENV_CODEX_REASONING_MODEL = "OPENMCP_CODEX_REASONING_MODEL"
 _ENV_GEMINI_REASONING_MODEL = "OPENMCP_GEMINI_REASONING_MODEL"
+_ENV_CODEX_DISABLE_PLUGIN = "OPENMCP_CODEX_DISABLE_PLUGIN"
 _PLUGIN_CONFIG_FILES = ("mcp_config.json", ".mcp.json", "mcp.json")
 
 
@@ -186,6 +187,7 @@ async def run(
                 model=resolved_model,
                 profile=resolved_profile,
                 reasoning_effort=reasoning,
+                disable_plugin=effective_env.get(_ENV_CODEX_DISABLE_PLUGIN, ""),
             )
             result = await run_with_retry(codex_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
         else:

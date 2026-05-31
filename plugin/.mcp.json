@@ -15,6 +15,7 @@
         "OPENMCP_CODEX_REASONING_MODEL": "gpt-5.5",
         "OPENMCP_GEMINI_REASONING_MODEL": "gemini-3.1-pro-preview",
         "OPENMCP_AGY_DISABLE_PLUGIN": "superpowers-ccg",
+        "OPENMCP_CODEX_DISABLE_PLUGIN": "superpowers-ccg@superpowers-ccg-marketplace",
         "OPENMCP_GEMINI_ROUTE_TO_AGY": "false"
       }
     }

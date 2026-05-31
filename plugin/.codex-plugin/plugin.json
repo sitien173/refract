@@ -1,0 +1,41 @@
+{
+  "name": "superpowers-ccg",
+  "version": "5.0.2+codex.20260531170041",
+  "description": "Multi-model Plan, Execute, and Review workflows backed by OpenMCP.",
+  "author": {
+    "name": "sitien173",
+    "url": "https://github.com/sitien173"
+  },
+  "homepage": "https://github.com/sitien173/superpowers-ccg",
+  "repository": "https://github.com/sitien173/superpowers-ccg",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "multi-model",
+    "codex",
+    "gemini",
+    "antigravity",
+    "openmcp",
+    "workflows"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Superpowers CCG",
+    "shortDescription": "Coordinate Codex, Gemini, and Antigravity through OpenMCP.",
+    "longDescription": "Three-gate Plan, Execute, and Review workflows for coordinating Codex, Gemini, and Antigravity workers through the bundled OpenMCP server.",
+    "developerName": "sitien173",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/sitien173/superpowers-ccg",
+    "defaultPrompt": [
+      "Plan and route this change with the three-gate workflow.",
+      "Execute the active implementation plan phase.",
+      "Review the completed phase before marking it done."
+    ],
+    "brandColor": "#3B82F6"
+  }
+}

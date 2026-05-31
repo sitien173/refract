@@ -28,6 +28,12 @@ def _is_codex_compatible_model(model: str) -> bool:
     return bool(model) and bool(_CODEX_MODEL_RE.match(model.strip()))
 
 
+def _disabled_plugin_override(plugin_name: str) -> str:
+    plugin_name = plugin_name.strip()
+    escaped_name = plugin_name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'plugins."{escaped_name}".enabled=false' if escaped_name else ""
+
+
 @dataclass(slots=True)
 class CodexParams:
     PROMPT: str
@@ -36,6 +42,7 @@ class CodexParams:
     model: str = ""
     profile: str = ""
     reasoning_effort: str = ""
+    disable_plugin: str = ""
 
 
 def _windows_escape(prompt: str) -> str:
@@ -350,6 +357,10 @@ async def execute(params: CodexParams) -> BackendResult:
 
     if params.reasoning_effort:
         cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
+
+    disabled_plugin_override = _disabled_plugin_override(params.disable_plugin)
+    if disabled_plugin_override:
+        cmd.extend(["-c", disabled_plugin_override])
 
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])

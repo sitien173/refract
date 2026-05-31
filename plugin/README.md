@@ -1,6 +1,6 @@
 # Superpowers-CCG
 
-Multi-model orchestration plugin for [Claude Code](https://docs.claude.com/docs/claude-code). Claude plans, routes, reviews, and handles simple edits. Heavier work is dispatched to **Codex** (back-side) or **Gemini** (front-side) through a single MCP tool.
+Multi-model orchestration plugin for [Claude Code](https://docs.claude.com/docs/claude-code) and Codex. The host coordinator plans, routes, reviews, and handles simple edits. Heavier work is dispatched to **Codex** (back-side) or **Gemini** / **Antigravity** (front-side) through a single MCP tool.
 
 > **CCG** = **C**laude + **C**odex + **G**emini
 
@@ -20,7 +20,7 @@ Canonical spec: `skills/coordinating-multi-model-work/SKILL.md`.
 
 | Phase | Owner | Tool |
 |---|---|---|
-| Simple — one-line edit, rename, doc tweak, single-file fix | Claude | built-in |
+| Simple — one-line edit, rename, doc tweak, single-file fix | Coordinator | built-in |
 | **Back-side** — backend, API, business logic, database, system, infra, CI/CD, scripts, server-side tests | Codex | `mcp__openmcp__run(backend="codex", ...)` |
 | **Front-side** — UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__openmcp__run(backend="gemini", ...)` |
 | New feature / ideation (before plan exists) | Cross-Validation → assign side | both backends |
@@ -46,27 +46,38 @@ docs/plans/2026-05-21-user-auth/
 
 Single-phase / docs-only work uses a flat file (`docs/plans/YYYY-MM-DD-<slug>-implementation-plan.md`) with no resume artifacts.
 
-- **`.handover.md`** is the resume pointer (≤500 tokens). Always Claude-authored, rewritten on every plan-state change. `session_refs` frontmatter caches Codex/Gemini `SESSION_ID`s and is updated after every MCP call that returns one.
+- **`.handover.md`** is the resume pointer (≤500 tokens). Always coordinator-authored, rewritten on every plan-state change. `session_refs` frontmatter caches Codex/Gemini `SESSION_ID`s and is updated after every MCP call that returns one.
 - **`prompt.md`** holds the full dispatch spec; the MCP `PROMPT` field is just a pointer to it. Inline `PROMPT` only for one- or two-sentence asks.
 - **`notes.md`** captures off-spec decisions, deviations, tradeoffs, assumptions, and follow-ups — appended per task by the worker. Empty sub-sections written as `- none`.
-- **`journal.md`** is the durable phase record. Claude writes the Route skeleton at phase start; the worker appends the full `# EXTERNAL RESPONSE` block at phase end; Claude finalizes Review and Squash Commit sections after the Review gate.
+- **`journal.md`** is the durable phase record. The coordinator writes the Route skeleton at phase start; the worker appends the full `# EXTERNAL RESPONSE` block at phase end; the coordinator finalizes Review and Squash Commit sections after the Review gate.
 
 ## Worker Contract (Codex / Gemini)
 
-- **One commit per task.** Message prefix `phase-<N>.task-<M>: <subject>`. Hashes returned in `## COMMITS`. After Review `PASS`, Claude squashes them into a single `phase-<N>: <summary>` commit (`git reset --soft HEAD~<count>`).
+- **One commit per task.** Message prefix `phase-<N>.task-<M>: <subject>`. Hashes returned in `## COMMITS`. After Review `PASS`, the coordinator squashes them into a single `phase-<N>: <summary>` commit (`git reset --soft HEAD~<count>`).
 - **Per-task `notes.md` block** appended after each task — never batch-written at phase end.
 - **`# EXTERNAL RESPONSE` block** appended to `journal.md` before the worker emits its terse completion line.
 - **Same-phase fix:** reuse cached `SESSION_ID`, send `FIX:` + delta context only.
 
 ## Resume
 
-A new session reads `.handover.md` first, then only the `journal.md` files listed in `read_first`. The session-start hook surfaces an `<RESUME>` block when an `ACTIVE` handover exists, so resuming an in-flight plan does not require re-scanning the plan tree.
+A new session reads `.handover.md` first, then only the `journal.md` files listed in `read_first`. In Claude Code, the session-start hook surfaces an `<RESUME>` block when an `ACTIVE` handover exists. Codex uses the same handover artifacts through the shared skills but does not run the Claude Code hook.
 
 ## Install
+
+### Claude Code
 
 ```bash
 claude plugin marketplace add https://github.com/sitien173/superpowers-ccg
 claude plugin install superpowers-ccg
+```
+
+### Codex
+
+Add the Git marketplace, then install the plugin:
+
+```bash
+codex plugin marketplace add sitien173/superpowers-ccg-codex-marketplace --ref main
+codex plugin add superpowers-ccg@superpowers-ccg-marketplace
 ```
 
 ### Prerequisites
@@ -99,6 +110,7 @@ Environment resolution priority for OpenMCP defaults:
 | `OPENMCP_GEMINI_REASONING_MODEL` | Gemini model used when `run(reasoning=...)` is non-empty | empty |
 | `OPENMCP_GEMINI_ROUTE_TO_AGY` | Routes `backend="gemini"` calls to `agy` when truthy (`1`, `true`, `yes`, `on`) | `false` |
 | `OPENMCP_AGY_DISABLE_PLUGIN` | Plugin name to disable/restore around `agy` execution | `superpowers-ccg` |
+| `OPENMCP_CODEX_DISABLE_PLUGIN` | Codex plugin selector disabled only for delegated `codex exec` workers; empty keeps all enabled | empty |
 | `OPENMCP_LOG_FILE` | OpenMCP log file path | `~/.openmcp/openmcp.log` |
 | `OPENMCP_LOG_LEVEL` | OpenMCP log level | `INFO` |
 
@@ -114,6 +126,7 @@ OPENMCP_CODEX_REASONING_MODEL=gpt-5.5
 OPENMCP_GEMINI_REASONING_MODEL=gemini-3.1-pro-preview
 OPENMCP_GEMINI_ROUTE_TO_AGY=false
 OPENMCP_AGY_DISABLE_PLUGIN=superpowers-ccg
+OPENMCP_CODEX_DISABLE_PLUGIN=superpowers-ccg@superpowers-ccg-marketplace
 OPENMCP_LOG_FILE=~/.openmcp/openmcp.log
 OPENMCP_LOG_LEVEL=INFO
 ```
@@ -134,6 +147,7 @@ Example plugin env (`.mcp.json`):
         "OPENMCP_GEMINI_REASONING_MODEL": "gemini-3.1-pro-preview",
         "OPENMCP_GEMINI_ROUTE_TO_AGY": "false",
         "OPENMCP_AGY_DISABLE_PLUGIN": "superpowers-ccg",
+        "OPENMCP_CODEX_DISABLE_PLUGIN": "superpowers-ccg@superpowers-ccg-marketplace",
         "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
         "OPENMCP_LOG_LEVEL": "INFO"
       }
@@ -152,14 +166,14 @@ claude mcp remove agy
 
 ## Commands & Skills
 
-Slash commands (each loads its skill before acting):
+Claude Code slash commands (each loads its skill before acting):
 
 - `/brainstorm` — explore intent, requirements, and design via dialogue. Cross-Validation runs only when work is full-stack, unclear, or high-impact (not every new feature).
 - `/write-plan` — turn a confirmed design into a phase-based plan.
 - `/execute-plan` — run the active phase under the three gates.
 - `/setup-openmcp-env` — interactively configure every `OPENMCP_*` env var and save to `~/.openmcp/.env`.
 
-Skills (namespace `superpowers-ccg:`):
+Shared skills discovered by Claude Code and Codex (namespace `superpowers-ccg:`):
 
 - `coordinating-multi-model-work` — canonical 3-gate workflow, routing, review, resume artifacts.
 - `brainstorming`, `writing-plans`, `executing-plans` — phase-stage skills loaded by the slash commands.
@@ -176,10 +190,10 @@ Skills (namespace `superpowers-ccg:`):
 
 User: *"Add user auth with email + password. UI on the settings page."*
 
-1. **Cross-Validation** — Claude asks Codex and Gemini the same narrow question (bcrypt vs argon2? session vs JWT?) and reconciles.
+1. **Cross-Validation** — the coordinator asks Codex and Gemini the same narrow question (bcrypt vs argon2? session vs JWT?) and reconciles.
 2. **`/write-plan`** scaffolds `docs/plans/2026-05-21-user-auth/{PLAN.md, .handover.md}` with Phase 1 (Codex / back-side: hashing, sessions table, auth endpoints) and Phase 2 (Gemini / front-side: settings form, validation, error states).
-3. **`/execute-plan`** for Phase 1 — Claude creates `phase-01/`, writes the Route skeleton to `journal.md` and the dispatch spec to `prompt.md`, dispatches Codex. Codex commits per task, appends per-task blocks to `notes.md`, appends the `# EXTERNAL RESPONSE` to `journal.md`, returns the completion line.
-4. **Review Phase 1** — Claude runs `git show` per commit + integration tests, scans changed files, finalizes Review and Squash Commit sections of `journal.md`, squashes task commits, updates `.handover.md`.
+3. **`/execute-plan`** for Phase 1 — the coordinator creates `phase-01/`, writes the Route skeleton to `journal.md` and the dispatch spec to `prompt.md`, dispatches Codex. Codex commits per task, appends per-task blocks to `notes.md`, appends the `# EXTERNAL RESPONSE` to `journal.md`, returns the completion line.
+4. **Review Phase 1** — the coordinator runs `git show` per commit + integration tests, scans changed files, finalizes Review and Squash Commit sections of `journal.md`, squashes task commits, updates `.handover.md`.
 5. **Phase 2** — same loop with Gemini.
 6. **`verifying-before-completion`** runs the full `Done When` across both phases.
 
@@ -189,6 +203,8 @@ If the session breaks at any step, the next session reads `.handover.md` first a
 
 ```bash
 claude plugin update superpowers-ccg
+codex plugin marketplace upgrade superpowers-ccg-marketplace
+codex plugin add superpowers-ccg@superpowers-ccg-marketplace
 ```
 
 ## Support

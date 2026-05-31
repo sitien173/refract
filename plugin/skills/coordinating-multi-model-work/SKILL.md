@@ -5,7 +5,7 @@ description: "Three-gate workflow (Plan → Execute → Review)"
 
 # Coordinating Multi-Model Work
 
-Claude plans, routes, reviews, integrates, and handles simple tasks directly. Codex owns back-side (backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests/debug). Gemini owns front-side (UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, front-end tests, large-context sweeps).
+The coordinator plans, routes, reviews, integrates, and handles simple tasks directly. The coordinator may be Claude Code, Codex, or another host that loads this skill. Codex workers own back-side work (backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests/debug). Gemini workers own front-side work (UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, front-end tests, large-context sweeps).
 
 **Cross-Validation (CV)** = ask Codex and Gemini the same narrow question, reconcile divergences, then route implementation to a side owner. Run CV **only** when a phase is:
 - **Full-stack** — straddles both sides with unresolved coupling (API contract, shared schema, auth flow), or
@@ -20,14 +20,14 @@ Gather the minimum context to route (skip ceremony for trivial work). Frame work
 
 ```text
 # ROUTE
-- Owner: Claude | Codex | Gemini | Cross-Validation
+- Owner: Coordinator | Codex | Gemini | Cross-Validation
 - Reason: [one line — back-side / front-side / simple / new-feature ideation]
 - Done When: [build/test/lint commands or acceptance bullets]
 ```
 
 | Phase | Owner |
 |---|---|
-| Simple/trivial (one-line edit, rename, doc tweak, single-file fix, clarification) | Claude |
+| Simple/trivial (one-line edit, rename, doc tweak, single-file fix, clarification) | Coordinator |
 | Back-side work | Codex |
 | Front-side work | Gemini |
 | Full-stack / unclear / high-impact (per CV triggers) | Cross-Validation → reconcile → side owner |
@@ -37,7 +37,7 @@ Gather the minimum context to route (skip ceremony for trivial work). Frame work
 
 ## Gate 2 — Execute
 
-- **Claude (simple):** edit directly; commit per logical change.
+- **Coordinator (simple):** edit directly; commit per logical change.
 - **Codex / Gemini:** call `mcp__openmcp__run` with `backend="codex"` (back) or `"gemini"`/`"agy"` (front). The worker edits files with its own write tools — on-disk files are the source of truth, never a draft. Reuse cached `SESSION_ID` when present.
 - **Cross-Validation:** same narrow question to both, compare, pick direction, route to the side owner (`reasoning="high"`).
 - **Same-phase fix:** reuse `SESSION_ID`; send only `FIX:` + delta context.
@@ -47,11 +47,11 @@ Gather the minimum context to route (skip ceremony for trivial work). Frame work
 
 **Dispatch prompt:** write it to `docs/plans/<slug>/phase-<NN>/prompt.md` (template in `implementer-prompt.md`) and pass its absolute path. Inline `PROMPT` only for one- or two-sentence asks with no context block.
 
-**Per-task commits (Codex / Gemini phases):** the worker makes one commit per task, subject `phase-<N>.task-<M>: <summary>`, and returns hashes in `## COMMITS`. Claude never commits on the worker's behalf and reviews each via `git show <hash>`. After Review PASS, Claude squashes the phase into one commit: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"` — task commits are review artifacts only.
+**Per-task commits (Codex / Gemini phases):** the worker makes one commit per task, subject `phase-<N>.task-<M>: <summary>`, and returns hashes in `## COMMITS`. The coordinator never commits on the worker's behalf and reviews each via `git show <hash>`. After Review PASS, the coordinator squashes the phase into one commit: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"` — task commits are review artifacts only.
 
 **Per-phase notes (Codex / Gemini phases):** the worker appends a `## Task <M>` block to `docs/plans/<slug>/phase-<NN>/notes.md` after each task (not batched at phase end). Each block has: Decisions made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions, Follow-ups for human. Empty sub-sections = `- none`; every task gets a block even if all `none`.
 
-**Phase journal (Codex / Gemini phases):** `docs/plans/<slug>/phase-<NN>/journal.md` is the single durable phase record (survives compaction). Claude creates it at phase start with the Route skeleton; the worker appends its full `# EXTERNAL RESPONSE` block before emitting the completion line.
+**Phase journal (Codex / Gemini phases):** `docs/plans/<slug>/phase-<NN>/journal.md` is the single durable phase record (survives compaction). The coordinator creates it at phase start with the Route skeleton; the worker appends its full `# EXTERNAL RESPONSE` block before emitting the completion line.
 
 ### Worker response format
 
@@ -75,7 +75,7 @@ None (or list questions; emit and stop if any)
 TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
 ```
 
-Then the single completion line Claude scans for:
+Then the single completion line the coordinator scans for:
 
 ```text
 Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
@@ -103,7 +103,7 @@ Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
 | MEDIUM — code smell, missed edge case | `PASS` → `PASS_WITH_DEBT` |
 | LOW — minor naming/style | Noted only |
 
-Skip the Quality scan only when: docs/coordination-only phase, Claude one-line/trivial edit, or `## FILES MODIFIED` empty. Required for every Codex / Gemini phase. Discard findings that contradict the user's explicit request or project conventions (with explanation).
+Skip the Quality scan only when: docs/coordination-only phase, coordinator one-line/trivial edit, or `## FILES MODIFIED` empty. Required for every Codex / Gemini phase. Discard findings that contradict the user's explicit request or project conventions (with explanation).
 
 ```text
 # REVIEW
@@ -124,7 +124,7 @@ Skip the Quality scan only when: docs/coordination-only phase, Claude one-line/t
 # CROSS-VALIDATION
 - Agreement: [shared conclusions]
 - Divergences: [one line per disagreement + chosen resolution]
-- Next owner: Codex | Gemini | Claude
+- Next owner: Codex | Gemini | Coordinator
 ```
 
 ## Session-Resume Artifacts
@@ -143,7 +143,7 @@ docs/plans/<slug>/
     journal.md  # Route skeleton + appended EXTERNAL RESPONSE + Review
 ```
 
-**`.handover.md`** — terse resume pointer, always Claude-authored (a hook cannot synthesize it). Rewrite at the end of every turn that changes plan state (route set, phase change, BLOCKED, phase done). `session_refs` is the single source of truth for cached worker SESSION IDs — update it after every MCP call that returns one.
+**`.handover.md`** — terse resume pointer, always coordinator-authored (a hook cannot synthesize it). Rewrite at the end of every turn that changes plan state (route set, phase change, BLOCKED, phase done). `session_refs` is the single source of truth for cached worker SESSION IDs — update it after every MCP call that returns one.
 
 ```markdown
 ---
@@ -151,7 +151,7 @@ plan: docs/plans/<slug>
 updated_at: <ISO8601>
 current_phase: <N>
 status: ACTIVE   # ACTIVE | BLOCKED | DONE
-owner: claude | codex | gemini
+owner: coordinator | codex | gemini
 session_refs:
   codex: <id or null>
   gemini: <id or null>
@@ -170,7 +170,7 @@ session_refs:
 <empty | edited-but-not-committed paths>
 ```
 
-**`phase-<NN>/journal.md`** — durable per-phase record. Claude writes the skeleton at phase start; the worker appends its `# EXTERNAL RESPONSE`; Claude finalizes the Review after the gate.
+**`phase-<NN>/journal.md`** — durable per-phase record. The coordinator writes the skeleton at phase start; the worker appends its `# EXTERNAL RESPONSE`; the coordinator finalizes the Review after the gate.
 
 ```markdown
 # Phase <N> — <title>

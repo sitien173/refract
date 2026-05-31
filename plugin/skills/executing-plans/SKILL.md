@@ -16,11 +16,11 @@ Phase-by-phase runner. The Plan / Execute / Review gates, routing table, worker 
 
 1. **Read the plan once.** Select the requested, active, or next unstarted phase. Confirm it has 2–4 tasks, an owner, file set, acceptance criteria, integration checks.
 2. **Load resume artifacts.** For folder-layout plans, read `<plan-dir>/.handover.md` (current phase, next action, cached `session_refs`) then every file in `read_first`. Skip for flat single-file plans.
-3. **Plan gate.** Apply `coordinating-multi-model-work` Plan gate to the active phase and output the `# ROUTE` block. Create `<plan-dir>/phase-<NN>/` lazily — only `journal.md` (with Route skeleton) is pre-written. Worker writes `prompt.md` and `notes.md`; Claude writes `prompt.md` immediately before dispatch for Codex/Gemini phases.
+3. **Plan gate.** Apply `coordinating-multi-model-work` Plan gate to the active phase and output the `# ROUTE` block. Create `<plan-dir>/phase-<NN>/` lazily — only `journal.md` (with Route skeleton) is pre-written. Worker writes `prompt.md` and `notes.md`; the coordinator writes `prompt.md` immediately before dispatch for Codex/Gemini phases.
 4. **Execute gate.**
-   - `claude` — edit directly, commit per logical change.
+   - `coordinator` — edit directly, commit per logical change.
    - `codex` (`backend="codex"`) / `gemini` (`backend="gemini"` or `"agy"`) — write dispatch prompt to `<plan-dir>/phase-<NN>/prompt.md` (template in `implementer-prompt.md`), pass its **absolute** path to `mcp__openmcp__run`. Every path inside the prompt body and the `cd` argument must also be absolute with forward slashes on Windows. Reuse cached `SESSION_ID` from `session_refs` if present; same-phase fix → `FIX:` + delta. Write the returned `SESSION_ID` back to `session_refs` after every MCP call.
-5. **Review gate.** Run integration checks + `git show` per task commit (Spec), then Quality scan on `## FILES MODIFIED` (skip for trivial Claude / docs-only edits). Reject the phase if commits, `notes.md` `## Task <M>` blocks, or `journal.md` External Response section are missing. Output `# REVIEW`. Finalize the Review and Squash Commit sections of `journal.md`. On `PASS`, squash all phase task commits: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"`.
+5. **Review gate.** Run integration checks + `git show` per task commit (Spec), then Quality scan on `## FILES MODIFIED` (skip for trivial coordinator / docs-only edits). Reject the phase if commits, `notes.md` `## Task <M>` blocks, or `journal.md` External Response section are missing. Output `# REVIEW`. Finalize the Review and Squash Commit sections of `journal.md`. On `PASS`, squash all phase task commits: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"`.
 6. **Update handover.** Rewrite `.handover.md` with current phase, status, next action, `read_first`, and one `completed_tasks` row per finished task.
 7. Advance to the next phase only after Review passes. After the last phase, set `.handover.md` status to `DONE` and hand off to `verifying-before-completion`.
 
@@ -29,7 +29,7 @@ Phase-by-phase runner. The Plan / Execute / Review gates, routing table, worker 
 (Gate semantics, absolute-path rule, blocked-on-missing-artifacts, and MCP-failure handling are canonical in `coordinating-multi-model-work`. Executor specifics:)
 
 - Phase-scoped prompts only — never re-explain the whole plan to a worker.
-- Advance to the next phase only after Review passes; `.handover.md` is always Claude-authored, rewritten on every state change.
+- Advance to the next phase only after Review passes; `.handover.md` is always coordinator-authored, rewritten on every state change.
 
 ## References
 

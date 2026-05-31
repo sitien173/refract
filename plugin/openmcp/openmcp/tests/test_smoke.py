@@ -354,6 +354,29 @@ async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_codex_disables_configured_plugin_for_delegated_run(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import codex as codex_backend
+
+    captured = {}
+
+    def fake_run_shell_command(cmd, cwd=None):
+        captured["cmd"] = cmd
+        yield "PONG"
+
+    monkeypatch.setattr(codex_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
+
+    out = await codex_backend.execute(
+        CodexParams(PROMPT="x", cd=tmp_path, disable_plugin="superpowers-ccg@local-agent-plugins")
+    )
+
+    override_index = captured["cmd"].index('plugins."superpowers-ccg@local-agent-plugins".enabled=false')
+    assert captured["cmd"][override_index - 1] == "-c"
+    assert out.outcome == "OK"
+
+
+@pytest.mark.asyncio
 async def test_bad_cd_gemini_fatal() -> None:
     bad = Path("C:/definitely/not/real/path")
     out = await gemini_execute(GeminiParams(PROMPT="x", cd=bad))
@@ -517,6 +540,22 @@ async def test_env_defaults_applied_for_codex_model_and_profile(monkeypatch) -> 
     await srv.run(backend="codex", PROMPT="x", cd=Path("."))
     assert captured["model"] == "gpt-5"
     assert captured["profile"] == "mcp_execution"
+
+
+@pytest.mark.asyncio
+async def test_env_disable_plugin_applied_for_codex(monkeypatch) -> None:
+    import openmcp.server as srv
+
+    captured = {}
+
+    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
+        captured["disable_plugin"] = params.disable_plugin
+        return {"success": True, "SESSION_ID": "", "error": ""}
+
+    monkeypatch.setenv("OPENMCP_CODEX_DISABLE_PLUGIN", "superpowers-ccg@local-agent-plugins")
+    monkeypatch.setattr(srv, "run_with_retry", fake)
+    await srv.run(backend="codex", PROMPT="x", cd=Path("."))
+    assert captured["disable_plugin"] == "superpowers-ccg@local-agent-plugins"
 
 
 @pytest.mark.asyncio
