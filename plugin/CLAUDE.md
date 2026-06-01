@@ -6,6 +6,7 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 
 - `coordinating-multi-model-work` — canonical 3-gate workflow, routing, review, resume artifacts. **Load first.**
 - `brainstorming` — new features / ideation (Cross-Validation only if full-stack / unclear / high-impact).
+- `technical-prd-generator` — rough requirements → research-backed PRD; saves to `docs/plans/`, hands off to `writing-plans`.
 - `writing-plans` — design → phase-based plan.
 - `executing-plans` — run a plan one phase at a time.
 - `test-driven-development` — failing test first, then minimal code (feature/bugfix work).
@@ -15,6 +16,7 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 ## Slash commands
 
 - `/superpowers-ccg:brainstorm`
+- `/superpowers-ccg:prd` — rough requirements → research-backed PRD
 - `/superpowers-ccg:write-plan`
 - `/superpowers-ccg:execute-plan`
 - `/superpowers-ccg:setup-openmcp-env` — configure `OPENMCP_*` env vars → `~/.openmcp/.env`
