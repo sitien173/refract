@@ -28,7 +28,7 @@ Turn rough product or technical requirements into a clear, buildable, research-b
    - If a critical input is missing, infer a reasonable default and label it as an assumption. Ask at most 2 clarifying questions only when the PRD would be misleading without them.
 
 2. **Research when needed**
-   - For current, niche, technical, legal, platform, security, pricing, market, or ecosystem facts, research with `tvly` (`tvly search` / `tvly extract` / `tvly research`) unless the user explicitly says not to. This plugin mandates `tvly` for web access — never use `WebSearch`/`WebFetch`.
+   - For current, niche, technical, legal, platform, security, pricing, market, or ecosystem facts, research when available unless the user explicitly says not to.
    - Prefer primary sources for technical/platform claims: official docs, standards, vendor docs, project docs, legal/regulatory sources, and reputable research.
    - Cite load-bearing facts directly in the PRD.
    - See `references/research-protocol.md` for citation and source-selection rules.
@@ -113,7 +113,7 @@ For software, networking, infrastructure, security, AI, fintech, health, games, 
 
 ## Routing
 
-PRD authoring is a Gate-1 ideation task — the coordinator handles it directly, like `brainstorming`. Route to a worker only when a sub-task is clearly side-owned (e.g. a large-context `tvly research` sweep → Gemini). Follow `coordinating-multi-model-work` for routing and gate semantics.
+PRD authoring is a Gate-1 ideation task — the coordinator handles it directly, like `brainstorming`. Route to a worker only when a sub-task is clearly side-owned (e.g. a large-context research sweep → Gemini). Follow `coordinating-multi-model-work` for routing and gate semantics.
 
 ## References
 

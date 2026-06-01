@@ -2,10 +2,6 @@
 
 Use this protocol when a PRD relies on facts that may be current, niche, technical, regulatory, market-specific, platform-specific, or otherwise easy to misremember.
 
-## Tooling
-
-Do all web research with `tvly`, never `WebSearch`/`WebFetch` (plugin rule): `tvly search "<query>"` to find sources, `tvly extract "<url>"` to pull a known page, `tvly research "<topic>"` for multi-source synthesis with citations.
-
 ## When to Research
 
 Research before finalizing claims about:
