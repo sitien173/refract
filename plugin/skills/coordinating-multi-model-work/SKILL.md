@@ -43,6 +43,8 @@ Gather the minimum context to route (skip ceremony for trivial work). Frame work
 - **Same-phase fix:** reuse `SESSION_ID`; send only `FIX:` + delta context.
 - **MCP failure / rejected SESSION_ID** → output `BLOCKED`, ask the user. No retry, executor switch, or Task/Agent fallback without explicit consent.
 
+**Discipline (coordinator + every worker):** feature/bugfix phases are test-first per `test-driven-development` (failing test before production code); bug/failure phases follow `systematic-debugging` (root cause before any fix, fix begins with a failing test). The dispatch prompt states these as phase rules; workers record the RED→GREEN result and root-cause evidence in `notes.md` / journal.
+
 **Paths:** always pass ABSOLUTE paths (forward slashes on Windows) to MCP workers — the `cd` arg, the `PROMPT` pointer, and every path inside the prompt body. Gemini/agy mis-resolves relative paths.
 
 **Dispatch prompt:** write it to `docs/plans/<slug>/phase-<NN>/prompt.md` (template in `implementer-prompt.md`) and pass its absolute path. Inline `PROMPT` only for one- or two-sentence asks with no context block.
@@ -83,7 +85,9 @@ Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
 
 ## Gate 3 — Review
 
-**(a) Spec & Integration** — run the phase's `Done When` checks; compare result vs request, file scope, integration output. Initial status: `PASS` | `PASS_WITH_DEBT` | `FAIL`.
+**(a) Spec & Integration** — run the phase's `Done When` checks; compare result vs request, file scope, integration output. Verify **fresh** evidence per `verifying-before-completion` — no claim without having run the check this turn. Initial status: `PASS` | `PASS_WITH_DEBT` | `FAIL`.
+
+**Discipline check** — for any feature/bugfix phase, confirm test-first evidence (a test that failed then passed); for any fix, confirm stated root-cause evidence. Missing test-first or root-cause evidence is a CRITICAL finding → `FAIL`.
 
 **(b) Quality scan** — scan every file in `## FILES MODIFIED` (stay scoped to changed files — no broader audit):
 
@@ -198,4 +202,11 @@ session_refs:
 - One commit per task by the worker; missing `## COMMITS` hashes, `notes.md` task blocks, or journal External Response block Review.
 - Notes + journal External Response written before the worker's completion line.
 - Absolute paths only when talking to MCP workers.
-- User overrides ("use Codex/Gemini", "no external models", "skip cross-validation") always win.
+- Feature/bugfix work is test-first (`test-driven-development`); bugs get root-cause-first debugging (`systematic-debugging`); no completion claim without fresh evidence (`verifying-before-completion`).
+- User overrides ("use Codex/Gemini", "no external models", "skip cross-validation", "no TDD here") always win.
+
+## Discipline Skills
+
+- `skills/test-driven-development/SKILL.md` — failing test before production code.
+- `skills/systematic-debugging/SKILL.md` — root cause before any fix.
+- `skills/verifying-before-completion/SKILL.md` — fresh evidence before claiming done.

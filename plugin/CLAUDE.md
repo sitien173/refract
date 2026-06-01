@@ -8,7 +8,9 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 - `brainstorming` — new features / ideation (Cross-Validation only if full-stack / unclear / high-impact).
 - `writing-plans` — design → phase-based plan.
 - `executing-plans` — run a plan one phase at a time.
-- `verifying-before-completion` — final check before reporting done.
+- `test-driven-development` — failing test first, then minimal code (feature/bugfix work).
+- `systematic-debugging` — root cause before any fix (bugs / test failures).
+- `verifying-before-completion` — fresh evidence before reporting done.
 
 ## Slash commands
 

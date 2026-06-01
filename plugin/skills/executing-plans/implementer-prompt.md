@@ -44,19 +44,24 @@ mcp__openmcp__run:
 
 ## Done When
 - [acceptance criterion]
-- [integration check command]
+- [integration check command — its fresh output is the completion evidence]
 
 ## Rules
 - Edit files directly with your write tools; on-disk files are the source of truth.
 - Do not duplicate file content in the response.
 - Do not redesign the phase or produce a reference prototype.
+- **Test-first (TDD):** for any feature/bugfix, write the failing test first and
+  watch it fail, then write minimal code to pass. No production code without a
+  failing test first.
+- **Bug fixes:** find the root cause before fixing; the fix starts from a failing
+  test reproducing the bug. Never fix a bug without a test.
 - If anything is unclear, list it under CLARIFICATIONS NEEDED and stop.
 
 ## Per-Task Workflow
 For each task in order:
-  1. Implement.
+  1. Implement test-first where it applies: write the failing test, run it, confirm RED; then minimal code to GREEN.
   2. `git add` only files touched for this task; commit with subject `phase-<N>.task-<M>: <one-line>`. Capture the hash.
-  3. Append a `## Task <M>` block to `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/notes.md` (create with heading `# Phase <N> — Decision Notes` if missing). Sub-sections: Decisions made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions, Follow-ups for human. Empty sub-sections = `- none`.
+  3. Append a `## Task <M>` block to `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/notes.md` (create with heading `# Phase <N> — Decision Notes` if missing). Sub-sections: Decisions made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions, Follow-ups for human, Test evidence (RED→GREEN, or root cause for a fix). Empty sub-sections = `- none`.
   4. Append the commit row to `## COMMITS` in your response.
 
 ## After All Tasks

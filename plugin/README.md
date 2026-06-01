@@ -177,7 +177,9 @@ Shared skills discovered by Claude Code and Codex (namespace `superpowers-ccg:`)
 
 - `coordinating-multi-model-work` — canonical 3-gate workflow, routing, review, resume artifacts.
 - `brainstorming`, `writing-plans`, `executing-plans` — phase-stage skills loaded by the slash commands.
-- `verifying-before-completion` — final integration check before reporting done.
+- `test-driven-development` — failing test first, watch it fail, then minimal code (feature/bugfix phases).
+- `systematic-debugging` — root-cause investigation before any fix (bugs, test failures).
+- `verifying-before-completion` — fresh verification evidence before reporting done.
 
 ## Hard Rules
 
