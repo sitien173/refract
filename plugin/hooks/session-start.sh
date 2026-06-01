@@ -24,6 +24,46 @@ escape_for_json() {
 
 compact_escaped=$(escape_for_json "$COMPACT_CONTEXT")
 
+# Materialize the bundled shared contract (shared/*.md) into the consuming
+# project's .agents/shared/. Deterministic, version-stamped copy. Writes nothing
+# to stdout (stdout is reserved for the SessionStart JSON contract). Every step
+# is guarded so a copy failure never suppresses the resume context below.
+shared_version() {
+    awk '
+        match($0, /ccg-shared-version:[[:space:]]*[^[:space:]>]+/) {
+            v = substr($0, RSTART, RLENGTH)
+            sub(/^ccg-shared-version:[[:space:]]*/, "", v)
+            print v
+            exit
+        }
+    ' "$1" 2>/dev/null || true
+}
+
+materialize_shared() {
+    local plugin_root src_dir dest_dir template name dest src_ver dest_ver
+    plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
+    [ -n "$plugin_root" ] || return 0
+    src_dir="${plugin_root}/shared"
+    [ -d "$src_dir" ] || return 0
+
+    dest_dir="${PWD}/.agents/shared"
+    shopt -s nullglob
+    for template in "$src_dir"/*.md; do
+        name="$(basename "$template")"
+        dest="${dest_dir}/${name}"
+        if [ -f "$dest" ]; then
+            src_ver="$(shared_version "$template")"
+            dest_ver="$(shared_version "$dest")"
+            [ "$src_ver" = "$dest_ver" ] && continue
+        fi
+        mkdir -p "$dest_dir" 2>/dev/null || true
+        cp -f "$template" "$dest" 2>/dev/null || true
+    done
+    shopt -u nullglob
+}
+
+materialize_shared || true
+
 extract_frontmatter_value() {
     local file="$1"
     local key="$2"

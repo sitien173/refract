@@ -55,6 +55,8 @@ Gather the minimum context to route (skip ceremony for trivial work). Frame work
 
 **Phase journal (Codex / Gemini phases):** `docs/plans/<slug>/phase-<NN>/journal.md` is the single durable phase record (survives compaction). The coordinator creates it at phase start with the Route skeleton; the worker appends its full `# EXTERNAL RESPONSE` block before emitting the completion line.
 
+**Shared contract:** the worker-facing contract lives in `<project>/.agents/shared/{worker-contract.md,erp.md}` — materialized from the plugin's bundled `shared/` templates by the SessionStart hook (git-tracked in the consuming project, regenerated on plugin version change). Workers run without the plugin loaded, so dispatch prompts point at those absolute paths instead of restating the protocol. This skill stays the human-readable canonical text; `shared/*.md` is the machine-/worker-facing mirror — edit the plugin templates, never the materialized copies.
+
 ### Worker response format
 
 ```text

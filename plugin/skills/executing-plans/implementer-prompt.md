@@ -1,6 +1,6 @@
 # Implementer Prompt Template
 
-Dispatch template for Codex / Gemini phase workers. The worker response format (`# EXTERNAL RESPONSE` block, `## COMMITS`, `## NOTES`, completion line) is canonical in `coordinating-multi-model-work` — workers follow that spec; this file is the per-phase **input** spec only.
+Dispatch template for Codex / Gemini phase workers. The worker contract (per-task workflow, discipline) and response format live in `<project>/.agents/shared/{worker-contract.md,erp.md}` — materialized by the plugin's SessionStart hook and readable by the worker at its `cd`. This file is the per-phase **input** spec only; it points at those two files instead of restating them.
 
 ## MCP call
 
@@ -17,7 +17,9 @@ mcp__openmcp__run:
     Plan dir:   <ABSOLUTE>/docs/plans/<slug>
     Phase dir:  <ABSOLUTE>/docs/plans/<slug>/phase-<NN>
     Phase:      <N>
-    Follow every rule in the spec file. Emit the completion line when done.
+    Contract:   <ABSOLUTE>/.agents/shared/worker-contract.md
+    Response:   <ABSOLUTE>/.agents/shared/erp.md
+    Follow the contract and the spec file. Respond per erp.md, then emit the completion line.
 ```
 
 **Absolute paths only.** The pointer path, `cd`, and every path inside the prompt body must be absolute with forward slashes on Windows. Gemini/agy mis-resolves relative paths.
@@ -47,29 +49,19 @@ mcp__openmcp__run:
 - [integration check command — its fresh output is the completion evidence]
 
 ## Rules
-- Edit files directly with your write tools; on-disk files are the source of truth.
-- Do not duplicate file content in the response.
-- Do not redesign the phase or produce a reference prototype.
-- **Test-first (TDD):** for any feature/bugfix, write the failing test first and
-  watch it fail, then write minimal code to pass. No production code without a
-  failing test first.
-- **Bug fixes:** find the root cause before fixing; the fix starts from a failing
-  test reproducing the bug. Never fix a bug without a test.
-- If anything is unclear, list it under CLARIFICATIONS NEEDED and stop.
 
-## Per-Task Workflow
-For each task in order:
-  1. Implement test-first where it applies: write the failing test, run it, confirm RED; then minimal code to GREEN.
-  2. `git add` only files touched for this task; commit with subject `phase-<N>.task-<M>: <one-line>`. Capture the hash.
-  3. Append a `## Task <M>` block to `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/notes.md` (create with heading `# Phase <N> — Decision Notes` if missing). Sub-sections: Decisions made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions, Follow-ups for human, Test evidence (RED→GREEN, or root cause for a fix). Empty sub-sections = `- none`.
-  4. Append the commit row to `## COMMITS` in your response.
-
-## After All Tasks
-- Append the full `# EXTERNAL RESPONSE` block (same content you return inline) under the `## External Response` heading of `<ABSOLUTE>/docs/plans/<slug>/phase-<NN>/journal.md`. Do not overwrite earlier sections.
+Follow the contract in `<ABSOLUTE>/.agents/shared/worker-contract.md` — per-task
+workflow (test-first → one commit per task `phase-<N>.task-<M>: …` → append a
+`## Task <M>` block to `phase-<NN>/notes.md` → append the `# EXTERNAL RESPONSE`
+block to `phase-<NN>/journal.md`) plus the discipline rules (test-first,
+root-cause-first, evidence) and prompt discipline (edit on disk, no duplication,
+no redesign, unclear → CLARIFICATIONS NEEDED + stop). Use the absolute
+`notes.md` / `journal.md` paths under the Phase dir above.
 
 ## Response Format
 
-Return the canonical `# EXTERNAL RESPONSE` block defined in `coordinating-multi-model-work` (META, SUMMARY, FILES MODIFIED, COMMITS, NOTES, SPEC COMPLIANCE, CLARIFICATIONS NEEDED, NEXT), then the single completion line. Do not restate the schema here — follow that spec.
+Respond per `<ABSOLUTE>/.agents/shared/erp.md` — return the `# EXTERNAL RESPONSE`
+block, then the single completion line.
 
 ## Same-phase fix
 
