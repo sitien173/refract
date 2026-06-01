@@ -89,8 +89,8 @@ def _load_openmcp_dotenv() -> Dict[str, str]:
 
 def _effective_env() -> Dict[str, str]:
     env = _load_plugin_env()
-    env.update(_load_openmcp_dotenv())
     env.update(os.environ)
+    env.update(_load_openmcp_dotenv())
     return env
 
 
