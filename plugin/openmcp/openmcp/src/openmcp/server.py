@@ -129,7 +129,7 @@ def _resolve_model(
 def _resolve_profile(profile: str, env: Dict[str, str]) -> str:
     if profile:
         return profile
-    return env.get(_ENV_CODEX_PROFILE_DEFAULT, "mcp-execution")
+    return env.get(_ENV_CODEX_PROFILE_DEFAULT, "mcp_execution")
 
 @mcp.tool(
     name="run",

@@ -21,13 +21,6 @@ from openmcp.logging_setup import get_logger
 
 log = get_logger("codex")
 
-_CODEX_MODEL_RE = re.compile(r"^(gpt-|codex-)", re.IGNORECASE)
-
-
-def _is_codex_compatible_model(model: str) -> bool:
-    return bool(model) and bool(_CODEX_MODEL_RE.match(model.strip()))
-
-
 def _disabled_plugin_override(plugin_name: str) -> str:
     plugin_name = plugin_name.strip()
     escaped_name = plugin_name.replace("\\", "\\\\").replace('"', '\\"')
@@ -343,14 +336,8 @@ async def execute(params: CodexParams) -> BackendResult:
         str(last_message_path),
     ]
 
-    if _is_codex_compatible_model(params.model):
+    if params.model:
         cmd.extend(["--model", params.model])
-    elif params.model:
-        log.info(
-            "codex: ignoring incompatible model %r (must match gpt-*/codex-*); using profile %r only",
-            params.model,
-            params.profile,
-        )
 
     if params.profile:
         cmd.extend(["--profile", params.profile])
