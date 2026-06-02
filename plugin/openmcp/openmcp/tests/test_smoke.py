@@ -559,7 +559,7 @@ async def test_env_disable_plugin_applied_for_codex(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_explicit_model_and_profile_override_env_defaults(monkeypatch) -> None:
+async def test_explicit_profile_suppresses_codex_model_override(monkeypatch) -> None:
     import openmcp.server as srv
 
     captured = {}
@@ -579,7 +579,7 @@ async def test_explicit_model_and_profile_override_env_defaults(monkeypatch) -> 
         model="gpt-5-mini",
         profile="custom-profile",
     )
-    assert captured["model"] == "gpt-5-mini"
+    assert captured["model"] == ""
     assert captured["profile"] == "custom-profile"
 
 

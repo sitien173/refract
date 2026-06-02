@@ -171,9 +171,10 @@ async def run(
     effective_backend = _effective_backend(backend, effective_env)
     resolved_model = _resolve_model(effective_backend, model, reasoning, effective_env)
     resolved_profile = "" if reasoning else _resolve_profile(profile, effective_env)
+    codex_model = "" if effective_backend == "codex" and profile else resolved_model
     log.info(
         "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s max_retries=%d",
-        backend, effective_backend, SESSION_ID or "<new>", resolved_model, resolved_profile, reasoning or "<off>", max_retries,
+        backend, effective_backend, SESSION_ID or "<new>", codex_model if effective_backend == "codex" else resolved_model, resolved_profile, reasoning or "<off>", max_retries,
     )
     try:
         if effective_backend == "agy":
@@ -184,7 +185,7 @@ async def run(
                 PROMPT=PROMPT,
                 cd=cd_path,
                 SESSION_ID=SESSION_ID,
-                model=resolved_model,
+                model=codex_model,
                 profile=resolved_profile,
                 reasoning_effort=reasoning,
                 disable_plugin=effective_env.get(_ENV_CODEX_DISABLE_PLUGIN, ""),
