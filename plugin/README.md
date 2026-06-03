@@ -129,14 +129,14 @@ Environment resolution priority for OpenMCP defaults:
 | `OPENMCP_CODEX_MODEL_DEFAULT` | Default `model` when `backend="codex"` and no model arg is passed | empty |
 | `OPENMCP_GEMINI_MODEL_DEFAULT` | Default `model` when `backend="gemini"` and no model arg is passed | empty |
 | `OPENMCP_CODEX_PROFILE_DEFAULT` | Default `profile` when `backend="codex"` and no profile arg is passed | `mcp-execution` |
-| `OPENMCP_AGY_REASONING_MODEL` | Base agy model used when `run(reasoning=...)` is non-empty; final model is `<base>-<reasoning>` (e.g. `gemini-3.5-flash-high`) | empty |
-| `OPENMCP_CODEX_REASONING_MODEL` | Codex model used when `run(reasoning=...)` is non-empty; effort passed via `-c model_reasoning_effort=<reasoning>` | empty |
-| `OPENMCP_GEMINI_REASONING_MODEL` | Gemini model used when `run(reasoning=...)` is non-empty | empty |
 | `OPENMCP_GEMINI_ROUTE_TO_AGY` | Routes `backend="gemini"` calls to `agy` when truthy (`1`, `true`, `yes`, `on`) | `false` |
 | `OPENMCP_AGY_DISABLE_PLUGIN` | Plugin name to disable/restore around `agy` execution | `superpowers-ccg` |
 | `OPENMCP_CODEX_DISABLE_PLUGIN` | Codex plugin selector disabled only for delegated `codex exec` workers; empty keeps all enabled | empty |
 | `OPENMCP_LOG_FILE` | OpenMCP log file path | `~/.openmcp/openmcp.log` |
 | `OPENMCP_LOG_LEVEL` | OpenMCP log level | `INFO` |
+
+Reasoning-mode models are hardcoded in `openmcp/src/openmcp/server.py` (`_REASONING_MODELS`):
+`agy → gemini-3.5-flash` (suffixed with `-<reasoning>`), `codex → gpt-5.5`, `gemini → gemini-3.1-pro-preview`.
 
 Example `~/.openmcp/.env`:
 
@@ -145,9 +145,6 @@ OPENMCP_AGY_MODEL_DEFAULT=gemini-3.5-flash
 OPENMCP_CODEX_MODEL_DEFAULT=gpt-5.3-codex
 OPENMCP_GEMINI_MODEL_DEFAULT=gemini-2.5-pro
 OPENMCP_CODEX_PROFILE_DEFAULT=mcp_execution
-OPENMCP_AGY_REASONING_MODEL=gemini-3.5-flash
-OPENMCP_CODEX_REASONING_MODEL=gpt-5.5
-OPENMCP_GEMINI_REASONING_MODEL=gemini-3.1-pro-preview
 OPENMCP_GEMINI_ROUTE_TO_AGY=false
 OPENMCP_AGY_DISABLE_PLUGIN=superpowers-ccg
 OPENMCP_CODEX_DISABLE_PLUGIN=superpowers-ccg@superpowers-ccg-marketplace
@@ -166,9 +163,6 @@ Example plugin env (`.mcp.json`):
         "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.3-codex",
         "OPENMCP_GEMINI_MODEL_DEFAULT": "gemini-2.5-pro",
         "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
-        "OPENMCP_AGY_REASONING_MODEL": "gemini-3.5-flash",
-        "OPENMCP_CODEX_REASONING_MODEL": "gpt-5.5",
-        "OPENMCP_GEMINI_REASONING_MODEL": "gemini-3.1-pro-preview",
         "OPENMCP_GEMINI_ROUTE_TO_AGY": "false",
         "OPENMCP_AGY_DISABLE_PLUGIN": "superpowers-ccg",
         "OPENMCP_CODEX_DISABLE_PLUGIN": "superpowers-ccg@superpowers-ccg-marketplace",

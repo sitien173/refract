@@ -12,7 +12,7 @@ The coordinator plans, routes, reviews, integrates, and handles simple tasks dir
 - **Unclear** — ambiguous requirements, multiple viable architectures, no obvious owner, or
 - **High-impact** — breaking change, public API, security boundary, data migration, irreversible infra, architecture decision.
 
-Otherwise route directly to the side owner. CV dispatches MUST pass `reasoning="high"`.
+Otherwise route directly to the side owner. CV dispatches MUST pass `reasoning="high"`; openmcp then resolves backend → model from a hardcoded reasoning-model map: `codex → gpt-5.5`, `agy → gemini-3.5-flash` (suffixed with `-<reasoning>`), `gemini → gemini-3.1-pro-preview`. Do NOT pass `model=` on CV calls — leave it empty so the map applies.
 
 ## Gate 1 — Plan
 

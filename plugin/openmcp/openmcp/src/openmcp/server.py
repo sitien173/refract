@@ -26,10 +26,13 @@ _ENV_CODEX_MODEL_DEFAULT = "OPENMCP_CODEX_MODEL_DEFAULT"
 _ENV_GEMINI_MODEL_DEFAULT = "OPENMCP_GEMINI_MODEL_DEFAULT"
 _ENV_CODEX_PROFILE_DEFAULT = "OPENMCP_CODEX_PROFILE_DEFAULT"
 _ENV_GEMINI_ROUTE_TO_AGY = "OPENMCP_GEMINI_ROUTE_TO_AGY"
-_ENV_AGY_REASONING_MODEL = "OPENMCP_AGY_REASONING_MODEL"
-_ENV_CODEX_REASONING_MODEL = "OPENMCP_CODEX_REASONING_MODEL"
-_ENV_GEMINI_REASONING_MODEL = "OPENMCP_GEMINI_REASONING_MODEL"
 _ENV_CODEX_DISABLE_PLUGIN = "OPENMCP_CODEX_DISABLE_PLUGIN"
+
+_REASONING_MODELS: Dict[str, str] = {
+    "agy": "gemini-3.5-flash",
+    "codex": "gpt-5.5",
+    "gemini": "gemini-3.1-pro-preview",
+}
 _PLUGIN_CONFIG_FILES = ("mcp_config.json", ".mcp.json", "mcp.json")
 
 
@@ -114,11 +117,8 @@ def _resolve_model(
         return model
     if reasoning:
         if backend == "agy":
-            base = env.get(_ENV_AGY_REASONING_MODEL, "")
-            return f"{base}-{reasoning}" if base else ""
-        if backend == "gemini":
-            return env.get(_ENV_GEMINI_REASONING_MODEL, "")
-        return env.get(_ENV_CODEX_REASONING_MODEL, "")
+            return f"{_REASONING_MODELS['agy']}-{reasoning}"
+        return _REASONING_MODELS[backend]
     if backend == "agy":
         return ""
     if backend == "gemini":
