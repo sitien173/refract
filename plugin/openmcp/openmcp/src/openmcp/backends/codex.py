@@ -35,7 +35,6 @@ class CodexParams:
     model: str = ""
     profile: str = ""
     reasoning_effort: str = ""
-    disable_plugin: str = ""
 
 
 def _windows_escape(prompt: str) -> str:
@@ -345,9 +344,7 @@ async def execute(params: CodexParams) -> BackendResult:
     if params.reasoning_effort:
         cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
 
-    disabled_plugin_override = _disabled_plugin_override(params.disable_plugin)
-    if disabled_plugin_override:
-        cmd.extend(["-c", disabled_plugin_override])
+    cmd.extend(["-c", _disabled_plugin_override("superpowers-ccg")])
 
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])

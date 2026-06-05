@@ -29,7 +29,7 @@ _CONTINUE_PROMPT = "Continue your work. Complete any remaining `[ ]` task items.
 _AGY_MAX_CONTINUATIONS = 3
 _UNCHECKED_RE = re.compile(r"^\s*-\s*`?\[\s\]`?\s", re.MULTILINE)
 _settings_lock = threading.Lock()
-_DISABLED_PLUGIN_NAME = os.environ.get("OPENMCP_AGY_DISABLE_PLUGIN", "superpowers-ccg").strip()
+_DISABLED_PLUGIN_NAME = "superpowers-ccg"
 
 
 @dataclass(slots=True)
