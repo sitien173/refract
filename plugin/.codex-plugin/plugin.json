@@ -1,6 +1,6 @@
 {
   "name": "superpowers-ccg",
-  "version": "5.0.2+codex.20260531170041",
+  "version": "5.2.0",
   "description": "Multi-model Plan, Execute, and Review workflows backed by OpenMCP.",
   "author": {
     "name": "sitien173",

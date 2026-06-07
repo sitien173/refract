@@ -181,7 +181,7 @@ claude mcp remove agy
 
 ## Commands & Skills
 
-Claude Code slash commands (each loads its skill before acting):
+Claude Code slash commands (each loads its shared skill before acting):
 
 - `/brainstorm` — explore intent, requirements, and design via dialogue. Cross-Validation runs only when work is full-stack, unclear, or high-impact (not every new feature).
 - `/prd` — turn rough product or technical requirements into a research-backed PRD (goals, non-goals, requirements, architecture, risks, milestones, acceptance criteria).
@@ -197,6 +197,15 @@ Shared skills discovered by Claude Code and Codex (namespace `superpowers-ccg:`)
 - `test-driven-development` — failing test first, watch it fail, then minimal code (feature/bugfix phases).
 - `systematic-debugging` — root-cause investigation before any fix (bugs, test failures).
 - `verifying-before-completion` — fresh verification evidence before reporting done.
+
+Codex does not install Claude slash-command files as native slash commands. Use the same workflows by invoking the corresponding `superpowers-ccg:*` skill directly; the command files are thin Claude entry points over those shared skills.
+
+## Cross-Host Compatibility
+
+- Claude Code uses `.claude-plugin/plugin.json`, `commands/*.md`, `hooks/hooks.json`, and the shared `.mcp.json`.
+- Codex uses `.codex-plugin/plugin.json`, `skills/`, and the same shared `.mcp.json`.
+- Hook scripts are host-neutral shell scripts, but automatic hook registration is Claude-specific unless Codex adds equivalent hook support.
+- OpenMCP is the shared MCP server for both hosts. Delegated Codex workers are always launched with `superpowers-ccg@superpowers-ccg-marketplace` disabled to avoid recursive plugin loading.
 
 ## Hard Rules
 
