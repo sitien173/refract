@@ -354,7 +354,7 @@ async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_codex_disables_configured_plugin_for_delegated_run(monkeypatch, tmp_path) -> None:
+async def test_codex_disables_plugin_for_delegated_run(monkeypatch, tmp_path) -> None:
     from openmcp.backends import codex as codex_backend
 
     captured = {}
@@ -367,14 +367,11 @@ async def test_codex_disables_configured_plugin_for_delegated_run(monkeypatch, t
     monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
     monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
 
-    out = await codex_backend.execute(
-        CodexParams(PROMPT="x", cd=tmp_path)
-    )
+    out = await codex_backend.execute(CodexParams(PROMPT="x", cd=tmp_path))
 
-    override_index = captured["cmd"].index('plugins."superpowers-ccg".enabled=false')
+    override_index = captured["cmd"].index('plugins."superpowers-ccg@superpowers-ccg-marketplace".enabled=false')
     assert captured["cmd"][override_index - 1] == "-c"
     assert out.outcome == "OK"
-
 
 @pytest.mark.asyncio
 async def test_bad_cd_gemini_fatal() -> None:

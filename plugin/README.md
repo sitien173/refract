@@ -131,7 +131,6 @@ Environment resolution priority for OpenMCP defaults:
 | `OPENMCP_CODEX_PROFILE_DEFAULT` | Default `profile` when `backend="codex"` and no profile arg is passed | `mcp-execution` |
 | `OPENMCP_GEMINI_ROUTE_TO_AGY` | Routes `backend="gemini"` calls to `agy` when truthy (`1`, `true`, `yes`, `on`) | `false` |
 | `OPENMCP_AGY_DISABLE_PLUGIN` | Plugin name to disable/restore around `agy` execution | `superpowers-ccg` |
-| `OPENMCP_CODEX_DISABLE_PLUGIN` | Codex plugin selector disabled only for delegated `codex exec` workers; empty keeps all enabled | empty |
 | `OPENMCP_LOG_FILE` | OpenMCP log file path | `~/.openmcp/openmcp.log` |
 | `OPENMCP_LOG_LEVEL` | OpenMCP log level | `INFO` |
 
@@ -147,7 +146,6 @@ OPENMCP_GEMINI_MODEL_DEFAULT=gemini-2.5-pro
 OPENMCP_CODEX_PROFILE_DEFAULT=mcp_execution
 OPENMCP_GEMINI_ROUTE_TO_AGY=false
 OPENMCP_AGY_DISABLE_PLUGIN=superpowers-ccg
-OPENMCP_CODEX_DISABLE_PLUGIN=superpowers-ccg@superpowers-ccg-marketplace
 OPENMCP_LOG_FILE=~/.openmcp/openmcp.log
 OPENMCP_LOG_LEVEL=INFO
 ```
@@ -165,7 +163,6 @@ Example plugin env (`.mcp.json`):
         "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
         "OPENMCP_GEMINI_ROUTE_TO_AGY": "false",
         "OPENMCP_AGY_DISABLE_PLUGIN": "superpowers-ccg",
-        "OPENMCP_CODEX_DISABLE_PLUGIN": "superpowers-ccg@superpowers-ccg-marketplace",
         "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
         "OPENMCP_LOG_LEVEL": "INFO"
       }

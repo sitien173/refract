@@ -21,6 +21,9 @@ from openmcp.logging_setup import get_logger
 
 log = get_logger("codex")
 
+_DISABLED_PLUGIN = "superpowers-ccg@superpowers-ccg-marketplace"
+
+
 def _disabled_plugin_override(plugin_name: str) -> str:
     plugin_name = plugin_name.strip()
     escaped_name = plugin_name.replace("\\", "\\\\").replace('"', '\\"')
@@ -344,7 +347,7 @@ async def execute(params: CodexParams) -> BackendResult:
     if params.reasoning_effort:
         cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
 
-    cmd.extend(["-c", _disabled_plugin_override("superpowers-ccg")])
+    cmd.extend(["-c", _disabled_plugin_override(_DISABLED_PLUGIN)])
 
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])
