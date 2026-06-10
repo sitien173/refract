@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import tomllib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -173,6 +174,32 @@ def test_agy_strips_windows_terminal_title_escape() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agy_reports_pty_initialization_failure_as_fatal(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    def fail_pty(cmd, cwd=None):
+        raise ImportError("DLL load failed while importing winpty")
+
+    @contextlib.contextmanager
+    def noop_context(*args, **kwargs):
+        yield
+
+    monkeypatch.setattr(agy_backend, "_temporary_disabled_plugin", noop_context)
+    monkeypatch.setattr(agy_backend, "run_shell_command_pty", fail_pty)
+    monkeypatch.setattr(agy_backend, "_extract_session_id_from_history", lambda workspace_path, prompt_snippet="": "")
+    monkeypatch.setattr(agy_backend, "_extract_session_id_from_pb_signature", lambda workspace_path: "")
+    monkeypatch.setattr(agy_backend, "_extract_session_id_from_recent_conversation_file", lambda started_at: "")
+    monkeypatch.setattr(agy_backend, "_extract_session_id_from_latest_log", lambda: "")
+    monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    out = await agy_backend.execute(AgyParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "execution_error"
+    assert out.error == "DLL load failed while importing winpty"
+
+
+@pytest.mark.asyncio
 async def test_agy_falls_back_to_configured_model_when_model_override_has_no_output(monkeypatch, tmp_path) -> None:
     from openmcp.backends import agy as agy_backend
 
@@ -230,6 +257,12 @@ def test_tool_signature() -> None:
         "max_retries",
         "retry_base_ms",
     ]
+
+
+def test_windows_pywinpty_version_excludes_broken_release() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "pywinpty>=2.0,<3.0.4; sys_platform == 'win32'" in pyproject["project"]["dependencies"]
 
 
 @pytest.mark.asyncio

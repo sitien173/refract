@@ -495,6 +495,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
 
     cwd = cd.absolute().as_posix()
     error_text = ""
+    execution_error = False
     agent_messages = ""
     started_at = time.time()
 
@@ -546,6 +547,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
     except Exception as exc:  # noqa: BLE001
         log.exception("agy: unexpected error during run")
         error_text = str(exc)
+        execution_error = True
 
     extracted_session_id = (
         _extract_session_id(agent_messages)
@@ -559,6 +561,15 @@ async def _execute_once(params: AgyParams) -> BackendResult:
         log.info("agy: extracted session id via fallback: %s", extracted_session_id)
     else:
         log.warning("agy: no session id extracted from output/history/pb/log/params")
+
+    if execution_error:
+        return BackendResult(
+            outcome="FATAL",
+            SESSION_ID=extracted_session_id,
+            agent_messages=agent_messages,
+            error=error_text or "agy execution failed",
+            error_class="execution_error",
+        )
 
     result = _classify_output(agent_messages, extracted_session_id, error_text)
     log.info(
