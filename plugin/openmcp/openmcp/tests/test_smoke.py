@@ -387,7 +387,7 @@ async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_codex_disables_plugin_for_delegated_run(monkeypatch, tmp_path) -> None:
+async def test_codex_disables_plugin_from_env_for_delegated_run(monkeypatch, tmp_path) -> None:
     from openmcp.backends import codex as codex_backend
 
     captured = {}
@@ -399,11 +399,33 @@ async def test_codex_disables_plugin_for_delegated_run(monkeypatch, tmp_path) ->
     monkeypatch.setattr(codex_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
     monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
+    monkeypatch.setenv("OPENMCP_CODEX_DISABLE_PLUGIN", "custom-plugin@custom-marketplace")
 
     out = await codex_backend.execute(CodexParams(PROMPT="x", cd=tmp_path))
 
-    override_index = captured["cmd"].index('plugins."superpowers-ccg@superpowers-ccg-marketplace".enabled=false')
+    override_index = captured["cmd"].index('plugins."custom-plugin@custom-marketplace".enabled=false')
     assert captured["cmd"][override_index - 1] == "-c"
+    assert out.outcome == "OK"
+
+
+@pytest.mark.asyncio
+async def test_codex_skips_plugin_disable_when_env_missing(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import codex as codex_backend
+
+    captured = {}
+
+    def fake_run_shell_command(cmd, cwd=None):
+        captured["cmd"] = cmd
+        yield "PONG"
+
+    monkeypatch.setattr(codex_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
+    monkeypatch.delenv("OPENMCP_CODEX_DISABLE_PLUGIN", raising=False)
+
+    out = await codex_backend.execute(CodexParams(PROMPT="x", cd=tmp_path))
+
+    assert all(not item.startswith("plugins.") for item in captured["cmd"])
     assert out.outcome == "OK"
 
 @pytest.mark.asyncio
