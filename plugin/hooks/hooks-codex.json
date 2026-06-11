@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/hooks/run-hook.sh\" superpowers-ccg-session-start.sh",
+            "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run-hook.cmd\" superpowers-ccg-session-start.sh",
+            "statusMessage": "Loading superpowers-ccg context"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/hooks/run-hook.sh\" superpowers-ccg-user-prompt-submit.sh --codex",
+            "commandWindows": "\"%PLUGIN_ROOT%\\hooks\\run-hook.cmd\" superpowers-ccg-user-prompt-submit.sh --codex"
+          }
+        ]
+      }
+    ]
+  }
+}

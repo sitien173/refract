@@ -84,7 +84,7 @@ Single-phase / docs-only work uses a flat file (`docs/plans/YYYY-MM-DD-<slug>-im
 
 ## Resume
 
-A new session reads `.handover.md` first, then only the `journal.md` files listed in `read_first`. In Claude Code, the session-start hook surfaces an `<RESUME>` block when an `ACTIVE` handover exists. Codex uses the same handover artifacts through the shared skills but does not run the Claude Code hook.
+A new session reads `.handover.md` first, then only the `journal.md` files listed in `read_first`. Claude Code and Codex use host-specific session-start hook configurations to surface an `<RESUME>` block when an `ACTIVE` handover exists.
 
 ## Install
 
@@ -202,9 +202,9 @@ Codex does not install Claude slash-command files as native slash commands. Use 
 
 ## Cross-Host Compatibility
 
-- Claude Code uses `.claude-plugin/plugin.json`, `commands/*.md`, `hooks/hooks.json`, and the shared `.mcp.json`.
-- Codex uses `.codex-plugin/plugin.json`, `skills/`, and the same shared `.mcp.json`.
-- Hook scripts are host-neutral shell scripts, but automatic hook registration is Claude-specific unless Codex adds equivalent hook support.
+- Claude Code uses `.claude-plugin/plugin.json`, `commands/*.md`, `hooks/hooks-claude.json`, and the shared `.mcp.json`.
+- Codex uses `.codex-plugin/plugin.json`, `skills/`, `hooks/hooks-codex.json`, and the same shared `.mcp.json`.
+- Hook scripts share the handover parsing logic but emit host-specific output contracts.
 - OpenMCP is the shared MCP server for both hosts. Delegated Codex workers are always launched with `superpowers-ccg@superpowers-ccg-marketplace` disabled to avoid recursive plugin loading.
 
 ## Hard Rules

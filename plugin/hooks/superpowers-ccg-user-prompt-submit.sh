@@ -146,6 +146,19 @@ fi
 
 escaped="$(escape_for_json "$summary")"
 
+if [ "${1:-}" = "--codex" ]; then
+    cat <<EOF
+{
+  "systemMessage": "${escaped}",
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "${escaped}"
+  }
+}
+EOF
+    exit 0
+fi
+
 cat <<EOF
 {
   "systemMessage": "${escaped}",
