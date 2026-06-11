@@ -104,6 +104,43 @@ codex plugin marketplace add sitien173/superpowers-ccg-codex-marketplace --ref m
 codex plugin add superpowers-ccg@superpowers-ccg-marketplace
 ```
 
+### Qoder
+
+Install the plugin via the Qoder Marketplace (Quest → Marketplace → search "superpowers-ccg"), or add it manually:
+
+1. Copy (or symlink) this repo into `~/.qoder/plugins/superpowers-ccg/`.
+2. Register hooks by merging the following into `~/.qoder/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${QODER_PLUGIN_ROOT}/hooks/run-hook.sh\" superpowers-ccg-session-start.sh --qoder",
+            "commandWindows": "\"%QODER_PLUGIN_ROOT%\\hooks\\run-hook.cmd\" superpowers-ccg-session-start.sh --qoder",
+            "statusMessage": "Loading superpowers-ccg context"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${QODER_PLUGIN_ROOT}/hooks/run-hook.sh\" superpowers-ccg-user-prompt-submit.sh --qoder",
+            "commandWindows": "\"%QODER_PLUGIN_ROOT%\\hooks\\run-hook.cmd\" superpowers-ccg-user-prompt-submit.sh --qoder"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> **Note:** `$QODER_PLUGIN_ROOT` is the env variable Qoder sets to the plugin's install directory (analogous to `$PLUGIN_ROOT` in Codex). If Qoder uses a different variable name, update the hook commands above accordingly.
+
 ### Prerequisites
 
 - [Claude Code](https://docs.claude.com/docs/claude-code) — `claude --version`

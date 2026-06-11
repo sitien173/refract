@@ -203,6 +203,19 @@ if [ -n "$resume_context" ]; then
     resume_escaped="$(escape_for_json "$resume_context")"
 fi
 
+if [ "${1:-}" = "--qoder" ]; then
+    cat <<EOF
+{
+  "systemMessage": "<EXTREMELY_IMPORTANT>\n${compact_escaped}\n</EXTREMELY_IMPORTANT>${resume_escaped:+\n${resume_escaped}}",
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "<EXTREMELY_IMPORTANT>\n${compact_escaped}\n</EXTREMELY_IMPORTANT>${resume_escaped:+\n${resume_escaped}}"
+  }
+}
+EOF
+    exit 0
+fi
+
 cat <<EOF
 {
   "hookSpecificOutput": {

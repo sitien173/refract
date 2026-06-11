@@ -146,7 +146,7 @@ fi
 
 escaped="$(escape_for_json "$summary")"
 
-if [ "${1:-}" = "--codex" ]; then
+if [ "${1:-}" = "--codex" ] || [ "${1:-}" = "--qoder" ]; then
     cat <<EOF
 {
   "systemMessage": "${escaped}",
