@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-.}}/hooks/run-hook.sh\" session-start.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-$USERPROFILE/.agents}}/hooks/run-hook.sh\" superpowers-ccg-session-start.sh"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-.}}/hooks/run-hook.sh\" user-prompt-submit.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-$USERPROFILE/.agents}}/hooks/run-hook.sh\" superpowers-ccg-user-prompt-submit.sh"
           }
         ]
       }
