@@ -20,15 +20,6 @@ from openmcp.logging_setup import get_logger
 
 log = get_logger("codex")
 
-_DISABLED_PLUGIN_ENV = "OPENMCP_CODEX_DISABLE_PLUGIN"
-
-
-def _disabled_plugin_override(plugin_name: str) -> str:
-    plugin_name = plugin_name.strip()
-    escaped_name = plugin_name.replace("\\", "\\\\").replace('"', '\\"')
-    return f'plugins."{escaped_name}".enabled=false' if escaped_name else ""
-
-
 @dataclass(slots=True)
 class CodexParams:
     PROMPT: str
@@ -37,7 +28,6 @@ class CodexParams:
     model: str = ""
     profile: str = ""
     reasoning_effort: str = ""
-    disable_plugin: str = ""
     timeout_s: int = 0
 
 
@@ -297,12 +287,6 @@ async def execute(params: CodexParams) -> BackendResult:
 
     if params.reasoning_effort:
         cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
-
-    # Plugin disable: per-call config (preferred) then env (legacy).
-    disabled_plugin = params.disable_plugin or os.environ.get(_DISABLED_PLUGIN_ENV, "")
-    disabled_plugin_override = _disabled_plugin_override(disabled_plugin)
-    if disabled_plugin_override:
-        cmd.extend(["-c", disabled_plugin_override])
 
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])

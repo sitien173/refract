@@ -5,12 +5,14 @@ description: "Three-gate workflow (Plan → Execute → Review)"
 
 # Coordinating Multi-Model Work
 
-The coordinator plans, routes, reviews, integrates, and handles simple tasks directly. The coordinator may be Claude Code, Codex, or another host that loads this skill. Codex workers own back-side work (backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests/debug). Gemini workers own front-side work (UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, front-end tests, large-context sweeps).
+The coordinator plans, routes, reviews, integrates, and handles simple tasks directly. The coordinator may be Claude Code, Codex, or another host that loads this skill. Codex workers own back-side work (backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests/debug, etc). Gemini workers own front-side work (UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, front-end tests, etc).
 
 **Cross-Validation (CV)** = ask Codex and Gemini the same narrow question, reconcile divergences, then route implementation to a side owner. Run CV **only** when a phase is:
 - **Full-stack** — straddles both sides with unresolved coupling (API contract, shared schema, auth flow), or
 - **Unclear** — ambiguous requirements, multiple viable architectures, no obvious owner, or
 - **High-impact** — breaking change, public API, security boundary, data migration, irreversible infra, architecture decision.
+
+Otherwise route directly to the side owner. CV dispatches MUST pass `reasoning="high"`.
 
 ## Gate 1 — Plan
 

@@ -28,8 +28,6 @@ _ENV_GEMINI_ROUTE_TO_AGY = "OPENMCP_GEMINI_ROUTE_TO_AGY"
 _ENV_AGY_REASONING_MODEL = "OPENMCP_AGY_REASONING_MODEL"
 _ENV_CODEX_REASONING_MODEL = "OPENMCP_CODEX_REASONING_MODEL"
 _ENV_GEMINI_REASONING_MODEL = "OPENMCP_GEMINI_REASONING_MODEL"
-_ENV_AGY_DISABLE_PLUGIN = "OPENMCP_AGY_DISABLE_PLUGIN"
-_ENV_CODEX_DISABLE_PLUGIN = "OPENMCP_CODEX_DISABLE_PLUGIN"
 
 _REASONING_MODEL_DEFAULTS: Dict[str, str] = {
     "agy": "gemini-3.5-flash",
@@ -240,7 +238,6 @@ async def run(
                 cd=cd_path,
                 SESSION_ID=SESSION_ID,
                 model=resolved_model,
-                disable_plugin=effective_env.get(_ENV_AGY_DISABLE_PLUGIN, "superpowers-ccg"),
                 timeout_s=timeout_s,
             )
             result = await run_with_retry(agy_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
@@ -252,7 +249,6 @@ async def run(
                 model=codex_model,
                 profile=resolved_profile,
                 reasoning_effort=reasoning,
-                disable_plugin=effective_env.get(_ENV_CODEX_DISABLE_PLUGIN, ""),
                 timeout_s=timeout_s,
             )
             result = await run_with_retry(codex_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)

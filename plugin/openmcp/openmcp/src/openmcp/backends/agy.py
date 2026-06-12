@@ -29,16 +29,12 @@ _CONTINUE_PROMPT = "Continue your work. Complete any remaining `[ ]` task items.
 _AGY_MAX_CONTINUATIONS = 3
 _UNCHECKED_RE = re.compile(r"^\s*-\s*`?\[\s\]`?\s", re.MULTILINE)
 _settings_lock = threading.Lock()
-_DEFAULT_DISABLED_PLUGIN_NAME = "superpowers-ccg"
-
-
 @dataclass(slots=True)
 class AgyParams:
     PROMPT: str
     cd: Path
     SESSION_ID: str = ""
     model: str = ""
-    disable_plugin: str = _DEFAULT_DISABLED_PLUGIN_NAME
     timeout_s: int = 0
 
 
@@ -568,7 +564,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
     )
 
     try:
-        with _temporary_disabled_plugin(params.disable_plugin), _patch_model(params.model):
+        with _temporary_disabled_plugin("superpowers-ccg"), _patch_model(params.model):
             if os.name == "nt":
                 cmd = [
                     "agy", "--print", params.PROMPT,
@@ -652,7 +648,6 @@ async def _execute_once(params: AgyParams) -> BackendResult:
                 cd=cd,
                 SESSION_ID=result.SESSION_ID or params.SESSION_ID,
                 model="",
-                disable_plugin=params.disable_plugin,
                 timeout_s=params.timeout_s,
             )
         )
@@ -679,7 +674,6 @@ async def execute(params: AgyParams) -> BackendResult:
                 cd=Path(params.cd),
                 SESSION_ID=session_id,
                 model="",
-                disable_plugin=params.disable_plugin,
                 timeout_s=params.timeout_s,
             )
         )

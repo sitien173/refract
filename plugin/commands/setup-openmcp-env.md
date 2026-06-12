@@ -20,6 +20,5 @@ Steps:
 | `OPENMCP_GEMINI_REASONING_MODEL` | Gemini model used when `reasoning` is set | empty |
 | `OPENMCP_AGY_REASONING_MODEL` | Base agy model used when `reasoning` is set | empty |
 | `OPENMCP_GEMINI_ROUTE_TO_AGY` | Route `backend="gemini"` calls to `agy` | `false` |
-| `OPENMCP_AGY_DISABLE_PLUGIN` | Plugin disabled/restored around `agy` runs | `superpowers-ccg` |
 | `OPENMCP_LOG_FILE` | OpenMCP log file path | `~/.openmcp/openmcp.log` |
 | `OPENMCP_LOG_LEVEL` | OpenMCP log level | `INFO` |

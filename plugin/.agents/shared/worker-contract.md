@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 5.2.0 -->
+<!-- ccg-shared-version: 5.2.3 -->
 # Worker Contract
 
 Execution contract for a Codex / Gemini phase worker. This file is materialized

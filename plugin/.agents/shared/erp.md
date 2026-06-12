@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 5.2.0 -->
+<!-- ccg-shared-version: 5.2.3 -->
 # External Response Protocol (ERP)
 
 Worker-facing contract for the response a Codex / Gemini phase worker returns to
