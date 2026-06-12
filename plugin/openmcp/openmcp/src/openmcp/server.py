@@ -21,16 +21,25 @@ log = get_logger("server")
 
 mcp = FastMCP("openmcp")
 
-_ENV_AGY_MODEL_DEFAULT = "OPENMCP_AGY_MODEL_DEFAULT"
 _ENV_CODEX_MODEL_DEFAULT = "OPENMCP_CODEX_MODEL_DEFAULT"
 _ENV_GEMINI_MODEL_DEFAULT = "OPENMCP_GEMINI_MODEL_DEFAULT"
 _ENV_CODEX_PROFILE_DEFAULT = "OPENMCP_CODEX_PROFILE_DEFAULT"
 _ENV_GEMINI_ROUTE_TO_AGY = "OPENMCP_GEMINI_ROUTE_TO_AGY"
+_ENV_AGY_REASONING_MODEL = "OPENMCP_AGY_REASONING_MODEL"
+_ENV_CODEX_REASONING_MODEL = "OPENMCP_CODEX_REASONING_MODEL"
+_ENV_GEMINI_REASONING_MODEL = "OPENMCP_GEMINI_REASONING_MODEL"
+_ENV_AGY_DISABLE_PLUGIN = "OPENMCP_AGY_DISABLE_PLUGIN"
+_ENV_CODEX_DISABLE_PLUGIN = "OPENMCP_CODEX_DISABLE_PLUGIN"
 
-_REASONING_MODELS: Dict[str, str] = {
+_REASONING_MODEL_DEFAULTS: Dict[str, str] = {
     "agy": "gemini-3.5-flash",
     "codex": "gpt-5.5",
     "gemini": "gemini-3.1-pro-preview",
+}
+_REASONING_MODEL_ENV: Dict[str, str] = {
+    "agy": _ENV_AGY_REASONING_MODEL,
+    "codex": _ENV_CODEX_REASONING_MODEL,
+    "gemini": _ENV_GEMINI_REASONING_MODEL,
 }
 _PLUGIN_CONFIG_FILES = ("mcp_config.json", ".mcp.json", "mcp.json")
 
@@ -90,9 +99,10 @@ def _load_openmcp_dotenv() -> Dict[str, str]:
 
 
 def _effective_env() -> Dict[str, str]:
+    # Precedence: process env > ~/.openmcp/.env > plugin config env.
     env = _load_plugin_env()
-    env.update(os.environ)
     env.update(_load_openmcp_dotenv())
+    env.update(os.environ)
     return env
 
 
@@ -106,6 +116,10 @@ def _effective_backend(backend: Literal["agy", "codex", "gemini"], env: Dict[str
     return backend
 
 
+def _reasoning_model(backend: str, env: Dict[str, str]) -> str:
+    return env.get(_REASONING_MODEL_ENV[backend], "") or _REASONING_MODEL_DEFAULTS[backend]
+
+
 def _resolve_model(
     backend: Literal["agy", "codex", "gemini"],
     model: str,
@@ -116,8 +130,10 @@ def _resolve_model(
         return model
     if reasoning:
         if backend == "agy":
-            return f"{_REASONING_MODELS['agy']}-{reasoning}"
-        return _REASONING_MODELS[backend]
+            base = _reasoning_model("agy", env)
+            # bare model id (no suffix) corresponds to Medium; preserve that
+            return base if reasoning == "medium" else f"{base}-{reasoning}"
+        return _reasoning_model(backend, env)
     if backend == "agy":
         return ""
     if backend == "gemini":
@@ -129,6 +145,24 @@ def _resolve_profile(profile: str, env: Dict[str, str]) -> str:
     if profile:
         return profile
     return env.get(_ENV_CODEX_PROFILE_DEFAULT, "mcp_execution")
+
+
+def _validate_cd(cd: Any) -> Path | None:
+    if cd is None:
+        return None
+    if isinstance(cd, Path):
+        return cd if str(cd) else None
+    cd_str = str(cd).strip()
+    if not cd_str:
+        return None
+    path = Path(cd_str)
+    if not path.is_absolute():
+        log.warning(
+            "run(): cd=%r is not absolute; resolving against current working directory. "
+            "Pass an absolute path to avoid this.", cd_str,
+        )
+    return path
+
 
 @mcp.tool(
     name="run",
@@ -149,6 +183,7 @@ async def run(
     reasoning: Literal["", "low", "medium", "high"] = "",
     max_retries: int = 0,
     retry_base_ms: int = 1000,
+    timeout_s: int = 0,
 ) -> Dict[str, Any]:
     """
     Run a backend agent.
@@ -156,28 +191,58 @@ async def run(
     Args:
         backend: Backend to run.
         PROMPT: Prompt to execute.
-        cd: Working directory for execution.
+        cd: Working directory for execution (must be an absolute path).
         SESSION_ID: Session ID to reuse. Leave empty to start a new session.
         model: Model to use. Leave empty to use the backend default.
-        profile: Codex profile to use. Ignored when reasoning is set.
+        profile: Codex profile to use. When combined with model, the model
+            argument overrides the profile's model field. When combined with
+            reasoning, reasoning takes precedence and selects its own model.
         reasoning: Reasoning effort. Leave empty to disable reasoning mode.
         max_retries: Maximum retry attempts for retryable backend failures.
         retry_base_ms: Base retry delay in milliseconds.
+        timeout_s: Overall subprocess timeout in seconds (0 = no timeout / backend default).
     """
 
-    cd_path = Path(cd)
+    cd_path = _validate_cd(cd)
+    if cd_path is None:
+        return {
+            "success": False,
+            "SESSION_ID": SESSION_ID or "",
+            "agent_messages": "",
+            "error": f"cd must be a non-empty absolute path; got {cd!r}",
+        }
     effective_env = _effective_env()
     effective_backend = _effective_backend(backend, effective_env)
     resolved_model = _resolve_model(effective_backend, model, reasoning, effective_env)
     resolved_profile = "" if reasoning else _resolve_profile(profile, effective_env)
-    codex_model = "" if effective_backend == "codex" and profile else resolved_model
+    codex_model = resolved_model
+    if effective_backend == "codex" and profile and model:
+        log.info(
+            "codex: profile=%r and model=%r both provided; model overrides the profile's model",
+            profile, model,
+        )
+    if effective_backend == "codex" and profile and reasoning:
+        log.warning(
+            "codex: profile=%r and reasoning=%r both provided; profile is ignored "
+            "(reasoning takes precedence and selects its own model)",
+            profile, reasoning,
+        )
     log.info(
-        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s max_retries=%d",
-        backend, effective_backend, SESSION_ID or "<new>", codex_model if effective_backend == "codex" else resolved_model, resolved_profile, reasoning or "<off>", max_retries,
+        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s max_retries=%d timeout_s=%s",
+        backend, effective_backend, SESSION_ID or "<new>",
+        codex_model if effective_backend == "codex" else resolved_model,
+        resolved_profile, reasoning or "<off>", max_retries, timeout_s or "<off>",
     )
     try:
         if effective_backend == "agy":
-            params = AgyParams(PROMPT=PROMPT, cd=cd_path, SESSION_ID=SESSION_ID, model=resolved_model)
+            params = AgyParams(
+                PROMPT=PROMPT,
+                cd=cd_path,
+                SESSION_ID=SESSION_ID,
+                model=resolved_model,
+                disable_plugin=effective_env.get(_ENV_AGY_DISABLE_PLUGIN, "superpowers-ccg"),
+                timeout_s=timeout_s,
+            )
             result = await run_with_retry(agy_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
         elif effective_backend == "codex":
             params = CodexParams(
@@ -187,10 +252,18 @@ async def run(
                 model=codex_model,
                 profile=resolved_profile,
                 reasoning_effort=reasoning,
+                disable_plugin=effective_env.get(_ENV_CODEX_DISABLE_PLUGIN, ""),
+                timeout_s=timeout_s,
             )
             result = await run_with_retry(codex_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
         else:
-            params = GeminiParams(PROMPT=PROMPT, cd=cd_path, SESSION_ID=SESSION_ID, model=resolved_model)
+            params = GeminiParams(
+                PROMPT=PROMPT,
+                cd=cd_path,
+                SESSION_ID=SESSION_ID,
+                model=resolved_model,
+                timeout_s=timeout_s,
+            )
             result = await run_with_retry(gemini_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
     except asyncio.CancelledError:
         log.warning(
@@ -201,7 +274,7 @@ async def run(
         raise
     except Exception as exc:
         log.exception("run(): unhandled exception in %s backend", backend)
-        return {"success": False, "SESSION_ID": SESSION_ID or "", "error": f"unhandled: {exc}"}
+        return {"success": False, "SESSION_ID": SESSION_ID or "", "agent_messages": "", "error": f"unhandled: {exc}"}
 
     log.info(
         "run() done backend=%s success=%s attempts=%s session_id=%s",

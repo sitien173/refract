@@ -12,8 +12,6 @@ The coordinator plans, routes, reviews, integrates, and handles simple tasks dir
 - **Unclear** — ambiguous requirements, multiple viable architectures, no obvious owner, or
 - **High-impact** — breaking change, public API, security boundary, data migration, irreversible infra, architecture decision.
 
-Otherwise route directly to the side owner. CV dispatches MUST pass `reasoning="high"`; openmcp then resolves backend → model from a hardcoded reasoning-model map: `codex → gpt-5.5`, `agy → gemini-3.5-flash` (suffixed with `-<reasoning>`), `gemini → gemini-3.1-pro-preview`. Do NOT pass `model=` on CV calls — leave it empty so the map applies.
-
 ## Gate 1 — Plan
 
 Gather the minimum context to route (skip ceremony for trivial work). Frame work as one phase: 2–4 related tasks, file set, `Done When` checks. Decide owner by **side**, then output:
@@ -56,6 +54,8 @@ Gather the minimum context to route (skip ceremony for trivial work). Frame work
 **Phase journal (Codex / Gemini phases):** `docs/plans/<slug>/phase-<NN>/journal.md` is the single durable phase record (survives compaction). The coordinator creates it at phase start with the Route skeleton; the worker appends its full `# EXTERNAL RESPONSE` block before emitting the completion line.
 
 **Shared contract:** the worker-facing contract lives in `<project>/.agents/shared/{worker-contract.md,erp.md}` — materialized from the plugin's bundled `shared/` templates by the SessionStart hook (git-tracked in the consuming project, regenerated on plugin version change). Workers run without the plugin loaded, so dispatch prompts point at those absolute paths instead of restating the protocol. This skill stays the human-readable canonical text; `shared/*.md` is the machine-/worker-facing mirror — edit the plugin templates, never the materialized copies.
+
+**Domain rules:** the same hook materializes `<project>/.agents/BACKEND.md` (Codex / back-side) and `<project>/.agents/FRONTEND.md` (Gemini / agy / front-side) from the plugin root. Every Codex dispatch prompt points at `BACKEND.md`; every Gemini dispatch prompt points at `FRONTEND.md`. Their `<RULES>` sections are hard constraints — a worker that violates one (string-built SQL, hardcoded design tokens, mouse-only interactive element, missing regression test on a bug fix, etc.) → CRITICAL finding in Review and `FAIL`. Edit the plugin-root files, never the materialized copies.
 
 ### Worker response format
 

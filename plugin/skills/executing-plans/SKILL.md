@@ -16,7 +16,7 @@ Phase-by-phase runner. The Plan / Execute / Review gates, routing table, worker 
 
 1. **Read the plan once.** Select the requested, active, or next unstarted phase. Confirm it has 2–4 tasks, an owner, file set, acceptance criteria, integration checks.
 2. **Load resume artifacts.** For folder-layout plans, read `<plan-dir>/.handover.md` (current phase, next action, cached `session_refs`) then every file in `read_first`. Skip for flat single-file plans.
-3. **Plan gate.** Apply `coordinating-multi-model-work` Plan gate to the active phase and output the `# ROUTE` block. Create `<plan-dir>/phase-<NN>/` lazily — only `journal.md` (with Route skeleton) is pre-written. Worker writes `prompt.md` and `notes.md`; the coordinator writes `prompt.md` immediately before dispatch for Codex/Gemini phases.
+3. **Plan gate.** Apply `coordinating-multi-model-work` Plan gate to the active phase and output the `# ROUTE` block. Create `<plan-dir>/phase-<NN>/` lazily — only `journal.md` (with Route skeleton) is pre-written. Worker writes `notes.md`; the coordinator writes `prompt.md` immediately before dispatch for Codex/Gemini phases.
 4. **Execute gate.**
    - `coordinator` — edit directly, commit per logical change.
    - `codex` (`backend="codex"`) / `gemini` (`backend="gemini"` or `"agy"`) — write dispatch prompt to `<plan-dir>/phase-<NN>/prompt.md` (template in `implementer-prompt.md`), pass its **absolute** path to `mcp__openmcp__run`. Every path inside the prompt body and the `cd` argument must also be absolute with forward slashes on Windows. Reuse cached `SESSION_ID` from `session_refs` if present; same-phase fix → `FIX:` + delta. Write the returned `SESSION_ID` back to `session_refs` after every MCP call.

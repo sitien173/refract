@@ -11,12 +11,11 @@ import subprocess
 import tempfile
 import threading
 import time
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator
 
-from . import BackendResult
+from . import BackendResult, classify_backend_output
 from openmcp.logging_setup import get_logger
 
 log = get_logger("codex")
@@ -38,22 +37,21 @@ class CodexParams:
     model: str = ""
     profile: str = ""
     reasoning_effort: str = ""
+    disable_plugin: str = ""
+    timeout_s: int = 0
 
 
-def _windows_escape(prompt: str) -> str:
-    result = prompt.replace("\\", "\\\\")
-    result = result.replace('"', '\\"')
-    result = result.replace("\n", "\\n")
-    result = result.replace("\r", "\\r")
-    result = result.replace("\t", "\\t")
-    result = result.replace("\b", "\\b")
-    result = result.replace("\f", "\\f")
-    result = result.replace("'", "\\'")
-    return result
+def run_shell_command(
+    cmd: list[str],
+    cwd: str | None = None,
+    timeout_s: int = 0,
+) -> Generator[str, None, None]:
+    """Execute a command and stream its stdout lines until EOF or timeout.
 
-
-def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, None, None]:
-    """Execute a command and stream its stdout lines until EOF."""
+    A non-zero ``timeout_s`` enforces an overall wall-clock budget; on
+    expiry the process is terminated and ``subprocess.TimeoutExpired``
+    is raised after best-effort cleanup.
+    """
     popen_cmd = cmd.copy()
     codex_path = shutil.which("codex") or cmd[0]
     popen_cmd[0] = codex_path
@@ -81,24 +79,33 @@ def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, 
 
     thread = threading.Thread(target=read_output, daemon=True)
     thread.start()
-
-    while True:
-        try:
-            line = output_queue.get(timeout=0.5)
-            if line is None:
-                break
-            yield line
-        except queue.Empty:
-            if process.poll() is not None and not thread.is_alive():
-                break
+    deadline = time.time() + timeout_s if timeout_s and timeout_s > 0 else None
+    timed_out = False
 
     try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-        raise
+        while True:
+            try:
+                line = output_queue.get(timeout=0.5)
+                if line is None:
+                    break
+                yield line
+            except queue.Empty:
+                if deadline is not None and time.time() > deadline:
+                    timed_out = True
+                    break
+                if process.poll() is not None and not thread.is_alive():
+                    break
     finally:
+        if process.poll() is None:
+            try:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            except OSError:
+                pass
         thread.join(timeout=5)
 
     while not output_queue.empty():
@@ -109,32 +116,9 @@ def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, 
         except queue.Empty:
             break
 
+    if timed_out:
+        raise subprocess.TimeoutExpired(cmd=popen_cmd, timeout=float(timeout_s or 0))
 
-_FATAL_TOKENS = (
-    "invalid model",
-    "unknown model",
-    "invalid profile",
-    "unknown profile",
-    "profile not found",
-    "authentication",
-    "unauthorized",
-    "forbidden",
-    "api key",
-    "not logged in",
-    "login required",
-)
-
-_RETRYABLE_TOKENS = (
-    "rate limit",
-    " 429",
-    " 5xx",
-    " 500",
-    " 502",
-    " 503",
-    " 504",
-    "timeout",
-    "timed out",
-)
 
 _RECONNECT_RE = re.compile(r"^\s*Reconnecting\.\.\.\s+\d+/\d+", re.MULTILINE)
 _SESSION_ID_STDOUT_RE = re.compile(
@@ -251,51 +235,13 @@ def _resolve_session_id(
 
 
 def _classify(*, agent_messages: str, session_id: str, error_text: str) -> BackendResult:
-    combined = f"{error_text}\n{agent_messages}".lower()
-
-    if any(token in combined for token in _FATAL_TOKENS):
-        return BackendResult(
-            outcome="FATAL",
-            SESSION_ID=session_id,
-            agent_messages=agent_messages,
-            error=error_text or "fatal backend/auth failure",
-            error_class="fatal_backend",
-        )
-
-    if _RECONNECT_RE.search(agent_messages) or any(token in combined for token in _RETRYABLE_TOKENS):
-        return BackendResult(
-            outcome="RETRYABLE",
-            SESSION_ID=session_id,
-            agent_messages=agent_messages,
-            error=error_text or "retryable backend failure",
-            error_class="retryable_backend",
-        )
-
-    if not agent_messages.strip():
-        extra = f" {error_text}" if error_text else ""
-        return BackendResult(
-            outcome="RETRYABLE",
-            SESSION_ID=session_id,
-            agent_messages=agent_messages,
-            error=f"Failed to get output from the codex session.{extra}".strip(),
-            error_class="no_agent_messages",
-        )
-
-    if not session_id:
-        return BackendResult(
-            outcome="OK",
-            SESSION_ID="",
-            agent_messages=agent_messages,
-            error="warning: no SESSION_ID",
-            error_class="warning",
-        )
-
-    return BackendResult(
-        outcome="OK",
-        SESSION_ID=session_id,
+    extra_retryable = bool(_RECONNECT_RE.search(error_text or ""))
+    return classify_backend_output(
+        backend_name="codex",
         agent_messages=agent_messages,
-        error=error_text,
-        error_class="",
+        session_id=session_id,
+        error_text=error_text,
+        extra_retryable_signal=extra_retryable,
     )
 
 
@@ -338,16 +284,22 @@ async def execute(params: CodexParams) -> BackendResult:
         str(last_message_path),
     ]
 
-    if params.model:
-        cmd.extend(["--model", params.model])
-
     if params.profile:
         cmd.extend(["--profile", params.profile])
+
+    if params.model:
+        # `--model` alone may be ignored when a profile is active; `-c model=…`
+        # forces the override of the profile's model field.
+        cmd.extend(["--model", params.model])
+        if params.profile:
+            escaped_model = params.model.replace("\\", "\\\\").replace('"', '\\"')
+            cmd.extend(["-c", f'model="{escaped_model}"'])
 
     if params.reasoning_effort:
         cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
 
-    disabled_plugin = os.environ.get(_DISABLED_PLUGIN_ENV, "")
+    # Plugin disable: per-call config (preferred) then env (legacy).
+    disabled_plugin = params.disable_plugin or os.environ.get(_DISABLED_PLUGIN_ENV, "")
     disabled_plugin_override = _disabled_plugin_override(disabled_plugin)
     if disabled_plugin_override:
         cmd.extend(["-c", disabled_plugin_override])
@@ -355,30 +307,33 @@ async def execute(params: CodexParams) -> BackendResult:
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])
 
-    prompt = _windows_escape(params.PROMPT) if os.name == "nt" else params.PROMPT
-    cmd += ["--", prompt]
+    # Popen(shell=False) gets a proper argv list; do not pre-escape the prompt.
+    cmd += ["--", params.PROMPT]
 
     log.info(
-        "codex.execute start cwd=%s model=%s profile=%s reasoning_effort=%s session_id=%s prompt_len=%d",
+        "codex.execute start cwd=%s model=%s profile=%s reasoning_effort=%s session_id=%s prompt_len=%d timeout_s=%s",
         cd.absolute().as_posix(),
         params.model,
         params.profile,
         params.reasoning_effort or "<off>",
         params.SESSION_ID or "<new>",
         len(params.PROMPT),
+        params.timeout_s or "<off>",
     )
     log.debug("codex cmd: %s", cmd)
 
     stdout_lines: list[str] = []
     err_message = ""
     started_at = time.time()
+    timed_out = False
 
     try:
-        for line in run_shell_command(cmd, cwd=cd.absolute().as_posix()):
+        for line in run_shell_command(cmd, cwd=cd.absolute().as_posix(), timeout_s=params.timeout_s):
             stdout_lines.append(line)
     except subprocess.TimeoutExpired as exc:
-        log.exception("codex subprocess timeout")
+        log.warning("codex subprocess timeout after %ss", params.timeout_s)
         err_message += f"\n\n[timeout] {exc}"
+        timed_out = True
     except Exception as exc:  # noqa: BLE001
         log.exception("codex: unexpected error during stream")
         err_message += f"\n\n[unexpected] {exc}"
@@ -451,12 +406,26 @@ async def execute(params: CodexParams) -> BackendResult:
             len(last_message), len(stdout_text),
         )
 
-    classify_text = agent_messages if agent_messages else stdout_text
+    # error_text carries only true error signal — not the entire stdout when it
+    # also happened to be the agent's message. Stdout is only surfaced when we
+    # genuinely have no agent output to attribute as success.
+    error_text = err_message.strip()
+    if not agent_messages.strip() and stdout_text and not last_message.strip():
+        if error_text:
+            error_text = f"{error_text}\n\n[stdout]\n{stdout_text}".strip()
+        else:
+            error_text = stdout_text
+
     result = _classify(
-        agent_messages=classify_text,
+        agent_messages=agent_messages,
         session_id=session_id,
-        error_text=err_message.strip() or (stdout_text if not last_message.strip() else ""),
+        error_text=error_text,
     )
+    if timed_out and result.outcome == "OK":
+        # Time-out with partial output: keep the messages but flag retryable.
+        result.outcome = "RETRYABLE"
+        result.error_class = "timeout"
+        result.error = err_message.strip() or "subprocess timed out"
     result.agent_messages = agent_messages
     log.info(
         "codex.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",

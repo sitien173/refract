@@ -177,7 +177,7 @@ def test_agy_strips_windows_terminal_title_escape() -> None:
 async def test_agy_reports_pty_initialization_failure_as_fatal(monkeypatch, tmp_path) -> None:
     from openmcp.backends import agy as agy_backend
 
-    def fail_pty(cmd, cwd=None):
+    def fail_pty(cmd, cwd=None, **kwargs):
         raise ImportError("DLL load failed while importing winpty")
 
     @contextlib.contextmanager
@@ -189,7 +189,7 @@ async def test_agy_reports_pty_initialization_failure_as_fatal(monkeypatch, tmp_
     monkeypatch.setattr(agy_backend, "_extract_session_id_from_history", lambda workspace_path, prompt_snippet="": "")
     monkeypatch.setattr(agy_backend, "_extract_session_id_from_pb_signature", lambda workspace_path: "")
     monkeypatch.setattr(agy_backend, "_extract_session_id_from_recent_conversation_file", lambda started_at: "")
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_latest_log", lambda: "")
+    monkeypatch.setattr(agy_backend, "_extract_session_id_from_latest_log", lambda *args, **kwargs: "")
     monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
 
     out = await agy_backend.execute(AgyParams(PROMPT="x", cd=tmp_path))
@@ -212,7 +212,7 @@ async def test_agy_falls_back_to_configured_model_when_model_override_has_no_out
         ]
     )
 
-    def fake_pty(cmd, cwd=None):
+    def fake_pty(cmd, cwd=None, **kwargs):
         calls.append(cmd)
         return next(outputs)
 
@@ -228,7 +228,7 @@ async def test_agy_falls_back_to_configured_model_when_model_override_has_no_out
     monkeypatch.setattr(agy_backend, "run_shell_command_pty", fake_pty)
     monkeypatch.setattr(agy_backend, "_extract_session_id_from_history", lambda workspace_path, prompt_snippet="": session_id)
     monkeypatch.setattr(agy_backend, "_extract_session_id_from_recent_conversation_file", lambda started_at: "")
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_latest_log", lambda: "")
+    monkeypatch.setattr(agy_backend, "_extract_session_id_from_latest_log", lambda *args, **kwargs: "")
     monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
 
     out = await agy_backend.execute(AgyParams(PROMPT="x", cd=tmp_path, model="gemini-3.5-flash"))
@@ -256,6 +256,7 @@ def test_tool_signature() -> None:
         "reasoning",
         "max_retries",
         "retry_base_ms",
+        "timeout_s",
     ]
 
 
@@ -338,7 +339,7 @@ async def test_bad_cd_codex_fatal() -> None:
 async def test_codex_uses_input_session_id_when_no_extraction_sources_match(monkeypatch, tmp_path) -> None:
     from openmcp.backends import codex as codex_backend
 
-    def fake_run_shell_command(cmd, cwd=None):
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield "PONG"
 
     monkeypatch.setattr(codex_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
@@ -360,7 +361,7 @@ async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path
     captured = {}
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
 
-    def fake_run_shell_command(cmd, cwd=None):
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
         captured["cmd"] = cmd
         captured["cwd"] = cwd
         yield "Reading additional input from stdin..."
@@ -392,7 +393,7 @@ async def test_codex_disables_plugin_from_env_for_delegated_run(monkeypatch, tmp
 
     captured = {}
 
-    def fake_run_shell_command(cmd, cwd=None):
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
         captured["cmd"] = cmd
         yield "PONG"
 
@@ -414,7 +415,7 @@ async def test_codex_skips_plugin_disable_when_env_missing(monkeypatch, tmp_path
 
     captured = {}
 
-    def fake_run_shell_command(cmd, cwd=None):
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
         captured["cmd"] = cmd
         yield "PONG"
 
@@ -443,7 +444,7 @@ async def test_gemini_uses_stream_json_output(monkeypatch, tmp_path) -> None:
     captured = {}
     session_id = "sess-marker"
 
-    def fake_run_shell_command(cmd, cwd=None):
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
         captured["cmd"] = cmd
         captured["cwd"] = cwd
         yield "banner text"
@@ -467,10 +468,13 @@ async def test_gemini_uses_stream_json_output(monkeypatch, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_gemini_stream_output_without_session_id_is_retryable(monkeypatch, tmp_path) -> None:
+async def test_gemini_stream_output_without_session_id_is_ok_with_warning(monkeypatch, tmp_path) -> None:
+    # Aligns with codex/agy semantics: a successful run that produced
+    # agent_messages but no extractable session id is OK + warning, not
+    # RETRYABLE — re-running would duplicate side effects.
     from openmcp.backends import gemini as gemini_backend
 
-    def fake_run_shell_command(cmd, cwd=None):
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps({"type": "message", "role": "assistant", "content": "PONG"})
         yield json.dumps({"type": "result", "status": "success"})
 
@@ -479,11 +483,11 @@ async def test_gemini_stream_output_without_session_id_is_retryable(monkeypatch,
 
     out = await gemini_backend.execute(GeminiParams(PROMPT="x", cd=tmp_path))
 
-    assert out.outcome == "RETRYABLE"
+    assert out.outcome == "OK"
     assert out.SESSION_ID == ""
     assert out.agent_messages == "PONG"
-    assert out.error == "missing SESSION_ID"
-    assert out.error_class == "missing_session_id"
+    assert out.error == "warning: no SESSION_ID"
+    assert out.error_class == "warning"
 
 
 @pytest.mark.asyncio
@@ -595,7 +599,7 @@ async def test_env_defaults_applied_for_codex_model_and_profile(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_explicit_profile_suppresses_codex_model_override(monkeypatch) -> None:
+async def test_explicit_model_overrides_codex_profile_model(monkeypatch) -> None:
     import openmcp.server as srv
 
     captured = {}
@@ -615,7 +619,7 @@ async def test_explicit_profile_suppresses_codex_model_override(monkeypatch) -> 
         model="gpt-5-mini",
         profile="custom-profile",
     )
-    assert captured["model"] == ""
+    assert captured["model"] == "gpt-5-mini"
     assert captured["profile"] == "custom-profile"
 
 

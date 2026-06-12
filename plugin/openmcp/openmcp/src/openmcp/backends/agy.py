@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator
 
-from . import BackendResult
+from . import BackendResult, classify_backend_output
 from openmcp.logging_setup import get_logger
 
 log = get_logger("agy")
@@ -29,7 +29,7 @@ _CONTINUE_PROMPT = "Continue your work. Complete any remaining `[ ]` task items.
 _AGY_MAX_CONTINUATIONS = 3
 _UNCHECKED_RE = re.compile(r"^\s*-\s*`?\[\s\]`?\s", re.MULTILINE)
 _settings_lock = threading.Lock()
-_DISABLED_PLUGIN_NAME = "superpowers-ccg"
+_DEFAULT_DISABLED_PLUGIN_NAME = "superpowers-ccg"
 
 
 @dataclass(slots=True)
@@ -38,6 +38,8 @@ class AgyParams:
     cd: Path
     SESSION_ID: str = ""
     model: str = ""
+    disable_plugin: str = _DEFAULT_DISABLED_PLUGIN_NAME
+    timeout_s: int = 0
 
 
 _VALID_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
@@ -84,9 +86,22 @@ def _resolve_agy_model_setting(model: str) -> str:
     return ""
 
 
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON via temp file + os.replace so we never leave a half-written file."""
+    serialized = json.dumps(data, indent=2, ensure_ascii=False)
+    tmp_path = path.with_suffix(path.suffix + ".openmcp.tmp")
+    tmp_path.write_text(serialized, encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 @contextlib.contextmanager
 def _patch_model(model: str):
-    """Temporarily override the model in agy's settings.json, then restore."""
+    """Temporarily override the model in agy's settings.json, then restore.
+
+    Preserves the original file byte-for-byte on restore (so a missing
+    "model" key isn't written back as ``"model": null``). Uses atomic
+    file replacement and is reentrancy-safe via ``_settings_lock``.
+    """
     if not model:
         yield
         return
@@ -97,16 +112,44 @@ def _patch_model(model: str):
         return
 
     with _settings_lock:
-        original_text = _SETTINGS_PATH.read_text(encoding="utf-8") if _SETTINGS_PATH.exists() else "{}"
-        settings = json.loads(original_text)
-        original_model = settings.get("model")
-        settings["model"] = resolved_model_name
-        _SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
+        if _SETTINGS_PATH.exists():
+            original_bytes = _SETTINGS_PATH.read_bytes()
+            try:
+                settings = json.loads(original_bytes.decode("utf-8"))
+                if not isinstance(settings, dict):
+                    settings = {}
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                log.warning("agy: settings.json is invalid; skipping model patch")
+                yield
+                return
+        else:
+            original_bytes = None
+            settings = {}
+
+        patched = dict(settings)
+        patched["model"] = resolved_model_name
+        try:
+            _atomic_write_json(_SETTINGS_PATH, patched)
+        except OSError as exc:
+            log.warning("agy: could not write settings.json model patch: %s", exc)
+            yield
+            return
+
         try:
             yield
         finally:
-            settings["model"] = original_model
-            _SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
+            try:
+                if original_bytes is None:
+                    try:
+                        _SETTINGS_PATH.unlink()
+                    except FileNotFoundError:
+                        pass
+                else:
+                    tmp_path = _SETTINGS_PATH.with_suffix(_SETTINGS_PATH.suffix + ".openmcp.tmp")
+                    tmp_path.write_bytes(original_bytes)
+                    os.replace(tmp_path, _SETTINGS_PATH)
+            except OSError as exc:
+                log.error("agy: failed to restore settings.json after model patch: %s", exc)
 
 
 _ANSI_ESCAPE = re.compile(
@@ -163,7 +206,11 @@ def _temporary_disabled_plugin(plugin_name: str):
             log.warning("agy: failed to re-enable plugin %r after run: %s", plugin_name, exc)
 
 
-def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, None, None]:
+def run_shell_command(
+    cmd: list[str],
+    cwd: str | None = None,
+    timeout_s: int = 0,
+) -> Generator[str, None, None]:
     """Execute a command and stream its output line-by-line (non-Windows / fallback)."""
     popen_cmd = cmd.copy()
     agy_path = shutil.which("agy") or cmd[0]
@@ -181,39 +228,47 @@ def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, 
     )
 
     output_queue: queue.Queue[str | None] = queue.Queue()
-    GRACEFUL_SHUTDOWN_DELAY = 0.5
 
     def read_output() -> None:
         if process.stdout:
             for line in iter(process.stdout.readline, ""):
                 output_queue.put(line.strip())
-            process.stdout.close()
+            try:
+                process.stdout.close()
+            except OSError:
+                pass
         output_queue.put(None)
 
     thread = threading.Thread(target=read_output, daemon=True)
     thread.start()
-
-    while True:
-        try:
-            line = output_queue.get(timeout=0.5)
-            if line is None:
-                break
-            yield line
-        except queue.Empty:
-            if process.poll() is not None and not thread.is_alive():
-                break
+    deadline = time.time() + timeout_s if timeout_s and timeout_s > 0 else None
+    timed_out = False
 
     try:
-        process.wait(timeout=20)
-    except subprocess.TimeoutExpired:
-        process.terminate()
-        try:
-            process.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-        time.sleep(GRACEFUL_SHUTDOWN_DELAY)
-    thread.join(timeout=20)
+        while True:
+            try:
+                line = output_queue.get(timeout=0.5)
+                if line is None:
+                    break
+                yield line
+            except queue.Empty:
+                if deadline is not None and time.time() > deadline:
+                    timed_out = True
+                    break
+                if process.poll() is not None and not thread.is_alive():
+                    break
+    finally:
+        if process.poll() is None:
+            try:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            except OSError:
+                pass
+        thread.join(timeout=10)
 
     while not output_queue.empty():
         try:
@@ -223,9 +278,20 @@ def run_shell_command(cmd: list[str], cwd: str | None = None) -> Generator[str, 
         except queue.Empty:
             break
 
+    if timed_out:
+        raise subprocess.TimeoutExpired(cmd=popen_cmd, timeout=float(timeout_s or 0))
 
-def run_shell_command_pty(cmd: list[str], cwd: str | None = None) -> str:
-    """Execute a command inside a Windows ConPTY and return captured output."""
+
+def run_shell_command_pty(
+    cmd: list[str],
+    cwd: str | None = None,
+    timeout_s: int = 0,
+) -> str:
+    """Execute a command inside a Windows ConPTY and return captured output.
+
+    Drains buffered output after the child exits so a process that dies
+    with unread data still surfaces its tail.
+    """
     import winpty  # pywinpty
 
     agy_path = shutil.which(cmd[0]) or cmd[0]
@@ -233,12 +299,37 @@ def run_shell_command_pty(cmd: list[str], cwd: str | None = None) -> str:
 
     proc = winpty.PtyProcess.spawn(argv, cwd=cwd)
     chunks: list[str] = []
-    while proc.isalive():
-        try:
-            chunk = proc.read(4096)
+    deadline = time.time() + timeout_s if timeout_s and timeout_s > 0 else None
+    timed_out = False
+    try:
+        while proc.isalive():
+            if deadline is not None and time.time() > deadline:
+                timed_out = True
+                break
+            try:
+                chunk = proc.read(4096)
+                if chunk:
+                    chunks.append(chunk)
+            except EOFError:
+                break
+        # Post-exit drain: read whatever is still buffered.
+        while True:
+            try:
+                chunk = proc.read(4096)
+            except EOFError:
+                break
+            if not chunk:
+                break
             chunks.append(chunk)
-        except EOFError:
-            break
+    finally:
+        if proc.isalive():
+            try:
+                proc.terminate(force=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    if timed_out:
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=float(timeout_s or 0))
     return _strip_ansi("".join(chunks))
 
 
@@ -341,7 +432,13 @@ def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
     return ""
 
 
-def _extract_session_id_from_latest_log() -> str:
+def _extract_session_id_from_latest_log(started_at: float | None = None) -> str:
+    """Scan Antigravity logs for a recent session id.
+
+    Restricted to logs touched within ~5 minutes of ``started_at`` so a
+    stale id from a previous conversation can never bleed into the
+    current call's session_refs.
+    """
     appdata = os.environ.get("APPDATA")
     if not appdata:
         return ""
@@ -358,7 +455,14 @@ def _extract_session_id_from_latest_log() -> str:
     if not log_files:
         return ""
 
+    cutoff = (started_at - 300) if started_at is not None else None
     for log_path in log_files:
+        try:
+            stat = log_path.stat()
+        except OSError:
+            continue
+        if cutoff is not None and stat.st_mtime < cutoff:
+            break
         try:
             log_text = log_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -413,62 +517,18 @@ def _agy_has_pending_tasks(session_id: str, started_at: float) -> bool:
 
 
 def _classify_output(agent_messages: str, session_id: str, error_text: str) -> BackendResult:
-    full_error = error_text.strip()
-    lower = f"{agent_messages}\n{full_error}".lower()
-    # Strip node_tls_reject_unauthorized to avoid false-positive auth failure classification
-    lower = lower.replace("node_tls_reject_unauthorized", "")
-
-    if any(token in lower for token in ("invalid model", "unknown model", "not a valid model", "authentication", "unauthorized", "forbidden", "api key", "not logged")):
-        return BackendResult(
-            outcome="FATAL",
-            SESSION_ID=session_id,
-            agent_messages=agent_messages,
-            error=full_error or "fatal backend/auth failure",
-            error_class="fatal_backend",
-        )
-
-    # Only treat soft retryable tokens as failure when we have no usable output.
-    # The Antigravity CLI prints "Reconnecting..." benignly during normal
-    # websocket reconnects, so matching it in a 5-minute successful run would
-    # discard real work. Real retryable failures typically produce no output.
-    if not agent_messages and any(
-        token in lower
-        for token in ("rate limit", "429", " 5xx", " 500", " 502", " 503", " 504", "timeout", "timed out")
-    ):
-        return BackendResult(
-            outcome="RETRYABLE",
-            SESSION_ID=session_id,
-            agent_messages=agent_messages,
-            error=full_error or "retryable backend failure",
-            error_class="retryable_backend",
-        )
-
-    if not agent_messages:
-        extra = f" {full_error}" if full_error else ""
-        return BackendResult(
-            outcome="RETRYABLE",
-            SESSION_ID=session_id,
-            agent_messages=agent_messages,
-            error=f"Failed to get `agent_messages` from the agy session.{extra}".strip(),
-            error_class="no_agent_messages",
-        )
-
-    if not session_id:
-        return BackendResult(
-            outcome="OK",
-            SESSION_ID="",
-            agent_messages=agent_messages,
-            error="warning: no SESSION_ID",
-            error_class="warning",
-        )
-
-    return BackendResult(
-        outcome="OK",
-        SESSION_ID=session_id,
+    result = classify_backend_output(
+        backend_name="agy",
         agent_messages=agent_messages,
-        error=full_error,
-        error_class="",
+        session_id=session_id,
+        error_text=error_text,
     )
+    # Preserve historical "no_agent_messages" wording for back-compat with
+    # tests that read the error string verbatim.
+    if result.error_class == "no_agent_messages":
+        extra = f" {error_text.strip()}" if error_text.strip() else ""
+        result.error = f"Failed to get `agent_messages` from the agy session.{extra}".strip()
+    return result
 
 
 async def _execute_once(params: AgyParams) -> BackendResult:
@@ -508,7 +568,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
     )
 
     try:
-        with _temporary_disabled_plugin(_DISABLED_PLUGIN_NAME), _patch_model(params.model):
+        with _temporary_disabled_plugin(params.disable_plugin), _patch_model(params.model):
             if os.name == "nt":
                 cmd = [
                     "agy", "--print", params.PROMPT,
@@ -517,7 +577,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
                 ]
                 if params.SESSION_ID:
                     cmd.extend(["--conversation", params.SESSION_ID])
-                agent_messages = run_shell_command_pty(cmd, cwd=cwd)
+                agent_messages = run_shell_command_pty(cmd, cwd=cwd, timeout_s=params.timeout_s)
             else:
                 with tempfile.NamedTemporaryFile(suffix=".log", delete=False) as tmp:
                     tmp_log_path = tmp.name
@@ -530,7 +590,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
                     ]
                     if params.SESSION_ID:
                         cmd.extend(["--conversation", params.SESSION_ID])
-                    for _ in run_shell_command(cmd, cwd=cwd):
+                    for _ in run_shell_command(cmd, cwd=cwd, timeout_s=params.timeout_s):
                         pass
                     try:
                         agent_messages = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
@@ -542,7 +602,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
                     except OSError:
                         pass
     except subprocess.TimeoutExpired as exc:
-        log.exception("agy subprocess timeout")
+        log.warning("agy subprocess timeout after %ss", params.timeout_s)
         error_text = f"timeout: {exc}"
     except Exception as exc:  # noqa: BLE001
         log.exception("agy: unexpected error during run")
@@ -554,7 +614,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
         or _extract_session_id_from_history(cd, params.PROMPT)
         or _extract_session_id_from_pb_signature(cd)
         or _extract_session_id_from_recent_conversation_file(started_at)
-        or _extract_session_id_from_latest_log()
+        or _extract_session_id_from_latest_log(started_at)
         or params.SESSION_ID
     )
     if extracted_session_id:
@@ -592,6 +652,8 @@ async def _execute_once(params: AgyParams) -> BackendResult:
                 cd=cd,
                 SESSION_ID=result.SESSION_ID or params.SESSION_ID,
                 model="",
+                disable_plugin=params.disable_plugin,
+                timeout_s=params.timeout_s,
             )
         )
     return result
@@ -617,6 +679,8 @@ async def execute(params: AgyParams) -> BackendResult:
                 cd=Path(params.cd),
                 SESSION_ID=session_id,
                 model="",
+                disable_plugin=params.disable_plugin,
+                timeout_s=params.timeout_s,
             )
         )
         if continuation.outcome != "OK":

@@ -12,15 +12,53 @@ from pathlib import Path
 _CONFIGURED = False
 
 
+def _read_openmcp_dotenv_value(key: str) -> str:
+    """Read a single key from ~/.openmcp/.env. Cheap and stand-alone so
+    logging_setup has no import cycle with server.py."""
+    try:
+        env_path = Path.home() / ".openmcp" / ".env"
+        if not env_path.exists():
+            return ""
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            if "=" not in line:
+                continue
+            k, value = line.split("=", 1)
+            if k.strip() != key:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                value = value[1:-1]
+            return value
+    except OSError:
+        return ""
+    return ""
+
+
+def _resolve_env(key: str, default: str = "") -> str:
+    """Process env > ~/.openmcp/.env > default."""
+    value = os.environ.get(key)
+    if value is not None and value != "":
+        return value
+    dotenv_value = _read_openmcp_dotenv_value(key)
+    if dotenv_value:
+        return dotenv_value
+    return default
+
+
 def _resolve_log_path() -> Path:
-    override = os.environ.get("OPENMCP_LOG_FILE")
+    override = _resolve_env("OPENMCP_LOG_FILE")
     if override:
         return Path(override).expanduser()
     return Path.home() / ".openmcp" / "openmcp.log"
 
 
 def _resolve_level() -> int:
-    raw = os.environ.get("OPENMCP_LOG_LEVEL", "INFO").upper()
+    raw = _resolve_env("OPENMCP_LOG_LEVEL", "INFO").upper()
     return getattr(logging, raw, logging.INFO)
 
 

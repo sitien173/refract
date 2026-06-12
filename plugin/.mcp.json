@@ -4,7 +4,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/sitien173/superpowers-ccg#subdirectory=openmcp/openmcp",
+        "git+https://github.com/sitien173/superpowers-ccg@v5.2.3#subdirectory=openmcp/openmcp",
         "openmcp"
       ],
       "env": {

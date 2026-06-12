@@ -11,7 +11,7 @@ mcp__openmcp__run:
   backend: "codex" (back-side) | "gemini" (front-side)
   cd: <ABSOLUTE repo root>
   PROMPT: |
-    [one sentence of persona / mindset — e.g. "You are an experienced backend engineer implementing the API endpoints for Phase N with clean code and good test coverage."]
+    [one sentence of persona / mindset — e.g. "You are an experienced backend engineer ..." when fresh session, or "You are continuing work on phase-2 of the <plan> ..." when resuming]
 
     Read your full task spec from: <ABSOLUTE>/docs/plans/<slug>/phase-<NN>/prompt.md
     Plan dir:   <ABSOLUTE>/docs/plans/<slug>
@@ -19,7 +19,9 @@ mcp__openmcp__run:
     Phase:      <N>
     Contract:   <ABSOLUTE>/.agents/shared/worker-contract.md
     Response:   <ABSOLUTE>/.agents/shared/erp.md
-    Follow the contract and the spec file. Respond per erp.md, then emit the completion line.
+    Domain:     <ABSOLUTE>/.agents/BACKEND.md   # Codex
+                <ABSOLUTE>/.agents/FRONTEND.md  # Gemini / agy
+    Follow the contract, the domain rules file, and the spec file. Respond per erp.md, then emit the completion line.
 ```
 
 **Absolute paths only.** The pointer path, `cd`, and every path inside the prompt body must be absolute with forward slashes on Windows. Gemini/agy mis-resolves relative paths.
@@ -57,6 +59,8 @@ block to `phase-<NN>/journal.md`) plus the discipline rules (test-first,
 root-cause-first, evidence) and prompt discipline (edit on disk, no duplication,
 no redesign, unclear → CLARIFICATIONS NEEDED + stop). Use the absolute
 `notes.md` / `journal.md` paths under the Phase dir above.
+
+Also follow the domain-rules file for your side: Codex → `<ABSOLUTE>/.agents/BACKEND.md`; Gemini / agy → `<ABSOLUTE>/.agents/FRONTEND.md`. Hard rules in those files (no string-built SQL, no hardcoded design tokens, etc.) override any conflicting guidance in the spec; surface the conflict via CLARIFICATIONS NEEDED before deviating.
 
 ## Response Format
 

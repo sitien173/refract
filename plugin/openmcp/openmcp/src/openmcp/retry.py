@@ -12,18 +12,15 @@ from openmcp.logging_setup import get_logger
 log = get_logger("retry")
 
 
-def _best_effort_cleanup() -> None:
-    """Best effort cleanup between attempts.
-
-    Phase 1 backends do not expose child PIDs, so retry relies on backend-level
-    process termination/cleanup behavior.
-    """
-    return None
-
-
 async def run_with_retry(execute_fn, params, max_retries: int, retry_base_ms: int) -> dict[str, Any]:
-    """Run backend execute with retry behavior based on BackendResult classification."""
+    """Run backend execute with retry behavior based on BackendResult classification.
+
+    Failure payloads (FATAL / exhausted RETRYABLE) include the last
+    observed SESSION_ID and agent_messages so the coordinator can cache
+    the session and inspect partial output.
+    """
     attempt = 1
+    last_result: BackendResult | None = None
     backend_name = getattr(execute_fn, "__module__", "backend").rsplit(".", 1)[-1]
     while True:
         log.info("retry: attempt %d backend=%s max_retries=%d", attempt, backend_name, max_retries)
@@ -33,6 +30,7 @@ async def run_with_retry(execute_fn, params, max_retries: int, retry_base_ms: in
             log.exception("retry: execute_fn raised on attempt %d", attempt)
             raise
 
+        last_result = result
         log.info(
             "retry: attempt %d outcome=%s error_class=%s",
             attempt, result.outcome, result.error_class,
@@ -51,20 +49,30 @@ async def run_with_retry(execute_fn, params, max_retries: int, retry_base_ms: in
 
         if result.outcome == "FATAL":
             log.error("retry: FATAL on attempt %d: %s", attempt, result.error)
-            return {"success": False, "error": result.error, "attempts": attempt}
+            return {
+                "success": False,
+                "SESSION_ID": result.SESSION_ID or "",
+                "agent_messages": result.agent_messages or "",
+                "error": result.error,
+                "attempts": attempt,
+            }
 
         if attempt > max_retries:
             log.error(
                 "retry: exhausted after %d attempts (max_retries=%d): %s",
                 attempt, max_retries, result.error,
             )
-            return {"success": False, "error": result.error, "attempts": attempt}
+            return {
+                "success": False,
+                "SESSION_ID": result.SESSION_ID or "",
+                "agent_messages": result.agent_messages or "",
+                "error": result.error,
+                "attempts": attempt,
+            }
 
         if result.SESSION_ID:
             params.SESSION_ID = result.SESSION_ID
             log.info("retry: preserving SESSION_ID=%s for next attempt", result.SESSION_ID)
-
-        _best_effort_cleanup()
 
         delay_ms = min(retry_base_ms * (2 ** (attempt - 1)), 8000)
         jitter_factor = random.uniform(0.8, 1.2)

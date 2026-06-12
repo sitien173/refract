@@ -1,5 +1,5 @@
 {
   "name": "superpowers-ccg",
-  "version": "5.2.2",
-  "description": "Superpowers CCG multi-model orchestration workflows."
+  "version": "5.2.3",
+  "description": "Superpowers-CCG: 3-gate (Plan → Execute → Review) workflow."
 }
