@@ -327,7 +327,7 @@ wheels = [
 
 [[package]]
 name = "openmcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -336,20 +336,28 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+compress = [
+    { name = "the-token-company" },
+]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
+]
+notify = [
+    { name = "py-notify-system" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.21.2" },
+    { name = "py-notify-system", marker = "extra == 'notify'", git = "https://github.com/sitien173/py-notify-system.git" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pywinpty", marker = "sys_platform == 'win32'", specifier = ">=2.0,<3.0.4" },
+    { name = "the-token-company", marker = "extra == 'compress'", git = "https://github.com/TheTokenCompany/the-token-company-python.git" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "notify", "compress"]
 
 [[package]]
 name = "packaging"
@@ -368,6 +376,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
 ]
+
+[[package]]
+name = "py-notify-system"
+version = "0.1.0"
+source = { git = "https://github.com/sitien173/py-notify-system.git#253418aeecde45d00b2ce00b8a2b7cf2510206c4" }
 
 [[package]]
 name = "pycparser"
@@ -727,6 +740,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/08/a3/84e821cc54b4ab50ae6dbc6ac3800a651b65ec35f045cc73785380654057/starlette-1.0.1.tar.gz", hash = "sha256:512399c5f1de7fac99c88572212ded9ddeddef2fb32afa82d724000e88b38f4f", size = 2659596, upload-time = "2026-05-21T21:58:58.433Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/e1/b2df4bc09a1e51ff664c1e17018a4274b42e5e9352e4a478ea540512dc88/starlette-1.0.1-py3-none-any.whl", hash = "sha256:7c0e69b2ee1c848bd54669d908500117a3ee13de603a21427e5c6fc1adf98dcd", size = 72802, upload-time = "2026-05-21T21:58:56.551Z" },
+]
+
+[[package]]
+name = "the-token-company"
+version = "0.3.1"
+source = { git = "https://github.com/TheTokenCompany/the-token-company-python.git#c6a83574e31e07acfa8893f9c294370b8f3333bf" }
+dependencies = [
+    { name = "httpx" },
 ]
 
 [[package]]
