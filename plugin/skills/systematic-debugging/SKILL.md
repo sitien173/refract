@@ -48,13 +48,9 @@ before attempting fix #4.
 
 ## CCG Routing
 
-- Route the bug by side: back-end → Codex, front-end → Gemini; trivial/clear →
-  coordinator. Full-stack or unclear failure → Cross-Validation to localise the
-  failing layer, then route to the side owner.
-- The dispatch prompt must require a stated root-cause hypothesis **with
-  evidence** (the boundary logs / failing test) before any fix commit.
-- **Review gate:** the coordinator rejects a fix with no root-cause evidence or
-  no failing-test-first reproduction.
+- Route the bug by side per `coordinating-multi-model-work`; unclear or full-stack failure → Cross-Validation to localise the failing layer first.
+- The dispatch prompt must require a root-cause hypothesis **with evidence** (boundary logs / failing test) before any fix commit.
+- **Review gate:** the coordinator FAILs a fix lacking root-cause evidence or a failing-test-first reproduction.
 
 ## Hard Rules
 

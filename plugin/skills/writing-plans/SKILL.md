@@ -20,8 +20,8 @@ Phase-plan author. The routing table, owner semantics, and resume artifacts all 
 4. Assign **one owner per phase by side** per `coordinating-multi-model-work` routing rules. Full-stack phases split into back-side + front-side sub-phases.
 5. Each phase specifies: goal, files (modify/create), tasks, acceptance criteria, reviewer checklist, integration checks.
 6. **Pick storage layout:**
-   - Multi-phase / multi-session → folder `docs/plans/YYYY-MM-DD-<slug>/` containing only `PLAN.md` + a `.handover.md` skeleton per the canonical schema (`status: ACTIVE`, `current_phase: 0`, `next_action: "Execute Phase 1"`, empty `completed_tasks`, null `session_refs`). **No `phase-NN/` directories at write time** — they are created lazily by the executor.
-   - Single-phase / docs-only → flat `docs/plans/YYYY-MM-DD-<slug>-implementation-plan.md` (no resume artifacts).
+   - Multi-phase / multi-session → folder `docs/plans/<slug>/` containing only `PLAN.md` + a `.handover.md` skeleton per the canonical schema (`status: ACTIVE`, `current_phase: 0`, `next_action: "Execute Phase 1"`, empty `completed_tasks`, null `session_refs`). **No `phase-NN/` directories at write time** — they are created lazily by the executor.
+   - Single-phase / docs-only → flat `docs/plans/<slug>-implementation-plan.md` (no resume artifacts).
 7. Offer execution via `executing-plans`.
 
 ## Hard Rules

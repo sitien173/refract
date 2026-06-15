@@ -21,7 +21,7 @@ description: "Explores intent, requirements, trade-offs, and design via dialogue
 6. Present design in 200–300 word sections; confirm each before continuing.
 7. Cover architecture, components, data flow, error handling, testing.
 8. After confirmation, ask the user whether to save as a design doc or a PRD:
-   - **Design** → save `docs/plans/YYYY-MM-DD-<topic>-design.md` and report path.
+   - **Design** → save `docs/plans/<topic>-design.md` and report path.
    - **PRD** → hand off to `technical-prd-generator` to produce a research-backed PRD under `docs/plans/`.
 9. Offer to turn the resulting design/PRD into an implementation plan via `writing-plans`.
 

@@ -49,7 +49,7 @@ Gather the minimum context to route (skip ceremony for trivial work). Frame work
 
 **Dispatch prompt:** write it to `docs/plans/<slug>/phase-<NN>/prompt.md` (template in `implementer-prompt.md`) and pass its absolute path. Inline `PROMPT` only for one- or two-sentence asks with no context block.
 
-**Per-task commits (Codex / Gemini phases):** the worker makes one commit per task, subject `phase-<N>.task-<M>: <summary>`, and returns hashes in `## COMMITS`. The coordinator never commits on the worker's behalf and reviews each via `git show <hash>`. After Review PASS, the coordinator squashes the phase into one commit: `git reset --soft HEAD~<count> && git commit -m "phase-<N>: <summary>"` — task commits are review artifacts only.
+**Per-task commits (Codex / Gemini phases):** the worker makes one commit per task, subject `phase-<N>.task-<M>: <summary>`, and returns hashes in `## COMMITS`. The coordinator never commits on the worker's behalf and reviews each via `git show <hash>`. After Review PASS, the coordinator squashes the phase into one commit that follows **Conventional Commits** — `<type>[optional scope]: <description>` with an optional body and footer(s), where `type` ∈ `feat | fix | test | refactor | docs | chore | perf | build | ci | style | revert`: `git reset --soft HEAD~<count> && git commit -m "<type>[scope]: <description>" -m "<optional body>" -m "<optional footer>"` (drop the extra `-m` args when there is no body/footer) — task commits are review artifacts only.
 
 **Per-phase notes (Codex / Gemini phases):** the worker appends a `## Task <M>` block to `docs/plans/<slug>/phase-<NN>/notes.md` after each task (not batched at phase end). Each block has: Decisions made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions, Follow-ups for human. Empty sub-sections = `- none`; every task gets a block even if all `none`.
 
@@ -208,6 +208,10 @@ session_refs:
 - Absolute paths only when talking to MCP workers.
 - Feature/bugfix work is test-first (`test-driven-development`); bugs get root-cause-first debugging (`systematic-debugging`); no completion claim without fresh evidence (`verifying-before-completion`).
 - User overrides ("use Codex/Gemini", "no external models", "skip cross-validation", "no TDD here") always win.
+
+## Sub-agent
+
+`agents/phase-runner.md` packages one phase's route → dispatch → ERP summary → quality scan → report loop into a single delegable agent. Hand it a phase (plan dir + phase number + spec) when you want the worker round-trip and Review run for you; it returns a `# PHASE RUNNER REPORT` with the verdict. Squash, handover rewrite, and plan advance stay with the coordinator.
 
 ## Discipline Skills
 

@@ -54,10 +54,10 @@ User overrides ("use Codex", "skip cross-validation", "no external models") alwa
 
 ## Plan Artifacts
 
-Multi-phase plans live in `docs/plans/<YYYY-MM-DD-slug>/`. Phase folders are created lazily — only `PLAN.md` and `.handover.md` exist at write time.
+Multi-phase plans live in `docs/plans/<slug>/`. Phase folders are created lazily — only `PLAN.md` and `.handover.md` exist at write time.
 
 ```
-docs/plans/2026-05-21-user-auth/
+docs/plans/user-auth/
   PLAN.md          # phases, ownership, Done When
   .handover.md     # resume pointer + cached worker SESSION_IDs
   phase-01/        # created when Phase 1 starts
@@ -68,7 +68,7 @@ docs/plans/2026-05-21-user-auth/
     ...
 ```
 
-Single-phase / docs-only work uses a flat file (`docs/plans/YYYY-MM-DD-<slug>-implementation-plan.md`) with no resume artifacts.
+Single-phase / docs-only work uses a flat file (`docs/plans/<slug>-implementation-plan.md`) with no resume artifacts.
 
 - **`.handover.md`** is the resume pointer (≤500 tokens). Always coordinator-authored, rewritten on every plan-state change. `session_refs` frontmatter caches Codex/Gemini `SESSION_ID`s and is updated after every MCP call that returns one.
 - **`prompt.md`** holds the full dispatch spec; the MCP `PROMPT` field is just a pointer to it. Inline `PROMPT` only for one- or two-sentence asks.
@@ -77,7 +77,7 @@ Single-phase / docs-only work uses a flat file (`docs/plans/YYYY-MM-DD-<slug>-im
 
 ## Worker Contract (Codex / Gemini)
 
-- **One commit per task.** Message prefix `phase-<N>.task-<M>: <subject>`. Hashes returned in `## COMMITS`. After Review `PASS`, the coordinator squashes them into a single `phase-<N>: <summary>` commit (`git reset --soft HEAD~<count>`).
+- **One commit per task.** Message prefix `phase-<N>.task-<M>: <subject>`. Hashes returned in `## COMMITS`. After Review `PASS`, the coordinator squashes them into a single **Conventional Commits** message — `<type>[optional scope]: <description>` plus optional body/footer, `type` ∈ `feat | fix | test | refactor | docs | chore | …` (`git reset --soft HEAD~<count>`).
 - **Per-task `notes.md` block** appended after each task — never batch-written at phase end.
 - **`# EXTERNAL RESPONSE` block** appended to `journal.md` before the worker emits its terse completion line.
 - **Same-phase fix:** reuse cached `SESSION_ID`, send `FIX:` + delta context only.

@@ -13,6 +13,10 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 - `systematic-debugging` — root cause before any fix (bugs / test failures).
 - `verifying-before-completion` — fresh evidence before reporting done.
 
+## Sub-agents (`agents/`)
+
+- `phase-runner` — runs one plan phase end-to-end: routes to the worker side, dispatches via the openmcp backend, summarizes the worker's ERP reply, runs the Review quality scan, and reports a verdict. The coordinator still owns squash + plan advance.
+
 ## Slash commands
 
 - `/superpowers-ccg:brainstorm`

@@ -49,7 +49,7 @@ Turn rough product or technical requirements into a clear, buildable, research-b
    - Ensure the final recommendation is clear.
 
 6. **Save and hand off**
-   - Save the final PRD to `docs/plans/YYYY-MM-DD-<product>-prd.md` and report the path (same convention `brainstorming` uses for design docs).
+   - Save the final PRD to `docs/plans/<product>-prd.md` and report the path (same convention `brainstorming` uses for design docs).
    - Offer to turn the PRD into a phase-based implementation plan via `writing-plans`. Commit only if the user asks.
 
 ## Default Output Behavior
