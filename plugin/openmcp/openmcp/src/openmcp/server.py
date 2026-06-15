@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.gemini import GeminiParams, execute as gemini_execute
+from openmcp.compression import compress_response
 from openmcp.logging_setup import configure as configure_logging, get_logger
 from openmcp.notify import emit_error, emit_finish, emit_start
 from openmcp.retry import run_with_retry
@@ -307,11 +308,12 @@ async def run(
             attempts=attempts,
             error=result.get("error", "") or "",
         )
+    agent_messages = await compress_response(result.get("agent_messages", "") or "", effective_env)
 
     return {
         "success": result.get("success", False),
         "SESSION_ID": result_session_id,
-        "agent_messages": result.get("agent_messages", "") or "",
+        "agent_messages": agent_messages,
         "error": result.get("error", "") or "",
     }
 
