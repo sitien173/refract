@@ -44,8 +44,6 @@ TASK_COMPLETE
 
 ## Review
 - Spec Status: PASS
-- Quality Findings: No findings
-- Final Status: PASS
 - Explanation: Test-first evidence present for all 4 tasks; CancelledError re-raised; all acceptance criteria met; 10/10 notify tests + 44/44 full suite green.
 
 ## Squash Commit

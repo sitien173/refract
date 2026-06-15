@@ -10,15 +10,6 @@
             "statusMessage": "Loading superpowers-ccg context"
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${QODER_PLUGIN_ROOT}/hooks/run-hook.sh\" superpowers-ccg-user-prompt-submit.sh --qoder",
-            "commandWindows": "\"%QODER_PLUGIN_ROOT%\\hooks\\run-hook.cmd\" superpowers-ccg-user-prompt-submit.sh --qoder"
-          }
-        ]
       }
     ]
   }

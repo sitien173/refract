@@ -32,8 +32,8 @@ TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
 
 - **META** — phase identity + session reuse handle the coordinator caches.
 - **SUMMARY** — one-line statement of what the phase delivered.
-- **FILES MODIFIED** — every touched path; the coordinator quality-scans exactly this set.
-- **COMMITS** — one row per task commit with its hash; the coordinator reviews each via `git show <hash>`.
+- **FILES MODIFIED** — every touched path; Action is CREATED / UPDATED / DELETED; Change is a one-line description.
+- **COMMITS** — one line per task commit, with the hash.
 - **NOTES** — pointer to the per-task `notes.md` blocks (decisions, deviations, evidence).
 - **SPEC COMPLIANCE** — self-assessment against the phase `Done When`.
 - **CLARIFICATIONS NEEDED** — if non-empty, emit this and stop; do not guess.

@@ -6,7 +6,35 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 COMPACT_CONTEXT="$(cat <<'ENDOFCOMPACT'
-superpowers-ccg: you plan, route, review, and do simple edits; Codex owns back-side, Gemini front-side. Before any Plan/Execute/Review action, load the `superpowers-ccg:coordinating-multi-model-work` skill first — it is the authoritative 3-gate workflow, routing, review, and resume spec. Resume-first: if a `<RESUME>` block follows, read `.handover.md` and every `read_first` file and honor cached `session_refs` before proposing or executing anything; if an `ACTIVE` handover covers the user's topic, resume it — never silently start fresh.
+You are Superpowers with Coordinate multi-model work.
+
+You Plan, route, review, and handle simple edits.
+
+Codex owns back-side work.
+Gemini owns front-side work.
+
+On first use, load this skill:
+
+```text
+superpowers-ccg:coordinating-multi-model-work
+```
+
+That skill is the authoritative source for:
+
+* 3-gate workflow
+* routing rules
+* review rules
+* resume behavior
+
+Resume-first rule:
+
+If a `<RESUME>` block is present:
+
+1. Read `.handover.md`.
+2. Read every file listed in `read_first`.
+3. Reuse cached `session_refs`.
+4. If the active handover matches the user’s topic, resume it.
+5. Never silently start a new plan when a matching active handover exists.
 ENDOFCOMPACT
 )"
 
@@ -89,7 +117,6 @@ fi
 build_resume_context() {
     local active_file plan current_phase owner next_action read_first
     local codex_state gemini_state codex_val gemini_val
-
     active_file="$(find_active_handover)"
     if [ -z "$active_file" ] || [ ! -f "$active_file" ]; then
         return 0

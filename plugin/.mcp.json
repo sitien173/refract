@@ -15,7 +15,7 @@
         "OPENMCP_AGY_REASONING_MODEL": "gemini-3.1-pro-high",
         "OPENMCP_CODEX_REASONING_MODEL": "gpt-5.5",
         "OPENMCP_GEMINI_REASONING_MODEL": "gemini-3.1-pro-preview",
-        "OPENMCP_GEMINI_ROUTE_TO_AGY": "true",
+        "OPENMCP_GEMINI_ROUTE_TO_AGY": "false",
         "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
         "OPENMCP_LOG_LEVEL": "INFO"
       }

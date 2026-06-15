@@ -10,16 +10,14 @@ Three gates: **Plan → Execute → Review**.
 
 1. **Plan** — for new features / ideation, run **Cross-Validation** first (ask Codex + Gemini the same narrow question, reconcile divergences). Then frame work as one phase: 2–4 tasks, file set, `Done When` checks. Output a `# ROUTE` block.
 2. **Execute** — route by side (no default executor). Worker edits files via its own MCP write tools and returns `## FILES MODIFIED`.
-3. **Review** — (a) Spec: run `Done When` + `git show <hash>` per task commit; (b) Quality scan on changed files (edge cases, error handling, security, naming, duplication, correctness). Output `# REVIEW` with `PASS` / `PASS_WITH_DEBT` / `FAIL`.
-
-Severity downgrade: `CRITICAL`/`HIGH` force `FAIL`; `MEDIUM` downgrades `PASS` → `PASS_WITH_DEBT`; `LOW` is noted only. Quality scan is skipped for docs-only or trivial Claude edits, required for every Codex/Gemini phase.
+3. **Review** — Spec: run `Done When` + `git show <hash>` per task commit. Output `# REVIEW` with `PASS` / `PASS_WITH_DEBT` / `FAIL`.
 
 Canonical spec: `skills/coordinating-multi-model-work/SKILL.md`.
 
 ```mermaid
 flowchart TD
     A([Request]) --> B{Fuzzy idea or<br/>clear task?}
-    B -->|"fuzzy idea / requirements"| BR["/brainstorm or /prd<br/>design or PRD doc"]
+    B -->|"fuzzy idea / requirements"| BR["/brainstorm<br/>design doc"]
     BR --> WP["/write-plan<br/>PLAN.md + phases"]
     B -->|"clear, scoped task"| WP
     WP --> P["Gate 1 - Plan<br/>frame phase, emit # ROUTE"]
@@ -32,7 +30,7 @@ flowchart TD
     CO --> EX["Gate 2 - Execute<br/>per-task commits + notes + journal"]
     CX --> EX
     GM --> EX
-    EX --> RV{"Gate 3 - Review<br/>Spec + Quality scan"}
+    EX --> RV{"Gate 3 - Review<br/>Spec"}
     RV -->|FAIL| P
     RV -->|"PASS / PASS_WITH_DEBT"| SQ["Squash commit<br/>update .handover.md"]
     SQ --> NX{More phases?}
@@ -218,16 +216,13 @@ claude mcp remove agy
 Claude Code slash commands (each loads its shared skill before acting):
 
 - `/brainstorm` — explore intent, requirements, and design via dialogue. Cross-Validation runs only when work is full-stack, unclear, or high-impact (not every new feature).
-- `/prd` — turn rough product or technical requirements into a research-backed PRD (goals, non-goals, requirements, architecture, risks, milestones, acceptance criteria).
 - `/write-plan` — turn a confirmed design into a phase-based plan.
 - `/execute-plan` — run the active phase under the three gates.
-- `/setup-openmcp-env` — interactively configure every `OPENMCP_*` env var and save to `~/.openmcp/.env`.
 
 Shared skills discovered by Claude Code and Codex (namespace `superpowers-ccg:`):
 
 - `coordinating-multi-model-work` — canonical 3-gate workflow, routing, review, resume artifacts.
 - `brainstorming`, `writing-plans`, `executing-plans` — phase-stage skills loaded by the slash commands.
-- `technical-prd-generator` — generate, improve, or review PRDs / technical specs; saves to `docs/plans/` and can hand off to `writing-plans`.
 - `test-driven-development` — failing test first, watch it fail, then minimal code (feature/bugfix phases).
 - `systematic-debugging` — root-cause investigation before any fix (bugs, test failures).
 - `verifying-before-completion` — fresh verification evidence before reporting done.
@@ -257,7 +252,7 @@ Every flow runs through the same three gates; what changes is the entry point an
 ```mermaid
 flowchart LR
     I["Install plugin + backends"] --> E["/setup-openmcp-env"]
-    E --> B["/brainstorm or /prd<br/>idea to design / PRD"]
+    E --> B["/brainstorm<br/>idea to design"]
     B --> W["/write-plan<br/>docs/plans/.../PLAN.md"]
     W --> X["/execute-plan<br/>phase by phase"]
     X --> R["Review each phase<br/>PASS then squash"]
@@ -265,8 +260,7 @@ flowchart LR
 ```
 
 1. **Install** the plugin and the Codex / Gemini backends (see [Install](#install)).
-2. `/setup-openmcp-env` — choose models and write `~/.openmcp/.env`.
-3. `/brainstorm "<product idea>"` (or `/prd "<requirements>"` for a formal spec) — produces a confirmed design / PRD under `docs/plans/`.
+3. `/brainstorm "<product idea>"` — produces a confirmed design under `docs/plans/`.
 4. `/write-plan` — turns it into `PLAN.md` with phases split by side (back-side → Codex, front-side → Gemini).
 5. `/execute-plan` — runs the active phase under the gates; repeat until every phase passes.
 6. `verifying-before-completion` — final `Done When` evidence across all phases.
@@ -288,7 +282,7 @@ sequenceDiagram
     C->>C: /write-plan -> PLAN.md (Phase 1 back, Phase 2 front)
     C->>X: dispatch Phase 1 (prompt.md)
     X-->>C: commits + notes + journal + completion line
-    C->>C: Review Phase 1 (git show, Done When, quality scan) -> PASS -> squash
+    C->>C: Review Phase 1 (git show, Done When) -> PASS -> squash
     C->>G: dispatch Phase 2 (prompt.md)
     G-->>C: commits + notes + journal + completion line
     C->>C: Review Phase 2 -> PASS -> squash

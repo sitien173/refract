@@ -53,7 +53,6 @@ Phase-plan author. The routing table, owner semantics, and resume artifacts all 
 
 **Reviewer Checklist:**
 - [spec requirement]
-- [edge case / regression]
 
 **Integration Checks:**
 - `exact command`

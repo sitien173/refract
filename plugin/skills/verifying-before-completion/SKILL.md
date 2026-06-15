@@ -45,9 +45,7 @@ Skip a step = guessing, not verifying.
 2. Read full output and exit codes; compare against the original request and
    acceptance criteria, line by line.
 3. Confirm changed files match the expected scope.
-4. Run the Review gate from `coordinating-multi-model-work`: (a) Spec status from
-   the integration checks, (b) Quality scan on changed files. Output `# REVIEW`
-   with Spec Status, Quality Findings, Final Status.
+4. Run the Review gate from `coordinating-multi-model-work`.
 5. For bug fixes, verify the red→green cycle: the regression test fails without
    the fix and passes with it (don't trust a test that only passed once).
 6. Report: task status, files changed, integration result with evidence, Review

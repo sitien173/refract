@@ -11,7 +11,9 @@ mcp__openmcp__run:
   backend: "codex" (back-side) | "gemini" (front-side)
   cd: <ABSOLUTE repo root>
   PROMPT: |
-    [one sentence of persona / mindset — e.g. "You are an experienced backend engineer ..." when fresh session, or "You are continuing work on phase-2 of the <plan> ..." when resuming]
+    [one sentence of persona / mindset — e.g. "You are an experienced backend engineer ..." if <fresh session>, or "continue work on phase-2 of the <plan> ..." if <resuming>]
+
+    Scope: [one sentence scope — e.g. "Implement the user authentication API per the spec."]
 
     Read your full task spec from: <ABSOLUTE>/docs/plans/<slug>/phase-<NN>/prompt.md
     Plan dir:   <ABSOLUTE>/docs/plans/<slug>
@@ -22,6 +24,8 @@ mcp__openmcp__run:
     Domain:     <ABSOLUTE>/.agents/BACKEND.md   # Codex
                 <ABSOLUTE>/.agents/FRONTEND.md  # Gemini / agy
     Follow the contract, the domain rules file, and the spec file. Respond per erp.md, then emit the completion line.
+
+    Output: Respond per the ERP contract.
 ```
 
 **Absolute paths only.** The pointer path, `cd`, and every path inside the prompt body must be absolute with forward slashes on Windows. Gemini/agy mis-resolves relative paths.

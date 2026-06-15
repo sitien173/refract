@@ -3,218 +3,350 @@ name: coordinating-multi-model-work
 description: "Three-gate workflow (Plan → Execute → Review)"
 ---
 
-# Coordinating Multi-Model Work
+Coordinating Multi-Model Work
 
-The coordinator plans, routes, reviews, integrates, and handles simple tasks directly. The coordinator may be Claude Code, Codex, or another host that loads this skill. Codex workers own back-side work (backend, API, business logic, database, ORM, system, infra, CI/CD, Docker, scripts, server-side tests/debug, etc). Gemini workers own front-side work (UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, front-end tests, etc).
+ Use skill coordinate work between coordinator, Codex, Gemini **Coordinator** handles planning routing review integration simple tasks.
+ **Codex** owns back-side work: backend API database infra CI/CD Docker, scripts, server tests.
+ **Gemini/ agy** owns front-side work: UI CSS layout motion canvas/SVG, client interactions multimodal, front-end tests.
 
-**Cross-Validation (CV)** = ask Codex and Gemini the same narrow question, reconcile divergences, then route implementation to a side owner. Run CV **only** when a phase is:
-- **Full-stack** — straddles both sides with unresolved coupling (API contract, shared schema, auth flow), or
-- **Unclear** — ambiguous requirements, multiple viable architectures, no obvious owner, or
-- **High-impact** — breaking change, public API, security boundary, data migration, irreversible infra, architecture decision.
+ ## Core Rule
 
-Otherwise route directly to the side owner. CV dispatches MUST pass `reasoning="high"`.
+ Route by **side**.
 
-## Gate 1 — Plan
+ Use **Cross-Validation (CV)** only when work is:
 
-Gather the minimum context to route (skip ceremony for trivial work). Frame work as one phase: 2–4 related tasks, file set, `Done When` checks. Decide owner by **side**, then output:
+ **Full-stack**: backend and frontend tightly coupled.
+ **Unclear**: requirements, owner, or architecture ambiguous.
+ **High-impact**: public API, security boundary, data migration, breaking change, irreversible infra, or major architecture decision.
 
-```text
+ For CV, ask Codex Gemini same narrow question with `reasoning="high"`, compare answers, resolve differences, then route implementation to correct owner.
+
+ User overrides always win.
+
+ ---
+
+# Gate 1 — Plan
+
+ Gather only enough context to route work.
+
+ Define one phase as:
+
+* 2–4 related tasks
+* relevant files
+* clear `Done When` checks
+
+ Then output:
+
+ ```text
 # ROUTE
-- Owner: Coordinator | Codex | Gemini | Cross-Validation
-- Reason: [one line — back-side / front-side / simple / new-feature ideation]
-- Done When: [build/test/lint commands or acceptance bullets]
-```
+- Owner: Coordinator| Codex| Gemini| Cross-Validation
+- Reason: [one line]
+- Done When: [tests, build, lint, or acceptance checks]
+ ```
 
-| Phase | Owner |
-|---|---|
-| Simple/trivial (one-line edit, rename, doc tweak, single-file fix, clarification) | Coordinator |
-| Back-side work | Codex |
-| Front-side work | Gemini |
-| Full-stack / unclear / high-impact (per CV triggers) | Cross-Validation → reconcile → side owner |
-| Single-side, clear scope, low blast radius | Skip CV → side owner directly |
-| Full-stack phase spanning both sides | Split into back/front sub-phases; route each |
-| Ambiguous side | Ask user |
+ ## Routing Guide
 
-## Gate 2 — Execute
+| Work type                                    | Owner                            |
+| ---------------------------------------------| -------------------------------- |
+| Simple edit, rename, doc tweak, clarification| Coordinator                      |
+| Back-side work                               | Codex                            |
+| Front-side work                              | Gemini                           |
+| Full-stack, unclear, or high-impact          | Cross-Validation                 |
+| Clear single-side work                       | Route directly to side owner     |
+| Full-stack phase                             | Split into back/front sub-phases |
+| Ambiguous owner                              | Ask user                         |
 
-- **Coordinator (simple):** edit directly; commit per logical change.
-- **Codex / Gemini:** call `mcp__openmcp__run` with `backend="codex"` (back) or `"gemini"`/`"agy"` (front). The worker edits files with its own write tools — on-disk files are the source of truth, never a draft. Reuse cached `SESSION_ID` when present.
-- **Cross-Validation:** same narrow question to both, compare, pick direction, route to the side owner (`reasoning="high"`).
-- **Same-phase fix:** reuse `SESSION_ID`; send only `FIX:` + delta context.
-- **MCP failure / rejected SESSION_ID** → output `BLOCKED`, ask the user. No retry, executor switch, or Task/Agent fallback without explicit consent.
+ ---
 
-**Discipline (coordinator + every worker):** feature/bugfix phases are test-first per `test-driven-development` (failing test before production code); bug/failure phases follow `systematic-debugging` (root cause before any fix, fix begins with a failing test). The dispatch prompt states these as phase rules; workers record the RED→GREEN result and root-cause evidence in `notes.md` / journal.
+# Gate 2 — Execute
 
-**Paths:** always pass ABSOLUTE paths (forward slashes on Windows) to MCP workers — the `cd` arg, the `PROMPT` pointer, and every path inside the prompt body. Gemini/agy mis-resolves relative paths.
+ ## Coordinator
 
-**Dispatch prompt:** write it to `docs/plans/<slug>/phase-<NN>/prompt.md` (template in `implementer-prompt.md`) and pass its absolute path. Inline `PROMPT` only for one- or two-sentence asks with no context block.
+ For simple work:
 
-**Per-task commits (Codex / Gemini phases):** the worker makes one commit per task, subject `phase-<N>.task-<M>: <summary>`, and returns hashes in `## COMMITS`. The coordinator never commits on the worker's behalf and reviews each via `git show <hash>`. After Review PASS, the coordinator squashes the phase into one commit that follows **Conventional Commits** — `<type>[optional scope]: <description>` with an optional body and footer(s), where `type` ∈ `feat | fix | test | refactor | docs | chore | perf | build | ci | style | revert`: `git reset --soft HEAD~<count> && git commit -m "<type>[scope]: <description>" -m "<optional body>" -m "<optional footer>"` (drop the extra `-m` args when there is no body/footer) — task commits are review artifacts only.
+* Edit directly.
+* Commit logical changes.
 
-**Per-phase notes (Codex / Gemini phases):** the worker appends a `## Task <M>` block to `docs/plans/<slug>/phase-<NN>/notes.md` after each task (not batched at phase end). Each block has: Decisions made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions, Follow-ups for human. Empty sub-sections = `- none`; every task gets a block even if all `none`.
+ ## Codex/ Gemini
 
-**Phase journal (Codex / Gemini phases):** `docs/plans/<slug>/phase-<NN>/journal.md` is the single durable phase record (survives compaction). The coordinator creates it at phase start with the Route skeleton; the worker appends its full `# EXTERNAL RESPONSE` block before emitting the completion line.
+ Call `mcp__openmcp__run`.
 
-**Shared contract:** the worker-facing contract lives in `<project>/.agents/shared/{worker-contract.md,erp.md}` — materialized from the plugin's bundled `shared/` templates by the SessionStart hook (git-tracked in the consuming project, regenerated on plugin version change). Workers run without the plugin loaded, so dispatch prompts point at those absolute paths instead of restating the protocol. This skill stays the human-readable canonical text; `shared/*.md` is the machine-/worker-facing mirror — edit the plugin templates, never the materialized copies.
+ Use:
 
-**Domain rules:** the same hook materializes `<project>/.agents/BACKEND.md` (Codex / back-side) and `<project>/.agents/FRONTEND.md` (Gemini / agy / front-side) from the plugin root. Every Codex dispatch prompt points at `BACKEND.md`; every Gemini dispatch prompt points at `FRONTEND.md`. Their `<RULES>` sections are hard constraints — a worker that violates one (string-built SQL, hardcoded design tokens, mouse-only interactive element, missing regression test on a bug fix, etc.) → CRITICAL finding in Review and `FAIL`. Edit the plugin-root files, never the materialized copies.
+* `backend="codex"` for back-side work.
+* `backend="gemini"` or `backend="agy"` for front-side work.
 
-### Worker response format
+ Rules:
 
-```text
+* Workers edit files directly. On-disk files are source of truth.
+* Reuse cached `SESSION_ID` when continuing same phase.
+ For same-phase fixes, send only `FIX:` plus delta context.
+ Always pass **absolute paths**.
+ On MCP failure or rejected `SESSION_ID`, output `BLOCKED` ask user. Do not retry or switch executor without consent.
+
+ ## Worker Discipline
+
+ Feature bugfix phases must follow:
+
+* `test-driven-development`: failing test before production code.
+* `systematic-debugging`: root cause before fixing bugs.
+* `verifying-before-completion`: no completion claim without fresh evidence.
+
+ Workers must record:
+
+* RED → GREEN result
+* root-cause evidence
+* task notes
+* commits
+* journal entry
+
+ ## Dispatch Prompt
+
+ Write worker prompts to:
+
+ ```text
+ docs/plans/<slug>/phase-<NN>/prompt.md
+ ```
+
+ Inline prompts only for very small one- or two-sentence tasks.
+
+ Worker prompts should point to:
+
+ ```text
+ <project>/.agents/shared/worker-contract.md
+ <project>/.agents/shared/erp.md
+ <project>/.agents/BACKEND.md
+ <project>/.agents/FRONTEND.md
+ ```
+
+ Do not edit materialized `.agents` files directly. Edit plugin templates instead.
+
+ ## Worker Commits
+
+ Workers make one commit per task:
+
+ ```text
+ phase-<N>.task-<M>: <summary>
+ ```
+
+ worker returns hashes in `## COMMITS`.
+
+ coordinator reviews each commit with:
+
+ ```bash
+ git show <hash>
+ ```
+
+ After Review PASS, coordinator squashes phase into one Conventional Commit:
+
+ ```text
+ <type>[scope]: <description>
+ ```
+
+ Allowed types:
+
+ ```text
+ feat| fix| test| refactor| docs| chore| perf| build| ci| style| revert
+ ```
+
+ ## Worker Notes
+
+ After each task, worker appends to:
+
+ ```text
+ docs/plans/<slug>/phase-<NN>/notes.md
+ ```
+
+ Each task gets:
+
+ ```markdown
+ ## Task <M>
+
+ ### Decisions made
+- none
+
+ ### Spec deviations
+- none
+
+ ### Tradeoffs accepted
+- none
+
+ ### Assumptions
+- none
+
+ ### Follow-ups for human
+- none
+ ```
+
+ ## Phase Journal
+
+ Each phase has:
+
+ ```text
+ docs/plans/<slug>/phase-<NN>/journal.md
+ ```
+
+ coordinator creates it at phase start.
+
+ worker appends its full external response before completion line.
+
+ ---
+
+# Worker Response Format
+
+ ```text
 # EXTERNAL RESPONSE
-## META
-- Phase / Owner (codex|gemini) / SessionID / Started / Finished / Plan dir
-## SUMMARY
-[one sentence]
-## FILES MODIFIED
-| Action | Path | Change |
-## COMMITS
-- phase-<N>.task-<M>: <hash>  <subject>
-## NOTES
-- phase-<NN>/notes.md  (## Task <M>, …)
-## SPEC COMPLIANCE
-- Meets Spec? YES | WITH_DEBT | NO  — [one line]
-## CLARIFICATIONS NEEDED
-None (or list questions; emit and stop if any)
-## NEXT
-TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
-```
 
-Then the single completion line the coordinator scans for:
+ ## META
+- Phase/ Owner/ SessionID/ Started/ Finished/ Plan dir
 
-```text
-Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
-```
+ ## SUMMARY
+ [one sentence]
 
-## Gate 3 — Review
+ ## FILES MODIFIED
+| Action| Path| Change |
 
-**(a) Spec & Integration** — run the phase's `Done When` checks; compare result vs request, file scope, integration output. Verify **fresh** evidence per `verifying-before-completion` — no claim without having run the check this turn. Initial status: `PASS` | `PASS_WITH_DEBT` | `FAIL`.
+ ## COMMITS
+- phase-<N>.task-<M>: <hash> <subject>
 
-**Discipline check** — for any feature/bugfix phase, confirm test-first evidence (a test that failed then passed); for any fix, confirm stated root-cause evidence. Missing test-first or root-cause evidence is a CRITICAL finding → `FAIL`.
+ ## NOTES
+- phase-<NN>/notes.md
 
-**(b) Quality scan** — scan every file in `## FILES MODIFIED` (stay scoped to changed files — no broader audit):
+ ## SPEC COMPLIANCE
+- Meets Spec? YES| WITH_DEBT| NO — [one line]
 
-| Category | Check |
-|---|---|
-| Edge cases | null/undefined, empty arrays, boundaries, off-by-one |
-| Error handling | swallowed errors, missing catch, unhandled rejections |
-| Security | injection (SQL/XSS/cmd), hardcoded secrets, unsafe deserialization, missing boundary validation |
-| Naming & clarity | misleading names, ambiguous abbreviations, scope creep vs name |
-| Duplication | copy-paste logic that should be extracted |
-| Correctness | logic errors, race conditions, resource leaks, bad type narrowing |
+ ## CLARIFICATIONS NEEDED
+ None
 
-| Severity | Effect |
-|---|---|
-| CRITICAL — bug, security vuln, data-loss | Force `FAIL` |
-| HIGH — likely bug / significant gap | Force `FAIL` |
-| MEDIUM — code smell, missed edge case | `PASS` → `PASS_WITH_DEBT` |
-| LOW — minor naming/style | Noted only |
+ ## NEXT
+ TASK_COMPLETE| CONTINUE_SESSION| HANDOVER_TO_CLAUDE
+ ```
 
-Skip the Quality scan only when: docs/coordination-only phase, coordinator one-line/trivial edit, or `## FILES MODIFIED` empty. Required for every Codex / Gemini phase. Discard findings that contradict the user's explicit request or project conventions (with explanation).
+ Then end with:
 
-```text
+ ```text
+ Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
+ ```
+
+ ---
+
+# Gate 3 — Review
+
+ Review every phase before calling it complete.
+
+ Run phase `Done When` checks.
+
+ Verify:
+
+* requested behavior
+* changed file scope
+* integration result
+* fresh test/build/lint evidence
+
+ Initial status:
+
+ ```text
+ PASS| PASS_WITH_DEBT| FAIL
+ ```
+
+ Missing fresh evidence means failure.
+
+ For feature bugfix work verify:
+
+* failing test existed before fix
+* test now passes
+* bug fixes include root-cause evidence
+
+ Missing test-first or root-cause evidence is CRITICAL forces `FAIL`.
+
+ Skip only for:
+
+* docs-only coordination phases
+* coordinator one-line trivial edits
+* empty file changes
+
+ ## Review Output
+
+ ```text
 # REVIEW
-- Spec Status: PASS | PASS_WITH_DEBT | FAIL
-- Quality Findings:
-  | Severity | path:line | Problem | Fix |
-  (or "No findings" / "Skipped: <reason>")
-- Final Status: PASS | PASS_WITH_DEBT | FAIL
-- Explanation: [one line — what changed from spec status and why]
-- Next: [done | debt + owner | retry/clarify]
-```
+- Spec Status: PASS| PASS_WITH_DEBT| FAIL
+- Next: done| debt+ owner| retry/clarify
+ ```
 
-`PASS_WITH_DEBT` requires an explicit non-blocking debt note. `FAIL` blocks completion — re-route the gap or ask the user. Reject the phase if `## COMMITS` hashes, `notes.md` task blocks, or the journal External Response section are missing.
+ `PASS_WITH_DEBT` requires clear non-blocking debt note.
 
-### Cross-Validation output
+ `FAIL` blocks completion.
 
-```text
+ Reject phase if any are missing:
+
+* commit hashes
+* notes task blocks
+* journal external response
+
+ ---
+
+# Cross-Validation Output
+
+ ```text
 # CROSS-VALIDATION
 - Agreement: [shared conclusions]
-- Divergences: [one line per disagreement + chosen resolution]
-- Next owner: Codex | Gemini | Coordinator
-```
+ Divergences: [disagreements and chosen resolution]
+ Next owner: Codex| Gemini| Coordinator
+ ```
 
-## Session-Resume Artifacts
+ ---
 
-Opt-in per plan; flat single-file plans need none. Multi-phase / multi-session plans persist `.handover.md` + per-phase `journal.md` alongside `PLAN.md`.
+# Resume Artifacts
 
-**Plan directory layout** (phase IDs zero-padded to two digits; phase folders created lazily by the executor, never pre-scaffolded):
+ Use resume artifacts only for multi-phase multi-session plans.
 
-```
-docs/plans/<slug>/
+ Plan layout:
+
+ ```text
+ docs/plans/<slug>/
   PLAN.md
   .handover.md
   phase-01/
-    prompt.md   # dispatch prompt
-    notes.md    # per-task decision notes
-    journal.md  # Route skeleton + appended EXTERNAL RESPONSE + Review
-```
+    prompt.md
+    notes.md
+    journal.md
+ ```
 
-**`.handover.md`** — terse resume pointer, always coordinator-authored (a hook cannot synthesize it). Rewrite at the end of every turn that changes plan state (route set, phase change, BLOCKED, phase done). `session_refs` is the single source of truth for cached worker SESSION IDs — update it after every MCP call that returns one.
+ ## `.handover.md`
 
-```markdown
----
-plan: docs/plans/<slug>
-updated_at: <ISO8601>
-current_phase: <N>
-status: ACTIVE   # ACTIVE | BLOCKED | DONE
-owner: coordinator | codex | gemini
-session_refs:
-  codex: <id or null>
-  gemini: <id or null>
----
-## next_action
-<one to three sentences — exact next step>
-## read_first
-- docs/plans/<slug>/phase-<NN>/journal.md
-## completed_tasks
-- id / owner / commit / notes  (one row per finished task)
-## blockers
-<empty | one line per blocker>
-## decisions_delta
-<empty | new decisions since prior handover>
-## uncommitted_files
-<empty | edited-but-not-committed paths>
-```
+ coordinator rewrites this after every state change.
 
-**`phase-<NN>/journal.md`** — durable per-phase record. The coordinator writes the skeleton at phase start; the worker appends its `# EXTERNAL RESPONSE`; the coordinator finalizes the Review after the gate.
+ tracks:
 
-```markdown
-# Phase <N> — <title>
-- Status / Owner / Started / Finished
-## Route
-- Reason / Done When / Files
-## External Response
-<worker appends the full # EXTERNAL RESPONSE block>
-## Review
-- Spec Status / Quality Findings / Final Status
-## Squash Commit
-- <type>[scope]: <description>   # final history after Review PASS
-## Decisions
-- per-task decisions live in notes.md; cross-task / phase-level noted here
-## Handoff
-<what the next phase or session must do>
-```
+* current phase
+* status
+* owner
+* cached worker session IDs
+* next action
+* read-first files
+* completed tasks
+* blockers
+* decisions
+* uncommitted files
 
-**Resume rule:** a new session reads `.handover.md` first, then only the `journal.md` files listed in `read_first`. Never scan every phase folder unless the handover is missing or corrupt.
+ A new session reads `.handover.md` first, then only listed `journal.md` files.
 
-## Hard Rules
+ Do not scan every phase folder unless handover is missing or corrupt.
 
-- One phase, one owner, one review. Worker output is the final edit — no draft-then-reimplement.
-- Route by side; never auto-route to one executor. CV only for full-stack / unclear / high-impact work.
-- One commit per task by the worker; missing `## COMMITS` hashes, `notes.md` task blocks, or journal External Response block Review.
-- Notes + journal External Response written before the worker's completion line.
-- Absolute paths only when talking to MCP workers.
-- Feature/bugfix work is test-first (`test-driven-development`); bugs get root-cause-first debugging (`systematic-debugging`); no completion claim without fresh evidence (`verifying-before-completion`).
-- User overrides ("use Codex/Gemini", "no external models", "skip cross-validation", "no TDD here") always win.
+ ---
 
-## Sub-agent
+# Hard Rules
 
-`agents/phase-runner.md` packages one phase's route → dispatch → ERP summary → quality scan → report loop into a single delegable agent. Hand it a phase (plan dir + phase number + spec) when you want the worker round-trip and Review run for you; it returns a `# PHASE RUNNER REPORT` with the verdict. Squash, handover rewrite, and plan advance stay with the coordinator.
+* One phase, one owner, one review.
+* Route by side.
+ Do not use Cross-Validation unless work is full-stack, unclear, or high-impact.
+ Workers edit files directly; no draft-then-reimplement.
+ Workers make one commit per task.
+ Coordinator reviews worker commits, then squashes after PASS.
+ Missing commits, notes, or journal entries fail Review.
+ Use absolute paths for MCP workers.
+ Feature and bugfix work must be test-first.
+ Bugs require root-cause-first debugging.
+* No completion claim without fresh evidence.
+* User instructions override this skill.
 
-## Discipline Skills
-
-- `skills/test-driven-development/SKILL.md` — failing test before production code.
-- `skills/systematic-debugging/SKILL.md` — root cause before any fix.
-- `skills/verifying-before-completion/SKILL.md` — fresh evidence before claiming done.

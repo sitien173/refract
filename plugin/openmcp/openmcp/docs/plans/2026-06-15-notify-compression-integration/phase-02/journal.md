@@ -41,8 +41,6 @@ TASK_COMPLETE
 
 ## Review
 - Spec Status: PASS
-- Quality Findings: No findings
-- Final Status: PASS
 - Explanation: Test-first evidence present; CancelledError re-raised; ERP structure preserved; all best-effort paths return original text; 9/9 compression tests + 53/53 full suite green.
 
 ## Squash Commit
