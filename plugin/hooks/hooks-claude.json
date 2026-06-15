@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-.}}/hooks/run-hook.sh\" superpowers-ccg-session-start.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-${HOME:-$USERPROFILE}/.agents/plugins/superpowers-ccg}}/hooks/run-hook.sh\" superpowers-ccg-session-start.sh"
           }
         ]
       }
