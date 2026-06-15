@@ -19,12 +19,18 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
 ]
+notify = [
+    "py-notify-system @ git+https://github.com/sitien173/py-notify-system.git",
+]
 
 [project.scripts]
 openmcp = "openmcp.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openmcp"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.uv]
 package = true

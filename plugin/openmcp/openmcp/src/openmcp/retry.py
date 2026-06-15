@@ -8,6 +8,7 @@ from typing import Any
 
 from openmcp.backends import BackendResult
 from openmcp.logging_setup import get_logger
+from openmcp.notify import emit_attempt_failed
 
 log = get_logger("retry")
 
@@ -74,6 +75,13 @@ async def run_with_retry(execute_fn, params, max_retries: int, retry_base_ms: in
             params.SESSION_ID = result.SESSION_ID
             log.info("retry: preserving SESSION_ID=%s for next attempt", result.SESSION_ID)
 
+        await emit_attempt_failed(
+            backend=backend_name,
+            session_id=result.SESSION_ID or getattr(params, "SESSION_ID", ""),
+            model=getattr(params, "model", ""),
+            attempts=attempt,
+            error=result.error,
+        )
         delay_ms = min(retry_base_ms * (2 ** (attempt - 1)), 8000)
         jitter_factor = random.uniform(0.8, 1.2)
         sleep_s = (delay_ms * jitter_factor) / 1000.0

@@ -14,6 +14,7 @@ from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.gemini import GeminiParams, execute as gemini_execute
 from openmcp.logging_setup import configure as configure_logging, get_logger
+from openmcp.notify import emit_error, emit_finish, emit_start
 from openmcp.retry import run_with_retry
 
 configure_logging()
@@ -232,6 +233,12 @@ async def run(
         resolved_profile, reasoning or "<off>", max_retries, timeout_s or "<off>",
     )
     try:
+        await emit_start(
+            backend=effective_backend,
+            session_id=SESSION_ID,
+            model=resolved_model,
+            attempts=1,
+        )
         if effective_backend == "agy":
             params = AgyParams(
                 PROMPT=PROMPT,
@@ -270,16 +277,40 @@ async def run(
         raise
     except Exception as exc:
         log.exception("run(): unhandled exception in %s backend", backend)
+        await emit_error(
+            backend=effective_backend,
+            session_id=SESSION_ID,
+            model=resolved_model,
+            attempts=1,
+            error=f"unhandled: {exc}",
+        )
         return {"success": False, "SESSION_ID": SESSION_ID or "", "agent_messages": "", "error": f"unhandled: {exc}"}
 
     log.info(
         "run() done backend=%s success=%s attempts=%s session_id=%s",
         backend, result.get("success"), result.get("attempts"), result.get("SESSION_ID", ""),
     )
+    attempts = int(result.get("attempts", 1) or 1)
+    result_session_id = result.get("SESSION_ID", "") or ""
+    if result.get("success", False):
+        await emit_finish(
+            backend=effective_backend,
+            session_id=result_session_id,
+            model=resolved_model,
+            attempts=attempts,
+        )
+    else:
+        await emit_error(
+            backend=effective_backend,
+            session_id=result_session_id,
+            model=resolved_model,
+            attempts=attempts,
+            error=result.get("error", "") or "",
+        )
 
     return {
         "success": result.get("success", False),
-        "SESSION_ID": result.get("SESSION_ID", "") or "",
+        "SESSION_ID": result_session_id,
         "agent_messages": result.get("agent_messages", "") or "",
         "error": result.get("error", "") or "",
     }

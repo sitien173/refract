@@ -506,6 +506,7 @@ async def test_env_defaults_applied_for_gemini_model(monkeypatch) -> None:
         captured["model"] = params.model
         return {"success": True, "SESSION_ID": "", "error": ""}
 
+    monkeypatch.setenv("OPENMCP_GEMINI_ROUTE_TO_AGY", "false")
     monkeypatch.setenv("OPENMCP_GEMINI_MODEL_DEFAULT", "gemini-2.5-pro")
     monkeypatch.setattr(srv, "run_with_retry", fake)
     await srv.run(backend="gemini", PROMPT="x", cd=Path("."))
