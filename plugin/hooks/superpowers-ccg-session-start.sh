@@ -48,6 +48,20 @@ If a `<RESUME>` block is present:
 ENDOFCOMPACT
 )"
 
+escape_for_json() {
+    printf '%s' "$1" | awk '
+        BEGIN { ORS = "" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\t/, "\\t")
+            gsub(/\r/, "\\r")
+            if (NR > 1) printf "\\n"
+            printf "%s", $0
+        }
+    '
+}
+
 compact_escaped=$(escape_for_json "$COMPACT_CONTEXT")
 
 # Materialize the bundled shared contract (shared/*.md) and the domain-rule
