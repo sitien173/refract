@@ -1,7 +1,7 @@
 {
   "name": "superpowers-ccg",
   "description": "Superpowers-CCG: 3-gate (Plan → Execute → Review) workflow.",
-  "version": "5.2.6",
+  "version": "5.2.7",
   "author": {
     "name": "sitien173"
   },
