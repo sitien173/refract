@@ -1,12 +1,12 @@
 """Backend interfaces for openmcp."""
 
 from dataclasses import dataclass
-from typing import Iterable, Literal, Optional
+from typing import Iterable, Literal
 
 
 @dataclass(slots=True)
 class BackendResult:
-    outcome: Literal["OK", "RETRYABLE", "FATAL"]
+    outcome: Literal["OK", "FATAL"]
     SESSION_ID: str
     agent_messages: str
     error: str
@@ -26,21 +26,8 @@ _DEFAULT_FATAL_TOKENS = (
     "login required",
 )
 
-_DEFAULT_RETRYABLE_TOKENS = (
-    "rate limit",
-    " 429",
-    " 5xx",
-    " 500",
-    " 502",
-    " 503",
-    " 504",
-    "timeout",
-    "timed out",
-)
-
 
 def _normalize(text: str) -> str:
-    # Strip a few benign strings that would otherwise be matched as fatal/retryable.
     return text.lower().replace("node_tls_reject_unauthorized", "")
 
 
@@ -51,22 +38,14 @@ def classify_backend_output(
     session_id: str,
     error_text: str,
     fatal_tokens: Iterable[str] = _DEFAULT_FATAL_TOKENS,
-    retryable_tokens: Iterable[str] = _DEFAULT_RETRYABLE_TOKENS,
-    extra_retryable_signal: Optional[bool] = None,
     treat_missing_session_as_ok_warning: bool = True,
 ) -> BackendResult:
     """Shared classifier for all backends.
 
-    Rules (consistent across backends):
+    Rules:
       * FATAL tokens are matched only against ``error_text`` / stderr.
-        Worker prose mentioning ``authentication`` or ``api key`` does not
-        downgrade a successful run to FATAL.
-      * RETRYABLE tokens are checked only when ``agent_messages`` is empty;
-        otherwise the run produced usable output and benign mentions of
-        ``timeout`` / ``rate limit`` inside the agent's text should not
-        be treated as a transport failure.
-      * A successful run without an extracted SESSION_ID returns
-        ``OK`` + warning (matches the codex / agy contract).
+      * Empty agent_messages with no fatal tokens returns FATAL with descriptive error.
+      * A successful run without an extracted SESSION_ID returns OK + warning.
     """
     agent_messages_stripped = (agent_messages or "").strip()
     error_text_stripped = (error_text or "").strip()
@@ -83,25 +62,9 @@ def classify_backend_output(
         )
 
     if not agent_messages_stripped:
-        if error_text_stripped and any(token in error_lower for token in retryable_tokens):
-            return BackendResult(
-                outcome="RETRYABLE",
-                SESSION_ID=session_id,
-                agent_messages=agent_messages,
-                error=error_text_stripped or "retryable backend failure",
-                error_class="retryable_backend",
-            )
-        if extra_retryable_signal:
-            return BackendResult(
-                outcome="RETRYABLE",
-                SESSION_ID=session_id,
-                agent_messages=agent_messages,
-                error=error_text_stripped or "retryable backend failure",
-                error_class="retryable_backend",
-            )
         extra = f" {error_text_stripped}" if error_text_stripped else ""
         return BackendResult(
-            outcome="RETRYABLE",
+            outcome="FATAL",
             SESSION_ID=session_id,
             agent_messages=agent_messages,
             error=f"Failed to get output from the {backend_name} session.{extra}".strip(),

@@ -110,7 +110,6 @@ def run_shell_command(
         raise subprocess.TimeoutExpired(cmd=popen_cmd, timeout=float(timeout_s or 0))
 
 
-_RECONNECT_RE = re.compile(r"^\s*Reconnecting\.\.\.\s+\d+/\d+", re.MULTILINE)
 _SESSION_ID_STDOUT_RE = re.compile(
     r"^\s*session id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -225,13 +224,11 @@ def _resolve_session_id(
 
 
 def _classify(*, agent_messages: str, session_id: str, error_text: str) -> BackendResult:
-    extra_retryable = bool(_RECONNECT_RE.search(error_text or ""))
     return classify_backend_output(
         backend_name="codex",
         agent_messages=agent_messages,
         session_id=session_id,
         error_text=error_text,
-        extra_retryable_signal=extra_retryable,
     )
 
 
@@ -406,8 +403,7 @@ async def execute(params: CodexParams) -> BackendResult:
         error_text=error_text,
     )
     if timed_out and result.outcome == "OK":
-        # Time-out with partial output: keep the messages but flag retryable.
-        result.outcome = "RETRYABLE"
+        result.outcome = "FATAL"
         result.error_class = "timeout"
         result.error = err_message.strip() or "subprocess timed out"
     result.agent_messages = agent_messages

@@ -237,7 +237,7 @@ async def execute(params: GeminiParams) -> BackendResult:
         error_text=error_text.strip(),
     )
     if timed_out and result.outcome == "OK":
-        result.outcome = "RETRYABLE"
+        result.outcome = "FATAL"
         result.error_class = "timeout"
         result.error = error_text.strip() or "subprocess timed out"
     log.info(

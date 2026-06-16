@@ -16,7 +16,6 @@ from openmcp.backends.gemini import GeminiParams, execute as gemini_execute
 from openmcp.compression import compress_response
 from openmcp.logging_setup import configure as configure_logging, get_logger
 from openmcp.notify import emit_error, emit_finish, emit_start
-from openmcp.retry import run_with_retry
 
 configure_logging()
 log = get_logger("server")
@@ -167,8 +166,7 @@ def _validate_cd(cd: Any) -> Path | None:
 @mcp.tool(
     name="run",
     description=(
-        "Run an agy, codex, or gemini backend with retry support. "
-        "Retries reuse the previous SESSION_ID to preserve conversation context. "
+        "Run an agy, codex, or gemini backend. "
         "Use reasoning mode only for narrow Q&A or cross-validation. "
         "Returns {success, SESSION_ID, agent_messages, error}."
     ),
@@ -181,8 +179,6 @@ async def run(
     model: str = "",
     profile: str = "",
     reasoning: Literal["", "low", "medium", "high"] = "",
-    max_retries: int = 0,
-    retry_base_ms: int = 1000,
     timeout_s: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -198,8 +194,6 @@ async def run(
             argument overrides the profile's model field. When combined with
             reasoning, reasoning takes precedence and selects its own model.
         reasoning: Reasoning effort. Leave empty to disable reasoning mode.
-        max_retries: Maximum retry attempts for retryable backend failures.
-        retry_base_ms: Base retry delay in milliseconds.
         timeout_s: Overall subprocess timeout in seconds (0 = no timeout / backend default).
     """
 
@@ -228,17 +222,16 @@ async def run(
             profile, reasoning,
         )
     log.info(
-        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s max_retries=%d timeout_s=%s",
+        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s timeout_s=%s",
         backend, effective_backend, SESSION_ID or "<new>",
         codex_model if effective_backend == "codex" else resolved_model,
-        resolved_profile, reasoning or "<off>", max_retries, timeout_s or "<off>",
+        resolved_profile, reasoning or "<off>", timeout_s or "<off>",
     )
     try:
         await emit_start(
             backend=effective_backend,
             session_id=SESSION_ID,
             model=resolved_model,
-            attempts=1,
         )
         if effective_backend == "agy":
             params = AgyParams(
@@ -248,7 +241,7 @@ async def run(
                 model=resolved_model,
                 timeout_s=timeout_s,
             )
-            result = await run_with_retry(agy_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
+            backend_result = await agy_execute(params)
         elif effective_backend == "codex":
             params = CodexParams(
                 PROMPT=PROMPT,
@@ -259,7 +252,7 @@ async def run(
                 reasoning_effort=reasoning,
                 timeout_s=timeout_s,
             )
-            result = await run_with_retry(codex_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
+            backend_result = await codex_execute(params)
         else:
             params = GeminiParams(
                 PROMPT=PROMPT,
@@ -268,7 +261,23 @@ async def run(
                 model=resolved_model,
                 timeout_s=timeout_s,
             )
-            result = await run_with_retry(gemini_execute, params, max_retries=max_retries, retry_base_ms=retry_base_ms)
+            backend_result = await gemini_execute(params)
+
+        if backend_result.outcome == "OK":
+            result = {
+                "success": True,
+                "SESSION_ID": backend_result.SESSION_ID,
+                "agent_messages": backend_result.agent_messages,
+            }
+            if backend_result.error_class == "warning" and backend_result.error:
+                result["warning"] = backend_result.error
+        else:
+            result = {
+                "success": False,
+                "SESSION_ID": backend_result.SESSION_ID or "",
+                "agent_messages": backend_result.agent_messages or "",
+                "error": backend_result.error,
+            }
     except asyncio.CancelledError:
         log.warning(
             "run(): CANCELLED by MCP host (notifications/cancelled or transport closed) "
@@ -282,30 +291,26 @@ async def run(
             backend=effective_backend,
             session_id=SESSION_ID,
             model=resolved_model,
-            attempts=1,
             error=f"unhandled: {exc}",
         )
         return {"success": False, "SESSION_ID": SESSION_ID or "", "agent_messages": "", "error": f"unhandled: {exc}"}
 
     log.info(
-        "run() done backend=%s success=%s attempts=%s session_id=%s",
-        backend, result.get("success"), result.get("attempts"), result.get("SESSION_ID", ""),
+        "run() done backend=%s success=%s session_id=%s",
+        backend, result.get("success"), result.get("SESSION_ID", ""),
     )
-    attempts = int(result.get("attempts", 1) or 1)
     result_session_id = result.get("SESSION_ID", "") or ""
     if result.get("success", False):
         await emit_finish(
             backend=effective_backend,
             session_id=result_session_id,
             model=resolved_model,
-            attempts=attempts,
         )
     else:
         await emit_error(
             backend=effective_backend,
             session_id=result_session_id,
             model=resolved_model,
-            attempts=attempts,
             error=result.get("error", "") or "",
         )
     agent_messages = await compress_response(result.get("agent_messages", "") or "", effective_env)

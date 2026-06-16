@@ -43,7 +43,7 @@ async def test_live_gemini_route_to_agy(monkeypatch) -> None:
     monkeypatch.setenv("OPENMCP_GEMINI_ROUTE_TO_AGY", "true")
     monkeypatch.setenv("OPENMCP_AGY_MODEL_DEFAULT", "gemini-3.5-flash")
 
-    out = await server_run(backend="gemini", PROMPT=PROMPT, cd=Path.cwd(), max_retries=2)
+    out = await server_run(backend="gemini", PROMPT=PROMPT, cd=Path.cwd())
 
     assert out.get("success") is True, out.get("error", "")
     assert out.get("agent_messages", "").strip(), "gemini route returned empty agent_messages"

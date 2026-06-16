@@ -381,16 +381,18 @@ def _extract_session_id_from_pb_signature(workspace_path: Path) -> str:
     workspace_bytes = str(workspace_path.resolve()).encode("utf-8", errors="ignore")
 
     try:
-        pb_files = sorted(
-            _CONVERSATIONS_PATH.glob("*.pb"),
+        pb_files = list(_CONVERSATIONS_PATH.glob("*.pb"))
+        db_files = list(_CONVERSATIONS_PATH.glob("*.db"))
+        conversation_files = sorted(
+            pb_files + db_files,
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        for pb_path in pb_files[:10]:
+        for conv_path in conversation_files[:10]:
             try:
-                content = pb_path.read_bytes()
+                content = conv_path.read_bytes()
                 if workspace_bytes in content:
-                    stem = pb_path.stem
+                    stem = conv_path.stem
                     if re.fullmatch(_UUID_PATTERN, stem, re.IGNORECASE):
                         return stem
             except OSError:
@@ -406,8 +408,10 @@ def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
         return ""
 
     try:
+        pb_files = list(_CONVERSATIONS_PATH.glob("*.pb"))
+        db_files = list(_CONVERSATIONS_PATH.glob("*.db"))
         conversation_files = sorted(
-            _CONVERSATIONS_PATH.glob("*.pb"),
+            pb_files + db_files,
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
@@ -637,9 +641,9 @@ async def _execute_once(params: AgyParams) -> BackendResult:
     )
     if result.error:
         log.warning("agy.execute error_text: %s", result.error[:500])
-    if result.outcome == "RETRYABLE" and result.error_class == "no_agent_messages" and params.model:
+    if result.outcome == "FATAL" and result.error_class == "no_agent_messages" and params.model:
         log.warning(
-            "agy: model override %r produced no output; retrying once with agy's configured default model",
+            "agy: model override %r produced no output; trying once with agy's configured default model",
             params.model,
         )
         return await _execute_once(

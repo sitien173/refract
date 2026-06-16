@@ -47,14 +47,13 @@ def _env_truthy(name: str, env: dict[str, str]) -> bool:
     return server_env_truthy(name, env)
 
 
-def _notify_kwargs(env: dict[str, str], *, backend: str, session_id: str, model: str, attempts: int) -> dict[str, Any]:
+def _notify_kwargs(env: dict[str, str], *, backend: str, session_id: str, model: str) -> dict[str, Any]:
     return {
         "title": env.get(_ENV_NOTIFY_TITLE, "openmcp") or "openmcp",
         "context": {
             "backend": backend,
             "session_id": session_id,
             "model": model,
-            "attempts": attempts,
         },
         "desktop": not env.get(_ENV_NOTIFY_DESKTOP, "").strip() or _env_truthy(_ENV_NOTIFY_DESKTOP, env),
         "webhook": _env_truthy(_ENV_NOTIFY_WEBHOOK, env),
@@ -62,14 +61,14 @@ def _notify_kwargs(env: dict[str, str], *, backend: str, session_id: str, model:
     }
 
 
-async def _emit(message: str, *, status: str, backend: str, session_id: str, model: str, attempts: int) -> None:
+async def _emit(message: str, *, status: str, backend: str, session_id: str, model: str) -> None:
     env = _effective_env()
     if not _env_truthy(_ENV_NOTIFY_ENABLED, env):
         return
     notify_fn = _load_notify()
     if notify_fn is None:
         return
-    kwargs = _notify_kwargs(env, backend=backend, session_id=session_id, model=model, attempts=attempts)
+    kwargs = _notify_kwargs(env, backend=backend, session_id=session_id, model=model)
     kwargs["status"] = status
     try:
         await asyncio.to_thread(notify_fn, message, **kwargs)
@@ -79,52 +78,37 @@ async def _emit(message: str, *, status: str, backend: str, session_id: str, mod
         log.warning("Failed to emit notification status=%s backend=%s: %s", status, backend, exc)
 
 
-async def emit_start(*, backend: str, session_id: str, model: str, attempts: int) -> None:
+async def emit_start(*, backend: str, session_id: str, model: str) -> None:
     await _emit(
         "Worker started",
         status="task_started",
         backend=backend,
         session_id=session_id,
         model=model,
-        attempts=attempts,
     )
 
 
-async def emit_attempt_failed(*, backend: str, session_id: str, model: str, attempts: int, error: str) -> None:
-    await _emit(
-        f"Attempt {attempts} failed: {error}",
-        status="task_retry",
-        backend=backend,
-        session_id=session_id,
-        model=model,
-        attempts=attempts,
-    )
-
-
-async def emit_finish(*, backend: str, session_id: str, model: str, attempts: int) -> None:
+async def emit_finish(*, backend: str, session_id: str, model: str) -> None:
     await _emit(
         "Worker completed",
         status="task_complete",
         backend=backend,
         session_id=session_id,
         model=model,
-        attempts=attempts,
     )
 
 
-async def emit_error(*, backend: str, session_id: str, model: str, attempts: int, error: str) -> None:
+async def emit_error(*, backend: str, session_id: str, model: str, error: str) -> None:
     await _emit(
         f"Worker failed: {error}",
         status="task_error",
         backend=backend,
         session_id=session_id,
         model=model,
-        attempts=attempts,
     )
 
 
 __all__ = [
-    "emit_attempt_failed",
     "emit_error",
     "emit_finish",
     "emit_start",

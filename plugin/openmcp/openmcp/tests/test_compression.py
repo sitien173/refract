@@ -230,24 +230,26 @@ async def test_compress_response_leaves_malformed_erp_unchanged(monkeypatch) -> 
 @pytest.mark.asyncio
 async def test_run_passes_agent_messages_through_compress_response(monkeypatch) -> None:
     import openmcp.server as srv
+    from openmcp.backends import BackendResult
 
     captured = {}
 
-    async def fake_run_with_retry(execute_fn, params, *, max_retries, retry_base_ms):
+    async def fake_agy_execute(params):
         captured["prompt"] = params.PROMPT
-        return {
-            "success": True,
-            "SESSION_ID": "sess-x",
-            "agent_messages": "original body",
-            "attempts": 1,
-        }
+        return BackendResult(
+            outcome="OK",
+            SESSION_ID="sess-x",
+            agent_messages="original body",
+            error="",
+            error_class="",
+        )
 
     async def fake_compress_response(text, env):
         captured["text"] = text
         captured["env"] = env
         return "compressed body"
 
-    monkeypatch.setattr(srv, "run_with_retry", fake_run_with_retry)
+    monkeypatch.setattr(srv, "agy_execute", fake_agy_execute)
     monkeypatch.setattr(srv, "compress_response", fake_compress_response)
     monkeypatch.setenv("OPENMCP_COMPRESS_RESPONSE", "true")
     monkeypatch.setenv("OPENMCP_TTC_API_KEY", "secret")
@@ -269,18 +271,20 @@ async def test_run_passes_agent_messages_through_compress_response(monkeypatch) 
 @pytest.mark.asyncio
 async def test_run_defaults_disabled_keeps_response_payload_unchanged(monkeypatch) -> None:
     import openmcp.server as srv
+    from openmcp.backends import BackendResult
 
-    async def fake_run_with_retry(execute_fn, params, *, max_retries, retry_base_ms):
-        return {
-            "success": True,
-            "SESSION_ID": "sess-x",
-            "agent_messages": "lots of text",
-            "attempts": 1,
-        }
+    async def fake_codex_execute(params):
+        return BackendResult(
+            outcome="OK",
+            SESSION_ID="sess-x",
+            agent_messages="lots of text",
+            error="",
+            error_class="",
+        )
 
     monkeypatch.delenv("OPENMCP_COMPRESS_RESPONSE", raising=False)
     monkeypatch.delenv("OPENMCP_TTC_API_KEY", raising=False)
-    monkeypatch.setattr(srv, "run_with_retry", fake_run_with_retry)
+    monkeypatch.setattr(srv, "codex_execute", fake_codex_execute)
 
     out = await srv.run(backend="codex", PROMPT="x", cd=Path("."))
 

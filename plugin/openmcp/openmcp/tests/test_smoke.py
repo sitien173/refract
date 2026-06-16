@@ -13,12 +13,10 @@ from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.gemini import GeminiParams, execute as gemini_execute
-from openmcp.retry import run_with_retry
 
 
 def test_imports() -> None:
     import openmcp.server  # noqa: F401
-    import openmcp.retry  # noqa: F401
     import openmcp.cli  # noqa: F401
     import openmcp.backends.agy  # noqa: F401
     import openmcp.backends.codex  # noqa: F401
@@ -103,6 +101,18 @@ def test_agy_recent_conversation_file_fallback(monkeypatch, tmp_path) -> None:
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
     conversation_file = tmp_path / f"{session_id}.pb"
     conversation_file.write_bytes(b"conversation")
+    monkeypatch.setattr(agy_backend, "_CONVERSATIONS_PATH", tmp_path)
+
+    assert agy_backend._extract_session_id_from_recent_conversation_file(time.time() - 1) == session_id
+    assert agy_backend._extract_session_id_from_recent_conversation_file(time.time() + 120) == ""
+
+
+def test_agy_recent_conversation_file_fallback_db_format(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    session_id = "c769ef45-e29d-5305-c430-1bf6eef0268c"
+    conversation_file = tmp_path / f"{session_id}.db"
+    conversation_file.write_bytes(b"sqlite database content")
     monkeypatch.setattr(agy_backend, "_CONVERSATIONS_PATH", tmp_path)
 
     assert agy_backend._extract_session_id_from_recent_conversation_file(time.time() - 1) == session_id
@@ -199,48 +209,6 @@ async def test_agy_reports_pty_initialization_failure_as_fatal(monkeypatch, tmp_
     assert out.error == "DLL load failed while importing winpty"
 
 
-@pytest.mark.asyncio
-async def test_agy_falls_back_to_configured_model_when_model_override_has_no_output(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    calls = []
-    session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
-    outputs = iter(
-        [
-            "",
-            "PONG",
-        ]
-    )
-
-    def fake_pty(cmd, cwd=None, **kwargs):
-        calls.append(cmd)
-        return next(outputs)
-
-    @contextlib.contextmanager
-    def noop_context(*args, **kwargs):
-        yield
-
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"model": "Claude Opus 4.6 (Thinking)"}), encoding="utf-8")
-
-    monkeypatch.setattr(agy_backend, "_SETTINGS_PATH", settings_path)
-    monkeypatch.setattr(agy_backend, "_temporary_disabled_plugin", noop_context)
-    monkeypatch.setattr(agy_backend, "run_shell_command_pty", fake_pty)
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_history", lambda workspace_path, prompt_snippet="": session_id)
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_recent_conversation_file", lambda started_at: "")
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_latest_log", lambda *args, **kwargs: "")
-    monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
-
-    out = await agy_backend.execute(AgyParams(PROMPT="x", cd=tmp_path, model="gemini-3.5-flash"))
-
-    assert out.outcome == "OK"
-    assert out.SESSION_ID == session_id
-    assert out.agent_messages == "PONG"
-    assert len(calls) == 2
-    assert calls[0][0:2] == ["agy", "--print"]
-    assert calls[1][0:2] == ["agy", "--print"]
-
-
 def test_tool_signature() -> None:
     from openmcp.server import run
 
@@ -254,8 +222,6 @@ def test_tool_signature() -> None:
         "model",
         "profile",
         "reasoning",
-        "max_retries",
-        "retry_base_ms",
         "timeout_s",
     ]
 
@@ -264,59 +230,6 @@ def test_windows_pywinpty_version_excludes_broken_release() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert "pywinpty>=2.0,<3.0.4; sys_platform == 'win32'" in pyproject["project"]["dependencies"]
-
-
-@pytest.mark.asyncio
-async def test_retry_forwards_session_id() -> None:
-    @dataclass
-    class StubParams:
-        SESSION_ID: str = ""
-
-    calls: list[str] = []
-
-    async def execute_fn(params: StubParams) -> BackendResult:
-        calls.append(params.SESSION_ID)
-        if len(calls) == 1:
-            return BackendResult(
-                outcome="RETRYABLE",
-                SESSION_ID="sess-1",
-                agent_messages="",
-                error="transient",
-                error_class="retryable_backend",
-            )
-        return BackendResult(
-            outcome="OK",
-            SESSION_ID="sess-2",
-            agent_messages="done",
-            error="",
-            error_class="",
-        )
-
-    out = await run_with_retry(execute_fn, StubParams(), max_retries=2, retry_base_ms=1)
-    assert out["attempts"] == 2
-    assert out["success"] is True
-    assert out["SESSION_ID"] == "sess-2"
-    assert calls == ["", "sess-1"]
-
-
-@pytest.mark.asyncio
-async def test_fatal_returns_immediately() -> None:
-    @dataclass
-    class StubParams:
-        SESSION_ID: str = ""
-
-    async def execute_fn(_: StubParams) -> BackendResult:
-        return BackendResult(
-            outcome="FATAL",
-            SESSION_ID="",
-            agent_messages="",
-            error="fatal",
-            error_class="fatal_backend",
-        )
-
-    out = await run_with_retry(execute_fn, StubParams(), max_retries=3, retry_base_ms=1)
-    assert out["attempts"] == 1
-    assert out["success"] is False
 
 
 @pytest.mark.asyncio
@@ -452,15 +365,16 @@ async def test_gemini_stream_output_without_session_id_is_ok_with_warning(monkey
 async def test_response_shape_success(monkeypatch) -> None:
     import openmcp.server as srv
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
-        return {
-            "success": True,
-            "SESSION_ID": "sess-x",
-            "agent_messages": "lots of text",
-            "attempts": 1,
-        }
+    async def fake(params):
+        return BackendResult(
+            outcome="OK",
+            SESSION_ID="sess-x",
+            agent_messages="lots of text",
+            error="",
+            error_class="",
+        )
 
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "agy_execute", fake)
     out = await srv.run(backend="agy", PROMPT="x", cd=Path("."))
     assert set(out.keys()) == {"success", "SESSION_ID", "agent_messages", "error"}
     assert out == {"success": True, "SESSION_ID": "sess-x", "agent_messages": "lots of text", "error": ""}
@@ -470,10 +384,16 @@ async def test_response_shape_success(monkeypatch) -> None:
 async def test_response_shape_failure(monkeypatch) -> None:
     import openmcp.server as srv
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
-        return {"success": False, "error": "boom", "attempts": 1}
+    async def fake(params):
+        return BackendResult(
+            outcome="FATAL",
+            SESSION_ID="",
+            agent_messages="",
+            error="boom",
+            error_class="fatal_backend",
+        )
 
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "codex_execute", fake)
     out = await srv.run(backend="codex", PROMPT="x", cd=Path("."))
     assert set(out.keys()) == {"success", "SESSION_ID", "agent_messages", "error"}
     assert out == {"success": False, "SESSION_ID": "", "agent_messages": "", "error": "boom"}
@@ -485,12 +405,12 @@ async def test_env_defaults_applied_for_agy_model(monkeypatch) -> None:
 
     captured = {}
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
+    async def fake(params):
         captured["model"] = params.model
-        return {"success": True, "SESSION_ID": "", "error": ""}
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
     monkeypatch.setenv("OPENMCP_AGY_MODEL_DEFAULT", "gemini-3.5-flash")
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "agy_execute", fake)
     await srv.run(backend="agy", PROMPT="x", cd=Path("."))
     assert captured["model"] == ""
 
@@ -501,16 +421,14 @@ async def test_env_defaults_applied_for_gemini_model(monkeypatch) -> None:
 
     captured = {}
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
-        captured["execute_fn"] = execute_fn
+    async def fake(params):
         captured["model"] = params.model
-        return {"success": True, "SESSION_ID": "", "error": ""}
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
     monkeypatch.setenv("OPENMCP_GEMINI_ROUTE_TO_AGY", "false")
     monkeypatch.setenv("OPENMCP_GEMINI_MODEL_DEFAULT", "gemini-2.5-pro")
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "gemini_execute", fake)
     await srv.run(backend="gemini", PROMPT="x", cd=Path("."))
-    assert captured["execute_fn"] is srv.gemini_execute
     assert captured["model"] == "gemini-2.5-pro"
 
 
@@ -520,20 +438,18 @@ async def test_gemini_can_route_to_agy_with_env(monkeypatch) -> None:
 
     captured = {}
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
-        captured["execute_fn"] = execute_fn
+    async def fake(params):
         captured["params_type"] = type(params)
         captured["model"] = params.model
-        return {"success": True, "SESSION_ID": "", "error": ""}
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
     monkeypatch.setenv("OPENMCP_GEMINI_ROUTE_TO_AGY", "true")
     monkeypatch.setenv("OPENMCP_AGY_MODEL_DEFAULT", "gemini-3.5-flash")
     monkeypatch.setenv("OPENMCP_GEMINI_MODEL_DEFAULT", "gemini-2.5-pro")
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "agy_execute", fake)
 
     await srv.run(backend="gemini", PROMPT="x", cd=Path("."))
 
-    assert captured["execute_fn"] is srv.agy_execute
     assert captured["params_type"] is AgyParams
     assert captured["model"] == ""
 
@@ -544,14 +460,14 @@ async def test_env_defaults_applied_for_codex_model_and_profile(monkeypatch) -> 
 
     captured = {}
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
+    async def fake(params):
         captured["model"] = params.model
         captured["profile"] = params.profile
-        return {"success": True, "SESSION_ID": "", "error": ""}
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
     monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "gpt-5")
     monkeypatch.setenv("OPENMCP_CODEX_PROFILE_DEFAULT", "mcp_execution")
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "codex_execute", fake)
     await srv.run(backend="codex", PROMPT="x", cd=Path("."))
     assert captured["model"] == "gpt-5"
     assert captured["profile"] == "mcp_execution"
@@ -563,14 +479,14 @@ async def test_explicit_model_overrides_codex_profile_model(monkeypatch) -> None
 
     captured = {}
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
+    async def fake(params):
         captured["model"] = params.model
         captured["profile"] = params.profile
-        return {"success": True, "SESSION_ID": "", "error": ""}
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
     monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "gpt-5")
     monkeypatch.setenv("OPENMCP_CODEX_PROFILE_DEFAULT", "mcp_execution")
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "codex_execute", fake)
     await srv.run(
         backend="codex",
         PROMPT="x",
@@ -588,10 +504,10 @@ async def test_env_priority_user_then_openmcp_dotenv_then_plugin(monkeypatch, tm
 
     captured = {}
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
+    async def fake(params):
         captured["model"] = params.model
         captured["profile"] = params.profile
-        return {"success": True, "SESSION_ID": "", "error": ""}
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
     config = {
         "mcpServers": {
@@ -616,7 +532,7 @@ async def test_env_priority_user_then_openmcp_dotenv_then_plugin(monkeypatch, tm
     monkeypatch.setattr(srv.Path, "home", lambda: fake_home)
     monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "user-model")
     monkeypatch.delenv("OPENMCP_CODEX_PROFILE_DEFAULT", raising=False)
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "codex_execute", fake)
 
     await srv.run(backend="codex", PROMPT="x", cd=Path("."))
 
@@ -630,9 +546,9 @@ async def test_env_falls_back_to_plugin_env_when_higher_priorities_missing(monke
 
     captured = {}
 
-    async def fake(execute_fn, params, *, max_retries, retry_base_ms):
+    async def fake(params):
         captured["model"] = params.model
-        return {"success": True, "SESSION_ID": "", "error": ""}
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
     config = {
         "mcpServers": {
@@ -651,7 +567,7 @@ async def test_env_falls_back_to_plugin_env_when_higher_priorities_missing(monke
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(srv.Path, "home", lambda: fake_home)
     monkeypatch.delenv("OPENMCP_AGY_MODEL_DEFAULT", raising=False)
-    monkeypatch.setattr(srv, "run_with_retry", fake)
+    monkeypatch.setattr(srv, "agy_execute", fake)
 
     await srv.run(backend="agy", PROMPT="x", cd=Path("."))
 
