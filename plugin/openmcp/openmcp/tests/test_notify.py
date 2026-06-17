@@ -70,11 +70,11 @@ async def test_emit_finish_and_error_use_expected_statuses(monkeypatch) -> None:
     notify_mod = _load_notify_module(monkeypatch, fake_notify)
     monkeypatch.setenv("OPENMCP_NOTIFY_ENABLED", "yes")
 
-    await notify_mod.emit_finish(backend="gemini", session_id="sess-2", model="gemini-2.5-pro")
+    await notify_mod.emit_finish(backend="codex", session_id="sess-2", model="gpt-5")
     await notify_mod.emit_error(
-        backend="gemini",
+        backend="codex",
         session_id="sess-2",
-        model="gemini-2.5-pro",
+        model="gpt-5",
         error="fatal backend failure",
     )
 
@@ -188,7 +188,7 @@ async def test_run_emits_error_on_failure(monkeypatch) -> None:
 
     events = []
 
-    async def fake_gemini_execute(params):
+    async def fake_codex_execute(params):
         return BackendResult(
             outcome="FATAL",
             SESSION_ID="sess-fail",
@@ -206,19 +206,18 @@ async def test_run_emits_error_on_failure(monkeypatch) -> None:
     async def fake_emit_error(**kwargs):
         events.append(("error", kwargs))
 
-    monkeypatch.setattr(srv, "gemini_execute", fake_gemini_execute)
+    monkeypatch.setattr(srv, "codex_execute", fake_codex_execute)
     monkeypatch.setattr(srv, "emit_start", fake_emit_start)
     monkeypatch.setattr(srv, "emit_finish", fake_emit_finish)
     monkeypatch.setattr(srv, "emit_error", fake_emit_error)
-    monkeypatch.setenv("OPENMCP_GEMINI_ROUTE_TO_AGY", "false")
-    monkeypatch.setenv("OPENMCP_GEMINI_MODEL_DEFAULT", "")
+    monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "")
 
-    out = await srv.run(backend="gemini", PROMPT="x", cd=Path("."))
+    out = await srv.run(backend="codex", PROMPT="x", cd=Path("."))
 
     assert out == {"success": False, "SESSION_ID": "sess-fail", "agent_messages": "partial", "error": "fatal"}
     assert events == [
-        ("start", {"backend": "gemini", "session_id": "", "model": ""}),
-        ("error", {"backend": "gemini", "session_id": "sess-fail", "model": "", "error": "fatal"}),
+        ("start", {"backend": "codex", "session_id": "", "model": ""}),
+        ("error", {"backend": "codex", "session_id": "sess-fail", "model": "", "error": "fatal"}),
     ]
 
 

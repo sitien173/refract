@@ -12,7 +12,6 @@ import pytest
 from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
-from openmcp.backends.gemini import GeminiParams, execute as gemini_execute
 
 
 def test_imports() -> None:
@@ -20,7 +19,6 @@ def test_imports() -> None:
     import openmcp.cli  # noqa: F401
     import openmcp.backends.agy  # noqa: F401
     import openmcp.backends.codex  # noqa: F401
-    import openmcp.backends.gemini  # noqa: F401
 
 
 def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
@@ -301,67 +299,6 @@ async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_bad_cd_gemini_fatal() -> None:
-    bad = Path("C:/definitely/not/real/path")
-    out = await gemini_execute(GeminiParams(PROMPT="x", cd=bad))
-    assert out.outcome == "FATAL"
-    assert out.error_class == "bad_cd"
-
-
-@pytest.mark.asyncio
-async def test_gemini_uses_stream_json_output(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import gemini as gemini_backend
-
-    captured = {}
-    session_id = "sess-marker"
-
-    def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        captured["cmd"] = cmd
-        captured["cwd"] = cwd
-        yield "banner text"
-        yield json.dumps({"type": "init", "session_id": session_id})
-        yield json.dumps({"type": "message", "role": "assistant", "content": "PONG"})
-        yield json.dumps({"type": "result", "status": "success"})
-
-    monkeypatch.setattr(gemini_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr(gemini_backend, "run_shell_command", fake_run_shell_command)
-
-    out = await gemini_backend.execute(GeminiParams(PROMPT="x", cd=tmp_path))
-
-    assert "-o" not in captured["cmd"]
-    assert "--output-format" in captured["cmd"]
-    assert "stream-json" in captured["cmd"]
-    assert captured["cmd"][2] == "x"
-    assert out.outcome == "OK"
-    assert out.SESSION_ID == session_id
-    assert out.agent_messages == "PONG"
-    assert out.error == ""
-
-
-@pytest.mark.asyncio
-async def test_gemini_stream_output_without_session_id_is_ok_with_warning(monkeypatch, tmp_path) -> None:
-    # Aligns with codex/agy semantics: a successful run that produced
-    # agent_messages but no extractable session id is OK + warning, not
-    # RETRYABLE — re-running would duplicate side effects.
-    from openmcp.backends import gemini as gemini_backend
-
-    def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        yield json.dumps({"type": "message", "role": "assistant", "content": "PONG"})
-        yield json.dumps({"type": "result", "status": "success"})
-
-    monkeypatch.setattr(gemini_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr(gemini_backend, "run_shell_command", fake_run_shell_command)
-
-    out = await gemini_backend.execute(GeminiParams(PROMPT="x", cd=tmp_path))
-
-    assert out.outcome == "OK"
-    assert out.SESSION_ID == ""
-    assert out.agent_messages == "PONG"
-    assert out.error == "warning: no SESSION_ID"
-    assert out.error_class == "warning"
-
-
-@pytest.mark.asyncio
 async def test_response_shape_success(monkeypatch) -> None:
     import openmcp.server as srv
 
@@ -412,45 +349,6 @@ async def test_env_defaults_applied_for_agy_model(monkeypatch) -> None:
     monkeypatch.setenv("OPENMCP_AGY_MODEL_DEFAULT", "gemini-3.5-flash")
     monkeypatch.setattr(srv, "agy_execute", fake)
     await srv.run(backend="agy", PROMPT="x", cd=Path("."))
-    assert captured["model"] == ""
-
-
-@pytest.mark.asyncio
-async def test_env_defaults_applied_for_gemini_model(monkeypatch) -> None:
-    import openmcp.server as srv
-
-    captured = {}
-
-    async def fake(params):
-        captured["model"] = params.model
-        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
-
-    monkeypatch.setenv("OPENMCP_GEMINI_ROUTE_TO_AGY", "false")
-    monkeypatch.setenv("OPENMCP_GEMINI_MODEL_DEFAULT", "gemini-2.5-pro")
-    monkeypatch.setattr(srv, "gemini_execute", fake)
-    await srv.run(backend="gemini", PROMPT="x", cd=Path("."))
-    assert captured["model"] == "gemini-2.5-pro"
-
-
-@pytest.mark.asyncio
-async def test_gemini_can_route_to_agy_with_env(monkeypatch) -> None:
-    import openmcp.server as srv
-
-    captured = {}
-
-    async def fake(params):
-        captured["params_type"] = type(params)
-        captured["model"] = params.model
-        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
-
-    monkeypatch.setenv("OPENMCP_GEMINI_ROUTE_TO_AGY", "true")
-    monkeypatch.setenv("OPENMCP_AGY_MODEL_DEFAULT", "gemini-3.5-flash")
-    monkeypatch.setenv("OPENMCP_GEMINI_MODEL_DEFAULT", "gemini-2.5-pro")
-    monkeypatch.setattr(srv, "agy_execute", fake)
-
-    await srv.run(backend="gemini", PROMPT="x", cd=Path("."))
-
-    assert captured["params_type"] is AgyParams
     assert captured["model"] == ""
 
 

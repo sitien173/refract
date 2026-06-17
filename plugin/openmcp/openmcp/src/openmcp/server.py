@@ -1,4 +1,4 @@
-"""Unified FastMCP server surface for agy, codex, and gemini backends."""
+"""Unified FastMCP server surface for agy and codex backends."""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ from mcp.server.fastmcp import FastMCP
 
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
-from openmcp.backends.gemini import GeminiParams, execute as gemini_execute
-from openmcp.compression import compress_response
 from openmcp.logging_setup import configure as configure_logging, get_logger
 from openmcp.notify import emit_error, emit_finish, emit_start
 
@@ -23,22 +21,17 @@ log = get_logger("server")
 mcp = FastMCP("openmcp")
 
 _ENV_CODEX_MODEL_DEFAULT = "OPENMCP_CODEX_MODEL_DEFAULT"
-_ENV_GEMINI_MODEL_DEFAULT = "OPENMCP_GEMINI_MODEL_DEFAULT"
 _ENV_CODEX_PROFILE_DEFAULT = "OPENMCP_CODEX_PROFILE_DEFAULT"
-_ENV_GEMINI_ROUTE_TO_AGY = "OPENMCP_GEMINI_ROUTE_TO_AGY"
 _ENV_AGY_REASONING_MODEL = "OPENMCP_AGY_REASONING_MODEL"
 _ENV_CODEX_REASONING_MODEL = "OPENMCP_CODEX_REASONING_MODEL"
-_ENV_GEMINI_REASONING_MODEL = "OPENMCP_GEMINI_REASONING_MODEL"
 
 _REASONING_MODEL_DEFAULTS: Dict[str, str] = {
     "agy": "gemini-3.5-flash",
     "codex": "gpt-5.5",
-    "gemini": "gemini-3.1-pro-preview",
 }
 _REASONING_MODEL_ENV: Dict[str, str] = {
     "agy": _ENV_AGY_REASONING_MODEL,
     "codex": _ENV_CODEX_REASONING_MODEL,
-    "gemini": _ENV_GEMINI_REASONING_MODEL,
 }
 _PLUGIN_CONFIG_FILES = ("mcp_config.json", ".mcp.json", "mcp.json")
 
@@ -109,18 +102,12 @@ def _env_truthy(name: str, env: Dict[str, str]) -> bool:
     return env.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _effective_backend(backend: Literal["agy", "codex", "gemini"], env: Dict[str, str]) -> Literal["agy", "codex", "gemini"]:
-    if backend == "gemini" and _env_truthy(_ENV_GEMINI_ROUTE_TO_AGY, env):
-        return "agy"
-    return backend
-
-
 def _reasoning_model(backend: str, env: Dict[str, str]) -> str:
     return env.get(_REASONING_MODEL_ENV[backend], "") or _REASONING_MODEL_DEFAULTS[backend]
 
 
 def _resolve_model(
-    backend: Literal["agy", "codex", "gemini"],
+    backend: Literal["agy", "codex"],
     model: str,
     reasoning: str,
     env: Dict[str, str],
@@ -135,8 +122,6 @@ def _resolve_model(
         return _reasoning_model(backend, env)
     if backend == "agy":
         return ""
-    if backend == "gemini":
-        return env.get(_ENV_GEMINI_MODEL_DEFAULT, "")
     return env.get(_ENV_CODEX_MODEL_DEFAULT, "")
 
 
@@ -166,13 +151,13 @@ def _validate_cd(cd: Any) -> Path | None:
 @mcp.tool(
     name="run",
     description=(
-        "Run an agy, codex, or gemini backend. "
+        "Run an agy or codex backend. "
         "Use reasoning mode only for narrow Q&A or cross-validation. "
         "Returns {success, SESSION_ID, agent_messages, error}."
     ),
 )
 async def run(
-    backend: Literal["agy", "codex", "gemini"],
+    backend: Literal["agy", "codex"],
     PROMPT: str,
     cd: str,
     SESSION_ID: str = "",
@@ -206,34 +191,33 @@ async def run(
             "error": f"cd must be a non-empty absolute path; got {cd!r}",
         }
     effective_env = _effective_env()
-    effective_backend = _effective_backend(backend, effective_env)
-    resolved_model = _resolve_model(effective_backend, model, reasoning, effective_env)
+    resolved_model = _resolve_model(backend, model, reasoning, effective_env)
     resolved_profile = "" if reasoning else _resolve_profile(profile, effective_env)
     codex_model = resolved_model
-    if effective_backend == "codex" and profile and model:
+    if backend == "codex" and profile and model:
         log.info(
             "codex: profile=%r and model=%r both provided; model overrides the profile's model",
             profile, model,
         )
-    if effective_backend == "codex" and profile and reasoning:
+    if backend == "codex" and profile and reasoning:
         log.warning(
             "codex: profile=%r and reasoning=%r both provided; profile is ignored "
             "(reasoning takes precedence and selects its own model)",
             profile, reasoning,
         )
     log.info(
-        "run() backend=%s effective_backend=%s session_id=%s model=%s profile=%s reasoning=%s timeout_s=%s",
-        backend, effective_backend, SESSION_ID or "<new>",
-        codex_model if effective_backend == "codex" else resolved_model,
+        "run() backend=%s session_id=%s model=%s profile=%s reasoning=%s timeout_s=%s",
+        backend, SESSION_ID or "<new>",
+        codex_model if backend == "codex" else resolved_model,
         resolved_profile, reasoning or "<off>", timeout_s or "<off>",
     )
     try:
         await emit_start(
-            backend=effective_backend,
+            backend=backend,
             session_id=SESSION_ID,
             model=resolved_model,
         )
-        if effective_backend == "agy":
+        if backend == "agy":
             params = AgyParams(
                 PROMPT=PROMPT,
                 cd=cd_path,
@@ -242,7 +226,7 @@ async def run(
                 timeout_s=timeout_s,
             )
             backend_result = await agy_execute(params)
-        elif effective_backend == "codex":
+        else:
             params = CodexParams(
                 PROMPT=PROMPT,
                 cd=cd_path,
@@ -253,15 +237,6 @@ async def run(
                 timeout_s=timeout_s,
             )
             backend_result = await codex_execute(params)
-        else:
-            params = GeminiParams(
-                PROMPT=PROMPT,
-                cd=cd_path,
-                SESSION_ID=SESSION_ID,
-                model=resolved_model,
-                timeout_s=timeout_s,
-            )
-            backend_result = await gemini_execute(params)
 
         if backend_result.outcome == "OK":
             result = {
@@ -288,7 +263,7 @@ async def run(
     except Exception as exc:
         log.exception("run(): unhandled exception in %s backend", backend)
         await emit_error(
-            backend=effective_backend,
+            backend=backend,
             session_id=SESSION_ID,
             model=resolved_model,
             error=f"unhandled: {exc}",
@@ -302,23 +277,21 @@ async def run(
     result_session_id = result.get("SESSION_ID", "") or ""
     if result.get("success", False):
         await emit_finish(
-            backend=effective_backend,
+            backend=backend,
             session_id=result_session_id,
             model=resolved_model,
         )
     else:
         await emit_error(
-            backend=effective_backend,
+            backend=backend,
             session_id=result_session_id,
             model=resolved_model,
             error=result.get("error", "") or "",
         )
-    agent_messages = await compress_response(result.get("agent_messages", "") or "", effective_env)
-
     return {
         "success": result.get("success", False),
         "SESSION_ID": result_session_id,
-        "agent_messages": agent_messages,
+        "agent_messages": result.get("agent_messages", "") or "",
         "error": result.get("error", "") or "",
     }
 

@@ -1,10 +1,10 @@
 # Project Overview
 
 **openmcp** is a unified [MCP](https://modelcontextprotocol.io/) server that
-exposes a single `run` tool capable of dispatching prompts to three AI-coding
-CLI backends — **agy** (Antigravity CLI / Gemini), **codex** (OpenAI Codex CLI),
-and **gemini** (Gemini CLI) — with automatic retry, session continuity, model
-resolution, and a shared output-classification pipeline. It is designed to be
+exposes a single `run` tool capable of dispatching prompts to two AI-coding
+CLI backends — **agy** (Antigravity CLI / Gemini) and **codex** (OpenAI Codex CLI)
+— with automatic retry, session continuity, model resolution, and a shared
+output-classification pipeline. It is designed to be
 embedded as an MCP server inside host agents (e.g. the `superpowers-ccg` plugin)
 so that a coordinator can fan out coding tasks to heterogeneous backends through
 a single, transport-agnostic interface.
@@ -27,8 +27,7 @@ openmcp/
 │       └── backends/
 │           ├── __init__.py # BackendResult dataclass + shared classifier
 │           ├── agy.py      # Antigravity CLI backend (PTY on Windows)
-│           ├── codex.py    # Codex CLI backend (JSON-stream parsing)
-│           └── gemini.py   # Gemini CLI backend (stream-json mode)
+│           └── codex.py    # Codex CLI backend (JSON-stream parsing)
 └── tests/
     ├── conftest.py         # Auto-use fixture isolating ~/.openmcp/.env
     ├── test_smoke.py       # ~700-line offline unit/integration tests
@@ -52,7 +51,7 @@ uv sync --all-extras
 # Run the offline test suite (default: skips @live tests)
 uv run pytest
 
-# Run only the live integration tests (requires agy/codex/gemini on PATH)
+# Run only the live integration tests (requires agy/codex on PATH)
 uv run pytest -m live
 
 # Run a specific test file
@@ -96,15 +95,12 @@ flowchart TD
 
     Retry --> AgyExec["backends/agy.py<br>execute()"]
     Retry --> CodexExec["backends/codex.py<br>execute()"]
-    Retry --> GeminiExec["backends/gemini.py<br>execute()"]
 
     AgyExec -- "subprocess (PTY on Win)" --> AgyCLI["agy CLI"]
     CodexExec -- "subprocess" --> CodexCLI["codex CLI"]
-    GeminiExec -- "subprocess" --> GeminiCLI["gemini CLI"]
 
     AgyExec --> Classifier["classify_backend_output()"]
     CodexExec --> Classifier
-    GeminiExec --> Classifier
 
     Classifier --> BR["BackendResult<br>(OK / RETRYABLE / FATAL)"]
     BR --> Retry
@@ -114,8 +110,7 @@ flowchart TD
 
 1. The MCP host calls the `run` tool over stdio with a backend name, prompt,
    working directory, and optional session/model/retry parameters.
-2. `server.py` resolves the effective backend (gemini can route to agy),
-   model, and profile via a three-tier env precedence:
+2. `server.py` resolves model and profile via a three-tier env precedence:
    *plugin config → `~/.openmcp/.env` → process environment*.
 3. `run_with_retry()` calls the backend's `execute()` in a loop with
    exponential backoff + jitter. Session IDs are forwarded between retries
@@ -143,7 +138,7 @@ flowchart TD
   developer's real `~/.openmcp/.env` never leaks into tests.
 - The default addopts (`-m 'not live'`) ensure live tests are skipped in
   normal runs.
-- Live tests require `agy`, `codex`, and/or `gemini` CLIs on `PATH`;
+- Live tests require `agy` and/or `codex` CLIs on `PATH`;
   tests that cannot find the CLI are skipped (not failed).
 - Async tests use `pytest-asyncio`.
 - > TODO: add CI pipeline configuration (GitHub Actions / similar).
@@ -155,9 +150,8 @@ flowchart TD
   process environment variables. No secrets appear in log output (though
   full CLI command lines are logged at `DEBUG` level; review before
   enabling in production).
-- **Subprocess execution** — All three backends run external CLIs with
-  `--dangerously-skip-permissions` (agy), `--yolo` (codex), or
-  `--approval-mode=yolo` (gemini). These flags bypass the CLIs' built-in
+- **Subprocess execution** — Both backends run external CLIs with
+  `--dangerously-skip-permissions` (agy) or `--yolo` (codex). These flags bypass the CLIs' built-in
   safety prompts. The assumption is that the orchestrating agent has
   already vetted the prompt.
 - **Dependency scanning** — > TODO: set up `pip-audit` or similar.
@@ -192,12 +186,9 @@ flowchart TD
 | Variable | Default | Purpose |
 |-------------------------------|-------------------------------|--------------------------------------|
 | `OPENMCP_CODEX_MODEL_DEFAULT` | *(none)* | Default Codex model |
-| `OPENMCP_GEMINI_MODEL_DEFAULT`| *(none)* | Default Gemini CLI model |
 | `OPENMCP_CODEX_PROFILE_DEFAULT`| `mcp_execution` | Default Codex profile |
-| `OPENMCP_GEMINI_ROUTE_TO_AGY` | `false` | Route `gemini` calls to `agy` |
 | `OPENMCP_AGY_REASONING_MODEL` | `gemini-3.5-flash` | Model for agy reasoning mode |
 | `OPENMCP_CODEX_REASONING_MODEL`| `gpt-5.5` | Model for codex reasoning mode |
-| `OPENMCP_GEMINI_REASONING_MODEL`| `gemini-3.1-pro-preview` | Model for gemini reasoning mode |
 | `OPENMCP_LOG_FILE` | `~/.openmcp/openmcp.log` | Override log file path |
 | `OPENMCP_LOG_LEVEL` | `INFO` | Python log level name |
 

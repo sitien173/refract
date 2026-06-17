@@ -22,9 +22,6 @@ dev = [
 notify = [
     "py-notify-system @ git+https://github.com/sitien173/py-notify-system.git",
 ]
-compress = [
-    "the-token-company @ git+https://github.com/TheTokenCompany/the-token-company-python.git",
-]
 
 [project.scripts]
 openmcp = "openmcp.cli:main"
