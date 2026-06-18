@@ -1,6 +1,6 @@
 # Superpowers-CCG
 
-Multi-model orchestration plugin for [Claude Code](https://docs.claude.com/docs/claude-code) and Codex. The host coordinator plans, routes, reviews, and handles simple edits. Heavier work is dispatched to **Codex** (back-side) or **Gemini** / **Antigravity** (front-side) through a single MCP tool.
+Multi-model orchestration plugin for [Claude Code](https://docs.claude.com/docs/claude-code) and Codex. The host coordinator plans, routes, reviews, and handles simple edits. Heavier work is dispatched to **Codex** (back-side) or **Antigravity** (front-side) through a single MCP tool.
 
 > **CCG** = **C**laude + **C**odex + **G**emini
 
@@ -8,7 +8,7 @@ Multi-model orchestration plugin for [Claude Code](https://docs.claude.com/docs/
 
 Three gates: **Plan → Execute → Review**.
 
-1. **Plan** — for new features / ideation, run **Cross-Validation** first (ask Codex + Gemini the same narrow question, reconcile divergences). Then frame work as one phase: 2–4 tasks, file set, `Done When` checks. Output a `# ROUTE` block.
+1. **Plan** — for new features / ideation, run **Cross-Validation** first (ask Codex + agy the same narrow question, reconcile divergences). Then frame work as one phase: 2–4 tasks, file set, `Done When` checks. Output a `# ROUTE` block.
 2. **Execute** — route by side (no default executor). Worker edits files via its own MCP write tools and returns `## FILES MODIFIED`.
 3. **Review** — Spec: run `Done When` + `git show <hash>` per task commit. Output `# REVIEW` with `PASS` / `PASS_WITH_DEBT` / `FAIL`.
 
@@ -24,7 +24,7 @@ flowchart TD
     P --> R{Route by side}
     R -->|simple| CO["Coordinator edits directly"]
     R -->|back-side| CX["Codex worker via MCP"]
-    R -->|front-side| GM["Gemini worker via MCP"]
+    R -->|front-side| GM["agy worker via MCP"]
     R -->|"full-stack / unclear / high-impact"| CV["Cross-Validation<br/>ask both, reconcile"]
     CV --> R
     CO --> EX["Gate 2 - Execute<br/>per-task commits + notes + journal"]
@@ -44,7 +44,7 @@ flowchart TD
 |---|---|---|
 | Simple — one-line edit, rename, doc tweak, single-file fix | Coordinator | built-in |
 | **Back-side** — backend, API, business logic, database, system, infra, CI/CD, scripts, server-side tests | Codex | `mcp__openmcp__run(backend="codex", ...)` |
-| **Front-side** — UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__openmcp__run(backend="gemini", ...)` |
+| **Front-side** — UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | agy | `mcp__openmcp__run(backend="agy", ...)` |
 | New feature / ideation (before plan exists) | Cross-Validation → assign side | both backends |
 | Full-stack | split into back-side + front-side sub-phases | — |
 
@@ -68,12 +68,12 @@ docs/plans/user-auth/
 
 Single-phase / docs-only work uses a flat file (`docs/plans/<slug>-implementation-plan.md`) with no resume artifacts.
 
-- **`.handover.md`** is the resume pointer (≤500 tokens). Always coordinator-authored, rewritten on every plan-state change. `session_refs` frontmatter caches Codex/Gemini `SESSION_ID`s and is updated after every MCP call that returns one.
+- **`.handover.md`** is the resume pointer (≤500 tokens). Always coordinator-authored, rewritten on every plan-state change. `session_refs` frontmatter caches Codex/agy `SESSION_ID`s and is updated after every MCP call that returns one.
 - **`prompt.md`** holds the full dispatch spec; the MCP `PROMPT` field is just a pointer to it. Inline `PROMPT` only for one- or two-sentence asks.
 - **`notes.md`** captures off-spec decisions, deviations, tradeoffs, assumptions, and follow-ups — appended per task by the worker. Empty sub-sections written as `- none`.
 - **`journal.md`** is the durable phase record. The coordinator writes the Route skeleton at phase start; the worker appends the full `# EXTERNAL RESPONSE` block at phase end; the coordinator finalizes Review and Squash Commit sections after the Review gate.
 
-## Worker Contract (Codex / Gemini)
+## Worker Contract (Codex / agy)
 
 - **One commit per task.** Message prefix `phase-<N>.task-<M>: <subject>`. Hashes returned in `## COMMITS`. After Review `PASS`, the coordinator squashes them into a single **Conventional Commits** message — `<type>[optional scope]: <description>` plus optional body/footer, `type` ∈ `feat | fix | test | refactor | docs | chore | …` (`git reset --soft HEAD~<count>`).
 - **Per-task `notes.md` block** appended after each task — never batch-written at phase end.
@@ -143,13 +143,12 @@ Install the plugin via the Qoder Marketplace (Quest → Marketplace → search "
 
 - [Claude Code](https://docs.claude.com/docs/claude-code) — `claude --version`
 - [Codex CLI](https://developers.openai.com/codex/quickstart) — `codex --version`
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) — `gemini --version`
 - [Antigravity CLI] `agy --version`
 - `uv` / `uvx`
 
 ### MCP setup
 
-A single unified server — [openmcp](https://github.com/sitien173/superpowers-ccg/tree/main/openmcp/openmcp) — exposes one tool, `mcp__openmcp__run`, with a `backend` field (`"codex"` or `"gemini"` or `"agy"`).
+A single unified server — [openmcp](https://github.com/sitien173/superpowers-ccg/tree/main/openmcp/openmcp) — exposes one tool, `mcp__openmcp__run`, with a `backend` field (`"codex"` or `"agy"`).
 
 Environment resolution priority for OpenMCP defaults:
 
@@ -162,23 +161,19 @@ Environment resolution priority for OpenMCP defaults:
 |---|---|---|
 | `OPENMCP_AGY_MODEL_DEFAULT` | Default `model` when `backend="agy"` and no model arg is passed | empty |
 | `OPENMCP_CODEX_MODEL_DEFAULT` | Default `model` when `backend="codex"` and no model arg is passed | empty |
-| `OPENMCP_GEMINI_MODEL_DEFAULT` | Default `model` when `backend="gemini"` and no model arg is passed | empty |
 | `OPENMCP_CODEX_PROFILE_DEFAULT` | Default `profile` when `backend="codex"` and no profile arg is passed | `mcp-execution` |
-| `OPENMCP_GEMINI_ROUTE_TO_AGY` | Routes `backend="gemini"` calls to `agy` when truthy (`1`, `true`, `yes`, `on`) | `false` |
 | `OPENMCP_LOG_FILE` | OpenMCP log file path | `~/.openmcp/openmcp.log` |
 | `OPENMCP_LOG_LEVEL` | OpenMCP log level | `INFO` |
 
 Reasoning-mode models are hardcoded in `openmcp/src/openmcp/server.py` (`_REASONING_MODELS`):
-`agy → gemini-3.5-flash` (suffixed with `-<reasoning>`), `codex → gpt-5.5`, `gemini → gemini-3.1-pro-preview`.
+`agy → gemini-3.5-flash` (suffixed with `-<reasoning>`), `codex → gpt-5.5`.
 
 Example `~/.openmcp/.env`:
 
 ```env
 OPENMCP_AGY_MODEL_DEFAULT=gemini-3.5-flash
 OPENMCP_CODEX_MODEL_DEFAULT=gpt-5.3-codex
-OPENMCP_GEMINI_MODEL_DEFAULT=gemini-2.5-pro
 OPENMCP_CODEX_PROFILE_DEFAULT=mcp_execution
-OPENMCP_GEMINI_ROUTE_TO_AGY=false
 OPENMCP_LOG_FILE=~/.openmcp/openmcp.log
 OPENMCP_LOG_LEVEL=INFO
 ```
@@ -192,9 +187,7 @@ Example plugin env (`.mcp.json`):
       "env": {
         "OPENMCP_AGY_MODEL_DEFAULT": "gemini-3.5-flash",
         "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.3-codex",
-        "OPENMCP_GEMINI_MODEL_DEFAULT": "gemini-2.5-pro",
         "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
-        "OPENMCP_GEMINI_ROUTE_TO_AGY": "false",
         "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
         "OPENMCP_LOG_LEVEL": "INFO"
       }
@@ -239,7 +232,7 @@ Codex does not install Claude slash-command files as native slash commands. Use 
 ## Hard Rules
 
 - **Fail-closed.** Any MCP failure (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED` and ask the user. No silent retry, executor switch, or Task/Agent fallback.
-- **Absolute paths only when calling `mcp__openmcp__run`.** The dispatch prompt pointer, the `cd` argument, and every file path inside the prompt body must be absolute (forward slashes on Windows). Gemini/agy mis-resolves relative paths and may scan the whole device.
+- **Absolute paths only when calling `mcp__openmcp__run`.** The dispatch prompt pointer, the `cd` argument, and every file path inside the prompt body must be absolute (forward slashes on Windows). agy mis-resolves relative paths and may scan the whole device.
 - **One phase, one owner, one review.** No draft-then-reimplement handoffs.
 - **Route by side.** No default executor; ambiguous side → ask user.
 
@@ -259,9 +252,9 @@ flowchart LR
     R --> V["verifying-before-completion"]
 ```
 
-1. **Install** the plugin and the Codex / Gemini backends (see [Install](#install)).
+1. **Install** the plugin and the Codex / agy backends (see [Install](#install)).
 3. `/brainstorm "<product idea>"` — produces a confirmed design under `docs/plans/`.
-4. `/write-plan` — turns it into `PLAN.md` with phases split by side (back-side → Codex, front-side → Gemini).
+4. `/write-plan` — turns it into `PLAN.md` with phases split by side (back-side → Codex, front-side → agy).
 5. `/execute-plan` — runs the active phase under the gates; repeat until every phase passes.
 6. `verifying-before-completion` — final `Done When` evidence across all phases.
 
@@ -276,7 +269,7 @@ sequenceDiagram
     actor U as User
     participant C as Coordinator (Claude)
     participant X as Codex (back-side)
-    participant G as Gemini (front-side)
+    participant G as agy (front-side)
     U->>C: describe feature
     Note over C,G: Cross-Validation only if full-stack / unclear / high-impact
     C->>C: /write-plan -> PLAN.md (Phase 1 back, Phase 2 front)
@@ -289,7 +282,7 @@ sequenceDiagram
     C->>U: verifying-before-completion across both phases
 ```
 
-- The coordinator decides the owner **by side**; a single-side feature skips Cross-Validation and routes straight to Codex or Gemini.
+- The coordinator decides the owner **by side**; a single-side feature skips Cross-Validation and routes straight to Codex or agy.
 - Each worker edits files with its own tools, commits per task, and writes `notes.md` + the `# EXTERNAL RESPONSE` journal block. The coordinator never commits on the worker's behalf.
 
 ### 3. Bug fix / debugging
@@ -315,7 +308,7 @@ When a phase straddles both sides (shared API contract, schema, auth flow) or is
 sequenceDiagram
     participant C as Coordinator
     participant X as Codex
-    participant G as Gemini
+    participant G as agy
     C->>X: same narrow question (reasoning=high)
     C->>G: same narrow question (reasoning=high)
     X-->>C: back-side answer
@@ -342,7 +335,7 @@ flowchart LR
 ```
 
 - The handover artifacts (`.handover.md` + per-phase `journal.md`) are the durable state — a fresh session never re-scans every phase folder.
-- In Claude Code the hook injects the `<RESUME>` block automatically; cached Codex / Gemini `SESSION_ID`s let in-flight worker sessions continue with `FIX:` deltas.
+- In Claude Code the hook injects the `<RESUME>` block automatically; cached Codex / agy `SESSION_ID`s let in-flight worker sessions continue with `FIX:` deltas.
 
 ## Update
 

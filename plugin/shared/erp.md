@@ -1,7 +1,7 @@
-<!-- ccg-shared-version: 5.2.3 -->
+<!-- ccg-shared-version: 5.3.0 -->
 # External Response Protocol (ERP)
 
-Worker-facing contract for the response a Codex / Gemini phase worker returns to
+Worker-facing contract for the response a Codex / agy phase worker returns to
 the coordinator. This file is materialized into `<project>/.agents/shared/erp.md`
 by the plugin's SessionStart hook — do not hand-edit the copy; edit the plugin's
 `shared/erp.md` template.
@@ -13,7 +13,7 @@ Return exactly this block. Each section is what the coordinator scans for.
 ```text
 # EXTERNAL RESPONSE
 ## META
-- Phase / Owner (codex|gemini) / SessionID / Started / Finished / Plan dir
+- Phase / Owner (codex|agy) / SessionID / Started / Finished / Plan dir
 ## SUMMARY
 [one sentence]
 ## FILES MODIFIED

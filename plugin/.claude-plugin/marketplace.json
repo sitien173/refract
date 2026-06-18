@@ -8,7 +8,7 @@
     {
       "name": "superpowers-ccg",
       "description": "3-gate (Plan → Execute → Review) workflow.",
-      "version": "5.2.8",
+      "version": "5.3.0",
       "source": {
         "source": "url",
         "url": "https://github.com/sitien173/superpowers-ccg.git"

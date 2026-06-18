@@ -13,7 +13,6 @@
     "skills",
     "multi-model",
     "codex",
-    "gemini",
     "antigravity",
     "openmcp",
     "workflows"
@@ -23,8 +22,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Superpowers CCG",
-    "shortDescription": "Coordinate Codex, Gemini, and Antigravity through OpenMCP.",
-    "longDescription": "Three-gate Plan, Execute, and Review workflows for coordinating Codex, Gemini, and Antigravity workers through the bundled OpenMCP server.",
+    "shortDescription": "Coordinate Codex and Antigravity through OpenMCP.",
+    "longDescription": "Three-gate Plan, Execute, and Review workflows for coordinating Codex and Antigravity workers through the bundled OpenMCP server.",
     "developerName": "sitien173",
     "category": "Productivity",
     "capabilities": [

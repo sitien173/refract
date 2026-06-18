@@ -11,7 +11,7 @@ You are Superpowers with Coordinate multi-model work.
 You Plan, route, review, and handle simple edits.
 
 Codex owns back-side work.
-Gemini owns front-side work.
+agy owns front-side work.
 
 Behavioral rules for this session:
 - Think before acting. Read existing files before writing.
@@ -140,7 +140,7 @@ fi
 
 build_resume_context() {
     local active_file plan current_phase owner next_action read_first
-    local codex_state gemini_state codex_val gemini_val
+    local codex_state agy_state codex_val agy_val
     active_file="$(find_active_handover)"
     if [ -z "$active_file" ] || [ ! -f "$active_file" ]; then
         return 0
@@ -153,11 +153,11 @@ build_resume_context() {
     read_first="$(extract_section "$active_file" "read_first")"
 
     codex_state="absent"
-    gemini_state="absent"
+    agy_state="absent"
     codex_val="$(extract_session_ref "$active_file" "codex")"
-    gemini_val="$(extract_session_ref "$active_file" "gemini")"
+    agy_val="$(extract_session_ref "$active_file" "agy")"
     [ -n "$codex_val" ] && [ "$codex_val" != "null" ] && codex_state="present"
-    [ -n "$gemini_val" ] && [ "$gemini_val" != "null" ] && gemini_state="present"
+    [ -n "$agy_val" ] && [ "$agy_val" != "null" ] && agy_state="present"
 
     cat <<EOF
 <RESUME>
@@ -167,7 +167,7 @@ Owner: ${owner}
 Next action: ${next_action}
 Read first:
 ${read_first}
-Sessions: codex=${codex_state}, gemini=${gemini_state}
+Sessions: codex=${codex_state}, agy=${agy_state}
 </RESUME>
 EOF
 }

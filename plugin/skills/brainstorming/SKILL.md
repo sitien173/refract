@@ -13,7 +13,7 @@ description: "Explores intent, requirements, trade-offs, and design via dialogue
 
 ## Workflow
 
-1. **Cross-validate only when warranted.** Run Cross-Validation (Codex + Gemini narrow question, reconcile divergences) **only** if the idea is full-stack, unclear, or high-impact per `coordinating-multi-model-work` CV triggers. Otherwise skip and proceed straight to clarification.
+1. **Cross-validate only when warranted.** Run Cross-Validation (Codex + agy narrow question, reconcile divergences) **only** if the idea is full-stack, unclear, or high-impact per `coordinating-multi-model-work` CV triggers. Otherwise skip and proceed straight to clarification.
 2. Inspect current project state: relevant files, docs, recent commits.
 3. Ask one question at time; prefer multiple choice when useful.
 4. Clarify purpose, constraints, non-goals, success criteria, preferences.

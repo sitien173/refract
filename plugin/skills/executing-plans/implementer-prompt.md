@@ -1,6 +1,6 @@
 # Implementer Prompt Template
 
-Dispatch template for Codex / Gemini phase workers. The worker contract (per-task workflow, discipline) and response format live in `<project>/.agents/shared/{worker-contract.md,erp.md}` — materialized by the plugin's SessionStart hook and readable by the worker at its `cd`. This file is the per-phase **input** spec only; it points at those two files instead of restating them.
+Dispatch template for Codex / agy phase workers. The worker contract (per-task workflow, discipline) and response format live in `<project>/.agents/shared/{worker-contract.md,erp.md}` — materialized by the plugin's SessionStart hook and readable by the worker at its `cd`. This file is the per-phase **input** spec only; it points at those two files instead of restating them.
 
 ## MCP call
 
@@ -8,7 +8,7 @@ Default: prompt body lives in `<plan-dir>/phase-<NN>/prompt.md`; the MCP `PROMPT
 
 ```text
 mcp__openmcp__run:
-  backend: "codex" (back-side) | "gemini" (front-side)
+  backend: "codex" (back-side) | "agy" (front-side)
   cd: <ABSOLUTE repo root>
   PROMPT: |
     [one sentence of persona / mindset — e.g. "You are an experienced backend engineer ..." if <fresh session>, or "continue work on phase-2 of the <plan> ..." if <resuming>]
@@ -22,13 +22,13 @@ mcp__openmcp__run:
     Contract:   <ABSOLUTE>/.agents/shared/worker-contract.md
     Response:   <ABSOLUTE>/.agents/shared/erp.md
     Domain:     <ABSOLUTE>/.agents/BACKEND.md   # Codex
-                <ABSOLUTE>/.agents/FRONTEND.md  # Gemini / agy
+                <ABSOLUTE>/.agents/FRONTEND.md  # agy
     Follow the contract, the domain rules file, and the spec file. Respond per erp.md, then emit the completion line.
 
     Output: Respond per the ERP contract.
 ```
 
-**Absolute paths only.** The pointer path, `cd`, and every path inside the prompt body must be absolute with forward slashes on Windows. Gemini/agy mis-resolves relative paths.
+**Absolute paths only.** The pointer path, `cd`, and every path inside the prompt body must be absolute with forward slashes on Windows. agy mis-resolves relative paths.
 
 ## Prompt file (`<plan-dir>/phase-<NN>/prompt.md`)
 
@@ -64,7 +64,7 @@ root-cause-first, evidence) and prompt discipline (edit on disk, no duplication,
 no redesign, unclear → CLARIFICATIONS NEEDED + stop). Use the absolute
 `notes.md` / `journal.md` paths under the Phase dir above.
 
-Also follow the domain-rules file for your side: Codex → `<ABSOLUTE>/.agents/BACKEND.md`; Gemini / agy → `<ABSOLUTE>/.agents/FRONTEND.md`. Hard rules in those files (no string-built SQL, no hardcoded design tokens, etc.) override any conflicting guidance in the spec; surface the conflict via CLARIFICATIONS NEEDED before deviating.
+Also follow the domain-rules file for your side: Codex → `<ABSOLUTE>/.agents/BACKEND.md`; agy → `<ABSOLUTE>/.agents/FRONTEND.md`. Hard rules in those files (no string-built SQL, no hardcoded design tokens, etc.) override any conflicting guidance in the spec; surface the conflict via CLARIFICATIONS NEEDED before deviating.
 
 ## Response Format
 

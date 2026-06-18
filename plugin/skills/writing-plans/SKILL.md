@@ -36,7 +36,7 @@ Phase-plan author. The routing table, owner semantics, and resume artifacts all 
 ```markdown
 ### Phase N: [Short outcome]
 
-**Owner:** `coordinator` | `codex` | `gemini`
+**Owner:** `coordinator` | `codex` | `agy`
 
 **Goal:** [One clear outcome]
 

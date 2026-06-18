@@ -44,7 +44,7 @@ this rule violates the spirit of it.**
 ## CCG Routing
 
 - **Coordinator (trivial edit):** run the cycle directly; the RED→GREEN run is the evidence.
-- **Codex / Gemini phase:** test-first is task-1 of any feature/bugfix; the worker records RED→GREEN per the worker contract.
+- **Codex / agy phase:** test-first is task-1 of any feature/bugfix; the worker records RED→GREEN per the worker contract.
 - **Review gate:** the coordinator FAILs any phase that adds production code without failing-test-first evidence.
 
 (Routing table, gates, and worker mechanics are canonical in `coordinating-multi-model-work`.)

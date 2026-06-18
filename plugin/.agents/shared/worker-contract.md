@@ -1,7 +1,7 @@
-<!-- ccg-shared-version: 5.2.3 -->
+<!-- ccg-shared-version: 5.3.0 -->
 # Worker Contract
 
-Execution contract for a Codex / Gemini phase worker. This file is materialized
+Execution contract for a Codex / agy phase worker. This file is materialized
 into `<project>/.agents/shared/worker-contract.md` by the plugin's SessionStart
 hook — do not hand-edit the copy; edit the plugin's `shared/worker-contract.md`
 template. The per-phase `prompt.md` carries the actual tasks; this file is the
@@ -15,15 +15,18 @@ For each task in order:
    RED; then write minimal code to GREEN.
 2. `git add` only the files touched for this task; commit with subject
    `phase-<N>.task-<M>: <one-line>`. Capture the hash.
-3. Append a `## Task <M>` block to `<plan-dir>/phase-<NN>/notes.md` (create with
-   heading `# Phase <N> — Decision Notes` if missing). Sub-sections: Decisions
-   made (not in spec), Spec deviations, Tradeoffs accepted, Assumptions,
-   Follow-ups for human, Test evidence (RED→GREEN, or root cause for a fix).
-   Empty sub-sections = `- none`; every task gets a block even if all `none`.
+3. Append a `## Task <M>` block to `<plan-dir>/phase-<NN>/notes.md`. If the file
+   is missing, create it from the `.agents/shared/notes-template.md` template.
+   Sub-sections per task: Decisions made (not in spec), Spec deviations,
+   Tradeoffs accepted, Assumptions, Follow-ups for human, Test evidence
+   (RED→GREEN, or root cause for a fix). Empty sub-sections = `- none`; every
+   task gets a block even if all `none`.
 4. Append the commit row to `## COMMITS` in your response.
 
 ## After all tasks
 
+- If `<plan-dir>/phase-<NN>/journal.md` is missing, create it from the
+  `.agents/shared/journal-template.md` template and fill its META.
 - Append the full `# EXTERNAL RESPONSE` block (see `erp.md`) under the
   `## External Response` heading of `<plan-dir>/phase-<NN>/journal.md`. Do not
   overwrite earlier sections.

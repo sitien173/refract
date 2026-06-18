@@ -6,7 +6,7 @@
 
 Three gates: **Plan → Execute → Review**.
 
-1. **Plan** — gather minimum context. Run CROSS_VALIDATION (Codex + Gemini, reconcile) **only** when work is full-stack, unclear, or high-impact; otherwise skip. Define one phase: 2–4 tasks, file set, Done When. Output `# ROUTE`.
+1. **Plan** — gather minimum context. Run CROSS_VALIDATION (Codex + agy, reconcile) **only** when work is full-stack, unclear, or high-impact; otherwise skip. Define one phase: 2–4 tasks, file set, Done When. Output `# ROUTE`.
 2. **Execute** — route by side; worker edits files and returns `## FILES MODIFIED`.
 3. **Review** — run Done When, output `# REVIEW` with PASS / PASS_WITH_DEBT / FAIL.
 
@@ -18,7 +18,7 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 |---|---|---|
 | Simple/trivial Claude can handle directly | Claude | none |
 | **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts | Codex | `mcp__openmcp__run(backend="codex", ...)` |
-| **Front-side**: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps | Gemini | `mcp__openmcp__run(backend="gemini", ...)` |
+| **Front-side**: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps | agy | `mcp__openmcp__run(backend="agy", ...)` |
 | Full-stack / unclear / high-impact new work | Cross-Validation → side owner | both |
 | Single-side new feature, clear scope | Side owner directly (skip CV) | one |
 | Full-stack execution | Split into back-side + front-side sub-phases | both |
@@ -53,4 +53,4 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 - One phase, one owner, one review. No draft-then-reimplement handoffs.
 - Cross-Validation runs only when work is full-stack, unclear, or high-impact. Skip for clear single-side work — CV catches misses via dual review, it is not a default ceremony.
 - Route by side, not by default — never auto-route to one executor.
-- User overrides ("use Codex" / "use Gemini" / "no external models" / "skip cross-validation") win.
+- User overrides ("use Codex" / "use agy" / "no external models" / "skip cross-validation") win.

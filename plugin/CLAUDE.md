@@ -23,7 +23,7 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 ## Project-specific rules
 
 - Long prompts → write to a repo file under `docs/plans/` and pass the absolute path.
-- MCP backends: `codex` (back-side), `gemini` or `agy` (front-side). Detailed setup in `README.md`.
+- MCP backends: `codex` (back-side), `agy` (front-side). Detailed setup in `README.md`.
 
 ## Install / update
 
