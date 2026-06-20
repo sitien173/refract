@@ -1,8 +1,8 @@
 ---
 name: phase-executor
-description: Executes one plan phase under Gate 2. Routes back-side work to Codex and front-side work to agy via mcp__openmcp__run, handles simple edits directly, then returns a single summary to the Coordinator. Use when the Coordinator has a routed phase ready to execute.
-tools: Read, Write, Edit, Bash, Glob, Skill, mcp__openmcp__run
-model: sonnet
+description: Executes one plan phase under Gate 2. Routes back-side work to Codex and front-side work to agy via mcp__plugin_superpowers-ccg_openmcp__run, handles simple edits directly, then returns a single summary to the Coordinator. Use when the Coordinator has a routed phase ready to execute.
+tools: Read, Write, Edit, Bash, Glob, Skill, mcp__plugin_superpowers-ccg_openmcp__run, mcp__plugin_*
+model: haiku
 ---
 
 # Phase Executor
@@ -33,9 +33,9 @@ Read the dispatch prompt and the files it points to before acting:
 Route by side. Do not decide Cross-Validation; that is the Coordinator's call.
 
 - **Back-side** (backend, API, DB, infra, CI/CD, Docker, scripts, server tests):
-  call `mcp__openmcp__run` with `backend="codex"`.
+  call `mcp__plugin_superpowers-ccg_openmcp__run` with `backend="codex"`.
 - **Front-side** (UI, CSS, layout, motion, canvas/SVG, client, front-end tests):
-  call `mcp__openmcp__run` with `backend="agy"`.
+  call `mcp__plugin_superpowers-ccg_openmcp__run` with `backend="agy"`.
 - **Simple edit** (rename, doc tweak, one-line fix): do it yourself with Bash.
 
 Rules for workers:
