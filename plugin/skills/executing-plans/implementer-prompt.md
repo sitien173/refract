@@ -7,12 +7,12 @@ Dispatch template for Codex / agy phase workers. The worker contract (per-task w
 Default: prompt body lives in `<plan-dir>/phase-<NN>/prompt.md`; the MCP `PROMPT` field is a thin pointer. Inline only for one- or two-sentence asks with no context block.
 
 ```text
-mcp__openmcp__run:
+mcp__plugin_superpowers-ccg_openmcp__run:
   backend: "codex" (back-side) | "agy" (front-side)
   cd: <ABSOLUTE repo root>
   PROMPT: |
-    [one sentence of persona / mindset — e.g. "You are an experienced backend engineer ..." if <fresh session>, or "continue work on phase-2 of the <plan> ..." if <resuming>]
-
+    [one or two compressed sentences of the user request]
+    
     Scope: [one sentence scope — e.g. "Implement the user authentication API per the spec."]
 
     Read your full task spec from: <ABSOLUTE>/docs/plans/<slug>/phase-<NN>/prompt.md

@@ -43,8 +43,8 @@ flowchart TD
 | Phase | Owner | Tool |
 |---|---|---|
 | Simple — one-line edit, rename, doc tweak, single-file fix | Coordinator | built-in |
-| **Back-side** — backend, API, business logic, database, system, infra, CI/CD, scripts, server-side tests | Codex | `mcp__openmcp__run(backend="codex", ...)` |
-| **Front-side** — UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | agy | `mcp__openmcp__run(backend="agy", ...)` |
+| **Back-side** — backend, API, business logic, database, system, infra, CI/CD, scripts, server-side tests | Codex | `mcp__plugin_superpowers-ccg_openmcp__run(backend="codex", ...)` |
+| **Front-side** — UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | agy | `mcp__plugin_superpowers-ccg_openmcp__run(backend="agy", ...)` |
 | New feature / ideation (before plan exists) | Cross-Validation → assign side | both backends |
 | Full-stack | split into back-side + front-side sub-phases | — |
 
@@ -148,7 +148,7 @@ Install the plugin via the Qoder Marketplace (Quest → Marketplace → search "
 
 ### MCP setup
 
-A single unified server — [openmcp](https://github.com/sitien173/superpowers-ccg/tree/main/openmcp/openmcp) — exposes one tool, `mcp__openmcp__run`, with a `backend` field (`"codex"` or `"agy"`).
+A single unified server — [openmcp](https://github.com/sitien173/superpowers-ccg/tree/main/openmcp/openmcp) — exposes one tool, `mcp__plugin_superpowers-ccg_openmcp__run`, with a `backend` field (`"codex"` or `"agy"`).
 
 Environment resolution priority for OpenMCP defaults:
 
@@ -232,7 +232,7 @@ Codex does not install Claude slash-command files as native slash commands. Use 
 ## Hard Rules
 
 - **Fail-closed.** Any MCP failure (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED` and ask the user. No silent retry, executor switch, or Task/Agent fallback.
-- **Absolute paths only when calling `mcp__openmcp__run`.** The dispatch prompt pointer, the `cd` argument, and every file path inside the prompt body must be absolute (forward slashes on Windows). agy mis-resolves relative paths and may scan the whole device.
+- **Absolute paths only when calling `mcp__plugin_superpowers-ccg_openmcp__run`.** The dispatch prompt pointer, the `cd` argument, and every file path inside the prompt body must be absolute (forward slashes on Windows). agy mis-resolves relative paths and may scan the whole device.
 - **One phase, one owner, one review.** No draft-then-reimplement handoffs.
 - **Route by side.** No default executor; ambiguous side → ask user.
 

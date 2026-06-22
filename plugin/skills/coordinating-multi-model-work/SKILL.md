@@ -5,8 +5,8 @@ description: Three-gate Plan -> Execute -> Review workflow for coordinating a co
 
 # Coordinating Multi-Model Work
 
-Three roles. The **Coordinator** plans, routes, reviews, and integrates; it does
-not execute. **Codex** owns back-side work: backend, API, database, infra,
+Three roles. The **Coordinator** plans, routes, executes, reviews, and
+integrates. **Codex** owns back-side work: backend, API, database, infra,
 CI/CD, Docker, scripts, server tests. **agy** owns front-side work: UI, CSS,
 layout, motion, canvas/SVG, client, multimodal, front-end tests.
 
@@ -52,14 +52,28 @@ file set, and clear `Done When` checks. Then output:
 
 # Gate 2 — Execute
 
-The Coordinator does not execute. Delegate the routed phase to the
-`phase-executor` sub-agent (`subagent_type="phase-executor"`), passing: phase
-number and plan dir, owner decision, dispatch-prompt path, and any cached
-`SESSION_ID`. phase-executor makes simple edits itself, routes worker tasks via
-`mcp__openmcp__run`, and returns one summary for Gate 3.
+The Coordinator executes the routed phase directly. Run CV first when required,
+then act on the resolved owner:
 
-Run CV yourself before delegating, then hand the resolved owner to
-phase-executor.
+- **Back-side** (backend, API, DB, infra, CI/CD, Docker, scripts, server tests):
+  call `mcp__plugin_superpowers-ccg_openmcp__run` with `backend="codex"`.
+- **Front-side** (UI, CSS, layout, motion, canvas/SVG, client, front-end tests):
+  call `mcp__plugin_superpowers-ccg_openmcp__run` with `backend="agy"`.
+- **Simple edit** (rename, doc tweak, one-line fix): make it yourself.
+
+Workers edit files directly; on-disk files are the source of truth. Always pass
+absolute paths, reuse the cached `SESSION_ID` for same-phase continuation, and
+send only `FIX:` + delta context for same-phase fixes. On MCP failure or a
+rejected `SESSION_ID`, output `BLOCKED` and ask the user — never retry blindly
+or switch owner without consent.
+
+One commit per task (`phase-<N>.task-<M>: <summary>`); collect the hashes and do
+not squash until Review PASS. Append per-task notes to
+`docs/plans/<slug>/phase-<NN>/notes.md` and the worker's full external response
+to `docs/plans/<slug>/phase-<NN>/journal.md`. For feature/bugfix work load
+`test-driven-development`, `systematic-debugging`, and
+`verifying-before-completion` via Skill: failing test before production code,
+root cause before any fix, fresh evidence before any completion claim.
 
 ## Dispatch prompt
 
@@ -140,7 +154,7 @@ is missing or corrupt.
 # Hard rules
 
 - One phase, one owner, one review.
-- Coordinator coordinates only; delegate Gate 2 to phase-executor.
+- Coordinator executes Gate 2 directly: simple edits itself, worker tasks via MCP.
 - Route by side; use CV only when full-stack, unclear, or high-impact.
 - Absolute paths for MCP workers; reuse cached `SESSION_ID`, send `FIX:` + delta for same-phase fixes.
 - On MCP failure or rejected `SESSION_ID`, output `BLOCKED` and ask the user.

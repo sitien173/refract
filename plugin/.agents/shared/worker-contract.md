@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 5.3.0 -->
+<!-- ccg-shared-version: 5.3.1 -->
 # Worker Contract
 
 Execution contract for a Codex / agy phase worker. This file is materialized

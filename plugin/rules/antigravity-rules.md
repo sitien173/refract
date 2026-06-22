@@ -17,8 +17,8 @@ Full rules: `skills/coordinating-multi-model-work/SKILL.md`.
 | Phase | Owner | MCP |
 |---|---|---|
 | Simple/trivial Claude can handle directly | Claude | none |
-| **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts | Codex | `mcp__openmcp__run(backend="codex", ...)` |
-| **Front-side**: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps | agy | `mcp__openmcp__run(backend="agy", ...)` |
+| **Back-side**: backend, API, logic, database, system, infra, CI/CD, scripts | Codex | `mcp__plugin_superpowers-ccg_openmcp__run(backend="codex", ...)` |
+| **Front-side**: UI, CSS, motion, canvas/SVG, interactions, multimodal, large-context UI/doc sweeps | agy | `mcp__plugin_superpowers-ccg_openmcp__run(backend="agy", ...)` |
 | Full-stack / unclear / high-impact new work | Cross-Validation → side owner | both |
 | Single-side new feature, clear scope | Side owner directly (skip CV) | one |
 | Full-stack execution | Split into back-side + front-side sub-phases | both |
