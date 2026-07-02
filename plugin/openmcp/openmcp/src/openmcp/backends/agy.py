@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import queue
 import re
 import shutil
 import subprocess
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Generator
 
 from . import BackendResult, classify_backend_output
+from ._shell import stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
 log = get_logger("agy")
@@ -194,12 +194,11 @@ def _temporary_disabled_plugin(plugin_name: str):
     try:
         yield
     finally:
-        if not disabled:
-            return
-        try:
-            _run_plugin_command("enable", plugin_name)
-        except (subprocess.SubprocessError, OSError) as exc:
-            log.warning("agy: failed to re-enable plugin %r after run: %s", plugin_name, exc)
+        if disabled:
+            try:
+                _run_plugin_command("enable", plugin_name)
+            except (subprocess.SubprocessError, OSError) as exc:
+                log.warning("agy: failed to re-enable plugin %r after run: %s", plugin_name, exc)
 
 
 def run_shell_command(
@@ -208,74 +207,15 @@ def run_shell_command(
     timeout_s: int = 0,
 ) -> Generator[str, None, None]:
     """Execute a command and stream its output line-by-line (non-Windows / fallback)."""
-    popen_cmd = cmd.copy()
-    agy_path = shutil.which("agy") or cmd[0]
-    popen_cmd[0] = agy_path
-
-    process = subprocess.Popen(
-        popen_cmd,
-        shell=False,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-        encoding="utf-8",
+    yield from stream_shell_command_lines(
+        cmd,
+        executable_name="agy",
         cwd=cwd,
+        timeout_s=timeout_s,
+        line_transform=lambda line: line.strip(),
+        terminate_wait_s=10,
+        suppress_stdout_close_errors=True,
     )
-
-    output_queue: queue.Queue[str | None] = queue.Queue()
-
-    def read_output() -> None:
-        if process.stdout:
-            for line in iter(process.stdout.readline, ""):
-                output_queue.put(line.strip())
-            try:
-                process.stdout.close()
-            except OSError:
-                pass
-        output_queue.put(None)
-
-    thread = threading.Thread(target=read_output, daemon=True)
-    thread.start()
-    deadline = time.time() + timeout_s if timeout_s and timeout_s > 0 else None
-    timed_out = False
-
-    try:
-        while True:
-            try:
-                line = output_queue.get(timeout=0.5)
-                if line is None:
-                    break
-                yield line
-            except queue.Empty:
-                if deadline is not None and time.time() > deadline:
-                    timed_out = True
-                    break
-                if process.poll() is not None and not thread.is_alive():
-                    break
-    finally:
-        if process.poll() is None:
-            try:
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-            except OSError:
-                pass
-        thread.join(timeout=10)
-
-    while not output_queue.empty():
-        try:
-            line = output_queue.get_nowait()
-            if line is not None:
-                yield line
-        except queue.Empty:
-            break
-
-    if timed_out:
-        raise subprocess.TimeoutExpired(cmd=popen_cmd, timeout=float(timeout_s or 0))
 
 
 def run_shell_command_pty(
@@ -374,38 +314,9 @@ def _extract_session_id_from_history(workspace_path: Path, prompt_snippet: str =
     return ""
 
 
-def _extract_session_id_from_pb_signature(workspace_path: Path) -> str:
+def _recent_conversation_files(limit: int) -> list[Path]:
     if not _CONVERSATIONS_PATH.exists():
-        return ""
-
-    workspace_bytes = str(workspace_path.resolve()).encode("utf-8", errors="ignore")
-
-    try:
-        pb_files = list(_CONVERSATIONS_PATH.glob("*.pb"))
-        db_files = list(_CONVERSATIONS_PATH.glob("*.db"))
-        conversation_files = sorted(
-            pb_files + db_files,
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        for conv_path in conversation_files[:10]:
-            try:
-                content = conv_path.read_bytes()
-                if workspace_bytes in content:
-                    stem = conv_path.stem
-                    if re.fullmatch(_UUID_PATTERN, stem, re.IGNORECASE):
-                        return stem
-            except OSError:
-                continue
-    except OSError:
-        pass
-    return ""
-
-
-
-def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
-    if not _CONVERSATIONS_PATH.exists():
-        return ""
+        return []
 
     try:
         pb_files = list(_CONVERSATIONS_PATH.glob("*.pb"))
@@ -416,9 +327,27 @@ def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
             reverse=True,
         )
     except OSError:
-        return ""
+        return []
+    return conversation_files[:limit]
 
-    for conversation_path in conversation_files[:20]:
+
+def _extract_session_id_from_pb_signature(workspace_path: Path) -> str:
+    workspace_bytes = str(workspace_path.resolve()).encode("utf-8", errors="ignore")
+
+    for conv_path in _recent_conversation_files(10):
+        try:
+            content = conv_path.read_bytes()
+            if workspace_bytes in content:
+                stem = conv_path.stem
+                if re.fullmatch(_UUID_PATTERN, stem, re.IGNORECASE):
+                    return stem
+        except OSError:
+            continue
+    return ""
+
+
+def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
+    for conversation_path in _recent_conversation_files(20):
         try:
             stat = conversation_path.stat()
         except OSError:

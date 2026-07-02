@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import re
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator
 
 from . import BackendResult, classify_backend_output
+from ._shell import stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
 log = get_logger("codex")
@@ -42,72 +41,15 @@ def run_shell_command(
     expiry the process is terminated and ``subprocess.TimeoutExpired``
     is raised after best-effort cleanup.
     """
-    popen_cmd = cmd.copy()
-    codex_path = shutil.which("codex") or cmd[0]
-    popen_cmd[0] = codex_path
-
-    process = subprocess.Popen(
-        popen_cmd,
-        shell=False,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-        encoding="utf-8",
+    yield from stream_shell_command_lines(
+        cmd,
+        executable_name="codex",
         errors="replace",
         cwd=cwd,
+        timeout_s=timeout_s,
+        line_transform=lambda line: line.rstrip("\r\n"),
+        terminate_wait_s=5,
     )
-
-    output_queue: queue.Queue[str | None] = queue.Queue()
-
-    def read_output() -> None:
-        if process.stdout:
-            for line in iter(process.stdout.readline, ""):
-                output_queue.put(line.rstrip("\r\n"))
-            process.stdout.close()
-        output_queue.put(None)
-
-    thread = threading.Thread(target=read_output, daemon=True)
-    thread.start()
-    deadline = time.time() + timeout_s if timeout_s and timeout_s > 0 else None
-    timed_out = False
-
-    try:
-        while True:
-            try:
-                line = output_queue.get(timeout=0.5)
-                if line is None:
-                    break
-                yield line
-            except queue.Empty:
-                if deadline is not None and time.time() > deadline:
-                    timed_out = True
-                    break
-                if process.poll() is not None and not thread.is_alive():
-                    break
-    finally:
-        if process.poll() is None:
-            try:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-            except OSError:
-                pass
-        thread.join(timeout=5)
-
-    while not output_queue.empty():
-        try:
-            line = output_queue.get_nowait()
-            if line is not None:
-                yield line
-        except queue.Empty:
-            break
-
-    if timed_out:
-        raise subprocess.TimeoutExpired(cmd=popen_cmd, timeout=float(timeout_s or 0))
 
 
 _SESSION_ID_STDOUT_RE = re.compile(

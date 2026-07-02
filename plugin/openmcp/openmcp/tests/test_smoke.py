@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import os
 import tomllib
 import time
 from dataclasses import dataclass
@@ -182,6 +183,7 @@ def test_agy_strips_windows_terminal_title_escape() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "nt", reason="Windows ConPTY path only")
 async def test_agy_reports_pty_initialization_failure_as_fatal(monkeypatch, tmp_path) -> None:
     from openmcp.backends import agy as agy_backend
 
@@ -511,6 +513,19 @@ def test_agy_plugin_restored_when_execution_fails(monkeypatch) -> None:
         ["agy", "plugin", "disable", "superpowers-ccg"],
         ["agy", "plugin", "enable", "superpowers-ccg"],
     ]
+
+
+def test_agy_plugin_disable_failure_does_not_swallow_body_exception(monkeypatch) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    def fail_disable(command: str, plugin_name: str) -> None:
+        raise OSError("disable failed")
+
+    monkeypatch.setattr(agy_backend, "_run_plugin_command", fail_disable)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with agy_backend._temporary_disabled_plugin("superpowers-ccg"):
+            raise RuntimeError("boom")
 
 
 def test_agy_patch_model_maps_gemini_id_to_display_name(monkeypatch, tmp_path) -> None:
