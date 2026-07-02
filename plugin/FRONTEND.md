@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 5.3.1 -->
+<!-- ccg-shared-version: 5.3.2 -->
 # FRONTEND.md — Frontend Engineering Rules
 
 Domain rules for client-side work: UI, components, state, styling, UX, and design. Extends the global AGENTS.md — global rules always apply.

@@ -4,12 +4,12 @@
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/sitien173/superpowers-ccg#subdirectory=openmcp/openmcp",
+        "git+https://github.com/sitien173/openmcp",
         "openmcp"
       ],
       "env": {
         "OPENMCP_AGY_MODEL_DEFAULT": "gemini-3.1-pro-high",
-        "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.4",
+        "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.5",
         "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
         "OPENMCP_AGY_REASONING_MODEL": "gemini-3.1-pro-high",
         "OPENMCP_CODEX_REASONING_MODEL": "gpt-5.5",
