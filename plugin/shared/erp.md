@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 5.3.2 -->
+<!-- ccg-shared-version: 5.3.3 -->
 # External Response Protocol (ERP)
 
 Worker-facing contract for the response a Codex / agy phase worker returns to
