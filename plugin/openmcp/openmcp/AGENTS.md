@@ -175,9 +175,7 @@ flowchart TD
      `max_retries` is caller-controlled; there is no server-side hard cap.
    - The agy auto-continuation loop is hard-capped at 3 iterations
      (`_AGY_MAX_CONTINUATIONS`).
-4. **Plugin self-disabling** — the agy backend disables the
-   `superpowers-ccg` plugin before running to avoid recursive MCP calls,
-   then re-enables it on exit.
+4. **Plugin self-disabling** — the agy backend runs without disabling plugins.
 
 ## Extensibility Hooks
 

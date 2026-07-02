@@ -23,7 +23,6 @@ from openmcp.logging_setup import get_logger
 log = get_logger("agy")
 
 _SETTINGS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
-_CONVERSATIONS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
 _BRAIN_PATH = Path.home() / ".gemini" / "antigravity-cli" / "brain"
 _CONTINUE_PROMPT = "Continue your work. Complete any remaining `[ ]` task items."
 _AGY_MAX_CONTINUATIONS = 3
@@ -148,57 +147,8 @@ def _patch_model(model: str):
                 log.error("agy: failed to restore settings.json after model patch: %s", exc)
 
 
-_ANSI_ESCAPE = re.compile(
-    r"\x1b\[[\?0-9;]*[a-zA-Z]"
-    r"|\x1b[()][AB012]"
-    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
-    r"|\r"
-)
 _UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
-_SESSION_ID_PATTERNS = (
-    re.compile(rf"--conversation[= ]{_UUID_PATTERN}", re.IGNORECASE),
-    re.compile(rf"\bconversation(?:Id|_id)?\b[\"'\s:=]+{_UUID_PATTERN}", re.IGNORECASE),
-    re.compile(rf"\bsession(?:Id|_id)?\b[\"'\s:=]+{_UUID_PATTERN}", re.IGNORECASE),
-    re.compile(rf"\bthread(?:Id|_id)?\b[\"'\s:=]+{_UUID_PATTERN}", re.IGNORECASE),
-)
-
-
-def _strip_ansi(text: str) -> str:
-    return _ANSI_ESCAPE.sub("", text)
-
-
-def _run_plugin_command(command: str, plugin_name: str) -> None:
-    subprocess.run(
-        ["agy", "plugin", command, plugin_name],
-        check=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-
-@contextlib.contextmanager
-def _temporary_disabled_plugin(plugin_name: str):
-    if not plugin_name:
-        yield
-        return
-
-    disabled = False
-    try:
-        _run_plugin_command("disable", plugin_name)
-        disabled = True
-    except (subprocess.SubprocessError, OSError) as exc:
-        log.warning("agy: failed to disable plugin %r before run: %s", plugin_name, exc)
-
-    try:
-        yield
-    finally:
-        if disabled:
-            try:
-                _run_plugin_command("enable", plugin_name)
-            except (subprocess.SubprocessError, OSError) as exc:
-                log.warning("agy: failed to re-enable plugin %r after run: %s", plugin_name, exc)
+_CONVERSATION_ID_RE = re.compile(rf"(?:Created|Streaming) conversation {_UUID_PATTERN}")
 
 
 def run_shell_command(
@@ -216,190 +166,6 @@ def run_shell_command(
         terminate_wait_s=10,
         suppress_stdout_close_errors=True,
     )
-
-
-def run_shell_command_pty(
-    cmd: list[str],
-    cwd: str | None = None,
-    timeout_s: int = 0,
-) -> str:
-    """Execute a command inside a Windows ConPTY and return captured output.
-
-    Drains buffered output after the child exits so a process that dies
-    with unread data still surfaces its tail.
-    """
-    import winpty  # pywinpty
-
-    agy_path = shutil.which(cmd[0]) or cmd[0]
-    argv = [agy_path] + cmd[1:]
-
-    proc = winpty.PtyProcess.spawn(argv, cwd=cwd)
-    chunks: list[str] = []
-    deadline = time.time() + timeout_s if timeout_s and timeout_s > 0 else None
-    timed_out = False
-    try:
-        while proc.isalive():
-            if deadline is not None and time.time() > deadline:
-                timed_out = True
-                break
-            try:
-                chunk = proc.read(4096)
-                if chunk:
-                    chunks.append(chunk)
-            except EOFError:
-                break
-        # Post-exit drain: read whatever is still buffered.
-        while True:
-            try:
-                chunk = proc.read(4096)
-            except EOFError:
-                break
-            if not chunk:
-                break
-            chunks.append(chunk)
-    finally:
-        if proc.isalive():
-            try:
-                proc.terminate(force=True)
-            except Exception:  # noqa: BLE001
-                pass
-
-    if timed_out:
-        raise subprocess.TimeoutExpired(cmd=argv, timeout=float(timeout_s or 0))
-    return _strip_ansi("".join(chunks))
-
-
-def _extract_session_id(text: str) -> str:
-    for pattern in _SESSION_ID_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            return match.group(1)
-    return ""
-
-
-def _extract_session_id_from_history(workspace_path: Path, prompt_snippet: str = "") -> str:
-    history_file = Path.home() / ".gemini" / "antigravity-cli" / "history.jsonl"
-    if not history_file.exists():
-        return ""
-
-    resolved_workspace = str(workspace_path.resolve()).lower()
-    snippet = prompt_snippet.strip()[:60].lower() if prompt_snippet else ""
-
-    try:
-        with history_file.open("r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
-            
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                raw_workspace = entry.get("workspace", "")
-                if not raw_workspace:
-                    continue
-                entry_workspace = str(Path(raw_workspace).resolve()).lower()
-                
-                if entry_workspace == resolved_workspace:
-                    if snippet:
-                        display_text = entry.get("display", "").lower()
-                        if snippet in display_text:
-                            return entry.get("conversationId", "")
-                    else:
-                        return entry.get("conversationId", "")
-            except (json.JSONDecodeError, KeyError):
-                continue
-    except OSError:
-        pass
-    return ""
-
-
-def _recent_conversation_files(limit: int) -> list[Path]:
-    if not _CONVERSATIONS_PATH.exists():
-        return []
-
-    try:
-        pb_files = list(_CONVERSATIONS_PATH.glob("*.pb"))
-        db_files = list(_CONVERSATIONS_PATH.glob("*.db"))
-        conversation_files = sorted(
-            pb_files + db_files,
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-    except OSError:
-        return []
-    return conversation_files[:limit]
-
-
-def _extract_session_id_from_pb_signature(workspace_path: Path) -> str:
-    workspace_bytes = str(workspace_path.resolve()).encode("utf-8", errors="ignore")
-
-    for conv_path in _recent_conversation_files(10):
-        try:
-            content = conv_path.read_bytes()
-            if workspace_bytes in content:
-                stem = conv_path.stem
-                if re.fullmatch(_UUID_PATTERN, stem, re.IGNORECASE):
-                    return stem
-        except OSError:
-            continue
-    return ""
-
-
-def _extract_session_id_from_recent_conversation_file(started_at: float) -> str:
-    for conversation_path in _recent_conversation_files(20):
-        try:
-            stat = conversation_path.stat()
-        except OSError:
-            continue
-        if stat.st_mtime < started_at - 30:
-            break
-
-        conversation_id = conversation_path.stem
-        if re.fullmatch(_UUID_PATTERN, conversation_id, re.IGNORECASE):
-            return conversation_id
-    return ""
-
-
-def _extract_session_id_from_latest_log(started_at: float | None = None) -> str:
-    """Scan Antigravity logs for a recent session id.
-
-    Restricted to logs touched within ~5 minutes of ``started_at`` so a
-    stale id from a previous conversation can never bleed into the
-    current call's session_refs.
-    """
-    appdata = os.environ.get("APPDATA")
-    if not appdata:
-        return ""
-
-    logs_dir = Path(appdata) / "Antigravity" / "logs"
-    if not logs_dir.exists():
-        return ""
-
-    try:
-        log_files = sorted(logs_dir.rglob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        return ""
-
-    if not log_files:
-        return ""
-
-    cutoff = (started_at - 300) if started_at is not None else None
-    for log_path in log_files:
-        try:
-            stat = log_path.stat()
-        except OSError:
-            continue
-        if cutoff is not None and stat.st_mtime < cutoff:
-            break
-        try:
-            log_text = log_path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        session_id = _extract_session_id(log_text)
-        if session_id:
-            return session_id
-    return ""
 
 
 def _agy_has_pending_tasks(session_id: str, started_at: float) -> bool:
@@ -486,7 +252,6 @@ async def _execute_once(params: AgyParams) -> BackendResult:
     error_text = ""
     execution_error = False
     agent_messages = ""
-    started_at = time.time()
 
     log.info(
         "agy.execute start cwd=%s model=%s session_id=%s prompt_len=%d",
@@ -497,39 +262,29 @@ async def _execute_once(params: AgyParams) -> BackendResult:
     )
 
     try:
-        with _temporary_disabled_plugin("superpowers-ccg"), _patch_model(params.model):
-            if os.name == "nt":
+        with _patch_model(params.model):
+            with tempfile.NamedTemporaryFile(suffix=".log", delete=False) as tmp:
+                tmp_log_path = tmp.name
+            try:
                 cmd = [
                     "agy", "--print", params.PROMPT,
                     "--dangerously-skip-permissions",
                     "--add-dir", cwd,
+                    "--log-file", tmp_log_path,
                 ]
                 if params.SESSION_ID:
                     cmd.extend(["--conversation", params.SESSION_ID])
-                agent_messages = run_shell_command_pty(cmd, cwd=cwd, timeout_s=params.timeout_s)
-            else:
-                with tempfile.NamedTemporaryFile(suffix=".log", delete=False) as tmp:
-                    tmp_log_path = tmp.name
+                for _ in run_shell_command(cmd, cwd=cwd, timeout_s=params.timeout_s):
+                    pass
                 try:
-                    cmd = [
-                        "agy", "--print", params.PROMPT,
-                        "--dangerously-skip-permissions",
-                        "--add-dir", cwd,
-                        "--log-file", tmp_log_path,
-                    ]
-                    if params.SESSION_ID:
-                        cmd.extend(["--conversation", params.SESSION_ID])
-                    for _ in run_shell_command(cmd, cwd=cwd, timeout_s=params.timeout_s):
-                        pass
-                    try:
-                        agent_messages = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
-                    except OSError:
-                        agent_messages = ""
-                finally:
-                    try:
-                        os.unlink(tmp_log_path)
-                    except OSError:
-                        pass
+                    agent_messages = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    agent_messages = ""
+            finally:
+                try:
+                    os.unlink(tmp_log_path)
+                except OSError:
+                    pass
     except subprocess.TimeoutExpired as exc:
         log.warning("agy subprocess timeout after %ss", params.timeout_s)
         error_text = f"timeout: {exc}"
@@ -538,18 +293,12 @@ async def _execute_once(params: AgyParams) -> BackendResult:
         error_text = str(exc)
         execution_error = True
 
-    extracted_session_id = (
-        _extract_session_id(agent_messages)
-        or _extract_session_id_from_history(cd, params.PROMPT)
-        or _extract_session_id_from_pb_signature(cd)
-        or _extract_session_id_from_recent_conversation_file(started_at)
-        or _extract_session_id_from_latest_log(started_at)
-        or params.SESSION_ID
-    )
+    match = _CONVERSATION_ID_RE.search(agent_messages)
+    extracted_session_id = match.group(1) if match else params.SESSION_ID
     if extracted_session_id:
-        log.info("agy: extracted session id via fallback: %s", extracted_session_id)
+        log.info("agy: resolved session id: %s", extracted_session_id)
     else:
-        log.warning("agy: no session id extracted from output/history/pb/log/params")
+        log.warning("agy: no session id found in log or params")
 
     if execution_error:
         return BackendResult(

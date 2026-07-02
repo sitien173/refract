@@ -1,9 +1,6 @@
 import asyncio
-import contextlib
 import inspect
 import json
-import os
-import tomllib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,130 +80,68 @@ def test_codex_session_file_fallback_without_prompt_match(monkeypatch, tmp_path)
     assert _extract_session_id_from_latest_session(tmp_path, "prompt that is not in file", time.time() - 1) == session_id
 
 
-def test_agy_extract_session_id_patterns() -> None:
-    from openmcp.backends.agy import _extract_session_id
-
-    session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
-
-    assert _extract_session_id(f"--conversation {session_id}") == session_id
-    assert _extract_session_id(f"conversationId: {session_id}") == session_id
-    assert _extract_session_id(f"session_id = {session_id}") == session_id
-    assert _extract_session_id(f"threadId {session_id}") == session_id
-
-
-def test_agy_recent_conversation_file_fallback(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
-    conversation_file = tmp_path / f"{session_id}.pb"
-    conversation_file.write_bytes(b"conversation")
-    monkeypatch.setattr(agy_backend, "_CONVERSATIONS_PATH", tmp_path)
-
-    assert agy_backend._extract_session_id_from_recent_conversation_file(time.time() - 1) == session_id
-    assert agy_backend._extract_session_id_from_recent_conversation_file(time.time() + 120) == ""
-
-
-def test_agy_recent_conversation_file_fallback_db_format(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    session_id = "c769ef45-e29d-5305-c430-1bf6eef0268c"
-    conversation_file = tmp_path / f"{session_id}.db"
-    conversation_file.write_bytes(b"sqlite database content")
-    monkeypatch.setattr(agy_backend, "_CONVERSATIONS_PATH", tmp_path)
-
-    assert agy_backend._extract_session_id_from_recent_conversation_file(time.time() - 1) == session_id
-    assert agy_backend._extract_session_id_from_recent_conversation_file(time.time() + 120) == ""
-
-
-def test_agy_history_jsonl_extraction(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
-    
-    session_id = "f8a70c35-1816-4b97-87b9-ce387e798c37"
-    dot_gemini = tmp_path / ".gemini" / "antigravity-cli"
-    dot_gemini.mkdir(parents=True)
-    history_file = dot_gemini / "history.jsonl"
-    
-    # Write mock history content
-    history_file.write_text(
-        json.dumps({
-            "display": "Read the current README.md and write a plan",
-            "timestamp": int(time.time() * 1000),
-            "workspace": str(tmp_path),
-            "conversationId": session_id
-        }) + "\n",
-        encoding="utf-8"
-    )
-    
-    # Monkeypatch the home path inside agy.py
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    
-    extracted = agy_backend._extract_session_id_from_history(tmp_path, "Read the current")
-    assert extracted == session_id
-    
-    # Try with unmatched prompt snippet
-    extracted_unmatched = agy_backend._extract_session_id_from_history(tmp_path, "unmatched snippet")
-    assert extracted_unmatched == ""
-    
-    # Try with another workspace
-    other_workspace = tmp_path / "other"
-    extracted_other = agy_backend._extract_session_id_from_history(other_workspace)
-    assert extracted_other == ""
-
-
-def test_agy_pb_signature_extraction(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
-    
-    session_id = "d597e994-7312-49ec-9317-ce9ae59b38bc"
-    pb_file = tmp_path / f"{session_id}.pb"
-    
-    # Write mock protobuf content containing the workspace path in bytes
-    workspace_bytes = str(tmp_path.resolve()).encode("utf-8")
-    pb_file.write_bytes(b"\x0a\x2fsome-header-bytes\x12\x10" + workspace_bytes + b"\x1a\x08metadata")
-    
-    monkeypatch.setattr(agy_backend, "_CONVERSATIONS_PATH", tmp_path)
-    
-    # Verify signature extraction matches workspace path
-    extracted = agy_backend._extract_session_id_from_pb_signature(tmp_path)
-    assert extracted == session_id
-    
-    # Verify unmatched workspace path returns empty
-    other_workspace = Path("F:/other/workspace")
-    extracted_unmatched = agy_backend._extract_session_id_from_pb_signature(other_workspace)
-    assert extracted_unmatched == ""
-
-
-def test_agy_strips_windows_terminal_title_escape() -> None:
-    from openmcp.backends.agy import _strip_ansi
-
-    assert _strip_ansi("\x1b]0;Administrator:  C:\\WINDOWS\\system32\\cmd.exe \x1b\\PONG") == "PONG"
-    assert _strip_ansi("\x1b]0;Administrator:  C:\\WINDOWS\\system32\\cmd.exe \x1b\\") == ""
-
-
 @pytest.mark.asyncio
-@pytest.mark.skipif(os.name != "nt", reason="Windows ConPTY path only")
-async def test_agy_reports_pty_initialization_failure_as_fatal(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("prefix", ["Created", "Streaming"])
+async def test_agy_extracts_session_id_from_conversation_log(monkeypatch, tmp_path, prefix) -> None:
     from openmcp.backends import agy as agy_backend
 
-    def fail_pty(cmd, cwd=None, **kwargs):
-        raise ImportError("DLL load failed while importing winpty")
+    session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
 
-    @contextlib.contextmanager
-    def noop_context(*args, **kwargs):
-        yield
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        log_path = Path(cmd[cmd.index("--log-file") + 1])
+        log_path.write_text(f"{prefix} conversation {session_id}\nPONG", encoding="utf-8")
+        yield ""
 
-    monkeypatch.setattr(agy_backend, "_temporary_disabled_plugin", noop_context)
-    monkeypatch.setattr(agy_backend, "run_shell_command_pty", fail_pty)
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_history", lambda workspace_path, prompt_snippet="": "")
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_pb_signature", lambda workspace_path: "")
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_recent_conversation_file", lambda started_at: "")
-    monkeypatch.setattr(agy_backend, "_extract_session_id_from_latest_log", lambda *args, **kwargs: "")
     monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
 
     out = await agy_backend.execute(AgyParams(PROMPT="x", cd=tmp_path))
 
-    assert out.outcome == "FATAL"
-    assert out.error_class == "execution_error"
-    assert out.error == "DLL load failed while importing winpty"
+    assert out.outcome == "OK"
+    assert out.SESSION_ID == session_id
+    assert out.agent_messages == f"{prefix} conversation {session_id}\nPONG"
+
+
+@pytest.mark.asyncio
+async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
+    monkeypatch,
+    tmp_path,
+    tmp_path_factory,
+) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    home = tmp_path_factory.mktemp("agy-home")
+    stale_id = "d597e994-7312-49ec-9317-ce9ae59b38bc"
+    history_dir = home / ".gemini" / "antigravity-cli"
+    history_dir.mkdir(parents=True)
+    (history_dir / "history.jsonl").write_text(
+        json.dumps(
+            {
+                "display": "x",
+                "workspace": str(tmp_path),
+                "conversationId": stale_id,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        log_path = Path(cmd[cmd.index("--log-file") + 1])
+        log_path.write_text("PONG", encoding="utf-8")
+        yield ""
+
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await agy_backend.execute(
+        AgyParams(PROMPT="x", cd=tmp_path, SESSION_ID="resume-session-id")
+    )
+
+    assert out.outcome == "OK"
+    assert out.SESSION_ID == "resume-session-id"
+    assert out.agent_messages == "PONG"
 
 
 def test_tool_signature() -> None:
@@ -224,12 +159,6 @@ def test_tool_signature() -> None:
         "reasoning",
         "timeout_s",
     ]
-
-
-def test_windows_pywinpty_version_excludes_broken_release() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-
-    assert "pywinpty>=2.0,<3.0.4; sys_platform == 'win32'" in pyproject["project"]["dependencies"]
 
 
 @pytest.mark.asyncio
@@ -472,60 +401,6 @@ async def test_env_falls_back_to_plugin_env_when_higher_priorities_missing(monke
     await srv.run(backend="agy", PROMPT="x", cd=Path("."))
 
     assert captured["model"] == ""
-
-
-def test_agy_plugin_temporarily_disabled_and_restored(monkeypatch) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        return None
-
-    monkeypatch.setattr(agy_backend.subprocess, "run", fake_run)
-
-    with agy_backend._temporary_disabled_plugin("superpowers-ccg"):
-        pass
-
-    assert calls == [
-        ["agy", "plugin", "disable", "superpowers-ccg"],
-        ["agy", "plugin", "enable", "superpowers-ccg"],
-    ]
-
-
-def test_agy_plugin_restored_when_execution_fails(monkeypatch) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        return None
-
-    monkeypatch.setattr(agy_backend.subprocess, "run", fake_run)
-
-    with pytest.raises(RuntimeError):
-        with agy_backend._temporary_disabled_plugin("superpowers-ccg"):
-            raise RuntimeError("boom")
-
-    assert calls == [
-        ["agy", "plugin", "disable", "superpowers-ccg"],
-        ["agy", "plugin", "enable", "superpowers-ccg"],
-    ]
-
-
-def test_agy_plugin_disable_failure_does_not_swallow_body_exception(monkeypatch) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    def fail_disable(command: str, plugin_name: str) -> None:
-        raise OSError("disable failed")
-
-    monkeypatch.setattr(agy_backend, "_run_plugin_command", fail_disable)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        with agy_backend._temporary_disabled_plugin("superpowers-ccg"):
-            raise RuntimeError("boom")
 
 
 def test_agy_patch_model_maps_gemini_id_to_display_name(monkeypatch, tmp_path) -> None:
