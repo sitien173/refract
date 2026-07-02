@@ -144,6 +144,31 @@ async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
     assert out.agent_messages == "PONG"
 
 
+@pytest.mark.asyncio
+async def test_agy_prefers_stdout_reply_over_noisy_log_file(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        log_path = Path(cmd[cmd.index("--log-file") + 1])
+        log_path.write_text(
+            f"I0702 21:32:01.000000 1 server.go:1] noisy diagnostic line\n"
+            f"I0702 21:32:04.716348 1 server.go:807] Created conversation {session_id}\n",
+            encoding="utf-8",
+        )
+        yield "pong from agy"
+
+    monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await agy_backend.execute(AgyParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "OK"
+    assert out.SESSION_ID == session_id
+    assert out.agent_messages == "pong from agy"
+
+
 def test_tool_signature() -> None:
     from openmcp.server import run
 

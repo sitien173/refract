@@ -252,6 +252,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
     error_text = ""
     execution_error = False
     agent_messages = ""
+    log_text = ""
 
     log.info(
         "agy.execute start cwd=%s model=%s session_id=%s prompt_len=%d",
@@ -274,12 +275,18 @@ async def _execute_once(params: AgyParams) -> BackendResult:
                 ]
                 if params.SESSION_ID:
                     cmd.extend(["--conversation", params.SESSION_ID])
-                for _ in run_shell_command(cmd, cwd=cwd, timeout_s=params.timeout_s):
-                    pass
+                stdout_lines = list(run_shell_command(cmd, cwd=cwd, timeout_s=params.timeout_s))
                 try:
-                    agent_messages = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
+                    log_text = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
                 except OSError:
-                    agent_messages = ""
+                    log_text = ""
+                # The CLI's actual reply is printed to stdout; --log-file only
+                # captures internal server diagnostics (and, incidentally, the
+                # "Created/Streaming conversation <id>" lines used below to
+                # resolve the session id). Prefer stdout, fall back to the log
+                # only if the CLI printed nothing there.
+                stdout_text = "\n".join(stdout_lines).strip()
+                agent_messages = stdout_text or log_text
             finally:
                 try:
                     os.unlink(tmp_log_path)
@@ -293,7 +300,7 @@ async def _execute_once(params: AgyParams) -> BackendResult:
         error_text = str(exc)
         execution_error = True
 
-    match = _CONVERSATION_ID_RE.search(agent_messages)
+    match = _CONVERSATION_ID_RE.search(log_text) or _CONVERSATION_ID_RE.search(agent_messages)
     extracted_session_id = match.group(1) if match else params.SESSION_ID
     if extracted_session_id:
         log.info("agy: resolved session id: %s", extracted_session_id)
