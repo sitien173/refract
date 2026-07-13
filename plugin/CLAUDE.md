@@ -15,14 +15,12 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 ## Slash commands
 
 - `/superpowers-ccg:brainstorm`
-- `/superpowers-ccg:prd` — rough requirements → research-backed PRD
 - `/superpowers-ccg:write-plan`
 - `/superpowers-ccg:execute-plan`
-- `/superpowers-ccg:setup-openmcp-env` — configure `OPENMCP_*` env vars → `~/.openmcp/.env`
 
 ## Project-specific rules
 
-- Long prompts → write to a repo file under `docs/plans/` and pass the absolute path.
+- Long prompts → write to a repo file under `docs/plans/` and pass its repo-root-relative path.
 - MCP backends: `codex` (back-side), `agy` (front-side). Detailed setup in `README.md`.
 
 ## Install / update

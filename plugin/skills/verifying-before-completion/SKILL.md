@@ -70,6 +70,9 @@ Skip a step = guessing, not verifying.
 - Trust no worker/agent success report — verify via the VCS diff and `git show`.
 - Review stays scoped to spec + changed files; broader audit only if the phase
   checklist asks for it.
+- For code-changing phases the Review gate includes the codex code-quality review
+  (`profile="code-review"`, fresh session, never the implement `SESSION_ID`);
+  fold its findings into the Review status.
 
 ## Red Flags — STOP
 

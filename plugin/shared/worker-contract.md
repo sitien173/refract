@@ -1,7 +1,7 @@
-<!-- ccg-shared-version: 5.3.3 -->
+<!-- ccg-shared-version: 5.3.7 -->
 # Worker Contract
 
-Execution contract for a Codex / agy phase worker. This file is materialized
+Execution contract for a codex / agy phase worker. This file is materialized
 into `<project>/.agents/shared/worker-contract.md` by the plugin's SessionStart
 hook — do not hand-edit the copy; edit the plugin's `shared/worker-contract.md`
 template. The per-phase `prompt.md` carries the actual tasks; this file is the

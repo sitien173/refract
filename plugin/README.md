@@ -1,348 +1,95 @@
 # Superpowers-CCG
 
-Multi-model orchestration plugin for [Claude Code](https://docs.claude.com/docs/claude-code) and Codex. The host coordinator plans, routes, reviews, and handles simple edits. Heavier work is dispatched to **Codex** (back-side) or **Antigravity** (front-side) through a single MCP tool.
+Multi-model orchestration plugin for [Claude Code](https://docs.claude.com/docs/claude-code). The host **Coordinator** (Claude) plans, routes, reviews, and handles simple edits. Heavier work is dispatched to **Codex** (back-side) or **Antigravity / agy** (front-side) through a single MCP tool.
 
 > **CCG** = **C**laude + **C**odex + **G**emini
 
 ## Workflow
 
-Three gates: **Plan → Execute → Review**.
-
-1. **Plan** — for new features / ideation, run **Cross-Validation** first (ask Codex + agy the same narrow question, reconcile divergences). Then frame work as one phase: 2–4 tasks, file set, `Done When` checks. Output a `# ROUTE` block.
-2. **Execute** — route by side (no default executor). Worker edits files via its own MCP write tools and returns `## FILES MODIFIED`.
-3. **Review** — Spec: run `Done When` + `git show <hash>` per task commit. Output `# REVIEW` with `PASS` / `PASS_WITH_DEBT` / `FAIL`.
-
-Canonical spec: `skills/coordinating-multi-model-work/SKILL.md`.
+Three gates: **Plan → Execute → Review**. Route each phase by **side** — no default executor. Use Cross-Validation only when work is full-stack, unclear, or high-impact.
 
 ```mermaid
 flowchart TD
     A([Request]) --> B{Fuzzy idea or<br/>clear task?}
-    B -->|"fuzzy idea / requirements"| BR["/brainstorm<br/>design doc"]
+    B -->|"fuzzy idea"| BR["/brainstorm<br/>design doc"]
     BR --> WP["/write-plan<br/>PLAN.md + phases"]
-    B -->|"clear, scoped task"| WP
+    B -->|"clear task"| WP
     WP --> P["Gate 1 - Plan<br/>frame phase, emit # ROUTE"]
     P --> R{Route by side}
     R -->|simple| CO["Coordinator edits directly"]
-    R -->|back-side| CX["Codex worker via MCP"]
-    R -->|front-side| GM["agy worker via MCP"]
+    R -->|back-side| CX["Codex via MCP"]
+    R -->|front-side| GM["agy via MCP"]
     R -->|"full-stack / unclear / high-impact"| CV["Cross-Validation<br/>ask both, reconcile"]
     CV --> R
     CO --> EX["Gate 2 - Execute<br/>per-task commits + notes + journal"]
     CX --> EX
     GM --> EX
-    EX --> RV{"Gate 3 - Review<br/>Spec"}
+    EX --> RV{"Gate 3 - Review"}
     RV -->|FAIL| P
-    RV -->|"PASS / PASS_WITH_DEBT"| SQ["Squash commit<br/>update .handover.md"]
+    RV -->|"PASS"| SQ["Squash commit<br/>update .handover.md"]
     SQ --> NX{More phases?}
     NX -->|yes| P
     NX -->|no| V(["verifying-before-completion"])
 ```
 
-## Routing
-
-| Phase | Owner | Tool |
-|---|---|---|
-| Simple — one-line edit, rename, doc tweak, single-file fix | Coordinator | built-in |
-| **Back-side** — backend, API, business logic, database, system, infra, CI/CD, scripts, server-side tests | Codex | `mcp__plugin_superpowers-ccg_openmcp__run(backend="codex", ...)` |
-| **Front-side** — UI, CSS, layout, motion, canvas/SVG, client interactions, multimodal, large-context UI/doc sweeps | agy | `mcp__plugin_superpowers-ccg_openmcp__run(backend="agy", ...)` |
-| New feature / ideation (before plan exists) | Cross-Validation → assign side | both backends |
-| Full-stack | split into back-side + front-side sub-phases | — |
+**The canonical spec is [`skills/coordinating-multi-model-work/SKILL.md`](skills/coordinating-multi-model-work/SKILL.md)** — gates, routing table, review semantics, worker contract, and resume artifacts all live there. Everything else in this repo points to it.
 
 User overrides ("use Codex", "skip cross-validation", "no external models") always win.
 
-## Plan Artifacts
-
-Multi-phase plans live in `docs/plans/<slug>/`. Phase folders are created lazily — only `PLAN.md` and `.handover.md` exist at write time.
-
-```
-docs/plans/user-auth/
-  PLAN.md          # phases, ownership, Done When
-  .handover.md     # resume pointer + cached worker SESSION_IDs
-  phase-01/        # created when Phase 1 starts
-    prompt.md      # dispatch spec for the worker
-    notes.md       # decision notes, one ## Task <M> block per task
-    journal.md     # Route → External Response → Review → Squash Commit
-  phase-02/
-    ...
-```
-
-Single-phase / docs-only work uses a flat file (`docs/plans/<slug>-implementation-plan.md`) with no resume artifacts.
-
-- **`.handover.md`** is the resume pointer (≤500 tokens). Always coordinator-authored, rewritten on every plan-state change. `session_refs` frontmatter caches Codex/agy `SESSION_ID`s and is updated after every MCP call that returns one.
-- **`prompt.md`** holds the full dispatch spec; the MCP `PROMPT` field is just a pointer to it. Inline `PROMPT` only for one- or two-sentence asks.
-- **`notes.md`** captures off-spec decisions, deviations, tradeoffs, assumptions, and follow-ups — appended per task by the worker. Empty sub-sections written as `- none`.
-- **`journal.md`** is the durable phase record. The coordinator writes the Route skeleton at phase start; the worker appends the full `# EXTERNAL RESPONSE` block at phase end; the coordinator finalizes Review and Squash Commit sections after the Review gate.
-
-## Worker Contract (Codex / agy)
-
-- **One commit per task.** Message prefix `phase-<N>.task-<M>: <subject>`. Hashes returned in `## COMMITS`. After Review `PASS`, the coordinator squashes them into a single **Conventional Commits** message — `<type>[optional scope]: <description>` plus optional body/footer, `type` ∈ `feat | fix | test | refactor | docs | chore | …` (`git reset --soft HEAD~<count>`).
-- **Per-task `notes.md` block** appended after each task — never batch-written at phase end.
-- **`# EXTERNAL RESPONSE` block** appended to `journal.md` before the worker emits its terse completion line.
-- **Same-phase fix:** reuse cached `SESSION_ID`, send `FIX:` + delta context only.
-
-## Resume
-
-A new session reads `.handover.md` first, then only the `journal.md` files listed in `read_first`. Claude Code and Codex use host-specific session-start hook configurations to surface an `<RESUME>` block when an `ACTIVE` handover exists.
-
 ## Install
-
-### Claude Code
 
 ```bash
 claude plugin marketplace add https://github.com/sitien173/superpowers-ccg
 claude plugin install superpowers-ccg
 ```
 
-### Codex
-
-Add the Git marketplace, then install the plugin:
-
-```bash
-codex plugin marketplace add sitien173/superpowers-ccg-codex-marketplace --ref main
-codex plugin add superpowers-ccg@superpowers-ccg-marketplace
-```
-
-### Qoder
-
-Install the plugin via the Qoder Marketplace (Quest → Marketplace → search "superpowers-ccg"), or add it manually:
-
-1. Copy (or symlink) this repo into `~/.qoder/plugins/superpowers-ccg/`.
-2. Register hooks by merging the following into `~/.qoder/settings.json`:
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${QODER_PLUGIN_ROOT}/hooks/run-hook.sh\" superpowers-ccg-session-start.sh --qoder",
-            "commandWindows": "\"%QODER_PLUGIN_ROOT%\\hooks\\run-hook.cmd\" superpowers-ccg-session-start.sh --qoder",
-            "statusMessage": "Loading superpowers-ccg context"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${QODER_PLUGIN_ROOT}/hooks/run-hook.sh\" superpowers-ccg-user-prompt-submit.sh --qoder",
-            "commandWindows": "\"%QODER_PLUGIN_ROOT%\\hooks\\run-hook.cmd\" superpowers-ccg-user-prompt-submit.sh --qoder"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-> **Note:** `$QODER_PLUGIN_ROOT` is the env variable Qoder sets to the plugin's install directory (analogous to `$PLUGIN_ROOT` in Codex). If Qoder uses a different variable name, update the hook commands above accordingly.
-
 ### Prerequisites
 
 - [Claude Code](https://docs.claude.com/docs/claude-code) — `claude --version`
 - [Codex CLI](https://developers.openai.com/codex/quickstart) — `codex --version`
-- [Antigravity CLI] `agy --version`
+- Antigravity CLI — `agy --version`
 - `uv` / `uvx`
 
 ### MCP setup
 
-A single unified server — [openmcp](https://github.com/sitien173/superpowers-ccg/tree/main/openmcp/openmcp) — exposes one tool, `mcp__plugin_superpowers-ccg_openmcp__run`, with a `backend` field (`"codex"` or `"agy"`).
+A single unified server — [openmcp](https://github.com/sitien173/openmcp) — exposes one tool, `mcp__plugin_superpowers-ccg_openmcp__run`, with a `backend` field (`"codex"` or `"agy"`). It is launched from `.mcp.json` via `uvx`.
 
-Environment resolution priority for OpenMCP defaults:
+Defaults resolve from: (1) user environment variables, then (2) the `env` block in `.mcp.json`.
 
-1. User environment variables
-2. `~/.openmcp/.env`
-
-### OpenMCP environment variables
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `OPENMCP_AGY_MODEL_DEFAULT` | Default `model` when `backend="agy"` and no model arg is passed | empty |
-| `OPENMCP_CODEX_MODEL_DEFAULT` | Default `model` when `backend="codex"` and no model arg is passed | empty |
-| `OPENMCP_CODEX_PROFILE_DEFAULT` | Default `profile` when `backend="codex"` and no profile arg is passed | `mcp-execution` |
-| `OPENMCP_LOG_FILE` | OpenMCP log file path | `~/.openmcp/openmcp.log` |
-| `OPENMCP_LOG_LEVEL` | OpenMCP log level | `INFO` |
-
-Reasoning-mode models are hardcoded in `openmcp/src/openmcp/server.py` (`_REASONING_MODELS`):
-`agy → gemini-3.5-flash` (suffixed with `-<reasoning>`), `codex → gpt-5.5`.
-
-Example `~/.openmcp/.env`:
-
-```env
-OPENMCP_AGY_MODEL_DEFAULT=gemini-3.5-flash
-OPENMCP_CODEX_MODEL_DEFAULT=gpt-5.3-codex
-OPENMCP_CODEX_PROFILE_DEFAULT=mcp_execution
-OPENMCP_LOG_FILE=~/.openmcp/openmcp.log
-OPENMCP_LOG_LEVEL=INFO
-```
-
-Example plugin env (`.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "openmcp": {
-      "env": {
-        "OPENMCP_AGY_MODEL_DEFAULT": "gemini-3.5-flash",
-        "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.3-codex",
-        "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
-        "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
-        "OPENMCP_LOG_LEVEL": "INFO"
-      }
-    }
-  }
-}
-```
-
-If you previously installed separate `codexmcp` / `geminimcp` servers, remove them:
-
-```bash
-claude mcp remove codex
-claude mcp remove gemini
-claude mcp remove agy
-```
+| Variable | Purpose |
+|---|---|
+| `OPENMCP_AGY_MODEL_DEFAULT` | Default `model` for `backend="agy"` |
+| `OPENMCP_CODEX_MODEL_DEFAULT` | Default `model` for `backend="codex"` |
+| `OPENMCP_CODEX_PROFILE_DEFAULT` | Default Codex profile |
+| `OPENMCP_AGY_REASONING_MODEL` | Model used for agy reasoning-mode calls |
+| `OPENMCP_CODEX_REASONING_MODEL` | Model used for Codex reasoning-mode calls |
+| `OPENMCP_LOG_FILE` | OpenMCP log file path (default `~/.openmcp/openmcp.log`) |
+| `OPENMCP_LOG_LEVEL` | OpenMCP log level (default `INFO`) |
 
 ## Commands & Skills
 
-Claude Code slash commands (each loads its shared skill before acting):
+Slash commands (each loads its shared skill before acting):
 
-- `/brainstorm` — explore intent, requirements, and design via dialogue. Cross-Validation runs only when work is full-stack, unclear, or high-impact (not every new feature).
+- `/brainstorm` — explore intent, requirements, and design via dialogue.
 - `/write-plan` — turn a confirmed design into a phase-based plan.
 - `/execute-plan` — run the active phase under the three gates.
 
-Shared skills discovered by Claude Code and Codex (namespace `superpowers-ccg:`):
+Shared skills (namespace `superpowers-ccg:`):
 
 - `coordinating-multi-model-work` — canonical 3-gate workflow, routing, review, resume artifacts.
 - `brainstorming`, `writing-plans`, `executing-plans` — phase-stage skills loaded by the slash commands.
-- `test-driven-development` — failing test first, watch it fail, then minimal code (feature/bugfix phases).
-- `systematic-debugging` — root-cause investigation before any fix (bugs, test failures).
+- `test-driven-development` — failing test first, then minimal code (feature/bugfix phases).
+- `systematic-debugging` — root-cause investigation before any fix.
 - `verifying-before-completion` — fresh verification evidence before reporting done.
 
-Codex does not install Claude slash-command files as native slash commands. Use the same workflows by invoking the corresponding `superpowers-ccg:*` skill directly; the command files are thin Claude entry points over those shared skills.
+## Plan artifacts
 
-## Cross-Host Compatibility
-
-- Claude Code uses `.claude-plugin/plugin.json`, `commands/*.md`, `hooks/hooks-claude.json`, and the shared `.mcp.json`.
-- Codex uses `.codex-plugin/plugin.json`, `skills/`, `hooks/hooks-codex.json`, and the same shared `.mcp.json`.
-- Hook scripts share the handover parsing logic but emit host-specific output contracts.
-- OpenMCP is the shared MCP server for both hosts. Delegated Codex workers are always launched with `superpowers-ccg@superpowers-ccg-marketplace` disabled to avoid recursive plugin loading.
-
-## Hard Rules
-
-- **Fail-closed.** Any MCP failure (timeout, unavailable, session-failed, permission-blocked, prompt too long) → output `BLOCKED` and ask the user. No silent retry, executor switch, or Task/Agent fallback.
-- **Absolute paths only when calling `mcp__plugin_superpowers-ccg_openmcp__run`.** The dispatch prompt pointer, the `cd` argument, and every file path inside the prompt body must be absolute (forward slashes on Windows). agy mis-resolves relative paths and may scan the whole device.
-- **One phase, one owner, one review.** No draft-then-reimplement handoffs.
-- **Route by side.** No default executor; ambiguous side → ask user.
-
-## Use Cases
-
-Every flow runs through the same three gates; what changes is the entry point and how work is routed.
-
-### 1. New / fresh project (greenfield)
-
-```mermaid
-flowchart LR
-    I["Install plugin + backends"] --> E["/setup-openmcp-env"]
-    E --> B["/brainstorm<br/>idea to design"]
-    B --> W["/write-plan<br/>docs/plans/.../PLAN.md"]
-    W --> X["/execute-plan<br/>phase by phase"]
-    X --> R["Review each phase<br/>PASS then squash"]
-    R --> V["verifying-before-completion"]
-```
-
-1. **Install** the plugin and the Codex / agy backends (see [Install](#install)).
-3. `/brainstorm "<product idea>"` — produces a confirmed design under `docs/plans/`.
-4. `/write-plan` — turns it into `PLAN.md` with phases split by side (back-side → Codex, front-side → agy).
-5. `/execute-plan` — runs the active phase under the gates; repeat until every phase passes.
-6. `verifying-before-completion` — final `Done When` evidence across all phases.
-
-> Scope already clear? Skip `/brainstorm` and go straight to `/write-plan`.
-
-### 2. New feature (existing codebase)
-
-Example: *"Add user auth with email + password; UI on the settings page."*
-
-```mermaid
-sequenceDiagram
-    actor U as User
-    participant C as Coordinator (Claude)
-    participant X as Codex (back-side)
-    participant G as agy (front-side)
-    U->>C: describe feature
-    Note over C,G: Cross-Validation only if full-stack / unclear / high-impact
-    C->>C: /write-plan -> PLAN.md (Phase 1 back, Phase 2 front)
-    C->>X: dispatch Phase 1 (prompt.md)
-    X-->>C: commits + notes + journal + completion line
-    C->>C: Review Phase 1 (git show, Done When) -> PASS -> squash
-    C->>G: dispatch Phase 2 (prompt.md)
-    G-->>C: commits + notes + journal + completion line
-    C->>C: Review Phase 2 -> PASS -> squash
-    C->>U: verifying-before-completion across both phases
-```
-
-- The coordinator decides the owner **by side**; a single-side feature skips Cross-Validation and routes straight to Codex or agy.
-- Each worker edits files with its own tools, commits per task, and writes `notes.md` + the `# EXTERNAL RESPONSE` journal block. The coordinator never commits on the worker's behalf.
-
-### 3. Bug fix / debugging
-
-```mermaid
-flowchart TD
-    B["Bug report / failing test"] --> RC["systematic-debugging<br/>reproduce, find root cause"]
-    RC --> T["Write failing test that<br/>reproduces the bug — RED"]
-    T --> F["Minimal fix — GREEN"]
-    F --> RV{"Review: root cause +<br/>RED to GREEN evidence<br/>in notes.md"}
-    RV -->|PASS| D["Squash commit"]
-    RV -->|FAIL| RC
-```
-
-- Routed to the side that owns the buggy code; small, obvious fixes the coordinator handles directly.
-- **Root cause before fix** (`systematic-debugging`) and **failing test first** (`test-driven-development`) are mandatory — the fix begins from a test that reproduces the bug, and the RED→GREEN evidence lands in `notes.md`.
-
-### 4. Full-stack feature (Cross-Validation)
-
-When a phase straddles both sides (shared API contract, schema, auth flow) or is high-impact:
-
-```mermaid
-sequenceDiagram
-    participant C as Coordinator
-    participant X as Codex
-    participant G as agy
-    C->>X: same narrow question (reasoning=high)
-    C->>G: same narrow question (reasoning=high)
-    X-->>C: back-side answer
-    G-->>C: front-side answer
-    C->>C: reconcile divergences, pick the contract
-    C->>X: Phase 1 - back-side sub-phase
-    X-->>C: PASS
-    C->>G: Phase 2 - front-side sub-phase (uses agreed contract)
-    G-->>C: PASS
-```
-
-- Cross-Validation **decides the contract once**, then the work splits into routed back / front sub-phases — never a single mixed phase.
-- CV dispatches always pass `reasoning="high"`.
-
-### 5. Resume after compaction / new session
-
-```mermaid
-flowchart LR
-    S(["New session / compaction"]) --> H["session-start hook<br/>surfaces RESUME block"]
-    H --> RD["Read .handover.md first"]
-    RD --> RF["Read only journals<br/>listed in read_first"]
-    RF --> SR["Restore cached SESSION_IDs<br/>from session_refs"]
-    SR --> CONT["Continue the active phase"]
-```
-
-- The handover artifacts (`.handover.md` + per-phase `journal.md`) are the durable state — a fresh session never re-scans every phase folder.
-- In Claude Code the hook injects the `<RESUME>` block automatically; cached Codex / agy `SESSION_ID`s let in-flight worker sessions continue with `FIX:` deltas.
+Multi-phase plans live in `docs/plans/<slug>/` (`PLAN.md` + `.handover.md`; `phase-NN/` folders created lazily). `.handover.md` is the resume pointer — a new session reads it first, then only the journals it lists. Single-phase / docs-only work uses a flat `docs/plans/<slug>-implementation-plan.md`. See the canonical skill for the full schema.
 
 ## Update
 
 ```bash
 claude plugin update superpowers-ccg
-codex plugin marketplace upgrade superpowers-ccg-marketplace
-codex plugin add superpowers-ccg@superpowers-ccg-marketplace
 ```
 
 ## Support
@@ -354,4 +101,4 @@ Issues: https://github.com/sitien173/superpowers-ccg/issues
 - [obra/superpowers](https://github.com/obra/superpowers) — original Superpowers
 - [BryanHoo/superpowers-ccg](https://github.com/BryanHoo/superpowers-ccg) — CCG fork
 - [fengshao1227/ccg-workflow](https://github.com/fengshao1227/ccg-workflow) — CCG workflow
-- [sitien173/superpowers-ccg (openmcp)](https://github.com/sitien173/superpowers-ccg/tree/main/openmcp/openmcp) — unified Codex + Antigravity (agy) MCP server
+- [sitien173/openmcp](https://github.com/sitien173/openmcp) — unified Codex + Antigravity (agy) MCP server

@@ -1,7 +1,7 @@
-<!-- ccg-shared-version: 5.3.3 -->
+<!-- ccg-shared-version: 5.3.7 -->
 # External Response Protocol (ERP)
 
-Worker-facing contract for the response a Codex / agy phase worker returns to
+Worker-facing contract for the response a codex / agy phase worker returns to
 the coordinator. This file is materialized into `<project>/.agents/shared/erp.md`
 by the plugin's SessionStart hook — do not hand-edit the copy; edit the plugin's
 `shared/erp.md` template.

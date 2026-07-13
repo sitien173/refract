@@ -1,10 +1,12 @@
 {
   "mcpServers": {
     "openmcp": {
-      "command": "uvx",
+      "command": "/home/ngosi/.local/bin/uv",
       "args": [
-        "--from",
-        "git+https://github.com/sitien173/openmcp",
+        "run",
+        "--quiet",
+        "--project",
+        "/home/ngosi/projects/openmcp",
         "openmcp"
       ],
       "env": {
