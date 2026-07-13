@@ -1,6 +1,8 @@
 # Implementer Prompt Template
 
-Dispatch template for codex / agy phase workers. The worker contract (per-task workflow, discipline) and response format live in `<project>/.agents/shared/{worker-contract.md,erp.md}` — materialized by the plugin's SessionStart hook and readable by the worker at its `cd`. This file is the per-phase **input** spec only; it points at those two files instead of restating them.
+Dispatch template for codex and agy phase workers. The worker contract, response
+format, and templates live under the installed plugin's absolute `shared/` path.
+This file is the per-phase input specification.
 
 ## MCP call
 
@@ -8,8 +10,9 @@ Default: prompt body lives in `<plan-dir>/phase-<NN>/prompt.md`; the MCP `PROMPT
 
 ```text
 mcp__plugin_superpowers-ccg_openmcp__run:
-  backend: "codex" (back-side) | "agy" (front-side)
+  backend: "codex" (backend) | "agy" (frontend)
   cd: <repo root>
+  timeout_s: 900
   PROMPT: |  
     You are a [role description and expertise areas]...
     
@@ -19,14 +22,17 @@ mcp__plugin_superpowers-ccg_openmcp__run:
     Plan dir:   docs/plans/<slug>
     Phase dir:  docs/plans/<slug>/phase-<NN>
     Phase:      <N>
-    Contract:   .agents/shared/worker-contract.md
-    Response:   .agents/shared/erp.md
+    Contract:   <plugin-root>/shared/worker-contract.md
+    Response:   <plugin-root>/shared/erp.md
+    Notes:      <plugin-root>/shared/notes-template.md
+    Journal:    <plugin-root>/shared/journal-template.md
     Follow the contract and the spec file. Respond per erp.md, then emit the completion line.
 
     Output: Respond per the ERP contract.
 ```
 
-Set `cd` to the repo root; every path in the prompt body is relative to it.
+Set `cd` to the repo root. Repository paths are relative to it. Bundled contract
+paths are absolute. Workers must never stage, commit, reset, or squash.
 
 ## Prompt file (`<plan-dir>/phase-<NN>/prompt.md`)
 
@@ -54,13 +60,15 @@ Set `cd` to the repo root; every path in the prompt body is relative to it.
 
 ## Rules
 
-Follow `.agents/shared/worker-contract.md` for the per-task workflow and discipline — write `notes.md` / `journal.md` under the Phase dir above.
+Follow the absolute bundled worker-contract path for execution discipline. Write
+`notes.md` and `journal.md` under the Phase directory above.
 
 ## Response Format
 
-Respond per `.agents/shared/erp.md` — return the `# EXTERNAL RESPONSE`
-block, then the single completion line.
+Respond per the absolute bundled ERP path. Return the `# EXTERNAL RESPONSE`
+block, then its matching status line.
 
 ## Same-phase fix
 
-Reuse the cached `SESSION_ID`. Send `FIX:` + only the delta files / delta context. The fix still gets its own task commit and (if it changes a decision) an appended `notes.md` block.
+Reuse the cached `SESSION_ID` only for this phase. Send `FIX:` plus only delta
+files and context. Append a notes block when decisions change. Do not commit.

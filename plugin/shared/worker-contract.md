@@ -1,36 +1,34 @@
-<!-- ccg-shared-version: 5.3.7 -->
+<!-- ccg-shared-version: 5.3.8 -->
 # Worker Contract
 
-Execution contract for a codex / agy phase worker. This file is materialized
-into `<project>/.agents/shared/worker-contract.md` by the plugin's SessionStart
-hook — do not hand-edit the copy; edit the plugin's `shared/worker-contract.md`
-template. The per-phase `prompt.md` carries the actual tasks; this file is the
-stable how.
+Execution contract for a codex or agy phase worker. This bundled file is
+read directly from the installed plugin. The per-phase `prompt.md` carries the
+actual tasks; this file defines the stable execution process.
 
 ## Per-task workflow
 
 For each task in order:
 
 1. Implement test-first where it applies: write the failing test, run it, confirm
-   RED; then write minimal code to GREEN.
-2. `git add` only the files touched for this task; commit with subject
-   `phase-<N>.task-<M>: <one-line>`. Capture the hash.
+   RED; then write minimal code to GREEN. For behavior-preserving refactors,
+   establish passing characterization coverage and keep it green.
+2. Do not stage, commit, reset, or squash. The coordinator owns every Git action.
 3. Append a `## Task <M>` block to `<plan-dir>/phase-<NN>/notes.md`. If the file
-   is missing, create it from the `.agents/shared/notes-template.md` template.
+   is missing, create it from the bundled `notes-template.md` path in the prompt.
    Sub-sections per task: Decisions made (not in spec), Spec deviations,
    Tradeoffs accepted, Assumptions, Follow-ups for human, Test evidence
    (RED→GREEN, or root cause for a fix). Empty sub-sections = `- none`; every
    task gets a block even if all `none`.
-4. Append the commit row to `## COMMITS` in your response.
+4. Add every touched path to `## FILES MODIFIED` in your response.
 
 ## After all tasks
 
 - If `<plan-dir>/phase-<NN>/journal.md` is missing, create it from the
-  `.agents/shared/journal-template.md` template and fill its META.
+  bundled `journal-template.md` path in the prompt and fill its META.
 - Append the full `# EXTERNAL RESPONSE` block (see `erp.md`) under the
-  `## External Response` heading of `<plan-dir>/phase-<NN>/journal.md`. Do not
+  `## Implementation Response` heading of `<plan-dir>/phase-<NN>/journal.md`. Do not
   overwrite earlier sections.
-- Then emit the single completion line from `erp.md`.
+- Then emit the status line selected by `erp.md`.
 
 ## Discipline
 
@@ -44,6 +42,9 @@ For each task in order:
 ## Prompt discipline
 
 - Edit files directly with your write tools; on-disk files are the source of truth.
+- Stay within the declared file set. Report every changed path.
 - Do not duplicate file content in the response.
 - Do not redesign the phase or produce a reference prototype.
 - If anything is unclear, list it under CLARIFICATIONS NEEDED and stop.
+- Before stopping, append the partial response with `NEXT: BLOCKED` to the journal
+  and emit the matching blocked status line.

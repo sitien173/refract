@@ -1,20 +1,18 @@
 {
   "mcpServers": {
     "openmcp": {
-      "command": "/home/ngosi/.local/bin/uv",
+      "command": "uvx",
       "args": [
-        "run",
-        "--quiet",
-        "--project",
-        "/home/ngosi/projects/openmcp",
+        "--from",
+        "git+https://github.com/sitien173/openmcp",
         "openmcp"
       ],
       "env": {
         "OPENMCP_AGY_MODEL_DEFAULT": "gemini-3.1-pro-high",
-        "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.5",
+        "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.6-luna",
         "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
         "OPENMCP_AGY_REASONING_MODEL": "gemini-3.1-pro-high",
-        "OPENMCP_CODEX_REASONING_MODEL": "gpt-5.5",
+        "OPENMCP_CODEX_REASONING_MODEL": "gpt-5.6-sol",
         "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
         "OPENMCP_LOG_LEVEL": "INFO"
       }

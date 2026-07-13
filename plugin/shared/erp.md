@@ -1,10 +1,8 @@
-<!-- ccg-shared-version: 5.3.7 -->
+<!-- ccg-shared-version: 5.3.8 -->
 # External Response Protocol (ERP)
 
-Worker-facing contract for the response a codex / agy phase worker returns to
-the coordinator. This file is materialized into `<project>/.agents/shared/erp.md`
-by the plugin's SessionStart hook — do not hand-edit the copy; edit the plugin's
-`shared/erp.md` template.
+Worker-facing contract for the response a codex or agy phase worker returns to
+the coordinator. This bundled file is read directly from the installed plugin.
 
 ## The `# EXTERNAL RESPONSE` block
 
@@ -18,8 +16,6 @@ Return exactly this block. Each section is what the coordinator scans for.
 [one sentence]
 ## FILES MODIFIED
 | Action | Path | Change |
-## COMMITS
-- phase-<N>.task-<M>: <hash>  <subject>
 ## NOTES
 - phase-<NN>/notes.md  (## Task <M>, …)
 ## SPEC COMPLIANCE
@@ -27,22 +23,26 @@ Return exactly this block. Each section is what the coordinator scans for.
 ## CLARIFICATIONS NEEDED
 None (or list questions; emit and stop if any)
 ## NEXT
-TASK_COMPLETE | CONTINUE_SESSION | HANDOVER_TO_CLAUDE
+TASK_COMPLETE | BLOCKED | CONTINUE_SESSION
 ```
 
 - **META** — phase identity + session reuse handle the coordinator caches.
 - **SUMMARY** — one-line statement of what the phase delivered.
 - **FILES MODIFIED** — every touched path; the coordinator quality-scans exactly this set.
-- **COMMITS** — one row per task commit with its hash; the coordinator reviews each via `git show <hash>`.
 - **NOTES** — pointer to the per-task `notes.md` blocks (decisions, deviations, evidence).
 - **SPEC COMPLIANCE** — self-assessment against the phase `Done When`.
 - **CLARIFICATIONS NEEDED** — if non-empty, emit this and stop; do not guess.
-- **NEXT** — whether the phase is done, the session continues, or it hands back to the coordinator.
+- **NEXT** — whether the phase is done, blocked, or continuing.
 
 ## Completion line
 
-After the block, emit exactly one completion line — the coordinator scans for it:
+After the block, emit exactly one matching status line:
 
 ```text
 Phase <N> completed. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
+Phase <N> blocked. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
+Phase <N> continuing. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
 ```
+
+Use `completed` only with `TASK_COMPLETE`. Use `blocked` when clarification is
+required. Use `continuing` only with `CONTINUE_SESSION`.

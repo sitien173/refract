@@ -12,18 +12,20 @@ Routing, gates, and the worker response format live in
 ## The Iron Law
 
 ```
-NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
+NO NEW BEHAVIOR WITHOUT A FAILING TEST FIRST
+NO REFACTOR WITHOUT PASSING CHARACTERIZATION COVERAGE
 ```
 
-If you didn't watch the test fail, you don't know it tests the right thing.
+For changed behavior, a test you never saw fail remains unproven.
 Wrote code before the test? Delete it and start over — don't keep it "as
 reference", don't "adapt" it while writing the test. **Violating the letter of
 this rule violates the spirit of it.**
 
 ## Use When
 
-- Implementing a new feature, behaviour change, or refactor.
+- Implementing a new feature or behaviour change.
 - Fixing a bug — the failing test reproduces the bug first.
+- Refactoring — begin with passing characterization coverage.
 - Exceptions (ask the user): throwaway prototypes, generated code, config files.
 
 ## Workflow
@@ -41,20 +43,25 @@ this rule violates the spirit of it.**
    behaviour. Tests stay green.
 6. Repeat for the next behaviour.
 
+For behavior-preserving refactors, establish passing characterization tests
+first. Refactor in small steps while keeping them green. Do not manufacture a
+failure when behavior must remain unchanged.
+
 ## CCG Routing
 
 - **Coordinator (trivial edit):** run the cycle directly; the RED→GREEN run is the evidence.
-- **codex / agy phase:** test-first is task-1 of any feature/bugfix; the worker records RED→GREEN per the worker contract.
-- **Review gate:** the coordinator FAILs any phase that adds production code without failing-test-first evidence.
+- **codex / agy phase:** each changed behavior follows RED then GREEN. The worker records the evidence per task.
+- **Review gate:** the coordinator FAILs changed behavior lacking failing-test-first evidence.
 
 (Routing table, gates, and worker mechanics are canonical in `coordinating-multi-model-work`.)
 
 ## Hard Rules
 
-- No production code without a failing test that you watched fail first.
+- No changed behavior without a failing test watched first.
 - Minimal GREEN code only — simplicity is the goal, not a later cleanup.
 - Fix the code to satisfy the test; never weaken the test to pass.
 - Bug fix = failing test reproducing the bug, then fix. Never fix without a test.
+- Refactor = passing characterization coverage before structural changes.
 - User override ("no TDD here") always wins; otherwise the Iron Law holds.
 
 ## Red Flags — STOP and start over

@@ -59,7 +59,7 @@ Skip a step = guessing, not verifying.
 | Build succeeds | Build command: exit 0 | Linter passed, "logs look fine" |
 | Bug fixed | Original-symptom test passes | Code changed, assumed fixed |
 | Regression test works | Red→green cycle verified | Test passed once |
-| Worker completed | `git show` / diff shows changes | Worker reported "success" |
+| Worker completed | Diff shows requested changes | Worker reported "success" |
 | Requirements met | Line-by-line checklist | Tests passing |
 
 ## Hard Rules
@@ -67,12 +67,12 @@ Skip a step = guessing, not verifying.
 - No completion claim until required checks pass, or Review returns
   `PASS_WITH_DEBT` with explicit non-blocking debt. `FAIL` blocks completion.
 - Unrun tests are not passed tests. Partial checks prove nothing.
-- Trust no worker/agent success report — verify via the VCS diff and `git show`.
+- Trust no worker/agent success report — verify the VCS diff directly.
 - Review stays scoped to spec + changed files; broader audit only if the phase
   checklist asks for it.
 - For code-changing phases the Review gate includes the codex code-quality review
-  (`profile="code-review"`, fresh session, never the implement `SESSION_ID`);
-  fold its findings into the Review status.
+  with an explicit reviewer prompt, fresh session, and no named profile. Never
+  pass the implementation `SESSION_ID`. Fold findings into Review status.
 
 ## Red Flags — STOP
 
