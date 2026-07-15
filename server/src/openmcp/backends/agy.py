@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Generator
 
 from . import BackendResult, classify_backend_output
-from ._shell import stream_shell_command_lines
+from ._shell import ShellCommandCancelled, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
 log = get_logger("agy")
@@ -35,6 +36,7 @@ class AgyParams:
     SESSION_ID: str = ""
     model: str = ""
     timeout_s: int = 0
+    cancel_event: threading.Event | None = None
 
 
 _VALID_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
@@ -155,6 +157,7 @@ def run_shell_command(
     cmd: list[str],
     cwd: str | None = None,
     timeout_s: int = 0,
+    cancel_event: threading.Event | None = None,
 ) -> Generator[str, None, None]:
     """Execute a command and stream its output line-by-line (non-Windows / fallback)."""
     yield from stream_shell_command_lines(
@@ -165,6 +168,7 @@ def run_shell_command(
         line_transform=lambda line: line.strip(),
         terminate_wait_s=10,
         suppress_stdout_close_errors=True,
+        cancel_event=cancel_event,
     )
 
 
@@ -226,7 +230,7 @@ def _classify_output(agent_messages: str, session_id: str, error_text: str) -> B
     return result
 
 
-async def _execute_once(params: AgyParams) -> BackendResult:
+def _execute_once(params: AgyParams) -> BackendResult:
     """Execute one agy CLI session and return normalized backend result."""
     cd = Path(params.cd)
     if not cd.exists():
@@ -275,7 +279,14 @@ async def _execute_once(params: AgyParams) -> BackendResult:
                 ]
                 if params.SESSION_ID:
                     cmd.extend(["--conversation", params.SESSION_ID])
-                stdout_lines = list(run_shell_command(cmd, cwd=cwd, timeout_s=params.timeout_s))
+                stdout_lines = list(
+                    run_shell_command(
+                        cmd,
+                        cwd=cwd,
+                        timeout_s=params.timeout_s,
+                        cancel_event=params.cancel_event,
+                    )
+                )
                 try:
                     log_text = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
                 except OSError:
@@ -292,6 +303,9 @@ async def _execute_once(params: AgyParams) -> BackendResult:
                     os.unlink(tmp_log_path)
                 except OSError:
                     pass
+    except ShellCommandCancelled:
+        log.warning("agy subprocess cancelled")
+        error_text = "backend command cancelled"
     except subprocess.TimeoutExpired as exc:
         log.warning("agy subprocess timeout after %ss", params.timeout_s)
         error_text = f"timeout: {exc}"
@@ -306,6 +320,15 @@ async def _execute_once(params: AgyParams) -> BackendResult:
         log.info("agy: resolved session id: %s", extracted_session_id)
     else:
         log.warning("agy: no session id found in log or params")
+
+    if params.cancel_event is not None and params.cancel_event.is_set():
+        return BackendResult(
+            outcome="FATAL",
+            SESSION_ID=extracted_session_id,
+            agent_messages=agent_messages,
+            error="backend command cancelled",
+            error_class="cancelled",
+        )
 
     if execution_error:
         return BackendResult(
@@ -331,22 +354,23 @@ async def _execute_once(params: AgyParams) -> BackendResult:
             "agy: model override %r produced no output; trying once with agy's configured default model",
             params.model,
         )
-        return await _execute_once(
+        return _execute_once(
             AgyParams(
                 PROMPT=params.PROMPT,
                 cd=cd,
                 SESSION_ID=result.SESSION_ID or params.SESSION_ID,
                 model="",
                 timeout_s=params.timeout_s,
+                cancel_event=params.cancel_event,
             )
         )
     return result
 
 
-async def execute(params: AgyParams) -> BackendResult:
+def _execute_sync(params: AgyParams) -> BackendResult:
     """Execute an agy CLI session and continue while current-turn tasks remain pending."""
     outer_started_at = time.time()
-    result = await _execute_once(params)
+    result = _execute_once(params)
     if result.outcome != "OK" or not result.SESSION_ID:
         return result
 
@@ -357,13 +381,14 @@ async def execute(params: AgyParams) -> BackendResult:
         continuations += 1
         log.info("agy: task.md has pending [ ] items; continuation %d/%d", continuations, _AGY_MAX_CONTINUATIONS)
         continue_started_at = time.time()
-        continuation = await _execute_once(
+        continuation = _execute_once(
             AgyParams(
                 PROMPT=_CONTINUE_PROMPT,
                 cd=Path(params.cd),
                 SESSION_ID=session_id,
                 model="",
                 timeout_s=params.timeout_s,
+                cancel_event=params.cancel_event,
             )
         )
         if continuation.outcome != "OK":
@@ -382,6 +407,11 @@ async def execute(params: AgyParams) -> BackendResult:
     result.agent_messages = merged_messages
     result.SESSION_ID = session_id
     return result
+
+
+async def execute(params: AgyParams) -> BackendResult:
+    """Execute agy without blocking the daemon event loop."""
+    return await asyncio.to_thread(_execute_sync, params)
 
 
 __all__ = ["AgyParams", "execute"]

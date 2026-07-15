@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator
 
 from . import BackendResult, classify_backend_output
-from ._shell import stream_shell_command_lines
+from ._shell import ShellCommandCancelled, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
 log = get_logger("codex")
@@ -28,12 +30,14 @@ class CodexParams:
     profile: str = ""
     reasoning_effort: str = ""
     timeout_s: int = 0
+    cancel_event: threading.Event | None = None
 
 
 def run_shell_command(
     cmd: list[str],
     cwd: str | None = None,
     timeout_s: int = 0,
+    cancel_event: threading.Event | None = None,
 ) -> Generator[str, None, None]:
     """Execute a command and stream its stdout lines until EOF or timeout.
 
@@ -49,6 +53,7 @@ def run_shell_command(
         timeout_s=timeout_s,
         line_transform=lambda line: line.rstrip("\r\n"),
         terminate_wait_s=5,
+        cancel_event=cancel_event,
     )
 
 
@@ -174,7 +179,7 @@ def _classify(*, agent_messages: str, session_id: str, error_text: str) -> Backe
     )
 
 
-async def execute(params: CodexParams) -> BackendResult:
+def _execute_sync(params: CodexParams) -> BackendResult:
     """Execute a Codex CLI session and return normalized backend result."""
     cd = Path(params.cd)
     if not cd.exists():
@@ -243,7 +248,7 @@ async def execute(params: CodexParams) -> BackendResult:
         len(params.PROMPT),
         params.timeout_s or "<off>",
     )
-    log.debug("codex cmd: %s", cmd)
+    log.debug("codex command prepared args=%d", len(cmd))
 
     stdout_lines: list[str] = []
     err_message = ""
@@ -251,8 +256,16 @@ async def execute(params: CodexParams) -> BackendResult:
     timed_out = False
 
     try:
-        for line in run_shell_command(cmd, cwd=cd.absolute().as_posix(), timeout_s=params.timeout_s):
+        for line in run_shell_command(
+            cmd,
+            cwd=cd.absolute().as_posix(),
+            timeout_s=params.timeout_s,
+            cancel_event=params.cancel_event,
+        ):
             stdout_lines.append(line)
+    except ShellCommandCancelled:
+        log.warning("codex subprocess cancelled")
+        err_message = "cancelled"
     except subprocess.TimeoutExpired as exc:
         log.warning("codex subprocess timeout after %ss", params.timeout_s)
         err_message += f"\n\n[timeout] {exc}"
@@ -348,6 +361,10 @@ async def execute(params: CodexParams) -> BackendResult:
         result.outcome = "FATAL"
         result.error_class = "timeout"
         result.error = err_message.strip() or "subprocess timed out"
+    if params.cancel_event is not None and params.cancel_event.is_set():
+        result.outcome = "FATAL"
+        result.error_class = "cancelled"
+        result.error = "backend command cancelled"
     result.agent_messages = agent_messages
     log.info(
         "codex.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",
@@ -359,6 +376,11 @@ async def execute(params: CodexParams) -> BackendResult:
     if result.error:
         log.warning("codex.execute error_text: %s", result.error[:500])
     return result
+
+
+async def execute(params: CodexParams) -> BackendResult:
+    """Execute Codex without blocking the daemon event loop."""
+    return await asyncio.to_thread(_execute_sync, params)
 
 
 __all__ = ["CodexParams", "execute"]

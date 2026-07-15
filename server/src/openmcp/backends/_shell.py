@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import queue
+import os
+import signal
 import shutil
 import subprocess
 import threading
 import time
 from collections.abc import Callable, Generator
+
+
+class ShellCommandCancelled(subprocess.SubprocessError):
+    """Raised after a caller cancels an active backend process."""
 
 
 def stream_shell_command_lines(
@@ -20,6 +26,7 @@ def stream_shell_command_lines(
     terminate_wait_s: int,
     errors: str | None = None,
     suppress_stdout_close_errors: bool = False,
+    cancel_event: threading.Event | None = None,
 ) -> Generator[str, None, None]:
     """Execute a command and stream combined stdout and stderr lines."""
     popen_cmd = cmd.copy()
@@ -34,6 +41,7 @@ def stream_shell_command_lines(
         "universal_newlines": True,
         "encoding": "utf-8",
         "cwd": cwd,
+        "start_new_session": os.name != "nt",
     }
     if errors is not None:
         popen_kwargs["errors"] = errors
@@ -58,6 +66,26 @@ def stream_shell_command_lines(
     thread.start()
     deadline = time.time() + timeout_s if timeout_s and timeout_s > 0 else None
     timed_out = False
+    cancelled = False
+
+    def terminate() -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name != "nt":
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+            try:
+                process.wait(timeout=terminate_wait_s)
+            except subprocess.TimeoutExpired:
+                if os.name != "nt":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+                process.wait()
+        except OSError:
+            pass
 
     try:
         while True:
@@ -67,22 +95,16 @@ def stream_shell_command_lines(
                     break
                 yield line
             except queue.Empty:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
                 if deadline is not None and time.time() > deadline:
                     timed_out = True
                     break
                 if process.poll() is not None and not thread.is_alive():
                     break
     finally:
-        if process.poll() is None:
-            try:
-                process.terminate()
-                try:
-                    process.wait(timeout=terminate_wait_s)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-            except OSError:
-                pass
+        terminate()
         thread.join(timeout=terminate_wait_s)
 
     while not output_queue.empty():
@@ -95,3 +117,8 @@ def stream_shell_command_lines(
 
     if timed_out:
         raise subprocess.TimeoutExpired(cmd=popen_cmd, timeout=float(timeout_s or 0))
+    if cancelled:
+        raise ShellCommandCancelled("backend command cancelled")
+
+
+__all__ = ["ShellCommandCancelled", "stream_shell_command_lines"]

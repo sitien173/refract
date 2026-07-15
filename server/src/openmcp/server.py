@@ -1,29 +1,60 @@
-"""Unified FastMCP server surface for agy and codex backends."""
+"""Unified FastMCP server surface for agy, codex, and Pi backends."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Any, AsyncIterator, Dict, Literal, cast
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
+from openmcp.backends.pi import PiParams, execute as pi_execute
 from openmcp.logging_setup import configure as configure_logging, get_logger
+from openmcp.config import load_config
+from openmcp.models import ActionResult, JobView, ProjectView, SubmissionResult
 from openmcp.notify import emit_error, emit_finish, emit_start
+from openmcp.runtime import Runtime
 
 configure_logging()
 log = get_logger("server")
 
-mcp = FastMCP("openmcp")
+_DAEMON_CONFIG = load_config()
+_ACTIVE_RUNTIME: Runtime | None = None
+
+
+@asynccontextmanager
+async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
+    global _ACTIVE_RUNTIME
+    runtime = Runtime(_DAEMON_CONFIG)
+    await runtime.start()
+    _ACTIVE_RUNTIME = runtime
+    try:
+        yield runtime
+    finally:
+        _ACTIVE_RUNTIME = None
+        await runtime.close()
+
+
+mcp = FastMCP(
+    "openmcp",
+    host=_DAEMON_CONFIG.host,
+    port=_DAEMON_CONFIG.port,
+    streamable_http_path="/mcp",
+    json_response=True,
+    lifespan=_lifespan,
+)
 
 _ENV_CODEX_MODEL_DEFAULT = "OPENMCP_CODEX_MODEL_DEFAULT"
 _ENV_CODEX_PROFILE_DEFAULT = "OPENMCP_CODEX_PROFILE_DEFAULT"
 _ENV_AGY_REASONING_MODEL = "OPENMCP_AGY_REASONING_MODEL"
 _ENV_CODEX_REASONING_MODEL = "OPENMCP_CODEX_REASONING_MODEL"
+_ENV_PI_MODEL_DEFAULT = "OPENMCP_PI_MODEL_DEFAULT"
 
 _REASONING_MODEL_DEFAULTS: Dict[str, str] = {
     "agy": "gemini-3.5-flash",
@@ -107,7 +138,7 @@ def _reasoning_model(backend: str, env: Dict[str, str]) -> str:
 
 
 def _resolve_model(
-    backend: Literal["agy", "codex"],
+    backend: Literal["agy", "codex", "pi"],
     model: str,
     reasoning: str,
     env: Dict[str, str],
@@ -119,9 +150,13 @@ def _resolve_model(
             base = _reasoning_model("agy", env)
             # bare model id (no suffix) corresponds to Medium; preserve that
             return base if reasoning == "medium" else f"{base}-{reasoning}"
-        return _reasoning_model(backend, env)
+        if backend == "codex":
+            return _reasoning_model("codex", env)
+        return env.get(_ENV_PI_MODEL_DEFAULT, "")
     if backend == "agy":
         return ""
+    if backend == "pi":
+        return env.get(_ENV_PI_MODEL_DEFAULT, "")
     return env.get(_ENV_CODEX_MODEL_DEFAULT, "")
 
 
@@ -148,16 +183,8 @@ def _validate_cd(cd: Any) -> Path | None:
     return path
 
 
-@mcp.tool(
-    name="run",
-    description=(
-        "Run an agy or codex backend. "
-        "Use reasoning mode only for narrow Q&A or cross-validation. "
-        "Returns {success, SESSION_ID, agent_messages, error}."
-    ),
-)
 async def run(
-    backend: Literal["agy", "codex"],
+    backend: Literal["agy", "codex", "pi"],
     PROMPT: str,
     cd: str,
     SESSION_ID: str = "",
@@ -176,9 +203,8 @@ async def run(
         SESSION_ID: Session ID to reuse. Leave empty to start a new session.
         model: Model to use. Leave empty to use the backend default.
         profile: Codex profile to use. When combined with model, the model
-            argument overrides the profile's model field. When combined with
-            reasoning, reasoning takes precedence and selects its own model.
-        reasoning: Reasoning effort. Leave empty to disable reasoning mode.
+            argument overrides the profile's model field. Ignored by Pi.
+        reasoning: Reasoning effort. Pi maps this to its --thinking level.
         timeout_s: Overall subprocess timeout in seconds (0 = no timeout / backend default).
     """
 
@@ -193,6 +219,8 @@ async def run(
     effective_env = _effective_env()
     resolved_model = _resolve_model(backend, model, reasoning, effective_env)
     resolved_profile = "" if reasoning else _resolve_profile(profile, effective_env)
+    if backend != "codex":
+        resolved_profile = ""
     codex_model = resolved_model
     if backend == "codex" and profile and model:
         log.info(
@@ -226,7 +254,7 @@ async def run(
                 timeout_s=timeout_s,
             )
             backend_result = await agy_execute(params)
-        else:
+        elif backend == "codex":
             params = CodexParams(
                 PROMPT=PROMPT,
                 cd=cd_path,
@@ -237,6 +265,16 @@ async def run(
                 timeout_s=timeout_s,
             )
             backend_result = await codex_execute(params)
+        else:
+            params = PiParams(
+                PROMPT=PROMPT,
+                cd=cd_path,
+                SESSION_ID=SESSION_ID,
+                model=resolved_model,
+                reasoning_effort=reasoning,
+                timeout_s=timeout_s,
+            )
+            backend_result = await pi_execute(params)
 
         if backend_result.outcome == "OK":
             result = {
@@ -296,4 +334,201 @@ async def run(
     }
 
 
-__all__ = ["mcp", "run"]
+def _runtime(ctx: Context) -> Runtime:
+    return cast(Runtime, ctx.request_context.lifespan_context)
+
+
+def _active_runtime() -> Runtime:
+    if _ACTIVE_RUNTIME is None:
+        raise RuntimeError("OpenMCP runtime is not active")
+    return _ACTIVE_RUNTIME
+
+
+@mcp.tool(description="Register a clean Git project.", structured_output=True)
+async def project_register(
+    path: str,
+    ctx: Context,
+    alias: str = "",
+) -> ProjectView:
+    return _runtime(ctx).register_project(path, alias)
+
+
+@mcp.tool(description="Queue a durable project workflow.", structured_output=True)
+async def job_submit(
+    project_id: str,
+    workflow: str,
+    inputs: dict[str, Any],
+    ctx: Context,
+    context_key: str = "",
+    parent_job_id: str = "",
+    routing_profile: str = "",
+) -> SubmissionResult:
+    return await _runtime(ctx).submit(
+        project_id,
+        workflow,
+        inputs,
+        context_key,
+        parent_job_id,
+        routing_profile,
+    )
+
+
+@mcp.tool(description="Wait for job completion or timeout.", structured_output=True)
+async def job_wait(
+    job_id: str,
+    ctx: Context,
+    timeout_s: int = 0,
+) -> JobView:
+    runtime = _runtime(ctx)
+    deadline = time.monotonic() + timeout_s if timeout_s > 0 else None
+    while True:
+        job = runtime.database.job(job_id)
+        if job is None:
+            raise ValueError(f"Unknown job: {job_id}")
+        completed = sum(
+            stage.state in {"succeeded", "failed", "cancelled", "skipped"}
+            for stage in job.stages
+        )
+        await ctx.report_progress(
+            progress=float(completed),
+            total=float(len(job.stages) or 1),
+            message=job.state,
+        )
+        if job.state in {
+            "succeeded",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "integrated",
+            "integration_conflict",
+        }:
+            return job
+        if deadline is not None and time.monotonic() >= deadline:
+            return job
+        await asyncio.sleep(0.5)
+
+
+@mcp.tool(description="Cancel a queued or running job.", structured_output=True)
+async def job_cancel(job_id: str, ctx: Context) -> ActionResult:
+    return _runtime(ctx).cancel(job_id)
+
+
+@mcp.tool(description="Retry a failed or interrupted job.", structured_output=True)
+async def job_retry(
+    job_id: str,
+    ctx: Context,
+    from_stage: str = "",
+) -> SubmissionResult:
+    return await _runtime(ctx).retry(job_id, from_stage)
+
+
+@mcp.tool(description="Fast-forward a successful job into its project.", structured_output=True)
+async def job_integrate(job_id: str, ctx: Context) -> ActionResult:
+    return _runtime(ctx).integrate(job_id)
+
+
+def _json(value: Any) -> str:
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    elif isinstance(value, list):
+        value = [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in value
+        ]
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+@mcp.resource("openmcp://projects", mime_type="application/json")
+async def projects_resource() -> str:
+    return _json(_active_runtime().database.projects())
+
+
+@mcp.resource("openmcp://projects/{project_id}", mime_type="application/json")
+async def project_resource(project_id: str, ctx: Context) -> str:
+    project = _runtime(ctx).database.project(project_id)
+    if project is None:
+        raise ValueError(f"Unknown project: {project_id}")
+    return _json(project)
+
+
+@mcp.resource("openmcp://projects/{project_id}/jobs", mime_type="application/json")
+async def project_jobs_resource(project_id: str, ctx: Context) -> str:
+    if _runtime(ctx).database.project(project_id) is None:
+        raise ValueError(f"Unknown project: {project_id}")
+    return _json(_runtime(ctx).database.jobs(project_id))
+
+
+@mcp.resource("openmcp://jobs/{job_id}", mime_type="application/json")
+async def job_resource(job_id: str, ctx: Context) -> str:
+    job = _runtime(ctx).database.job(job_id)
+    if job is None:
+        raise ValueError(f"Unknown job: {job_id}")
+    return _json(job)
+
+
+@mcp.resource("openmcp://jobs/{job_id}/events", mime_type="application/json")
+async def job_events_resource(job_id: str, ctx: Context) -> str:
+    if _runtime(ctx).database.job(job_id) is None:
+        raise ValueError(f"Unknown job: {job_id}")
+    return _json(_runtime(ctx).database.events(job_id))
+
+
+@mcp.resource(
+    "openmcp://contexts/{project_id}/{context_key}",
+    mime_type="application/json",
+)
+async def context_resource(
+    project_id: str,
+    context_key: str,
+    ctx: Context,
+) -> str:
+    return _json(_runtime(ctx).database.context(project_id, context_key))
+
+
+@mcp.resource("openmcp://models", mime_type="application/json")
+async def models_resource() -> str:
+    return _json(_active_runtime().targets())
+
+
+@mcp.resource("openmcp://routing-profiles", mime_type="application/json")
+async def routing_profiles_resource() -> str:
+    runtime = _active_runtime()
+    return _json(
+        {
+            "default": runtime.config.default_routing_profile,
+            "available": sorted(runtime.config.routing_profiles),
+        }
+    )
+
+
+@mcp.resource("openmcp://workflows/{project_id}", mime_type="application/json")
+async def workflows_resource(project_id: str, ctx: Context) -> str:
+    project = _runtime(ctx).database.project(project_id)
+    if project is None:
+        raise ValueError(f"Unknown project: {project_id}")
+    path = Path(project.root) / ".openmcp" / "workflows"
+    names = [
+        "canvas-read",
+        "canvas-write",
+        "forge-read",
+        "forge-write",
+        "sage-read",
+        "sentinel-read",
+        "single-read",
+        "single-write",
+    ]
+    if path.exists():
+        names.extend(file.stem for file in sorted(path.glob("*.yaml")))
+    return _json(sorted(set(names)))
+
+
+__all__ = [
+    "job_cancel",
+    "job_integrate",
+    "job_retry",
+    "job_submit",
+    "job_wait",
+    "mcp",
+    "project_register",
+    "run",
+]

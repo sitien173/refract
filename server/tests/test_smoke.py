@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import json
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
+from openmcp.backends.pi import PiParams, execute as pi_execute
 
 
 def test_imports() -> None:
@@ -17,6 +19,7 @@ def test_imports() -> None:
     import openmcp.cli  # noqa: F401
     import openmcp.backends.agy  # noqa: F401
     import openmcp.backends.codex  # noqa: F401
+    import openmcp.backends.pi  # noqa: F401
 
 
 def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
@@ -252,6 +255,155 @@ async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path
     assert out.outcome == "OK"
     assert out.SESSION_ID == session_id
     assert out.agent_messages == "PONG"
+
+
+@pytest.mark.asyncio
+async def test_pi_json_mode_extracts_reply_session_and_cli_options(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    captured = {}
+    session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        yield json.dumps({"type": "session", "version": 3, "id": session_id})
+        yield json.dumps(
+            {
+                "type": "message_end",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "PONG"}]},
+            }
+        )
+        yield json.dumps({"type": "agent_end", "messages": []})
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await pi_backend.execute(
+        PiParams(
+            PROMPT="x",
+            cd=tmp_path,
+            SESSION_ID="existing-session",
+            model="openai/gpt-5",
+            reasoning_effort="high",
+        )
+    )
+
+    assert captured["cmd"] == [
+        "pi", "--mode", "json", "--approve", "--session", "existing-session",
+        "--model", "openai/gpt-5", "--thinking", "high", "x",
+    ]
+    assert captured["cwd"] == str(tmp_path.absolute())
+    assert out.outcome == "OK"
+    assert out.SESSION_ID == session_id
+    assert out.agent_messages == "PONG"
+
+
+@pytest.mark.asyncio
+async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    captured = {}
+
+    def fake_run_shell_command(cmd, **kwargs):
+        captured["cmd"] = cmd
+        yield json.dumps(
+            {
+                "type": "message_end",
+                "message": {"role": "assistant", "content": "reviewed"},
+            }
+        )
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await pi_backend.execute(
+        PiParams(
+            PROMPT="review",
+            cd=tmp_path,
+            system_prompt="sentinel instructions",
+            isolated=True,
+            read_only=True,
+        )
+    )
+
+    assert captured["cmd"] == [
+        "pi",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-context-files",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--system-prompt",
+        "sentinel instructions",
+        "--tools",
+        "read,grep,find,ls",
+        "review",
+    ]
+    assert out.outcome == "OK"
+
+
+@pytest.mark.asyncio
+async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path) -> None:
+    import openmcp.drivers as drivers_module
+    from openmcp.config import TargetConfig
+
+    captured = {}
+
+    async def fake_execute(params):
+        captured["params"] = params
+        return BackendResult(
+            outcome="OK",
+            SESSION_ID="session",
+            agent_messages="reviewed",
+            error="",
+            error_class="",
+        )
+
+    monkeypatch.setattr(drivers_module, "pi_execute", fake_execute)
+    registry = drivers_module.DriverRegistry()
+    await registry.execute(
+        target=TargetConfig(
+            id="sentinel-primary",
+            backend="pi",
+            model="gpt-5.6-sol",
+            system_prompt="sentinel",
+            isolated=True,
+            read_only=True,
+        ),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=60,
+        cancel_event=threading.Event(),
+    )
+
+    params = captured["params"]
+    assert params.model == "gpt-5.6-sol"
+    assert params.system_prompt == "sentinel"
+    assert params.isolated
+    assert params.read_only
+
+
+@pytest.mark.asyncio
+async def test_server_dispatches_pi_with_default_model(monkeypatch, tmp_path) -> None:
+    import openmcp.server as srv
+
+    captured = {}
+
+    async def fake(params):
+        captured["params"] = params
+        return BackendResult(outcome="OK", SESSION_ID="pi-session", agent_messages="PONG", error="", error_class="")
+
+    monkeypatch.setenv("OPENMCP_PI_MODEL_DEFAULT", "openai/gpt-5")
+    monkeypatch.setattr(srv, "pi_execute", fake)
+    out = await srv.run(backend="pi", PROMPT="x", cd=str(tmp_path), reasoning="high")
+
+    assert captured["params"].model == "openai/gpt-5"
+    assert captured["params"].reasoning_effort == "high"
+    assert out == {"success": True, "SESSION_ID": "pi-session", "agent_messages": "PONG", "error": ""}
 
 
 @pytest.mark.asyncio
