@@ -1,0 +1,12 @@
+interface:
+  display_name: "OpenMCP Orchestrate"
+  short_description: "Run durable OpenMCP project workflows safely"
+  default_prompt: "Use $openmcp-orchestrate to route, run, review, and integrate this project task safely."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "openmcp"
+      description: "OpenMCP durable project orchestration server"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8765/mcp"

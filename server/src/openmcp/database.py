@@ -57,6 +57,8 @@ class Database:
                 workflow TEXT NOT NULL,
                 routing_profile TEXT NOT NULL DEFAULT '',
                 workflow_json TEXT NOT NULL,
+                execution_plan_json TEXT NOT NULL DEFAULT '',
+                result_stage TEXT NOT NULL DEFAULT '',
                 inputs_json TEXT NOT NULL,
                 context_key TEXT NOT NULL,
                 parent_job_id TEXT NOT NULL DEFAULT '',
@@ -108,8 +110,11 @@ class Database:
                 context_key TEXT NOT NULL,
                 role TEXT NOT NULL,
                 target_id TEXT NOT NULL,
+                target_key TEXT NOT NULL,
+                lane TEXT NOT NULL DEFAULT '',
                 session_id TEXT NOT NULL,
-                PRIMARY KEY(project_id, context_key, role, target_id)
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(project_id, context_key, role, target_key, lane)
             );
 
             CREATE TABLE IF NOT EXISTS context_turns (
@@ -152,8 +157,55 @@ class Database:
             self._connection.execute(
                 "ALTER TABLE jobs ADD COLUMN routing_profile TEXT NOT NULL DEFAULT ''"
             )
+        if "execution_plan_json" not in columns:
+            self._connection.execute(
+                "ALTER TABLE jobs ADD COLUMN execution_plan_json TEXT NOT NULL DEFAULT ''"
+            )
+        if "result_stage" not in columns:
+            self._connection.execute(
+                "ALTER TABLE jobs ADD COLUMN result_stage TEXT NOT NULL DEFAULT ''"
+            )
+        session_columns = {
+            row["name"]
+            for row in self._connection.execute(
+                "PRAGMA table_info(context_sessions)"
+            ).fetchall()
+        }
+        if not {"target_key", "lane", "updated_at"}.issubset(session_columns):
+            self._connection.executescript(
+                """
+                ALTER TABLE context_sessions RENAME TO context_sessions_legacy;
+                CREATE TABLE context_sessions (
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    context_key TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    target_key TEXT NOT NULL,
+                    lane TEXT NOT NULL DEFAULT '',
+                    session_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(project_id, context_key, role, target_key, lane)
+                );
+                INSERT INTO context_sessions(
+                    project_id, context_key, role, target_id, target_key,
+                    lane, session_id, updated_at
+                )
+                SELECT project_id, context_key, role, target_id, '', '', session_id, ''
+                FROM context_sessions_legacy;
+                DROP TABLE context_sessions_legacy;
+                """
+            )
         self._connection.execute(
             "UPDATE jobs SET integration_base=base_commit WHERE integration_base=''"
+        )
+        self._connection.execute(
+            """
+            UPDATE jobs SET result_stage=(
+                SELECT id FROM stages
+                WHERE stages.job_id=jobs.id
+                ORDER BY ordinal DESC LIMIT 1
+            ) WHERE result_stage=''
+            """
         )
         self._connection.execute(
             "INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)"
@@ -161,19 +213,25 @@ class Database:
         self._connection.execute(
             "INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)"
         )
+        self._connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)"
+        )
         self._connection.commit()
 
-    def interrupt_active_jobs(self) -> int:
+    def interrupt_active_jobs(self) -> list[str]:
         now = utc_now()
+        rows = self._connection.execute(
+            "SELECT id FROM jobs WHERE state='running'"
+        ).fetchall()
         with self._connection:
-            stages = self._connection.execute(
+            self._connection.execute(
                 "UPDATE stages SET state='interrupted' WHERE state='running'"
-            ).rowcount
-            jobs = self._connection.execute(
+            )
+            self._connection.execute(
                 "UPDATE jobs SET state='interrupted', updated_at=? WHERE state='running'",
                 (now,),
-            ).rowcount
-        return max(jobs, stages)
+            )
+        return [row["id"] for row in rows]
 
     def upsert_project(
         self,
@@ -240,6 +298,8 @@ class Database:
         workflow: str,
         routing_profile: str,
         workflow_json: str,
+        execution_plan_json: str = "",
+        result_stage: str = "",
         inputs: dict[str, Any],
         context_key: str,
         parent_job_id: str,
@@ -250,15 +310,19 @@ class Database:
         stages: Iterable[tuple[str, int, str]],
     ) -> None:
         now = utc_now()
+        resolved_stages = tuple(stages)
+        if not result_stage and resolved_stages:
+            result_stage = resolved_stages[-1][0]
         with self._connection:
             self._connection.execute(
                 """
                 INSERT INTO jobs(
-                    id, project_id, workflow, routing_profile, workflow_json, inputs_json,
+                    id, project_id, workflow, routing_profile, workflow_json,
+                    execution_plan_json, result_stage, inputs_json,
                     context_key, parent_job_id, state, base_commit,
                     integration_base, branch, worktree,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -266,6 +330,8 @@ class Database:
                     workflow,
                     routing_profile,
                     workflow_json,
+                    execution_plan_json,
+                    result_stage,
                     json.dumps(inputs, ensure_ascii=False),
                     context_key,
                     parent_job_id,
@@ -279,7 +345,10 @@ class Database:
             )
             self._connection.executemany(
                 "INSERT INTO stages(job_id, id, ordinal, mode, state) VALUES (?, ?, ?, ?, 'pending')",
-                ((job_id, stage_id, ordinal, mode) for stage_id, ordinal, mode in stages),
+                (
+                    (job_id, stage_id, ordinal, mode)
+                    for stage_id, ordinal, mode in resolved_stages
+                ),
             )
         self.event(
             job_id,
@@ -290,6 +359,16 @@ class Database:
     def queued_job_ids(self) -> list[str]:
         rows = self._connection.execute(
             "SELECT id FROM jobs WHERE state='queued' ORDER BY created_at"
+        ).fetchall()
+        return [row["id"] for row in rows]
+
+    def terminal_job_ids(self) -> list[str]:
+        rows = self._connection.execute(
+            """
+            SELECT id FROM jobs
+            WHERE state NOT IN ('queued', 'running')
+            ORDER BY created_at
+            """
         ).fetchall()
         return [row["id"] for row in rows]
 
@@ -311,18 +390,27 @@ class Database:
             )
         self.event(job_id, f"job.{state}", {"error": error} if error else {})
 
-    def set_job_result(self, job_id: str, *, text: str, commit: str) -> None:
+    def set_job_commit(self, job_id: str, commit: str) -> None:
         with self._connection:
             self._connection.execute(
-                "UPDATE jobs SET result_text=?, result_commit=?, updated_at=? WHERE id=?",
-                (text, commit, utc_now(), job_id),
+                "UPDATE jobs SET result_commit=?, updated_at=? WHERE id=?",
+                (commit, utc_now(), job_id),
             )
 
-    def set_job_routing_profile(self, job_id: str, routing_profile: str) -> None:
+    def set_execution_plan(
+        self,
+        job_id: str,
+        routing_profile: str,
+        execution_plan_json: str,
+    ) -> None:
         with self._connection:
             self._connection.execute(
-                "UPDATE jobs SET routing_profile=?, updated_at=? WHERE id=?",
-                (routing_profile, utc_now(), job_id),
+                """
+                UPDATE jobs
+                SET routing_profile=?, execution_plan_json=?, updated_at=?
+                WHERE id=?
+                """,
+                (routing_profile, execution_plan_json, utc_now(), job_id),
             )
 
     def set_stage_state(
@@ -362,21 +450,35 @@ class Database:
             )
         self.event(job_id, f"stage.{state}", {"stage": stage_id, "target": target_id or ""})
 
-    def reset_retry(self, job_id: str, from_ordinal: int) -> None:
+    def reset_retry(self, job_id: str, stage_ids: Iterable[str]) -> None:
+        resolved = tuple(dict.fromkeys(stage_ids))
+        if not resolved:
+            raise ValueError("Retry requires at least one stage")
+        placeholders = ", ".join("?" for _ in resolved)
         with self._connection:
             self._connection.execute(
-                """
+                f"""
                 UPDATE stages SET state='pending', target_id='', text='', outputs_json='[]',
                     error='', commit_sha='', start_commit=''
-                WHERE job_id=? AND ordinal>=?
+                WHERE job_id=? AND id IN ({placeholders})
                 """,
-                (job_id, from_ordinal),
+                (job_id, *resolved),
             )
             self._connection.execute(
                 "UPDATE jobs SET state='queued', error='', result_text='', result_commit='', updated_at=? WHERE id=?",
                 (utc_now(), job_id),
             )
-        self.event(job_id, "job.retried", {"from_ordinal": from_ordinal})
+        self.event(job_id, "job.retried", {"stages": list(resolved)})
+
+    def skip_unfinished_stages(self, job_id: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                UPDATE stages SET state='skipped'
+                WHERE job_id=? AND state IN ('pending', 'ready')
+                """,
+                (job_id,),
+            )
 
     def add_artifact(self, job_id: str, kind: str, path: str) -> None:
         with self._connection:
@@ -407,7 +509,12 @@ class Database:
             for row in rows
         ]
 
-    def job(self, job_id: str) -> JobView | None:
+    def job(
+        self,
+        job_id: str,
+        *,
+        include_stage_outputs: bool = True,
+    ) -> JobView | None:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             return None
@@ -424,12 +531,33 @@ class Database:
                 mode=stage["mode"],
                 attempts=stage["attempts"],
                 target_id=stage["target_id"],
-                text=stage["text"],
-                error=stage["error"],
+                text=(
+                    stage["text"]
+                    if include_stage_outputs
+                    and not (
+                        row["result_commit"]
+                        and stage["id"] == row["result_stage"]
+                    )
+                    else ""
+                ),
+                error=(
+                    stage["error"]
+                    if include_stage_outputs and stage["error"] != row["error"]
+                    else ""
+                ),
                 commit=stage["commit_sha"],
             )
             for stage in stage_rows
         ]
+        result_stage = next(
+            (stage for stage in stage_rows if stage["id"] == row["result_stage"]),
+            None,
+        )
+        result_text = (
+            result_stage["text"]
+            if result_stage is not None and row["result_commit"]
+            else row["result_text"]
+        )
         return JobView(
             id=row["id"],
             project_id=row["project_id"],
@@ -445,27 +573,49 @@ class Database:
             updated_at=row["updated_at"],
             stages=stages,
             result=JobResult(
-                text=row["result_text"],
+                text=result_text,
                 commit=row["result_commit"],
                 error=row["error"],
                 artifacts=[ArtifactView(kind=value["kind"], path=value["path"]) for value in artifacts],
             ),
         )
 
-    def jobs(self, project_id: str) -> list[JobView]:
+    def jobs(
+        self,
+        project_id: str,
+        *,
+        include_stage_outputs: bool = False,
+    ) -> list[JobView]:
         rows = self._connection.execute(
             "SELECT id FROM jobs WHERE project_id=? ORDER BY created_at DESC",
             (project_id,),
         ).fetchall()
-        return [job for row in rows if (job := self.job(row["id"])) is not None]
+        return [
+            job
+            for row in rows
+            if (
+                job := self.job(
+                    row["id"],
+                    include_stage_outputs=include_stage_outputs,
+                )
+            )
+            is not None
+        ]
 
-    def session(self, project_id: str, context_key: str, role: str, target_id: str) -> str:
+    def session(
+        self,
+        project_id: str,
+        context_key: str,
+        role: str,
+        target_key: str,
+        lane: str,
+    ) -> str:
         row = self._connection.execute(
             """
             SELECT session_id FROM context_sessions
-            WHERE project_id=? AND context_key=? AND role=? AND target_id=?
+            WHERE project_id=? AND context_key=? AND role=? AND target_key=? AND lane=?
             """,
-            (project_id, context_key, role, target_id),
+            (project_id, context_key, role, target_key, lane),
         ).fetchone()
         return row["session_id"] if row else ""
 
@@ -476,6 +626,8 @@ class Database:
         context_key: str,
         role: str,
         target_id: str,
+        target_key: str,
+        lane: str,
         session_id: str,
         prompt: str,
         response: str,
@@ -484,12 +636,26 @@ class Database:
             if session_id:
                 self._connection.execute(
                     """
-                    INSERT INTO context_sessions(project_id, context_key, role, target_id, session_id)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(project_id, context_key, role, target_id)
-                    DO UPDATE SET session_id=excluded.session_id
+                    INSERT INTO context_sessions(
+                        project_id, context_key, role, target_id, target_key,
+                        lane, session_id, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(project_id, context_key, role, target_key, lane)
+                    DO UPDATE SET
+                        target_id=excluded.target_id,
+                        session_id=excluded.session_id,
+                        updated_at=excluded.updated_at
                     """,
-                    (project_id, context_key, role, target_id, session_id),
+                    (
+                        project_id,
+                        context_key,
+                        role,
+                        target_id,
+                        target_key,
+                        lane,
+                        session_id,
+                        utc_now(),
+                    ),
                 )
             self._connection.execute(
                 """
@@ -520,14 +686,18 @@ class Database:
     def context(self, project_id: str, context_key: str) -> list[ContextStreamView]:
         rows = self._connection.execute(
             """
-            SELECT role, target_id, session_id FROM context_sessions
-            WHERE project_id=? AND context_key=? ORDER BY role, target_id
+            SELECT role, target_id, lane, session_id FROM context_sessions
+            WHERE project_id=? AND context_key=?
+            ORDER BY role, target_id, updated_at
             """,
             (project_id, context_key),
         ).fetchall()
         roles: dict[str, dict[str, str]] = {}
         for row in rows:
-            roles.setdefault(row["role"], {})[row["target_id"]] = row["session_id"]
+            target = row["target_id"]
+            if row["lane"]:
+                target = f"{target}#{row['lane']}"
+            roles.setdefault(row["role"], {})[target] = row["session_id"]
         views: list[ContextStreamView] = []
         for role, sessions in roles.items():
             count = self._connection.execute(

@@ -4,6 +4,10 @@ OpenMCP is a loopback HTTP orchestration daemon. It exposes durable project
 jobs through MCP. Jobs use role workflows, routing profiles, named contexts,
 isolated worktrees, chained commits, and explicit integration.
 
+## Repository Skill
+
+Use `.agents/skills/openmcp-orchestrate/SKILL.md` for OpenMCP orchestration.
+
 ## Repository Structure
 
 ```text
@@ -39,7 +43,9 @@ uv build
 
 Tools:
 
+- `project_init`
 - `project_register`
+- `task_route`
 - `job_submit`
 - `job_wait`
 - `job_cancel`

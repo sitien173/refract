@@ -34,7 +34,9 @@ The default endpoint is `http://127.0.0.1:8765/mcp`.
 
 Tools:
 
+- `project_init`
 - `project_register`
+- `task_route`
 - `job_submit`
 - `job_wait`
 - `job_cancel`
@@ -48,8 +50,29 @@ Role workflows:
 - `sage-read`
 - `sentinel-read`
 
-Resources include projects, jobs, contexts, models, workflows, and
-`openmcp://routing-profiles`.
+Resources include projects, jobs, contexts, models, workflows, global routing
+profiles, and effective project routing profiles.
+
+`task_route` loads task-route definitions for the supplied task. With
+`project_id`, it prefers `.openmcp/task_routes.json`. Otherwise, it loads
+`~/.openmcp/task_routes.json`. The coordinator performs all classification.
+
+```json
+{
+  "version": 1,
+  "columns": ["use_case", "recommend", "role", "reason"],
+  "routes": [
+    {
+      "use_case": "Non-UI repository implementation",
+      "recommend": "Forge",
+      "role": "owner",
+      "reason": "Owns non-UI implementation."
+    }
+  ]
+}
+```
+
+Templates reload on every call. Editing them needs no restart.
 
 Example:
 
@@ -69,6 +92,10 @@ Example:
 
 Parent jobs create isolated review and fix chains. Every chain preserves its
 original integration base.
+
+`job_wait` returns compact stage metadata by default. Set
+`include_stage_outputs=true` to include intermediate stage responses. The final
+response remains available once through `result.text`.
 
 ## Configuration
 
@@ -157,6 +184,70 @@ Profiles map logical roles onto route IDs. Routes then select targets, retry
 limits, and timeouts. Add distinct targets and routes for meaningful cost,
 quality, latency, or offline policies.
 
+Targets, routes, and profiles reload before each submission. Submitted jobs
+retain an immutable routing snapshot. Later configuration changes affect only
+new jobs. Host, port, and worker settings still require a restart.
+
+## Project configuration
+
+Call `project_init` with a Git project path. It creates missing files only:
+
+```text
+.openmcp/
+  config.toml
+  task_routes.json
+  workflows/
+```
+
+The empty workflows directory is not created. Add it when needed. Commit the
+created files before registration or job submission.
+
+Project configuration overlays global routes and routing profiles:
+
+```toml
+[project]
+default_routing_profile = "quality"
+
+[[routes]]
+id = "forge-project"
+targets = ["forge-primary"]
+
+[routing_profiles.quality]
+forge = "forge-project"
+```
+
+Precedence is explicit submission profile, project configuration, global
+configuration, then built-in defaults. Targets and daemon settings remain
+global. Project configuration reloads before submission. Running jobs retain
+their original routing snapshot.
+
+## Local overlays
+
+Local overlays expose selected ignored files to specific workflows. Create an
+ignored `.openmcp.local.toml` inside the registered project:
+
+```toml
+[[overlays]]
+include = [
+  "config/**/*.development.json",
+  "themes/**/*.local.css",
+]
+exclude = ["config/private.development.json"]
+workflows = ["project-development-write"]
+```
+
+Every matched file must already be ignored by Git. Overlay paths cannot contain
+symlinks. Include and exclude values support relative glob patterns. Use the
+separate `exclude` list instead of negated patterns.
+
+OpenMCP copies matching files into isolated job worktrees. Successful write
+stages save modifications, creations, and deletions outside Git. `job_integrate`
+copies them back after verifying their original hashes. Concurrent local edits
+produce an integration conflict.
+
+Overlay snapshots live under `~/.openmcp/runs/`. Never expose credentials or
+private keys through overlays. Use environment variables for secrets.
+
 ## Pi isolation
 
 Isolated Pi targets replace the default system prompt. They also pass:
@@ -177,12 +268,17 @@ Store workflows under `.openmcp/workflows/*.yaml`. Stage routes use logical role
 names. The selected routing profile resolves them at submission time.
 
 Write stages must form one ordered chain. Read stages may run concurrently.
+Single-terminal workflows infer their result stage. Workflows with multiple
+terminal stages must set a top-level `result_stage`.
 
 ## Isolation model
 
 Every job receives a private branch. Write stages share its primary worktree.
 Read stages use disposable detached worktrees. Successful jobs never modify the
 registered project. Integration requires a clean, unchanged root.
+
+Terminal jobs release their worktrees. Branches remain only when retry or
+integration still needs their commits.
 
 ## State
 

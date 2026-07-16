@@ -7,15 +7,29 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from openmcp.config import DaemonConfig, RouteConfig, TargetConfig, load_config
+from openmcp.config import (
+    DaemonConfig,
+    RouteConfig,
+    TargetConfig,
+    load_config,
+    load_project_config,
+    load_task_routes,
+)
 from openmcp.backends._shell import ShellCommandCancelled, stream_shell_command_lines
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
+from openmcp.planning import resolve_execution_plan
 from openmcp.runtime import Runtime
-from openmcp.workflows import load_workflow, parse_workflow, render_prompt
+from openmcp.workflows import (
+    load_workflow,
+    parse_workflow,
+    render_prompt,
+    validate_inputs,
+)
 
 
 def _git(path: Path, *args: str) -> str:
@@ -65,6 +79,7 @@ class FakeDrivers:
         self.outcomes = outcomes or {}
         self.mutate = mutate
         self.sessions: list[str] = []
+        self.backends: list[str] = []
 
     @staticmethod
     def available(target) -> bool:
@@ -72,6 +87,7 @@ class FakeDrivers:
 
     async def execute(self, *, target, cwd, session_id, **kwargs) -> DriverResult:
         self.sessions.append(session_id)
+        self.backends.append(target.backend)
         outcome = self.outcomes.get(target.id, "SUCCESS")
         if outcome == "SUCCESS" and self.mutate:
             (cwd / "result.txt").write_text(f"created by {target.id}\n", encoding="utf-8")
@@ -97,6 +113,11 @@ class BlockingDrivers(FakeDrivers):
         )
 
 
+class ExplodingDrivers(FakeDrivers):
+    async def execute(self, **kwargs) -> DriverResult:
+        raise RuntimeError("driver exploded")
+
+
 class ChangingDrivers(FakeDrivers):
     def __init__(self) -> None:
         super().__init__()
@@ -112,6 +133,137 @@ class ChangingDrivers(FakeDrivers):
             error="",
             error_code="",
         )
+
+
+class OverlayDrivers(FakeDrivers):
+    async def execute(self, *, cwd, session_id, target, **kwargs) -> DriverResult:
+        config = cwd / "config"
+        theme = cwd / "themes" / "dark" / "palette.local.css"
+        assert (
+            config / "application.development.json"
+        ).read_text(encoding="utf-8") == "original\n"
+        assert (config / "remove.development.json").read_text(
+            encoding="utf-8"
+        ) == "remove\n"
+        assert not (config / "private.development.json").exists()
+        assert theme.read_text(encoding="utf-8") == "old theme\n"
+        (config / "application.development.json").write_text(
+            "updated\n",
+            encoding="utf-8",
+        )
+        (config / "remove.development.json").unlink()
+        (config / "created.development.json").write_text(
+            "created\n",
+            encoding="utf-8",
+        )
+        theme.write_text("new theme\n", encoding="utf-8")
+        return DriverResult(
+            outcome="SUCCESS",
+            session_id=session_id or f"session-{target.id}",
+            text="overlay updated",
+            error="",
+            error_code="",
+        )
+
+
+class ChainedOverlayDrivers(FakeDrivers):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def execute(self, *, cwd, session_id, target, **kwargs) -> DriverResult:
+        self.calls += 1
+        path = cwd / "config" / "application.development.json"
+        expected = "original\n" if self.calls == 1 else "parent\n"
+        assert path.read_text(encoding="utf-8") == expected
+        path.write_text(
+            "parent\n" if self.calls == 1 else "child\n",
+            encoding="utf-8",
+        )
+        return DriverResult(
+            outcome="SUCCESS",
+            session_id=session_id or f"session-{target.id}",
+            text=f"overlay update {self.calls}",
+            error="",
+            error_code="",
+        )
+
+
+class RetriedOverlayDrivers(FakeDrivers):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def execute(self, *, cwd, session_id, target, **kwargs) -> DriverResult:
+        self.calls += 1
+        path = cwd / "config" / "application.development.json"
+        expected = {
+            1: "original\n",
+            2: "first\n",
+            3: "original\n",
+            4: "rerun\n",
+        }[self.calls]
+        assert path.read_text(encoding="utf-8") == expected
+        path.write_text(
+            {
+                1: "first\n",
+                2: "failed\n",
+                3: "rerun\n",
+                4: "final\n",
+            }[self.calls],
+            encoding="utf-8",
+        )
+        outcome = "TARGET_FATAL" if self.calls == 2 else "SUCCESS"
+        return DriverResult(
+            outcome=outcome,
+            session_id=session_id or f"session-{target.id}",
+            text="overlay retry" if outcome == "SUCCESS" else "",
+            error="failed stage" if outcome != "SUCCESS" else "",
+            error_code="backend_failure" if outcome != "SUCCESS" else "",
+        )
+
+
+def _overlay_repository(tmp_path: Path) -> Path:
+    root = _repository(tmp_path)
+    (root / ".gitignore").write_text(
+        "\n".join(
+            [
+                ".openmcp.local.toml",
+                "config/*.development.json",
+                "themes/**/*.local.css",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "-m", "ignore development files")
+    config = root / "config"
+    theme = root / "themes" / "dark"
+    config.mkdir()
+    theme.mkdir(parents=True)
+    (config / "application.development.json").write_text(
+        "original\n",
+        encoding="utf-8",
+    )
+    (config / "remove.development.json").write_text(
+        "remove\n",
+        encoding="utf-8",
+    )
+    (config / "private.development.json").write_text(
+        "private\n",
+        encoding="utf-8",
+    )
+    (theme / "palette.local.css").write_text("old theme\n", encoding="utf-8")
+    (root / ".openmcp.local.toml").write_text(
+        """[[overlays]]
+include = ["config/*.development.json", "themes/**/*.local.css"]
+exclude = ["config/private.development.json"]
+workflows = ["single-write"]
+""",
+        encoding="utf-8",
+    )
+    return root
 
 
 def test_workflow_rejects_parallel_write_stages() -> None:
@@ -160,6 +312,69 @@ def test_workflow_renders_dependency_outputs(tmp_path) -> None:
     assert prompt == f"Review done in {tmp_path.as_posix()}"
 
 
+def test_workflow_requires_result_for_multiple_terminal_stages() -> None:
+    data = {
+        "version": 1,
+        "name": "parallel-review",
+        "stages": {
+            "quality": {"route": "review", "prompt": "quality"},
+            "tests": {"route": "review", "prompt": "tests"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="require result_stage"):
+        parse_workflow(data)
+
+    data["result_stage"] = "quality"
+    workflow = parse_workflow(data)
+    assert workflow.result_stage == "quality"
+
+
+def test_workflow_validates_types_and_dependency_references() -> None:
+    workflow = parse_workflow(
+        {
+            "version": 1,
+            "name": "typed",
+            "inputs": {
+                "count": {"type": "integer", "required": True},
+                "note": {"type": "string"},
+            },
+            "stages": {
+                "execute": {
+                    "route": "forge",
+                    "prompt": "${inputs.count}:${inputs.note}",
+                },
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="invalid types"):
+        validate_inputs(workflow, {"count": True})
+    validate_inputs(workflow, {"count": 2})
+    assert render_prompt(
+        workflow.stages[0],
+        inputs={"count": 2},
+        project_root=Path("/project"),
+        stage_results={},
+    ) == "2:"
+
+    with pytest.raises(ValueError, match="non-dependency"):
+        parse_workflow(
+            {
+                "version": 1,
+                "name": "bad-reference",
+                "result_stage": "second",
+                "stages": {
+                    "first": {"route": "forge", "prompt": "first"},
+                    "second": {
+                        "route": "forge",
+                        "prompt": "${stages.first.text}",
+                    },
+                },
+            }
+        )
+
+
 def test_owner_specific_workflows_use_dedicated_routes(tmp_path) -> None:
     routes = {"forge", "canvas", "sage", "sentinel"}
 
@@ -167,6 +382,99 @@ def test_owner_specific_workflows_use_dedicated_routes(tmp_path) -> None:
     assert load_workflow(tmp_path, "canvas-write", routes).stages[0].route == "canvas"
     assert load_workflow(tmp_path, "sage-read", routes).stages[0].route == "sage"
     assert load_workflow(tmp_path, "sentinel-read", routes).stages[0].route == "sentinel"
+
+
+def test_new_role_resolves_without_workflow_parser_changes(tmp_path) -> None:
+    workflow = parse_workflow(
+        {
+            "version": 1,
+            "name": "analyst-read",
+            "stages": {
+                "execute": {
+                    "mode": "read",
+                    "route": "analyst",
+                    "prompt": "analyze",
+                },
+            },
+        }
+    )
+    config = DaemonConfig(
+        home=tmp_path,
+        targets=(TargetConfig(id="analyst-primary", backend="pi"),),
+        routes=(RouteConfig(id="analysis", targets=("analyst-primary",)),),
+        routing_profiles={"balanced": {"analyst": "analysis"}},
+    )
+
+    plan = resolve_execution_plan(workflow, config, "balanced")
+
+    assert plan.route("analyst").id == "analysis"
+    assert plan.target("analyst-primary").backend == "pi"
+
+
+def test_task_route_template_prefers_project_then_global(tmp_path) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    home.mkdir()
+    (project / ".openmcp").mkdir(parents=True)
+    global_path = home / "task_routes.json"
+    project_path = project / ".openmcp" / "task_routes.json"
+    global_path.write_text(
+        '{"version": 1, "routes": [{"recommend": "Forge"}]}',
+        encoding="utf-8",
+    )
+    project_path.write_text(
+        '{"version": 1, "routes": [{"recommend": "Builder"}]}',
+        encoding="utf-8",
+    )
+
+    project_routes = load_task_routes(home, project)
+    project_path.unlink()
+    global_routes = load_task_routes(home, project)
+
+    assert project_routes["routes"][0]["recommend"] == "Builder"
+    assert global_routes["routes"][0]["recommend"] == "Forge"
+
+
+def test_task_route_template_requires_nonempty_json_object(tmp_path) -> None:
+    with pytest.raises(ValueError, match="Missing task route template"):
+        load_task_routes(tmp_path)
+
+    (tmp_path / "task_routes.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="non-empty JSON object"):
+        load_task_routes(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_task_route_tool_uses_registered_project_template(tmp_path) -> None:
+    from openmcp.server import task_route
+
+    root = _repository(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "task_routes.json").write_text(
+        '{"routes": [{"recommend": "Forge"}]}',
+        encoding="utf-8",
+    )
+    directory = root / ".openmcp"
+    directory.mkdir()
+    (directory / "task_routes.json").write_text(
+        '{"routes": [{"recommend": "Builder"}]}',
+        encoding="utf-8",
+    )
+    _git(root, "add", ".openmcp/task_routes.json")
+    _git(root, "commit", "-m", "add task routes")
+    runtime = Runtime(_config(home))
+    try:
+        project = runtime.register_project(str(root))
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(lifespan_context=runtime)
+        )
+
+        result = await task_route("Implement feature", ctx, project.id)
+
+        assert result.template["routes"][0]["recommend"] == "Builder"
+    finally:
+        runtime.database.close()
 
 
 def test_default_consultant_and_reviewer_are_isolated_pi_targets(tmp_path) -> None:
@@ -215,12 +523,212 @@ forge = "forge-quality"
     }
 
 
-def test_database_migrates_routing_profile_column(tmp_path) -> None:
+def test_project_config_overlays_routes_and_profiles(tmp_path) -> None:
+    project = tmp_path / "project"
+    (project / ".openmcp").mkdir(parents=True)
+    (project / ".openmcp" / "config.toml").write_text(
+        """
+[project]
+default_routing_profile = "quality"
+
+[[routes]]
+id = "forge-project"
+targets = ["premium"]
+
+[routing_profiles.quality]
+forge = "forge-project"
+""",
+        encoding="utf-8",
+    )
+    base = DaemonConfig(
+        home=tmp_path / "home",
+        targets=(
+            TargetConfig(id="primary", backend="codex"),
+            TargetConfig(id="premium", backend="agy"),
+        ),
+        routes=(RouteConfig(id="forge", targets=("primary",)),),
+        routing_profiles={"balanced": {"forge": "forge"}},
+    )
+
+    project_config = load_project_config(project, base)
+
+    assert project_config.default_routing_profile == "quality"
+    assert project_config.routing_profiles["quality"] == {
+        "forge": "forge-project",
+    }
+    assert project_config.routes[-1].targets == ("premium",)
+    assert base.default_routing_profile == "balanced"
+
+
+def test_project_config_rejects_daemon_and_target_overrides(tmp_path) -> None:
+    project = tmp_path / "project"
+    (project / ".openmcp").mkdir(parents=True)
+    (project / ".openmcp" / "config.toml").write_text(
+        "[daemon]\nmax_jobs = 1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported project config sections"):
+        load_project_config(project, _config(tmp_path / "home"))
+
+
+def test_project_init_creates_files_without_overwriting(tmp_path) -> None:
+    root = _repository(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "task_routes.json").write_text(
+        '{"version": 1, "routes": [{"recommend": "Forge"}]}',
+        encoding="utf-8",
+    )
+    runtime = Runtime(_config(home))
+    try:
+        first = runtime.initialize_project(str(root))
+        config_path = root / ".openmcp" / "config.toml"
+        config_path.write_text("[project]\n", encoding="utf-8")
+        second = runtime.initialize_project(str(root))
+
+        assert first.created == [
+            ".openmcp/config.toml",
+            ".openmcp/task_routes.json",
+        ]
+        assert first.requires_commit
+        assert second.created == []
+        assert second.existing == first.created
+        assert not second.requires_commit
+        assert config_path.read_text(encoding="utf-8") == "[project]\n"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_submission_uses_project_route_override(tmp_path) -> None:
+    root = _repository(tmp_path)
+    directory = root / ".openmcp"
+    directory.mkdir()
+    (directory / "config.toml").write_text(
+        """
+[[routes]]
+id = "forge"
+targets = ["project-target"]
+""",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".openmcp/config.toml")
+    _git(root, "commit", "-m", "add project routing")
+    targets = (
+        TargetConfig(id="global-target", backend="codex"),
+        TargetConfig(id="project-target", backend="agy"),
+    )
+    runtime = Runtime(
+        DaemonConfig(
+            home=tmp_path / "home",
+            max_jobs=1,
+            targets=targets,
+            routes=(RouteConfig(id="forge", targets=("global-target",)),),
+            routing_profiles={"balanced": {"forge": "forge"}},
+        )
+    )
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(
+            project.id,
+            "single-read",
+            {"prompt": "inspect"},
+        )
+        job = await runtime.wait(submission.job_id, 10)
+
+        assert job.state == "succeeded"
+        assert job.result.text == "response from project-target"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_new_submissions_reload_backend_without_reusing_session(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = _repository(tmp_path)
+    home = tmp_path / "home"
+    path = home / "config.toml"
+    home.mkdir()
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+
+    def write_config(backend: str) -> None:
+        path.write_text(
+            f"""
+[[targets]]
+id = "primary"
+backend = "{backend}"
+capabilities = ["code"]
+
+[[routes]]
+id = "forge"
+targets = ["primary"]
+
+[routing_profiles.balanced]
+forge = "forge"
+""",
+            encoding="utf-8",
+        )
+
+    write_config("codex")
+    runtime = Runtime(load_config(path))
+    drivers = FakeDrivers()
+    runtime.drivers = drivers
+    project = runtime.register_project(str(root))
+    first = await runtime.submit(
+        project.id,
+        "single-read",
+        {"prompt": "first"},
+        context_key="shared",
+    )
+    write_config("agy")
+    await runtime.start()
+    try:
+        await runtime.wait(first.job_id, 10)
+
+        second = await runtime.submit(
+            project.id,
+            "single-read",
+            {"prompt": "second"},
+            context_key="shared",
+        )
+        await runtime.wait(second.job_id, 10)
+
+        assert drivers.backends == ["codex", "agy"]
+        assert drivers.sessions == ["", ""]
+        first_record = runtime.database.job_record(first.job_id)
+        second_record = runtime.database.job_record(second.job_id)
+        assert '"backend": "codex"' in first_record["execution_plan_json"]
+        assert '"backend": "agy"' in second_record["execution_plan_json"]
+    finally:
+        await runtime.close()
+
+
+def test_database_migrates_execution_state(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     Database(path).close()
     connection = sqlite3.connect(path)
     connection.execute("ALTER TABLE jobs DROP COLUMN routing_profile")
+    connection.execute("ALTER TABLE context_sessions RENAME TO context_sessions_new")
+    connection.execute(
+        """
+        CREATE TABLE context_sessions (
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            context_key TEXT NOT NULL,
+            role TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            PRIMARY KEY(project_id, context_key, role, target_id)
+        )
+        """
+    )
+    connection.execute("DROP TABLE context_sessions_new")
     connection.execute("DELETE FROM schema_migrations WHERE version=3")
+    connection.execute("DELETE FROM schema_migrations WHERE version=4")
     connection.commit()
     connection.close()
 
@@ -235,10 +743,20 @@ def test_database_migrates_routing_profile_column(tmp_path) -> None:
         row[0]
         for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
     }
+    session_columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(context_sessions)"
+        ).fetchall()
+    }
     connection.close()
 
     assert "routing_profile" in columns
+    assert "execution_plan_json" in columns
+    assert "result_stage" in columns
+    assert {"target_key", "lane", "updated_at"}.issubset(session_columns)
     assert 3 in migrations
+    assert 4 in migrations
 
 
 def test_database_marks_active_work_interrupted(tmp_path) -> None:
@@ -277,6 +795,47 @@ def test_database_marks_active_work_interrupted(tmp_path) -> None:
     database.close()
 
 
+def test_job_views_return_result_text_once(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    database.upsert_project(
+        project_id="project",
+        alias="project",
+        root="/project",
+        head_commit="abc",
+        clean=True,
+    )
+    database.create_job(
+        job_id="job",
+        project_id="project",
+        workflow="two-stage",
+        routing_profile="balanced",
+        workflow_json="{}",
+        result_stage="review",
+        inputs={},
+        context_key="test",
+        parent_job_id="",
+        base_commit="abc",
+        integration_base="abc",
+        branch="openmcp/job",
+        worktree="/worktree",
+        stages=[("implement", 0, "write"), ("review", 1, "read")],
+    )
+    database.set_stage_state("job", "implement", "succeeded", text="implemented")
+    database.set_stage_state("job", "review", "succeeded", text="reviewed")
+    database.set_job_commit("job", "def")
+    database.set_job_state("job", "succeeded")
+
+    compact = database.job("job", include_stage_outputs=False)
+    detailed = database.job("job", include_stage_outputs=True)
+
+    assert compact is not None
+    assert detailed is not None
+    assert compact.result.text == "reviewed"
+    assert [stage.text for stage in compact.stages] == ["", ""]
+    assert [stage.text for stage in detailed.stages] == ["implemented", ""]
+    database.close()
+
+
 def test_shell_command_cancellation_terminates_process_group() -> None:
     cancelled = threading.Event()
     timer = threading.Timer(0.2, cancelled.set)
@@ -310,7 +869,9 @@ async def test_mcp_exposes_clean_daemon_contract() -> None:
     }
 
     assert set(tools) == {
+        "project_init",
         "project_register",
+        "task_route",
         "job_submit",
         "job_wait",
         "job_cancel",
@@ -319,12 +880,19 @@ async def test_mcp_exposes_clean_daemon_contract() -> None:
     }
     assert "parent_job_id" in tools["job_submit"].inputSchema["properties"]
     assert "routing_profile" in tools["job_submit"].inputSchema["properties"]
+    assert "include_stage_outputs" in tools["job_wait"].inputSchema["properties"]
+    assert set(tools["task_route"].inputSchema["properties"]) == {
+        "task",
+        "project_id",
+    }
+    assert set(tools["project_init"].inputSchema["properties"]) == {"path"}
     assert resources == {
         "openmcp://projects",
         "openmcp://models",
         "openmcp://routing-profiles",
     }
     assert "openmcp://projects/{project_id}/jobs" in templates
+    assert "openmcp://projects/{project_id}/routing-profiles" in templates
 
 
 @pytest.mark.asyncio
@@ -345,12 +913,209 @@ async def test_write_job_isolated_then_integrated(tmp_path) -> None:
 
         assert job.state == "succeeded"
         assert job.result.commit != job.base_commit
+        assert job.result.text == "response from primary"
+        assert job.stages[0].text == ""
         assert not (root / "result.txt").exists()
+        assert not Path(runtime.database.job_record(job.id)["worktree"]).exists()
 
         integrated = runtime.integrate(job.id)
         assert integrated.success
         assert integrated.state == "integrated"
         assert (root / "result.txt").read_text(encoding="utf-8") == "created by primary\n"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_write_job_integrates_project_overlay_patterns(tmp_path) -> None:
+    root = _overlay_repository(tmp_path)
+    runtime = Runtime(_config(tmp_path / "home"))
+    runtime.drivers = OverlayDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(
+            project.id,
+            "single-write",
+            {"prompt": "update development files"},
+        )
+        job = await runtime.wait(submission.job_id, 10)
+
+        assert job.state == "succeeded"
+        assert job.result.commit == job.base_commit
+        assert (root / "config" / "application.development.json").read_text(
+            encoding="utf-8"
+        ) == "original\n"
+        assert not (root / "config" / "created.development.json").exists()
+
+        integrated = runtime.integrate(job.id)
+
+        assert integrated.success
+        assert (root / "config" / "application.development.json").read_text(
+            encoding="utf-8"
+        ) == "updated\n"
+        assert not (root / "config" / "remove.development.json").exists()
+        assert (root / "config" / "created.development.json").read_text(
+            encoding="utf-8"
+        ) == "created\n"
+        assert (root / "config" / "private.development.json").read_text(
+            encoding="utf-8"
+        ) == "private\n"
+        assert (root / "themes" / "dark" / "palette.local.css").read_text(
+            encoding="utf-8"
+        ) == "new theme\n"
+        assert _git(root, "status", "--porcelain=v1") == ""
+        assert _git(root, "ls-files", "config") == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_overlay_integration_detects_local_conflict(tmp_path) -> None:
+    root = _overlay_repository(tmp_path)
+    runtime = Runtime(_config(tmp_path / "home"))
+    runtime.drivers = OverlayDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(
+            project.id,
+            "single-write",
+            {"prompt": "update development files"},
+        )
+        job = await runtime.wait(submission.job_id, 10)
+        local = root / "config" / "application.development.json"
+        local.write_text("changed locally\n", encoding="utf-8")
+
+        integrated = runtime.integrate(job.id)
+
+        assert not integrated.success
+        assert integrated.state == "integration_conflict"
+        assert integrated.error.endswith("config/application.development.json")
+        assert local.read_text(encoding="utf-8") == "changed locally\n"
+        assert not (root / "config" / "created.development.json").exists()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_child_job_inherits_parent_overlay_changes(tmp_path) -> None:
+    root = _overlay_repository(tmp_path)
+    runtime = Runtime(_config(tmp_path / "home"))
+    runtime.drivers = ChainedOverlayDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        parent_submission = await runtime.submit(
+            project.id,
+            "single-write",
+            {"prompt": "first overlay update"},
+        )
+        parent = await runtime.wait(parent_submission.job_id, 10)
+        child_submission = await runtime.submit(
+            project.id,
+            "single-write",
+            {"prompt": "second overlay update"},
+            parent_job_id=parent.id,
+        )
+        child = await runtime.wait(child_submission.job_id, 10)
+
+        integrated = runtime.integrate(child.id)
+
+        assert integrated.success
+        assert runtime.database.job(parent.id).state == "integrated"
+        assert runtime.database.job(child.id).state == "integrated"
+        assert (root / "config" / "application.development.json").read_text(
+            encoding="utf-8"
+        ) == "child\n"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_rewinds_overlay_to_selected_stage(tmp_path) -> None:
+    root = _overlay_repository(tmp_path)
+    workflows = root / ".openmcp" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "overlay-retry.yaml").write_text(
+        """version: 1
+name: overlay-retry
+stages:
+  first:
+    mode: write
+    route: forge
+    prompt: first
+  second:
+    needs: [first]
+    mode: write
+    route: forge
+    prompt: second
+""",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".openmcp/workflows/overlay-retry.yaml")
+    _git(root, "commit", "-m", "add overlay retry workflow")
+    (root / ".openmcp.local.toml").write_text(
+        """[[overlays]]
+include = ["config/*.development.json"]
+workflows = ["overlay-retry"]
+""",
+        encoding="utf-8",
+    )
+    runtime = Runtime(_config(tmp_path / "home"))
+    runtime.drivers = RetriedOverlayDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(
+            project.id,
+            "overlay-retry",
+            {},
+        )
+        failed = await runtime.wait(submission.job_id, 10)
+
+        assert failed.state == "failed"
+        retried = await runtime.retry(failed.id, "first")
+        succeeded = await runtime.wait(retried.job_id, 10)
+
+        assert succeeded.state == "succeeded"
+        assert runtime.integrate(succeeded.id).success
+        assert (root / "config" / "application.development.json").read_text(
+            encoding="utf-8"
+        ) == "final\n"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_overlay_rejects_tracked_files(tmp_path) -> None:
+    root = _repository(tmp_path)
+    (root / ".gitignore").write_text(
+        ".openmcp.local.toml\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "-m", "ignore local overlay config")
+    (root / ".openmcp.local.toml").write_text(
+        """[[overlays]]
+include = ["README.md"]
+workflows = ["single-write"]
+""",
+        encoding="utf-8",
+    )
+    runtime = Runtime(_config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+
+        with pytest.raises(ValueError, match="must be ignored by Git: README.md"):
+            await runtime.submit(
+                project.id,
+                "single-write",
+                {"prompt": "update development files"},
+            )
+
+        assert _git(root, "branch", "--list", "openmcp/*") == ""
     finally:
         await runtime.close()
 
@@ -498,6 +1263,9 @@ async def test_failed_job_can_retry_explicitly(tmp_path) -> None:
         )
         failed = await runtime.wait(submission.job_id, 10)
         assert failed.state == "failed"
+        record = runtime.database.job_record(failed.id)
+        assert record is not None
+        assert not Path(record["worktree"]).exists()
 
         drivers.outcomes.clear()
         retried = await runtime.retry(failed.id)
@@ -505,6 +1273,59 @@ async def test_failed_job_can_retry_explicitly(tmp_path) -> None:
 
         assert succeeded.state == "succeeded"
         assert succeeded.stages[0].attempts == 2
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_unexpected_driver_error_fails_stage_and_cleans_worktree(tmp_path) -> None:
+    root = _repository(tmp_path)
+    runtime = Runtime(_config(tmp_path / "home"))
+    runtime.drivers = ExplodingDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(
+            project.id,
+            "single-write",
+            {"prompt": "explode"},
+        )
+        job = await runtime.wait(submission.job_id, 10)
+        record = runtime.database.job_record(job.id)
+
+        assert job.state == "failed"
+        assert job.stages[0].state == "failed"
+        assert job.result.error == "driver exploded"
+        assert record is not None
+        assert not Path(record["worktree"]).exists()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_queued_cancellation_cleans_and_remains_retryable(tmp_path) -> None:
+    root = _repository(tmp_path)
+    runtime = Runtime(_config(tmp_path / "home"))
+    runtime.drivers = FakeDrivers()
+    project = runtime.register_project(str(root))
+    submission = await runtime.submit(
+        project.id,
+        "single-read",
+        {"prompt": "inspect"},
+    )
+    record = runtime.database.job_record(submission.job_id)
+    assert record is not None
+
+    cancelled = runtime.cancel(submission.job_id)
+
+    assert cancelled.state == "cancelled"
+    assert not Path(record["worktree"]).exists()
+
+    await runtime.start()
+    try:
+        retried = await runtime.retry(submission.job_id)
+        succeeded = await runtime.wait(retried.job_id, 10)
+        assert succeeded.state == "succeeded"
     finally:
         await runtime.close()
 
@@ -537,6 +1358,34 @@ async def test_daemon_shutdown_marks_running_job_interrupted(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_startup_cleans_abandoned_running_worktree(tmp_path) -> None:
+    root = _repository(tmp_path)
+    home = tmp_path / "home"
+    abandoned = Runtime(_config(home))
+    project = abandoned.register_project(str(root))
+    submission = await abandoned.submit(
+        project.id,
+        "single-read",
+        {"prompt": "wait"},
+    )
+    record = abandoned.database.job_record(submission.job_id)
+    assert record is not None
+    abandoned.database.set_job_state(submission.job_id, "running")
+    abandoned.database.set_stage_state(submission.job_id, "execute", "running")
+    abandoned.database.close()
+
+    runtime = Runtime(_config(home))
+    await runtime.start()
+    try:
+        interrupted = runtime.database.job(submission.job_id)
+        assert interrupted is not None
+        assert interrupted.state == "interrupted"
+        assert not Path(record["worktree"]).exists()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_review_job_can_chain_before_integration(tmp_path) -> None:
     root = _repository(tmp_path)
     runtime = Runtime(_config(tmp_path / "home"))
@@ -565,7 +1414,8 @@ async def test_review_job_can_chain_before_integration(tmp_path) -> None:
 
         assert review_job.base_commit == implementation_job.result.commit
         assert review_job.integration_base == implementation_job.integration_base
-        assert _git(Path(runtime.database.job_record(implementation_job.id)["worktree"]), "log", "-1", "--format=%s") == "feat: add result"
+        assert not Path(runtime.database.job_record(implementation_job.id)["worktree"]).exists()
+        assert _git(root, "log", "-1", "--format=%s", implementation_job.result.commit) == "feat: add result"
         assert not (root / "result.txt").exists()
 
         integrated = runtime.integrate(implementation_job.id)

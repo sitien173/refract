@@ -40,6 +40,7 @@ class WorkflowSpec:
     name: str
     inputs: dict[str, InputSpec]
     stages: tuple[StageSpec, ...]
+    result_stage: str
     digest: str
 
 
@@ -140,6 +141,20 @@ def _parse_stages(raw: Any) -> tuple[StageSpec, ...]:
     return tuple(stages)
 
 
+def _dependencies(stages: tuple[StageSpec, ...], stage_id: str) -> set[str]:
+    by_id = {stage.id: stage for stage in stages}
+    resolved: set[str] = set()
+
+    def collect(value: str) -> None:
+        for dependency in by_id[value].needs:
+            if dependency not in resolved:
+                resolved.add(dependency)
+                collect(dependency)
+
+    collect(stage_id)
+    return resolved
+
+
 def _validate_graph(stages: tuple[StageSpec, ...]) -> None:
     by_id = {stage.id: stage for stage in stages}
     for stage in stages:
@@ -194,9 +209,19 @@ def _validate_variables(workflow: WorkflowSpec) -> None:
                 valid = parts[1] in stage_ids and parts[2] in {"text", "outputs", "commit"}
             if not valid:
                 raise ValueError(f"Stage {stage.id!r} has unknown variable {variable!r}")
+            if parts[0] == "stages" and parts[1] not in _dependencies(
+                workflow.stages,
+                stage.id,
+            ):
+                raise ValueError(
+                    f"Stage {stage.id!r} references non-dependency {parts[1]!r}"
+                )
 
 
-def parse_workflow(data: Any, known_routes: set[str] | None) -> WorkflowSpec:
+def parse_workflow(
+    data: Any,
+    known_routes: set[str] | None = None,
+) -> WorkflowSpec:
     if not isinstance(data, dict):
         raise ValueError("Workflow document must be a mapping")
     version = int(data.get("version", 0))
@@ -208,21 +233,31 @@ def parse_workflow(data: Any, known_routes: set[str] | None) -> WorkflowSpec:
     inputs = _parse_inputs(data.get("inputs"))
     stages = _parse_stages(data.get("stages"))
     _validate_graph(stages)
-    if known_routes is not None:
-        unknown_routes = {stage.route for stage in stages} - known_routes
-        if unknown_routes:
-            raise ValueError(f"Unknown workflow routes: {sorted(unknown_routes)}")
+    dependencies = {dependency for stage in stages for dependency in stage.needs}
+    terminal_stages = [stage.id for stage in stages if stage.id not in dependencies]
+    result_stage = str(data.get("result_stage", "")).strip()
+    if result_stage:
+        if result_stage not in {stage.id for stage in stages}:
+            raise ValueError(f"Unknown workflow result stage {result_stage!r}")
+        if result_stage not in terminal_stages:
+            raise ValueError("Workflow result stage must be terminal")
+    elif len(terminal_stages) == 1:
+        result_stage = terminal_stages[0]
+    else:
+        raise ValueError("Workflows with multiple terminal stages require result_stage")
     canonical = {
         "version": version,
         "name": name,
         "inputs": {key: asdict(value) for key, value in inputs.items()},
         "stages": [asdict(stage) for stage in stages],
+        "result_stage": result_stage,
     }
     workflow = WorkflowSpec(
         version=version,
         name=name,
         inputs=inputs,
         stages=stages,
+        result_stage=result_stage,
         digest=_digest(canonical),
     )
     _validate_variables(workflow)
@@ -244,10 +279,15 @@ def workflow_data(workflow: WorkflowSpec) -> dict[str, Any]:
         "name": workflow.name,
         "inputs": {key: asdict(value) for key, value in workflow.inputs.items()},
         "stages": stages,
+        "result_stage": workflow.result_stage,
     }
 
 
-def load_workflow(project_root: Path, name: str, known_routes: set[str]) -> WorkflowSpec:
+def load_workflow(
+    project_root: Path,
+    name: str,
+    known_routes: set[str] | None = None,
+) -> WorkflowSpec:
     builtin = _builtin(name)
     if builtin is not None:
         return parse_workflow(workflow_data(builtin), known_routes)
@@ -273,6 +313,21 @@ def validate_inputs(workflow: WorkflowSpec, values: dict[str, Any]) -> None:
         raise ValueError(f"Unknown workflow inputs: {sorted(unknown)}")
     if missing:
         raise ValueError(f"Missing workflow inputs: {sorted(missing)}")
+    expected_types = {
+        "string": lambda value: isinstance(value, str),
+        "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
+        "number": lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
+        "boolean": lambda value: isinstance(value, bool),
+        "object": lambda value: isinstance(value, dict),
+        "array": lambda value: isinstance(value, list),
+    }
+    invalid = [
+        name
+        for name, value in values.items()
+        if not expected_types[workflow.inputs[name].type](value)
+    ]
+    if invalid:
+        raise ValueError(f"Workflow inputs have invalid types: {sorted(invalid)}")
 
 
 def render_prompt(
@@ -286,13 +341,15 @@ def render_prompt(
         variable = match.group(1)
         parts = variable.split(".")
         if parts[0] == "inputs":
-            value = inputs[parts[1]]
+            value = inputs.get(parts[1], "")
         elif parts == ["project", "root"]:
             value = project_root.as_posix()
         else:
             results = stage_results.get(parts[1], [])
             if parts[2] == "outputs":
                 value = [result.get("text", "") for result in results]
+            elif parts[2] == "text":
+                value = "\n\n".join(result.get("text", "") for result in results)
             else:
                 value = results[-1].get(parts[2], "") if results else ""
         if isinstance(value, str):

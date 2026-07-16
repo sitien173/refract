@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 
 class WorkspaceError(RuntimeError):
@@ -52,6 +53,30 @@ def inspect_repository(path: Path) -> RepositoryState:
     except WorkspaceError as exc:
         raise WorkspaceError(f"Project must be a Git repository: {resolved}: {exc}") from exc
     return RepositoryState(root=root, head=head, clean=not status)
+
+
+def ignored_paths(repository: Path, relatives: Iterable[str]) -> set[str]:
+    values = sorted(set(relatives))
+    if not values:
+        return set()
+    git = shutil.which("git")
+    if git is None:
+        raise WorkspaceError("Git was not found on PATH")
+    completed = subprocess.run(
+        [git, "-C", str(repository), "check-ignore", "-z", "--stdin"],
+        input="\0".join(values) + "\0",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=False,
+        check=False,
+    )
+    if completed.returncode in {0, 1}:
+        return set(completed.stdout.rstrip("\0").split("\0")) - {""}
+    error = completed.stderr.strip() or completed.stdout.strip()
+    raise WorkspaceError(error or "Could not inspect ignored paths")
 
 
 class WorkspaceManager:
@@ -104,14 +129,20 @@ class WorkspaceManager:
         path.parent.mkdir(parents=True, exist_ok=True)
         _git("-C", str(repository), "worktree", "add", str(path), branch)
 
-    @staticmethod
-    def remove(repository: Path, path: Path) -> None:
+    def remove(self, repository: Path, path: Path) -> None:
         if path.exists():
             try:
                 _git("-C", str(repository), "worktree", "remove", "--force", str(path))
             except WorkspaceError:
                 shutil.rmtree(path, ignore_errors=True)
                 _git("-C", str(repository), "worktree", "prune")
+        parent = path.parent
+        while parent != self.root and parent.is_relative_to(self.root):
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
 
     @staticmethod
     def head(path: Path) -> str:
@@ -191,4 +222,5 @@ __all__ = [
     "WorkspaceError",
     "WorkspaceManager",
     "inspect_repository",
+    "ignored_paths",
 ]

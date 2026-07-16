@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ class DaemonConfig:
     targets: tuple[TargetConfig, ...] = field(default_factory=tuple)
     routes: tuple[RouteConfig, ...] = field(default_factory=tuple)
     routing_profiles: dict[str, dict[str, str]] = field(default_factory=dict)
+    config_path: Path | None = None
 
     @property
     def database_path(self) -> Path:
@@ -62,6 +64,31 @@ class DaemonConfig:
 def openmcp_home() -> Path:
     override = os.environ.get("OPENMCP_HOME", "").strip()
     return Path(override).expanduser() if override else Path.home() / ".openmcp"
+
+
+def load_task_routes(
+    home: Path,
+    project_root: Path | None = None,
+) -> dict[str, Any]:
+    project_path = (
+        project_root / ".openmcp" / "task_routes.json"
+        if project_root is not None
+        else None
+    )
+    path = (
+        project_path
+        if project_path is not None and project_path.exists()
+        else home / "task_routes.json"
+    )
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"Missing task route template: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid task route template: {path}: {exc.msg}") from exc
+    if not isinstance(value, dict) or not value:
+        raise ValueError("Task route template must be a non-empty JSON object")
+    return value
 
 
 def _positive_int(value: Any, default: int) -> int:
@@ -243,6 +270,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         )
     return DaemonConfig(
         home=home,
+        config_path=config_path,
         host=str(daemon.get("host", "127.0.0.1")),
         port=_positive_int(daemon.get("port"), 8765),
         max_jobs=_positive_int(daemon.get("max_jobs"), 4),
@@ -255,10 +283,77 @@ def load_config(path: Path | None = None) -> DaemonConfig:
     )
 
 
+def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
+    path = project_root / ".openmcp" / "config.toml"
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return base
+    unsupported = set(raw) - {"project", "routes", "routing_profiles"}
+    if unsupported:
+        raise ValueError(f"Unsupported project config sections: {sorted(unsupported)}")
+
+    project = raw.get("project", {})
+    if not isinstance(project, dict):
+        raise ValueError("[project] must be a TOML table")
+
+    raw_routes = raw.get("routes")
+    if raw_routes is None:
+        route_overrides: tuple[RouteConfig, ...] = ()
+    elif not isinstance(raw_routes, list):
+        raise ValueError("Project routes must be TOML tables")
+    elif raw_routes:
+        route_overrides = _routes(raw_routes, base.targets)
+    else:
+        route_overrides = ()
+    route_by_id = {route.id: route for route in base.routes}
+    route_by_id.update({route.id: route for route in route_overrides})
+    routes = tuple(route_by_id.values())
+
+    profiles = {
+        profile_id: dict(mapping)
+        for profile_id, mapping in base.routing_profiles.items()
+    }
+    raw_profiles = raw.get("routing_profiles")
+    if raw_profiles is not None:
+        if not isinstance(raw_profiles, dict) or not raw_profiles:
+            raise ValueError("[routing_profiles] must contain at least one profile")
+        inherited = profiles[base.default_routing_profile]
+        route_ids = set(route_by_id)
+        for profile_id, mapping in raw_profiles.items():
+            if not isinstance(mapping, dict) or not mapping:
+                raise ValueError(f"Routing profile {profile_id!r} must be a table")
+            resolved = {
+                **profiles.get(str(profile_id), inherited),
+                **{str(role): str(route) for role, route in mapping.items()},
+            }
+            unknown = set(resolved.values()) - route_ids
+            if unknown:
+                raise ValueError(
+                    f"Routing profile {profile_id!r} has unknown routes: "
+                    f"{sorted(unknown)}"
+                )
+            profiles[str(profile_id)] = resolved
+
+    default_profile = str(
+        project.get("default_routing_profile", base.default_routing_profile)
+    ).strip()
+    if default_profile not in profiles:
+        raise ValueError(f"Unknown project routing profile: {default_profile!r}")
+    return replace(
+        base,
+        default_routing_profile=default_profile,
+        routes=routes,
+        routing_profiles=profiles,
+    )
+
+
 __all__ = [
     "DaemonConfig",
     "RouteConfig",
     "TargetConfig",
     "load_config",
+    "load_project_config",
+    "load_task_routes",
     "openmcp_home",
 ]

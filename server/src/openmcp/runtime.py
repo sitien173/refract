@@ -11,7 +11,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from openmcp.config import DaemonConfig, RouteConfig, TargetConfig
+from openmcp.config import (
+    DaemonConfig,
+    RouteConfig,
+    TargetConfig,
+    load_config,
+    load_project_config,
+    load_task_routes,
+)
 from openmcp.database import Database, utc_now
 from openmcp.drivers import DriverRegistry, DriverResult
 from openmcp.logging_setup import get_logger
@@ -19,8 +26,31 @@ from openmcp.models import (
     ActionResult,
     JobView,
     ModelTargetView,
+    ProjectInitResult,
     ProjectView,
     SubmissionResult,
+)
+from openmcp.overlays import (
+    OverlayError,
+    apply_overlays,
+    capture_overlays,
+    copy_overlays,
+    discard_overlays,
+    inherit_overlays,
+    initialize_overlays,
+    load_overlay_rules,
+    preflight_overlays,
+    rewind_overlays,
+    restore_overlays,
+    seal_overlays,
+    validate_overlays,
+)
+from openmcp.planning import (
+    ExecutionPlan,
+    execution_plan_data,
+    parse_execution_plan,
+    resolve_execution_plan,
+    target_execution_key,
 )
 from openmcp.workflows import (
     StageSpec,
@@ -69,30 +99,24 @@ class Runtime:
         self._workers: list[asyncio.Task[None]] = []
         self._cancel_events: dict[str, threading.Event] = {}
         self._completion_events: dict[str, asyncio.Event] = {}
-        self._target_semaphores = {
-            target.id: asyncio.Semaphore(target.max_concurrency)
-            for target in config.targets
-        }
-        self._target_active = {target.id: 0 for target in config.targets}
-        self._targets = {target.id: target for target in config.targets}
-        self._routes = {route.id: route for route in config.routes}
-        self._routing_profiles = config.routing_profiles or {
-            config.default_routing_profile: {
-                route_id: route_id for route_id in self._routes
-            }
-        }
-        self._logical_routes = {
-            role
-            for mapping in self._routing_profiles.values()
-            for role in mapping
-        }
+        self._target_semaphores: dict[str, asyncio.Semaphore] = {}
+        self._target_active: dict[str, int] = {}
+        self._catalog = config
         self._closing = False
 
     async def start(self) -> None:
         self._closing = False
         interrupted = self.database.interrupt_active_jobs()
         if interrupted:
-            log.warning("Marked %d active records interrupted", interrupted)
+            log.warning("Marked %d active records interrupted", len(interrupted))
+        for job_id in set(interrupted) | set(self.database.terminal_job_ids()):
+            record = self.database.job_record(job_id)
+            if record is None:
+                continue
+            if record["state"] in {"failed", "cancelled", "interrupted"}:
+                self.database.skip_unfinished_stages(job_id)
+            if Path(record["worktree"]).exists():
+                self._cleanup_terminal_workspace(job_id)
         self._workers = [
             asyncio.create_task(self._worker(), name=f"openmcp-worker-{index}")
             for index in range(self.config.max_jobs)
@@ -134,6 +158,48 @@ class Runtime:
                 raise RuntimeError(f"Project alias already exists: {resolved_alias}") from exc
             raise
 
+    def initialize_project(self, path: str) -> ProjectInitResult:
+        try:
+            state = inspect_repository(Path(path))
+        except WorkspaceError as exc:
+            raise RuntimeError(str(exc)) from exc
+        directory = state.root / ".openmcp"
+        config_path = directory / "config.toml"
+        routes_path = directory / "task_routes.json"
+        contents: dict[Path, str] = {}
+        if not config_path.exists():
+            default_profile = self._reload_catalog().default_routing_profile
+            contents[config_path] = (
+                "[project]\n"
+                f"default_routing_profile = {json.dumps(default_profile)}\n"
+            )
+        if not routes_path.exists():
+            template = load_task_routes(self.config.home)
+            contents[routes_path] = json.dumps(
+                template,
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+
+        directory.mkdir(parents=True, exist_ok=True)
+        for file_path, content in contents.items():
+            file_path.write_text(content, encoding="utf-8")
+        expected = (config_path, routes_path)
+        return ProjectInitResult(
+            root=state.root.as_posix(),
+            created=[
+                file_path.relative_to(state.root).as_posix()
+                for file_path in expected
+                if file_path in contents
+            ],
+            existing=[
+                file_path.relative_to(state.root).as_posix()
+                for file_path in expected
+                if file_path not in contents
+            ],
+            requires_commit=bool(contents),
+        )
+
     async def submit(
         self,
         project_id: str,
@@ -159,25 +225,27 @@ class Runtime:
             head_commit=state.head,
             clean=True,
         )
-        selected_profile = (
-            routing_profile.strip() or self.config.default_routing_profile
-        )
-        profile_routes = self._routing_profiles.get(selected_profile)
-        if profile_routes is None:
-            raise RuntimeError(f"Unknown routing profile: {selected_profile}")
-        workflow = load_workflow(
-            Path(project.root),
-            workflow_name,
-            self._logical_routes,
-        )
-        missing_routes = {
-            stage.route for stage in workflow.stages if stage.route not in profile_routes
-        }
-        if missing_routes:
-            raise RuntimeError(
-                f"Routing profile {selected_profile!r} does not map roles: "
-                f"{sorted(missing_routes)}"
+        try:
+            catalog = load_project_config(
+                Path(project.root),
+                self._reload_catalog(),
             )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        selected_profile = routing_profile.strip() or catalog.default_routing_profile
+        workflow = load_workflow(Path(project.root), workflow_name)
+        try:
+            overlay_rules = load_overlay_rules(state.root, workflow.name)
+        except OverlayError as exc:
+            raise RuntimeError(str(exc)) from exc
+        try:
+            execution_plan = resolve_execution_plan(
+                workflow,
+                catalog,
+                selected_profile,
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
         validate_inputs(workflow, inputs)
         base_commit = state.head
         integration_base = state.head
@@ -198,12 +266,31 @@ class Runtime:
                 job_id,
                 base_commit,
             )
+            overlay_root = self._overlay_root(job_id)
+            initialize_overlays(
+                state.root,
+                worktree,
+                overlay_root,
+                overlay_rules,
+            )
+            if parent_job_id:
+                inherit_overlays(
+                    self._overlay_root(parent_job_id),
+                    worktree,
+                    overlay_root,
+                )
+            seal_overlays(overlay_root)
             self.database.create_job(
                 job_id=job_id,
                 project_id=project.id,
                 workflow=workflow.name,
                 routing_profile=selected_profile,
                 workflow_json=json.dumps(workflow_data(workflow), ensure_ascii=False),
+                execution_plan_json=json.dumps(
+                    execution_plan_data(execution_plan),
+                    ensure_ascii=False,
+                ),
+                result_stage=workflow.result_stage,
                 inputs=inputs,
                 context_key=context_key.strip() or workflow.name,
                 parent_job_id=parent_job_id,
@@ -216,10 +303,15 @@ class Runtime:
                     for index, stage in enumerate(workflow.stages)
                 ),
             )
-        except Exception:
+        except Exception as exc:
             candidate = self.config.worktrees_path / job_id / "primary"
-            if candidate.exists():
-                self.workspaces.remove(state.root, candidate)
+            self.workspaces.discard_job(
+                state.root,
+                candidate,
+                f"openmcp/{job_id}",
+            )
+            if isinstance(exc, OverlayError):
+                raise RuntimeError(str(exc)) from exc
             raise
         self._completion_events[job_id] = asyncio.Event()
         await self._queue.put(job_id)
@@ -250,6 +342,8 @@ class Runtime:
             raise RuntimeError(f"Unknown job: {job_id}")
         if job.state == "queued":
             self.database.set_job_state(job_id, "cancelled")
+            self.database.skip_unfinished_stages(job_id)
+            self._cleanup_terminal_workspace(job_id)
             self._signal_completion(job_id)
             return ActionResult(success=True, job_id=job_id, state="cancelled")
         if job.state != "running":
@@ -271,18 +365,70 @@ class Runtime:
         if job.state not in {"failed", "cancelled", "interrupted"}:
             raise RuntimeError(f"Job cannot be retried from {job.state}")
         stages = self.database.stage_records(job_id)
+        workflow_document = json.loads(record["workflow_json"])
+        if "result_stage" not in workflow_document and record["result_stage"]:
+            workflow_document["result_stage"] = record["result_stage"]
+        workflow = parse_workflow(workflow_document)
         selected = None
         if from_stage:
             selected = next((stage for stage in stages if stage["id"] == from_stage), None)
             if selected is None:
                 raise RuntimeError(f"Unknown stage: {from_stage}")
         else:
-            selected = next((stage for stage in stages if stage["state"] != "succeeded"), None)
+            selected = next(
+                (
+                    stage
+                    for stage in stages
+                    if stage["state"] in {"failed", "cancelled", "interrupted"}
+                ),
+                None,
+            )
+            selected = selected or next(
+                (stage for stage in stages if stage["state"] != "succeeded"),
+                None,
+            )
             selected = selected or stages[-1]
+        stage_by_id = {stage.id: stage for stage in workflow.stages}
+        selected_spec = stage_by_id[selected["id"]]
+        stage_states = {stage["id"]: stage["state"] for stage in stages}
+        blocked_dependencies = [
+            dependency
+            for dependency in selected_spec.needs
+            if stage_states[dependency] != "succeeded"
+        ]
+        if blocked_dependencies:
+            raise RuntimeError(
+                f"Retry stage {selected_spec.id!r} has unfinished dependencies: "
+                f"{sorted(blocked_dependencies)}"
+            )
+
+        def depends_on(stage: StageSpec, dependency: str) -> bool:
+            return dependency in stage.needs or any(
+                depends_on(stage_by_id[value], dependency)
+                for value in stage.needs
+            )
+
+        reset_ids = {
+            stage.id
+            for stage in workflow.stages
+            if stage.id == selected_spec.id
+            or depends_on(stage, selected_spec.id)
+            or stage_states[stage.id] == "skipped"
+        }
         project = self.database.project(job.project_id)
         if project is None:
             raise RuntimeError(f"Unknown project: {job.project_id}")
         worktree = Path(record["worktree"])
+        previous_overlay_stage = next(
+            (
+                stage
+                for stage in reversed(stages)
+                if stage["ordinal"] < selected["ordinal"]
+                and stage["mode"] == "write"
+                and stage["state"] == "succeeded"
+            ),
+            None,
+        )
         try:
             self.workspaces.restore_job(Path(project.root), worktree, record["branch"])
             start_commit = selected["start_commit"] or record["base_commit"]
@@ -290,9 +436,13 @@ class Runtime:
             if self.workspaces.archive_patch(worktree, patch_path, start_commit):
                 self.database.add_artifact(job_id, "retry_patch", patch_path.as_posix())
             self.workspaces.reset(worktree, start_commit)
+            rewind_overlays(
+                self._overlay_root(job_id),
+                previous_overlay_stage["id"] if previous_overlay_stage else "",
+            )
         except WorkspaceError as exc:
             raise RuntimeError(str(exc)) from exc
-        self.database.reset_retry(job_id, int(selected["ordinal"]))
+        self.database.reset_retry(job_id, reset_ids)
         self._completion_events[job_id] = asyncio.Event()
         await self._queue.put(job_id)
         return SubmissionResult(job_id=job_id, state="queued")
@@ -320,12 +470,20 @@ class Runtime:
         if project is None:
             raise RuntimeError(f"Unknown project: {job.project_id}")
         try:
+            preflight_overlays(
+                Path(project.root),
+                self._overlay_root(job_id),
+            )
             self.workspaces.integrate(
                 Path(project.root),
                 job.integration_base,
                 job.result.commit,
             )
-        except WorkspaceError as exc:
+            apply_overlays(
+                Path(project.root),
+                self._overlay_root(job_id),
+            )
+        except (OverlayError, WorkspaceError) as exc:
             self.database.set_job_state(job_id, "integration_conflict", error=str(exc))
             self._signal_completion(job_id)
             return ActionResult(
@@ -359,11 +517,106 @@ class Runtime:
         self._signal_completion(job_id)
         return ActionResult(success=True, job_id=job_id, state="integrated")
 
+    @property
+    def catalog(self) -> DaemonConfig:
+        return self._catalog
+
+    def catalog_for_project(self, project_id: str) -> DaemonConfig:
+        project = self.database.project(project_id)
+        if project is None:
+            raise RuntimeError(f"Unknown project: {project_id}")
+        try:
+            return load_project_config(
+                Path(project.root),
+                self._reload_catalog(),
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    def _reload_catalog(self) -> DaemonConfig:
+        if self.config.config_path is None:
+            return self._catalog
+        catalog = load_config(self.config.config_path)
+        self._catalog = catalog
+        return catalog
+
+    def _overlay_root(self, job_id: str) -> Path:
+        return self.config.runs_path / job_id / "overlays"
+
+    def _job_plan(
+        self,
+        job_id: str,
+        record: dict[str, Any],
+        workflow: WorkflowSpec,
+    ) -> ExecutionPlan:
+        if record["execution_plan_json"]:
+            return parse_execution_plan(json.loads(record["execution_plan_json"]))
+        catalog = self.catalog_for_project(record["project_id"])
+        routing_profile = (
+            record["routing_profile"] or catalog.default_routing_profile
+        )
+        try:
+            plan = resolve_execution_plan(workflow, catalog, routing_profile)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        serialized = json.dumps(execution_plan_data(plan), ensure_ascii=False)
+        self.database.set_execution_plan(job_id, routing_profile, serialized)
+        record["routing_profile"] = routing_profile
+        record["execution_plan_json"] = serialized
+        return plan
+
+    def _cleanup_terminal_workspace(self, job_id: str) -> None:
+        record = self.database.job_record(job_id)
+        if record is None or record["state"] not in _TERMINAL_STATES:
+            return
+        project = self.database.project(record["project_id"])
+        if project is None:
+            return
+        stages = self.database.stage_records(job_id)
+        has_write = any(stage["mode"] == "write" for stage in stages)
+        worktree = Path(record["worktree"])
+        repository = Path(project.root)
+        if (
+            worktree.exists()
+            and has_write
+            and record["state"] in {"failed", "cancelled", "interrupted"}
+        ):
+            try:
+                discard_overlays(worktree, self._overlay_root(job_id))
+                patch_path = self.config.runs_path / job_id / "terminal.patch"
+                head = self.workspaces.head(worktree)
+                if self.workspaces.archive_patch(worktree, patch_path, head):
+                    self.database.add_artifact(
+                        job_id,
+                        "terminal_patch",
+                        patch_path.as_posix(),
+                    )
+            except Exception as exc:
+                log.warning("Patch archival failed for job %s: %s", job_id, exc)
+                self.database.event(
+                    job_id,
+                    "job.cleanup_failed",
+                    {"error": str(exc)},
+                )
+        try:
+            if record["state"] == "succeeded" and not has_write:
+                self.workspaces.discard_job(
+                    repository,
+                    worktree,
+                    record["branch"],
+                )
+            else:
+                self.workspaces.remove(repository, worktree)
+        except Exception as exc:
+            log.warning("Cleanup failed for job %s: %s", job_id, exc)
+            self.database.event(job_id, "job.cleanup_failed", {"error": str(exc)})
+
     def targets(self) -> list[ModelTargetView]:
         now = datetime.now(timezone.utc)
         views: list[ModelTargetView] = []
-        for target in self.config.targets:
-            health = self.database.target_health(target.id)
+        for target in self._catalog.targets:
+            target_key = target_execution_key(target)
+            health = self.database.target_health(target_key)
             open_until = str(health["circuit_open_until"])
             healthy = self.drivers.available(target) and not self._is_open(open_until, now)
             views.append(
@@ -372,7 +625,7 @@ class Runtime:
                     model=target.model,
                     capabilities=list(target.capabilities),
                     max_concurrency=target.max_concurrency,
-                    active=self._target_active[target.id],
+                    active=self._target_active.get(target_key, 0),
                     healthy=healthy,
                     circuit_open_until=open_until,
                 )
@@ -394,6 +647,8 @@ class Runtime:
                 log.exception("Unhandled scheduler failure for job %s", job_id)
                 if job_id is not None:
                     self.database.set_job_state(job_id, "failed", error=f"scheduler: {exc}")
+                    self.database.skip_unfinished_stages(job_id)
+                    self._cleanup_terminal_workspace(job_id)
                     self._signal_completion(job_id)
             finally:
                 self._queue.task_done()
@@ -402,35 +657,39 @@ class Runtime:
         record = self.database.job_record(job_id)
         if record is None:
             return
-        if not record["routing_profile"]:
-            record["routing_profile"] = self.config.default_routing_profile
-            self.database.set_job_routing_profile(
-                job_id,
-                record["routing_profile"],
-            )
         project = self.database.project(record["project_id"])
         if project is None:
             self.database.set_job_state(job_id, "failed", error="Project was removed")
             self._signal_completion(job_id)
             return
-        workflow_document = json.loads(record["workflow_json"])
-        for stage in workflow_document.get("stages", {}).values():
-            if isinstance(stage, dict):
-                stage["route"] = _LEGACY_ROLES.get(
-                    stage.get("route"),
-                    stage.get("route"),
-                )
-        workflow = parse_workflow(workflow_document, self._logical_routes)
-        inputs = json.loads(record["inputs_json"])
         worktree = Path(record["worktree"])
         cancel_event = threading.Event()
         self._cancel_events[job_id] = cancel_event
         self.database.set_job_state(job_id, "running")
         try:
+            workflow_document = json.loads(record["workflow_json"])
+            if "result_stage" not in workflow_document and record["result_stage"]:
+                workflow_document["result_stage"] = record["result_stage"]
+            for stage in workflow_document.get("stages", {}).values():
+                if isinstance(stage, dict):
+                    stage["route"] = _LEGACY_ROLES.get(
+                        stage.get("route"),
+                        stage.get("route"),
+                    )
+            workflow = parse_workflow(workflow_document)
+            plan = self._job_plan(job_id, record, workflow)
+            inputs = json.loads(record["inputs_json"])
+            self.workspaces.restore_job(
+                Path(project.root),
+                worktree,
+                record["branch"],
+            )
+            restore_overlays(worktree, self._overlay_root(job_id))
             while True:
                 if cancel_event.is_set():
                     state = "interrupted" if self._closing else "cancelled"
                     self.database.set_job_state(job_id, state)
+                    self.database.skip_unfinished_stages(job_id)
                     return
                 stage_records = {value["id"]: value for value in self.database.stage_records(job_id)}
                 remaining = [
@@ -455,7 +714,7 @@ class Runtime:
                                 job_id,
                                 project,
                                 record,
-                                workflow,
+                                plan,
                                 inputs,
                                 stage,
                                 cancel_event,
@@ -464,33 +723,38 @@ class Runtime:
                         )
                     )
                     if not all(results):
+                        self.database.skip_unfinished_stages(job_id)
                         return
                     continue
                 if not await self._run_stage(
                     job_id,
                     project,
                     record,
-                    workflow,
+                    plan,
                     inputs,
                     ready[0],
                     cancel_event,
                 ):
+                    self.database.skip_unfinished_stages(job_id)
                     return
-            stages = self.database.stage_records(job_id)
-            result_text = stages[-1]["text"] if stages else ""
             result_commit = self.workspaces.head(worktree)
-            self.database.set_job_result(job_id, text=result_text, commit=result_commit)
+            self.database.set_job_commit(job_id, result_commit)
             self.database.set_job_state(job_id, "succeeded")
-            if all(stage.mode == "read" for stage in workflow.stages):
-                self.workspaces.discard_job(
-                    Path(project.root),
-                    worktree,
-                    record["branch"],
-                )
-        except WorkspaceError as exc:
+        except Exception as exc:
+            log.exception("Job %s failed", job_id)
+            for stage_record in self.database.stage_records(job_id):
+                if stage_record["state"] == "running":
+                    self.database.set_stage_state(
+                        job_id,
+                        stage_record["id"],
+                        "failed",
+                        error=str(exc),
+                    )
             self.database.set_job_state(job_id, "failed", error=str(exc))
+            self.database.skip_unfinished_stages(job_id)
         finally:
             self._cancel_events.pop(job_id, None)
+            self._cleanup_terminal_workspace(job_id)
             self._signal_completion(job_id)
 
     async def _run_stage(
@@ -498,7 +762,7 @@ class Runtime:
         job_id: str,
         project: ProjectView,
         job: dict[str, Any],
-        workflow: WorkflowSpec,
+        plan: ExecutionPlan,
         inputs: dict[str, Any],
         stage: StageSpec,
         cancel_event: threading.Event,
@@ -526,27 +790,33 @@ class Runtime:
 
         async def run_worker(worker: int) -> dict[str, Any]:
             reader: Path | None = None
-            if stage.mode == "read":
-                reader = self.workspaces.create_reader(
-                    Path(project.root),
-                    job_id,
-                    stage.id,
-                    worker,
-                    start_commit,
-                )
-                cwd = reader
-            else:
-                cwd = primary
             try:
+                if stage.mode == "read":
+                    reader = self.workspaces.create_reader(
+                        Path(project.root),
+                        job_id,
+                        stage.id,
+                        worker,
+                        start_commit,
+                    )
+                    copy_overlays(
+                        primary,
+                        reader,
+                        self._overlay_root(job_id),
+                    )
+                    cwd = reader
+                else:
+                    cwd = primary
                 result, target_id = await self._execute_with_route(
                     job_id=job_id,
                     project=project,
                     context_key=job["context_key"],
-                    routing_profile=job["routing_profile"],
+                    plan=plan,
                     stage=stage,
                     prompt=prompt,
                     cwd=cwd,
                     cancel_event=cancel_event,
+                    lane=str(worker) if stage.fanout > 1 else "",
                 )
                 return {
                     "outcome": result.outcome,
@@ -554,6 +824,14 @@ class Runtime:
                     "error": result.error,
                     "target_id": target_id,
                     "session_id": result.session_id,
+                }
+            except Exception as exc:
+                return {
+                    "outcome": "TARGET_FATAL",
+                    "text": "",
+                    "error": str(exc),
+                    "target_id": "",
+                    "session_id": "",
                 }
             finally:
                 if reader is not None:
@@ -564,6 +842,7 @@ class Runtime:
         errors = [output["error"] for output in outputs if output["outcome"] != "SUCCESS"]
         if errors:
             if stage.mode == "write":
+                discard_overlays(primary, self._overlay_root(job_id))
                 patch_path = self.config.runs_path / job_id / f"{stage.id}-failed.patch"
                 if self.workspaces.archive_patch(primary, patch_path, start_commit):
                     self.database.add_artifact(job_id, "failed_patch", patch_path.as_posix())
@@ -589,12 +868,18 @@ class Runtime:
 
         commit = start_commit
         if stage.mode == "write":
+            validate_overlays(primary, self._overlay_root(job_id))
             message = str(inputs.get("commit_message", "")).strip()
             commit = self.workspaces.commit(
                 primary,
                 job_id,
                 stage.id,
                 message=message,
+            )
+            capture_overlays(
+                primary,
+                self._overlay_root(job_id),
+                stage.id,
             )
         text = "\n\n".join(output["text"] for output in outputs)
         transcript = self.config.runs_path / job_id / f"{stage.id}.txt"
@@ -621,24 +906,31 @@ class Runtime:
         job_id: str,
         project: ProjectView,
         context_key: str,
-        routing_profile: str,
+        plan: ExecutionPlan,
         stage: StageSpec,
         prompt: str,
         cwd: Path,
         cancel_event: threading.Event,
+        lane: str,
     ) -> tuple[DriverResult, str]:
-        route_id = self._routing_profiles[routing_profile][stage.route]
-        route = self._routes[route_id]
+        route = plan.route(stage.route)
         attempted: set[str] = set()
         last_target_id = ""
         last = DriverResult("TARGET_FATAL", "", "", "No healthy target", "no_target")
         for attempt in range(route.max_attempts):
-            target = self._select_target(route, attempted)
+            target = self._select_target(route, plan, attempted)
             if target is None:
                 break
             attempted.add(target.id)
             last_target_id = target.id
-            session_id = self.database.session(project.id, context_key, stage.context, target.id)
+            target_key = target_execution_key(target)
+            session_id = self.database.session(
+                project.id,
+                context_key,
+                stage.context,
+                target_key,
+                lane,
+            )
             effective_prompt = prompt if session_id else self._with_history(
                 project.id,
                 context_key,
@@ -650,9 +942,13 @@ class Runtime:
                 "target.selected",
                 {"stage": stage.id, "target": target.id, "attempt": attempt + 1},
             )
-            semaphore = self._target_semaphores[target.id]
+            semaphore = self._target_semaphores.setdefault(
+                target_key,
+                asyncio.Semaphore(target.max_concurrency),
+            )
+            self._target_active.setdefault(target_key, 0)
             async with semaphore:
-                self._target_active[target.id] += 1
+                self._target_active[target_key] += 1
                 try:
                     self.database.set_stage_state(
                         job_id,
@@ -670,14 +966,16 @@ class Runtime:
                         cancel_event=cancel_event,
                     )
                 finally:
-                    self._target_active[target.id] -= 1
+                    self._target_active[target_key] -= 1
             if last.outcome == "SUCCESS":
-                self.database.record_target_success(target.id)
+                self.database.record_target_success(target_key)
                 self.database.append_turn(
                     project_id=project.id,
                     context_key=context_key,
                     role=stage.context,
                     target_id=target.id,
+                    target_key=target_key,
+                    lane=lane,
                     session_id=last.session_id,
                     prompt=prompt,
                     response=last.text,
@@ -685,33 +983,39 @@ class Runtime:
                 return last, target.id
             if last.outcome in {"CANCELLED", "REQUEST_FATAL"}:
                 return last, target.id
-            health = self.database.target_health(target.id)
+            health = self.database.target_health(target_key)
             circuit_open_until = ""
             if int(health["consecutive_failures"]) + 1 >= 3:
                 circuit_open_until = (
                     datetime.now(timezone.utc) + timedelta(seconds=60)
                 ).isoformat()
-            self.database.record_target_failure(target.id, circuit_open_until)
+            self.database.record_target_failure(target_key, circuit_open_until)
             if attempt + 1 < route.max_attempts:
                 delay = min(8.0, 2.0**attempt) * random.uniform(0.8, 1.2)
                 await asyncio.sleep(delay)
         return last, last_target_id
 
-    def _select_target(self, route: RouteConfig, attempted: set[str]) -> TargetConfig | None:
+    def _select_target(
+        self,
+        route: RouteConfig,
+        plan: ExecutionPlan,
+        attempted: set[str],
+    ) -> TargetConfig | None:
         now = datetime.now(timezone.utc)
         candidates: list[tuple[float, int, int, TargetConfig]] = []
         for order, target_id in enumerate(route.targets):
-            target = self._targets[target_id]
+            target = plan.target(target_id)
             if target.id in attempted:
                 continue
             if not set(route.requires).issubset(target.capabilities):
                 continue
-            health = self.database.target_health(target.id)
+            target_key = target_execution_key(target)
+            health = self.database.target_health(target_key)
             if self._is_open(str(health["circuit_open_until"]), now):
                 continue
             if not self.drivers.available(target):
                 continue
-            load = self._target_active[target.id] / target.max_concurrency
+            load = self._target_active.get(target_key, 0) / target.max_concurrency
             candidates.append((load, target.priority, order, target))
         return min(candidates, default=(0, 0, 0, None), key=lambda value: value[:3])[3]
 

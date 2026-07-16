@@ -16,8 +16,15 @@ from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.pi import PiParams, execute as pi_execute
 from openmcp.logging_setup import configure as configure_logging, get_logger
-from openmcp.config import load_config
-from openmcp.models import ActionResult, JobView, ProjectView, SubmissionResult
+from openmcp.config import load_config, load_task_routes
+from openmcp.models import (
+    ActionResult,
+    JobView,
+    ProjectInitResult,
+    ProjectView,
+    SubmissionResult,
+    TaskRouteResult,
+)
 from openmcp.notify import emit_error, emit_finish, emit_start
 from openmcp.runtime import Runtime
 
@@ -353,6 +360,40 @@ async def project_register(
     return _runtime(ctx).register_project(path, alias)
 
 
+@mcp.tool(description="Initialize project-level OpenMCP files.", structured_output=True)
+async def project_init(path: str, ctx: Context) -> ProjectInitResult:
+    return _runtime(ctx).initialize_project(path)
+
+
+@mcp.tool(
+    description=(
+        "Load task-route definitions. The coordinator breaks down the task "
+        "and chooses agent names from the returned template."
+    ),
+    structured_output=True,
+)
+async def task_route(
+    task: str,
+    ctx: Context,
+    project_id: str = "",
+) -> TaskRouteResult:
+    value = task.strip()
+    if not value:
+        raise ValueError("Task must contain text")
+    runtime = _runtime(ctx)
+    project_root = None
+    resolved_project_id = project_id.strip()
+    if resolved_project_id:
+        project = runtime.database.project(resolved_project_id)
+        if project is None:
+            raise ValueError(f"Unknown project: {resolved_project_id}")
+        project_root = Path(project.root)
+    return TaskRouteResult(
+        task=value,
+        template=load_task_routes(runtime.config.home, project_root),
+    )
+
+
 @mcp.tool(description="Queue a durable project workflow.", structured_output=True)
 async def job_submit(
     project_id: str,
@@ -378,15 +419,20 @@ async def job_wait(
     job_id: str,
     ctx: Context,
     timeout_s: int = 0,
+    include_stage_outputs: bool = False,
 ) -> JobView:
     runtime = _runtime(ctx)
     deadline = time.monotonic() + timeout_s if timeout_s > 0 else None
     while True:
-        job = runtime.database.job(job_id)
+        job = runtime.database.job(
+            job_id,
+            include_stage_outputs=include_stage_outputs,
+        )
         if job is None:
             raise ValueError(f"Unknown job: {job_id}")
         completed = sum(
-            stage.state in {"succeeded", "failed", "cancelled", "skipped"}
+            stage.state
+            in {"succeeded", "failed", "cancelled", "interrupted", "skipped"}
             for stage in job.stages
         )
         await ctx.report_progress(
@@ -455,12 +501,17 @@ async def project_resource(project_id: str, ctx: Context) -> str:
 async def project_jobs_resource(project_id: str, ctx: Context) -> str:
     if _runtime(ctx).database.project(project_id) is None:
         raise ValueError(f"Unknown project: {project_id}")
-    return _json(_runtime(ctx).database.jobs(project_id))
+    return _json(
+        _runtime(ctx).database.jobs(
+            project_id,
+            include_stage_outputs=False,
+        )
+    )
 
 
 @mcp.resource("openmcp://jobs/{job_id}", mime_type="application/json")
 async def job_resource(job_id: str, ctx: Context) -> str:
-    job = _runtime(ctx).database.job(job_id)
+    job = _runtime(ctx).database.job(job_id, include_stage_outputs=True)
     if job is None:
         raise ValueError(f"Unknown job: {job_id}")
     return _json(job)
@@ -495,8 +546,22 @@ async def routing_profiles_resource() -> str:
     runtime = _active_runtime()
     return _json(
         {
-            "default": runtime.config.default_routing_profile,
-            "available": sorted(runtime.config.routing_profiles),
+            "default": runtime.catalog.default_routing_profile,
+            "available": sorted(runtime.catalog.routing_profiles),
+        }
+    )
+
+
+@mcp.resource(
+    "openmcp://projects/{project_id}/routing-profiles",
+    mime_type="application/json",
+)
+async def project_routing_profiles_resource(project_id: str, ctx: Context) -> str:
+    catalog = _runtime(ctx).catalog_for_project(project_id)
+    return _json(
+        {
+            "default": catalog.default_routing_profile,
+            "available": sorted(catalog.routing_profiles),
         }
     )
 
@@ -529,6 +594,8 @@ __all__ = [
     "job_submit",
     "job_wait",
     "mcp",
+    "project_init",
     "project_register",
     "run",
+    "task_route",
 ]

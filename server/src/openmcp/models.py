@@ -108,6 +108,18 @@ class ActionResult(BaseModel):
     error: str = ""
 
 
+class TaskRouteResult(BaseModel):
+    task: str
+    template: dict[str, Any]
+
+
+class ProjectInitResult(BaseModel):
+    root: str
+    created: list[str] = Field(default_factory=list)
+    existing: list[str] = Field(default_factory=list)
+    requires_commit: bool
+
+
 class ResourcePayload(BaseModel):
     data: Any
 
@@ -120,9 +132,11 @@ __all__ = [
     "JobState",
     "JobView",
     "ModelTargetView",
+    "ProjectInitResult",
     "ProjectView",
     "ResourcePayload",
     "StageState",
     "StageView",
     "SubmissionResult",
+    "TaskRouteResult",
 ]
