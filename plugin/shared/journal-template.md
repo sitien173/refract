@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 5.3.8 -->
+<!-- ccg-shared-version: 7.0.1 -->
 
 # Phase <N> — Journal: <phase title>
 
@@ -12,8 +12,11 @@ sections.
 ## META
 
 - Plan: docs/plans/<slug>/PLAN.md
-- Owner: codex | agy | coordinator
-- SessionID: <id or n/a>
+- Owner: <configured nickname>
+- Owner Execution Role: <stable role>
+- Routing Profile: <name>
+- Write job: <OpenMCP job ID or n/a>
+- Review job: <OpenMCP job ID or n/a>
 - Started: <ISO timestamp>
 - Finished: <ISO timestamp>
 
@@ -23,7 +26,7 @@ sections.
 
 ## Quality Review
 
-<!-- Coordinator appends the independent review response here. -->
+<!-- Coordinator appends the selected reviewer's response here. -->
 
 ## Review Result
 

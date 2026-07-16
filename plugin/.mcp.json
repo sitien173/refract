@@ -1,21 +1,8 @@
 {
   "mcpServers": {
     "openmcp": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/sitien173/openmcp",
-        "openmcp"
-      ],
-      "env": {
-        "OPENMCP_AGY_MODEL_DEFAULT": "gemini-3.1-pro-high",
-        "OPENMCP_CODEX_MODEL_DEFAULT": "gpt-5.6-luna",
-        "OPENMCP_CODEX_PROFILE_DEFAULT": "mcp_execution",
-        "OPENMCP_AGY_REASONING_MODEL": "gemini-3.1-pro-high",
-        "OPENMCP_CODEX_REASONING_MODEL": "gpt-5.6-sol",
-        "OPENMCP_LOG_FILE": "~/.openmcp/openmcp.log",
-        "OPENMCP_LOG_LEVEL": "INFO"
-      }
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp"
     }
   }
 }

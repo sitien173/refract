@@ -49,9 +49,9 @@ failure when behavior must remain unchanged.
 
 ## CCG Routing
 
-- **Coordinator (trivial edit):** run the cycle directly; the RED→GREEN run is the evidence.
-- **codex / agy phase:** each changed behavior follows RED then GREEN. The worker records the evidence per task.
-- **Review gate:** the coordinator FAILs changed behavior lacking failing-test-first evidence.
+- **Implementation phase:** each changed behavior follows RED then GREEN. The
+  selected owner records evidence per task.
+- **Review gate:** fail changed behavior lacking test-first evidence.
 
 (Routing table, gates, and worker mechanics are canonical in `coordinating-multi-model-work`.)
 

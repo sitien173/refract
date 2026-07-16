@@ -1,74 +1,99 @@
 # Implementer Prompt Template
 
-Dispatch template for codex and agy phase workers. The worker contract, response
-format, and templates live under the installed plugin's absolute `shared/` path.
-This file is the per-phase input specification.
+OpenMCP runs workers inside isolated Git worktrees. It commits successful write
+jobs automatically. Workers never stage, commit, reset, squash, or integrate.
 
-## MCP call
+## Submit sequence
 
-Default: prompt body lives in `<plan-dir>/phase-<NN>/prompt.md`; the MCP `PROMPT` field is a thin pointer. Inline only for one- or two-sentence asks with no context block.
+Select the public nickname and stable `execution_role` through `task_route`.
+OpenMCP never infers either value from task words.
+
+Initialize once before registration:
 
 ```text
-mcp__plugin_superpowers-ccg_openmcp__run:
-  backend: "codex" (backend) | "agy" (frontend)
-  cd: <repo root>
-  timeout_s: 900
-  PROMPT: |  
-    You are a [role description and expertise areas]...
-    
-    Scope: [one sentence scope — e.g. "Implement the user authentication API per the spec."]
-
-    Read your full task spec from: docs/plans/<slug>/phase-<NN>/prompt.md
-    Plan dir:   docs/plans/<slug>
-    Phase dir:  docs/plans/<slug>/phase-<NN>
-    Phase:      <N>
-    Contract:   <plugin-root>/shared/worker-contract.md
-    Response:   <plugin-root>/shared/erp.md
-    Notes:      <plugin-root>/shared/notes-template.md
-    Journal:    <plugin-root>/shared/journal-template.md
-    Follow the contract and the spec file. Respond per erp.md, then emit the completion line.
-
-    Output: Respond per the ERP contract.
+project_init:
+  path: <absolute repository root>
 ```
 
-Set `cd` to the repo root. Repository paths are relative to it. Bundled contract
-paths are absolute. Workers must never stage, commit, reset, or squash.
+Review and commit created `.openmcp` files. Then register cleanly:
 
-## Prompt file (`<plan-dir>/phase-<NN>/prompt.md`)
+```text
+project_register:
+  path: <absolute repository root>
+  alias: <repository name>
+```
+
+Submit the phase:
+
+```text
+job_submit:
+  project_id: <stored project UUID>
+  workflow: <owner_execution_role>-write
+  inputs:
+    prompt: |
+      You are <owner_nickname>. Implement the plan phase correctly. Follow the instructions below. Do not stage, commit, reset, squash, or integrate. Do not use Git mutation commands. Do not edit the root repository while an isolated chain remains active.
+      Read: docs/plans/<slug>/phase-<NN>/prompt.md
+      Contract: <plugin-root>/shared/worker-contract.md
+      Response: <plugin-root>/shared/erp.md
+      Notes: <plugin-root>/shared/notes-template.md
+      Journal: <plugin-root>/shared/journal-template.md
+      Follow those files. Create `notes.md` and `journal.md` inside the phase directory.
+      Return the ERP response.
+    commit_message: <phase Conventional Commit message>
+  context_key: <slug>/phase-<NN>/<owner_execution_role>
+  parent_job_id: ""
+  routing_profile: <stored phase profile>
+```
+
+Then call `job_wait`:
+
+```text
+job_wait:
+  job_id: <returned job UUID>
+  include_stage_outputs: false
+```
+
+Wait again while queued or running. Read only `job.result.text`. Never combine
+it with stage output. Record only project and job identifiers.
+
+## Phase prompt
+
+Write `<plan-dir>/phase-<NN>/prompt.md`:
 
 ```markdown
 ## Original User Request
 [one or two compressed sentences]
 
 ## Phase
-[phase summary — one sentence]
+[one sentence]
 
 ## Tasks
 - task-1: <one line>
 - task-2: <one line>
-- task-3: <one line>
 
 ## Context
-[small snippets from existing files only — no pre-written implementation]
+[minimum existing-code context]
 
 ## Files
-[flat list of file paths]
+- `path/to/file`
 
 ## Done When
 - [acceptance criterion]
-- [integration check command — its fresh output is the completion evidence]
+- `[fresh verification command]`
 
 ## Rules
 
-Follow the absolute bundled worker-contract path for execution discipline. Write
-`notes.md` and `journal.md` under the Phase directory above.
+Follow the supplied worker contract. Write `notes.md` and `journal.md` inside
+this phase directory. Do not use Git mutation commands.
 
 ## Response Format
 
-Respond per the absolute bundled ERP path. Return the `# EXTERNAL RESPONSE`
-block, then its matching status line.
+Return the `# EXTERNAL RESPONSE` block and matching status line from ERP.
+```
 
 ## Same-phase fix
 
-Reuse the cached `SESSION_ID` only for this phase. Send `FIX:` plus only delta
-files and context. Append a notes block when decisions change. Do not commit.
+Submit the same `<owner_execution_role>-write` workflow. Set `parent_job_id` to the
+latest write job. Reuse its implementer `context_key`. Start the prompt with
+`FIX:` and include only changed requirements, findings, files, and checks. Use
+a `fix:` commit message.

@@ -1,9 +1,9 @@
-<!-- ccg-shared-version: 5.3.8 -->
+<!-- ccg-shared-version: 7.0.1 -->
 # Worker Contract
 
-Execution contract for a codex or agy phase worker. This bundled file is
-read directly from the installed plugin. The per-phase `prompt.md` carries the
-actual tasks; this file defines the stable execution process.
+Execution contract for the selected phase owner. This bundled file is read
+directly from the installed plugin. The per-phase `prompt.md` carries the actual
+tasks; this file defines the stable execution process.
 
 ## Per-task workflow
 
@@ -12,7 +12,8 @@ For each task in order:
 1. Implement test-first where it applies: write the failing test, run it, confirm
    RED; then write minimal code to GREEN. For behavior-preserving refactors,
    establish passing characterization coverage and keep it green.
-2. Do not stage, commit, reset, or squash. The coordinator owns every Git action.
+2. Do not stage, commit, reset, squash, merge, or integrate. OpenMCP commits a
+   successful write job. Coordinator approves integration.
 3. Append a `## Task <M>` block to `<plan-dir>/phase-<NN>/notes.md`. If the file
    is missing, create it from the bundled `notes-template.md` path in the prompt.
    Sub-sections per task: Decisions made (not in spec), Spec deviations,
@@ -42,6 +43,7 @@ For each task in order:
 ## Prompt discipline
 
 - Edit files directly with your write tools; on-disk files are the source of truth.
+- Your current directory is an isolated OpenMCP worktree.
 - Stay within the declared file set. Report every changed path.
 - Do not duplicate file content in the response.
 - Do not redesign the phase or produce a reference prototype.

@@ -13,7 +13,9 @@ description: "Explores intent, requirements, trade-offs, and design via dialogue
 
 ## Workflow
 
-1. **Cross-validate only when warranted.** Run Cross-Validation (codex + agy, same narrow question, reconcile divergences) **only** if the idea is full-stack, unclear, or high-impact per `coordinating-multi-model-work` CV triggers. Otherwise skip and proceed straight to clarification.
+1. **Consult the configured advisor.** Use `task_route` to select its nickname
+   and `execution_role`. Ask one narrow question for every non-trivial design.
+   Skip only fully specified, low-risk routine work.
 2. Inspect current project state: relevant files, docs, recent commits.
 3. Ask one question at time; prefer multiple choice when useful.
 4. Clarify purpose, constraints, non-goals, success criteria, preferences.
@@ -24,7 +26,8 @@ description: "Explores intent, requirements, trade-offs, and design via dialogue
 
 ## Hard Rules
 
-- Cross-Validation only for full-stack / unclear / high-impact ideas; skip otherwise. User "skip cross-validation" override still wins when CV would otherwise trigger.
+- Configured consultation is mandatory for unclear, architectural, full-stack,
+  or high-impact ideas. User overrides always win.
 - One question per message during clarification.
 - Always write final confirmed design document.
 - Commit only if user asks.

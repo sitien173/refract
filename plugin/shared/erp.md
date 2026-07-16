@@ -1,17 +1,17 @@
-<!-- ccg-shared-version: 5.3.8 -->
+<!-- ccg-shared-version: 7.0.1 -->
 # External Response Protocol (ERP)
 
-Worker-facing contract for the response a codex or agy phase worker returns to
-the coordinator. This bundled file is read directly from the installed plugin.
+Worker-facing contract for the selected owner's response. This bundled file is
+read directly from the installed plugin.
 
 ## The `# EXTERNAL RESPONSE` block
 
-Return exactly this block. Each section is what the coordinator scans for.
+Return exactly this block. Each section is what Coordinator scans for.
 
 ```text
 # EXTERNAL RESPONSE
 ## META
-- Phase / Owner (codex|agy) / SessionID / Started / Finished / Plan dir
+- Phase / Owner nickname / Started / Finished / Plan dir
 ## SUMMARY
 [one sentence]
 ## FILES MODIFIED
@@ -23,12 +23,12 @@ Return exactly this block. Each section is what the coordinator scans for.
 ## CLARIFICATIONS NEEDED
 None (or list questions; emit and stop if any)
 ## NEXT
-TASK_COMPLETE | BLOCKED | CONTINUE_SESSION
+TASK_COMPLETE | BLOCKED | CONTINUE_CONTEXT
 ```
 
-- **META** — phase identity + session reuse handle the coordinator caches.
+- **META** — phase identity and timestamps.
 - **SUMMARY** — one-line statement of what the phase delivered.
-- **FILES MODIFIED** — every touched path; the coordinator quality-scans exactly this set.
+- **FILES MODIFIED** — every touched path; Coordinator scans exactly this set.
 - **NOTES** — pointer to the per-task `notes.md` blocks (decisions, deviations, evidence).
 - **SPEC COMPLIANCE** — self-assessment against the phase `Done When`.
 - **CLARIFICATIONS NEEDED** — if non-empty, emit this and stop; do not guess.
@@ -45,4 +45,4 @@ Phase <N> continuing. Journal: docs/plans/<slug>/phase-<NN>/journal.md.
 ```
 
 Use `completed` only with `TASK_COMPLETE`. Use `blocked` when clarification is
-required. Use `continuing` only with `CONTINUE_SESSION`.
+required. Use `continuing` only with `CONTINUE_CONTEXT`.

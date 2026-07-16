@@ -48,9 +48,10 @@ before attempting fix #4.
 
 ## CCG Routing
 
-- Route the bug by side per `coordinating-multi-model-work`; unclear or full-stack failure → Cross-Validation to localise the failing layer first.
+- Route each debugging use case through `task_route`. Use the configured
+  consultant for unclear or cross-component failures.
 - The dispatch prompt must require a root-cause hypothesis **with evidence** (boundary logs / failing test) before any fix commit.
-- **Review gate:** the coordinator FAILs a fix lacking root-cause evidence or a failing-test-first reproduction.
+- **Review gate:** fail fixes lacking root-cause evidence or reproduction.
 
 ## Hard Rules
 
@@ -79,6 +80,6 @@ before attempting fix #4.
 
 ## References
 
-- `skills/coordinating-multi-model-work/SKILL.md` — routing, Cross-Validation, gates.
+- `skills/coordinating-multi-model-work/SKILL.md` — routing, consultation, gates.
 - `skills/test-driven-development/SKILL.md` — Phase 4: failing test before the fix.
 - `skills/verifying-before-completion/SKILL.md` — verify the fix with fresh evidence.

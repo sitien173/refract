@@ -3,6 +3,6 @@ description: Explore intent, requirements, and trade-offs via dialogue, then wri
 argument-hint: [idea or feature to explore]
 ---
 
-Invoke the `superpowers-ccg:brainstorming` skill and follow its workflow to turn the idea below into a confirmed design document. Cross-Validation runs only when the idea is full-stack, unclear, or high-impact.
+Invoke the `superpowers-ccg:brainstorming` skill. Turn the idea below into a confirmed design. Use the configured consultant for every non-trivial design. Skip consultation only for fully specified, low-risk work.
 
 Idea: $ARGUMENTS

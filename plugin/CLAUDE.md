@@ -5,7 +5,7 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 ## Skills (`superpowers-ccg:` namespace)
 
 - `coordinating-multi-model-work` — canonical 3-gate workflow, routing, review, resume artifacts. **Load first.**
-- `brainstorming` — new features / ideation (Cross-Validation only if full-stack / unclear / high-impact).
+- `brainstorming` — new features and configured consultation.
 - `writing-plans` — design → phase-based plan.
 - `executing-plans` — run a plan one phase at a time.
 - `test-driven-development` — failing test first, then minimal code (feature/bugfix work).
@@ -20,8 +20,16 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 
 ## Project-specific rules
 
-- Long prompts → write to a repo file under `docs/plans/` and pass its repo-root-relative path.
-- MCP backends: `codex` (backend), `agy` (frontend). Detailed setup in `README.md`.
+- Long prompts → write under `docs/plans/`. Submit a thin pointer.
+- OpenMCP runs as a local HTTP daemon. Detailed setup is in `README.md`.
+- The agent loading the workflow becomes Coordinator.
+- Initialize project files before first registration.
+- Use `task_route`; Coordinator chooses agent nicknames.
+- Derive workflows from configured `execution_role` values.
+- Read effective project routing profiles before selection.
+- Existing phase chains retain stored routing decisions.
+- Use compact job waits. Read only `job.result.text`.
+- Resume through project jobs. Never expose provider identities.
 
 ## Install / update
 

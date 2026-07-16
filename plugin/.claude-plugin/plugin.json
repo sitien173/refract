@@ -1,7 +1,7 @@
 {
   "name": "superpowers-ccg",
   "description": "Superpowers-CCG: 3-gate (Plan → Execute → Review) workflow.",
-  "version": "5.3.8",
+  "version": "7.0.1",
   "author": {
     "name": "sitien173"
   },
@@ -12,9 +12,9 @@
     "skills",
     "tdd",
     "debugging",
-    "multi-model",
-    "codex",
-    "antigravity",
+    "multi-agent",
+    "routing-profiles",
+    "isolated-review",
     "collaboration",
     "workflows"
   ]

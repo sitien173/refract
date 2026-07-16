@@ -42,6 +42,8 @@ Skip a step = guessing, not verifying.
 
 1. Run the declared integration checks (build, lint, type-check, tests, smoke)
    fresh — never reuse a previous run.
+   For external jobs, use a disposable detached worktree at
+   `job.result.commit`. Terminal execution worktrees are already released.
 2. Read full output and exit codes; compare against the original request and
    acceptance criteria, line by line.
 3. Confirm changed files match the expected scope.
@@ -70,9 +72,9 @@ Skip a step = guessing, not verifying.
 - Trust no worker/agent success report — verify the VCS diff directly.
 - Review stays scoped to spec + changed files; broader audit only if the phase
   checklist asks for it.
-- For code-changing phases the Review gate includes the codex code-quality review
-  with an explicit reviewer prompt, fresh session, and no named profile. Never
-  pass the implementation `SESSION_ID`. Fold findings into Review status.
+- For external code changes, submit the derived reviewer read workflow with the
+  latest write job as parent. Pass the stored routing profile. Use a unique
+  reviewer context. Fold findings into Review status before `job_integrate`.
 
 ## Red Flags — STOP
 
