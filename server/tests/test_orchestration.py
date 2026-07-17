@@ -22,6 +22,7 @@ from openmcp.config import (
 from openmcp.backends._shell import ShellCommandCancelled, stream_shell_command_lines
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
+from openmcp.models import JobView, StageView
 from openmcp.planning import resolve_execution_plan
 from openmcp.runtime import Runtime
 from openmcp.workflows import (
@@ -726,8 +727,6 @@ def test_database_migrates_execution_state(tmp_path) -> None:
         """
     )
     connection.execute("DROP TABLE context_sessions_new")
-    connection.execute("DELETE FROM schema_migrations WHERE version=3")
-    connection.execute("DELETE FROM schema_migrations WHERE version=4")
     connection.commit()
     connection.close()
 
@@ -738,10 +737,9 @@ def test_database_migrates_execution_state(tmp_path) -> None:
         row[1]
         for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
     }
-    migrations = {
-        row[0]
-        for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
-    }
+    migration_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+    ).fetchone()
     session_columns = {
         row[1]
         for row in connection.execute(
@@ -753,9 +751,28 @@ def test_database_migrates_execution_state(tmp_path) -> None:
     assert "routing_profile" in columns
     assert "execution_plan_json" in columns
     assert "result_stage" in columns
+    assert "result_text" not in columns
     assert {"target_key", "lane", "updated_at"}.issubset(session_columns)
-    assert 3 in migrations
-    assert 4 in migrations
+    assert migration_table is None
+
+
+def test_archive_patch_preserves_git_output_bytes(tmp_path) -> None:
+    from openmcp.workspaces import WorkspaceManager
+
+    root = _repository(tmp_path)
+    base_commit = _git(root, "rev-parse", "HEAD")
+    binary = root / "image.bin"
+    binary.write_bytes(b"\x00\xff\x80\x00openmcp\n")
+    _git(root, "add", "--intent-to-add", ".")
+    expected = subprocess.run(
+        ["git", "-C", str(root), "diff", "--binary", base_commit],
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+    destination = tmp_path / "archive" / "binary.patch"
+
+    assert WorkspaceManager.archive_patch(root, destination, base_commit)
+    assert destination.read_bytes() == expected
 
 
 def test_database_marks_active_work_interrupted(tmp_path) -> None:
@@ -794,7 +811,7 @@ def test_database_marks_active_work_interrupted(tmp_path) -> None:
     database.close()
 
 
-def test_job_views_return_result_text_once(tmp_path) -> None:
+def test_job_views_return_result_stage_text_once(tmp_path) -> None:
     database = Database(tmp_path / "openmcp.db")
     database.upsert_project(
         project_id="project",
@@ -854,6 +871,71 @@ def test_shell_command_cancellation_terminates_process_group() -> None:
     finally:
         timer.cancel()
     assert time.monotonic() - started < 3
+
+
+@pytest.mark.asyncio
+async def test_job_wait_uses_runtime_completion_waiter() -> None:
+    from openmcp.server import job_wait
+
+    def view(state: str, stage_state: str) -> JobView:
+        return JobView(
+            id="job",
+            project_id="project",
+            workflow="read",
+            routing_profile="balanced",
+            state=state,
+            context_key="test",
+            parent_job_id="",
+            base_commit="abc",
+            integration_base="abc",
+            branch="openmcp/job",
+            created_at="now",
+            updated_at="now",
+            stages=[StageView(id="execute", state=stage_state, mode="read")],
+        )
+
+    running = view("running", "running")
+    succeeded = view("succeeded", "succeeded")
+
+    class DatabaseStub:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def job(self, job_id: str, *, include_stage_outputs: bool) -> JobView:
+            self.calls += 1
+            return running if self.calls == 1 else succeeded
+
+    class RuntimeStub:
+        def __init__(self) -> None:
+            self.database = DatabaseStub()
+            self.wait_calls: list[tuple[str, int]] = []
+
+        async def wait(self, job_id: str, timeout_s: int) -> JobView:
+            self.wait_calls.append((job_id, timeout_s))
+            return succeeded
+
+    class ContextStub:
+        def __init__(self, runtime: RuntimeStub) -> None:
+            self.request_context = SimpleNamespace(lifespan_context=runtime)
+            self.progress: list[tuple[float, float, str]] = []
+
+        async def report_progress(
+            self,
+            *,
+            progress: float,
+            total: float,
+            message: str,
+        ) -> None:
+            self.progress.append((progress, total, message))
+
+    runtime = RuntimeStub()
+    ctx = ContextStub(runtime)
+
+    result = await job_wait("job", ctx, timeout_s=12)
+
+    assert result is succeeded
+    assert runtime.wait_calls == [("job", 12)]
+    assert ctx.progress == [(0.0, 1.0, "running"), (1.0, 1.0, "succeeded")]
 
 
 @pytest.mark.asyncio

@@ -37,10 +37,7 @@ class Database:
     def _migrate(self) -> None:
         self._connection.executescript(
             """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY
-            );
-            INSERT OR IGNORE INTO schema_migrations(version) VALUES (1);
+            DROP TABLE IF EXISTS schema_migrations;
 
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
@@ -69,7 +66,6 @@ class Database:
                 worktree TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                result_text TEXT NOT NULL DEFAULT '',
                 result_commit TEXT NOT NULL DEFAULT '',
                 error TEXT NOT NULL DEFAULT ''
             );
@@ -165,6 +161,8 @@ class Database:
             self._connection.execute(
                 "ALTER TABLE jobs ADD COLUMN result_stage TEXT NOT NULL DEFAULT ''"
             )
+        if "result_text" in columns:
+            self._connection.execute("ALTER TABLE jobs DROP COLUMN result_text")
         session_columns = {
             row["name"]
             for row in self._connection.execute(
@@ -206,15 +204,6 @@ class Database:
                 ORDER BY ordinal DESC LIMIT 1
             ) WHERE result_stage=''
             """
-        )
-        self._connection.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)"
-        )
-        self._connection.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)"
-        )
-        self._connection.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)"
         )
         self._connection.commit()
 
@@ -465,7 +454,7 @@ class Database:
                 (job_id, *resolved),
             )
             self._connection.execute(
-                "UPDATE jobs SET state='queued', error='', result_text='', result_commit='', updated_at=? WHERE id=?",
+                "UPDATE jobs SET state='queued', error='', result_commit='', updated_at=? WHERE id=?",
                 (utc_now(), job_id),
             )
         self.event(job_id, "job.retried", {"stages": list(resolved)})
@@ -553,11 +542,7 @@ class Database:
             (stage for stage in stage_rows if stage["id"] == row["result_stage"]),
             None,
         )
-        result_text = (
-            result_stage["text"]
-            if result_stage is not None and row["result_commit"]
-            else row["result_text"]
-        )
+        result_text = result_stage["text"] if result_stage is not None else ""
         return JobView(
             id=row["id"],
             project_id=row["project_id"],

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import re
@@ -23,12 +22,12 @@ from openmcp.logging_setup import get_logger
 
 log = get_logger("agy")
 
-_SETTINGS_PATH = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
 _BRAIN_PATH = Path.home() / ".gemini" / "antigravity-cli" / "brain"
 _CONTINUE_PROMPT = "Continue your work. Complete any remaining `[ ]` task items."
 _AGY_MAX_CONTINUATIONS = 3
 _UNCHECKED_RE = re.compile(r"^\s*-\s*`?\[\s\]`?\s", re.MULTILINE)
-_settings_lock = threading.Lock()
+
+
 @dataclass(slots=True)
 class AgyParams:
     PROMPT: str
@@ -56,8 +55,8 @@ def _is_valid_agy_model_id(model: str) -> bool:
     return bool(model) and bool(_VALID_MODEL_ID_RE.match(model.strip()))
 
 
-def _resolve_agy_model_setting(model: str) -> str:
-    """Resolve incoming model value to an Antigravity settings display name."""
+def _resolve_agy_model(model: str) -> str:
+    """Resolve an incoming model value to an Antigravity CLI display name."""
     normalized = model.strip()
     if not normalized:
         return ""
@@ -81,72 +80,6 @@ def _resolve_agy_model_setting(model: str) -> str:
         model,
     )
     return ""
-
-
-def _atomic_write_json(path: Path, data: dict) -> None:
-    """Write JSON via temp file + os.replace so we never leave a half-written file."""
-    serialized = json.dumps(data, indent=2, ensure_ascii=False)
-    tmp_path = path.with_suffix(path.suffix + ".openmcp.tmp")
-    tmp_path.write_text(serialized, encoding="utf-8")
-    os.replace(tmp_path, path)
-
-
-@contextlib.contextmanager
-def _patch_model(model: str):
-    """Temporarily override the model in agy's settings.json, then restore.
-
-    Preserves the original file byte-for-byte on restore (so a missing
-    "model" key isn't written back as ``"model": null``). Uses atomic
-    file replacement and is reentrancy-safe via ``_settings_lock``.
-    """
-    if not model:
-        yield
-        return
-
-    resolved_model_name = _resolve_agy_model_setting(model)
-    if not resolved_model_name:
-        yield
-        return
-
-    with _settings_lock:
-        if _SETTINGS_PATH.exists():
-            original_bytes = _SETTINGS_PATH.read_bytes()
-            try:
-                settings = json.loads(original_bytes.decode("utf-8"))
-                if not isinstance(settings, dict):
-                    settings = {}
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                log.warning("agy: settings.json is invalid; skipping model patch")
-                yield
-                return
-        else:
-            original_bytes = None
-            settings = {}
-
-        patched = dict(settings)
-        patched["model"] = resolved_model_name
-        try:
-            _atomic_write_json(_SETTINGS_PATH, patched)
-        except OSError as exc:
-            log.warning("agy: could not write settings.json model patch: %s", exc)
-            yield
-            return
-
-        try:
-            yield
-        finally:
-            try:
-                if original_bytes is None:
-                    try:
-                        _SETTINGS_PATH.unlink()
-                    except FileNotFoundError:
-                        pass
-                else:
-                    tmp_path = _SETTINGS_PATH.with_suffix(_SETTINGS_PATH.suffix + ".openmcp.tmp")
-                    tmp_path.write_bytes(original_bytes)
-                    os.replace(tmp_path, _SETTINGS_PATH)
-            except OSError as exc:
-                log.error("agy: failed to restore settings.json after model patch: %s", exc)
 
 
 _UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
@@ -258,51 +191,53 @@ def _execute_once(params: AgyParams) -> BackendResult:
     agent_messages = ""
     log_text = ""
 
+    resolved_model = _resolve_agy_model(params.model)
     log.info(
         "agy.execute start cwd=%s model=%s session_id=%s prompt_len=%d",
         cwd,
-        params.model,
+        resolved_model or "<default>",
         params.SESSION_ID or "<new>",
         len(params.PROMPT),
     )
 
     try:
-        with _patch_model(params.model):
-            with tempfile.NamedTemporaryFile(suffix=".log", delete=False) as tmp:
-                tmp_log_path = tmp.name
-            try:
-                cmd = [
-                    "agy", "--print", params.PROMPT,
-                    "--dangerously-skip-permissions",
-                    "--add-dir", cwd,
-                    "--log-file", tmp_log_path,
-                ]
-                if params.SESSION_ID:
-                    cmd.extend(["--conversation", params.SESSION_ID])
-                stdout_lines = list(
-                    run_shell_command(
-                        cmd,
-                        cwd=cwd,
-                        timeout_s=params.timeout_s,
-                        cancel_event=params.cancel_event,
-                    )
+        with tempfile.NamedTemporaryFile(suffix=".log", delete=False) as tmp:
+            tmp_log_path = tmp.name
+        try:
+            cmd = [
+                "agy", "--print", params.PROMPT,
+                "--dangerously-skip-permissions",
+                "--add-dir", cwd,
+                "--log-file", tmp_log_path,
+            ]
+            if resolved_model:
+                cmd.extend(["--model", resolved_model])
+            if params.SESSION_ID:
+                cmd.extend(["--conversation", params.SESSION_ID])
+            stdout_lines = list(
+                run_shell_command(
+                    cmd,
+                    cwd=cwd,
+                    timeout_s=params.timeout_s,
+                    cancel_event=params.cancel_event,
                 )
-                try:
-                    log_text = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    log_text = ""
-                # The CLI's actual reply is printed to stdout; --log-file only
-                # captures internal server diagnostics (and, incidentally, the
-                # "Created/Streaming conversation <id>" lines used below to
-                # resolve the session id). Prefer stdout, fall back to the log
-                # only if the CLI printed nothing there.
-                stdout_text = "\n".join(stdout_lines).strip()
-                agent_messages = stdout_text or log_text
-            finally:
-                try:
-                    os.unlink(tmp_log_path)
-                except OSError:
-                    pass
+            )
+            try:
+                log_text = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                log_text = ""
+            # The CLI's actual reply is printed to stdout; --log-file only
+            # captures internal server diagnostics (and, incidentally, the
+            # "Created/Streaming conversation <id>" lines used below to
+            # resolve the session id). Prefer stdout, fall back to the log
+            # only if the CLI printed nothing there.
+            stdout_text = "\n".join(stdout_lines).strip()
+            agent_messages = stdout_text or log_text
+        finally:
+            try:
+                os.unlink(tmp_log_path)
+            except OSError:
+                pass
     except ShellCommandCancelled:
         log.warning("agy subprocess cancelled")
         error_text = "backend command cancelled"
@@ -349,7 +284,7 @@ def _execute_once(params: AgyParams) -> BackendResult:
     )
     if result.error:
         log.warning("agy.execute error_text: %s", result.error[:500])
-    if result.outcome == "FATAL" and result.error_class == "no_agent_messages" and params.model:
+    if result.outcome == "FATAL" and result.error_class == "no_agent_messages" and resolved_model:
         log.warning(
             "agy: model override %r produced no output; trying once with agy's configured default model",
             params.model,
@@ -386,7 +321,7 @@ def _execute_sync(params: AgyParams) -> BackendResult:
                 PROMPT=_CONTINUE_PROMPT,
                 cd=Path(params.cd),
                 SESSION_ID=session_id,
-                model="",
+                model=params.model,
                 timeout_s=params.timeout_s,
                 cancel_event=params.cancel_event,
             )

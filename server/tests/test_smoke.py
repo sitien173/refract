@@ -580,39 +580,24 @@ async def test_env_falls_back_to_plugin_env_when_higher_priorities_missing(monke
     assert captured["model"] == ""
 
 
-def test_agy_patch_model_maps_gemini_id_to_display_name(monkeypatch, tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_agy_passes_model_per_invocation(monkeypatch, tmp_path) -> None:
     from openmcp.backends import agy as agy_backend
 
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"model": "Gemini 3.5 Flash (Low)", "other": "keep"}),
-        encoding="utf-8",
+    captured: dict[str, list[str]] = {}
+
+    def fake_run_shell_command(cmd, **kwargs):
+        captured["cmd"] = cmd
+        yield "PONG"
+
+    monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
+
+    result = await agy_backend.execute(
+        AgyParams(PROMPT="x", cd=tmp_path, model="gemini-3.5-flash")
     )
-    monkeypatch.setattr(agy_backend, "_SETTINGS_PATH", settings_path)
 
-    with agy_backend._patch_model("gemini-3.5-flash"):
-        patched = json.loads(settings_path.read_text(encoding="utf-8"))
-        assert patched["model"] == "Gemini 3.5 Flash (Medium)"
-        assert patched["other"] == "keep"
-
-    restored = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert restored["model"] == "Gemini 3.5 Flash (Low)"
-    assert restored["other"] == "keep"
-
-
-def test_agy_patch_model_accepts_supported_display_name(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"model": "Gemini 3.5 Flash (Low)"}),
-        encoding="utf-8",
+    assert result.outcome == "OK"
+    assert captured["cmd"][captured["cmd"].index("--model") + 1] == (
+        "Gemini 3.5 Flash (Medium)"
     )
-    monkeypatch.setattr(agy_backend, "_SETTINGS_PATH", settings_path)
-
-    with agy_backend._patch_model("Gemini 3.1 Pro (High)"):
-        patched = json.loads(settings_path.read_text(encoding="utf-8"))
-        assert patched["model"] == "Gemini 3.1 Pro (High)"
-
-    restored = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert restored["model"] == "Gemini 3.5 Flash (Low)"

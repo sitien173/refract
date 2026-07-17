@@ -281,6 +281,16 @@ registered project. Integration requires a clean, unchanged root.
 Terminal jobs release their worktrees. Branches remain only when retry or
 integration still needs their commits.
 
+## Security boundary
+
+Worktrees isolate Git history and make integration explicit; they are not a
+sandbox. Write backends run with their CLI permission bypass enabled and can
+execute host commands, including commands that reach the parent repository by
+absolute path or `git -C`. The security boundary is the loopback-only MCP
+endpoint together with operator trust and clean-tree preflight. Do not expose
+the endpoint to untrusted clients or treat an agent running in a worktree as
+contained.
+
 ## State
 
 ```text

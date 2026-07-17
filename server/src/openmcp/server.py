@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Literal, cast
@@ -79,6 +78,8 @@ def _openmcp_env_file() -> Path:
 
 
 def _load_plugin_env() -> Dict[str, str]:
+    # The MCP host's current directory is its local configuration boundary;
+    # these values may contain credentials and must never be logged.
     plugin_env: Dict[str, str] = {}
     for config_name in _PLUGIN_CONFIG_FILES:
         config_path = Path.cwd() / config_name
@@ -422,36 +423,44 @@ async def job_wait(
     include_stage_outputs: bool = False,
 ) -> JobView:
     runtime = _runtime(ctx)
-    deadline = time.monotonic() + timeout_s if timeout_s > 0 else None
-    while True:
-        job = runtime.database.job(
-            job_id,
-            include_stage_outputs=include_stage_outputs,
-        )
-        if job is None:
-            raise ValueError(f"Unknown job: {job_id}")
+    job = runtime.database.job(
+        job_id,
+        include_stage_outputs=include_stage_outputs,
+    )
+    if job is None:
+        raise ValueError(f"Unknown job: {job_id}")
+
+    async def report_progress(value: JobView) -> None:
         completed = sum(
             stage.state
             in {"succeeded", "failed", "cancelled", "interrupted", "skipped"}
-            for stage in job.stages
+            for stage in value.stages
         )
         await ctx.report_progress(
             progress=float(completed),
-            total=float(len(job.stages) or 1),
-            message=job.state,
+            total=float(len(value.stages) or 1),
+            message=value.state,
         )
-        if job.state in {
-            "succeeded",
-            "failed",
-            "cancelled",
-            "interrupted",
-            "integrated",
-            "integration_conflict",
-        }:
-            return job
-        if deadline is not None and time.monotonic() >= deadline:
-            return job
-        await asyncio.sleep(0.5)
+
+    await report_progress(job)
+    if job.state in {
+        "succeeded",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "integrated",
+        "integration_conflict",
+    }:
+        return job
+    await runtime.wait(job_id, timeout_s)
+    refreshed = runtime.database.job(
+        job_id,
+        include_stage_outputs=include_stage_outputs,
+    )
+    if refreshed is None:
+        raise ValueError(f"Unknown job: {job_id}")
+    await report_progress(refreshed)
+    return refreshed
 
 
 @mcp.tool(description="Cancel a queued or running job.", structured_output=True)

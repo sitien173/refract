@@ -122,10 +122,11 @@ require provider CLIs. Normal test runs skip live markers.
 - Never log API keys or environment secrets.
 - Review every subprocess command change.
 - Review classifier and scheduler retry changes.
-- Never write Antigravity settings outside `_patch_model()`.
+- Never modify Antigravity settings to select a model; pass `agy --model` per invocation.
 - Update `uv.lock` only through `uv lock`.
 - Keep Sentinel and Sage read-only by default.
 - Keep HTTP bound to loopback by default.
+- Treat worktrees as Git isolation, not a security sandbox: permission-bypassing write agents can access the host and parent repository.
 
 ## Adding Targets and Roles
 
