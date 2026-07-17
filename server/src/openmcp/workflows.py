@@ -50,20 +50,8 @@ def _digest(data: dict[str, Any]) -> str:
 
 
 def _builtin(name: str) -> WorkflowSpec | None:
-    definitions = {
-        "single-read": ("read", "forge", "worker"),
-        "single-write": ("write", "forge", "worker"),
-        "forge-read": ("read", "forge", "forge"),
-        "forge-write": ("write", "forge", "forge"),
-        "canvas-read": ("read", "canvas", "canvas"),
-        "canvas-write": ("write", "canvas", "canvas"),
-        "sage-read": ("read", "sage", "sage"),
-        "sentinel-read": ("read", "sentinel", "sentinel"),
-    }
-    definition = definitions.get(name)
-    if definition is None:
+    if name not in {"read", "write"}:
         return None
-    mode, route, context = definition
     data = {
         "version": 1,
         "name": name,
@@ -73,9 +61,9 @@ def _builtin(name: str) -> WorkflowSpec | None:
         },
         "stages": {
             "execute": {
-                "mode": mode,
-                "route": route,
-                "context": context,
+                "mode": name,
+                "route": "default",
+                "context": "worker",
                 "prompt": "${inputs.prompt}",
             }
         },

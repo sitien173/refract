@@ -52,12 +52,10 @@ Tools:
 - `job_retry`
 - `job_integrate`
 
-Built-in workflows:
+Built-in workflow permissions:
 
-- `forge-read` and `forge-write`
-- `canvas-read` and `canvas-write`
-- `sage-read`
-- `sentinel-read`
+- `read`
+- `write`
 
 `job_submit` accepts `routing_profile` and `parent_job_id`. Public resources
 expose role nicknames. Internal provider identities remain configuration-only.

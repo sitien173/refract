@@ -70,7 +70,7 @@ def _config(home: Path, targets: tuple[TargetConfig, ...] | None = None) -> Daem
                 max_attempts=len(resolved_targets),
             ),
         ),
-        routing_profiles={"balanced": {"forge": "forge"}},
+        routing_profiles={"balanced": {"default": "forge", "forge": "forge"}},
     )
 
 
@@ -259,7 +259,7 @@ def _overlay_repository(tmp_path: Path) -> Path:
         """[[overlays]]
 include = ["config/*.development.json", "themes/**/*.local.css"]
 exclude = ["config/private.development.json"]
-workflows = ["single-write"]
+workflows = ["write"]
 """,
         encoding="utf-8",
     )
@@ -375,20 +375,19 @@ def test_workflow_validates_types_and_dependency_references() -> None:
         )
 
 
-def test_owner_specific_workflows_use_dedicated_routes(tmp_path) -> None:
-    routes = {"forge", "canvas", "sage", "sentinel"}
+def test_builtin_workflows_are_permissions(tmp_path) -> None:
+    read = load_workflow(tmp_path, "read", {"default"})
+    write = load_workflow(tmp_path, "write", {"default"})
 
-    assert load_workflow(tmp_path, "forge-write", routes).stages[0].route == "forge"
-    assert load_workflow(tmp_path, "canvas-write", routes).stages[0].route == "canvas"
-    assert load_workflow(tmp_path, "sage-read", routes).stages[0].route == "sage"
-    assert load_workflow(tmp_path, "sentinel-read", routes).stages[0].route == "sentinel"
+    assert (read.stages[0].mode, read.stages[0].route) == ("read", "default")
+    assert (write.stages[0].mode, write.stages[0].route) == ("write", "default")
 
 
 def test_new_role_resolves_without_workflow_parser_changes(tmp_path) -> None:
     workflow = parse_workflow(
         {
             "version": 1,
-            "name": "analyst-read",
+            "name": "analyst",
             "stages": {
                 "execute": {
                     "mode": "read",
@@ -625,7 +624,7 @@ targets = ["project-target"]
             max_jobs=1,
             targets=targets,
             routes=(RouteConfig(id="forge", targets=("global-target",)),),
-            routing_profiles={"balanced": {"forge": "forge"}},
+            routing_profiles={"balanced": {"default": "forge"}},
         )
     )
     runtime.drivers = FakeDrivers()
@@ -634,7 +633,7 @@ targets = ["project-target"]
         project = runtime.register_project(str(root))
         submission = await runtime.submit(
             project.id,
-            "single-read",
+            "read",
             {"prompt": "inspect"},
         )
         job = await runtime.wait(submission.job_id, 10)
@@ -669,7 +668,7 @@ id = "forge"
 targets = ["primary"]
 
 [routing_profiles.balanced]
-forge = "forge"
+default = "forge"
 """,
             encoding="utf-8",
         )
@@ -681,7 +680,7 @@ forge = "forge"
     project = runtime.register_project(str(root))
     first = await runtime.submit(
         project.id,
-        "single-read",
+        "read",
         {"prompt": "first"},
         context_key="shared",
     )
@@ -692,7 +691,7 @@ forge = "forge"
 
         second = await runtime.submit(
             project.id,
-            "single-read",
+            "read",
             {"prompt": "second"},
             context_key="shared",
         )
@@ -771,7 +770,7 @@ def test_database_marks_active_work_interrupted(tmp_path) -> None:
     database.create_job(
         job_id="job",
         project_id="project",
-        workflow="single-read",
+        workflow="read",
         routing_profile="balanced",
         workflow_json="{}",
         inputs={},
@@ -905,7 +904,7 @@ async def test_write_job_isolated_then_integrated(tmp_path) -> None:
         project = runtime.register_project(str(root), "sample")
         submission = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "create result"},
             "feature",
         )
@@ -936,7 +935,7 @@ async def test_write_job_integrates_project_overlay_patterns(tmp_path) -> None:
         project = runtime.register_project(str(root))
         submission = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "update development files"},
         )
         job = await runtime.wait(submission.job_id, 10)
@@ -980,7 +979,7 @@ async def test_overlay_integration_detects_local_conflict(tmp_path) -> None:
         project = runtime.register_project(str(root))
         submission = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "update development files"},
         )
         job = await runtime.wait(submission.job_id, 10)
@@ -1008,13 +1007,13 @@ async def test_child_job_inherits_parent_overlay_changes(tmp_path) -> None:
         project = runtime.register_project(str(root))
         parent_submission = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "first overlay update"},
         )
         parent = await runtime.wait(parent_submission.job_id, 10)
         child_submission = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "second overlay update"},
             parent_job_id=parent.id,
         )
@@ -1099,7 +1098,7 @@ async def test_overlay_rejects_tracked_files(tmp_path) -> None:
     (root / ".openmcp.local.toml").write_text(
         """[[overlays]]
 include = ["README.md"]
-workflows = ["single-write"]
+workflows = ["write"]
 """,
         encoding="utf-8",
     )
@@ -1111,7 +1110,7 @@ workflows = ["single-write"]
         with pytest.raises(ValueError, match="must be ignored by Git: README.md"):
             await runtime.submit(
                 project.id,
-                "single-write",
+                "write",
                 {"prompt": "update development files"},
             )
 
@@ -1130,7 +1129,7 @@ async def test_read_job_discards_filesystem_changes(tmp_path) -> None:
         project = runtime.register_project(str(root))
         submission = await runtime.submit(
             project.id,
-            "single-read",
+            "read",
             {"prompt": "inspect"},
         )
         job = await runtime.wait(submission.job_id, 10)
@@ -1160,7 +1159,7 @@ async def test_route_fails_over_and_preserves_context_session(tmp_path) -> None:
         project = runtime.register_project(str(root))
         first = await runtime.submit(
             project.id,
-            "single-read",
+            "read",
             {"prompt": "first"},
             "shared",
         )
@@ -1170,7 +1169,7 @@ async def test_route_fails_over_and_preserves_context_session(tmp_path) -> None:
 
         second = await runtime.submit(
             project.id,
-            "single-read",
+            "read",
             {"prompt": "second"},
             "shared",
         )
@@ -1196,8 +1195,8 @@ async def test_job_selects_configured_routing_profile(tmp_path) -> None:
             RouteConfig(id="forge-quality", targets=("premium",)),
         ),
         routing_profiles={
-            "cost": {"forge": "forge-economy"},
-            "quality": {"forge": "forge-quality"},
+            "cost": {"default": "forge-economy"},
+            "quality": {"default": "forge-quality"},
         },
         default_routing_profile="cost",
     )
@@ -1208,7 +1207,7 @@ async def test_job_selects_configured_routing_profile(tmp_path) -> None:
         project = runtime.register_project(str(root))
         submission = await runtime.submit(
             project.id,
-            "single-read",
+            "read",
             {"prompt": "inspect"},
             routing_profile="quality",
         )
@@ -1230,7 +1229,7 @@ async def test_integration_rejects_advanced_project_head(tmp_path) -> None:
         project = runtime.register_project(str(root))
         submission = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "create result"},
         )
         job = await runtime.wait(submission.job_id, 10)
@@ -1258,7 +1257,7 @@ async def test_failed_job_can_retry_explicitly(tmp_path) -> None:
         project = runtime.register_project(str(root))
         submission = await runtime.submit(
             project.id,
-            "single-read",
+            "read",
             {"prompt": "inspect"},
         )
         failed = await runtime.wait(submission.job_id, 10)
@@ -1287,7 +1286,7 @@ async def test_unexpected_driver_error_fails_stage_and_cleans_worktree(tmp_path)
         project = runtime.register_project(str(root))
         submission = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "explode"},
         )
         job = await runtime.wait(submission.job_id, 10)
@@ -1310,7 +1309,7 @@ async def test_queued_cancellation_cleans_and_remains_retryable(tmp_path) -> Non
     project = runtime.register_project(str(root))
     submission = await runtime.submit(
         project.id,
-        "single-read",
+        "read",
         {"prompt": "inspect"},
     )
     record = runtime.database.job_record(submission.job_id)
@@ -1340,7 +1339,7 @@ async def test_daemon_shutdown_marks_running_job_interrupted(tmp_path) -> None:
     project = runtime.register_project(str(root))
     submission = await runtime.submit(
         project.id,
-        "single-read",
+        "read",
         {"prompt": "wait"},
     )
     for _ in range(100):
@@ -1365,7 +1364,7 @@ async def test_startup_cleans_abandoned_running_worktree(tmp_path) -> None:
     project = abandoned.register_project(str(root))
     submission = await abandoned.submit(
         project.id,
-        "single-read",
+        "read",
         {"prompt": "wait"},
     )
     record = abandoned.database.job_record(submission.job_id)
@@ -1395,7 +1394,7 @@ async def test_review_job_can_chain_before_integration(tmp_path) -> None:
         project = runtime.register_project(str(root))
         implementation = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {
                 "prompt": "implement",
                 "commit_message": "feat: add result",
@@ -1405,7 +1404,7 @@ async def test_review_job_can_chain_before_integration(tmp_path) -> None:
         implementation_job = await runtime.wait(implementation.job_id, 10)
         review = await runtime.submit(
             project.id,
-            "single-read",
+            "read",
             {"prompt": "review"},
             "phase/reviewer",
             implementation_job.id,
@@ -1435,13 +1434,13 @@ async def test_integrating_fix_chain_cleans_all_write_jobs(tmp_path) -> None:
         project = runtime.register_project(str(root))
         implementation = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "implement"},
         )
         implementation_job = await runtime.wait(implementation.job_id, 10)
         fix = await runtime.submit(
             project.id,
-            "single-write",
+            "write",
             {"prompt": "fix"},
             parent_job_id=implementation_job.id,
         )

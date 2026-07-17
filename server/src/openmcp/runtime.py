@@ -74,7 +74,6 @@ _TERMINAL_STATES = {
     "integration_conflict",
 }
 _LEGACY_ROLES = {
-    "default": "forge",
     "coding": "forge",
     "backend": "forge",
     "frontend": "canvas",

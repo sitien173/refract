@@ -572,16 +572,7 @@ async def workflows_resource(project_id: str, ctx: Context) -> str:
     if project is None:
         raise ValueError(f"Unknown project: {project_id}")
     path = Path(project.root) / ".openmcp" / "workflows"
-    names = [
-        "canvas-read",
-        "canvas-write",
-        "forge-read",
-        "forge-write",
-        "sage-read",
-        "sentinel-read",
-        "single-read",
-        "single-write",
-    ]
+    names = ["read", "write"]
     if path.exists():
         names.extend(file.stem for file in sorted(path.glob("*.yaml")))
     return _json(sorted(set(names)))

@@ -43,12 +43,10 @@ Tools:
 - `job_retry`
 - `job_integrate`
 
-Role workflows:
+Workflow permissions:
 
-- `forge-read` and `forge-write`
-- `canvas-read` and `canvas-write`
-- `sage-read`
-- `sentinel-read`
+- `read`
+- `write`
 
 Resources include projects, jobs, contexts, models, workflows, global routing
 profiles, and effective project routing profiles.
@@ -79,7 +77,7 @@ Example:
 ```json
 {
   "project_id": "project-uuid",
-  "workflow": "forge-write",
+  "workflow": "write",
   "routing_profile": "quality",
   "inputs": {
     "prompt": "Add validation for empty names.",
@@ -162,18 +160,21 @@ requires = ["review"]
 targets = ["sentinel-primary"]
 
 [routing_profiles.balanced]
+default = "forge"
 forge = "forge"
 canvas = "canvas"
 sage = "sage"
 sentinel = "sentinel"
 
 [routing_profiles.cost]
+default = "forge"
 forge = "forge"
 canvas = "canvas"
 sage = "sage"
 sentinel = "sentinel"
 
 [routing_profiles.quality]
+default = "forge"
 forge = "forge"
 canvas = "canvas"
 sage = "sage"
@@ -213,7 +214,7 @@ id = "forge-project"
 targets = ["forge-primary"]
 
 [routing_profiles.quality]
-forge = "forge-project"
+default = "forge-project"
 ```
 
 Precedence is explicit submission profile, project configuration, global
@@ -233,7 +234,7 @@ include = [
   "themes/**/*.local.css",
 ]
 exclude = ["config/private.development.json"]
-workflows = ["project-development-write"]
+workflows = ["write"]
 ```
 
 Every matched file must already be ignored by Git. Overlay paths cannot contain
