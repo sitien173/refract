@@ -1,6 +1,6 @@
 ---
 name: coordinating-multi-model-work
-description: Three-gate Plan, Execute, and Review workflow using OpenMCP task-route templates, project initialization, project routing overrides, isolated jobs, compact results, independent quality review, and resumable integration. Load first for planning, routing, execution, review, or plan resumption.
+description: "Canonical three-gate (Plan, Execute, Review) workflow coordinating delegated OpenMCP jobs: project setup, task routing, routing profiles, isolated execution, independent review, and resumable integration. Load first for any planning, routing, execution, review, or resume action."
 ---
 
 # Coordinating Multi-Model Work
@@ -42,11 +42,14 @@ You must:
 8. Keep workflow names out of `# ROUTE`.
 
 `recommend` is the public nickname. `role` describes responsibility.
-`execution_role` selects execution without exposing a workflow name. Derive
-write workflows as `<execution_role>-write`. Derive read workflows as
-`<execution_role>-read`. Confirm derived names through
-`openmcp://workflows/<project_id>` before submission. Stop when a delegated
-route lacks `execution_role` or its derived workflow does not exist.
+`execution_role` labels the routing-profile role and context key; it no longer
+derives a workflow name. Submit the built-in `write` workflow for code changes
+and the built-in `read` workflow for consultation and review. OpenMCP ignores
+`execution_role` when resolving a built-in workflow and routes it through the
+profile's `default` mapping. Confirm `read` and `write` through
+`openmcp://workflows/<project_id>` before submission. A registered custom
+project workflow keeps its own name. Stop when a required workflow does not
+exist.
 
 # Routing Profiles
 
@@ -77,7 +80,7 @@ unclear, full-stack, high-impact, architectural, or tradeoff-heavy work.
 
 ## Consultation
 
-1. Derive and submit the consultant read workflow.
+1. Submit the built-in `read` workflow for the consultant.
 2. Use `<plan-slug>/consultant/<execution_role>` as `context_key`.
 3. Ask one narrow question with constraints and desired output.
 4. Call `job_wait` with `include_stage_outputs: false`.
@@ -115,7 +118,7 @@ an isolated chain. Resume through
 
 ## Implementation
 
-Submit the derived owner write workflow with:
+Submit the built-in `write` workflow with:
 
 - `project_id`: stored project identifier.
 - `routing_profile`: stored phase profile.
@@ -139,7 +142,7 @@ Workers never change Git history. OpenMCP commits successful write stages.
 
 ## Same-phase fixes
 
-Submit the same owner workflow and profile. Set `parent_job_id` to the latest
+Submit the `write` workflow and the same profile. Set `parent_job_id` to the latest
 write job. Reuse the implementer context key. Send `FIX:` plus only delta
 context. Use a `fix:` commit message.
 
@@ -165,7 +168,7 @@ responses, or missing evidence.
 
 ## Independent quality review
 
-1. Submit the derived reviewer read workflow with the latest write job as parent.
+1. Submit the built-in `read` workflow with the latest write job as parent.
 2. Pass the stored routing profile.
 3. Use `<phase-prefix>/reviewer/<reviewer_execution_role>/<latest-write-job-id>`.
 4. Require review of the exact implementation range.

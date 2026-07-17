@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 7.0.1 -->
+<!-- ccg-shared-version: 7.0.3 -->
 
 # Phase <N> — Journal: <phase title>
 

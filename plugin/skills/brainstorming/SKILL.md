@@ -26,8 +26,8 @@ description: "Explores intent, requirements, trade-offs, and design via dialogue
 
 ## Hard Rules
 
-- Configured consultation is mandatory for unclear, architectural, full-stack,
-  or high-impact ideas. User overrides always win.
+- Configured consultation is mandatory for the non-trivial work defined in
+  `coordinating-multi-model-work` Gate 1. User overrides always win.
 - One question per message during clarification.
 - Always write final confirmed design document.
 - Commit only if user asks.

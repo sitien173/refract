@@ -1,81 +1,57 @@
 ---
 name: executing-plans
-description: "Executes a written plan through project-scoped OpenMCP jobs with Plan, Execute, and Review gates. Use when running or resuming an implementation phase."
+description: "Runs or resumes a written plan one phase at a time through the coordinating workflow's Plan, Execute, and Review gates. Use when executing or resuming an implementation phase."
 ---
 
 # Executing Plans
 
-Load `coordinating-multi-model-work` first. It defines routing, gates, job
-states, review rules, and the handover schema.
+Thin phase-runner. **Load `coordinating-multi-model-work` first** — it owns the
+gates, job states, review rules, integration, and handover schema. This skill
+adds only what is specific to running a plan phase: setup, resume, and route
+resolution.
 
 ## Use When
 
-- An executable plan exists.
+- An executable (folder-layout) plan exists.
 - The user requests execution or resumption.
 
-## Workflow
+## Per-phase procedure
 
-1. Read `PLAN.md` once. Select the requested phase.
-2. Read `.handover.md` and validated `read_first` paths.
-3. Without `project_id`, call `project_init`. Review and commit created files.
-   Register only after the repository becomes clean.
-4. Read `openmcp://projects/<project_id>/jobs`. Match `job_refs` and
-   `context_prefix` before resolving new routing.
-5. When a phase chain exists, restore its nickname, execution role, workflow,
-   and profile. Recover missing values from the job workflow, profile, and
-   context key. Stop when recovery is ambiguous. Never call `task_route` again
-   for that phase.
-6. For a new phase, call `task_route` with its route intent and `project_id`.
-   Validate user-pinned nicknames. Otherwise select configured recommendations.
-7. Split the phase before submission when use cases select different owners.
-8. Read `openmcp://workflows/<project_id>`. Derive and validate owner,
-   consultant, and reviewer workflows from their `execution_role` values.
-9. Read `openmcp://projects/<project_id>/routing-profiles`. Validate a pinned
-   profile. Otherwise select the returned default.
-10. Confirm the resolved phase has one owner, one routing profile, two to four
+1. Read `PLAN.md` once; select the requested phase. Read `.handover.md` and its
+   validated `read_first` paths.
+2. **Project setup** (only without a `project_id`): run coordinating's *Project
+   Setup* — `project_init`, commit created files, then `project_register`.
+3. **Resume before routing.** Read `openmcp://projects/<project_id>/jobs`; match
+   `job_refs` and `context_prefix`. For an existing phase chain, restore its
+   stored nickname, execution role, workflow, and profile (recover missing
+   values from the job's workflow, profile, and context key; stop if ambiguous).
+   Never call `task_route` again for that phase.
+4. **New phase routing.** Call `task_route` with the phase route intent and
+   `project_id`. Validate any user-pinned nickname; otherwise select the
+   configured recommendation. Split the phase when its use cases need different
+   owners. Confirm the built-in `read`/`write` workflows against
+   `openmcp://workflows/<project_id>`, and the profile against
+   `openmcp://projects/<project_id>/routing-profiles`.
+5. Confirm the resolved phase has one owner, one routing profile, two to four
    tasks, files, acceptance criteria, checks, and a commit message.
-11. Run the canonical Plan gate. Output `# ROUTE`.
-12. Prepare the phase checkpoint. Commit prompt and handover. Record the clean
-   commit as `phase_base`.
-13. Submit the derived owner write workflow.
-14. Submit the prompt from `implementer-prompt.md`. Store the write job ID. Call
-    `job_wait` with `include_stage_outputs: false` until terminal.
-15. Read only `job.result.text`. Never append stage output.
-16. Verify `job.result.commit` inside a disposable detached worktree. Remove it
-    after running every declared check.
-17. Complete specification review.
-18. Submit the derived reviewer read workflow with the latest write job as
-    parent. Use a fresh reviewer context key. Wait and inspect its result.
-19. On `FAIL`, submit an owner-specific fix job. Set `parent_job_id` to the
-    latest write job. Reuse the implementer context key.
-20. On `PASS`, integrate only the latest write job with `job_integrate`.
-21. Append review evidence to `journal.md`. Update `.handover.md`. Commit that
-    coordination state as `chore(plan): record phase <N>`.
-22. Advance only after Review passes. After the final phase, mark `DONE` and
-    invoke `verifying-before-completion`.
+6. **Run the three gates per `coordinating-multi-model-work`:** Gate 1 emits
+   `# ROUTE`; Gate 2 checkpoints, submits the built-in `write` workflow (using
+   `implementer-prompt.md`), and waits compactly; Gate 3 verifies in a
+   disposable worktree, runs independent review, and integrates on PASS.
+7. Append review evidence to `journal.md`, update `.handover.md`, and commit
+   coordination state as `chore(plan): record phase <N>`.
+8. Advance only after Review passes. After the final phase, mark handover `DONE`
+   and invoke `verifying-before-completion`.
 
-## Failure Handling
+## Skill-specific rules
 
-- `queued` or `running`: wait again.
-- `interrupted`: call `job_retry`, then wait.
-- `failed` or `cancelled`: mark handover `BLOCKED`.
-- `integration_conflict`: preserve branches. Ask the user.
+- Flat plans are documentation only — never execute one.
+- Existing phase chains keep stored routing decisions; only new phases reload
+  routes and profiles.
+- Recover ambiguous routing? Stop and ask, rather than re-routing a live chain.
 
-Never stage worker changes. Never cherry-pick or merge worker branches. Never
-edit the root repository while an isolated chain remains active.
-
-## Hard Rules
-
-- Phase prompts remain narrow.
-- Flat plans are documentation only.
-- OpenMCP owns active job state.
-- Coordinator owns semantic agent selection.
-- Existing phase chains keep stored routing decisions.
-- New phases reload task routes and project profiles.
-- Every job uses the stored routing profile.
-- Terminal job worktrees are disposable.
-- Read final output only from `job.result.text`.
-- Backend-native sessions never enter prompts or handover.
+(Job-state handling, worktree verification, review gate, and no-manual-Git rules
+are canonical in `coordinating-multi-model-work`.)
 
 ## References
 

@@ -8,7 +8,7 @@ CLI identities remain private OpenMCP configuration.
 |---|---|
 | `recommend` | Public agent nickname |
 | `role` | Owner, consultant, or reviewer responsibility |
-| `execution_role` | Stable workflow and profile role |
+| `execution_role` | Stable routing-profile and context role |
 
 ## Workflow
 
@@ -122,27 +122,33 @@ requires = ["review"]
 targets = ["sentinel-primary"]
 
 [routing_profiles.balanced]
+default = "forge-balanced"
 forge = "forge-balanced"
 canvas = "canvas-balanced"
 sage = "sage-balanced"
 sentinel = "sentinel-balanced"
 
 [routing_profiles.cost]
+default = "forge-balanced"
 forge = "forge-balanced"
 canvas = "canvas-balanced"
 sage = "sage-balanced"
 sentinel = "sentinel-balanced"
 
 [routing_profiles.quality]
+default = "forge-balanced"
 forge = "forge-balanced"
 canvas = "canvas-balanced"
 sage = "sage-balanced"
 sentinel = "sentinel-balanced"
 ```
 
-Point profile mappings at different routes and targets. These names are only
-examples. Skills use the effective project default unless the user pins an
-available profile.
+Every profile maps `default`. The built-in `read` and `write` workflows ignore
+`execution_role` and resolve through that `default` mapping; OpenMCP still
+selects a target whose capability matches the workflow permission. The role
+keys remain for custom project workflows. Point profile mappings at different
+routes and targets. These names are only examples. Skills use the effective
+project default unless the user pins an available profile.
 
 - `balanced`: normal delivery.
 - `cost`: lower-cost targets and fewer retries.
@@ -167,9 +173,10 @@ Define coordinator routing guidance in `~/.openmcp/task_routes.json`:
 
 OpenMCP returns this template through `task_route`. Coordinator performs the
 semantic breakdown and chooses agent names. OpenMCP does not classify words.
-`execution_role` remains stable when nicknames change. The coordinator derives
-`<execution_role>-write` or `<execution_role>-read` and validates it against the
-project workflow resource.
+`execution_role` remains stable when nicknames change. The coordinator submits
+the built-in `write` or `read` workflow and validates it against the project
+workflow resource. OpenMCP ignores `execution_role` for built-in workflows and
+routes them through the profile's `default` mapping.
 
 Default read-only consultant and reviewer targets use Pi's non-interactive mode.
 OpenMCP passes
@@ -189,9 +196,11 @@ The plugin uses durable tools:
 - `job_cancel`
 - `job_integrate`
 
-Implementation derives a write workflow from the selected owner's execution
-role. Consultation and review derive read workflows. Every submission carries
-a `routing_profile`.
+Implementation submits the built-in `write` workflow. Consultation and review
+submit the built-in `read` workflow. OpenMCP resolves each built-in workflow
+through the profile's `default` mapping, ignoring `execution_role`. Custom
+project workflows keep their own names. Every submission carries a
+`routing_profile`.
 
 Before first registration, `project_init` creates missing project files:
 

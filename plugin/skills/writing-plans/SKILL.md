@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: "Turns a confirmed design into a phase-based implementation plan. Use when phases need route intent, file scope, acceptance criteria, and integration checks before current project routing is resolved during execution."
+description: "Turns a confirmed design into a phase-based implementation plan with route intent, file scope, acceptance criteria, and integration checks. Use when a design is ready and work needs phase boundaries before execution."
 ---
 
 # Writing Plans

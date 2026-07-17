@@ -83,22 +83,22 @@ grep -q '^## Final Commit$' shared/journal-template.md
 grep -q 'Every executable plan' skills/writing-plans/SKILL.md
 grep -q 'Resolve at execution' skills/writing-plans/SKILL.md
 grep -q 'Do not call `task_route` during plan authoring' skills/writing-plans/SKILL.md
-grep -q 'Validate user-pinned nicknames' skills/executing-plans/SKILL.md
-grep -q 'Otherwise select the returned default' skills/executing-plans/SKILL.md
+grep -q 'Validate any user-pinned nickname' skills/executing-plans/SKILL.md
+grep -q 'Otherwise use the effective default' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'execution_role' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://workflows/<project_id>' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Do not reroute an existing phase chain' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Existing phase chains keep stored routing decisions' skills/executing-plans/SKILL.md
-grep -q '<owner_execution_role>-write' skills/executing-plans/implementer-prompt.md
+grep -q 'workflow: write' skills/executing-plans/implementer-prompt.md
 grep -q 'Never mutate the root during isolated chains' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'project_init' skills/executing-plans/implementer-prompt.md
-grep -q 'project_register' skills/executing-plans/implementer-prompt.md
+grep -q 'project_init' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'project_register' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'task_route' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'job_submit' skills/executing-plans/implementer-prompt.md
 grep -q 'job_wait' skills/executing-plans/implementer-prompt.md
 grep -q 'include_stage_outputs: false' skills/executing-plans/implementer-prompt.md
 grep -q 'job.result.text' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'job_integrate' skills/executing-plans/SKILL.md
+grep -q 'job_integrate' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'parent_job_id' skills/executing-plans/implementer-prompt.md
 grep -q 'openmcp://projects/<project_id>/jobs' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://routing-profiles' skills/coordinating-multi-model-work/SKILL.md

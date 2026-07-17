@@ -1,37 +1,22 @@
 # Implementer Prompt Template
 
-OpenMCP runs workers inside isolated Git worktrees. It commits successful write
-jobs automatically. Workers never stage, commit, reset, squash, or integrate.
+Concrete dispatch artifacts for Gate 2. Project setup, `job_wait`, and job-state
+handling are canonical in `coordinating-multi-model-work` — follow it for those.
+OpenMCP runs workers in isolated worktrees and commits successful write jobs;
+workers never stage, commit, reset, squash, merge, or integrate.
 
-## Submit sequence
+## Write-job submission
 
-Select the public nickname and stable `execution_role` through `task_route`.
-OpenMCP never infers either value from task words.
-
-Initialize once before registration:
-
-```text
-project_init:
-  path: <absolute repository root>
-```
-
-Review and commit created `.openmcp` files. Then register cleanly:
-
-```text
-project_register:
-  path: <absolute repository root>
-  alias: <repository name>
-```
-
-Submit the phase:
+Select the nickname and stable `execution_role` via `task_route` (OpenMCP never
+infers them). After setup, submit the phase:
 
 ```text
 job_submit:
   project_id: <stored project UUID>
-  workflow: <owner_execution_role>-write
+  workflow: write
   inputs:
     prompt: |
-      You are <owner_nickname>. Implement the plan phase correctly. Follow the instructions below. Do not stage, commit, reset, squash, or integrate. Do not use Git mutation commands. Do not edit the root repository while an isolated chain remains active.
+      <one or two compressed sentences of the original user request>
       Read: docs/plans/<slug>/phase-<NN>/prompt.md
       Contract: <plugin-root>/shared/worker-contract.md
       Response: <plugin-root>/shared/erp.md
@@ -45,16 +30,8 @@ job_submit:
   routing_profile: <stored phase profile>
 ```
 
-Then call `job_wait`:
-
-```text
-job_wait:
-  job_id: <returned job UUID>
-  include_stage_outputs: false
-```
-
-Wait again while queued or running. Read only `job.result.text`. Never combine
-it with stage output. Record only project and job identifiers.
+Then `job_wait` with `include_stage_outputs: false`. Read only
+`job.result.text`; never combine it with stage output.
 
 ## Phase prompt
 
@@ -84,8 +61,8 @@ Write `<plan-dir>/phase-<NN>/prompt.md`:
 ## Rules
 
 Follow the supplied worker contract. Write `notes.md` and `journal.md` inside
-this phase directory. Do not use Git mutation commands.
-
+this phase directory, create new files if they do not exist.
+  
 ## Response Format
 
 Return the `# EXTERNAL RESPONSE` block and matching status line from ERP.
@@ -93,7 +70,7 @@ Return the `# EXTERNAL RESPONSE` block and matching status line from ERP.
 
 ## Same-phase fix
 
-Submit the same `<owner_execution_role>-write` workflow. Set `parent_job_id` to the
-latest write job. Reuse its implementer `context_key`. Start the prompt with
-`FIX:` and include only changed requirements, findings, files, and checks. Use
-a `fix:` commit message.
+Resubmit the built-in `write` workflow with `parent_job_id`
+set to the latest write job and the implementer `context_key` reused. Start the
+prompt with `FIX:` and include only changed requirements, findings, files, and
+checks. Use a `fix:` commit message.
