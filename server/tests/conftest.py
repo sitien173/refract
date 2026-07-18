@@ -1,6 +1,6 @@
 """Test isolation fixtures.
 
-The smoke tests assert how ``server._effective_env()`` resolves backend
+The smoke tests assert how ``environment.effective_env()`` resolves backend
 defaults. Without isolation, the developer's real ``~/.openmcp/.env``
 silently leaks into the test process and changes the resolution order,
 masking regressions in the precedence logic.

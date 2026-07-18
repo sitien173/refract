@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from openmcp.environment import effective_env as _effective_env
+from openmcp.environment import env_truthy as _env_truthy
 from openmcp.logging_setup import get_logger
 
 log = get_logger("notify")
@@ -34,17 +36,6 @@ def _load_notify() -> Any | None:
     _NOTIFY = notify
     return _NOTIFY
 
-
-def _effective_env() -> dict[str, str]:
-    from openmcp.server import _effective_env as server_effective_env
-
-    return server_effective_env()
-
-
-def _env_truthy(name: str, env: dict[str, str]) -> bool:
-    from openmcp.server import _env_truthy as server_env_truthy
-
-    return server_env_truthy(name, env)
 
 
 def _notify_kwargs(env: dict[str, str], *, backend: str, session_id: str, model: str) -> dict[str, Any]:

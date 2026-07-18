@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -108,13 +109,13 @@ def _extract_output(lines: list[str]) -> tuple[str, str, str]:
 
 def _execute_sync(params: PiParams) -> BackendResult:
     """Execute a Pi non-interactive session and return a normalized result."""
-    cd = Path(params.cd)
-    if not cd.exists():
+    cd = Path(params.cd).expanduser().absolute()
+    if not cd.is_dir():
         return BackendResult(
             outcome="FATAL",
             SESSION_ID="",
             agent_messages="",
-            error=f"The workspace root directory `{cd.absolute().as_posix()}` does not exist. Please check the path and try again.",
+            error=f"The workspace root directory `{cd}` does not exist or is not a directory. Please check the path and try again.",
             error_class="bad_cd",
         )
     if shutil.which("pi") is None:
@@ -154,7 +155,7 @@ def _execute_sync(params: PiParams) -> BackendResult:
 
     log.info(
         "pi.execute start cwd=%s model=%s thinking=%s session_id=%s prompt_len=%d timeout_s=%s",
-        cd.absolute().as_posix(), params.model or "<default>",
+        os.fspath(cd), params.model or "<default>",
         params.reasoning_effort or "<off>", params.SESSION_ID or "<new>",
         len(params.PROMPT), params.timeout_s or "<off>",
     )
@@ -165,7 +166,7 @@ def _execute_sync(params: PiParams) -> BackendResult:
     try:
         for line in run_shell_command(
             cmd,
-            cwd=cd.absolute().as_posix(),
+            cwd=os.fspath(cd),
             timeout_s=params.timeout_s,
             cancel_event=params.cancel_event,
         ):

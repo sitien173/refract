@@ -293,7 +293,7 @@ async def test_pi_json_mode_extracts_reply_session_and_cli_options(monkeypatch, 
         "pi", "--mode", "json", "--approve", "--session", "existing-session",
         "--model", "openai/gpt-5", "--thinking", "high", "x",
     ]
-    assert captured["cwd"] == str(tmp_path.absolute())
+    assert Path(captured["cwd"]) == tmp_path.absolute()
     assert out.outcome == "OK"
     assert out.SESSION_ID == session_id
     assert out.agent_messages == "PONG"
@@ -506,6 +506,7 @@ async def test_explicit_model_overrides_codex_profile_model(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_env_priority_user_then_openmcp_dotenv_then_plugin(monkeypatch, tmp_path) -> None:
+    import openmcp.environment as environment
     import openmcp.server as srv
 
     captured = {}
@@ -535,7 +536,7 @@ async def test_env_priority_user_then_openmcp_dotenv_then_plugin(monkeypatch, tm
     )
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(srv.Path, "home", lambda: fake_home)
+    monkeypatch.setattr(environment.Path, "home", lambda: fake_home)
     monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "user-model")
     monkeypatch.delenv("OPENMCP_CODEX_PROFILE_DEFAULT", raising=False)
     monkeypatch.setattr(srv, "codex_execute", fake)
@@ -548,6 +549,7 @@ async def test_env_priority_user_then_openmcp_dotenv_then_plugin(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_env_falls_back_to_plugin_env_when_higher_priorities_missing(monkeypatch, tmp_path) -> None:
+    import openmcp.environment as environment
     import openmcp.server as srv
 
     captured = {}
@@ -571,7 +573,7 @@ async def test_env_falls_back_to_plugin_env_when_higher_priorities_missing(monke
     fake_home.mkdir(parents=True)
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(srv.Path, "home", lambda: fake_home)
+    monkeypatch.setattr(environment.Path, "home", lambda: fake_home)
     monkeypatch.delenv("OPENMCP_AGY_MODEL_DEFAULT", raising=False)
     monkeypatch.setattr(srv, "agy_execute", fake)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 import sys
 import subprocess
@@ -22,6 +23,7 @@ from openmcp.config import (
 from openmcp.backends._shell import ShellCommandCancelled, stream_shell_command_lines
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
+from openmcp.overlays import OverlayError, load_overlay_rules
 from openmcp.planning import resolve_execution_plan
 from openmcp.runtime import Runtime
 from openmcp.workflows import (
@@ -264,6 +266,19 @@ workflows = ["write"]
         encoding="utf-8",
     )
     return root
+
+
+def test_overlay_patterns_reject_platform_specific_paths(tmp_path) -> None:
+    config = tmp_path / ".openmcp.local.toml"
+    for pattern in ("C:/secrets/**", "config\\secrets\\**", "config/file:stream"):
+        config.write_text(
+            "[[overlays]]\n"
+            f"include = [{pattern!r}]\n"
+            "workflows = [\"write\"]\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(OverlayError):
+            load_overlay_rules(tmp_path, "write")
 
 
 def test_workflow_rejects_parallel_write_stages() -> None:
@@ -835,7 +850,38 @@ def test_job_views_return_result_text_once(tmp_path) -> None:
     database.close()
 
 
-def test_shell_command_cancellation_terminates_process_group() -> None:
+@pytest.mark.skipif(os.name != "nt", reason="Windows launcher behavior")
+def test_shell_command_uses_safe_npm_powershell_shim(tmp_path) -> None:
+    command = tmp_path / "agent.cmd"
+    command.write_text("@echo unsafe & whoami\n", encoding="utf-8")
+    command.with_suffix(".ps1").write_text(
+        "$args | ForEach-Object { Write-Output $_ }\n",
+        encoding="utf-8",
+    )
+
+    output = list(
+        stream_shell_command_lines(
+            [os.fspath(command), "hello&whoami", "100%PATH%"],
+            executable_name=os.fspath(command),
+            line_transform=lambda line: line.rstrip("\r\n"),
+            terminate_wait_s=1,
+        )
+    )
+
+    assert output == ["hello&whoami", "100%PATH%"]
+
+
+def test_shell_command_cancellation_terminates_process_group(tmp_path) -> None:
+    child_marker = tmp_path / "leaked-child.txt"
+    child_code = (
+        "import pathlib,time; time.sleep(1); "
+        f"pathlib.Path({str(child_marker)!r}).write_text('leaked', encoding='utf-8')"
+    )
+    parent_code = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
+        "time.sleep(30)"
+    )
     cancelled = threading.Event()
     timer = threading.Timer(0.2, cancelled.set)
     timer.start()
@@ -844,7 +890,7 @@ def test_shell_command_cancellation_terminates_process_group() -> None:
         with pytest.raises(ShellCommandCancelled):
             list(
                 stream_shell_command_lines(
-                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                    [sys.executable, "-c", parent_code],
                     executable_name=sys.executable,
                     line_transform=str.strip,
                     terminate_wait_s=1,
@@ -854,6 +900,8 @@ def test_shell_command_cancellation_terminates_process_group() -> None:
     finally:
         timer.cancel()
     assert time.monotonic() - started < 3
+    time.sleep(1)
+    assert not child_marker.exists()
 
 
 @pytest.mark.asyncio

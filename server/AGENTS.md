@@ -4,28 +4,31 @@ OpenMCP is a loopback HTTP orchestration daemon. It exposes durable project
 jobs through MCP. Jobs use role workflows, routing profiles, named contexts,
 isolated worktrees, chained commits, and explicit integration.
 
-## Repository Skill
-
-Use `.agents/skills/openmcp-orchestrate/SKILL.md` for OpenMCP orchestration.
-
 ## Repository Structure
 
 ```text
 src/openmcp/
-  backends/       CLI adapters and shared classification
-  cli.py          serve and doctor commands
-  config.py       targets, routes, and routing profiles
-  database.py     SQLite state and migrations
-  drivers.py      internal provider dispatch
-  models.py       public structured results
-  runtime.py      scheduler, contexts, retries, and integration
-  server.py       MCP tools and resources
-  workflows.py    built-in and project workflow loading
-  workspaces.py   Git isolation and integration
+  backends/           provider-specific CLI adapters and classification
+  backend_runner.py   direct Python invocation compatibility service
+  cli.py              serve and doctor commands
+  config.py           targets, routes, and routing profiles
+  database.py         SQLite state and migrations
+  drivers.py          internal provider dispatch
+  environment.py      process, dotenv, and plugin environment resolution
+  models.py           public structured results
+  notify.py           optional lifecycle notifications
+  overlays.py         ignored-file overlay handling
+  planning.py         immutable execution-plan snapshots
+  processes.py        cross-platform process-group lifecycle
+  runtime.py          scheduler, contexts, retries, and integration
+  server.py           MCP tools, resources, and daemon lifecycle
+  workflows.py        built-in and project workflow loading
+  workspaces.py       Git isolation and integration
 tests/
   test_smoke.py
   test_orchestration.py
   test_live_backends.py
+  test_notify.py
 ```
 
 ## Development Commands
