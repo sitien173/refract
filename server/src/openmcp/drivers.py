@@ -50,6 +50,9 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
             args.extend(["--profile", target.profile])
         if target.model:
             args.extend(["--model", target.model])
+            if target.profile:
+                escaped = target.model.replace("\\", "\\\\").replace('"', '\\"')
+                args.extend(["-c", f'model="{escaped}"'])
         if target.reasoning:
             args.extend(["-c", f"model_reasoning_effort={target.reasoning}"])
         return tuple(args)
@@ -77,7 +80,7 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
                 )
             args.extend(
                 [
-                    "--approve",
+                    "--no-approve",
                     "--no-context-files",
                     "--no-extensions",
                     "--no-skills",
