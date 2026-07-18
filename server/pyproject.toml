@@ -8,6 +8,10 @@ version = "1.2.0"
 description = "Durable local orchestration for coding-agent CLI backends."
 readme = "README.md"
 requires-python = ">=3.12"
+classifiers = [
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     "mcp[cli]>=1.21.2",
     "pydantic>=2",

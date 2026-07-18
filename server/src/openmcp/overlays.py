@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from openmcp.workspaces import WorkspaceError, ignored_paths
@@ -42,10 +42,18 @@ def _strings(value: Any, label: str, *, required: bool = False) -> tuple[str, ..
 
 def _validate_pattern(pattern: str) -> None:
     path = PurePosixPath(pattern)
-    if path.is_absolute() or ".." in path.parts:
+    windows_path = PureWindowsPath(pattern)
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or windows_path.drive
+        or windows_path.root
+    ):
         raise OverlayError(f"Overlay pattern must stay inside the project: {pattern}")
     if "\\" in pattern:
         raise OverlayError(f"Overlay pattern must use forward slashes: {pattern}")
+    if ":" in pattern:
+        raise OverlayError(f"Overlay pattern must be portable across platforms: {pattern}")
 
 
 def load_overlay_rules(project_root: Path, workflow: str) -> tuple[OverlayRule, ...]:
@@ -87,7 +95,16 @@ def load_overlay_rules(project_root: Path, workflow: str) -> tuple[OverlayRule, 
 
 def _safe_path(root: Path, relative: str) -> Path:
     value = PurePosixPath(relative)
-    if value.is_absolute() or not value.parts or ".." in value.parts:
+    windows_value = PureWindowsPath(relative)
+    if (
+        value.is_absolute()
+        or not value.parts
+        or ".." in value.parts
+        or "\\" in relative
+        or ":" in relative
+        or windows_value.drive
+        or windows_value.root
+    ):
         raise OverlayError(f"Invalid overlay path: {relative}")
     path = root.joinpath(*value.parts)
     current = root
@@ -225,7 +242,8 @@ def initialize_overlays(
     if not rules:
         return
     state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    state_root.chmod(0o700)
+    if os.name != "nt":
+        state_root.chmod(0o700)
     files = _matching_files(repository, rules)
     _validate_ignored(repository, files)
     originals = {relative: _digest(path) for relative, path in files.items()}

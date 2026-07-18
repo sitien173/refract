@@ -25,7 +25,7 @@ def _git(*args: str, cwd: Path | None = None) -> str:
     if git is None:
         raise WorkspaceError("Git was not found on PATH")
     completed = subprocess.run(
-        [git, *args],
+        [git, "-c", "core.quotepath=false", *args],
         cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -63,7 +63,16 @@ def ignored_paths(repository: Path, relatives: Iterable[str]) -> set[str]:
     if git is None:
         raise WorkspaceError("Git was not found on PATH")
     completed = subprocess.run(
-        [git, "-C", str(repository), "check-ignore", "-z", "--stdin"],
+        [
+            git,
+            "-c",
+            "core.quotepath=false",
+            "-C",
+            str(repository),
+            "check-ignore",
+            "-z",
+            "--stdin",
+        ],
         input="\0".join(values) + "\0",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

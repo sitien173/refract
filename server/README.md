@@ -13,13 +13,37 @@ OpenMCP is a local coding-agent orchestration daemon.
 - Chained review and fix jobs
 - Explicit guarded integration
 
-## Installation
+## Architecture
 
-OpenMCP requires Python 3.12 or newer.
+The package is organized by responsibility rather than provider or transport:
+
+- `server.py` exposes MCP tools, resources, and the daemon lifecycle.
+- `runtime.py` coordinates durable jobs, workflows, routing, and worktrees.
+- `database.py`, `workspaces.py`, and `overlays.py` provide persistence and
+  filesystem adapters.
+- `backends/` contains provider-specific CLI adapters; `drivers.py` normalizes
+  them for durable jobs. `processes.py` owns portable process-group creation and
+  whole-tree cancellation.
+- `backend_runner.py` supports the legacy direct Python invocation API, while
+  `environment.py` resolves its shared process, dotenv, and plugin settings.
+
+## Platform support and installation
+
+OpenMCP supports Windows, macOS, and Linux with Python 3.12 or newer. Git and at
+least one configured backend CLI (`agy`, `codex`, or `pi`) must be on `PATH`.
+Backend executables may be native programs, shell launchers, or Windows npm
+`.cmd` launchers. On Windows, the standard matching npm `.ps1` shim and
+PowerShell are required so prompt arguments bypass `cmd.exe` expansion.
 
 ```bash
 uv sync --all-extras
+uv run openmcp doctor
 ```
+
+Paths are passed to child processes in the operating system's native form.
+Overlay configuration and persisted relative paths always use `/`, so project
+configuration remains portable. Set `OPENMCP_HOME` to move daemon state; both
+`~/...` and native absolute paths are accepted.
 
 ## Running
 
@@ -296,3 +320,6 @@ uv run pytest
 uv run pytest -m live
 uv build
 ```
+
+The default suite is platform-independent and runs in CI on Windows, macOS,
+and Linux. Live tests additionally require the provider CLIs and credentials.

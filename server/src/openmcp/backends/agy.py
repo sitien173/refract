@@ -232,13 +232,13 @@ def _classify_output(agent_messages: str, session_id: str, error_text: str) -> B
 
 def _execute_once(params: AgyParams) -> BackendResult:
     """Execute one agy CLI session and return normalized backend result."""
-    cd = Path(params.cd)
-    if not cd.exists():
+    cd = Path(params.cd).expanduser().absolute()
+    if not cd.is_dir():
         return BackendResult(
             outcome="FATAL",
             SESSION_ID="",
             agent_messages="",
-            error=f"The workspace root directory `{cd.absolute().as_posix()}` does not exist. Please check the path and try again.",
+            error=f"The workspace root directory `{cd}` does not exist or is not a directory. Please check the path and try again.",
             error_class="bad_cd",
         )
 
@@ -252,7 +252,7 @@ def _execute_once(params: AgyParams) -> BackendResult:
             error_class="missing_cli",
         )
 
-    cwd = cd.absolute().as_posix()
+    cwd = os.fspath(cd)
     error_text = ""
     execution_error = False
     agent_messages = ""
