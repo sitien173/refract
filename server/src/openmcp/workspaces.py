@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+from openmcp.logging_setup import get_logger
+
+
+log = get_logger("workspaces")
 
 
 class WorkspaceError(RuntimeError):
@@ -24,6 +30,7 @@ def _git(*args: str, cwd: Path | None = None) -> str:
     git = shutil.which("git")
     if git is None:
         raise WorkspaceError("Git was not found on PATH")
+    started_at = time.monotonic()
     completed = subprocess.run(
         [git, "-c", "core.quotepath=false", *args],
         cwd=cwd,
@@ -36,9 +43,32 @@ def _git(*args: str, cwd: Path | None = None) -> str:
         shell=False,
         check=False,
     )
+    operation = (
+        args[args.index("-C") + 2]
+        if "-C" in args and len(args) > args.index("-C") + 2
+        else next((value for value in args if not value.startswith("-")), "git")
+    )
+    duration_ms = round((time.monotonic() - started_at) * 1000, 2)
     if completed.returncode:
         error = completed.stderr.strip() or completed.stdout.strip()
+        log.warning(
+            "Git operation failed",
+            extra={
+                "event": "git.failed",
+                "operation": operation,
+                "return_code": completed.returncode,
+                "duration_ms": duration_ms,
+            },
+        )
         raise WorkspaceError(error or f"Git command failed: {' '.join(args)}")
+    log.debug(
+        "Git operation completed",
+        extra={
+            "event": "git.completed",
+            "operation": operation,
+            "duration_ms": duration_ms,
+        },
+    )
     return completed.stdout.strip()
 
 

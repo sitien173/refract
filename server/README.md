@@ -148,6 +148,15 @@ history_turns = 8
 history_bytes = 65536
 default_routing_profile = "balanced"
 
+[logging]
+level = "INFO"
+format = "json"
+file = "openmcp.log"
+console = false
+max_bytes = 10485760
+backup_count = 5
+capture_warnings = true
+
 [[targets]]
 id = "forge-primary"
 backend = "codex"
@@ -263,8 +272,41 @@ Targets, routes, profiles, and backend CLI arguments reload before each
 submission. Submitted jobs retain an immutable routing snapshot, including the
 selected target arguments and policy. Later configuration changes affect only
 new jobs; a changed backend also starts a new context lane rather than reusing a
-session created by the old target. Host, port, and worker settings still require
-a restart.
+session created by the old target. Host, port, worker, and logging settings require a restart.
+
+## Application logging
+
+OpenMCP writes application logs to `~/.openmcp/openmcp.log` by default. Logging
+is asynchronous, UTF-8 encoded, size-rotated, and retained according to
+`max_bytes` and `backup_count`. Timestamps are UTC. Native crash traces are
+written separately to `~/.openmcp/openmcp.crash.log` when Python's fault handler
+is not already owned by the host process.
+
+Use `[logging]` in `config.toml` to select `text` or newline-delimited `json`.
+Relative `file` paths resolve under `OPENMCP_HOME`; set `file = false` to disable
+the file sink. If the file cannot be opened, OpenMCP falls back to stderr.
+`console = true` mirrors application logs to stderr. JSON records include event
+names, durations, process/thread metadata, and available project, job, stage,
+and target correlation IDs. Prompts and model responses are not included in
+application logs; they remain in the durable job data and transcript artifacts.
+Common credential forms are redacted as defense in depth, but credentials must
+never be placed in configuration or prompts solely in reliance on redaction.
+
+Environment variables override `[logging]`:
+
+- `OPENMCP_LOG_LEVEL`
+- `OPENMCP_LOG_FORMAT` (`text` or `json`)
+- `OPENMCP_LOG_FILE` (`-`, `off`, or `none` disables it)
+- `OPENMCP_LOG_CONSOLE`
+- `OPENMCP_LOG_MAX_BYTES`
+- `OPENMCP_LOG_BACKUP_COUNT`
+- `OPENMCP_LOG_CAPTURE_WARNINGS`
+
+Boolean environment values accept `true`/`false`, `yes`/`no`, `on`/`off`, or
+`1`/`0`. One-run overrides are also available on `openmcp serve`:
+`--log-level`, `--log-format`, `--log-file`, and
+`--log-console`/`--no-log-console`. `openmcp doctor` reports the resolved sink,
+format, and level without writing credentials.
 
 ## Project configuration
 
@@ -425,6 +467,8 @@ integration still needs their commits.
 
 ```text
 ~/.openmcp/openmcp.db
+~/.openmcp/openmcp.log
+~/.openmcp/openmcp.crash.log
 ~/.openmcp/runs/
 ~/.openmcp/worktrees/
 ```

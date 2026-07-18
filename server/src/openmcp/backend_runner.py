@@ -118,7 +118,12 @@ async def run(
         )
         raise
     except Exception as exc:
-        log.exception("run(): unhandled exception in %s backend", backend)
+        # Executor exceptions can include a subprocess argv containing PROMPT.
+        log.error(
+            "run(): unhandled backend exception backend=%s type=%s",
+            backend,
+            type(exc).__name__,
+        )
         return {
             "success": False,
             "SESSION_ID": SESSION_ID or "",

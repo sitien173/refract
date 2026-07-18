@@ -36,6 +36,19 @@ class RouteConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class LoggingConfig:
+    """Application log sinks and retention policy."""
+
+    level: str = "INFO"
+    format: str = "text"
+    file: Path | None = None
+    console: bool = False
+    max_bytes: int = 10 * 1024 * 1024
+    backup_count: int = 5
+    capture_warnings: bool = True
+
+
+@dataclass(slots=True, frozen=True)
 class DaemonConfig:
     home: Path
     host: str = "127.0.0.1"
@@ -48,6 +61,7 @@ class DaemonConfig:
     routes: tuple[RouteConfig, ...] = field(default_factory=tuple)
     routing_profiles: dict[str, dict[str, str]] = field(default_factory=dict)
     config_path: Path | None = None
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     @property
     def database_path(self) -> Path:
@@ -291,6 +305,64 @@ def _routes(raw: Any, targets: tuple[TargetConfig, ...]) -> tuple[RouteConfig, .
     return tuple(routes)
 
 
+def _logging_config(raw: Any, home: Path) -> LoggingConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("[logging] must be a TOML table")
+    unknown = set(raw) - {
+        "level",
+        "format",
+        "file",
+        "console",
+        "max_bytes",
+        "backup_count",
+        "capture_warnings",
+    }
+    if unknown:
+        raise ValueError(f"Unsupported logging settings: {sorted(unknown)}")
+    level = str(raw.get("level", "INFO")).strip().upper()
+    if level not in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}:
+        raise ValueError(f"Invalid logging level: {level!r}")
+    log_format = str(raw.get("format", "text")).strip().lower()
+    if log_format not in {"text", "json"}:
+        raise ValueError("Logging format must be 'text' or 'json'")
+    raw_file = raw.get("file", "openmcp.log")
+    if raw_file is None or raw_file is False or str(raw_file).strip().lower() in {
+        "",
+        "none",
+        "off",
+    }:
+        log_file = None
+    elif not isinstance(raw_file, str):
+        raise ValueError("logging.file must be a path string or false")
+    else:
+        candidate = Path(raw_file).expanduser()
+        log_file = candidate if candidate.is_absolute() else home / candidate
+
+    for name in ("console", "capture_warnings"):
+        if name in raw and not isinstance(raw[name], bool):
+            raise ValueError(f"logging.{name} must be true or false")
+    try:
+        max_bytes = int(raw.get("max_bytes", 10 * 1024 * 1024))
+        backup_count = int(raw.get("backup_count", 5))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Logging retention settings must be integers") from exc
+    if isinstance(raw.get("max_bytes"), bool) or max_bytes < 1:
+        raise ValueError("logging.max_bytes must be at least 1")
+    if isinstance(raw.get("backup_count"), bool) or backup_count < 0:
+        raise ValueError("logging.backup_count must be at least 0")
+    return LoggingConfig(
+        level=level,
+        format=log_format,
+        file=log_file,
+        console=raw.get("console", False),
+        max_bytes=max_bytes,
+        backup_count=backup_count,
+        capture_warnings=raw.get("capture_warnings", True),
+    )
+
+
 def load_config(path: Path | None = None) -> DaemonConfig:
     home = openmcp_home()
     config_path = path or home / "config.toml"
@@ -323,6 +395,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         targets=targets,
         routes=routes,
         routing_profiles=routing_profiles,
+        logging=_logging_config(raw.get("logging"), home),
     )
 
 
@@ -393,6 +466,7 @@ def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
 
 __all__ = [
     "DaemonConfig",
+    "LoggingConfig",
     "RouteConfig",
     "TargetConfig",
     "load_config",

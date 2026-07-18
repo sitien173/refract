@@ -256,7 +256,12 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         err_message += f"\n\n[timeout] {exc}"
         timed_out = True
     except Exception as exc:  # noqa: BLE001
-        log.exception("codex: unexpected error during stream")
+        # Subprocess exception strings can contain the complete argv, including
+        # the user prompt. Keep application logs metadata-only.
+        log.error(
+            "codex: unexpected error during stream type=%s",
+            type(exc).__name__,
+        )
         err_message += f"\n\n[unexpected] {exc}"
 
     stdout_text = "\n".join(stdout_lines)
@@ -268,7 +273,10 @@ def _execute_sync(params: CodexParams) -> BackendResult:
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
             if stripped:
-                log.debug("codex: skipping non-JSON stdout line: %s", stripped)
+                log.debug(
+                    "codex: skipping non-JSON stdout line len=%d",
+                    len(stripped),
+                )
             continue
 
         item_type = parsed.get("type", "")
@@ -359,7 +367,11 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         len(result.agent_messages),
     )
     if result.error:
-        log.warning("codex.execute error_text: %s", result.error[:500])
+        log.warning(
+            "codex.execute returned error class=%s len=%d",
+            result.error_class,
+            len(result.error),
+        )
     return result
 
 
