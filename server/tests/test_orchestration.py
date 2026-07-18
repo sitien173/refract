@@ -552,6 +552,28 @@ forge = "forge-quality"
     }
 
 
+@pytest.mark.parametrize(
+    ("backend", "arg", "error"),
+    [
+        ("agy", "--", "reserved '--' token"),
+        ("pi", "--", "reserved '--' token"),
+        ("codex", "--cd", "workspace root"),
+        ("codex", "--cd=D:/other", "workspace root"),
+        ("codex", "-C", "workspace root"),
+        ("codex", "-CD:/other", "workspace root"),
+    ],
+)
+def test_config_rejects_reserved_target_args(tmp_path, backend, arg, error) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f'''\n[[targets]]\nid = "unsafe"\nbackend = "{backend}"\nargs = ["{arg}"]\n''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=error):
+        load_config(path)
+
+
 def test_config_rejects_resource_loading_args_for_isolated_pi(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(

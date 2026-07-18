@@ -460,6 +460,37 @@ async def test_driver_enforces_approval_after_normal_pi_target_args(monkeypatch,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    [
+        pytest.param(
+            {"id": "unsafe-terminator", "backend": "agy", "args": ("--",)},
+            id="end-of-options",
+        ),
+        pytest.param(
+            {"id": "unsafe-workspace", "backend": "codex", "args": ("-CD:/other",)},
+            id="codex-workspace",
+        ),
+    ],
+)
+async def test_driver_rejects_programmatic_reserved_target_args(tmp_path, target) -> None:
+    from openmcp.config import TargetConfig
+    from openmcp.drivers import DriverRegistry
+
+    result = await DriverRegistry().execute(
+        target=TargetConfig(**target),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+    )
+
+    assert result.outcome == "TARGET_FATAL"
+    assert result.error_code == "invalid_args"
+
+
+@pytest.mark.asyncio
 async def test_driver_rejects_unsafe_programmatic_isolated_pi_target(tmp_path) -> None:
     from openmcp.config import TargetConfig
     from openmcp.drivers import DriverRegistry

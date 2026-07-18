@@ -187,6 +187,43 @@ def _routing_profiles(
     return profiles
 
 
+def validate_target_args(
+    target_id: str,
+    backend: str,
+    args: tuple[str, ...],
+    *,
+    isolated: bool = False,
+) -> None:
+    """Reject argv that can override transport or isolation boundaries."""
+    if not all(isinstance(value, str) for value in args):
+        raise ValueError(f"Target {target_id!r} args must contain only strings")
+    if any("\x00" in value for value in args):
+        raise ValueError(f"Target {target_id!r} args cannot contain NUL bytes")
+    if "--" in args:
+        raise ValueError(
+            f"Target {target_id!r} args cannot contain the reserved '--' token"
+        )
+    if backend == "codex" and any(
+        value in {"--cd", "-C"}
+        or value.startswith("--cd=")
+        or (value.startswith("-C") and len(value) > 2)
+        for value in args
+    ):
+        raise ValueError(
+            f"Codex target {target_id!r} args cannot override the workspace root"
+        )
+    forbidden_isolated_pi_args = {"--extension", "-e", "--skill", "--prompt-template"}
+    if backend == "pi" and isolated and any(
+        value in forbidden_isolated_pi_args
+        or value.startswith(("--extension=", "--skill=", "--prompt-template="))
+        for value in args
+    ):
+        raise ValueError(
+            f"Isolated Pi target {target_id!r} cannot explicitly load extensions, "
+            "skills, or prompt templates"
+        )
+
+
 def _targets(raw: Any) -> tuple[TargetConfig, ...]:
     if not isinstance(raw, list) or not raw:
         return _default_targets()
@@ -204,20 +241,8 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
         args = item.get("args", [])
         if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
             raise ValueError(f"Target {target_id!r} args must be a list of strings")
-        if any("\x00" in value for value in args):
-            raise ValueError(f"Target {target_id!r} args cannot contain NUL bytes")
         isolated = bool(item.get("isolated", False))
-        forbidden_isolated_pi_args = {"--extension", "-e", "--skill", "--prompt-template"}
-        has_forbidden_isolated_pi_arg = any(
-            value in forbidden_isolated_pi_args
-            or value.startswith(("--extension=", "--skill=", "--prompt-template="))
-            for value in args
-        )
-        if backend == "pi" and isolated and has_forbidden_isolated_pi_arg:
-            raise ValueError(
-                f"Isolated Pi target {target_id!r} cannot explicitly load extensions, "
-                "skills, or prompt templates"
-            )
+        validate_target_args(target_id, backend, tuple(args), isolated=isolated)
         targets.append(
             TargetConfig(
                 id=target_id,
@@ -374,4 +399,5 @@ __all__ = [
     "load_project_config",
     "load_task_routes",
     "openmcp_home",
+    "validate_target_args",
 ]

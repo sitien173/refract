@@ -12,7 +12,7 @@ from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.pi import PiParams, execute as pi_execute
-from openmcp.config import TargetConfig
+from openmcp.config import TargetConfig, validate_target_args
 
 
 DriverOutcome = Literal[
@@ -39,6 +39,12 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
     Backends only own transport arguments. Provider-specific execution policy
     remains in target configuration and is compiled here.
     """
+    validate_target_args(
+        target.id,
+        target.backend,
+        target.args,
+        isolated=target.isolated,
+    )
     args = list(target.args)
     if target.backend == "agy":
         if target.model:
@@ -59,25 +65,6 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
 
     if target.backend == "pi":
         if target.isolated:
-            forbidden = (
-                "--extension",
-                "-e",
-                "--skill",
-                "--prompt-template",
-            )
-            forbidden_prefixes = (
-                "--extension=",
-                "--skill=",
-                "--prompt-template=",
-            )
-            if any(
-                value in forbidden or value.startswith(forbidden_prefixes)
-                for value in args
-            ):
-                raise ValueError(
-                    "Isolated Pi execution cannot explicitly load extensions, skills, "
-                    "or prompt templates"
-                )
             args.extend(
                 [
                     "--no-approve",

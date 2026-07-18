@@ -52,9 +52,12 @@ OpenMCP still owns the non-interactive transport, workspace, prompt, output
 capture, and durable session argument. The driver translates first-class target
 fields such as `model`, `profile`, `reasoning`, `system_prompt`, `isolated`, and
 `read_only` into CLI arguments before calling a transport-only backend. Avoid
-duplicating those fields or transport-owned options in `args`. Options such as
-Codex `--ephemeral` and Pi `--no-session` disable persistence and therefore
-prevent OpenMCP from resuming that backend context on a later job.
+duplicating those fields or transport-owned options in `args`. The reserved
+end-of-options token `--` is rejected for every backend. Codex `--cd`, `-C`, and
+their attached-value forms are also rejected so a target cannot leave its
+isolated worktree. Options such as Codex `--ephemeral` and Pi `--no-session`
+disable persistence and therefore prevent OpenMCP from resuming that backend
+context on a later job.
 
 ## Antigravity (`agy --print`)
 
