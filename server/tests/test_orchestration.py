@@ -25,7 +25,7 @@ from openmcp.backends._shell import ShellCommandCancelled, stream_shell_command_
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
 from openmcp.overlays import OverlayError, load_overlay_rules
-from openmcp.planning import resolve_execution_plan
+from openmcp.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
 from openmcp.runtime import Runtime
 from openmcp.workflows import (
     load_workflow,
@@ -417,7 +417,13 @@ def test_new_role_resolves_without_workflow_parser_changes(tmp_path) -> None:
     )
     config = DaemonConfig(
         home=tmp_path,
-        targets=(TargetConfig(id="analyst-primary", backend="pi"),),
+        targets=(
+            TargetConfig(
+                id="analyst-primary",
+                backend="pi",
+                args=("--provider", "openai", "--offline"),
+            ),
+        ),
         routes=(RouteConfig(id="analysis", targets=("analyst-primary",)),),
         routing_profiles={"balanced": {"analyst": "analysis"}},
     )
@@ -426,6 +432,10 @@ def test_new_role_resolves_without_workflow_parser_changes(tmp_path) -> None:
 
     assert plan.route("analyst").id == "analysis"
     assert plan.target("analyst-primary").backend == "pi"
+    restored = parse_execution_plan(execution_plan_data(plan))
+    assert restored.target("analyst-primary").args == (
+        "--provider", "openai", "--offline",
+    )
 
 
 def test_task_route_template_prefers_project_then_global(tmp_path) -> None:
@@ -520,6 +530,7 @@ default_routing_profile = "quality"
 [[targets]]
 id = "premium"
 backend = "codex"
+args = ["--ephemeral", "--color", "never"]
 capabilities = ["code"]
 
 [[routes]]
@@ -535,9 +546,27 @@ forge = "forge-quality"
     config = load_config(path)
 
     assert config.default_routing_profile == "quality"
+    assert config.targets[0].args == ("--ephemeral", "--color", "never")
     assert config.routing_profiles == {
         "quality": {"forge": "forge-quality"},
     }
+
+
+def test_config_rejects_resource_loading_args_for_isolated_pi(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[[targets]]
+id = "unsafe-reviewer"
+backend = "pi"
+isolated = true
+args = ["--extension", "reviewer.ts"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Isolated Pi target"):
+        load_config(path)
 
 
 def test_project_config_overlays_routes_and_profiles(tmp_path) -> None:

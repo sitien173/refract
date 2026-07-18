@@ -20,6 +20,7 @@ class TargetConfig:
     system_prompt: str = ""
     isolated: bool = False
     read_only: bool = False
+    args: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ("code", "reasoning", "review")
     max_concurrency: int = 1
     priority: int = 100
@@ -200,6 +201,23 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
         capabilities = item.get("capabilities", ["code", "reasoning", "review"])
         if not isinstance(capabilities, list):
             raise ValueError(f"Target {target_id!r} capabilities must be a list")
+        args = item.get("args", [])
+        if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
+            raise ValueError(f"Target {target_id!r} args must be a list of strings")
+        if any("\x00" in value for value in args):
+            raise ValueError(f"Target {target_id!r} args cannot contain NUL bytes")
+        isolated = bool(item.get("isolated", False))
+        forbidden_isolated_pi_args = {"--extension", "-e", "--skill", "--prompt-template"}
+        has_forbidden_isolated_pi_arg = any(
+            value in forbidden_isolated_pi_args
+            or value.startswith(("--extension=", "--skill=", "--prompt-template="))
+            for value in args
+        )
+        if backend == "pi" and isolated and has_forbidden_isolated_pi_arg:
+            raise ValueError(
+                f"Isolated Pi target {target_id!r} cannot explicitly load extensions, "
+                "skills, or prompt templates"
+            )
         targets.append(
             TargetConfig(
                 id=target_id,
@@ -208,8 +226,9 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
                 profile=str(item.get("profile", "")),
                 reasoning=str(item.get("reasoning", "")),
                 system_prompt=str(item.get("system_prompt", "")),
-                isolated=bool(item.get("isolated", False)),
+                isolated=isolated,
                 read_only=bool(item.get("read_only", False)),
+                args=tuple(args),
                 capabilities=tuple(str(value) for value in capabilities),
                 max_concurrency=_positive_int(item.get("max_concurrency"), 1),
                 priority=int(item.get("priority", 100)),

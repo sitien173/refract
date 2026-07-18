@@ -24,11 +24,7 @@ class PiParams:
     PROMPT: str
     cd: Path
     SESSION_ID: str = ""
-    model: str = ""
-    reasoning_effort: str = ""
-    system_prompt: str = ""
-    isolated: bool = False
-    read_only: bool = False
+    args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
 
@@ -126,38 +122,17 @@ def _execute_sync(params: PiParams) -> BackendResult:
             error="The `pi` CLI was not found on PATH. Please install Pi and ensure `pi` is available.",
             error_class="missing_cli",
         )
-
     # JSON mode is non-interactive and returns machine-readable session events.
-    cmd = ["pi", "--mode", "json"]
-    if params.isolated:
-        cmd.extend(
-            [
-                "--no-approve",
-                "--no-context-files",
-                "--no-extensions",
-                "--no-skills",
-                "--no-prompt-templates",
-            ]
-        )
-    else:
-        cmd.append("--approve")
-    if params.system_prompt:
-        cmd.extend(["--system-prompt", params.system_prompt])
-    if params.read_only:
-        cmd.extend(["--tools", "read,grep,find,ls"])
+    # It follows target arguments so result parsing cannot be overridden.
+    cmd = ["pi", "--approve", *params.args, "--mode", "json"]
     if params.SESSION_ID:
         cmd.extend(["--session", params.SESSION_ID])
-    if params.model:
-        cmd.extend(["--model", params.model])
-    if params.reasoning_effort:
-        cmd.extend(["--thinking", params.reasoning_effort])
     cmd.append(params.PROMPT)
 
     log.info(
-        "pi.execute start cwd=%s model=%s thinking=%s session_id=%s prompt_len=%d timeout_s=%s",
-        os.fspath(cd), params.model or "<default>",
-        params.reasoning_effort or "<off>", params.SESSION_ID or "<new>",
-        len(params.PROMPT), params.timeout_s or "<off>",
+        "pi.execute start cwd=%s session_id=%s prompt_len=%d args=%d timeout_s=%s",
+        os.fspath(cd), params.SESSION_ID or "<new>",
+        len(params.PROMPT), len(params.args), params.timeout_s or "<off>",
     )
     log.debug("pi command prepared args=%d", len(cmd))
 

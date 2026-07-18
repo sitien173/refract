@@ -26,9 +26,7 @@ class CodexParams:
     PROMPT: str
     cd: Path
     SESSION_ID: str = ""
-    model: str = ""
-    profile: str = ""
-    reasoning_effort: str = ""
+    args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
 
@@ -214,25 +212,12 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         "--cd",
         os.fspath(cd),
         "--yolo",
-        "--skip-git-repo-check",
+        *params.args,
+        # JSONL and the final-message file are OpenMCP's result protocol.
         "--json",
         "-o",
         str(last_message_path),
     ]
-
-    if params.profile:
-        cmd.extend(["--profile", params.profile])
-
-    if params.model:
-        # `--model` alone may be ignored when a profile is active; `-c model=…`
-        # forces the override of the profile's model field.
-        cmd.extend(["--model", params.model])
-        if params.profile:
-            escaped_model = params.model.replace("\\", "\\\\").replace('"', '\\"')
-            cmd.extend(["-c", f'model="{escaped_model}"'])
-
-    if params.reasoning_effort:
-        cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
 
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])
@@ -241,13 +226,11 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     cmd += ["--", params.PROMPT]
 
     log.info(
-        "codex.execute start cwd=%s model=%s profile=%s reasoning_effort=%s session_id=%s prompt_len=%d timeout_s=%s",
+        "codex.execute start cwd=%s session_id=%s prompt_len=%d args=%d timeout_s=%s",
         os.fspath(cd),
-        params.model,
-        params.profile,
-        params.reasoning_effort or "<off>",
         params.SESSION_ID or "<new>",
         len(params.PROMPT),
+        len(params.args),
         params.timeout_s or "<off>",
     )
     log.debug("codex command prepared args=%d", len(cmd))

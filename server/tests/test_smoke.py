@@ -3,7 +3,7 @@ import inspect
 import json
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -20,6 +20,13 @@ def test_imports() -> None:
     import openmcp.backends.agy  # noqa: F401
     import openmcp.backends.codex  # noqa: F401
     import openmcp.backends.pi  # noqa: F401
+
+
+def test_backend_params_are_transport_only() -> None:
+    expected = {"PROMPT", "cd", "SESSION_ID", "args", "timeout_s", "cancel_event"}
+    assert {field.name for field in fields(AgyParams)} == expected
+    assert {field.name for field in fields(CodexParams)} == expected
+    assert {field.name for field in fields(PiParams)} == expected
 
 
 def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
@@ -152,8 +159,10 @@ async def test_agy_prefers_stdout_reply_over_noisy_log_file(monkeypatch, tmp_pat
     from openmcp.backends import agy as agy_backend
 
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
+    captured = {}
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        captured["cmd"] = cmd
         log_path = Path(cmd[cmd.index("--log-file") + 1])
         log_path.write_text(
             f"I0702 21:32:01.000000 1 server.go:1] noisy diagnostic line\n"
@@ -165,8 +174,15 @@ async def test_agy_prefers_stdout_reply_over_noisy_log_file(monkeypatch, tmp_pat
     monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
 
-    out = await agy_backend.execute(AgyParams(PROMPT="x", cd=tmp_path))
+    out = await agy_backend.execute(
+        AgyParams(PROMPT="x", cd=tmp_path, args=("--mode", "plan", "--sandbox"))
+    )
 
+    assert captured["cmd"][1:5] == [
+        "--dangerously-skip-permissions", "--mode", "plan", "--sandbox",
+    ]
+    assert "--add-dir" not in captured["cmd"]
+    assert captured["cmd"][-2:] == ["--print", "x"]
     assert out.outcome == "OK"
     assert out.SESSION_ID == session_id
     assert out.agent_messages == "pong from agy"
@@ -177,16 +193,7 @@ def test_tool_signature() -> None:
 
     sig = inspect.signature(run)
     params = list(sig.parameters.keys())
-    assert params == [
-        "backend",
-        "PROMPT",
-        "cd",
-        "SESSION_ID",
-        "model",
-        "profile",
-        "reasoning",
-        "timeout_s",
-    ]
+    assert params == ["backend", "PROMPT", "cd", "SESSION_ID", "timeout_s"]
 
 
 @pytest.mark.asyncio
@@ -248,9 +255,21 @@ async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path
     monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
     monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
 
-    out = await codex_backend.execute(CodexParams(PROMPT="x", cd=tmp_path))
+    out = await codex_backend.execute(
+        CodexParams(
+            PROMPT="x",
+            cd=tmp_path,
+            args=("--ephemeral", "--color", "never"),
+        )
+    )
 
+    extra_start = captured["cmd"].index("--ephemeral")
+    assert captured["cmd"][extra_start:extra_start + 3] == [
+        "--ephemeral", "--color", "never",
+    ]
     assert "--json" in captured["cmd"]
+    assert "--yolo" in captured["cmd"]
+    assert "--skip-git-repo-check" not in captured["cmd"]
     assert captured["cmd"][-1] == "x"
     assert out.outcome == "OK"
     assert out.SESSION_ID == session_id
@@ -284,14 +303,17 @@ async def test_pi_json_mode_extracts_reply_session_and_cli_options(monkeypatch, 
             PROMPT="x",
             cd=tmp_path,
             SESSION_ID="existing-session",
-            model="openai/gpt-5",
-            reasoning_effort="high",
+            args=(
+                "--provider", "openai", "--offline", "--model", "openai/gpt-5",
+                "--thinking", "high",
+            ),
         )
     )
 
     assert captured["cmd"] == [
-        "pi", "--mode", "json", "--approve", "--session", "existing-session",
-        "--model", "openai/gpt-5", "--thinking", "high", "x",
+        "pi", "--approve", "--provider", "openai", "--offline", "--model",
+        "openai/gpt-5", "--thinking", "high", "--mode", "json", "--session",
+        "existing-session", "x",
     ]
     assert Path(captured["cwd"]) == tmp_path.absolute()
     assert out.outcome == "OK"
@@ -321,16 +343,23 @@ async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkey
         PiParams(
             PROMPT="review",
             cd=tmp_path,
-            system_prompt="sentinel instructions",
-            isolated=True,
-            read_only=True,
+            args=(
+                "--no-approve",
+                "--no-context-files",
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                "--system-prompt",
+                "sentinel instructions",
+                "--tools",
+                "read,grep,find,ls",
+            ),
         )
     )
 
     assert captured["cmd"] == [
         "pi",
-        "--mode",
-        "json",
+        "--approve",
         "--no-approve",
         "--no-context-files",
         "--no-extensions",
@@ -340,6 +369,8 @@ async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkey
         "sentinel instructions",
         "--tools",
         "read,grep,find,ls",
+        "--mode",
+        "json",
         "review",
     ]
     assert out.outcome == "OK"
@@ -369,9 +400,11 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
             id="sentinel-primary",
             backend="pi",
             model="gpt-5.6-sol",
+            reasoning="xhigh",
             system_prompt="sentinel",
             isolated=True,
             read_only=True,
+            args=("--verbose",),
         ),
         prompt="review",
         cwd=tmp_path,
@@ -381,10 +414,45 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
     )
 
     params = captured["params"]
-    assert params.model == "gpt-5.6-sol"
-    assert params.system_prompt == "sentinel"
-    assert params.isolated
-    assert params.read_only
+    assert params.args == (
+        "--verbose",
+        "--no-approve",
+        "--no-context-files",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--system-prompt",
+        "sentinel",
+        "--tools",
+        "read,grep,find,ls",
+        "--model",
+        "gpt-5.6-sol",
+        "--thinking",
+        "xhigh",
+    )
+
+
+@pytest.mark.asyncio
+async def test_driver_rejects_unsafe_programmatic_isolated_pi_target(tmp_path) -> None:
+    from openmcp.config import TargetConfig
+    from openmcp.drivers import DriverRegistry
+
+    result = await DriverRegistry().execute(
+        target=TargetConfig(
+            id="unsafe",
+            backend="pi",
+            isolated=True,
+            args=("--extension=unsafe.ts",),
+        ),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+    )
+
+    assert result.outcome == "TARGET_FATAL"
+    assert result.error_code == "invalid_args"
 
 
 @pytest.mark.asyncio
@@ -398,10 +466,9 @@ async def test_server_dispatches_pi_without_implicit_model(monkeypatch, tmp_path
         return BackendResult(outcome="OK", SESSION_ID="pi-session", agent_messages="PONG", error="", error_class="")
 
     monkeypatch.setattr(srv, "pi_execute", fake)
-    out = await srv.run(backend="pi", PROMPT="x", cd=str(tmp_path), reasoning="high")
+    out = await srv.run(backend="pi", PROMPT="x", cd=str(tmp_path))
 
-    assert captured["params"].model == ""
-    assert captured["params"].reasoning_effort == "high"
+    assert captured["params"].args == ()
     assert out == {"success": True, "SESSION_ID": "pi-session", "agent_messages": "PONG", "error": ""}
 
 
@@ -444,63 +511,61 @@ async def test_response_shape_failure(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_agy_reasoning_does_not_infer_model(monkeypatch) -> None:
-    import openmcp.server as srv
+async def test_driver_compiles_agy_and_codex_target_configuration(monkeypatch, tmp_path) -> None:
+    import openmcp.drivers as drivers_module
+    from openmcp.config import TargetConfig
 
     captured = {}
 
-    async def fake(params):
-        captured["model"] = params.model
+    async def fake_agy(params):
+        captured["agy"] = params
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
-    monkeypatch.setattr(srv, "agy_execute", fake)
-    await srv.run(backend="agy", PROMPT="x", cd=Path("."), reasoning="high")
-    assert captured["model"] == ""
-
-
-@pytest.mark.asyncio
-async def test_codex_without_profile_uses_cli_default(monkeypatch) -> None:
-    import openmcp.server as srv
-
-    captured = {}
-
-    async def fake(params):
-        captured["model"] = params.model
-        captured["profile"] = params.profile
+    async def fake_codex(params):
+        captured["codex"] = params
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
-    monkeypatch.setattr(srv, "codex_execute", fake)
-    await srv.run(backend="codex", PROMPT="x", cd=Path("."))
-    assert captured["model"] == ""
-    assert captured["profile"] == ""
-
-
-@pytest.mark.asyncio
-async def test_codex_forwards_explicit_execution_configuration(monkeypatch) -> None:
-    import openmcp.server as srv
-
-    captured = {}
-
-    async def fake(params):
-        captured["model"] = params.model
-        captured["profile"] = params.profile
-        captured["reasoning"] = params.reasoning_effort
-        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
-
-    monkeypatch.setattr(srv, "codex_execute", fake)
-    await srv.run(
-        backend="codex",
-        PROMPT="x",
-        cd=Path("."),
-        model="gpt-5-mini",
-        profile="custom-profile",
-        reasoning="high",
-    )
-    assert captured == {
-        "model": "gpt-5-mini",
-        "profile": "custom-profile",
-        "reasoning": "high",
+    monkeypatch.setattr(drivers_module, "agy_execute", fake_agy)
+    monkeypatch.setattr(drivers_module, "codex_execute", fake_codex)
+    registry = drivers_module.DriverRegistry()
+    common = {
+        "prompt": "x",
+        "cwd": tmp_path,
+        "session_id": "",
+        "timeout_s": 0,
+        "cancel_event": threading.Event(),
     }
+    await registry.execute(
+        target=TargetConfig(
+            id="agy",
+            backend="agy",
+            model="Gemini 3.5 Flash (High)",
+            args=("--sandbox",),
+        ),
+        **common,
+    )
+    await registry.execute(
+        target=TargetConfig(
+            id="codex",
+            backend="codex",
+            model="gpt-5-mini",
+            profile="custom-profile",
+            reasoning="high",
+            args=("--color", "never"),
+        ),
+        **common,
+    )
+
+    assert captured["agy"].args == (
+        "--sandbox", "--model", "Gemini 3.5 Flash (High)",
+    )
+    assert captured["codex"].args == (
+        "--color", "never",
+        "--profile", "custom-profile",
+        "--model", "gpt-5-mini",
+        "-c", 'model="gpt-5-mini"',
+        "-c", "model_reasoning_effort=high",
+    )
 
 
 @pytest.mark.asyncio
@@ -512,8 +577,7 @@ async def test_direct_run_ignores_legacy_environment_and_plugin_config(
     captured = {}
 
     async def fake(params):
-        captured["model"] = params.model
-        captured["profile"] = params.profile
+        captured["args"] = params.args
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
     config = {
@@ -534,42 +598,4 @@ async def test_direct_run_ignores_legacy_environment_and_plugin_config(
 
     await srv.run(backend="codex", PROMPT="x", cd=Path("."))
 
-    assert captured == {"model": "", "profile": ""}
-
-
-def test_agy_patch_model_maps_gemini_id_to_display_name(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"model": "Gemini 3.5 Flash (Low)", "other": "keep"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(agy_backend, "_SETTINGS_PATH", settings_path)
-
-    with agy_backend._patch_model("gemini-3.5-flash"):
-        patched = json.loads(settings_path.read_text(encoding="utf-8"))
-        assert patched["model"] == "Gemini 3.5 Flash (Medium)"
-        assert patched["other"] == "keep"
-
-    restored = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert restored["model"] == "Gemini 3.5 Flash (Low)"
-    assert restored["other"] == "keep"
-
-
-def test_agy_patch_model_accepts_supported_display_name(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
-
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"model": "Gemini 3.5 Flash (Low)"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(agy_backend, "_SETTINGS_PATH", settings_path)
-
-    with agy_backend._patch_model("Gemini 3.1 Pro (High)"):
-        patched = json.loads(settings_path.read_text(encoding="utf-8"))
-        assert patched["model"] == "Gemini 3.1 Pro (High)"
-
-    restored = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert restored["model"] == "Gemini 3.5 Flash (Low)"
+    assert captured == {"args": ()}

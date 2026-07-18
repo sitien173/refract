@@ -32,6 +32,7 @@ class ExecutionPlan:
 def _target_data(target: TargetConfig) -> dict[str, Any]:
     value = asdict(target)
     value["capabilities"] = list(target.capabilities)
+    value["args"] = list(target.args)
     return value
 
 
@@ -82,6 +83,7 @@ def parse_execution_plan(data: Any) -> ExecutionPlan:
             system_prompt=str(value.get("system_prompt", "")),
             isolated=bool(value.get("isolated", False)),
             read_only=bool(value.get("read_only", False)),
+            args=tuple(str(item) for item in value.get("args", [])),
             capabilities=tuple(str(item) for item in value.get("capabilities", [])),
             max_concurrency=int(value.get("max_concurrency", 1)),
             priority=int(value.get("priority", 100)),
