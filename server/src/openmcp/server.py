@@ -6,8 +6,9 @@ import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
+from functools import wraps
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal, cast
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal, ParamSpec, TypeVar, cast
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -16,7 +17,11 @@ from openmcp.backends.agy import execute as agy_execute
 from openmcp.backends.codex import execute as codex_execute
 from openmcp.backends.pi import execute as pi_execute
 from openmcp.config import load_config, load_task_routes
-from openmcp.logging_setup import configure as configure_logging, get_logger
+from openmcp.logging_setup import (
+    configure as configure_logging,
+    get_logger,
+    log_context,
+)
 from openmcp.models import (
     ActionResult,
     JobView,
@@ -27,10 +32,10 @@ from openmcp.models import (
 )
 from openmcp.runtime import Runtime
 
-configure_logging()
 log = get_logger("server")
 
 _DAEMON_CONFIG = load_config()
+configure_logging(_DAEMON_CONFIG.logging)
 _ACTIVE_RUNTIME: Runtime | None = None
 
 
@@ -38,13 +43,25 @@ _ACTIVE_RUNTIME: Runtime | None = None
 async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
     global _ACTIVE_RUNTIME
     runtime = Runtime(_DAEMON_CONFIG)
+    log.info(
+        "Starting OpenMCP daemon",
+        extra={
+            "event": "daemon.starting",
+            "host": _DAEMON_CONFIG.host,
+            "port": _DAEMON_CONFIG.port,
+            "max_jobs": _DAEMON_CONFIG.max_jobs,
+        },
+    )
     await runtime.start()
     _ACTIVE_RUNTIME = runtime
+    log.info("OpenMCP daemon ready", extra={"event": "daemon.ready"})
     try:
         yield runtime
     finally:
+        log.info("Stopping OpenMCP daemon", extra={"event": "daemon.stopping"})
         _ACTIVE_RUNTIME = None
         await runtime.close()
+        log.info("OpenMCP daemon stopped", extra={"event": "daemon.stopped"})
 
 
 mcp = FastMCP(
@@ -92,7 +109,87 @@ def _active_runtime() -> Runtime:
     return _ACTIVE_RUNTIME
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _logged_request(
+    operation: str,
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
+    """Log MCP tool boundaries without recording request payloads."""
+
+    def decorate(
+        function: Callable[_P, Awaitable[_R]],
+    ) -> Callable[_P, Awaitable[_R]]:
+        @wraps(function)
+        async def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            context = next(
+                (
+                    value
+                    for value in (*args, *kwargs.values())
+                    if isinstance(value, Context)
+                ),
+                None,
+            )
+            request_id = context.request_id if context is not None else ""
+            started_at = time.monotonic()
+            with log_context(request_id=request_id):
+                log.info(
+                    "MCP tool request started",
+                    extra={"event": "mcp.request_started", "operation": operation},
+                )
+                try:
+                    result = await function(*args, **kwargs)
+                except asyncio.CancelledError:
+                    log.warning(
+                        "MCP tool request cancelled",
+                        extra={
+                            "event": "mcp.request_finished",
+                            "operation": operation,
+                            "outcome": "cancelled",
+                            "duration_ms": round(
+                                (time.monotonic() - started_at) * 1000,
+                                2,
+                            ),
+                        },
+                    )
+                    raise
+                except Exception as exc:
+                    log.warning(
+                        "MCP tool request failed",
+                        extra={
+                            "event": "mcp.request_finished",
+                            "operation": operation,
+                            "outcome": "failed",
+                            "error_type": type(exc).__name__,
+                            "duration_ms": round(
+                                (time.monotonic() - started_at) * 1000,
+                                2,
+                            ),
+                        },
+                    )
+                    raise
+                log.info(
+                    "MCP tool request completed",
+                    extra={
+                        "event": "mcp.request_finished",
+                        "operation": operation,
+                        "outcome": "success",
+                        "duration_ms": round(
+                            (time.monotonic() - started_at) * 1000,
+                            2,
+                        ),
+                    },
+                )
+                return result
+
+        return wrapped
+
+    return decorate
+
+
 @mcp.tool(description="Register a clean Git project.", structured_output=True)
+@_logged_request("project_register")
 async def project_register(
     path: str,
     ctx: Context,
@@ -102,6 +199,7 @@ async def project_register(
 
 
 @mcp.tool(description="Initialize project-level OpenMCP files.", structured_output=True)
+@_logged_request("project_init")
 async def project_init(path: str, ctx: Context) -> ProjectInitResult:
     return _runtime(ctx).initialize_project(path)
 
@@ -113,6 +211,7 @@ async def project_init(path: str, ctx: Context) -> ProjectInitResult:
     ),
     structured_output=True,
 )
+@_logged_request("task_route")
 async def task_route(
     task: str,
     ctx: Context,
@@ -136,6 +235,7 @@ async def task_route(
 
 
 @mcp.tool(description="Queue a durable project workflow.", structured_output=True)
+@_logged_request("job_submit")
 async def job_submit(
     project_id: str,
     workflow: str,
@@ -156,6 +256,7 @@ async def job_submit(
 
 
 @mcp.tool(description="Wait for job completion or timeout.", structured_output=True)
+@_logged_request("job_wait")
 async def job_wait(
     job_id: str,
     ctx: Context,
@@ -196,11 +297,13 @@ async def job_wait(
 
 
 @mcp.tool(description="Cancel a queued or running job.", structured_output=True)
+@_logged_request("job_cancel")
 async def job_cancel(job_id: str, ctx: Context) -> ActionResult:
     return _runtime(ctx).cancel(job_id)
 
 
 @mcp.tool(description="Retry a failed or interrupted job.", structured_output=True)
+@_logged_request("job_retry")
 async def job_retry(
     job_id: str,
     ctx: Context,
@@ -210,6 +313,7 @@ async def job_retry(
 
 
 @mcp.tool(description="Fast-forward a successful job into its project.", structured_output=True)
+@_logged_request("job_integrate")
 async def job_integrate(job_id: str, ctx: Context) -> ActionResult:
     return _runtime(ctx).integrate(job_id)
 

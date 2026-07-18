@@ -154,7 +154,8 @@ def _execute_sync(params: PiParams) -> BackendResult:
         log.warning("pi subprocess timeout after %ss", params.timeout_s)
     except Exception as exc:  # noqa: BLE001
         timeout_error = f"unexpected: {exc}"
-        log.exception("pi: unexpected error during stream")
+        # A subprocess exception may embed argv and therefore the prompt.
+        log.error("pi: unexpected error during stream type=%s", type(exc).__name__)
 
     agent_messages, extracted_session_id, diagnostics = _extract_output(lines)
     session_id = extracted_session_id or params.SESSION_ID

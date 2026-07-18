@@ -16,6 +16,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from openmcp.logging_setup import get_logger
+
+
+log = get_logger("processes")
+
 
 def prepare_command(command: list[str]) -> list[str]:
     """Use a safe native launcher for a resolved command.
@@ -159,6 +164,11 @@ def terminate_process_tree(
     wait_s: float,
 ) -> None:
     """Stop a process and descendants created in its OpenMCP process group."""
+    started_at = time.monotonic()
+    log.info(
+        "Terminating backend process tree",
+        extra={"event": "process.terminating", "process_id": process.pid},
+    )
     if os.name == "nt":
         # Unlike POSIX process groups, Windows tree cleanup is addressed by the
         # launcher PID. Always attempt taskkill /T, even if the launcher was
@@ -167,6 +177,15 @@ def terminate_process_tree(
     else:
         # A POSIX process group can outlive its original launcher.
         _terminate_posix(process, wait_s)
+    log.info(
+        "Backend process tree terminated",
+        extra={
+            "event": "process.terminated",
+            "process_id": process.pid,
+            "return_code": process.poll(),
+            "duration_ms": round((time.monotonic() - started_at) * 1000, 2),
+        },
+    )
 
 
 __all__ = ["prepare_command", "process_group_kwargs", "terminate_process_tree"]

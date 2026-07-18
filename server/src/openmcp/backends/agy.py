@@ -202,7 +202,8 @@ def _execute_once(params: AgyParams) -> BackendResult:
         log.warning("agy subprocess timeout after %ss", params.timeout_s)
         error_text = f"timeout: {exc}"
     except Exception as exc:  # noqa: BLE001
-        log.exception("agy: unexpected error during run")
+        # A subprocess exception may embed argv and therefore the prompt.
+        log.error("agy: unexpected error during run type=%s", type(exc).__name__)
         error_text = str(exc)
         execution_error = True
 
@@ -240,7 +241,11 @@ def _execute_once(params: AgyParams) -> BackendResult:
         len(result.agent_messages),
     )
     if result.error:
-        log.warning("agy.execute error_text: %s", result.error[:500])
+        log.warning(
+            "agy.execute returned error class=%s len=%d",
+            result.error_class,
+            len(result.error),
+        )
     return result
 
 
