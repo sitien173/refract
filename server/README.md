@@ -137,6 +137,7 @@ default_routing_profile = "balanced"
 id = "forge-primary"
 backend = "codex"
 profile = "mcp_execution"
+args = ["--color", "never"]
 capabilities = ["code"]
 
 [[targets]]
@@ -221,8 +222,12 @@ sentinel = "sentinel"
 
 Profiles map logical roles onto route IDs, and routes select targets. Backend
 execution configuration belongs to each target: `backend`, `model`, `profile`,
-`reasoning`, `system_prompt`, `isolated`, and `read_only`. This keeps profile
-selection declarative without duplicating provider settings in profile tables.
+`reasoning`, `system_prompt`, `isolated`, `read_only`, and backend-specific
+`args`. Each `args` item is passed as one argv token without shell parsing. This
+keeps profile selection declarative without duplicating provider settings in
+profile tables. See [the researched non-interactive CLI argument
+reference](CLI_ARGUMENTS.md) for the available Agy, Codex, and Pi flags,
+OpenMCP-owned transport options, and Windows behavior.
 For example, the `quality` profile above selects `forge-quality`, including its
 model, Codex profile, and reasoning effort.
 
@@ -230,6 +235,10 @@ A target also accepts `max_concurrency` (default `1`) and `priority` (lower
 values are preferred). Routes own `requires`, target pools, `max_attempts`
 (default `2`), and `timeout_s` (`0` disables the route timeout). Add distinct
 targets and routes for meaningful cost, quality, latency, or offline policies.
+
+Never place API keys or credentials in target `args`; targets are persisted in
+immutable execution-plan snapshots. Use backend credential stores or
+environment variables.
 
 Targets, routes, and profiles reload before each submission. Submitted jobs
 retain an immutable routing snapshot. Later configuration changes affect only
@@ -304,7 +313,8 @@ Isolated Pi targets replace the default system prompt. They also pass:
 - `--no-skills`
 - `--no-prompt-templates`
 - `--no-approve`
-- `--tools read,grep,find,ls`
+
+Read-only Pi targets additionally pass `--tools read,grep,find,ls`.
 
 Pi runs non-interactively through `--mode json`. Models and system prompts
 remain configurable per target.
@@ -360,21 +370,22 @@ result = await run(
     "codex",
     "Summarize the current repository.",
     "/absolute/path/to/project",
-    reasoning="high",
     timeout_s=120,
 )
 ```
 
-`run` supports `agy`, `codex`, and `pi`; optional `SESSION_ID`, `model`,
-`profile`, `reasoning`, and `timeout_s` arguments; and returns `success`,
-`SESSION_ID`, `agent_messages`, and `error`. Pass an absolute working directory
-to avoid resolving a relative path against the host process.
+`run` supports `agy`, `codex`, and `pi`; optional `SESSION_ID` and `timeout_s`
+arguments; and returns `success`, `SESSION_ID`, `agent_messages`, and `error`.
+Pass an absolute working directory to avoid resolving a relative path against
+the host process.
 
-Direct runs no longer load MCP-client, dotenv, process-environment, model, or
-backend-profile defaults. The supplied `model`, `profile`, and `reasoning`
-values are forwarded unchanged; omitted values are left to the backend CLI.
-For durable jobs, configure execution settings on targets selected by routing
-profiles in `~/.openmcp/config.toml`.
+Direct runs do not load target execution configuration and leave model,
+profile, reasoning, and other harness settings at the CLI's own defaults.
+OpenMCP always enables each harness's non-interactive approval mode: Agy
+`--dangerously-skip-permissions`, Codex `--yolo`, and Pi `--approve`. For
+durable jobs, configure all other execution settings on targets
+selected by routing profiles in `~/.openmcp/config.toml`. The driver compiles
+target fields into backend argv before invoking the transport-only backend.
 
 ## Isolation model
 

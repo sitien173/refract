@@ -17,7 +17,6 @@ from openmcp.logging_setup import get_logger
 log = get_logger("backend_runner")
 
 BackendName = Literal["agy", "codex", "pi"]
-ReasoningEffort = Literal["", "low", "medium", "high"]
 
 
 def _validate_cd(cd: Any) -> Path | None:
@@ -43,19 +42,17 @@ async def run(
     PROMPT: str,
     cd: str,
     SESSION_ID: str = "",
-    model: str = "",
-    profile: str = "",
-    reasoning: ReasoningEffort = "",
     timeout_s: int = 0,
     *,
     agy_executor: Callable[[AgyParams], Awaitable[BackendResult]] = agy_execute,
     codex_executor: Callable[[CodexParams], Awaitable[BackendResult]] = codex_execute,
     pi_executor: Callable[[PiParams], Awaitable[BackendResult]] = pi_execute,
 ) -> dict[str, Any]:
-    """Run one backend using only supplied execution configuration.
+    """Run one backend with the harness CLI's default execution settings.
 
-    The injected executors keep the runner independent of transports and make
-    the compatibility facade in :mod:`openmcp.server` straightforward to test.
+    Target policy belongs to durable orchestration and is intentionally absent
+    here. The injected executors keep this compatibility runner transport-only
+    and straightforward to test.
     """
     cd_path = _validate_cd(cd)
     if cd_path is None:
@@ -65,24 +62,10 @@ async def run(
             "agent_messages": "",
             "error": f"cd must be a non-empty path; got {cd!r}",
         }
-    if backend == "codex" and profile and model:
-        log.info(
-            "codex: profile=%r and model=%r both provided; model overrides the profile's model",
-            profile,
-            model,
-        )
-    if backend == "agy" and reasoning:
-        log.warning(
-            "agy: reasoning=%r is ignored; pass model explicitly",
-            reasoning,
-        )
     log.info(
-        "run() backend=%s session_id=%s model=%s profile=%s reasoning=%s timeout_s=%s",
+        "run() backend=%s session_id=%s timeout_s=%s",
         backend,
         SESSION_ID or "<new>",
-        model,
-        profile if backend == "codex" else "",
-        reasoning or "<off>",
         timeout_s or "<off>",
     )
     try:
@@ -92,7 +75,6 @@ async def run(
                     PROMPT=PROMPT,
                     cd=cd_path,
                     SESSION_ID=SESSION_ID,
-                    model=model,
                     timeout_s=timeout_s,
                 )
             )
@@ -102,9 +84,6 @@ async def run(
                     PROMPT=PROMPT,
                     cd=cd_path,
                     SESSION_ID=SESSION_ID,
-                    model=model,
-                    profile=profile,
-                    reasoning_effort=reasoning,
                     timeout_s=timeout_s,
                 )
             )
@@ -114,8 +93,7 @@ async def run(
                     PROMPT=PROMPT,
                     cd=cd_path,
                     SESSION_ID=SESSION_ID,
-                    model=model,
-                    reasoning_effort=reasoning,
+                    args=("--approve",),
                     timeout_s=timeout_s,
                 )
             )
@@ -163,4 +141,4 @@ async def run(
     }
 
 
-__all__ = ["BackendName", "ReasoningEffort", "run"]
+__all__ = ["BackendName", "run"]

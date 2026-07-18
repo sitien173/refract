@@ -62,9 +62,6 @@ async def run(
     PROMPT: str,
     cd: str,
     SESSION_ID: str = "",
-    model: str = "",
-    profile: str = "",
-    reasoning: Literal["", "low", "medium", "high"] = "",
     timeout_s: int = 0,
 ) -> dict[str, Any]:
     """Run one backend through the legacy direct-invocation compatibility API.
@@ -78,9 +75,6 @@ async def run(
         PROMPT,
         cd,
         SESSION_ID,
-        model,
-        profile,
-        reasoning,
         timeout_s,
         agy_executor=agy_execute,
         codex_executor=codex_execute,
