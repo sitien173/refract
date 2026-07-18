@@ -278,15 +278,19 @@ session created by the old target. Host, port, worker, and logging settings requ
 
 OpenMCP writes application logs to `~/.openmcp/openmcp.log` by default. Logging
 is asynchronous, UTF-8 encoded, size-rotated, and retained according to
-`max_bytes` and `backup_count`. Timestamps are UTC. Native crash traces are
-written separately to `~/.openmcp/openmcp.crash.log` when Python's fault handler
-is not already owned by the host process.
+`max_bytes` and `backup_count`. Timestamps are UTC. While the file sink is
+enabled, native crash traces are written beside it (by default
+`~/.openmcp/openmcp.crash.log`) when Python's fault handler is not already owned
+by the host process. Disabling the file sink also disables this crash-trace file.
 
 Use `[logging]` in `config.toml` to select `text` or newline-delimited `json`.
-Relative `file` paths resolve under `OPENMCP_HOME`; set `file = false` to disable
-the file sink. If the file cannot be opened, OpenMCP falls back to stderr.
-`console = true` mirrors application logs to stderr. JSON records include event
-names, durations, process/thread metadata, and available project, job, stage,
+Relative TOML `file` paths and relative `OPENMCP_LOG_FILE` values resolve under
+`OPENMCP_HOME`; set `file = false` to disable the file sink. If the file cannot
+be opened, OpenMCP falls back to stderr. `console = true` mirrors application
+logs to stderr. OpenMCP always keeps at least one application-log sink: when the
+file sink is disabled and `console` is false, stderr is enabled as the fallback.
+JSON records include event names, durations, process/thread metadata, and
+available project, job, stage,
 and target correlation IDs. Prompts and model responses are not included in
 application logs; they remain in the durable job data and transcript artifacts.
 Common credential forms are redacted as defense in depth, but credentials must

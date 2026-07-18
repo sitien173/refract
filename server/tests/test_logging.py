@@ -74,6 +74,19 @@ def test_logging_environment_overrides_configuration(tmp_path, monkeypatch) -> N
     assert settings.backup_count == 2
 
 
+def test_relative_environment_log_file_uses_openmcp_home(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "state"
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setenv("OPENMCP_LOG_FILE", "logs/application.log")
+
+    settings = resolve_config(LoggingConfig(file=tmp_path / "configured.log"))
+
+    assert settings.file == home / "logs" / "application.log"
+
+
 def test_json_logging_has_context_structure_and_redaction(tmp_path) -> None:
     path = tmp_path / "application.jsonl"
     configure(

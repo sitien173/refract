@@ -87,6 +87,11 @@ def _environment_value(name: str) -> str | None:
     return value if value is not None and value.strip() else None
 
 
+def _openmcp_home() -> Path:
+    override = _environment_value("OPENMCP_HOME")
+    return Path(override).expanduser() if override else Path.home() / ".openmcp"
+
+
 def _boolean(value: str, name: str) -> bool:
     normalized = value.strip().lower()
     if normalized in {"1", "true", "yes", "on"}:
@@ -108,7 +113,7 @@ def _integer(value: str, name: str, *, minimum: int) -> int:
 
 def resolve_config(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
     """Resolve logging options with environment variables taking precedence."""
-    default_file = Path.home() / ".openmcp" / "openmcp.log"
+    default_file = _openmcp_home() / "openmcp.log"
     level = options.level if options is not None else "INFO"
     log_format = options.format if options is not None else "text"
     file = options.file if options is not None else default_file
@@ -122,7 +127,11 @@ def resolve_config(options: LoggingOptions | None = None) -> ResolvedLoggingConf
     if value := _environment_value("OPENMCP_LOG_FORMAT"):
         log_format = value
     if value := _environment_value("OPENMCP_LOG_FILE"):
-        file = None if value.strip().lower() in {"none", "off", "-"} else Path(value)
+        if value.strip().lower() in {"none", "off", "-"}:
+            file = None
+        else:
+            candidate = Path(value).expanduser()
+            file = candidate if candidate.is_absolute() else _openmcp_home() / candidate
     if value := _environment_value("OPENMCP_LOG_CONSOLE"):
         console = _boolean(value, "OPENMCP_LOG_CONSOLE")
     if value := _environment_value("OPENMCP_LOG_MAX_BYTES"):
