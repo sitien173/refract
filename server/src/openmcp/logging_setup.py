@@ -68,6 +68,7 @@ _SECRET_PATTERNS = (
     re.compile(r"\b(sk-[A-Za-z0-9_-]{12,})\b"),
 )
 
+_LOG_QUEUE_CAPACITY = 10_000
 _LOCK = threading.RLock()
 _LISTENER: logging.handlers.QueueListener | None = None
 _QUEUE_HANDLER: logging.Handler | None = None
@@ -76,6 +77,7 @@ _CRASH_FILE: Any | None = None
 _FAULT_HANDLER_OWNED = False
 _CONFIGURED_PID: int | None = None
 _FINGERPRINT: tuple[Any, ...] | None = None
+_FILE_SINK_DEGRADED = False
 _ATEXIT_REGISTERED = False
 _WARNING_STATE: tuple[list[logging.Handler], int, bool, bool] | None = None
 
@@ -260,14 +262,78 @@ class _SecureRotatingFileHandler(logging.handlers.RotatingFileHandler):
         self._secure_file()
 
 
-class _PreservingQueueHandler(logging.handlers.QueueHandler):
-    """Prepare records without discarding structured exception information."""
+class _BoundedQueueHandler(logging.handlers.QueueHandler):
+    """Preserve exceptions and shed load safely when sinks fall behind."""
+
+    def __init__(self, records: queue.Queue[logging.LogRecord]) -> None:
+        super().__init__(records)
+        self._drop_lock = threading.Lock()
+        self._dropped = 0
 
     def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
         prepared = copy.copy(record)
         prepared.msg = record.getMessage()
         prepared.args = None
         return prepared
+
+    def _drop_notice(self) -> logging.LogRecord:
+        record = logging.LogRecord(
+            name="openmcp.logging_setup",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=0,
+            msg="Dropped %d application log records because sinks were unavailable",
+            args=(self._dropped,),
+            exc_info=None,
+        )
+        record.event = "logging.records_dropped"
+        record.dropped_records = self._dropped
+        return record
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        # QueueHandler's default implementation reports queue.Full through
+        # logging's internal stderr path. Count and summarize drops instead.
+        with self._drop_lock:
+            if self._dropped:
+                try:
+                    self.queue.put_nowait(self._drop_notice())
+                except queue.Full:
+                    self._dropped += 1
+                    return
+                self._dropped = 0
+            try:
+                self.queue.put_nowait(record)
+            except queue.Full:
+                self._dropped += 1
+
+    def emit_drop_notice(self, *, block: bool) -> None:
+        """Publish pending drop telemetry, including during graceful shutdown."""
+        with self._drop_lock:
+            if not self._dropped:
+                return
+            notice = self._drop_notice()
+            try:
+                if block:
+                    self.queue.put(notice, timeout=1.0)
+                else:
+                    self.queue.put_nowait(notice)
+            except queue.Full:
+                return
+            self._dropped = 0
+
+
+class _GracefulQueueListener(logging.handlers.QueueListener):
+    def enqueue_sentinel(self) -> None:
+        # QueueListener uses put_nowait(), which can fail exactly when a bounded
+        # queue is under pressure. Block while a healthy listener drains it,
+        # but never deadlock shutdown if a sink failure killed that thread.
+        if self._thread is not None and self._thread.is_alive():
+            self.queue.put(self._sentinel)
+            return
+        try:
+            self.queue.put_nowait(self._sentinel)
+        except queue.Full:
+            pass
 
 
 def _formatter(name: str) -> logging.Formatter:
@@ -294,12 +360,14 @@ def _secure_parent(path: Path) -> None:
 def _stop_locked() -> None:
     global _LISTENER, _QUEUE_HANDLER, _TARGET_HANDLERS
     global _CRASH_FILE, _FAULT_HANDLER_OWNED, _CONFIGURED_PID, _FINGERPRINT
-    global _WARNING_STATE
+    global _FILE_SINK_DEGRADED, _WARNING_STATE
     logger = logging.getLogger("openmcp")
     if _QUEUE_HANDLER is not None:
         logger.removeHandler(_QUEUE_HANDLER)
         warnings_logger = logging.getLogger("py.warnings")
         warnings_logger.removeHandler(_QUEUE_HANDLER)
+    if isinstance(_QUEUE_HANDLER, _BoundedQueueHandler):
+        _QUEUE_HANDLER.emit_drop_notice(block=True)
     if _LISTENER is not None:
         try:
             _LISTENER.stop()
@@ -336,6 +404,7 @@ def _stop_locked() -> None:
     _FAULT_HANDLER_OWNED = False
     _CONFIGURED_PID = None
     _FINGERPRINT = None
+    _FILE_SINK_DEGRADED = False
 
 
 def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
@@ -347,7 +416,7 @@ def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
     """
     global _LISTENER, _QUEUE_HANDLER, _TARGET_HANDLERS
     global _CRASH_FILE, _FAULT_HANDLER_OWNED, _CONFIGURED_PID, _FINGERPRINT
-    global _ATEXIT_REGISTERED, _WARNING_STATE
+    global _ATEXIT_REGISTERED, _FILE_SINK_DEGRADED, _WARNING_STATE
 
     settings = resolve_config(options)
     fingerprint = (
@@ -360,7 +429,11 @@ def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
         settings.capture_warnings,
     )
     with _LOCK:
-        if _FINGERPRINT == fingerprint and _CONFIGURED_PID == os.getpid():
+        if (
+            _FINGERPRINT == fingerprint
+            and _CONFIGURED_PID == os.getpid()
+            and not _FILE_SINK_DEGRADED
+        ):
             return settings
         _stop_locked()
 
@@ -394,8 +467,10 @@ def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
             console_handler.addFilter(context_filter)
             targets.append(console_handler)
 
-        records: queue.Queue[logging.LogRecord] = queue.Queue()
-        queue_handler = _PreservingQueueHandler(records)
+        records: queue.Queue[logging.LogRecord] = queue.Queue(
+            maxsize=_LOG_QUEUE_CAPACITY
+        )
+        queue_handler = _BoundedQueueHandler(records)
         # Bind context in the producer thread/task; ContextVars intentionally
         # do not flow into the QueueListener's worker thread.
         queue_handler.addFilter(context_filter)
@@ -404,7 +479,7 @@ def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
         logger.addHandler(queue_handler)
         logger.setLevel(logging.getLevelNamesMapping()[settings.level])
         logger.propagate = False
-        listener = logging.handlers.QueueListener(
+        listener = _GracefulQueueListener(
             records,
             *targets,
             respect_handler_level=True,
@@ -415,6 +490,7 @@ def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
         _LISTENER = listener
         _CONFIGURED_PID = os.getpid()
         _FINGERPRINT = fingerprint
+        _FILE_SINK_DEGRADED = file_error is not None
 
         if settings.capture_warnings:
             warnings_logger = logging.getLogger("py.warnings")

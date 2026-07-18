@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 from pathlib import Path
 
 import pytest
 
+import openmcp.logging_setup as logging_setup
 from openmcp.config import LoggingConfig, load_config
 from openmcp.logging_setup import (
     configure,
@@ -107,6 +109,46 @@ def test_json_logging_has_context_structure_and_redaction(tmp_path) -> None:
     assert record["api_key"] == "[REDACTED]"
     assert record["duration_ms"] == 12.5
     assert "secret-token-value" not in json.dumps(record)
+
+
+def test_configure_retries_a_degraded_file_sink(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "recovered.log"
+    options = LoggingConfig(file=path, capture_warnings=False)
+    real_handler = logging_setup._SecureRotatingFileHandler
+    attempts = 0
+
+    def flaky_handler(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("transient sink failure")
+        return real_handler(*args, **kwargs)
+
+    monkeypatch.setattr(logging_setup, "_SecureRotatingFileHandler", flaky_handler)
+
+    configure(options)
+    configure(options)
+    get_logger("recovery").info("file sink recovered")
+    shutdown()
+
+    assert attempts == 2
+    assert "file sink recovered" in path.read_text(encoding="utf-8")
+
+
+def test_bounded_queue_summarizes_dropped_records() -> None:
+    records: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=1)
+    handler = logging_setup._BoundedQueueHandler(records)
+    first = logging.makeLogRecord({"msg": "first"})
+    second = logging.makeLogRecord({"msg": "second"})
+
+    handler.emit(first)
+    handler.emit(second)
+    assert records.get_nowait().getMessage() == "first"
+
+    handler.emit_drop_notice(block=False)
+    notice = records.get_nowait()
+    assert notice.event == "logging.records_dropped"
+    assert notice.dropped_records == 1
 
 
 def test_configure_is_idempotent_and_rotates_files(tmp_path) -> None:
