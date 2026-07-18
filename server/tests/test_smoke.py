@@ -388,7 +388,7 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_server_dispatches_pi_with_default_model(monkeypatch, tmp_path) -> None:
+async def test_server_dispatches_pi_without_implicit_model(monkeypatch, tmp_path) -> None:
     import openmcp.server as srv
 
     captured = {}
@@ -397,11 +397,10 @@ async def test_server_dispatches_pi_with_default_model(monkeypatch, tmp_path) ->
         captured["params"] = params
         return BackendResult(outcome="OK", SESSION_ID="pi-session", agent_messages="PONG", error="", error_class="")
 
-    monkeypatch.setenv("OPENMCP_PI_MODEL_DEFAULT", "openai/gpt-5")
     monkeypatch.setattr(srv, "pi_execute", fake)
     out = await srv.run(backend="pi", PROMPT="x", cd=str(tmp_path), reasoning="high")
 
-    assert captured["params"].model == "openai/gpt-5"
+    assert captured["params"].model == ""
     assert captured["params"].reasoning_effort == "high"
     assert out == {"success": True, "SESSION_ID": "pi-session", "agent_messages": "PONG", "error": ""}
 
@@ -445,7 +444,7 @@ async def test_response_shape_failure(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_env_defaults_applied_for_agy_model(monkeypatch) -> None:
+async def test_agy_reasoning_does_not_infer_model(monkeypatch) -> None:
     import openmcp.server as srv
 
     captured = {}
@@ -454,14 +453,13 @@ async def test_env_defaults_applied_for_agy_model(monkeypatch) -> None:
         captured["model"] = params.model
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
-    monkeypatch.setenv("OPENMCP_AGY_MODEL_DEFAULT", "gemini-3.5-flash")
     monkeypatch.setattr(srv, "agy_execute", fake)
-    await srv.run(backend="agy", PROMPT="x", cd=Path("."))
+    await srv.run(backend="agy", PROMPT="x", cd=Path("."), reasoning="high")
     assert captured["model"] == ""
 
 
 @pytest.mark.asyncio
-async def test_env_defaults_applied_for_codex_model_and_profile(monkeypatch) -> None:
+async def test_codex_without_profile_uses_cli_default(monkeypatch) -> None:
     import openmcp.server as srv
 
     captured = {}
@@ -471,16 +469,14 @@ async def test_env_defaults_applied_for_codex_model_and_profile(monkeypatch) -> 
         captured["profile"] = params.profile
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
-    monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "gpt-5")
-    monkeypatch.setenv("OPENMCP_CODEX_PROFILE_DEFAULT", "mcp_execution")
     monkeypatch.setattr(srv, "codex_execute", fake)
     await srv.run(backend="codex", PROMPT="x", cd=Path("."))
-    assert captured["model"] == "gpt-5"
-    assert captured["profile"] == "mcp_execution"
+    assert captured["model"] == ""
+    assert captured["profile"] == ""
 
 
 @pytest.mark.asyncio
-async def test_explicit_model_overrides_codex_profile_model(monkeypatch) -> None:
+async def test_codex_forwards_explicit_execution_configuration(monkeypatch) -> None:
     import openmcp.server as srv
 
     captured = {}
@@ -488,10 +484,9 @@ async def test_explicit_model_overrides_codex_profile_model(monkeypatch) -> None
     async def fake(params):
         captured["model"] = params.model
         captured["profile"] = params.profile
+        captured["reasoning"] = params.reasoning_effort
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
-    monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "gpt-5")
-    monkeypatch.setenv("OPENMCP_CODEX_PROFILE_DEFAULT", "mcp_execution")
     monkeypatch.setattr(srv, "codex_execute", fake)
     await srv.run(
         backend="codex",
@@ -499,14 +494,19 @@ async def test_explicit_model_overrides_codex_profile_model(monkeypatch) -> None
         cd=Path("."),
         model="gpt-5-mini",
         profile="custom-profile",
+        reasoning="high",
     )
-    assert captured["model"] == "gpt-5-mini"
-    assert captured["profile"] == "custom-profile"
+    assert captured == {
+        "model": "gpt-5-mini",
+        "profile": "custom-profile",
+        "reasoning": "high",
+    }
 
 
 @pytest.mark.asyncio
-async def test_env_priority_user_then_openmcp_dotenv_then_plugin(monkeypatch, tmp_path) -> None:
-    import openmcp.environment as environment
+async def test_direct_run_ignores_legacy_environment_and_plugin_config(
+    monkeypatch, tmp_path
+) -> None:
     import openmcp.server as srv
 
     captured = {}
@@ -527,59 +527,14 @@ async def test_env_priority_user_then_openmcp_dotenv_then_plugin(monkeypatch, tm
         }
     }
     (tmp_path / "mcp_config.json").write_text(json.dumps(config), encoding="utf-8")
-
-    fake_home = tmp_path / "home"
-    (fake_home / ".openmcp").mkdir(parents=True)
-    (fake_home / ".openmcp" / ".env").write_text(
-        "OPENMCP_CODEX_MODEL_DEFAULT=dotenv-model\nOPENMCP_CODEX_PROFILE_DEFAULT=dotenv-profile\n",
-        encoding="utf-8",
-    )
-
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(environment.Path, "home", lambda: fake_home)
-    monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "user-model")
-    monkeypatch.delenv("OPENMCP_CODEX_PROFILE_DEFAULT", raising=False)
+    monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "environment-model")
+    monkeypatch.setenv("OPENMCP_CODEX_PROFILE_DEFAULT", "environment-profile")
     monkeypatch.setattr(srv, "codex_execute", fake)
 
     await srv.run(backend="codex", PROMPT="x", cd=Path("."))
 
-    assert captured["model"] == "user-model"
-    assert captured["profile"] == "dotenv-profile"
-
-
-@pytest.mark.asyncio
-async def test_env_falls_back_to_plugin_env_when_higher_priorities_missing(monkeypatch, tmp_path) -> None:
-    import openmcp.environment as environment
-    import openmcp.server as srv
-
-    captured = {}
-
-    async def fake(params):
-        captured["model"] = params.model
-        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
-
-    config = {
-        "mcpServers": {
-            "openmcp": {
-                "env": {
-                    "OPENMCP_AGY_MODEL_DEFAULT": "plugin-agy-model",
-                }
-            }
-        }
-    }
-    (tmp_path / "mcp_config.json").write_text(json.dumps(config), encoding="utf-8")
-
-    fake_home = tmp_path / "home"
-    fake_home.mkdir(parents=True)
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(environment.Path, "home", lambda: fake_home)
-    monkeypatch.delenv("OPENMCP_AGY_MODEL_DEFAULT", raising=False)
-    monkeypatch.setattr(srv, "agy_execute", fake)
-
-    await srv.run(backend="agy", PROMPT="x", cd=Path("."))
-
-    assert captured["model"] == ""
+    assert captured == {"model": "", "profile": ""}
 
 
 def test_agy_patch_model_maps_gemini_id_to_display_name(monkeypatch, tmp_path) -> None:

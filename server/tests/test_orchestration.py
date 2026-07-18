@@ -83,6 +83,7 @@ class FakeDrivers:
         self.mutate = mutate
         self.sessions: list[str] = []
         self.backends: list[str] = []
+        self.targets: list[TargetConfig] = []
 
     @staticmethod
     def available(target) -> bool:
@@ -91,6 +92,7 @@ class FakeDrivers:
     async def execute(self, *, target, cwd, session_id, **kwargs) -> DriverResult:
         self.sessions.append(session_id)
         self.backends.append(target.backend)
+        self.targets.append(target)
         outcome = self.outcomes.get(target.id, "SUCCESS")
         if outcome == "SUCCESS" and self.mutate:
             (cwd / "result.txt").write_text(f"created by {target.id}\n", encoding="utf-8")
@@ -1262,8 +1264,20 @@ async def test_route_fails_over_and_preserves_context_session(tmp_path) -> None:
 async def test_job_selects_configured_routing_profile(tmp_path) -> None:
     root = _repository(tmp_path)
     targets = (
-        TargetConfig(id="economy", backend="codex"),
-        TargetConfig(id="premium", backend="codex"),
+        TargetConfig(
+            id="economy",
+            backend="codex",
+            model="economy-model",
+            profile="economy-profile",
+            reasoning="low",
+        ),
+        TargetConfig(
+            id="premium",
+            backend="codex",
+            model="quality-model",
+            profile="quality-profile",
+            reasoning="high",
+        ),
     )
     config = DaemonConfig(
         home=tmp_path / "home",
@@ -1279,7 +1293,8 @@ async def test_job_selects_configured_routing_profile(tmp_path) -> None:
         default_routing_profile="cost",
     )
     runtime = Runtime(config)
-    runtime.drivers = FakeDrivers()
+    drivers = FakeDrivers()
+    runtime.drivers = drivers
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
@@ -1293,6 +1308,7 @@ async def test_job_selects_configured_routing_profile(tmp_path) -> None:
 
         assert job.routing_profile == "quality"
         assert job.stages[0].target_id == "premium"
+        assert drivers.targets[-1] == targets[1]
     finally:
         await runtime.close()
 

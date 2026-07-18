@@ -104,7 +104,6 @@ def _default_targets() -> tuple[TargetConfig, ...]:
         TargetConfig(
             id="forge-primary",
             backend="codex",
-            profile="mcp_execution",
             capabilities=("code",),
             priority=10,
         ),
