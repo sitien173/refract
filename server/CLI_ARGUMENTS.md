@@ -149,9 +149,9 @@ The built-in tool names are `read`, `bash`, `edit`, `write`, `grep`, `find`, and
 `ls`. Pi also supports `@file` message arguments, but target `args` should
 contain options only because OpenMCP supplies the final prompt.
 
-OpenMCP owns `--mode json`, the prompt, and `--session`, and always starts Pi
-with `--approve`. For `isolated = true`, the driver subsequently adds
-`--no-approve`, `--no-context-files`, `--no-extensions`, `--no-skills`, and
+OpenMCP owns `--mode json`, the prompt, and `--session`. Direct runs and normal
+targets append `--approve` after configurable arguments so it cannot be
+overridden. For `isolated = true`, the driver instead adds `--no-approve`, `--no-context-files`, `--no-extensions`, `--no-skills`, and
 `--no-prompt-templates`; explicit extension, skill, and prompt-template args
 are rejected. `read_only = true` adds `--tools read,grep,find,ls`.
 `system_prompt`, `model`, and `reasoning` become `--system-prompt`, `--model`,

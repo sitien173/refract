@@ -93,6 +93,7 @@ async def run(
                     PROMPT=PROMPT,
                     cd=cd_path,
                     SESSION_ID=SESSION_ID,
+                    args=("--approve",),
                     timeout_s=timeout_s,
                 )
             )

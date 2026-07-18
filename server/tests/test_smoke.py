@@ -305,14 +305,14 @@ async def test_pi_json_mode_extracts_reply_session_and_cli_options(monkeypatch, 
             SESSION_ID="existing-session",
             args=(
                 "--provider", "openai", "--offline", "--model", "openai/gpt-5",
-                "--thinking", "high",
+                "--thinking", "high", "--approve",
             ),
         )
     )
 
     assert captured["cmd"] == [
-        "pi", "--approve", "--provider", "openai", "--offline", "--model",
-        "openai/gpt-5", "--thinking", "high", "--mode", "json", "--session",
+        "pi", "--provider", "openai", "--offline", "--model", "openai/gpt-5",
+        "--thinking", "high", "--approve", "--mode", "json", "--session",
         "existing-session", "x",
     ]
     assert Path(captured["cwd"]) == tmp_path.absolute()
@@ -359,7 +359,6 @@ async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkey
 
     assert captured["cmd"] == [
         "pi",
-        "--approve",
         "--no-approve",
         "--no-context-files",
         "--no-extensions",
@@ -433,6 +432,34 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_driver_enforces_approval_after_normal_pi_target_args(monkeypatch, tmp_path) -> None:
+    import openmcp.drivers as drivers_module
+    from openmcp.config import TargetConfig
+
+    captured = {}
+
+    async def fake_execute(params):
+        captured["args"] = params.args
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, "pi_execute", fake_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(
+            id="normal",
+            backend="pi",
+            args=("--no-approve", "--verbose"),
+        ),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+    )
+
+    assert captured["args"] == ("--no-approve", "--verbose", "--approve")
+
+
+@pytest.mark.asyncio
 async def test_driver_rejects_unsafe_programmatic_isolated_pi_target(tmp_path) -> None:
     from openmcp.config import TargetConfig
     from openmcp.drivers import DriverRegistry
@@ -468,7 +495,7 @@ async def test_server_dispatches_pi_without_implicit_model(monkeypatch, tmp_path
     monkeypatch.setattr(srv, "pi_execute", fake)
     out = await srv.run(backend="pi", PROMPT="x", cd=str(tmp_path))
 
-    assert captured["params"].args == ()
+    assert captured["params"].args == ("--approve",)
     assert out == {"success": True, "SESSION_ID": "pi-session", "agent_messages": "PONG", "error": ""}
 
 

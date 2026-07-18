@@ -124,7 +124,7 @@ def _execute_sync(params: PiParams) -> BackendResult:
         )
     # JSON mode is non-interactive and returns machine-readable session events.
     # It follows target arguments so result parsing cannot be overridden.
-    cmd = ["pi", "--approve", *params.args, "--mode", "json"]
+    cmd = ["pi", *params.args, "--mode", "json"]
     if params.SESSION_ID:
         cmd.extend(["--session", params.SESSION_ID])
     cmd.append(params.PROMPT)

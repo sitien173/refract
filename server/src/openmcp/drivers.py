@@ -87,6 +87,10 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
                     "--no-prompt-templates",
                 ]
             )
+        else:
+            # Append after user args so normal targets cannot disable the
+            # daemon's required non-interactive project approval.
+            args.append("--approve")
         if target.system_prompt:
             args.extend(["--system-prompt", target.system_prompt])
         if target.read_only:
