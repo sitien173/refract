@@ -159,13 +159,13 @@ def terminate_process_tree(
     wait_s: float,
 ) -> None:
     """Stop a process and descendants created in its OpenMCP process group."""
-    # Do not return solely because the launcher exited: descendants may still
-    # own the output pipe or remain in the POSIX process group.
     if os.name == "nt":
-        if process.poll() is not None:
-            return
+        # Unlike POSIX process groups, Windows tree cleanup is addressed by the
+        # launcher PID. Always attempt taskkill /T, even if the launcher was
+        # just reaped, rather than assuming its descendants exited with it.
         _terminate_windows(process, wait_s)
     else:
+        # A POSIX process group can outlive its original launcher.
         _terminate_posix(process, wait_s)
 
 

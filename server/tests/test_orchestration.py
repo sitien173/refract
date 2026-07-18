@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import openmcp.processes as processes
 from openmcp.config import (
     DaemonConfig,
     RouteConfig,
@@ -848,6 +849,35 @@ def test_job_views_return_result_text_once(tmp_path) -> None:
     assert [stage.text for stage in compact.stages] == ["", ""]
     assert [stage.text for stage in detailed.stages] == ["implemented", ""]
     database.close()
+
+
+def test_windows_cleanup_attempts_tree_kill_after_launcher_exit(monkeypatch) -> None:
+    calls: list[tuple[int, bool]] = []
+
+    class ExitedProcess:
+        pid = 12345
+
+        @staticmethod
+        def send_signal(_signal) -> None:
+            return
+
+        @staticmethod
+        def wait(*, timeout) -> int:
+            return 0
+
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+    monkeypatch.setattr(
+        processes,
+        "_taskkill",
+        lambda process_id, *, force, timeout_s: calls.append((process_id, force)),
+    )
+
+    processes._terminate_windows(ExitedProcess(), 1)
+
+    assert calls == [(12345, False)]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows launcher behavior")
