@@ -63,7 +63,7 @@ async def run(
             "success": False,
             "SESSION_ID": SESSION_ID or "",
             "agent_messages": "",
-            "error": f"cd must be a non-empty absolute path; got {cd!r}",
+            "error": f"cd must be a non-empty path; got {cd!r}",
         }
     if backend == "codex" and profile and model:
         log.info(
@@ -73,7 +73,7 @@ async def run(
         )
     if backend == "agy" and reasoning:
         log.warning(
-            "agy: reasoning=%r does not select a model; pass model explicitly",
+            "agy: reasoning=%r is ignored; pass model explicitly",
             reasoning,
         )
     log.info(
