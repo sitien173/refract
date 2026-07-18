@@ -25,7 +25,6 @@ from openmcp.models import (
     SubmissionResult,
     TaskRouteResult,
 )
-from openmcp.notify import emit_error, emit_finish, emit_start
 from openmcp.runtime import Runtime
 
 configure_logging()
@@ -86,9 +85,6 @@ async def run(
         agy_executor=agy_execute,
         codex_executor=codex_execute,
         pi_executor=pi_execute,
-        emit_start_event=emit_start,
-        emit_finish_event=emit_finish,
-        emit_error_event=emit_error,
     )
 
 

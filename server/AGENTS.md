@@ -14,9 +14,7 @@ src/openmcp/
   config.py           targets, routes, and routing profiles
   database.py         SQLite state and migrations
   drivers.py          internal provider dispatch
-  environment.py      process, dotenv, and plugin environment resolution
   models.py           public structured results
-  notify.py           optional lifecycle notifications
   overlays.py         ignored-file overlay handling
   planning.py         immutable execution-plan snapshots
   processes.py        cross-platform process-group lifecycle
@@ -28,7 +26,6 @@ tests/
   test_smoke.py
   test_orchestration.py
   test_live_backends.py
-  test_notify.py
 ```
 
 ## Development Commands

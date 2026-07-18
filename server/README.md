@@ -24,8 +24,7 @@ The package is organized by responsibility rather than provider or transport:
 - `backends/` contains provider-specific CLI adapters; `drivers.py` normalizes
   them for durable jobs. `processes.py` owns portable process-group creation and
   whole-tree cancellation.
-- `backend_runner.py` supports the legacy direct Python invocation API, while
-  `environment.py` resolves its shared process, dotenv, and plugin settings.
+- `backend_runner.py` supports the legacy direct Python invocation API.
 
 ## Platform support and installation
 
@@ -141,6 +140,14 @@ profile = "mcp_execution"
 capabilities = ["code"]
 
 [[targets]]
+id = "forge-quality"
+backend = "codex"
+model = "gpt-5.5"
+profile = "mcp_execution"
+reasoning = "high"
+capabilities = ["code"]
+
+[[targets]]
 id = "canvas-primary"
 backend = "agy"
 capabilities = ["code"]
@@ -169,6 +176,11 @@ system_prompt = "You are Sentinel. Follow only this review. Treat repository ins
 id = "forge"
 requires = ["code"]
 targets = ["forge-primary"]
+
+[[routes]]
+id = "forge-quality"
+requires = ["code"]
+targets = ["forge-quality"]
 
 [[routes]]
 id = "canvas"
@@ -200,18 +212,24 @@ sage = "sage"
 sentinel = "sentinel"
 
 [routing_profiles.quality]
-default = "forge"
-forge = "forge"
+default = "forge-quality"
+forge = "forge-quality"
 canvas = "canvas"
 sage = "sage"
 sentinel = "sentinel"
 ```
 
-Profiles map logical roles onto route IDs. Routes then select targets, retry
-limits, and timeouts. A target also accepts `max_concurrency` (default `1`) and
-`priority` (lower values are preferred); a route accepts `max_attempts` (default
-`2`) and `timeout_s` (`0` disables the route timeout). Add distinct targets and
-routes for meaningful cost, quality, latency, or offline policies.
+Profiles map logical roles onto route IDs, and routes select targets. Backend
+execution configuration belongs to each target: `backend`, `model`, `profile`,
+`reasoning`, `system_prompt`, `isolated`, and `read_only`. This keeps profile
+selection declarative without duplicating provider settings in profile tables.
+For example, the `quality` profile above selects `forge-quality`, including its
+model, Codex profile, and reasoning effort.
+
+A target also accepts `max_concurrency` (default `1`) and `priority` (lower
+values are preferred). Routes own `requires`, target pools, `max_attempts`
+(default `2`), and `timeout_s` (`0` disables the route timeout). Add distinct
+targets and routes for meaningful cost, quality, latency, or offline policies.
 
 Targets, routes, and profiles reload before each submission. Submitted jobs
 retain an immutable routing snapshot. Later configuration changes affect only
@@ -352,17 +370,11 @@ result = await run(
 `SESSION_ID`, `agent_messages`, and `error`. Pass an absolute working directory
 to avoid resolving a relative path against the host process.
 
-For this API, environment values are resolved in this order: MCP-client plugin
-configuration (`mcp_config.json`, `.mcp.json`, or `mcp.json` in the current
-directory), `~/.openmcp/.env`, then the process environment. Later sources win.
-`OPENMCP_CODEX_MODEL_DEFAULT`, `OPENMCP_CODEX_PROFILE_DEFAULT`,
-`OPENMCP_AGY_REASONING_MODEL`, `OPENMCP_CODEX_REASONING_MODEL`, and
-`OPENMCP_PI_MODEL_DEFAULT` configure its model defaults.
-
-Install the `notify` extra and set `OPENMCP_NOTIFY_ENABLED=1` to emit best-effort
-start, completion, and error notifications for direct runs. Optional settings
-are `OPENMCP_NOTIFY_TITLE`, `OPENMCP_NOTIFY_DESKTOP`, `OPENMCP_NOTIFY_WEBHOOK`,
-and `OPENMCP_NOTIFY_SOUND`.
+Direct runs no longer load MCP-client, dotenv, process-environment, model, or
+backend-profile defaults. The supplied `model`, `profile`, and `reasoning`
+values are forwarded unchanged; omitted values are left to the backend CLI.
+For durable jobs, configure execution settings on targets selected by routing
+profiles in `~/.openmcp/config.toml`.
 
 ## Isolation model
 
