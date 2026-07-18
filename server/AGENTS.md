@@ -11,7 +11,7 @@ src/openmcp/
   backends/           provider-specific CLI adapters and classification
   backend_runner.py   direct Python invocation compatibility service
   cli.py              serve and doctor commands
-  config.py           targets, routes, and routing profiles
+  config.py           targets, routes, profiles, and CLI args
   database.py         SQLite state and migrations
   drivers.py          internal provider dispatch
   models.py           public structured results
@@ -52,13 +52,15 @@ Tools:
 - `job_retry`
 - `job_integrate`
 
-Built-in workflow permissions:
+Built-in workflows:
 
-- `read`
-- `write`
+- `read` for disposable, non-committing inspection
+- `write` for isolated changes and explicit integration
 
-`job_submit` accepts `routing_profile` and `parent_job_id`. Public resources
-expose role nicknames. Internal provider identities remain configuration-only.
+`job_submit` accepts `routing_profile` and `parent_job_id`; `job_wait` accepts
+`include_stage_outputs`. Public resources expose role nicknames. Internal
+provider identities remain configuration-only, although configured target
+health is visible through the models resource.
 
 ## Architecture
 
@@ -85,12 +87,23 @@ Data flow:
 7. Chain review or fix jobs through parents.
 8. Integrate the latest approved write job explicitly.
 
+## Target execution policy
+
+Targets own provider execution settings: `model`, `profile`, `reasoning`,
+`system_prompt`, `isolated`, `read_only`, and backend-specific argv `args`.
+Drivers compile those fields into transport-only backend calls. Target args are
+individual argv tokens, never shell syntax; the reserved `--` token and Codex
+workspace overrides are rejected. Target policy and args are captured in the
+immutable execution plan for each job.
+
 ## Pi Isolation
 
 Targets can set `isolated`, `read_only`, and `system_prompt`. Isolated Pi
-invocations replace the default system prompt. They disable context files,
-extensions, skills, prompt templates, and project approvals. Read-only targets
-receive only `read`, `grep`, `find`, and `ls` tools.
+invocations disable context files, extensions, skills, prompt templates, and
+project approvals, and cannot explicitly load those resources through `args`.
+Read-only targets receive only `read`, `grep`, `find`, and `ls` tools. Normal Pi
+targets receive `--approve` after configurable args so approval cannot be
+turned off by target ordering.
 
 Sage and Sentinel default to `gpt-5.6-sol`. Configuration can override models.
 
@@ -122,13 +135,16 @@ require provider CLIs. Normal test runs skip live markers.
 - Never log API keys or environment secrets.
 - Review every subprocess command change.
 - Review classifier and scheduler retry changes.
-- Never write Antigravity settings outside `_patch_model()`.
+- Do not persist or mutate provider settings outside target configuration and
+  the driver compilation boundary.
 - Update `uv.lock` only through `uv lock`.
 - Keep Sentinel and Sage read-only by default.
 - Keep HTTP bound to loopback by default.
 
 ## Adding Targets and Roles
 
-Targets select internal providers and models. Routes select target pools.
-Routing profiles map public roles onto routes. Add a workflow only when a new
-execution shape is required.
+Targets select internal providers, models, policies, and backend argv options.
+Routes select target pools. Routing profiles map public roles onto routes.
+Configuration and project routing reload for new submissions, while submitted
+jobs retain their immutable plan. Add a workflow only when a new execution
+shape is required; use a project workflow for a new DAG or stage shape.

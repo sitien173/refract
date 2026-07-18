@@ -52,12 +52,15 @@ OpenMCP still owns the non-interactive transport, workspace, prompt, output
 capture, and durable session argument. The driver translates first-class target
 fields such as `model`, `profile`, `reasoning`, `system_prompt`, `isolated`, and
 `read_only` into CLI arguments before calling a transport-only backend. Avoid
-duplicating those fields or transport-owned options in `args`. The reserved
+duplicating those fields or transport-owned options in `args`; target arguments
+should be options only because OpenMCP supplies the final prompt. The reserved
 end-of-options token `--` is rejected for every backend. Codex `--cd`, `-C`, and
 their attached-value forms are also rejected so a target cannot leave its
-isolated worktree. Options such as Codex `--ephemeral` and Pi `--no-session`
-disable persistence and therefore prevent OpenMCP from resuming that backend
-context on a later job.
+isolated worktree. Isolated Pi targets cannot explicitly load extensions,
+skills, or prompt templates. Options such as Codex `--ephemeral` and Pi
+`--no-session` disable persistence and therefore prevent OpenMCP from resuming
+that backend context on a later job. These checks apply both when loading TOML
+and when a target is constructed programmatically.
 
 ## Antigravity (`agy --print`)
 
@@ -69,7 +72,7 @@ Available flags:
 | `--agent` | Agent for this CLI session |
 | `-c`, `--continue` | Continue the most recent conversation |
 | `--conversation` | Resume a conversation ID |
-| `--dangerously-skip-permissions` | Auto-approve tool permission requests |
+| `--dangerously-skip-permissions` | Auto-approve tool permission requests; OpenMCP-owned |
 | `-i`, `--prompt-interactive` | Initial prompt followed by an interactive session |
 | `--log-file` | Override internal log path |
 | `--mode` | `accept-edits` or `plan` |
@@ -89,7 +92,8 @@ OpenMCP owns `--print`, its prompt, `--conversation`, and `--log-file`.
 OpenMCP always enables `--dangerously-skip-permissions` for non-interactive
 execution. Everything else uses the Agy CLI default unless selected by target
 fields or `args`. The target `model` field is translated to `--model`; configure
-`--add-dir` or sandbox behavior explicitly when required.
+`--add-dir` or sandbox behavior explicitly when required. Agy stdout is the
+preferred response channel; the temporary log file is primarily diagnostic.
 
 ## Codex (`codex exec`)
 
@@ -107,6 +111,7 @@ Available `exec` options:
 | `-p`, `--profile` | Layer a named Codex configuration profile |
 | `-s`, `--sandbox` | `read-only`, `workspace-write`, or `danger-full-access` |
 | `--dangerously-bypass-approvals-and-sandbox` | Disable approvals and sandboxing |
+| `--yolo` | Non-interactive approval/bypass mode; OpenMCP-owned |
 | `--dangerously-bypass-hook-trust` | Bypass hook trust |
 | `-C`, `--cd` | Working root |
 | `--add-dir` | Additional writable directory |
@@ -126,9 +131,9 @@ message output. OpenMCP supplies a specific session ID and does not use
 `--last`.
 
 OpenMCP owns `exec`, `--cd`, `--json`, `--output-last-message`, the resume
-subcommand/session ID, and the prompt. OpenMCP always enables `--yolo` for
-non-interactive execution. Everything else uses the Codex CLI default unless
-selected by target fields or `args`. The driver translates
+subcommand/session ID, the `--` prompt boundary, and the prompt. OpenMCP always
+enables `--yolo` for non-interactive execution. Everything else uses the Codex
+CLI default unless selected by target fields or `args`. The driver translates
 `profile`, `model`, and `reasoning` to their CLI equivalents; arbitrary Codex
 configuration remains available through repeated `-c` entries in `args`.
 
@@ -154,8 +159,10 @@ contain options only because OpenMCP supplies the final prompt.
 
 OpenMCP owns `--mode json`, the prompt, and `--session`. Direct runs and normal
 targets append `--approve` after configurable arguments so it cannot be
-overridden. For `isolated = true`, the driver instead adds `--no-approve`, `--no-context-files`, `--no-extensions`, `--no-skills`, and
+overridden. For `isolated = true`, the driver instead adds `--no-approve`,
+`--no-context-files`, `--no-extensions`, `--no-skills`, and
 `--no-prompt-templates`; explicit extension, skill, and prompt-template args
-are rejected. `read_only = true` adds `--tools read,grep,find,ls`.
-`system_prompt`, `model`, and `reasoning` become `--system-prompt`, `--model`,
-and `--thinking` respectively.
+(including `--extension=...` forms) are rejected. `read_only = true` adds
+`--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become
+`--system-prompt`, `--model`, and `--thinking` respectively. OpenMCP places
+`--mode json` after target arguments so output parsing cannot be replaced.

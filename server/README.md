@@ -59,26 +59,41 @@ The daemon remains loopback-bound unless you explicitly change the host.
 
 Tools:
 
-- `project_init`
-- `project_register`
-- `task_route`
-- `job_submit`
-- `job_wait`
-- `job_cancel`
-- `job_retry`
-- `job_integrate`
+- `project_init(path)` creates missing project configuration files without
+  overwriting existing files.
+- `project_register(path, alias)` registers a clean Git project.
+- `task_route(task, project_id)` loads the project task-route template.
+- `job_submit(project_id, workflow, inputs, context_key, parent_job_id,
+  routing_profile)` queues a durable workflow.
+- `job_wait(job_id, timeout_s, include_stage_outputs)` waits for completion and
+  returns compact stage metadata by default.
+- `job_cancel(job_id)` cancels queued or running work.
+- `job_retry(job_id, from_stage)` retries failed, cancelled, or interrupted
+  work.
+- `job_integrate(job_id)` explicitly fast-forwards a successful job into the
+  registered project.
 
-Workflow permissions:
+Built-in workflows:
 
-- `read`
-- `write`
+- `read` — inspect without committing project changes.
+- `write` — make changes in an isolated worktree and, when needed, produce a
+  commit.
 
-Resources include projects, jobs, contexts, models, workflows, global routing
-profiles, and effective project routing profiles.
+Resources include:
+
+- `openmcp://projects` and `openmcp://projects/{project_id}`
+- `openmcp://projects/{project_id}/jobs`
+- `openmcp://jobs/{job_id}` and `openmcp://jobs/{job_id}/events`
+- `openmcp://contexts/{project_id}/{context_key}`
+- `openmcp://models`
+- `openmcp://routing-profiles`
+- `openmcp://projects/{project_id}/routing-profiles`
+- `openmcp://workflows/{project_id}`
 
 `task_route` loads task-route definitions for the supplied task. With
 `project_id`, it prefers `.openmcp/task_routes.json`. Otherwise, it loads
-`~/.openmcp/task_routes.json`. The coordinator performs all classification.
+`~/.openmcp/task_routes.json`. OpenMCP returns the template; the coordinator
+performs classification and chooses the agent names from it.
 
 ```json
 {
@@ -238,11 +253,18 @@ targets and routes for meaningful cost, quality, latency, or offline policies.
 
 Never place API keys or credentials in target `args`; targets are persisted in
 immutable execution-plan snapshots. Use backend credential stores or
-environment variables.
+environment variables. Target arguments are individual argv tokens, not shell
+syntax. OpenMCP rejects the `--` terminator for every backend, Codex workspace
+root overrides (`--cd`/`-C`), and resource-loading options on isolated Pi
+targets. See [the CLI argument reference](CLI_ARGUMENTS.md) for the complete
+transport boundary and policy-ordering rules.
 
-Targets, routes, and profiles reload before each submission. Submitted jobs
-retain an immutable routing snapshot. Later configuration changes affect only
-new jobs. Host, port, and worker settings still require a restart.
+Targets, routes, profiles, and backend CLI arguments reload before each
+submission. Submitted jobs retain an immutable routing snapshot, including the
+selected target arguments and policy. Later configuration changes affect only
+new jobs; a changed backend also starts a new context lane rather than reusing a
+session created by the old target. Host, port, and worker settings still require
+a restart.
 
 ## Project configuration
 
@@ -306,7 +328,8 @@ private keys through overlays. Use environment variables for secrets.
 
 ## Pi isolation
 
-Isolated Pi targets replace the default system prompt. They also pass:
+Isolated Pi targets use the configured `system_prompt` and disable ambient
+project resources. They pass:
 
 - `--no-context-files`
 - `--no-extensions`
@@ -314,10 +337,11 @@ Isolated Pi targets replace the default system prompt. They also pass:
 - `--no-prompt-templates`
 - `--no-approve`
 
-Read-only Pi targets additionally pass `--tools read,grep,find,ls`.
-
-Pi runs non-interactively through `--mode json`. Models and system prompts
-remain configurable per target.
+Read-only Pi targets additionally pass only `--tools read,grep,find,ls`.
+Normal Pi targets receive `--approve` after configurable target arguments so a
+normal target cannot turn off the daemon's approval policy. Pi runs
+non-interactively through `--mode json`, which OpenMCP places after target
+arguments.
 
 ## Custom workflows
 
@@ -379,13 +403,14 @@ arguments; and returns `success`, `SESSION_ID`, `agent_messages`, and `error`.
 Pass an absolute working directory to avoid resolving a relative path against
 the host process.
 
-Direct runs do not load target execution configuration and leave model,
-profile, reasoning, and other harness settings at the CLI's own defaults.
-OpenMCP always enables each harness's non-interactive approval mode: Agy
+Direct runs do not load target execution configuration, environment defaults,
+`.env` files, or MCP-client configuration. They leave model, profile, reasoning,
+and other harness settings at the CLI's own defaults. OpenMCP always enables
+each harness's non-interactive approval mode: Agy
 `--dangerously-skip-permissions`, Codex `--yolo`, and Pi `--approve`. For
-durable jobs, configure all other execution settings on targets
-selected by routing profiles in `~/.openmcp/config.toml`. The driver compiles
-target fields into backend argv before invoking the transport-only backend.
+durable jobs, configure all other execution settings on targets selected by
+routing profiles in `~/.openmcp/config.toml`. The driver compiles target fields
+into backend argv before invoking the transport-only backend.
 
 ## Isolation model
 
@@ -414,3 +439,5 @@ uv build
 
 The default suite is platform-independent and runs in CI on Windows, macOS,
 and Linux. Live tests additionally require the provider CLIs and credentials.
+Run `uv run openmcp doctor` to inspect Git and each configured target
+executable before starting the daemon.
