@@ -2,10 +2,10 @@
 
 Concrete dispatch artifacts for Gate 2. Project setup, `job_wait`, and job-state
 handling are canonical in `coordinating-multi-model-work` — follow it for those.
-OpenMCP runs workers in isolated worktrees and commits successful write jobs;
-workers never stage, commit, reset, squash, merge, or integrate.
+OpenMCP runs workers in isolated worktrees and commits successful implement
+jobs; workers never stage, commit, reset, squash, merge, or integrate.
 
-## Write-job submission
+## Implement-job submission
 
 Select the nickname and stable `execution_role` via `task_route` (OpenMCP never
 infers them). After setup, submit the phase:
@@ -13,7 +13,7 @@ infers them). After setup, submit the phase:
 ```text
 job_submit:
   project_id: <stored project UUID>
-  workflow: write
+  workflow: implement
   inputs:
     prompt: |
       <one or two compressed sentences of the original user request>
@@ -70,7 +70,7 @@ Return the `# EXTERNAL RESPONSE` block and matching status line from ERP.
 
 ## Same-phase fix
 
-Resubmit the built-in `write` workflow with `parent_job_id`
-set to the latest write job and the implementer `context_key` reused. Start the
+Resubmit the built-in `implement` workflow with `parent_job_id`
+set to the latest implement job and the implementer `context_key` reused. Start the
 prompt with `FIX:` and include only changed requirements, findings, files, and
 checks. Use a `fix:` commit message.

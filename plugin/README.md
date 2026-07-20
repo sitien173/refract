@@ -25,7 +25,7 @@ flowchart LR
     V --> Q[Selected reviewer checks quality]
     Q -->|FAIL| F[Chained fix job]
     F --> V
-    Q -->|PASS| I[Integrate latest write job]
+    Q -->|PASS| I[Integrate latest implement job]
 ```
 
 The canonical contract is
@@ -123,38 +123,34 @@ targets = ["sentinel-primary"]
 
 [routing_profiles.balanced]
 default = "forge-balanced"
-forge = "forge-balanced"
-canvas = "canvas-balanced"
-sage = "sage-balanced"
-sentinel = "sentinel-balanced"
+implement = "forge-balanced"
+consult = "sage-balanced"
+review = "sentinel-balanced"
 
-[routing_profiles.cost]
+[routing_profiles.back_side_standard]
 default = "forge-balanced"
-forge = "forge-balanced"
-canvas = "canvas-balanced"
-sage = "sage-balanced"
-sentinel = "sentinel-balanced"
+implement = "forge-balanced"
+consult = "sage-balanced"
+review = "sentinel-balanced"
 
-[routing_profiles.quality]
-default = "forge-balanced"
-forge = "forge-balanced"
-canvas = "canvas-balanced"
-sage = "sage-balanced"
-sentinel = "sentinel-balanced"
+[routing_profiles.front_side_standard]
+default = "canvas-balanced"
+implement = "canvas-balanced"
+consult = "sage-balanced"
+review = "sentinel-balanced"
 ```
 
-Every profile maps `default`. The built-in `read` and `write` workflows ignore
-`execution_role` and resolve through that `default` mapping; OpenMCP still
-selects a target whose capability matches the workflow permission. The role
-keys remain for custom project workflows. Point profile mappings at different
-routes and targets. These names are only examples. Skills use the effective
-project default unless the user pins an available profile.
+Every profile maps the built-in `implement`, `consult`, and `review` workflow
+roles plus a `default`. OpenMCP routes each built-in workflow through the
+profile's mapping for that role and still selects a target whose capability
+matches the workflow permission. Point profile mappings at different routes and
+targets. These names are only examples. Skills use the effective project default
+unless the user pins an available profile.
 
-- `balanced`: normal delivery.
-- `cost`: lower-cost targets and fewer retries.
-- `quality`: stronger targets and deeper reasoning.
-- `latency`: fastest healthy targets.
-- `offline`: local-only targets.
+- `balanced`: general delivery (default).
+- `cost_optimized`: lower-cost targets.
+- `back_side_standard` / `back_side_cost_optimized`: backend-oriented targets.
+- `front_side_standard` / `front_side_cost_optimized`: frontend-oriented targets.
 
 Define coordinator routing guidance in `~/.openmcp/task_routes.json`:
 
@@ -174,9 +170,9 @@ Define coordinator routing guidance in `~/.openmcp/task_routes.json`:
 OpenMCP returns this template through `task_route`. Coordinator performs the
 semantic breakdown and chooses agent names. OpenMCP does not classify words.
 `execution_role` remains stable when nicknames change. The coordinator submits
-the built-in `write` or `read` workflow and validates it against the project
-workflow resource. OpenMCP ignores `execution_role` for built-in workflows and
-routes them through the profile's `default` mapping.
+the built-in `implement`, `consult`, or `review` workflow and validates it
+against the project workflow resource. OpenMCP routes each built-in workflow
+through the selected profile.
 
 Default read-only consultant and reviewer targets use Pi's non-interactive mode.
 OpenMCP passes
@@ -187,7 +183,8 @@ OpenMCP passes
 
 The plugin uses durable tools:
 
-- `project_init`
+- `setup_instruction`
+- `doctor`
 - `project_register`
 - `task_route`
 - `job_submit`
@@ -196,23 +193,25 @@ The plugin uses durable tools:
 - `job_cancel`
 - `job_integrate`
 
-Implementation submits the built-in `write` workflow. Consultation and review
-submit the built-in `read` workflow. OpenMCP resolves each built-in workflow
-through the profile's `default` mapping, ignoring `execution_role`. Custom
-project workflows keep their own names. Every submission carries a
-`routing_profile`.
+Implementation submits the built-in `implement` workflow. Consultation submits
+the built-in `consult` workflow. Independent review submits the built-in
+`review` workflow. OpenMCP routes each built-in workflow through the selected
+profile. Custom project workflows keep their own names. Every submission carries
+a `routing_profile`.
 
-Before first registration, `project_init` creates missing project files:
+Before first registration, call `setup_instruction` and follow its guidance:
+read `openmcp://projects`, resolve the Git root, and register only when that
+root is absent. Put optional project overrides in `.openmcp/config.toml` and
+commit them:
 
 ```text
 .openmcp/config.toml
-.openmcp/task_routes.json
 ```
 
-Commit those files before `project_register`. Project configuration may
-override routes, profiles, and the default profile. Targets and daemon settings
-remain global. Precedence is explicit submission, project, global, then
-built-in defaults.
+Project configuration may override routes, profiles, and the default profile.
+Targets and daemon settings remain global. Precedence is explicit submission,
+project, global, then built-in defaults. Run `doctor` to validate the
+integration without mutating anything.
 
 Pass `project_id` to `task_route` for project guidance. Read effective profiles
 from `openmcp://projects/<project_id>/routing-profiles`.

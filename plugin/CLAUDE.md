@@ -23,9 +23,9 @@ Project pointers for Claude Code. Workflow, routing, and review semantics live i
 - Long prompts → write under `docs/plans/`. Submit a thin pointer.
 - OpenMCP runs as a local HTTP daemon. Detailed setup is in `README.md`.
 - The agent loading the workflow becomes Coordinator.
-- Initialize project files before first registration.
+- Follow `setup_instruction`; register only an absent, clean root.
 - Use `task_route`; Coordinator chooses agent nicknames.
-- Derive workflows from configured `execution_role` values.
+- Submit built-in `implement`, `consult`, or `review` workflows.
 - Read effective project routing profiles before selection.
 - Existing phase chains retain stored routing decisions.
 - Use compact job waits. Read only `job.result.text`.

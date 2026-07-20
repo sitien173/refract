@@ -72,8 +72,8 @@ Skip a step = guessing, not verifying.
 - Trust no worker/agent success report — verify the VCS diff directly.
 - Review stays scoped to spec + changed files; broader audit only if the phase
   checklist asks for it.
-- For external code changes, submit the built-in `read` workflow with the
-  latest write job as parent. Pass the stored routing profile. Use a unique
+- For external code changes, submit the built-in `review` workflow with the
+  latest implement job as parent. Pass the stored routing profile. Use a unique
   reviewer context. Fold findings into Review status before `job_integrate`.
 
 ## Red Flags — STOP

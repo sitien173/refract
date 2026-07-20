@@ -89,9 +89,9 @@ grep -q 'execution_role' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://workflows/<project_id>' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Do not reroute an existing phase chain' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Existing phase chains keep stored routing decisions' skills/executing-plans/SKILL.md
-grep -q 'workflow: write' skills/executing-plans/implementer-prompt.md
+grep -q 'workflow: implement' skills/executing-plans/implementer-prompt.md
 grep -q 'Never mutate the root during isolated chains' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'project_init' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'setup_instruction' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'project_register' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'task_route' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'job_submit' skills/executing-plans/implementer-prompt.md

@@ -14,15 +14,21 @@ Delegate consultation, implementation, and independent quality review. OpenMCP
 owns isolation, contexts, routing, commits, and durable jobs. Do not perform
 delegated implementation. User instructions override this workflow.
 
+Read [references/tool-contract.md](references/tool-contract.md) before the first
+OpenMCP call in a session for tool signatures, workflows, resources, and states.
+
 # Project Setup
 
 Before the first executable repository phase:
 
-1. Call `project_init` with the repository root.
-2. Inspect its `created` and `existing` paths.
-3. Review and commit created `.openmcp` files.
-4. Call `project_register` only after the repository is clean.
+1. Call `setup_instruction` with the repository root; follow its guidance.
+2. Read `openmcp://projects`. Resolve the Git root and match it there.
+3. Register only when that root is absent: call `project_register` with the
+   clean repository root and an `alias`.
+4. Put any project routing overrides in `.openmcp/config.toml`; keep daemon
+   settings and targets in the global OpenMCP config. Commit config changes.
 5. Store the returned `project_id` in `.handover.md`.
+6. Run `doctor` to validate the integration before submitting jobs.
 
 # Task Routing
 
@@ -42,11 +48,12 @@ You must:
 8. Keep workflow names out of `# ROUTE`.
 
 `recommend` is the public nickname. `role` describes responsibility.
-`execution_role` labels the routing-profile role and context key; it no longer
-derives a workflow name. Submit the built-in `write` workflow for code changes
-and the built-in `read` workflow for consultation and review. OpenMCP ignores
-`execution_role` when resolving a built-in workflow and routes it through the
-profile's `default` mapping. Confirm `read` and `write` through
+`execution_role` labels the routing-profile role and context key; it does not
+derive a workflow name. Submit the built-in `implement` workflow for code
+changes, the built-in `consult` workflow for consultation, and the built-in
+`review` workflow for independent quality review. OpenMCP routes each built-in
+workflow through the selected profile and matches a target by capability.
+Confirm `implement`, `consult`, and `review` through
 `openmcp://workflows/<project_id>` before submission. A registered custom
 project workflow keeps its own name. Stop when a required workflow does not
 exist.
@@ -80,7 +87,7 @@ unclear, full-stack, high-impact, architectural, or tradeoff-heavy work.
 
 ## Consultation
 
-1. Submit the built-in `read` workflow for the consultant.
+1. Submit the built-in `consult` workflow for the consultant.
 2. Use `<plan-slug>/consultant/<execution_role>` as `context_key`.
 3. Ask one narrow question with constraints and desired output.
 4. Call `job_wait` with `include_stage_outputs: false`.
@@ -118,7 +125,7 @@ an isolated chain. Resume through
 
 ## Implementation
 
-Submit the built-in `write` workflow with:
+Submit the built-in `implement` workflow with:
 
 - `project_id`: stored project identifier.
 - `routing_profile`: stored phase profile.
@@ -138,13 +145,13 @@ Then call `job_wait` with `include_stage_outputs: false`.
 Never concatenate `stage.text` with `job.result.text`. Compact waits omit
 intermediate outputs and prevent duplicate agent messages.
 
-Workers never change Git history. OpenMCP commits successful write stages.
+Workers never change Git history. OpenMCP commits successful implementation stages.
 
 ## Same-phase fixes
 
-Submit the `write` workflow and the same profile. Set `parent_job_id` to the latest
-write job. Reuse the implementer context key. Send `FIX:` plus only delta
-context. Use a `fix:` commit message.
+Submit the `implement` workflow and the same profile. Set `parent_job_id` to the
+latest implement job. Reuse the implementer context key. Send `FIX:` plus only
+delta context. Use a `fix:` commit message.
 
 # Gate 3: Review
 
@@ -168,9 +175,9 @@ responses, or missing evidence.
 
 ## Independent quality review
 
-1. Submit the built-in `read` workflow with the latest write job as parent.
+1. Submit the built-in `review` workflow with the latest implement job as parent.
 2. Pass the stored routing profile.
-3. Use `<phase-prefix>/reviewer/<reviewer_execution_role>/<latest-write-job-id>`.
+3. Use `<phase-prefix>/reviewer/<reviewer_execution_role>/<latest-implement-job-id>`.
 4. Require review of the exact implementation range.
 5. Wait with `include_stage_outputs: false`.
 6. Inspect only `job.result.text`.
@@ -189,7 +196,7 @@ Correctness and security findings force `FAIL`. Quality findings become
 
 ## Integration
 
-After both reviews pass, call `job_integrate` on the latest write job. Never
+After both reviews pass, call `job_integrate` on the latest implement job. Never
 merge, cherry-pick, reset, or stage worker changes manually.
 
 Then append review evidence to `journal.md`. Update `.handover.md`. Record
@@ -232,7 +239,7 @@ next_action: "Execute Phase <N>"
 phase_base: <commit|null>
 project_id: <OpenMCP project UUID|null>
 context_prefix: <plan-slug>/phase-<NN>
-job_refs: { phase: <N>, latest_consult: <id|null>, latest_write: <id|null>, latest_review: <id|null> }
+job_refs: { phase: <N>, latest_consult: <id|null>, latest_implement: <id|null>, latest_review: <id|null> }
 read_first: [ <file>, ... ]
 completed_tasks: [ { phase, task, summary }, ... ]
 completed_phases: [ { phase, commit, summary }, ... ]
@@ -246,7 +253,7 @@ integration.
 
 - Remain the primary workflow owner.
 - Use `task_route`; perform semantic routing.
-- Initialize project OpenMCP files before registration.
+- Follow `setup_instruction`; register only an absent, clean project root.
 - Expose delegated agents by nickname only.
 - Delegate implementation but own orchestration.
 - Use configured consultant, owner, and reviewer nicknames.

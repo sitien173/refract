@@ -8,7 +8,8 @@ description: "Runs or resumes a written plan one phase at a time through the coo
 Thin phase-runner. **Load `coordinating-multi-model-work` first** — it owns the
 gates, job states, review rules, integration, and handover schema. This skill
 adds only what is specific to running a plan phase: setup, resume, and route
-resolution.
+resolution. For OpenMCP tool signatures, workflows, resources, and states, see
+[coordinating's tool contract](../coordinating-multi-model-work/references/tool-contract.md).
 
 ## Use When
 
@@ -20,7 +21,8 @@ resolution.
 1. Read `PLAN.md` once; select the requested phase. Read `.handover.md` and its
    validated `read_first` paths.
 2. **Project setup** (only without a `project_id`): run coordinating's *Project
-   Setup* — `project_init`, commit created files, then `project_register`.
+   Setup* — `setup_instruction`, then `project_register` for an absent clean
+   root, then `doctor`.
 3. **Resume before routing.** Read `openmcp://projects/<project_id>/jobs`; match
    `job_refs` and `context_prefix`. For an existing phase chain, restore its
    stored nickname, execution role, workflow, and profile (recover missing
@@ -29,13 +31,13 @@ resolution.
 4. **New phase routing.** Call `task_route` with the phase route intent and
    `project_id`. Validate any user-pinned nickname; otherwise select the
    configured recommendation. Split the phase when its use cases need different
-   owners. Confirm the built-in `read`/`write` workflows against
+   owners. Confirm the built-in `implement`/`consult`/`review` workflows against
    `openmcp://workflows/<project_id>`, and the profile against
    `openmcp://projects/<project_id>/routing-profiles`.
 5. Confirm the resolved phase has one owner, one routing profile, two to four
    tasks, files, acceptance criteria, checks, and a commit message.
 6. **Run the three gates per `coordinating-multi-model-work`:** Gate 1 emits
-   `# ROUTE`; Gate 2 checkpoints, submits the built-in `write` workflow (using
+   `# ROUTE`; Gate 2 checkpoints, submits the built-in `implement` workflow (using
    `implementer-prompt.md`), and waits compactly; Gate 3 verifies in a
    disposable worktree, runs independent review, and integrates on PASS.
 7. Append review evidence to `journal.md`, update `.handover.md`, and commit
