@@ -29,6 +29,26 @@ def test_backend_params_are_transport_only() -> None:
     assert {field.name for field in fields(PiParams)} == expected
 
 
+def test_doctor_reports_legacy_routing_profile(monkeypatch, tmp_path, capsys) -> None:
+    from openmcp.cli import main
+
+    home = tmp_path / "openmcp"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        """[routing_profiles.balanced]
+default = "forge"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+
+    with pytest.raises(SystemExit) as raised:
+        main(["doctor"])
+
+    assert raised.value.code == 1
+    assert "does not map built-in roles" in capsys.readouterr().err
+
+
 def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
     from openmcp.backends.codex import _extract_session_id_from_latest_session
 

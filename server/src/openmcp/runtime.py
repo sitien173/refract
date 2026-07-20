@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import sqlite3
 import threading
 import time
 import uuid
@@ -18,7 +19,6 @@ from openmcp.config import (
     TargetConfig,
     load_config,
     load_project_config,
-    load_task_routes,
 )
 from openmcp.database import Database, utc_now
 from openmcp.drivers import DriverRegistry, DriverResult
@@ -27,7 +27,6 @@ from openmcp.models import (
     ActionResult,
     JobView,
     ModelTargetView,
-    ProjectInitResult,
     ProjectView,
     SubmissionResult,
 )
@@ -83,7 +82,7 @@ _LEGACY_ROLES = {
 }
 
 
-class RuntimeError(ValueError):
+class OrchestrationError(ValueError):
     pass
 
 
@@ -166,12 +165,12 @@ class Runtime:
         try:
             state = inspect_repository(Path(path))
         except WorkspaceError as exc:
-            raise RuntimeError(str(exc)) from exc
+            raise OrchestrationError(str(exc)) from exc
         if not state.clean:
-            raise RuntimeError("Project worktree must be clean before registration")
+            raise OrchestrationError("Project worktree must be clean before registration")
         resolved_alias = alias.strip() or state.root.name
         if not resolved_alias:
-            raise RuntimeError("Project alias cannot be empty")
+            raise OrchestrationError("Project alias cannot be empty")
         try:
             project = self.database.upsert_project(
                 project_id=str(uuid.uuid4()),
@@ -190,60 +189,15 @@ class Runtime:
                 },
             )
             return project
-        except Exception as exc:
-            if "UNIQUE constraint failed" in str(exc):
-                raise RuntimeError(f"Project alias already exists: {resolved_alias}") from exc
-            raise
-
-    def initialize_project(self, path: str) -> ProjectInitResult:
-        try:
-            state = inspect_repository(Path(path))
-        except WorkspaceError as exc:
-            raise RuntimeError(str(exc)) from exc
-        directory = state.root / ".openmcp"
-        config_path = directory / "config.toml"
-        routes_path = directory / "task_routes.json"
-        contents: dict[Path, str] = {}
-        if not config_path.exists():
-            default_profile = self._reload_catalog().default_routing_profile
-            contents[config_path] = (
-                "[project]\n"
-                f"default_routing_profile = {json.dumps(default_profile)}\n"
-            )
-        if not routes_path.exists():
-            template = load_task_routes(self.config.home)
-            contents[routes_path] = json.dumps(
-                template,
-                ensure_ascii=False,
-                indent=2,
-            ) + "\n"
-
-        directory.mkdir(parents=True, exist_ok=True)
-        for file_path, content in contents.items():
-            file_path.write_text(content, encoding="utf-8")
-        expected = (config_path, routes_path)
-        log.info(
-            "Project configuration initialized",
-            extra={
-                "event": "project.initialized",
-                "project_root": state.root.as_posix(),
-                "created_files": len(contents),
-            },
-        )
-        return ProjectInitResult(
-            root=state.root.as_posix(),
-            created=[
-                file_path.relative_to(state.root).as_posix()
-                for file_path in expected
-                if file_path in contents
-            ],
-            existing=[
-                file_path.relative_to(state.root).as_posix()
-                for file_path in expected
-                if file_path not in contents
-            ],
-            requires_commit=bool(contents),
-        )
+        except sqlite3.IntegrityError as exc:
+            constraint = str(exc).rsplit(":", 1)[-1].strip()
+            if constraint == "projects.alias":
+                message = f"Project alias already exists: {resolved_alias}"
+            elif constraint == "projects.root":
+                message = f"Project root already registered: {state.root.as_posix()}"
+            else:
+                message = "Project registration violates a database constraint"
+            raise OrchestrationError(message) from exc
 
     async def submit(
         self,
@@ -256,13 +210,13 @@ class Runtime:
     ) -> SubmissionResult:
         project = self.database.project(project_id)
         if project is None:
-            raise RuntimeError(f"Unknown project: {project_id}")
+            raise OrchestrationError(f"Unknown project: {project_id}")
         try:
             state = inspect_repository(Path(project.root))
         except WorkspaceError as exc:
-            raise RuntimeError(str(exc)) from exc
+            raise OrchestrationError(str(exc)) from exc
         if not state.clean:
-            raise RuntimeError("Project worktree must be clean before submission")
+            raise OrchestrationError("Project worktree must be clean before submission")
         self.database.upsert_project(
             project_id=project.id,
             alias=project.alias,
@@ -276,13 +230,13 @@ class Runtime:
                 self._reload_catalog(),
             )
         except ValueError as exc:
-            raise RuntimeError(str(exc)) from exc
+            raise OrchestrationError(str(exc)) from exc
         selected_profile = routing_profile.strip() or catalog.default_routing_profile
         workflow = load_workflow(Path(project.root), workflow_name)
         try:
             overlay_rules = load_overlay_rules(state.root, workflow.name)
         except OverlayError as exc:
-            raise RuntimeError(str(exc)) from exc
+            raise OrchestrationError(str(exc)) from exc
         try:
             execution_plan = resolve_execution_plan(
                 workflow,
@@ -290,18 +244,18 @@ class Runtime:
                 selected_profile,
             )
         except ValueError as exc:
-            raise RuntimeError(str(exc)) from exc
+            raise OrchestrationError(str(exc)) from exc
         validate_inputs(workflow, inputs)
         base_commit = state.head
         integration_base = state.head
         if parent_job_id:
             parent = self.database.job(parent_job_id)
             if parent is None or parent.project_id != project.id:
-                raise RuntimeError(f"Unknown parent job: {parent_job_id}")
+                raise OrchestrationError(f"Unknown parent job: {parent_job_id}")
             if parent.state != "succeeded" or not parent.result.commit:
-                raise RuntimeError("Parent job must be successful")
+                raise OrchestrationError("Parent job must be successful")
             if state.head != parent.integration_base:
-                raise RuntimeError("Project HEAD changed after the parent job started")
+                raise OrchestrationError("Project HEAD changed after the parent job started")
             base_commit = parent.result.commit
             integration_base = parent.integration_base
         job_id = str(uuid.uuid4())
@@ -356,7 +310,7 @@ class Runtime:
                 f"openmcp/{job_id}",
             )
             if isinstance(exc, OverlayError):
-                raise RuntimeError(str(exc)) from exc
+                raise OrchestrationError(str(exc)) from exc
             raise
         self._completion_events[job_id] = asyncio.Event()
         await self._queue.put(job_id)
@@ -374,10 +328,19 @@ class Runtime:
         )
         return SubmissionResult(job_id=job_id, state="queued")
 
-    async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:
-        job = self.database.job(job_id)
+    async def wait(
+        self,
+        job_id: str,
+        timeout_s: int = 0,
+        *,
+        include_stage_outputs: bool = True,
+    ) -> JobView:
+        job = self.database.job(
+            job_id,
+            include_stage_outputs=include_stage_outputs,
+        )
         if job is None:
-            raise RuntimeError(f"Unknown job: {job_id}")
+            raise OrchestrationError(f"Unknown job: {job_id}")
         if job.state in _TERMINAL_STATES:
             return job
         event = self._completion_events.setdefault(job_id, asyncio.Event())
@@ -388,15 +351,18 @@ class Runtime:
                 await event.wait()
         except TimeoutError:
             pass
-        refreshed = self.database.job(job_id)
+        refreshed = self.database.job(
+            job_id,
+            include_stage_outputs=include_stage_outputs,
+        )
         if refreshed is None:
-            raise RuntimeError(f"Unknown job: {job_id}")
+            raise OrchestrationError(f"Unknown job: {job_id}")
         return refreshed
 
     def cancel(self, job_id: str) -> ActionResult:
         job = self.database.job(job_id)
         if job is None:
-            raise RuntimeError(f"Unknown job: {job_id}")
+            raise OrchestrationError(f"Unknown job: {job_id}")
         if job.state == "queued":
             self.database.set_job_state(job_id, "cancelled")
             self.database.skip_unfinished_stages(job_id)
@@ -426,10 +392,12 @@ class Runtime:
         job = self.database.job(job_id)
         record = self.database.job_record(job_id)
         if job is None or record is None:
-            raise RuntimeError(f"Unknown job: {job_id}")
+            raise OrchestrationError(f"Unknown job: {job_id}")
         if job.state not in {"failed", "cancelled", "interrupted"}:
-            raise RuntimeError(f"Job cannot be retried from {job.state}")
+            raise OrchestrationError(f"Job cannot be retried from {job.state}")
         stages = self.database.stage_records(job_id)
+        if not stages:
+            raise OrchestrationError("Job has no persisted stages; cannot retry")
         workflow_document = json.loads(record["workflow_json"])
         if "result_stage" not in workflow_document and record["result_stage"]:
             workflow_document["result_stage"] = record["result_stage"]
@@ -438,7 +406,7 @@ class Runtime:
         if from_stage:
             selected = next((stage for stage in stages if stage["id"] == from_stage), None)
             if selected is None:
-                raise RuntimeError(f"Unknown stage: {from_stage}")
+                raise OrchestrationError(f"Unknown stage: {from_stage}")
         else:
             selected = next(
                 (
@@ -454,15 +422,19 @@ class Runtime:
             )
             selected = selected or stages[-1]
         stage_by_id = {stage.id: stage for stage in workflow.stages}
-        selected_spec = stage_by_id[selected["id"]]
         stage_states = {stage["id"]: stage["state"] for stage in stages}
+        if set(stage_by_id) != set(stage_states):
+            raise OrchestrationError(
+                "Persisted job stages do not match its workflow; cannot retry"
+            )
+        selected_spec = stage_by_id[selected["id"]]
         blocked_dependencies = [
             dependency
             for dependency in selected_spec.needs
             if stage_states[dependency] != "succeeded"
         ]
         if blocked_dependencies:
-            raise RuntimeError(
+            raise OrchestrationError(
                 f"Retry stage {selected_spec.id!r} has unfinished dependencies: "
                 f"{sorted(blocked_dependencies)}"
             )
@@ -482,7 +454,7 @@ class Runtime:
         }
         project = self.database.project(job.project_id)
         if project is None:
-            raise RuntimeError(f"Unknown project: {job.project_id}")
+            raise OrchestrationError(f"Unknown project: {job.project_id}")
         worktree = Path(record["worktree"])
         previous_overlay_stage = next(
             (
@@ -506,7 +478,7 @@ class Runtime:
                 previous_overlay_stage["id"] if previous_overlay_stage else "",
             )
         except WorkspaceError as exc:
-            raise RuntimeError(str(exc)) from exc
+            raise OrchestrationError(str(exc)) from exc
         self.database.reset_retry(job_id, reset_ids)
         self._completion_events[job_id] = asyncio.Event()
         await self._queue.put(job_id)
@@ -525,7 +497,7 @@ class Runtime:
         job = self.database.job(job_id)
         record = self.database.job_record(job_id)
         if job is None or record is None:
-            raise RuntimeError(f"Unknown job: {job_id}")
+            raise OrchestrationError(f"Unknown job: {job_id}")
         if job.state not in {"succeeded", "integration_conflict"} or not job.result.commit:
             return ActionResult(
                 success=False,
@@ -542,7 +514,7 @@ class Runtime:
             )
         project = self.database.project(job.project_id)
         if project is None:
-            raise RuntimeError(f"Unknown project: {job.project_id}")
+            raise OrchestrationError(f"Unknown project: {job.project_id}")
         try:
             preflight_overlays(
                 Path(project.root),
@@ -616,14 +588,14 @@ class Runtime:
     def catalog_for_project(self, project_id: str) -> DaemonConfig:
         project = self.database.project(project_id)
         if project is None:
-            raise RuntimeError(f"Unknown project: {project_id}")
+            raise OrchestrationError(f"Unknown project: {project_id}")
         try:
             return load_project_config(
                 Path(project.root),
                 self._reload_catalog(),
             )
         except ValueError as exc:
-            raise RuntimeError(str(exc)) from exc
+            raise OrchestrationError(str(exc)) from exc
 
     def _reload_catalog(self) -> DaemonConfig:
         if self.config.config_path is None:
@@ -650,7 +622,7 @@ class Runtime:
         try:
             plan = resolve_execution_plan(workflow, catalog, routing_profile)
         except ValueError as exc:
-            raise RuntimeError(str(exc)) from exc
+            raise OrchestrationError(str(exc)) from exc
         serialized = json.dumps(execution_plan_data(plan), ensure_ascii=False)
         self.database.set_execution_plan(job_id, routing_profile, serialized)
         record["routing_profile"] = routing_profile
@@ -806,7 +778,7 @@ class Runtime:
                     if all(stage_records[dependency]["state"] == "succeeded" for dependency in stage.needs)
                 ]
                 if not ready:
-                    raise RuntimeError("Workflow has no runnable stages")
+                    raise OrchestrationError("Workflow has no runnable stages")
                 readable = [stage for stage in ready if stage.mode == "read"]
                 if readable:
                     results = await asyncio.gather(
@@ -1243,4 +1215,4 @@ class Runtime:
         self._completion_events.setdefault(job_id, asyncio.Event()).set()
 
 
-__all__ = ["Runtime", "RuntimeError"]
+__all__ = ["Runtime", "OrchestrationError"]

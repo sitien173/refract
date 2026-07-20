@@ -43,7 +43,8 @@ uv build
 
 Tools:
 
-- `project_init`
+- `setup_instruction`
+- `doctor`
 - `project_register`
 - `task_route`
 - `job_submit`
@@ -54,8 +55,9 @@ Tools:
 
 Built-in workflows:
 
-- `read` for disposable, non-committing inspection
-- `write` for isolated changes and explicit integration
+- `implement` for isolated changes and explicit integration
+- `review` for non-committing code review
+- `consult` for non-committing analysis
 
 `job_submit` accepts `routing_profile` and `parent_job_id`; `job_wait` accepts
 `include_stage_outputs`. Public resources expose role nicknames. Internal
@@ -135,11 +137,13 @@ require provider CLIs. Normal test runs skip live markers.
 - Never log API keys or environment secrets.
 - Review every subprocess command change.
 - Review classifier and scheduler retry changes.
+- Never modify Antigravity settings to select a model; pass `agy --model` per invocation.
 - Do not persist or mutate provider settings outside target configuration and
   the driver compilation boundary.
 - Update `uv.lock` only through `uv lock`.
 - Keep Sentinel and Sage read-only by default.
 - Keep HTTP bound to loopback by default.
+- Treat worktrees as Git isolation, not a security sandbox: permission-bypassing write agents can access the host and parent repository.
 
 ## Adding Targets and Roles
 

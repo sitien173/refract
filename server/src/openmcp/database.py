@@ -46,10 +46,7 @@ class Database:
     def _migrate(self) -> None:
         self._connection.executescript(
             """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY
-            );
-            INSERT OR IGNORE INTO schema_migrations(version) VALUES (1);
+            DROP TABLE IF EXISTS schema_migrations;
 
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
@@ -78,7 +75,6 @@ class Database:
                 worktree TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                result_text TEXT NOT NULL DEFAULT '',
                 result_commit TEXT NOT NULL DEFAULT '',
                 error TEXT NOT NULL DEFAULT ''
             );
@@ -174,6 +170,9 @@ class Database:
             self._connection.execute(
                 "ALTER TABLE jobs ADD COLUMN result_stage TEXT NOT NULL DEFAULT ''"
             )
+        # Older databases may retain the deprecated result_text column. Leave it
+        # in place for compatibility with SQLite builds that cannot drop columns;
+        # current reads derive the result from the configured result stage.
         session_columns = {
             row["name"]
             for row in self._connection.execute(
@@ -215,15 +214,6 @@ class Database:
                 ORDER BY ordinal DESC LIMIT 1
             ) WHERE result_stage=''
             """
-        )
-        self._connection.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)"
-        )
-        self._connection.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)"
-        )
-        self._connection.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)"
         )
         self._connection.commit()
         log.debug(
@@ -478,7 +468,7 @@ class Database:
                 (job_id, *resolved),
             )
             self._connection.execute(
-                "UPDATE jobs SET state='queued', error='', result_text='', result_commit='', updated_at=? WHERE id=?",
+                "UPDATE jobs SET state='queued', error='', result_commit='', updated_at=? WHERE id=?",
                 (utc_now(), job_id),
             )
         self.event(job_id, "job.retried", {"stages": list(resolved)})
@@ -531,9 +521,22 @@ class Database:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             return None
-        stage_rows = self._connection.execute(
-            "SELECT * FROM stages WHERE job_id=? ORDER BY ordinal", (job_id,)
-        ).fetchall()
+        output_columns = (
+            "text, error"
+            if include_stage_outputs
+            else "CASE WHEN id=? THEN text ELSE '' END AS text, '' AS error"
+        )
+        stage_query = f"""
+            SELECT id, ordinal, mode, state, attempts, target_id,
+                   {output_columns}, commit_sha, start_commit
+            FROM stages WHERE job_id=? ORDER BY ordinal
+        """
+        stage_params = (
+            (job_id,)
+            if include_stage_outputs
+            else (row["result_stage"], job_id)
+        )
+        stage_rows = self._connection.execute(stage_query, stage_params).fetchall()
         artifacts = self._connection.execute(
             "SELECT kind, path FROM artifacts WHERE job_id=? ORDER BY kind, path", (job_id,)
         ).fetchall()
@@ -547,10 +550,7 @@ class Database:
                 text=(
                     stage["text"]
                     if include_stage_outputs
-                    and not (
-                        row["result_commit"]
-                        and stage["id"] == row["result_stage"]
-                    )
+                    and stage["id"] != row["result_stage"]
                     else ""
                 ),
                 error=(
@@ -566,11 +566,7 @@ class Database:
             (stage for stage in stage_rows if stage["id"] == row["result_stage"]),
             None,
         )
-        result_text = (
-            result_stage["text"]
-            if result_stage is not None and row["result_commit"]
-            else row["result_text"]
-        )
+        result_text = result_stage["text"] if result_stage is not None else ""
         return JobView(
             id=row["id"],
             project_id=row["project_id"],

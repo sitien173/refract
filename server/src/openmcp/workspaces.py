@@ -72,6 +72,29 @@ def _git(*args: str, cwd: Path | None = None) -> str:
     return completed.stdout.strip()
 
 
+def _git_bytes(*args: str, cwd: Path | None = None) -> bytes:
+    """Run Git while preserving stdout exactly for archival artifacts."""
+    git = shutil.which("git")
+    if git is None:
+        raise WorkspaceError("Git was not found on PATH")
+    completed = subprocess.run(
+        [git, *args],
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+        check=False,
+    )
+    if completed.returncode:
+        error = (
+            completed.stderr.decode("utf-8", errors="replace").strip()
+            or completed.stdout.decode("utf-8", errors="replace").strip()
+        )
+        raise WorkspaceError(error or f"Git command failed: {' '.join(args)}")
+    return completed.stdout
+
+
 def inspect_repository(path: Path) -> RepositoryState:
     resolved = path.expanduser().resolve()
     if not resolved.is_dir():
@@ -214,9 +237,9 @@ class WorkspaceManager:
         diff_args = ["-C", str(path), "diff", "--binary"]
         if base_commit:
             diff_args.append(base_commit)
-        patch = _git(*diff_args)
+        patch = _git_bytes(*diff_args)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(patch + "\n", encoding="utf-8")
+        destination.write_bytes(patch)
         return True
 
     @staticmethod

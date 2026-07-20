@@ -24,13 +24,14 @@ from openmcp.logging_setup import (
 )
 from openmcp.models import (
     ActionResult,
+    ClientInstructionResult,
     JobView,
-    ProjectInitResult,
     ProjectView,
     SubmissionResult,
     TaskRouteResult,
 )
 from openmcp.runtime import Runtime
+from openmcp.workspaces import WorkspaceError, inspect_repository
 
 log = get_logger("server")
 
@@ -188,6 +189,37 @@ def _logged_request(
     return decorate
 
 
+def _project_root(path: str) -> str:
+    try:
+        return inspect_repository(Path(path)).root.as_posix()
+    except WorkspaceError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+_SETUP_INSTRUCTIONS = """Configure OpenMCP for this project:
+1. Use the client's project-level instruction file. Do not modify global agent instructions.
+2. Keep the MCP server connection global when already configured.
+3. Require OpenMCP for durable delegated project work.
+4. Resolve the Git root and read openmcp://projects before registration.
+5. Register the clean project only when its resolved root is absent.
+6. Choose implement, review, or consult by task intent.
+7. Use the project's routing profile unless explicitly overridden.
+8. Wait for jobs. Integrate successful implementation jobs explicitly.
+9. Put project routing overrides in .openmcp/config.toml.
+10. Keep daemon settings and targets in the global OpenMCP config."""
+
+_DOCTOR_INSTRUCTIONS = """Validate this project's OpenMCP integration without mutations:
+1. Confirm setup_instruction, doctor, project_register, task_route, job_submit, job_wait, job_cancel, job_retry, and job_integrate are available.
+2. Confirm the client's project-level instruction file contains OpenMCP guidance.
+3. Confirm those project instructions override conflicting global behavior.
+4. Resolve the Git root and match it in openmcp://projects.
+5. Read the project workflows and routing profiles resources.
+6. Confirm implement, review, and consult are available.
+7. Confirm the selected profile maps all three workflow roles.
+8. Report PASS or FAIL for each check with exact remediation.
+Do not register projects, submit jobs, or edit configuration during validation."""
+
+
 @mcp.tool(description="Register a clean Git project.", structured_output=True)
 @_logged_request("project_register")
 async def project_register(
@@ -198,10 +230,28 @@ async def project_register(
     return _runtime(ctx).register_project(path, alias)
 
 
-@mcp.tool(description="Initialize project-level OpenMCP files.", structured_output=True)
-@_logged_request("project_init")
-async def project_init(path: str, ctx: Context) -> ProjectInitResult:
-    return _runtime(ctx).initialize_project(path)
+@mcp.tool(
+    description="Return project-local client integration instructions.",
+    structured_output=True,
+)
+@_logged_request("setup_instruction")
+async def setup_instruction(path: str) -> ClientInstructionResult:
+    return ClientInstructionResult(
+        root=_project_root(path),
+        instructions=_SETUP_INSTRUCTIONS,
+    )
+
+
+@mcp.tool(
+    description="Return client-side OpenMCP integration checks.",
+    structured_output=True,
+)
+@_logged_request("doctor")
+async def doctor(path: str) -> ClientInstructionResult:
+    return ClientInstructionResult(
+        root=_project_root(path),
+        instructions=_DOCTOR_INSTRUCTIONS,
+    )
 
 
 @mcp.tool(
@@ -264,36 +314,42 @@ async def job_wait(
     include_stage_outputs: bool = False,
 ) -> JobView:
     runtime = _runtime(ctx)
-    deadline = time.monotonic() + timeout_s if timeout_s > 0 else None
-    while True:
-        job = runtime.database.job(
-            job_id,
-            include_stage_outputs=include_stage_outputs,
-        )
-        if job is None:
-            raise ValueError(f"Unknown job: {job_id}")
+    job = runtime.database.job(
+        job_id,
+        include_stage_outputs=include_stage_outputs,
+    )
+    if job is None:
+        raise ValueError(f"Unknown job: {job_id}")
+
+    async def report_progress(value: JobView) -> None:
         completed = sum(
             stage.state
             in {"succeeded", "failed", "cancelled", "interrupted", "skipped"}
-            for stage in job.stages
+            for stage in value.stages
         )
         await ctx.report_progress(
             progress=float(completed),
-            total=float(len(job.stages) or 1),
-            message=job.state,
+            total=float(len(value.stages) or 1),
+            message=value.state,
         )
-        if job.state in {
-            "succeeded",
-            "failed",
-            "cancelled",
-            "interrupted",
-            "integrated",
-            "integration_conflict",
-        }:
-            return job
-        if deadline is not None and time.monotonic() >= deadline:
-            return job
-        await asyncio.sleep(0.5)
+
+    await report_progress(job)
+    if job.state in {
+        "succeeded",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "integrated",
+        "integration_conflict",
+    }:
+        return job
+    refreshed = await runtime.wait(
+        job_id,
+        timeout_s,
+        include_stage_outputs=include_stage_outputs,
+    )
+    await report_progress(refreshed)
+    return refreshed
 
 
 @mcp.tool(description="Cancel a queued or running job.", structured_output=True)
@@ -391,7 +447,7 @@ async def routing_profiles_resource() -> str:
     runtime = _active_runtime()
     return _json(
         {
-            "default": runtime.catalog.default_routing_profile,
+            "default_routing_profile": runtime.catalog.default_routing_profile,
             "available": sorted(runtime.catalog.routing_profiles),
         }
     )
@@ -405,7 +461,7 @@ async def project_routing_profiles_resource(project_id: str, ctx: Context) -> st
     catalog = _runtime(ctx).catalog_for_project(project_id)
     return _json(
         {
-            "default": catalog.default_routing_profile,
+            "default_routing_profile": catalog.default_routing_profile,
             "available": sorted(catalog.routing_profiles),
         }
     )
@@ -417,21 +473,22 @@ async def workflows_resource(project_id: str, ctx: Context) -> str:
     if project is None:
         raise ValueError(f"Unknown project: {project_id}")
     path = Path(project.root) / ".openmcp" / "workflows"
-    names = ["read", "write"]
+    names = ["consult", "implement", "review"]
     if path.exists():
         names.extend(file.stem for file in sorted(path.glob("*.yaml")))
     return _json(sorted(set(names)))
 
 
 __all__ = [
+    "doctor",
     "job_cancel",
     "job_integrate",
     "job_retry",
     "job_submit",
     "job_wait",
     "mcp",
-    "project_init",
     "project_register",
     "run",
+    "setup_instruction",
     "task_route",
 ]
