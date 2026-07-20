@@ -12,11 +12,6 @@ Load superpowers-ccg:coordinating-multi-model-work before any Plan, Execute,
 or Review action. Route external workers only when that skill requires them.
 User instructions override the workflow.
 
-OpenMCP uses durable project jobs. Resume active work from the project jobs
-resource before resolving new routing. Route from task templates.
-Chooses configured nicknames and stable execution roles. Existing phase chains
-keep stored routing. Use compact waits. Never expose provider sessions.
-
 Bundled worker contracts:
 - ${plugin_root}/shared/worker-contract.md
 - ${plugin_root}/shared/erp.md
