@@ -6,7 +6,8 @@ The default streamable HTTP endpoint is `http://127.0.0.1:8765/mcp`.
 
 | Tool | Required inputs | Optional inputs | Purpose |
 | --- | --- | --- | --- |
-| `project_init` | `path` | | Create missing project configuration. |
+| `setup_instruction` | `path` | | Return project-local client setup guidance. |
+| `doctor` | `path` | | Return read-only client integration checks. |
 | `project_register` | `path` | `alias` | Register a clean Git root. |
 | `task_route` | `task` | `project_id` | Load effective routing guidance. |
 | `job_submit` | `project_id`, `workflow`, `inputs` | `context_key`, `parent_job_id`, `routing_profile` | Queue durable work. |
@@ -17,21 +18,29 @@ The default streamable HTTP endpoint is `http://127.0.0.1:8765/mcp`.
 
 Tool names may be client-namespaced. Match their OpenMCP suffixes.
 
-## Built-in workflow permissions
+`setup_instruction` and `doctor` never mutate repositories. Setup guidance
+prefers project-level agent instructions. The MCP connection, daemon settings,
+and targets may remain global.
 
-| Workflow | Permission | Behavior |
+## Built-in workflows
+
+| Workflow | Internal mode | Behavior |
 | --- | --- | --- |
-| `read` | Read-only | Discards filesystem changes. Never integrate it. |
-| `write` | Read-write | Preserves commits for explicit integration. |
+| `implement` | Write | Preserves commits for explicit integration. |
+| `review` | Read | Reviews an implementation or project. |
+| `consult` | Read | Inspects, analyzes, or advises. |
 
-Role-prefixed and `single-*` aliases are unsupported. Both built-ins use the
-`default` logical role. Every selected routing profile must map `default` onto a
-route. Project workflows remain available under `.openmcp/workflows/*.yaml`.
+Each built-in uses its matching logical role. Every selected routing profile
+must map `implement`, `review`, and `consult` onto routes. Multi-stage project
+workflows remain available under `.openmcp/workflows/*.yaml`.
+
+The former `read` and `write` workflows are unsupported. Choose `review` or
+`consult` based on intent. Use `implement` for repository changes.
 
 `task_route` returns guidance. Its `execution_role` value does not select a
-built-in workflow. Never combine it with `read` or `write`.
+built-in workflow.
 
-Common write inputs:
+Common implementation inputs:
 
 ```json
 {
@@ -71,11 +80,11 @@ commit while preserving the original integration base.
 Recommended chain:
 
 ```text
-write -> read -> write fix
+implement -> review -> implement fix
 ```
 
-Integrate the final write job. Integrate the original write when review passes
-without a fix.
+Integrate the final implementation. Integrate the original implementation when
+review passes without a fix.
 
 ## Local overlays
 
@@ -85,7 +94,7 @@ Store local rules in ignored `.openmcp.local.toml`:
 [[overlays]]
 include = ["config/*.development.json", "themes/**/*.local.css"]
 exclude = ["config/private.development.json"]
-workflows = ["write"]
+workflows = ["implement"]
 ```
 
 Matched files must be Git-ignored. Paths cannot contain symlinks. Includes and

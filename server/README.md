@@ -59,8 +59,8 @@ The daemon remains loopback-bound unless you explicitly change the host.
 
 Tools:
 
-- `project_init(path)` creates missing project configuration files without
-  overwriting existing files.
+- `setup_instruction(path)` returns project-local client integration instructions.
+- `doctor(path)` returns read-only client integration checks.
 - `project_register(path, alias)` registers a clean Git project.
 - `task_route(task, project_id)` loads the project task-route template.
 - `job_submit(project_id, workflow, inputs, context_key, parent_job_id,
@@ -75,9 +75,14 @@ Tools:
 
 Built-in workflows:
 
-- `read` — inspect without committing project changes.
-- `write` — make changes in an isolated worktree and, when needed, produce a
-  commit.
+- `implement` — make changes in an isolated worktree and, when needed, produce
+  a commit.
+- `review` — perform non-committing code review.
+- `consult` — perform non-committing analysis.
+
+This release removes the former `read` and `write` workflows. Replace `write`
+with `implement`. Replace each `read` call with `review` or `consult`, based on
+its intent. Routing profiles must map all three built-in workflow names.
 
 Resources include:
 
@@ -117,13 +122,13 @@ Example:
 ```json
 {
   "project_id": "project-uuid",
-  "workflow": "write",
+  "workflow": "implement",
   "routing_profile": "quality",
   "inputs": {
     "prompt": "Add validation for empty names.",
     "commit_message": "feat: validate empty names"
   },
-  "context_key": "validation/phase-01/forge",
+  "context_key": "validation/phase-01/implement",
   "parent_job_id": ""
 }
 ```
@@ -223,25 +228,19 @@ requires = ["review"]
 targets = ["sentinel-primary"]
 
 [routing_profiles.balanced]
-default = "forge"
-forge = "forge"
-canvas = "canvas"
-sage = "sage"
-sentinel = "sentinel"
+implement = "forge"
+review = "sentinel"
+consult = "sage"
 
 [routing_profiles.cost]
-default = "forge"
-forge = "forge"
-canvas = "canvas"
-sage = "sage"
-sentinel = "sentinel"
+implement = "forge"
+review = "sentinel"
+consult = "sage"
 
 [routing_profiles.quality]
-default = "forge-quality"
-forge = "forge-quality"
-canvas = "canvas"
-sage = "sage"
-sentinel = "sentinel"
+implement = "forge-quality"
+review = "sentinel"
+consult = "sage"
 ```
 
 Profiles map logical roles onto route IDs, and routes select targets. Backend
@@ -314,7 +313,15 @@ format, and level without writing credentials.
 
 ## Project configuration
 
-Call `project_init` with a Git project path. It creates missing files only:
+Call `setup_instruction` with a Git project path. It returns client-side setup
+instructions. It never changes project files. Follow the returned guidance using
+the client's project-level instruction mechanism. Keep the MCP connection global
+when useful, but keep project behavior local.
+
+Call the MCP `doctor` tool to receive read-only integration checks. The CLI
+`openmcp doctor` command separately checks daemon prerequisites.
+
+Project overrides are optional. Create only the files required:
 
 ```text
 .openmcp/
@@ -323,8 +330,8 @@ Call `project_init` with a Git project path. It creates missing files only:
   workflows/
 ```
 
-The empty workflows directory is not created. Add it when needed. Commit the
-created files before registration or job submission.
+Add the workflows directory only when needed. Commit project configuration
+before registration or job submission.
 
 Project configuration overlays global routes and routing profiles:
 
@@ -333,11 +340,11 @@ Project configuration overlays global routes and routing profiles:
 default_routing_profile = "quality"
 
 [[routes]]
-id = "forge-project"
-targets = ["forge-primary"]
+id = "review-project"
+targets = ["sentinel-primary"]
 
 [routing_profiles.quality]
-default = "forge-project"
+review = "review-project"
 ```
 
 Precedence is explicit submission profile, project configuration, global
@@ -357,7 +364,7 @@ include = [
   "themes/**/*.local.css",
 ]
 exclude = ["config/private.development.json"]
-workflows = ["write"]
+workflows = ["implement"]
 ```
 
 Every matched file must already be ignored by Git. Overlay paths cannot contain
@@ -391,8 +398,12 @@ arguments.
 
 ## Custom workflows
 
-Store workflows under `.openmcp/workflows/*.yaml`. Stage routes use logical role
-names. The selected routing profile resolves them at submission time.
+Built-ins cover normal jobs. Use `implement`, `review`, or `consult`. Store
+multi-stage workflows under `.openmcp/workflows/*.yaml`.
+
+Every custom stage declares `mode` and `route`. Mode controls stage execution.
+Callers choose workflows, never modes. Routes use logical role names. The
+selected routing profile resolves them at submission time.
 
 ```yaml
 version: 1

@@ -43,7 +43,8 @@ uv build
 
 Tools:
 
-- `project_init`
+- `setup_instruction`
+- `doctor`
 - `project_register`
 - `task_route`
 - `job_submit`
@@ -54,8 +55,9 @@ Tools:
 
 Built-in workflows:
 
-- `read` for disposable, non-committing inspection
-- `write` for isolated changes and explicit integration
+- `implement` for isolated changes and explicit integration
+- `review` for non-committing code review
+- `consult` for non-committing analysis
 
 `job_submit` accepts `routing_profile` and `parent_job_id`; `job_wait` accepts
 `include_stage_outputs`. Public resources expose role nicknames. Internal

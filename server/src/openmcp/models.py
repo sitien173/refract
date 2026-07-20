@@ -113,11 +113,9 @@ class TaskRouteResult(BaseModel):
     template: dict[str, Any]
 
 
-class ProjectInitResult(BaseModel):
+class ClientInstructionResult(BaseModel):
     root: str
-    created: list[str] = Field(default_factory=list)
-    existing: list[str] = Field(default_factory=list)
-    requires_commit: bool
+    instructions: str
 
 
 class ResourcePayload(BaseModel):
@@ -127,12 +125,12 @@ class ResourcePayload(BaseModel):
 __all__ = [
     "ActionResult",
     "ArtifactView",
+    "ClientInstructionResult",
     "ContextStreamView",
     "JobResult",
     "JobState",
     "JobView",
     "ModelTargetView",
-    "ProjectInitResult",
     "ProjectView",
     "ResourcePayload",
     "StageState",

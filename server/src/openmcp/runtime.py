@@ -19,7 +19,6 @@ from openmcp.config import (
     TargetConfig,
     load_config,
     load_project_config,
-    load_task_routes,
 )
 from openmcp.database import Database, utc_now
 from openmcp.drivers import DriverRegistry, DriverResult
@@ -28,7 +27,6 @@ from openmcp.models import (
     ActionResult,
     JobView,
     ModelTargetView,
-    ProjectInitResult,
     ProjectView,
     SubmissionResult,
 )
@@ -196,55 +194,6 @@ class Runtime:
                 f"Project alias already exists: {resolved_alias}"
             ) from exc
 
-    def initialize_project(self, path: str) -> ProjectInitResult:
-        try:
-            state = inspect_repository(Path(path))
-        except WorkspaceError as exc:
-            raise OrchestrationError(str(exc)) from exc
-        directory = state.root / ".openmcp"
-        config_path = directory / "config.toml"
-        routes_path = directory / "task_routes.json"
-        contents: dict[Path, str] = {}
-        if not config_path.exists():
-            default_profile = self._reload_catalog().default_routing_profile
-            contents[config_path] = (
-                "[project]\n"
-                f"default_routing_profile = {json.dumps(default_profile)}\n"
-            )
-        if not routes_path.exists():
-            template = load_task_routes(self.config.home)
-            contents[routes_path] = json.dumps(
-                template,
-                ensure_ascii=False,
-                indent=2,
-            ) + "\n"
-
-        directory.mkdir(parents=True, exist_ok=True)
-        for file_path, content in contents.items():
-            file_path.write_text(content, encoding="utf-8")
-        expected = (config_path, routes_path)
-        log.info(
-            "Project configuration initialized",
-            extra={
-                "event": "project.initialized",
-                "project_root": state.root.as_posix(),
-                "created_files": len(contents),
-            },
-        )
-        return ProjectInitResult(
-            root=state.root.as_posix(),
-            created=[
-                file_path.relative_to(state.root).as_posix()
-                for file_path in expected
-                if file_path in contents
-            ],
-            existing=[
-                file_path.relative_to(state.root).as_posix()
-                for file_path in expected
-                if file_path not in contents
-            ],
-            requires_commit=bool(contents),
-        )
 
     async def submit(
         self,

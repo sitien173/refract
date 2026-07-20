@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any
 
 
+_BUILTIN_ROLE_ROUTES = {
+    "implement": "forge",
+    "review": "sentinel",
+    "consult": "sage",
+}
+
+
 @dataclass(slots=True, frozen=True)
 class TargetConfig:
     id: str
@@ -164,13 +171,11 @@ def _default_targets() -> tuple[TargetConfig, ...]:
 
 
 def _default_routes(targets: tuple[TargetConfig, ...]) -> tuple[RouteConfig, ...]:
-    ids = tuple(target.id for target in targets)
     codex_ids = tuple(target.id for target in targets if target.backend == "codex")
     agy_ids = tuple(target.id for target in targets if target.backend == "agy")
     sage_ids = tuple(target.id for target in targets if "consult" in target.capabilities)
     sentinel_ids = tuple(target.id for target in targets if "review" in target.capabilities)
     return (
-        RouteConfig(id="default", targets=ids),
         RouteConfig(id="forge", requires=("code",), targets=codex_ids),
         RouteConfig(id="canvas", requires=("code",), targets=agy_ids),
         RouteConfig(id="sage", requires=("consult",), targets=sage_ids),
@@ -184,7 +189,7 @@ def _routing_profiles(
 ) -> dict[str, dict[str, str]]:
     route_ids = {route.id for route in routes}
     if raw is None:
-        return {"balanced": {route_id: route_id for route_id in route_ids}}
+        raw = {"balanced": _BUILTIN_ROLE_ROUTES}
     if not isinstance(raw, dict) or not raw:
         raise ValueError("[routing_profiles] must contain at least one profile")
     profiles: dict[str, dict[str, str]] = {}
@@ -192,6 +197,12 @@ def _routing_profiles(
         if not isinstance(mapping, dict) or not mapping:
             raise ValueError(f"Routing profile {profile_id!r} must be a table")
         resolved = {str(role): str(route) for role, route in mapping.items()}
+        missing = set(_BUILTIN_ROLE_ROUTES) - resolved.keys()
+        if missing:
+            raise ValueError(
+                f"Routing profile {profile_id!r} does not map built-in roles: "
+                f"{sorted(missing)}"
+            )
         unknown = set(resolved.values()) - route_ids
         if unknown:
             raise ValueError(

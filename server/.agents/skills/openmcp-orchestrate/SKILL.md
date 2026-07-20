@@ -1,6 +1,6 @@
 ---
 name: openmcp-orchestrate
-description: Orchestrate durable Git project work through OpenMCP MCP tools. Use when an agent needs to initialize or register a project, route work, choose read or write workflow permissions and routing profiles, submit or monitor jobs, chain implementation and review jobs, retry or cancel jobs, integrate successful writes, or expose permitted ignored development files through local overlays.
+description: Orchestrate durable Git project work through OpenMCP MCP tools. Use when an agent needs project-local setup guidance, integration validation, project registration, task routing, semantic workflow selection, job monitoring, implementation and review chains, retries, cancellation, integration, or permitted local overlays.
 ---
 
 # OpenMCP Orchestration
@@ -18,8 +18,8 @@ OpenMCP call in a session. Re-read only relevant sections after errors.
 - Require a clean repository before submission.
 - Preserve dirty user changes. Never commit, stash, or delete them.
 - Keep the registered repository unchanged while jobs run.
-- Avoid parallel write jobs requiring integration.
-- Use `read` or `write` and routing profiles, not providers.
+- Avoid parallel implementation jobs requiring integration.
+- Use semantic workflows and routing profiles, not providers.
 - Never send credentials, private keys, or secret values.
 - Treat integration conflicts as blockers. Never reset user branches.
 
@@ -31,8 +31,13 @@ OpenMCP call in a session. Re-read only relevant sections after errors.
 2. Read `openmcp://projects` when resource access exists.
 3. Match projects using their resolved Git root.
 4. Call `project_register` only when no match exists.
-5. Use `project_init` only when project configuration is requested.
-6. Commit initialized configuration before submitting jobs.
+5. Call `setup_instruction` when project integration setup is requested.
+6. Apply its guidance through project-level client instructions.
+7. Call `doctor` when integration validation is requested.
+
+`setup_instruction` and `doctor` return instructions. They never mutate files.
+Prefer project-level agent behavior over global behavior. The MCP connection may
+remain global. Keep daemon settings and targets in global OpenMCP configuration.
 
 If tools remain unavailable, report the default loopback endpoint and stop.
 Never silently replace OpenMCP with direct execution.
@@ -44,15 +49,16 @@ how to preserve them.
 
 Call `task_route` with the complete task and project identifier. Apply its
 project-specific routing template. Treat recommended agents and execution roles
-as routing guidance. Select the workflow by required permission:
+as routing guidance. Select the workflow by intent:
 
-- Use `read` for inspection, analysis, consultation, or review.
-- Use `write` for any task that may change files.
-- Use custom workflows only for distinct execution shapes.
+- Use `implement` for tasks that may change files.
+- Use `review` for code-quality review.
+- Use `consult` for inspection, analysis, or consultation.
+- Use custom workflows only for multi-stage execution.
 
-Built-ins resolve through the `default` logical role. The selected routing
-profile must map `default` onto a route. Never construct role-permission names
-for built-ins. Ignore `execution_role` when selecting built-ins.
+Each built-in resolves through its matching logical role. Every routing profile
+must map `implement`, `review`, and `consult` onto routes. Ignore
+`execution_role` when selecting built-ins.
 
 Split mixed work into dependent jobs. Keep unrelated tasks separate.
 
@@ -61,7 +67,7 @@ Split mixed work into dependent jobs. Keep unrelated tasks separate.
 Call `job_submit` with:
 
 - A prompt defining outcome, scope, constraints, and validation.
-- A concise commit message for `write`.
+- A concise commit message for `implement`.
 - A stable topic-specific `context_key`.
 - A `parent_job_id` for dependent review or fix work.
 - A `routing_profile` only when policy requires one.
@@ -89,19 +95,20 @@ Use `job_retry` from the earliest invalid stage. Never create retry loops.
 
 ### 6. Review and integrate
 
-For higher-risk writes, submit `read` with the write job as parent. Use a
-reviewer-specific routing profile only when configured. Submit fixes as a
-`write` child of that review. Integrate the latest approved write job. If the
-chain ends in a read review, integrate its write ancestor.
+For higher-risk changes, submit `review` with the implementation job as parent.
+Use a reviewer-specific routing profile only when configured. Submit fixes as
+an `implement` child of that review. Integrate the latest approved
+implementation. If the chain ends in review, integrate its implementation
+ancestor.
 
 Call `job_integrate` only when:
 
 - The user requested repository changes.
-- The write job succeeded.
+- The implementation job succeeded.
 - Required review passed.
 - The original repository remains clean and unchanged.
 
-Never integrate read-only jobs. Verify repository status after integration.
+Never integrate review or consultation jobs. Verify repository status afterward.
 
 ## Local overlays
 
@@ -109,7 +116,7 @@ Use overlays only when jobs need ignored development files. Keep
 `.openmcp.local.toml` ignored. Prefer exact paths, then narrow includes and
 explicit excludes. List only permitted workflows.
 
-Use `workflows = ["write"]` for built-in write overlays.
+Use `workflows = ["implement"]` for built-in implementation overlays.
 
 Overlay changes apply during `job_integrate`, outside Git history. Hash conflicts
 protect concurrent local edits. Overlay snapshots remain under OpenMCP run
@@ -117,5 +124,5 @@ storage. Never expose secrets through overlays.
 
 ## Handoff
 
-Report the workflow permission, job identifier, terminal state, commit, and
+Report the workflow, job identifier, terminal state, commit, and
 verification outcome. Report conflicts or retained artifacts when relevant.

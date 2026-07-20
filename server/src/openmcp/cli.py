@@ -50,7 +50,13 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _doctor(config: DaemonConfig | None = None) -> int:
-    config = config or load_config()
+    if config is None:
+        try:
+            config = load_config()
+        except ValueError as exc:
+            sys.stderr.write(f"Configuration error: {exc}\n")
+            return 1
+    configure_logging(config.logging)
     logging_config = resolve_config(config.logging)
     writable_path = config.home
     while not writable_path.exists() and writable_path != writable_path.parent:
@@ -103,9 +109,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Run the daemon or inspect local prerequisites."""
     args = _parser().parse_args(argv)
     if args.command == "doctor":
-        config = load_config()
-        configure_logging(config.logging)
-        raise SystemExit(_doctor(config))
+        raise SystemExit(_doctor())
     if args.command not in {None, "serve"}:
         raise SystemExit(2)
 

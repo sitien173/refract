@@ -50,25 +50,31 @@ def _digest(data: dict[str, Any]) -> str:
 
 
 def _builtin(name: str) -> WorkflowSpec | None:
-    if name not in {"read", "write"}:
+    builtins = {
+        "implement": ("write", "implement"),
+        "review": ("read", "review"),
+        "consult": ("read", "consult"),
+    }
+    if name not in builtins:
         return None
+    mode, route = builtins[name]
+    inputs = {"prompt": {"type": "string", "required": True}}
+    if name == "implement":
+        inputs["commit_message"] = {"type": "string", "required": False}
     data = {
         "version": 1,
         "name": name,
-        "inputs": {
-            "prompt": {"type": "string", "required": True},
-            "commit_message": {"type": "string", "required": False},
-        },
+        "inputs": inputs,
         "stages": {
             "execute": {
-                "mode": name,
-                "route": "default",
+                "mode": mode,
+                "route": route,
                 "context": "worker",
                 "prompt": "${inputs.prompt}",
             }
         },
     }
-    return parse_workflow(data, known_routes=None)
+    return parse_workflow(data)
 
 
 def _parse_inputs(raw: Any) -> dict[str, InputSpec]:
@@ -98,14 +104,18 @@ def _parse_stages(raw: Any) -> tuple[StageSpec, ...]:
         stage_id = str(stage_id)
         if not _NAME_RE.fullmatch(stage_id) or not isinstance(definition, dict):
             raise ValueError(f"Invalid workflow stage {stage_id!r}")
-        mode = str(definition.get("mode", "read"))
-        route = str(definition.get("route", "default"))
+        mode = str(definition.get("mode", "")).strip()
+        route = str(definition.get("route", "")).strip()
         prompt = definition.get("prompt")
         needs = definition.get("needs", [])
         fanout = int(definition.get("fanout", 1))
         timeout_s = int(definition.get("timeout_s", 0))
+        if not mode:
+            raise ValueError(f"Stage {stage_id!r} requires a mode")
         if mode not in {"read", "write"}:
             raise ValueError(f"Stage {stage_id!r} has invalid mode {mode!r}")
+        if not route:
+            raise ValueError(f"Stage {stage_id!r} requires a route")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError(f"Stage {stage_id!r} requires a prompt")
         if not isinstance(needs, list):
@@ -206,10 +216,7 @@ def _validate_variables(workflow: WorkflowSpec) -> None:
                 )
 
 
-def parse_workflow(
-    data: Any,
-    known_routes: set[str] | None = None,
-) -> WorkflowSpec:
+def parse_workflow(data: Any) -> WorkflowSpec:
     if not isinstance(data, dict):
         raise ValueError("Workflow document must be a mapping")
     version = int(data.get("version", 0))
@@ -274,11 +281,10 @@ def workflow_data(workflow: WorkflowSpec) -> dict[str, Any]:
 def load_workflow(
     project_root: Path,
     name: str,
-    known_routes: set[str] | None = None,
 ) -> WorkflowSpec:
     builtin = _builtin(name)
     if builtin is not None:
-        return parse_workflow(workflow_data(builtin), known_routes)
+        return parse_workflow(workflow_data(builtin))
     if not _NAME_RE.fullmatch(name):
         raise ValueError(f"Invalid workflow name {name!r}")
     path = project_root / ".openmcp" / "workflows" / f"{name}.yaml"
@@ -288,7 +294,7 @@ def load_workflow(
         raise ValueError(f"Workflow {name!r} does not exist") from exc
     except yaml.YAMLError as exc:
         raise ValueError(f"Workflow {name!r} is invalid YAML: {exc}") from exc
-    workflow = parse_workflow(data, known_routes)
+    workflow = parse_workflow(data)
     if workflow.name != name:
         raise ValueError(f"Workflow file name and workflow name differ: {name!r}")
     return workflow
