@@ -651,6 +651,52 @@ def test_default_builtins_resolve_semantic_routes(
     assert plan.targets[0].id == target_id
 
 
+def test_custom_target_defaults_support_all_semantic_workflows(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[[targets]]
+id = "primary"
+backend = "codex"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert set(config.targets[0].capabilities) >= {
+        "code",
+        "review",
+        "consult",
+    }
+    for workflow_name in ("implement", "review", "consult"):
+        plan = resolve_execution_plan(
+            load_workflow(tmp_path, workflow_name),
+            config,
+            "balanced",
+        )
+        assert [target.id for target in plan.targets] == ["primary"]
+
+
+def test_config_rejects_profile_routes_without_eligible_targets(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[[targets]]
+id = "implement-only"
+backend = "codex"
+capabilities = ["code"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="role 'review' has no eligible targets on route 'sentinel'",
+    ):
+        load_config(path)
+
+
 def test_config_loads_routing_profile_overlays(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
@@ -748,6 +794,43 @@ implement = "forge"
 
     with pytest.raises(ValueError, match="does not map built-in roles"):
         load_config(path)
+
+
+def test_project_config_rejects_profile_route_without_eligible_targets(
+    tmp_path,
+) -> None:
+    project = tmp_path / "project"
+    (project / ".openmcp").mkdir(parents=True)
+    (project / ".openmcp" / "config.toml").write_text(
+        """
+[[routes]]
+id = "blocked-review"
+targets = ["primary"]
+requires = ["unavailable"]
+
+[routing_profiles.balanced]
+review = "blocked-review"
+""",
+        encoding="utf-8",
+    )
+    base = DaemonConfig(
+        home=tmp_path / "home",
+        targets=(TargetConfig(id="primary", backend="codex"),),
+        routes=(RouteConfig(id="primary", targets=("primary",)),),
+        routing_profiles={
+            "balanced": {
+                "implement": "primary",
+                "review": "primary",
+                "consult": "primary",
+            }
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="role 'review' has no eligible targets on route 'blocked-review'",
+    ):
+        load_project_config(project, base)
 
 
 def test_project_config_overlays_routes_and_profiles(tmp_path) -> None:

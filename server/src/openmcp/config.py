@@ -28,7 +28,7 @@ class TargetConfig:
     isolated: bool = False
     read_only: bool = False
     args: tuple[str, ...] = ()
-    capabilities: tuple[str, ...] = ("code", "reasoning", "review")
+    capabilities: tuple[str, ...] = ("code", "reasoning", "review", "consult")
     max_concurrency: int = 1
     priority: int = 100
 
@@ -212,6 +212,27 @@ def _routing_profiles(
     return profiles
 
 
+def _validate_profile_targets(
+    targets: tuple[TargetConfig, ...],
+    routes: tuple[RouteConfig, ...],
+    profiles: dict[str, dict[str, str]],
+) -> None:
+    target_by_id = {target.id: target for target in targets}
+    route_by_id = {route.id: route for route in routes}
+    for profile_id, mapping in profiles.items():
+        for role, route_id in mapping.items():
+            route = route_by_id[route_id]
+            if any(
+                set(route.requires).issubset(target_by_id[target_id].capabilities)
+                for target_id in route.targets
+            ):
+                continue
+            raise ValueError(
+                f"Routing profile {profile_id!r} role {role!r} has no eligible "
+                f"targets on route {route_id!r}"
+            )
+
+
 def validate_target_args(
     target_id: str,
     backend: str,
@@ -260,7 +281,10 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
         backend = str(item.get("backend", "")).strip()
         if not target_id or backend not in {"agy", "codex", "pi"}:
             raise ValueError(f"Invalid target: {item!r}")
-        capabilities = item.get("capabilities", ["code", "reasoning", "review"])
+        capabilities = item.get(
+            "capabilities",
+            ["code", "reasoning", "review", "consult"],
+        )
         if not isinstance(capabilities, list):
             raise ValueError(f"Target {target_id!r} capabilities must be a list")
         args = item.get("args", [])
@@ -394,6 +418,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         raise ValueError(
             f"Unknown default routing profile: {default_routing_profile!r}"
         )
+    _validate_profile_targets(targets, routes, routing_profiles)
     return DaemonConfig(
         home=home,
         config_path=config_path,
@@ -467,6 +492,7 @@ def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
     ).strip()
     if default_profile not in profiles:
         raise ValueError(f"Unknown project routing profile: {default_profile!r}")
+    _validate_profile_targets(base.targets, routes, profiles)
     return replace(
         base,
         default_routing_profile=default_profile,
