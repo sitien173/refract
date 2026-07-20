@@ -498,6 +498,38 @@ contained.
 ~/.openmcp/worktrees/
 ```
 
+## Automated pull request review
+
+`.github/workflows/ai-pr-review.yml` runs
+[tag1consulting/ai-pr-review](https://github.com/tag1consulting/ai-pr-review)
+for non-draft pull requests. It is configured for a custom provider that exposes
+an OpenAI-compatible `/chat/completions` API, including providers serving
+Anthropic models.
+
+Configure these repository settings before enabling the workflow:
+
+| Setting | Kind | Required | Purpose |
+|---|---|---:|---|
+| `AI_REVIEW_API_KEY` | Secret | Yes | Custom provider API key |
+| `AI_REVIEW_BASE_URL` | Variable | Yes | OpenAI-compatible API base URL, normally ending in `/v1` |
+| `AI_REVIEW_MODEL_STANDARD` | Variable | Yes | Model ID used for quick reviews |
+| `AI_REVIEW_MODEL_PREMIUM` | Variable | For full reviews | Model ID used when the PR has the `ai-review-full` label |
+
+For example, configure them with GitHub CLI without placing credentials in the
+repository:
+
+```bash
+gh secret set AI_REVIEW_API_KEY
+gh variable set AI_REVIEW_BASE_URL --body "https://provider.example/v1"
+gh variable set AI_REVIEW_MODEL_STANDARD --body "provider-model-id"
+gh variable set AI_REVIEW_MODEL_PREMIUM --body "provider-premium-model-id"
+```
+
+Add `skip-ai-review` to a PR to suppress review. Add `ai-review-full` to use full
+review mode. Optional tuning variables are documented directly in the workflow.
+GitHub does not expose repository secrets to workflows triggered by pull
+requests from forks, so those reviews will not run successfully by default.
+
 ## Development
 
 ```bash
