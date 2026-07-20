@@ -551,6 +551,33 @@ async def test_task_route_tool_uses_registered_project_template(tmp_path) -> Non
         runtime.database.close()
 
 
+@pytest.mark.parametrize(
+    ("constraint", "message"),
+    (
+        ("projects.alias", "Project alias already exists"),
+        ("projects.root", "Project root already registered"),
+    ),
+)
+def test_register_project_reports_integrity_constraint(
+    monkeypatch,
+    tmp_path,
+    constraint,
+    message,
+) -> None:
+    root = _repository(tmp_path)
+    runtime = Runtime(_config(tmp_path / "home"))
+
+    def reject_project(**_kwargs) -> None:
+        raise sqlite3.IntegrityError(f"UNIQUE constraint failed: {constraint}")
+
+    monkeypatch.setattr(runtime.database, "upsert_project", reject_project)
+    try:
+        with pytest.raises(ValueError, match=message):
+            runtime.register_project(str(root), "shared")
+    finally:
+        runtime.database.close()
+
+
 @pytest.mark.asyncio
 async def test_project_resources_expose_semantic_workflows(tmp_path) -> None:
     from openmcp.server import project_routing_profiles_resource, workflows_resource
@@ -918,6 +945,9 @@ def test_database_migrates_execution_state(tmp_path) -> None:
     Database(path).close()
     connection = sqlite3.connect(path)
     connection.execute("ALTER TABLE jobs DROP COLUMN routing_profile")
+    connection.execute(
+        "ALTER TABLE jobs ADD COLUMN result_text TEXT NOT NULL DEFAULT ''"
+    )
     connection.execute("ALTER TABLE context_sessions RENAME TO context_sessions_new")
     connection.execute(
         """
@@ -956,7 +986,7 @@ def test_database_migrates_execution_state(tmp_path) -> None:
     assert "routing_profile" in columns
     assert "execution_plan_json" in columns
     assert "result_stage" in columns
-    assert "result_text" not in columns
+    assert "result_text" in columns
     assert {"target_key", "lane", "updated_at"}.issubset(session_columns)
     assert migration_table is None
 
@@ -1043,7 +1073,6 @@ def test_job_views_return_result_stage_text_once(tmp_path) -> None:
     )
     database.set_stage_state("job", "implement", "succeeded", text="implemented")
     database.set_stage_state("job", "review", "succeeded", text="reviewed")
-    database.set_job_commit("job", "def")
     database.set_job_state("job", "succeeded")
 
     compact = database.job("job", include_stage_outputs=False)
@@ -1052,6 +1081,7 @@ def test_job_views_return_result_stage_text_once(tmp_path) -> None:
     assert compact is not None
     assert detailed is not None
     assert compact.result.text == "reviewed"
+    assert detailed.result.text == "reviewed"
     assert [stage.text for stage in compact.stages] == ["", ""]
     assert [stage.text for stage in detailed.stages] == ["implemented", ""]
     database.close()
@@ -1175,10 +1205,16 @@ async def test_job_wait_uses_runtime_completion_waiter() -> None:
     class RuntimeStub:
         def __init__(self) -> None:
             self.database = DatabaseStub()
-            self.wait_calls: list[tuple[str, int]] = []
+            self.wait_calls: list[tuple[str, int, bool]] = []
 
-        async def wait(self, job_id: str, timeout_s: int) -> JobView:
-            self.wait_calls.append((job_id, timeout_s))
+        async def wait(
+            self,
+            job_id: str,
+            timeout_s: int,
+            *,
+            include_stage_outputs: bool,
+        ) -> JobView:
+            self.wait_calls.append((job_id, timeout_s, include_stage_outputs))
             return succeeded
 
     class ContextStub:
@@ -1201,7 +1237,7 @@ async def test_job_wait_uses_runtime_completion_waiter() -> None:
     result = await job_wait("job", ctx, timeout_s=12)
 
     assert result is succeeded
-    assert runtime.wait_calls == [("job", 12)]
+    assert runtime.wait_calls == [("job", 12, False)]
     assert ctx.progress == [(0.0, 1.0, "running"), (1.0, 1.0, "succeeded")]
 
 

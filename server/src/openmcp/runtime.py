@@ -190,10 +190,14 @@ class Runtime:
             )
             return project
         except sqlite3.IntegrityError as exc:
-            raise OrchestrationError(
-                f"Project alias already exists: {resolved_alias}"
-            ) from exc
-
+            constraint = str(exc).rsplit(":", 1)[-1].strip()
+            if constraint == "projects.alias":
+                message = f"Project alias already exists: {resolved_alias}"
+            elif constraint == "projects.root":
+                message = f"Project root already registered: {state.root.as_posix()}"
+            else:
+                message = "Project registration violates a database constraint"
+            raise OrchestrationError(message) from exc
 
     async def submit(
         self,
@@ -324,8 +328,17 @@ class Runtime:
         )
         return SubmissionResult(job_id=job_id, state="queued")
 
-    async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:
-        job = self.database.job(job_id)
+    async def wait(
+        self,
+        job_id: str,
+        timeout_s: int = 0,
+        *,
+        include_stage_outputs: bool = True,
+    ) -> JobView:
+        job = self.database.job(
+            job_id,
+            include_stage_outputs=include_stage_outputs,
+        )
         if job is None:
             raise OrchestrationError(f"Unknown job: {job_id}")
         if job.state in _TERMINAL_STATES:
@@ -338,7 +351,10 @@ class Runtime:
                 await event.wait()
         except TimeoutError:
             pass
-        refreshed = self.database.job(job_id)
+        refreshed = self.database.job(
+            job_id,
+            include_stage_outputs=include_stage_outputs,
+        )
         if refreshed is None:
             raise OrchestrationError(f"Unknown job: {job_id}")
         return refreshed

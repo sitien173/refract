@@ -343,13 +343,11 @@ async def job_wait(
         "integration_conflict",
     }:
         return job
-    await runtime.wait(job_id, timeout_s)
-    refreshed = runtime.database.job(
+    refreshed = await runtime.wait(
         job_id,
+        timeout_s,
         include_stage_outputs=include_stage_outputs,
     )
-    if refreshed is None:
-        raise ValueError(f"Unknown job: {job_id}")
     await report_progress(refreshed)
     return refreshed
 
