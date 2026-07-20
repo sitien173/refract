@@ -1,0 +1,7 @@
+interface:
+  display_name: "OpenMCP Workflows"
+  short_description: "Author validated multi-stage OpenMCP workflow DAGs"
+  default_prompt: "Use $openmcp-workflows to author a custom multi-stage .openmcp/workflows YAML pipeline that passes OpenMCP validation."
+
+dependencies:
+  tools: []

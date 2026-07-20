@@ -1,0 +1,11 @@
+{
+  "eval_id": 1,
+  "eval_name": "project-override-reviewer",
+  "prompt": "For project /home/me/app only, send code review to a stricter pi reviewer (gpt-5.6-sol, reasoning high, isolated, read-only), keeping implement and consult on the global 'quality' profile. Everything global stays. Which files to edit and the TOML.",
+  "assertions": [
+    {"text": "Adds the new reviewer target to the GLOBAL ~/.openmcp/config.toml (pi, gpt-5.6-sol, reasoning high, isolated, read_only)"},
+    {"text": "Does NOT define a [[targets]] entry inside the project .openmcp/config.toml"},
+    {"text": "Project /home/me/app/.openmcp/config.toml adds a route pooling the new reviewer target"},
+    {"text": "Project config overrides routing_profiles.quality mapping only review to the new route, leaving implement and consult untouched"}
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "skill_name": "openmcp-orchestrate",
+  "evals": [
+    {
+      "id": 0,
+      "name": "implement-and-integrate-sequence",
+      "prompt": "I have a clean git repo at /home/me/service. I want to add validation that rejects empty user names, and I want the change merged into my repo when it's done. I'm connected to the OpenMCP MCP server. Walk me through exactly which OpenMCP tools you would call, in order, with the arguments for each, and when you would stop.",
+      "expected_output": "Ordered tool-call plan: check openmcp://projects for the resolved root, project_register if absent, task_route with the task, job_submit workflow=implement with prompt + commit_message + a context_key, job_wait with a finite timeout, inspect result on succeeded, then job_integrate on success. Does not integrate before success. Does not simulate results.",
+      "assertions": [],
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "dirty-repo-guardrail",
+      "prompt": "My git repo at /home/me/api has a bunch of uncommitted local edits I'm still working on. Can you kick off an OpenMCP review job on it right now?",
+      "expected_output": "Should detect/flag that the repository is dirty and stop before submission, report the affected paths, and preserve the user's changes (never commit, stash, or delete them). Should ask the user how to proceed rather than mutating the repo. A clean tree is required before submission.",
+      "assertions": [],
+      "files": []
+    }
+  ]
+}

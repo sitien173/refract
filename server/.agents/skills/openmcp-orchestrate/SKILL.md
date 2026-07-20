@@ -122,6 +122,16 @@ Overlay changes apply during `job_integrate`, outside Git history. Hash conflict
 protect concurrent local edits. Overlay snapshots remain under OpenMCP run
 storage. Never expose secrets through overlays.
 
+## Related skills
+
+Orchestration drives existing configuration. When the task actually needs new
+configuration or a new pipeline shape, hand off:
+
+- Use `openmcp-config` to add a target, route, routing profile, overlay, or
+  task-route template.
+- Use `openmcp-workflows` to author a custom multi-stage `.openmcp/workflows`
+  DAG. Author one only when built-ins cannot express the work as a single step.
+
 ## Handoff
 
 Report the workflow, job identifier, terminal state, commit, and

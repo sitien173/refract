@@ -1,0 +1,21 @@
+{
+  "skill_name": "openmcp-workflows",
+  "evals": [
+    {
+      "id": 0,
+      "name": "triage-review-fix-recheck",
+      "prompt": "In my OpenMCP project I want a reusable pipeline named 'triage': first a reviewer inspects the request and lists required changes, then a coder implements the change incorporating those findings and commits, then a second reviewer verifies the fix. Write the .openmcp/workflows/triage.yaml file.",
+      "expected_output": "Valid workflow YAML: version 1, name triage, inputs prompt (required) and commit_message. Three stages: a read review stage, a write fix stage that needs review and references ${stages.review.text}, a read verify stage that needs fix. Single write stage. result_stage is the terminal verify stage (inferred or explicit). Passes all loader validation rules.",
+      "assertions": [],
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "builtin-not-workflow",
+      "prompt": "I've got a null-pointer bug in src/parser.py in my OpenMCP-registered project. Just fix it and commit the change. Set this up for me.",
+      "expected_output": "Should recognize this is a single-step task and recommend the built-in 'implement' workflow via job_submit rather than authoring a custom .openmcp/workflows YAML file. Should NOT create a multi-stage workflow file.",
+      "assertions": [],
+      "files": []
+    }
+  ]
+}
