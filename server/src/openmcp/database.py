@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from openmcp.logging_setup import get_logger
 from openmcp.models import (
     ArtifactView,
     ContextStreamView,
@@ -16,6 +17,9 @@ from openmcp.models import (
     ProjectView,
     StageView,
 )
+
+
+log = get_logger("database")
 
 
 def utc_now() -> str:
@@ -30,9 +34,14 @@ class Database:
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._migrate()
+        log.info(
+            "Database opened",
+            extra={"event": "database.opened", "database": path.as_posix()},
+        )
 
     def close(self) -> None:
         self._connection.close()
+        log.info("Database closed", extra={"event": "database.closed"})
 
     def _migrate(self) -> None:
         self._connection.executescript(
@@ -206,6 +215,10 @@ class Database:
             """
         )
         self._connection.commit()
+        log.debug(
+            "Database schema is current",
+            extra={"event": "database.migrated", "schema_version": 4},
+        )
 
     def interrupt_active_jobs(self) -> list[str]:
         now = utc_now()

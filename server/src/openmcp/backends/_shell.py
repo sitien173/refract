@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import queue
-import os
-import signal
 import shutil
 import subprocess
 import threading
 import time
 from collections.abc import Callable, Generator
+
+from openmcp.processes import (
+    prepare_command,
+    process_group_kwargs,
+    terminate_process_tree,
+)
 
 
 class ShellCommandCancelled(subprocess.SubprocessError):
@@ -32,6 +36,7 @@ def stream_shell_command_lines(
     popen_cmd = cmd.copy()
     executable_path = shutil.which(executable_name) or cmd[0]
     popen_cmd[0] = executable_path
+    popen_cmd = prepare_command(popen_cmd)
 
     popen_kwargs: dict[str, object] = {
         "shell": False,
@@ -41,7 +46,7 @@ def stream_shell_command_lines(
         "universal_newlines": True,
         "encoding": "utf-8",
         "cwd": cwd,
-        "start_new_session": os.name != "nt",
+        **process_group_kwargs(),
     }
     if errors is not None:
         popen_kwargs["errors"] = errors
@@ -50,42 +55,29 @@ def stream_shell_command_lines(
     output_queue: queue.Queue[str | None] = queue.Queue()
 
     def read_output() -> None:
-        if process.stdout:
-            for line in iter(process.stdout.readline, ""):
-                output_queue.put(line_transform(line))
-            if suppress_stdout_close_errors:
-                try:
+        try:
+            if process.stdout:
+                for line in iter(process.stdout.readline, ""):
+                    output_queue.put(line_transform(line))
+        except (OSError, ValueError):
+            # Cancellation may close the pipe while the reader is blocked.
+            pass
+        finally:
+            if process.stdout:
+                if suppress_stdout_close_errors:
+                    try:
+                        process.stdout.close()
+                    except OSError:
+                        pass
+                else:
                     process.stdout.close()
-                except OSError:
-                    pass
-            else:
-                process.stdout.close()
-        output_queue.put(None)
+            output_queue.put(None)
 
     thread = threading.Thread(target=read_output, daemon=True)
     thread.start()
-    deadline = time.time() + timeout_s if timeout_s and timeout_s > 0 else None
+    deadline = time.monotonic() + timeout_s if timeout_s and timeout_s > 0 else None
     timed_out = False
     cancelled = False
-
-    def terminate() -> None:
-        if process.poll() is not None:
-            return
-        try:
-            if os.name != "nt":
-                os.killpg(process.pid, signal.SIGTERM)
-            else:
-                process.terminate()
-            try:
-                process.wait(timeout=terminate_wait_s)
-            except subprocess.TimeoutExpired:
-                if os.name != "nt":
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
-                process.wait()
-        except OSError:
-            pass
 
     try:
         while True:
@@ -98,13 +90,13 @@ def stream_shell_command_lines(
                 if cancel_event is not None and cancel_event.is_set():
                     cancelled = True
                     break
-                if deadline is not None and time.time() > deadline:
+                if deadline is not None and time.monotonic() > deadline:
                     timed_out = True
                     break
                 if process.poll() is not None and not thread.is_alive():
                     break
     finally:
-        terminate()
+        terminate_process_tree(process, wait_s=terminate_wait_s)
         thread.join(timeout=terminate_wait_s)
 
     while not output_queue.empty():

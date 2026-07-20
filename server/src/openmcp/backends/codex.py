@@ -26,9 +26,7 @@ class CodexParams:
     PROMPT: str
     cd: Path
     SESSION_ID: str = ""
-    model: str = ""
-    profile: str = ""
-    reasoning_effort: str = ""
+    args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
 
@@ -77,7 +75,9 @@ def _same_path(left: str, right: Path) -> bool:
     try:
         return Path(left).resolve() == right.resolve()
     except OSError:
-        return Path(left).as_posix().lower() == right.as_posix().lower()
+        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+            os.path.abspath(os.fspath(right))
+        )
 
 
 def _extract_session_id_from_latest_session(cwd: Path, prompt: str, started_at: float) -> str:
@@ -181,13 +181,13 @@ def _classify(*, agent_messages: str, session_id: str, error_text: str) -> Backe
 
 def _execute_sync(params: CodexParams) -> BackendResult:
     """Execute a Codex CLI session and return normalized backend result."""
-    cd = Path(params.cd)
-    if not cd.exists():
+    cd = Path(params.cd).expanduser().absolute()
+    if not cd.is_dir():
         return BackendResult(
             outcome="FATAL",
             SESSION_ID="",
             agent_messages="",
-            error=f"The workspace root directory `{cd.absolute().as_posix()}` does not exist. Please check the path and try again.",
+            error=f"The workspace root directory `{cd}` does not exist or is not a directory. Please check the path and try again.",
             error_class="bad_cd",
         )
 
@@ -210,27 +210,14 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         "codex",
         "exec",
         "--cd",
-        str(cd),
+        os.fspath(cd),
         "--yolo",
-        "--skip-git-repo-check",
+        *params.args,
+        # JSONL and the final-message file are OpenMCP's result protocol.
         "--json",
         "-o",
         str(last_message_path),
     ]
-
-    if params.profile:
-        cmd.extend(["--profile", params.profile])
-
-    if params.model:
-        # `--model` alone may be ignored when a profile is active; `-c model=…`
-        # forces the override of the profile's model field.
-        cmd.extend(["--model", params.model])
-        if params.profile:
-            escaped_model = params.model.replace("\\", "\\\\").replace('"', '\\"')
-            cmd.extend(["-c", f'model="{escaped_model}"'])
-
-    if params.reasoning_effort:
-        cmd.extend(["-c", f"model_reasoning_effort={params.reasoning_effort}"])
 
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])
@@ -239,13 +226,11 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     cmd += ["--", params.PROMPT]
 
     log.info(
-        "codex.execute start cwd=%s model=%s profile=%s reasoning_effort=%s session_id=%s prompt_len=%d timeout_s=%s",
-        cd.absolute().as_posix(),
-        params.model,
-        params.profile,
-        params.reasoning_effort or "<off>",
+        "codex.execute start cwd=%s session_id=%s prompt_len=%d args=%d timeout_s=%s",
+        os.fspath(cd),
         params.SESSION_ID or "<new>",
         len(params.PROMPT),
+        len(params.args),
         params.timeout_s or "<off>",
     )
     log.debug("codex command prepared args=%d", len(cmd))
@@ -258,7 +243,7 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     try:
         for line in run_shell_command(
             cmd,
-            cwd=cd.absolute().as_posix(),
+            cwd=os.fspath(cd),
             timeout_s=params.timeout_s,
             cancel_event=params.cancel_event,
         ):
@@ -271,7 +256,12 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         err_message += f"\n\n[timeout] {exc}"
         timed_out = True
     except Exception as exc:  # noqa: BLE001
-        log.exception("codex: unexpected error during stream")
+        # Subprocess exception strings can contain the complete argv, including
+        # the user prompt. Keep application logs metadata-only.
+        log.error(
+            "codex: unexpected error during stream type=%s",
+            type(exc).__name__,
+        )
         err_message += f"\n\n[unexpected] {exc}"
 
     stdout_text = "\n".join(stdout_lines)
@@ -283,7 +273,10 @@ def _execute_sync(params: CodexParams) -> BackendResult:
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
             if stripped:
-                log.debug("codex: skipping non-JSON stdout line: %s", stripped)
+                log.debug(
+                    "codex: skipping non-JSON stdout line len=%d",
+                    len(stripped),
+                )
             continue
 
         item_type = parsed.get("type", "")
@@ -374,7 +367,11 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         len(result.agent_messages),
     )
     if result.error:
-        log.warning("codex.execute error_text: %s", result.error[:500])
+        log.warning(
+            "codex.execute returned error class=%s len=%d",
+            result.error_class,
+            len(result.error),
+        )
     return result
 
 

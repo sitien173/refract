@@ -337,20 +337,16 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
-notify = [
-    { name = "py-notify-system" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.21.2" },
-    { name = "py-notify-system", marker = "extra == 'notify'", git = "https://github.com/sitien173/py-notify-system.git" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pyyaml" },
 ]
-provides-extras = ["dev", "notify"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "packaging"
@@ -369,11 +365,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
 ]
-
-[[package]]
-name = "py-notify-system"
-version = "0.1.0"
-source = { git = "https://github.com/sitien173/py-notify-system.git#253418aeecde45d00b2ce00b8a2b7cf2510206c4" }
 
 [[package]]
 name = "pycparser"

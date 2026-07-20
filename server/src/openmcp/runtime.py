@@ -7,6 +7,7 @@ import json
 import random
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,7 +23,7 @@ from openmcp.config import (
 )
 from openmcp.database import Database, utc_now
 from openmcp.drivers import DriverRegistry, DriverResult
-from openmcp.logging_setup import get_logger
+from openmcp.logging_setup import get_logger, log_context
 from openmcp.models import (
     ActionResult,
     JobView,
@@ -103,9 +104,21 @@ class Runtime:
         self._target_active: dict[str, int] = {}
         self._catalog = config
         self._closing = False
+        log.debug(
+            "Runtime initialized",
+            extra={
+                "event": "runtime.initialized",
+                "database": config.database_path.as_posix(),
+                "max_jobs": config.max_jobs,
+            },
+        )
 
     async def start(self) -> None:
         self._closing = False
+        log.info(
+            "Starting scheduler",
+            extra={"event": "scheduler.starting", "workers": self.config.max_jobs},
+        )
         interrupted = self.database.interrupt_active_jobs()
         if interrupted:
             log.warning("Marked %d active records interrupted", len(interrupted))
@@ -121,12 +134,26 @@ class Runtime:
             asyncio.create_task(self._worker(), name=f"openmcp-worker-{index}")
             for index in range(self.config.max_jobs)
         ]
-        for job_id in self.database.queued_job_ids():
+        queued = self.database.queued_job_ids()
+        for job_id in queued:
             self._completion_events[job_id] = asyncio.Event()
             await self._queue.put(job_id)
+        log.info(
+            "Scheduler started",
+            extra={
+                "event": "scheduler.started",
+                "workers": len(self._workers),
+                "recovered_jobs": len(interrupted),
+                "queued_jobs": len(queued),
+            },
+        )
 
     async def close(self) -> None:
         self._closing = True
+        log.info(
+            "Stopping scheduler",
+            extra={"event": "scheduler.stopping", "active_jobs": len(self._cancel_events)},
+        )
         for event in self._cancel_events.values():
             event.set()
         for _ in self._workers:
@@ -134,6 +161,7 @@ class Runtime:
         if self._workers:
             await asyncio.gather(*self._workers, return_exceptions=True)
         self.database.close()
+        log.info("Scheduler stopped", extra={"event": "scheduler.stopped"})
 
     def register_project(self, path: str, alias: str = "") -> ProjectView:
         try:
@@ -146,13 +174,23 @@ class Runtime:
         if not resolved_alias:
             raise OrchestrationError("Project alias cannot be empty")
         try:
-            return self.database.upsert_project(
+            project = self.database.upsert_project(
                 project_id=str(uuid.uuid4()),
                 alias=resolved_alias,
                 root=state.root.as_posix(),
                 head_commit=state.head,
                 clean=state.clean,
             )
+            log.info(
+                "Project registered",
+                extra={
+                    "event": "project.registered",
+                    "project_id": project.id,
+                    "project_alias": project.alias,
+                    "project_root": project.root,
+                },
+            )
+            return project
         except sqlite3.IntegrityError as exc:
             raise OrchestrationError(
                 f"Project alias already exists: {resolved_alias}"
@@ -185,6 +223,14 @@ class Runtime:
         for file_path, content in contents.items():
             file_path.write_text(content, encoding="utf-8")
         expected = (config_path, routes_path)
+        log.info(
+            "Project configuration initialized",
+            extra={
+                "event": "project.initialized",
+                "project_root": state.root.as_posix(),
+                "created_files": len(contents),
+            },
+        )
         return ProjectInitResult(
             root=state.root.as_posix(),
             created=[
@@ -315,6 +361,18 @@ class Runtime:
             raise
         self._completion_events[job_id] = asyncio.Event()
         await self._queue.put(job_id)
+        log.info(
+            "Job queued",
+            extra={
+                "event": "job.queued",
+                "project_id": project.id,
+                "job_id": job_id,
+                "workflow": workflow.name,
+                "routing_profile": selected_profile,
+                "stage_count": len(workflow.stages),
+                "parent_job_id": parent_job_id,
+            },
+        )
         return SubmissionResult(job_id=job_id, state="queued")
 
     async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:
@@ -345,6 +403,10 @@ class Runtime:
             self.database.skip_unfinished_stages(job_id)
             self._cleanup_terminal_workspace(job_id)
             self._signal_completion(job_id)
+            log.info(
+                "Queued job cancelled",
+                extra={"event": "job.cancelled", "job_id": job_id},
+            )
             return ActionResult(success=True, job_id=job_id, state="cancelled")
         if job.state != "running":
             return ActionResult(
@@ -355,6 +417,10 @@ class Runtime:
             )
         self._cancel_events.setdefault(job_id, threading.Event()).set()
         self.database.event(job_id, "job.cancellation_requested", {})
+        log.info(
+            "Job cancellation requested",
+            extra={"event": "job.cancellation_requested", "job_id": job_id},
+        )
         return ActionResult(success=True, job_id=job_id, state="running")
 
     async def retry(self, job_id: str, from_stage: str = "") -> SubmissionResult:
@@ -451,6 +517,15 @@ class Runtime:
         self.database.reset_retry(job_id, reset_ids)
         self._completion_events[job_id] = asyncio.Event()
         await self._queue.put(job_id)
+        log.info(
+            "Job queued for retry",
+            extra={
+                "event": "job.retried",
+                "job_id": job_id,
+                "from_stage": selected_spec.id,
+                "reset_stages": sorted(reset_ids),
+            },
+        )
         return SubmissionResult(job_id=job_id, state="queued")
 
     def integrate(self, job_id: str) -> ActionResult:
@@ -492,6 +567,15 @@ class Runtime:
         except (OverlayError, WorkspaceError) as exc:
             self.database.set_job_state(job_id, "integration_conflict", error=str(exc))
             self._signal_completion(job_id)
+            log.warning(
+                "Job integration conflicted",
+                extra={
+                    "event": "job.integration_conflict",
+                    "job_id": job_id,
+                    "project_id": job.project_id,
+                    "error": str(exc),
+                },
+            )
             return ActionResult(
                 success=False,
                 job_id=job_id,
@@ -521,6 +605,15 @@ class Runtime:
                 self.database.set_job_state(current_id, "integrated")
             current_id = current.parent_job_id
         self._signal_completion(job_id)
+        log.info(
+            "Job integrated",
+            extra={
+                "event": "job.integrated",
+                "job_id": job_id,
+                "project_id": job.project_id,
+                "commit": job.result.commit,
+            },
+        )
         return ActionResult(success=True, job_id=job_id, state="integrated")
 
     @property
@@ -648,7 +741,11 @@ class Runtime:
                     continue
                 record = self.database.job_record(job_id)
                 if record is not None and record["state"] == "queued":
-                    await self._run_job(job_id)
+                    with log_context(
+                        job_id=job_id,
+                        project_id=record["project_id"],
+                    ):
+                        await self._run_job(job_id)
             except Exception as exc:
                 log.exception("Unhandled scheduler failure for job %s", job_id)
                 if job_id is not None:
@@ -660,9 +757,14 @@ class Runtime:
                 self._queue.task_done()
 
     async def _run_job(self, job_id: str) -> None:
+        started_at = time.monotonic()
         record = self.database.job_record(job_id)
         if record is None:
             return
+        log.info(
+            "Job started",
+            extra={"event": "job.started", "workflow": record["workflow"]},
+        )
         project = self.database.project(record["project_id"])
         if project is None:
             self.database.set_job_state(job_id, "failed", error="Project was removed")
@@ -762,6 +864,15 @@ class Runtime:
             self._cancel_events.pop(job_id, None)
             self._cleanup_terminal_workspace(job_id)
             self._signal_completion(job_id)
+            completed = self.database.job_record(job_id)
+            log.info(
+                "Job finished",
+                extra={
+                    "event": "job.finished",
+                    "state": completed["state"] if completed else "unknown",
+                    "duration_ms": round((time.monotonic() - started_at) * 1000, 2),
+                },
+            )
 
     async def _run_stage(
         self,
@@ -792,6 +903,16 @@ class Runtime:
             stage.id,
             "running",
             start_commit=start_commit,
+        )
+        stage_started_at = time.monotonic()
+        log.info(
+            "Stage started",
+            extra={
+                "event": "stage.started",
+                "stage_id": stage.id,
+                "stage_mode": stage.mode,
+                "fanout": stage.fanout,
+            },
         )
 
         async def run_worker(worker: int) -> dict[str, Any]:
@@ -870,6 +991,16 @@ class Runtime:
                 error=error,
             )
             self.database.set_job_state(job_id, state, error=error)
+            log.warning(
+                "Stage finished unsuccessfully",
+                extra={
+                    "event": "stage.finished",
+                    "stage_id": stage.id,
+                    "state": state,
+                    "target_ids": target_ids,
+                    "duration_ms": round((time.monotonic() - stage_started_at) * 1000, 2),
+                },
+            )
             return False
 
         commit = start_commit
@@ -903,6 +1034,16 @@ class Runtime:
             outputs=outputs,
             error="",
             commit=commit,
+        )
+        log.info(
+            "Stage succeeded",
+            extra={
+                "event": "stage.finished",
+                "stage_id": stage.id,
+                "state": "succeeded",
+                "target_ids": target_ids,
+                "duration_ms": round((time.monotonic() - stage_started_at) * 1000, 2),
+            },
         )
         return True
 
@@ -953,6 +1094,19 @@ class Runtime:
                 asyncio.Semaphore(target.max_concurrency),
             )
             self._target_active.setdefault(target_key, 0)
+            attempt_started_at = time.monotonic()
+            log.info(
+                "Target attempt started",
+                extra={
+                    "event": "target.attempt_started",
+                    "stage_id": stage.id,
+                    "target_id": target.id,
+                    "route": route.id,
+                    "attempt": attempt + 1,
+                    "timeout_s": stage.timeout_s or route.timeout_s,
+                    "resumed_session": bool(session_id),
+                },
+            )
             async with semaphore:
                 self._target_active[target_key] += 1
                 try:
@@ -963,16 +1117,29 @@ class Runtime:
                         target_id=target.id,
                         increment_attempts=True,
                     )
-                    last = await self.drivers.execute(
-                        target=target,
-                        prompt=effective_prompt,
-                        cwd=cwd,
-                        session_id=session_id,
-                        timeout_s=stage.timeout_s or route.timeout_s,
-                        cancel_event=cancel_event,
-                    )
+                    with log_context(stage_id=stage.id, target_id=target.id):
+                        last = await self.drivers.execute(
+                            target=target,
+                            prompt=effective_prompt,
+                            cwd=cwd,
+                            session_id=session_id,
+                            timeout_s=stage.timeout_s or route.timeout_s,
+                            cancel_event=cancel_event,
+                        )
                 finally:
                     self._target_active[target_key] -= 1
+            log.info(
+                "Target attempt finished",
+                extra={
+                    "event": "target.attempt_finished",
+                    "stage_id": stage.id,
+                    "target_id": target.id,
+                    "attempt": attempt + 1,
+                    "outcome": last.outcome,
+                    "error_code": last.error_code,
+                    "duration_ms": round((time.monotonic() - attempt_started_at) * 1000, 2),
+                },
+            )
             if last.outcome == "SUCCESS":
                 self.database.record_target_success(target_key)
                 self.database.append_turn(
@@ -995,9 +1162,32 @@ class Runtime:
                 circuit_open_until = (
                     datetime.now(timezone.utc) + timedelta(seconds=60)
                 ).isoformat()
-            self.database.record_target_failure(target_key, circuit_open_until)
+            failures = self.database.record_target_failure(
+                target_key,
+                circuit_open_until,
+            )
+            if circuit_open_until:
+                log.warning(
+                    "Target circuit opened",
+                    extra={
+                        "event": "target.circuit_opened",
+                        "stage_id": stage.id,
+                        "target_id": target.id,
+                        "consecutive_failures": failures,
+                        "circuit_open_until": circuit_open_until,
+                    },
+                )
             if attempt + 1 < route.max_attempts:
                 delay = min(8.0, 2.0**attempt) * random.uniform(0.8, 1.2)
+                log.info(
+                    "Retrying stage with another target",
+                    extra={
+                        "event": "target.retry_scheduled",
+                        "stage_id": stage.id,
+                        "target_id": target.id,
+                        "delay_s": round(delay, 3),
+                    },
+                )
                 await asyncio.sleep(delay)
         return last, last_target_id
 

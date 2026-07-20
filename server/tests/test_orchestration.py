@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 import sys
 import subprocess
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import openmcp.processes as processes
 from openmcp.config import (
     DaemonConfig,
     RouteConfig,
@@ -23,7 +25,8 @@ from openmcp.backends._shell import ShellCommandCancelled, stream_shell_command_
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
 from openmcp.models import JobView, StageView
-from openmcp.planning import resolve_execution_plan
+from openmcp.overlays import OverlayError, load_overlay_rules
+from openmcp.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
 from openmcp.runtime import Runtime
 from openmcp.workflows import (
     load_workflow,
@@ -81,6 +84,7 @@ class FakeDrivers:
         self.mutate = mutate
         self.sessions: list[str] = []
         self.backends: list[str] = []
+        self.targets: list[TargetConfig] = []
 
     @staticmethod
     def available(target) -> bool:
@@ -89,6 +93,7 @@ class FakeDrivers:
     async def execute(self, *, target, cwd, session_id, **kwargs) -> DriverResult:
         self.sessions.append(session_id)
         self.backends.append(target.backend)
+        self.targets.append(target)
         outcome = self.outcomes.get(target.id, "SUCCESS")
         if outcome == "SUCCESS" and self.mutate:
             (cwd / "result.txt").write_text(f"created by {target.id}\n", encoding="utf-8")
@@ -267,6 +272,19 @@ workflows = ["write"]
     return root
 
 
+def test_overlay_patterns_reject_platform_specific_paths(tmp_path) -> None:
+    config = tmp_path / ".openmcp.local.toml"
+    for pattern in ("C:/secrets/**", "config\\secrets\\**", "config/file:stream"):
+        config.write_text(
+            "[[overlays]]\n"
+            f"include = [{pattern!r}]\n"
+            "workflows = [\"write\"]\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(OverlayError):
+            load_overlay_rules(tmp_path, "write")
+
+
 def test_workflow_rejects_parallel_write_stages() -> None:
     with pytest.raises(ValueError, match="must be ordered"):
         parse_workflow(
@@ -400,7 +418,13 @@ def test_new_role_resolves_without_workflow_parser_changes(tmp_path) -> None:
     )
     config = DaemonConfig(
         home=tmp_path,
-        targets=(TargetConfig(id="analyst-primary", backend="pi"),),
+        targets=(
+            TargetConfig(
+                id="analyst-primary",
+                backend="pi",
+                args=("--provider", "openai", "--offline"),
+            ),
+        ),
         routes=(RouteConfig(id="analysis", targets=("analyst-primary",)),),
         routing_profiles={"balanced": {"analyst": "analysis"}},
     )
@@ -409,6 +433,10 @@ def test_new_role_resolves_without_workflow_parser_changes(tmp_path) -> None:
 
     assert plan.route("analyst").id == "analysis"
     assert plan.target("analyst-primary").backend == "pi"
+    restored = parse_execution_plan(execution_plan_data(plan))
+    assert restored.target("analyst-primary").args == (
+        "--provider", "openai", "--offline",
+    )
 
 
 def test_task_route_template_prefers_project_then_global(tmp_path) -> None:
@@ -503,6 +531,7 @@ default_routing_profile = "quality"
 [[targets]]
 id = "premium"
 backend = "codex"
+args = ["--ephemeral", "--color", "never"]
 capabilities = ["code"]
 
 [[routes]]
@@ -518,9 +547,49 @@ forge = "forge-quality"
     config = load_config(path)
 
     assert config.default_routing_profile == "quality"
+    assert config.targets[0].args == ("--ephemeral", "--color", "never")
     assert config.routing_profiles == {
         "quality": {"forge": "forge-quality"},
     }
+
+
+@pytest.mark.parametrize(
+    ("backend", "arg", "error"),
+    [
+        ("agy", "--", "reserved '--' token"),
+        ("pi", "--", "reserved '--' token"),
+        ("codex", "--cd", "workspace root"),
+        ("codex", "--cd=D:/other", "workspace root"),
+        ("codex", "-C", "workspace root"),
+        ("codex", "-CD:/other", "workspace root"),
+    ],
+)
+def test_config_rejects_reserved_target_args(tmp_path, backend, arg, error) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f'''\n[[targets]]\nid = "unsafe"\nbackend = "{backend}"\nargs = ["{arg}"]\n''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=error):
+        load_config(path)
+
+
+def test_config_rejects_resource_loading_args_for_isolated_pi(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[[targets]]
+id = "unsafe-reviewer"
+backend = "pi"
+isolated = true
+args = ["--extension", "reviewer.ts"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Isolated Pi target"):
+        load_config(path)
 
 
 def test_project_config_overlays_routes_and_profiles(tmp_path) -> None:
@@ -852,7 +921,67 @@ def test_job_views_return_result_stage_text_once(tmp_path) -> None:
     database.close()
 
 
-def test_shell_command_cancellation_terminates_process_group() -> None:
+def test_windows_cleanup_attempts_tree_kill_after_launcher_exit(monkeypatch) -> None:
+    calls: list[tuple[int, bool]] = []
+
+    class ExitedProcess:
+        pid = 12345
+
+        @staticmethod
+        def send_signal(_signal) -> None:
+            return
+
+        @staticmethod
+        def wait(*, timeout) -> int:
+            return 0
+
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+    monkeypatch.setattr(
+        processes,
+        "_taskkill",
+        lambda process_id, *, force, timeout_s: calls.append((process_id, force)),
+    )
+
+    processes._terminate_windows(ExitedProcess(), 1)
+
+    assert calls == [(12345, False)]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows launcher behavior")
+def test_shell_command_uses_safe_npm_powershell_shim(tmp_path) -> None:
+    command = tmp_path / "agent.cmd"
+    command.write_text("@echo unsafe & whoami\n", encoding="utf-8")
+    command.with_suffix(".ps1").write_text(
+        "$args | ForEach-Object { Write-Output $_ }\n",
+        encoding="utf-8",
+    )
+
+    output = list(
+        stream_shell_command_lines(
+            [os.fspath(command), "hello&whoami", "100%PATH%"],
+            executable_name=os.fspath(command),
+            line_transform=lambda line: line.rstrip("\r\n"),
+            terminate_wait_s=1,
+        )
+    )
+
+    assert output == ["hello&whoami", "100%PATH%"]
+
+
+def test_shell_command_cancellation_terminates_process_group(tmp_path) -> None:
+    child_marker = tmp_path / "leaked-child.txt"
+    child_code = (
+        "import pathlib,time; time.sleep(1); "
+        f"pathlib.Path({str(child_marker)!r}).write_text('leaked', encoding='utf-8')"
+    )
+    parent_code = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
+        "time.sleep(30)"
+    )
     cancelled = threading.Event()
     timer = threading.Timer(0.2, cancelled.set)
     timer.start()
@@ -861,7 +990,7 @@ def test_shell_command_cancellation_terminates_process_group() -> None:
         with pytest.raises(ShellCommandCancelled):
             list(
                 stream_shell_command_lines(
-                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                    [sys.executable, "-c", parent_code],
                     executable_name=sys.executable,
                     line_transform=str.strip,
                     terminate_wait_s=1,
@@ -871,6 +1000,8 @@ def test_shell_command_cancellation_terminates_process_group() -> None:
     finally:
         timer.cancel()
     assert time.monotonic() - started < 3
+    time.sleep(1)
+    assert not child_marker.exists()
 
 
 @pytest.mark.asyncio
@@ -1266,8 +1397,20 @@ async def test_route_fails_over_and_preserves_context_session(tmp_path) -> None:
 async def test_job_selects_configured_routing_profile(tmp_path) -> None:
     root = _repository(tmp_path)
     targets = (
-        TargetConfig(id="economy", backend="codex"),
-        TargetConfig(id="premium", backend="codex"),
+        TargetConfig(
+            id="economy",
+            backend="codex",
+            model="economy-model",
+            profile="economy-profile",
+            reasoning="low",
+        ),
+        TargetConfig(
+            id="premium",
+            backend="codex",
+            model="quality-model",
+            profile="quality-profile",
+            reasoning="high",
+        ),
     )
     config = DaemonConfig(
         home=tmp_path / "home",
@@ -1283,7 +1426,8 @@ async def test_job_selects_configured_routing_profile(tmp_path) -> None:
         default_routing_profile="cost",
     )
     runtime = Runtime(config)
-    runtime.drivers = FakeDrivers()
+    drivers = FakeDrivers()
+    runtime.drivers = drivers
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
@@ -1297,6 +1441,7 @@ async def test_job_selects_configured_routing_profile(tmp_path) -> None:
 
         assert job.routing_profile == "quality"
         assert job.stages[0].target_id == "premium"
+        assert drivers.targets[-1] == targets[1]
     finally:
         await runtime.close()
 

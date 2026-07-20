@@ -13,13 +13,36 @@ OpenMCP is a local coding-agent orchestration daemon.
 - Chained review and fix jobs
 - Explicit guarded integration
 
-## Installation
+## Architecture
 
-OpenMCP requires Python 3.12 or newer.
+The package is organized by responsibility rather than provider or transport:
+
+- `server.py` exposes MCP tools, resources, and the daemon lifecycle.
+- `runtime.py` coordinates durable jobs, workflows, routing, and worktrees.
+- `database.py`, `workspaces.py`, and `overlays.py` provide persistence and
+  filesystem adapters.
+- `backends/` contains provider-specific CLI adapters; `drivers.py` normalizes
+  them for durable jobs. `processes.py` owns portable process-group creation and
+  whole-tree cancellation.
+- `backend_runner.py` supports the legacy direct Python invocation API.
+
+## Platform support and installation
+
+OpenMCP supports Windows, macOS, and Linux with Python 3.12 or newer. Git and at
+least one configured backend CLI (`agy`, `codex`, or `pi`) must be on `PATH`.
+Backend executables may be native programs, shell launchers, or Windows npm
+`.cmd` launchers. On Windows, the standard matching npm `.ps1` shim and
+PowerShell are required so prompt arguments bypass `cmd.exe` expansion.
 
 ```bash
 uv sync --all-extras
+uv run openmcp doctor
 ```
+
+Paths are passed to child processes in the operating system's native form.
+Overlay configuration and persisted relative paths always use `/`, so project
+configuration remains portable. Set `OPENMCP_HOME` to move daemon state; both
+`~/...` and native absolute paths are accepted.
 
 ## Running
 
@@ -28,32 +51,49 @@ uv run openmcp doctor
 uv run openmcp serve
 ```
 
-The default endpoint is `http://127.0.0.1:8765/mcp`.
+The default endpoint is `http://127.0.0.1:8765/mcp`. Override the configured
+listener for one invocation with `uv run openmcp serve --host HOST --port PORT`.
+The daemon remains loopback-bound unless you explicitly change the host.
 
 ## MCP contract
 
 Tools:
 
-- `project_init`
-- `project_register`
-- `task_route`
-- `job_submit`
-- `job_wait`
-- `job_cancel`
-- `job_retry`
-- `job_integrate`
+- `project_init(path)` creates missing project configuration files without
+  overwriting existing files.
+- `project_register(path, alias)` registers a clean Git project.
+- `task_route(task, project_id)` loads the project task-route template.
+- `job_submit(project_id, workflow, inputs, context_key, parent_job_id,
+  routing_profile)` queues a durable workflow.
+- `job_wait(job_id, timeout_s, include_stage_outputs)` waits for completion and
+  returns compact stage metadata by default.
+- `job_cancel(job_id)` cancels queued or running work.
+- `job_retry(job_id, from_stage)` retries failed, cancelled, or interrupted
+  work.
+- `job_integrate(job_id)` explicitly fast-forwards a successful job into the
+  registered project.
 
-Workflow permissions:
+Built-in workflows:
 
-- `read`
-- `write`
+- `read` — inspect without committing project changes.
+- `write` — make changes in an isolated worktree and, when needed, produce a
+  commit.
 
-Resources include projects, jobs, contexts, models, workflows, global routing
-profiles, and effective project routing profiles.
+Resources include:
+
+- `openmcp://projects` and `openmcp://projects/{project_id}`
+- `openmcp://projects/{project_id}/jobs`
+- `openmcp://jobs/{job_id}` and `openmcp://jobs/{job_id}/events`
+- `openmcp://contexts/{project_id}/{context_key}`
+- `openmcp://models`
+- `openmcp://routing-profiles`
+- `openmcp://projects/{project_id}/routing-profiles`
+- `openmcp://workflows/{project_id}`
 
 `task_route` loads task-route definitions for the supplied task. With
 `project_id`, it prefers `.openmcp/task_routes.json`. Otherwise, it loads
-`~/.openmcp/task_routes.json`. The coordinator performs all classification.
+`~/.openmcp/task_routes.json`. OpenMCP returns the template; the coordinator
+performs classification and chooses the agent names from it.
 
 ```json
 {
@@ -108,10 +148,28 @@ history_turns = 8
 history_bytes = 65536
 default_routing_profile = "balanced"
 
+[logging]
+level = "INFO"
+format = "json"
+file = "openmcp.log"
+console = false
+max_bytes = 10485760
+backup_count = 5
+capture_warnings = true
+
 [[targets]]
 id = "forge-primary"
 backend = "codex"
 profile = "mcp_execution"
+args = ["--color", "never"]
+capabilities = ["code"]
+
+[[targets]]
+id = "forge-quality"
+backend = "codex"
+model = "gpt-5.5"
+profile = "mcp_execution"
+reasoning = "high"
 capabilities = ["code"]
 
 [[targets]]
@@ -145,6 +203,11 @@ requires = ["code"]
 targets = ["forge-primary"]
 
 [[routes]]
+id = "forge-quality"
+requires = ["code"]
+targets = ["forge-quality"]
+
+[[routes]]
 id = "canvas"
 requires = ["code"]
 targets = ["canvas-primary"]
@@ -174,20 +237,80 @@ sage = "sage"
 sentinel = "sentinel"
 
 [routing_profiles.quality]
-default = "forge"
-forge = "forge"
+default = "forge-quality"
+forge = "forge-quality"
 canvas = "canvas"
 sage = "sage"
 sentinel = "sentinel"
 ```
 
-Profiles map logical roles onto route IDs. Routes then select targets, retry
-limits, and timeouts. Add distinct targets and routes for meaningful cost,
-quality, latency, or offline policies.
+Profiles map logical roles onto route IDs, and routes select targets. Backend
+execution configuration belongs to each target: `backend`, `model`, `profile`,
+`reasoning`, `system_prompt`, `isolated`, `read_only`, and backend-specific
+`args`. Each `args` item is passed as one argv token without shell parsing. This
+keeps profile selection declarative without duplicating provider settings in
+profile tables. See [the researched non-interactive CLI argument
+reference](CLI_ARGUMENTS.md) for the available Agy, Codex, and Pi flags,
+OpenMCP-owned transport options, and Windows behavior.
+For example, the `quality` profile above selects `forge-quality`, including its
+model, Codex profile, and reasoning effort.
 
-Targets, routes, and profiles reload before each submission. Submitted jobs
-retain an immutable routing snapshot. Later configuration changes affect only
-new jobs. Host, port, and worker settings still require a restart.
+A target also accepts `max_concurrency` (default `1`) and `priority` (lower
+values are preferred). Routes own `requires`, target pools, `max_attempts`
+(default `2`), and `timeout_s` (`0` disables the route timeout). Add distinct
+targets and routes for meaningful cost, quality, latency, or offline policies.
+
+Never place API keys or credentials in target `args`; targets are persisted in
+immutable execution-plan snapshots. Use backend credential stores or
+environment variables. Target arguments are individual argv tokens, not shell
+syntax. OpenMCP rejects the `--` terminator for every backend, Codex workspace
+root overrides (`--cd`/`-C`), and resource-loading options on isolated Pi
+targets. See [the CLI argument reference](CLI_ARGUMENTS.md) for the complete
+transport boundary and policy-ordering rules.
+
+Targets, routes, profiles, and backend CLI arguments reload before each
+submission. Submitted jobs retain an immutable routing snapshot, including the
+selected target arguments and policy. Later configuration changes affect only
+new jobs; a changed backend also starts a new context lane rather than reusing a
+session created by the old target. Host, port, worker, and logging settings require a restart.
+
+## Application logging
+
+OpenMCP writes application logs to `~/.openmcp/openmcp.log` by default. Logging
+is asynchronous, UTF-8 encoded, size-rotated, and retained according to
+`max_bytes` and `backup_count`. Timestamps are UTC. While the file sink is
+enabled, native crash traces are written beside it (by default
+`~/.openmcp/openmcp.crash.log`) when Python's fault handler is not already owned
+by the host process. Disabling the file sink also disables this crash-trace file.
+
+Use `[logging]` in `config.toml` to select `text` or newline-delimited `json`.
+Relative TOML `file` paths and relative `OPENMCP_LOG_FILE` values resolve under
+`OPENMCP_HOME`; set `file = false` to disable the file sink. If the file cannot
+be opened, OpenMCP falls back to stderr. `console = true` mirrors application
+logs to stderr. OpenMCP always keeps at least one application-log sink: when the
+file sink is disabled and `console` is false, stderr is enabled as the fallback.
+JSON records include event names, durations, process/thread metadata, and
+available project, job, stage,
+and target correlation IDs. Prompts and model responses are not included in
+application logs; they remain in the durable job data and transcript artifacts.
+Common credential forms are redacted as defense in depth, but credentials must
+never be placed in configuration or prompts solely in reliance on redaction.
+
+Environment variables override `[logging]`:
+
+- `OPENMCP_LOG_LEVEL`
+- `OPENMCP_LOG_FORMAT` (`text` or `json`)
+- `OPENMCP_LOG_FILE` (`-`, `off`, or `none` disables it)
+- `OPENMCP_LOG_CONSOLE`
+- `OPENMCP_LOG_MAX_BYTES`
+- `OPENMCP_LOG_BACKUP_COUNT`
+- `OPENMCP_LOG_CAPTURE_WARNINGS`
+
+Boolean environment values accept `true`/`false`, `yes`/`no`, `on`/`off`, or
+`1`/`0`. One-run overrides are also available on `openmcp serve`:
+`--log-level`, `--log-format`, `--log-file`, and
+`--log-console`/`--no-log-console`. `openmcp doctor` reports the resolved sink,
+format, and level without writing credentials.
 
 ## Project configuration
 
@@ -251,26 +374,89 @@ private keys through overlays. Use environment variables for secrets.
 
 ## Pi isolation
 
-Isolated Pi targets replace the default system prompt. They also pass:
+Isolated Pi targets use the configured `system_prompt` and disable ambient
+project resources. They pass:
 
 - `--no-context-files`
 - `--no-extensions`
 - `--no-skills`
 - `--no-prompt-templates`
 - `--no-approve`
-- `--tools read,grep,find,ls`
 
-Pi runs non-interactively through `--mode json`. Models and system prompts
-remain configurable per target.
+Read-only Pi targets additionally pass only `--tools read,grep,find,ls`.
+Normal Pi targets receive `--approve` after configurable target arguments so a
+normal target cannot turn off the daemon's approval policy. Pi runs
+non-interactively through `--mode json`, which OpenMCP places after target
+arguments.
 
 ## Custom workflows
 
 Store workflows under `.openmcp/workflows/*.yaml`. Stage routes use logical role
 names. The selected routing profile resolves them at submission time.
 
+```yaml
+version: 1
+name: review-and-fix
+inputs:
+  prompt:
+    type: string
+    required: true
+  commit_message:
+    type: string
+stages:
+  review:
+    mode: read
+    route: sentinel
+    context: reviewer
+    prompt: "Review this request: ${inputs.prompt}"
+  fix:
+    mode: write
+    route: forge
+    needs: [review]
+    prompt: |
+      Implement ${inputs.prompt}
+      Review findings:\n${stages.review.text}
+result_stage: fix
+```
+
+Inputs support `string`, `integer`, `number`, `boolean`, `object`, and `array`.
+Prompts may reference `${inputs.name}`, `${project.root}`, and outputs from a
+dependency as `${stages.stage.text}`, `${stages.stage.outputs}`, or
+`${stages.stage.commit}`. A read stage may set `fanout` from `1` through `16`.
+
 Write stages must form one ordered chain. Read stages may run concurrently.
 Single-terminal workflows infer their result stage. Workflows with multiple
 terminal stages must set a top-level `result_stage`.
+
+## Direct Python compatibility API
+
+Existing Python callers can invoke one backend directly. New integrations should
+use durable MCP jobs instead.
+
+```python
+from openmcp.server import run
+
+result = await run(
+    "codex",
+    "Summarize the current repository.",
+    "/absolute/path/to/project",
+    timeout_s=120,
+)
+```
+
+`run` supports `agy`, `codex`, and `pi`; optional `SESSION_ID` and `timeout_s`
+arguments; and returns `success`, `SESSION_ID`, `agent_messages`, and `error`.
+Pass an absolute working directory to avoid resolving a relative path against
+the host process.
+
+Direct runs do not load target execution configuration, environment defaults,
+`.env` files, or MCP-client configuration. They leave model, profile, reasoning,
+and other harness settings at the CLI's own defaults. OpenMCP always enables
+each harness's non-interactive approval mode: Agy
+`--dangerously-skip-permissions`, Codex `--yolo`, and Pi `--approve`. For
+durable jobs, configure all other execution settings on targets selected by
+routing profiles in `~/.openmcp/config.toml`. The driver compiles target fields
+into backend argv before invoking the transport-only backend.
 
 ## Isolation model
 
@@ -295,6 +481,8 @@ contained.
 
 ```text
 ~/.openmcp/openmcp.db
+~/.openmcp/openmcp.log
+~/.openmcp/openmcp.crash.log
 ~/.openmcp/runs/
 ~/.openmcp/worktrees/
 ```
@@ -306,3 +494,8 @@ uv run pytest
 uv run pytest -m live
 uv build
 ```
+
+The default suite is platform-independent and runs in CI on Windows, macOS,
+and Linux. Live tests additionally require the provider CLIs and credentials.
+Run `uv run openmcp doctor` to inspect Git and each configured target
+executable before starting the daemon.

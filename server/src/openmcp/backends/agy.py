@@ -33,53 +33,9 @@ class AgyParams:
     PROMPT: str
     cd: Path
     SESSION_ID: str = ""
-    model: str = ""
+    args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
-
-
-_VALID_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
-
-_AGY_GEMINI_MODEL_NAME_BY_ID = {
-    "gemini-3.5-flash": "Gemini 3.5 Flash (Medium)",
-    "gemini-3.5-flash-high": "Gemini 3.5 Flash (High)",
-    "gemini-3.5-flash-low": "Gemini 3.5 Flash (Low)",
-    "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)",
-    "gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",
-}
-_AGY_SUPPORTED_MODEL_NAMES = frozenset(_AGY_GEMINI_MODEL_NAME_BY_ID.values())
-
-
-def _is_valid_agy_model_id(model: str) -> bool:
-    """Reject display names ('Gemini 3.5 Flash (High)') and accept model ids."""
-    return bool(model) and bool(_VALID_MODEL_ID_RE.match(model.strip()))
-
-
-def _resolve_agy_model(model: str) -> str:
-    """Resolve an incoming model value to an Antigravity CLI display name."""
-    normalized = model.strip()
-    if not normalized:
-        return ""
-
-    mapped_name = _AGY_GEMINI_MODEL_NAME_BY_ID.get(normalized.lower())
-    if mapped_name:
-        return mapped_name
-
-    if normalized in _AGY_SUPPORTED_MODEL_NAMES:
-        return normalized
-
-    if _is_valid_agy_model_id(normalized):
-        log.warning(
-            "agy: unsupported Gemini model id %r; using agy's configured default instead",
-            model,
-        )
-        return ""
-
-    log.warning(
-        "agy: unsupported model name %r; using agy's configured default instead",
-        model,
-    )
-    return ""
 
 
 _UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
@@ -165,13 +121,13 @@ def _classify_output(agent_messages: str, session_id: str, error_text: str) -> B
 
 def _execute_once(params: AgyParams) -> BackendResult:
     """Execute one agy CLI session and return normalized backend result."""
-    cd = Path(params.cd)
-    if not cd.exists():
+    cd = Path(params.cd).expanduser().absolute()
+    if not cd.is_dir():
         return BackendResult(
             outcome="FATAL",
             SESSION_ID="",
             agent_messages="",
-            error=f"The workspace root directory `{cd.absolute().as_posix()}` does not exist. Please check the path and try again.",
+            error=f"The workspace root directory `{cd}` does not exist or is not a directory. Please check the path and try again.",
             error_class="bad_cd",
         )
 
@@ -185,19 +141,18 @@ def _execute_once(params: AgyParams) -> BackendResult:
             error_class="missing_cli",
         )
 
-    cwd = cd.absolute().as_posix()
+    cwd = os.fspath(cd)
     error_text = ""
     execution_error = False
     agent_messages = ""
     log_text = ""
 
-    resolved_model = _resolve_agy_model(params.model)
     log.info(
-        "agy.execute start cwd=%s model=%s session_id=%s prompt_len=%d",
+        "agy.execute start cwd=%s session_id=%s prompt_len=%d args=%d",
         cwd,
-        resolved_model or "<default>",
         params.SESSION_ID or "<new>",
         len(params.PROMPT),
+        len(params.args),
     )
 
     try:
@@ -205,15 +160,17 @@ def _execute_once(params: AgyParams) -> BackendResult:
             tmp_log_path = tmp.name
         try:
             cmd = [
-                "agy", "--print", params.PROMPT,
+                "agy",
                 "--dangerously-skip-permissions",
-                "--add-dir", cwd,
-                "--log-file", tmp_log_path,
+                *params.args,
+                "--log-file",
+                tmp_log_path,
             ]
-            if resolved_model:
-                cmd.extend(["--model", resolved_model])
             if params.SESSION_ID:
                 cmd.extend(["--conversation", params.SESSION_ID])
+            # Keep OpenMCP-owned transport arguments after target arguments:
+            # callers may tune the CLI, but cannot replace the prompt or log.
+            cmd.extend(["--print", params.PROMPT])
             stdout_lines = list(
                 run_shell_command(
                     cmd,
@@ -245,7 +202,8 @@ def _execute_once(params: AgyParams) -> BackendResult:
         log.warning("agy subprocess timeout after %ss", params.timeout_s)
         error_text = f"timeout: {exc}"
     except Exception as exc:  # noqa: BLE001
-        log.exception("agy: unexpected error during run")
+        # A subprocess exception may embed argv and therefore the prompt.
+        log.error("agy: unexpected error during run type=%s", type(exc).__name__)
         error_text = str(exc)
         execution_error = True
 
@@ -283,21 +241,10 @@ def _execute_once(params: AgyParams) -> BackendResult:
         len(result.agent_messages),
     )
     if result.error:
-        log.warning("agy.execute error_text: %s", result.error[:500])
-    if result.outcome == "FATAL" and result.error_class == "no_agent_messages" and resolved_model:
         log.warning(
-            "agy: model override %r produced no output; trying once with agy's configured default model",
-            params.model,
-        )
-        return _execute_once(
-            AgyParams(
-                PROMPT=params.PROMPT,
-                cd=cd,
-                SESSION_ID=result.SESSION_ID or params.SESSION_ID,
-                model="",
-                timeout_s=params.timeout_s,
-                cancel_event=params.cancel_event,
-            )
+            "agy.execute returned error class=%s len=%d",
+            result.error_class,
+            len(result.error),
         )
     return result
 
@@ -321,7 +268,7 @@ def _execute_sync(params: AgyParams) -> BackendResult:
                 PROMPT=_CONTINUE_PROMPT,
                 cd=Path(params.cd),
                 SESSION_ID=session_id,
-                model=params.model,
+                args=params.args,
                 timeout_s=params.timeout_s,
                 cancel_event=params.cancel_event,
             )

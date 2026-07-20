@@ -1,21 +1,27 @@
-"""Unified FastMCP server surface for agy, codex, and Pi backends."""
+"""FastMCP daemon surface and direct-run compatibility facade."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
+import time
 from contextlib import asynccontextmanager
+from functools import wraps
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, Literal, cast
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal, ParamSpec, TypeVar, cast
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from openmcp.backends.agy import AgyParams, execute as agy_execute
-from openmcp.backends.codex import CodexParams, execute as codex_execute
-from openmcp.backends.pi import PiParams, execute as pi_execute
-from openmcp.logging_setup import configure as configure_logging, get_logger
+from openmcp.backend_runner import run as _run_backend
+from openmcp.backends.agy import execute as agy_execute
+from openmcp.backends.codex import execute as codex_execute
+from openmcp.backends.pi import execute as pi_execute
 from openmcp.config import load_config, load_task_routes
+from openmcp.logging_setup import (
+    configure as configure_logging,
+    get_logger,
+    log_context,
+)
 from openmcp.models import (
     ActionResult,
     JobView,
@@ -24,13 +30,12 @@ from openmcp.models import (
     SubmissionResult,
     TaskRouteResult,
 )
-from openmcp.notify import emit_error, emit_finish, emit_start
 from openmcp.runtime import Runtime
 
-configure_logging()
 log = get_logger("server")
 
 _DAEMON_CONFIG = load_config()
+configure_logging(_DAEMON_CONFIG.logging)
 _ACTIVE_RUNTIME: Runtime | None = None
 
 
@@ -38,13 +43,25 @@ _ACTIVE_RUNTIME: Runtime | None = None
 async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
     global _ACTIVE_RUNTIME
     runtime = Runtime(_DAEMON_CONFIG)
+    log.info(
+        "Starting OpenMCP daemon",
+        extra={
+            "event": "daemon.starting",
+            "host": _DAEMON_CONFIG.host,
+            "port": _DAEMON_CONFIG.port,
+            "max_jobs": _DAEMON_CONFIG.max_jobs,
+        },
+    )
     await runtime.start()
     _ACTIVE_RUNTIME = runtime
+    log.info("OpenMCP daemon ready", extra={"event": "daemon.ready"})
     try:
         yield runtime
     finally:
+        log.info("Stopping OpenMCP daemon", extra={"event": "daemon.stopping"})
         _ACTIVE_RUNTIME = None
         await runtime.close()
+        log.info("OpenMCP daemon stopped", extra={"event": "daemon.stopped"})
 
 
 mcp = FastMCP(
@@ -56,290 +73,30 @@ mcp = FastMCP(
     lifespan=_lifespan,
 )
 
-_ENV_CODEX_MODEL_DEFAULT = "OPENMCP_CODEX_MODEL_DEFAULT"
-_ENV_CODEX_PROFILE_DEFAULT = "OPENMCP_CODEX_PROFILE_DEFAULT"
-_ENV_AGY_REASONING_MODEL = "OPENMCP_AGY_REASONING_MODEL"
-_ENV_CODEX_REASONING_MODEL = "OPENMCP_CODEX_REASONING_MODEL"
-_ENV_PI_MODEL_DEFAULT = "OPENMCP_PI_MODEL_DEFAULT"
-
-_REASONING_MODEL_DEFAULTS: Dict[str, str] = {
-    "agy": "gemini-3.5-flash",
-    "codex": "gpt-5.5",
-}
-_REASONING_MODEL_ENV: Dict[str, str] = {
-    "agy": _ENV_AGY_REASONING_MODEL,
-    "codex": _ENV_CODEX_REASONING_MODEL,
-}
-_PLUGIN_CONFIG_FILES = ("mcp_config.json", ".mcp.json", "mcp.json")
-
-
-def _openmcp_env_file() -> Path:
-    return Path.home() / ".openmcp" / ".env"
-
-
-def _load_plugin_env() -> Dict[str, str]:
-    # The MCP host's current directory is its local configuration boundary;
-    # these values may contain credentials and must never be logged.
-    plugin_env: Dict[str, str] = {}
-    for config_name in _PLUGIN_CONFIG_FILES:
-        config_path = Path.cwd() / config_name
-        if not config_path.exists():
-            continue
-        try:
-            config = json.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            log.warning("Failed to read plugin config %s: %s", config_path.as_posix(), exc)
-            continue
-        server_env = (
-            config.get("mcpServers", {})
-            .get("openmcp", {})
-            .get("env", {})
-        )
-        if not isinstance(server_env, dict):
-            continue
-        for key, value in server_env.items():
-            if value is None:
-                continue
-            plugin_env[str(key)] = str(value)
-    return plugin_env
-
-
-def _load_openmcp_dotenv() -> Dict[str, str]:
-    values: Dict[str, str] = {}
-    try:
-        lines = _openmcp_env_file().read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return values
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key:
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1]
-        values[key] = value
-    return values
-
-
-def _effective_env() -> Dict[str, str]:
-    # Precedence: process env > ~/.openmcp/.env > plugin config env.
-    env = _load_plugin_env()
-    env.update(_load_openmcp_dotenv())
-    env.update(os.environ)
-    return env
-
-
-def _env_truthy(name: str, env: Dict[str, str]) -> bool:
-    return env.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _reasoning_model(backend: str, env: Dict[str, str]) -> str:
-    return env.get(_REASONING_MODEL_ENV[backend], "") or _REASONING_MODEL_DEFAULTS[backend]
-
-
-def _resolve_model(
-    backend: Literal["agy", "codex", "pi"],
-    model: str,
-    reasoning: str,
-    env: Dict[str, str],
-) -> str:
-    if model:
-        return model
-    if reasoning:
-        if backend == "agy":
-            base = _reasoning_model("agy", env)
-            # bare model id (no suffix) corresponds to Medium; preserve that
-            return base if reasoning == "medium" else f"{base}-{reasoning}"
-        if backend == "codex":
-            return _reasoning_model("codex", env)
-        return env.get(_ENV_PI_MODEL_DEFAULT, "")
-    if backend == "agy":
-        return ""
-    if backend == "pi":
-        return env.get(_ENV_PI_MODEL_DEFAULT, "")
-    return env.get(_ENV_CODEX_MODEL_DEFAULT, "")
-
-
-def _resolve_profile(profile: str, env: Dict[str, str]) -> str:
-    if profile:
-        return profile
-    return env.get(_ENV_CODEX_PROFILE_DEFAULT, "mcp_execution")
-
-
-def _validate_cd(cd: Any) -> Path | None:
-    if cd is None:
-        return None
-    if isinstance(cd, Path):
-        return cd if str(cd) else None
-    cd_str = str(cd).strip()
-    if not cd_str:
-        return None
-    path = Path(cd_str)
-    if not path.is_absolute():
-        log.warning(
-            "run(): cd=%r is not absolute; resolving against current working directory. "
-            "Pass an absolute path to avoid this.", cd_str,
-        )
-    return path
-
 
 async def run(
     backend: Literal["agy", "codex", "pi"],
     PROMPT: str,
     cd: str,
     SESSION_ID: str = "",
-    model: str = "",
-    profile: str = "",
-    reasoning: Literal["", "low", "medium", "high"] = "",
     timeout_s: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
+    """Run one backend through the legacy direct-invocation compatibility API.
+
+    New orchestration should use the durable MCP job tools. This facade keeps
+    existing Python callers stable while delegating execution to
+    :mod:`openmcp.backend_runner`.
     """
-    Run a backend agent.
-
-    Args:
-        backend: Backend to run.
-        PROMPT: Prompt to execute.
-        cd: Working directory for execution (must be an absolute path).
-        SESSION_ID: Session ID to reuse. Leave empty to start a new session.
-        model: Model to use. Leave empty to use the backend default.
-        profile: Codex profile to use. When combined with model, the model
-            argument overrides the profile's model field. Ignored by Pi.
-        reasoning: Reasoning effort. Pi maps this to its --thinking level.
-        timeout_s: Overall subprocess timeout in seconds (0 = no timeout / backend default).
-    """
-
-    cd_path = _validate_cd(cd)
-    if cd_path is None:
-        return {
-            "success": False,
-            "SESSION_ID": SESSION_ID or "",
-            "agent_messages": "",
-            "error": f"cd must be a non-empty absolute path; got {cd!r}",
-        }
-    effective_env = _effective_env()
-    resolved_model = _resolve_model(backend, model, reasoning, effective_env)
-    resolved_profile = "" if reasoning else _resolve_profile(profile, effective_env)
-    if backend != "codex":
-        resolved_profile = ""
-    codex_model = resolved_model
-    if backend == "codex" and profile and model:
-        log.info(
-            "codex: profile=%r and model=%r both provided; model overrides the profile's model",
-            profile, model,
-        )
-    if backend == "codex" and profile and reasoning:
-        log.warning(
-            "codex: profile=%r and reasoning=%r both provided; profile is ignored "
-            "(reasoning takes precedence and selects its own model)",
-            profile, reasoning,
-        )
-    log.info(
-        "run() backend=%s session_id=%s model=%s profile=%s reasoning=%s timeout_s=%s",
-        backend, SESSION_ID or "<new>",
-        codex_model if backend == "codex" else resolved_model,
-        resolved_profile, reasoning or "<off>", timeout_s or "<off>",
+    return await _run_backend(
+        backend,
+        PROMPT,
+        cd,
+        SESSION_ID,
+        timeout_s,
+        agy_executor=agy_execute,
+        codex_executor=codex_execute,
+        pi_executor=pi_execute,
     )
-    try:
-        await emit_start(
-            backend=backend,
-            session_id=SESSION_ID,
-            model=resolved_model,
-        )
-        if backend == "agy":
-            params = AgyParams(
-                PROMPT=PROMPT,
-                cd=cd_path,
-                SESSION_ID=SESSION_ID,
-                model=resolved_model,
-                timeout_s=timeout_s,
-            )
-            backend_result = await agy_execute(params)
-        elif backend == "codex":
-            params = CodexParams(
-                PROMPT=PROMPT,
-                cd=cd_path,
-                SESSION_ID=SESSION_ID,
-                model=codex_model,
-                profile=resolved_profile,
-                reasoning_effort=reasoning,
-                timeout_s=timeout_s,
-            )
-            backend_result = await codex_execute(params)
-        else:
-            params = PiParams(
-                PROMPT=PROMPT,
-                cd=cd_path,
-                SESSION_ID=SESSION_ID,
-                model=resolved_model,
-                reasoning_effort=reasoning,
-                timeout_s=timeout_s,
-            )
-            backend_result = await pi_execute(params)
-
-        if backend_result.outcome == "OK":
-            result = {
-                "success": True,
-                "SESSION_ID": backend_result.SESSION_ID,
-                "agent_messages": backend_result.agent_messages,
-            }
-            if backend_result.error_class == "warning" and backend_result.error:
-                result["warning"] = backend_result.error
-        else:
-            result = {
-                "success": False,
-                "SESSION_ID": backend_result.SESSION_ID or "",
-                "agent_messages": backend_result.agent_messages or "",
-                "error": backend_result.error,
-            }
-    except asyncio.CancelledError:
-        log.warning(
-            "run(): CANCELLED by MCP host (notifications/cancelled or transport closed) "
-            "backend=%s session_id=%s",
-            backend, SESSION_ID or "<new>",
-        )
-        raise
-    except Exception as exc:
-        log.exception("run(): unhandled exception in %s backend", backend)
-        await emit_error(
-            backend=backend,
-            session_id=SESSION_ID,
-            model=resolved_model,
-            error=f"unhandled: {exc}",
-        )
-        return {"success": False, "SESSION_ID": SESSION_ID or "", "agent_messages": "", "error": f"unhandled: {exc}"}
-
-    log.info(
-        "run() done backend=%s success=%s session_id=%s",
-        backend, result.get("success"), result.get("SESSION_ID", ""),
-    )
-    result_session_id = result.get("SESSION_ID", "") or ""
-    if result.get("success", False):
-        await emit_finish(
-            backend=backend,
-            session_id=result_session_id,
-            model=resolved_model,
-        )
-    else:
-        await emit_error(
-            backend=backend,
-            session_id=result_session_id,
-            model=resolved_model,
-            error=result.get("error", "") or "",
-        )
-    return {
-        "success": result.get("success", False),
-        "SESSION_ID": result_session_id,
-        "agent_messages": result.get("agent_messages", "") or "",
-        "error": result.get("error", "") or "",
-    }
 
 
 def _runtime(ctx: Context) -> Runtime:
@@ -352,7 +109,87 @@ def _active_runtime() -> Runtime:
     return _ACTIVE_RUNTIME
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _logged_request(
+    operation: str,
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
+    """Log MCP tool boundaries without recording request payloads."""
+
+    def decorate(
+        function: Callable[_P, Awaitable[_R]],
+    ) -> Callable[_P, Awaitable[_R]]:
+        @wraps(function)
+        async def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            context = next(
+                (
+                    value
+                    for value in (*args, *kwargs.values())
+                    if isinstance(value, Context)
+                ),
+                None,
+            )
+            request_id = context.request_id if context is not None else ""
+            started_at = time.monotonic()
+            with log_context(request_id=request_id):
+                log.info(
+                    "MCP tool request started",
+                    extra={"event": "mcp.request_started", "operation": operation},
+                )
+                try:
+                    result = await function(*args, **kwargs)
+                except asyncio.CancelledError:
+                    log.warning(
+                        "MCP tool request cancelled",
+                        extra={
+                            "event": "mcp.request_finished",
+                            "operation": operation,
+                            "outcome": "cancelled",
+                            "duration_ms": round(
+                                (time.monotonic() - started_at) * 1000,
+                                2,
+                            ),
+                        },
+                    )
+                    raise
+                except Exception as exc:
+                    log.warning(
+                        "MCP tool request failed",
+                        extra={
+                            "event": "mcp.request_finished",
+                            "operation": operation,
+                            "outcome": "failed",
+                            "error_type": type(exc).__name__,
+                            "duration_ms": round(
+                                (time.monotonic() - started_at) * 1000,
+                                2,
+                            ),
+                        },
+                    )
+                    raise
+                log.info(
+                    "MCP tool request completed",
+                    extra={
+                        "event": "mcp.request_finished",
+                        "operation": operation,
+                        "outcome": "success",
+                        "duration_ms": round(
+                            (time.monotonic() - started_at) * 1000,
+                            2,
+                        ),
+                    },
+                )
+                return result
+
+        return wrapped
+
+    return decorate
+
+
 @mcp.tool(description="Register a clean Git project.", structured_output=True)
+@_logged_request("project_register")
 async def project_register(
     path: str,
     ctx: Context,
@@ -362,6 +199,7 @@ async def project_register(
 
 
 @mcp.tool(description="Initialize project-level OpenMCP files.", structured_output=True)
+@_logged_request("project_init")
 async def project_init(path: str, ctx: Context) -> ProjectInitResult:
     return _runtime(ctx).initialize_project(path)
 
@@ -373,6 +211,7 @@ async def project_init(path: str, ctx: Context) -> ProjectInitResult:
     ),
     structured_output=True,
 )
+@_logged_request("task_route")
 async def task_route(
     task: str,
     ctx: Context,
@@ -396,6 +235,7 @@ async def task_route(
 
 
 @mcp.tool(description="Queue a durable project workflow.", structured_output=True)
+@_logged_request("job_submit")
 async def job_submit(
     project_id: str,
     workflow: str,
@@ -416,6 +256,7 @@ async def job_submit(
 
 
 @mcp.tool(description="Wait for job completion or timeout.", structured_output=True)
+@_logged_request("job_wait")
 async def job_wait(
     job_id: str,
     ctx: Context,
@@ -464,11 +305,13 @@ async def job_wait(
 
 
 @mcp.tool(description="Cancel a queued or running job.", structured_output=True)
+@_logged_request("job_cancel")
 async def job_cancel(job_id: str, ctx: Context) -> ActionResult:
     return _runtime(ctx).cancel(job_id)
 
 
 @mcp.tool(description="Retry a failed or interrupted job.", structured_output=True)
+@_logged_request("job_retry")
 async def job_retry(
     job_id: str,
     ctx: Context,
@@ -478,6 +321,7 @@ async def job_retry(
 
 
 @mcp.tool(description="Fast-forward a successful job into its project.", structured_output=True)
+@_logged_request("job_integrate")
 async def job_integrate(job_id: str, ctx: Context) -> ActionResult:
     return _runtime(ctx).integrate(job_id)
 

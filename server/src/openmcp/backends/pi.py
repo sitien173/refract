@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -23,11 +24,7 @@ class PiParams:
     PROMPT: str
     cd: Path
     SESSION_ID: str = ""
-    model: str = ""
-    reasoning_effort: str = ""
-    system_prompt: str = ""
-    isolated: bool = False
-    read_only: bool = False
+    args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
 
@@ -108,13 +105,13 @@ def _extract_output(lines: list[str]) -> tuple[str, str, str]:
 
 def _execute_sync(params: PiParams) -> BackendResult:
     """Execute a Pi non-interactive session and return a normalized result."""
-    cd = Path(params.cd)
-    if not cd.exists():
+    cd = Path(params.cd).expanduser().absolute()
+    if not cd.is_dir():
         return BackendResult(
             outcome="FATAL",
             SESSION_ID="",
             agent_messages="",
-            error=f"The workspace root directory `{cd.absolute().as_posix()}` does not exist. Please check the path and try again.",
+            error=f"The workspace root directory `{cd}` does not exist or is not a directory. Please check the path and try again.",
             error_class="bad_cd",
         )
     if shutil.which("pi") is None:
@@ -125,38 +122,17 @@ def _execute_sync(params: PiParams) -> BackendResult:
             error="The `pi` CLI was not found on PATH. Please install Pi and ensure `pi` is available.",
             error_class="missing_cli",
         )
-
     # JSON mode is non-interactive and returns machine-readable session events.
-    cmd = ["pi", "--mode", "json"]
-    if params.isolated:
-        cmd.extend(
-            [
-                "--no-approve",
-                "--no-context-files",
-                "--no-extensions",
-                "--no-skills",
-                "--no-prompt-templates",
-            ]
-        )
-    else:
-        cmd.append("--approve")
-    if params.system_prompt:
-        cmd.extend(["--system-prompt", params.system_prompt])
-    if params.read_only:
-        cmd.extend(["--tools", "read,grep,find,ls"])
+    # It follows target arguments so result parsing cannot be overridden.
+    cmd = ["pi", *params.args, "--mode", "json"]
     if params.SESSION_ID:
         cmd.extend(["--session", params.SESSION_ID])
-    if params.model:
-        cmd.extend(["--model", params.model])
-    if params.reasoning_effort:
-        cmd.extend(["--thinking", params.reasoning_effort])
     cmd.append(params.PROMPT)
 
     log.info(
-        "pi.execute start cwd=%s model=%s thinking=%s session_id=%s prompt_len=%d timeout_s=%s",
-        cd.absolute().as_posix(), params.model or "<default>",
-        params.reasoning_effort or "<off>", params.SESSION_ID or "<new>",
-        len(params.PROMPT), params.timeout_s or "<off>",
+        "pi.execute start cwd=%s session_id=%s prompt_len=%d args=%d timeout_s=%s",
+        os.fspath(cd), params.SESSION_ID or "<new>",
+        len(params.PROMPT), len(params.args), params.timeout_s or "<off>",
     )
     log.debug("pi command prepared args=%d", len(cmd))
 
@@ -165,7 +141,7 @@ def _execute_sync(params: PiParams) -> BackendResult:
     try:
         for line in run_shell_command(
             cmd,
-            cwd=cd.absolute().as_posix(),
+            cwd=os.fspath(cd),
             timeout_s=params.timeout_s,
             cancel_event=params.cancel_event,
         ):
@@ -178,7 +154,8 @@ def _execute_sync(params: PiParams) -> BackendResult:
         log.warning("pi subprocess timeout after %ss", params.timeout_s)
     except Exception as exc:  # noqa: BLE001
         timeout_error = f"unexpected: {exc}"
-        log.exception("pi: unexpected error during stream")
+        # A subprocess exception may embed argv and therefore the prompt.
+        log.error("pi: unexpected error during stream type=%s", type(exc).__name__)
 
     agent_messages, extracted_session_id, diagnostics = _extract_output(lines)
     session_id = extracted_session_id or params.SESSION_ID
