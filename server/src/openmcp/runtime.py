@@ -743,12 +743,17 @@ class Runtime:
             workflow_document = json.loads(record["workflow_json"])
             if "result_stage" not in workflow_document and record["result_stage"]:
                 workflow_document["result_stage"] = record["result_stage"]
-            for stage in workflow_document.get("stages", {}).values():
-                if isinstance(stage, dict):
-                    stage["route"] = _LEGACY_ROLES.get(
-                        stage.get("route"),
-                        stage.get("route"),
-                    )
+            # Legacy stage-role names (e.g. "review" -> "sentinel") only apply to
+            # jobs without a modern immutable execution plan. When a plan is
+            # persisted its role_routes are keyed by the workflow's role names, so
+            # translating the stage route here would desync plan.route() lookups.
+            if not record["execution_plan_json"]:
+                for stage in workflow_document.get("stages", {}).values():
+                    if isinstance(stage, dict):
+                        stage["route"] = _LEGACY_ROLES.get(
+                            stage.get("route"),
+                            stage.get("route"),
+                        )
             workflow = parse_workflow(workflow_document)
             plan = self._job_plan(job_id, record, workflow)
             inputs = json.loads(record["inputs_json"])

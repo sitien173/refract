@@ -1396,6 +1396,28 @@ async def test_implement_job_isolated_then_integrated(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_review_job_succeeds_without_legacy_role_rewrite(tmp_path) -> None:
+    root = _repository(tmp_path)
+    runtime = Runtime(_config(tmp_path / "home"))
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root), "sample")
+        submission = await runtime.submit(
+            project.id,
+            "review",
+            {"prompt": "review the change"},
+        )
+        job = await runtime.wait(submission.job_id, 10)
+
+        assert job.state == "succeeded"
+        assert job.result.error == ""
+        assert job.result.text == "response from primary"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_implement_job_integrates_project_overlay_patterns(tmp_path) -> None:
     root = _overlay_repository(tmp_path)
     runtime = Runtime(_config(tmp_path / "home"))
