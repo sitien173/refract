@@ -118,6 +118,21 @@ class ClientInstructionResult(BaseModel):
     instructions: str
 
 
+class DaemonStatusResult(BaseModel):
+    status: Literal["running", "stopping"]
+    workers: int
+    active_jobs: int
+    queued_jobs: int
+
+
+class DaemonReloadResult(BaseModel):
+    success: bool
+    targets: int
+    routes: int
+    routing_profiles: int
+    restart_required: list[str] = Field(default_factory=list)
+
+
 class ResourcePayload(BaseModel):
     data: Any
 
@@ -127,6 +142,8 @@ __all__ = [
     "ArtifactView",
     "ClientInstructionResult",
     "ContextStreamView",
+    "DaemonReloadResult",
+    "DaemonStatusResult",
     "JobResult",
     "JobState",
     "JobView",

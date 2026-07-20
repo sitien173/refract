@@ -25,7 +25,8 @@ Global config file: `~/.openmcp/config.toml` (relocate with `OPENMCP_HOME`).
 | `history_bytes` | `65536` | Context byte budget per lane. |
 | `default_routing_profile` | `balanced` | Profile used when a submission omits one. |
 
-Host, port, and worker changes require a daemon restart.
+Host, port, worker, and history-limit changes require a daemon restart. Moving
+`OPENMCP_HOME` also requires starting a new daemon process.
 
 ## [logging]
 
@@ -39,10 +40,16 @@ Host, port, and worker changes require a daemon restart.
 | `backup_count` | `5` | Rotated files retained. |
 | `capture_warnings` | `true` | Route Python warnings into logs. |
 
-Logging changes require a restart. Environment overrides: `OPENMCP_LOG_LEVEL`,
+Logging changes require a restart. The MCP `reload` tool reports changed static
+settings in `restart_required`. Environment overrides: `OPENMCP_LOG_LEVEL`,
 `OPENMCP_LOG_FORMAT`, `OPENMCP_LOG_FILE` (`-`/`off`/`none` disables),
 `OPENMCP_LOG_CONSOLE`, `OPENMCP_LOG_MAX_BYTES`, `OPENMCP_LOG_BACKUP_COUNT`,
 `OPENMCP_LOG_CAPTURE_WARNINGS`. Prompts and model responses are never logged.
+
+Global targets, routes, routing profiles, and target `args` can be validated and
+activated for subsequent submissions with the MCP `reload` tool. Running jobs
+retain their immutable execution plans. Invalid configuration does not replace
+the active catalog.
 
 ## Targets `[[targets]]`
 

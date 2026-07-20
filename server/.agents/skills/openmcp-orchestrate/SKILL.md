@@ -1,6 +1,6 @@
 ---
 name: openmcp-orchestrate
-description: Orchestrate durable Git project work through OpenMCP MCP tools. Use when an agent needs project-local setup guidance, integration validation, project registration, task routing, semantic workflow selection, job monitoring, implementation and review chains, retries, cancellation, integration, or permitted local overlays.
+description: Orchestrate durable Git project work through OpenMCP MCP tools. Use when an agent needs daemon status or configuration reloads, integration validation, project registration, task routing, semantic workflow selection, job monitoring, implementation and review chains, retries, cancellation, integration, or permitted local overlays.
 ---
 
 # OpenMCP Orchestration
@@ -25,25 +25,39 @@ OpenMCP call in a session. Re-read only relevant sections after errors.
 
 ## Orchestration workflow
 
-### 1. Discover the project
+### 1. Check the daemon and discover the project
 
 1. Confirm the OpenMCP tools are available.
-2. Read `openmcp://projects` when resource access exists.
-3. Match projects using their resolved Git root.
-4. Call `project_register` only when no match exists.
-5. Call `setup_instruction` when project integration setup is requested.
-6. Apply its guidance through project-level client instructions.
-7. Call `doctor` when integration validation is requested.
+2. Call `status` and require `status="running"` before orchestration.
+3. Read `openmcp://projects` when resource access exists.
+4. Match projects using their resolved Git root.
+5. Call `project_register` only when no match exists.
+6. Call `doctor` when project integration validation is requested.
 
-`setup_instruction` and `doctor` return instructions. They never mutate files.
-Prefer project-level agent behavior over global behavior. The MCP connection may
-remain global. Keep daemon settings and targets in global OpenMCP configuration.
+`status` is a read-only scheduler snapshot. `doctor` returns project integration
+checks and never mutates files. Prefer project-level agent behavior over global
+behavior. The MCP connection may remain global. Keep daemon settings and targets
+in global OpenMCP configuration.
 
-If tools remain unavailable, report the default loopback endpoint and stop.
-Never silently replace OpenMCP with direct execution.
+If tools remain unavailable or `status` cannot be called, report the default
+loopback endpoint and stop. Never silently replace OpenMCP with direct
+execution.
 
 If the repository is dirty, stop and report affected paths. Let the user decide
 how to preserve them.
+
+### Daemon configuration reloads
+
+Call `reload` after changing global targets, routes, routing profiles, or target
+arguments when the user wants immediate validation and activation. It reloads
+those settings for subsequent submissions without interrupting running jobs.
+Inspect `success` and `restart_required`; do not claim full activation when the
+latter is non-empty. Host, port, worker, history, home, and logging changes still
+require a process restart. An invalid configuration makes `reload` fail and
+leaves the previous catalog active.
+
+Do not call `reload` for project route/profile overrides or task-route templates;
+they reload when used.
 
 ### 2. Route the task
 

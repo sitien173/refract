@@ -25,6 +25,8 @@ from openmcp.logging_setup import (
 from openmcp.models import (
     ActionResult,
     ClientInstructionResult,
+    DaemonReloadResult,
+    DaemonStatusResult,
     JobView,
     ProjectView,
     SubmissionResult,
@@ -196,20 +198,8 @@ def _project_root(path: str) -> str:
         raise ValueError(str(exc)) from exc
 
 
-_SETUP_INSTRUCTIONS = """Configure OpenMCP for this project:
-1. Use the client's project-level instruction file. Do not modify global agent instructions.
-2. Keep the MCP server connection global when already configured.
-3. Require OpenMCP for durable delegated project work.
-4. Resolve the Git root and read openmcp://projects before registration.
-5. Register the clean project only when its resolved root is absent.
-6. Choose implement, review, or consult by task intent.
-7. Use the project's routing profile unless explicitly overridden.
-8. Wait for jobs. Integrate successful implementation jobs explicitly.
-9. Put project routing overrides in .openmcp/config.toml.
-10. Keep daemon settings and targets in the global OpenMCP config."""
-
 _DOCTOR_INSTRUCTIONS = """Validate this project's OpenMCP integration without mutations:
-1. Confirm setup_instruction, doctor, project_register, task_route, job_submit, job_wait, job_cancel, job_retry, and job_integrate are available.
+1. Confirm status, reload, doctor, project_register, task_route, job_submit, job_wait, job_cancel, job_retry, and job_integrate are available.
 2. Confirm the client's project-level instruction file contains OpenMCP guidance.
 3. Confirm those project instructions override conflicting global behavior.
 4. Resolve the Git root and match it in openmcp://projects.
@@ -230,16 +220,19 @@ async def project_register(
     return _runtime(ctx).register_project(path, alias)
 
 
+@mcp.tool(description="Return the daemon scheduler status.", structured_output=True)
+@_logged_request("status")
+async def status(ctx: Context) -> DaemonStatusResult:
+    return _runtime(ctx).status()
+
+
 @mcp.tool(
-    description="Return project-local client integration instructions.",
+    description="Reload daemon routing and target configuration.",
     structured_output=True,
 )
-@_logged_request("setup_instruction")
-async def setup_instruction(path: str) -> ClientInstructionResult:
-    return ClientInstructionResult(
-        root=_project_root(path),
-        instructions=_SETUP_INSTRUCTIONS,
-    )
+@_logged_request("reload")
+async def reload(ctx: Context) -> DaemonReloadResult:
+    return _runtime(ctx).reload()
 
 
 @mcp.tool(
@@ -488,7 +481,8 @@ __all__ = [
     "job_wait",
     "mcp",
     "project_register",
+    "reload",
     "run",
-    "setup_instruction",
+    "status",
     "task_route",
 ]

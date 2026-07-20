@@ -25,6 +25,8 @@ from openmcp.drivers import DriverRegistry, DriverResult
 from openmcp.logging_setup import get_logger, log_context
 from openmcp.models import (
     ActionResult,
+    DaemonReloadResult,
+    DaemonStatusResult,
     JobView,
     ModelTargetView,
     ProjectView,
@@ -580,6 +582,55 @@ class Runtime:
             },
         )
         return ActionResult(success=True, job_id=job_id, state="integrated")
+
+    def status(self) -> DaemonStatusResult:
+        """Return a lightweight snapshot of the scheduler state."""
+        return DaemonStatusResult(
+            status="stopping" if self._closing else "running",
+            workers=sum(not worker.done() for worker in self._workers),
+            active_jobs=len(self._cancel_events),
+            queued_jobs=self._queue.qsize(),
+        )
+
+    def reload(self) -> DaemonReloadResult:
+        """Reload routing and target configuration for subsequent work.
+
+        Listener, scheduler, history, and logging changes cannot be applied safely
+        to a running process and are reported as requiring a daemon restart.
+        """
+        catalog = self._reload_catalog()
+        restart_fields = (
+            "home",
+            "host",
+            "port",
+            "max_jobs",
+            "history_turns",
+            "history_bytes",
+            "logging",
+        )
+        restart_required = [
+            field
+            for field in restart_fields
+            if getattr(self.config, field) != getattr(catalog, field)
+        ]
+        result = DaemonReloadResult(
+            success=True,
+            targets=len(catalog.targets),
+            routes=len(catalog.routes),
+            routing_profiles=len(catalog.routing_profiles),
+            restart_required=restart_required,
+        )
+        log.info(
+            "Daemon configuration reloaded",
+            extra={
+                "event": "daemon.reloaded",
+                "targets": result.targets,
+                "routes": result.routes,
+                "routing_profiles": result.routing_profiles,
+                "restart_required": restart_required,
+            },
+        )
+        return result
 
     @property
     def catalog(self) -> DaemonConfig:

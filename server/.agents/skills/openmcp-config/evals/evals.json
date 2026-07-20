@@ -5,7 +5,7 @@
       "id": 0,
       "name": "add-cost-profile",
       "prompt": "I run OpenMCP with a global ~/.openmcp/config.toml that already has a codex target 'forge-primary' (capabilities code), a pi reviewer 'sentinel-primary' and a pi consultant 'sage-primary', plus routes forge/sentinel/sage and a 'balanced' routing profile. I want a cheaper profile called 'cost' that runs implement on a new codex target using model gpt-5-mini, but keeps review on sentinel and consult on sage. Write the exact TOML I need to add to ~/.openmcp/config.toml.",
-      "expected_output": "TOML adding a new codex target (model gpt-5-mini, capabilities include code), a route requiring code that pools that target, and [routing_profiles.cost] mapping implement->new route, review->sentinel, consult->sage. No secrets in args. Host not moved off loopback.",
+      "expected_output": "TOML adding a new codex target (model gpt-5-mini, capabilities include code), a route requiring code that pools that target, and [routing_profiles.cost] mapping implement->new route, review->sentinel, consult->sage. No secrets in args. Host not moved off loopback. Calls the no-argument reload tool when available and checks success/restart_required; no process restart is needed for target/route/profile changes.",
       "assertions": [],
       "files": []
     },
@@ -13,7 +13,7 @@
       "id": 1,
       "name": "project-override-reviewer",
       "prompt": "My git project lives at /home/me/app. For this project ONLY I want code review to go to a stricter reviewer running pi model gpt-5.6-sol with high reasoning, isolated and read-only, while implement and consult keep using the global 'quality' profile's routes. Everything global should stay as-is. Tell me exactly which files to edit and give me the TOML.",
-      "expected_output": "New reviewer TARGET added to GLOBAL ~/.openmcp/config.toml (targets are global-only). Project /home/me/app/.openmcp/config.toml adds a route pooling that target and a routing_profiles.quality override mapping only review to it. Should NOT define a target inside project config.",
+      "expected_output": "New reviewer TARGET added to GLOBAL ~/.openmcp/config.toml (targets are global-only). Project /home/me/app/.openmcp/config.toml adds a route pooling that target and a routing_profiles.quality override mapping only review to it. Should NOT define a target inside project config. Calls the no-argument reload tool when available to activate and validate the global target; the project override reloads when used.",
       "assertions": [],
       "files": []
     }
