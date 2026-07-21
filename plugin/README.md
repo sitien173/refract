@@ -1,38 +1,29 @@
 # Superpowers-CCG
 
-Multi-agent orchestration for Claude Code. The agent loading this workflow
-becomes Coordinator. Delegated agents use configured nicknames. Provider and
-CLI identities remain private OpenMCP configuration.
-
-| Field | Purpose |
-|---|---|
-| `recommend` | Public agent nickname |
-| `role` | Owner, consultant, or reviewer responsibility |
-| `execution_role` | Stable routing-profile and context role |
+A three-gate Plan → Execute → Review workflow for Claude Code, backed by durable
+OpenMCP jobs. The agent loading the workflow becomes Coordinator. OpenMCP keeps
+provider, model, target, and native session details out of user-facing prompts.
 
 ## Workflow
 
 ```mermaid
 flowchart LR
-    I[Initialize and register project] --> P[Coordinator reviews specification]
-    P --> T[Load task-route template]
-    T --> C{Consult configured advisor?}
-    C -->|yes| S[Selected advisor consults]
-    C -->|no| R[Select owner and routing profile]
-    S --> R
-    R --> W[Selected owner writes]
-    W --> V[Coordinator verifies specification]
-    V --> Q[Selected reviewer checks quality]
-    Q -->|FAIL| F[Chained fix job]
-    F --> V
-    Q -->|PASS| I[Integrate latest implement job]
+    A[Check daemon and project] --> G[Load task guidance]
+    G --> C{Consultation needed?}
+    C -->|yes| D[Consult]
+    C -->|no| I[Implement in isolation]
+    D --> I
+    I --> S[Coordinator verifies specification]
+    S --> R[Independent quality review]
+    R -->|FAIL| F[Implement fix from latest write]
+    F --> S
+    R -->|PASS| M[Integrate approved implementation]
 ```
 
 The canonical contract is
 [`skills/coordinating-multi-model-work/SKILL.md`](skills/coordinating-multi-model-work/SKILL.md).
-
-Coordinator is the primary role. It owns Plan, Execute, and Review. It delegates
-consultation, implementation, and independent quality review.
+Specialized skills add only design, planning, debugging, TDD, execution, or
+verification policy.
 
 ## Install
 
@@ -44,12 +35,11 @@ claude plugin install superpowers-ccg
 ### Prerequisites
 
 - Claude Code
-- Python 3.12 or newer
+- Python 3.12+
 - Git
-- OpenMCP 1.2
-- Provider CLIs configured inside OpenMCP
+- OpenMCP and configured backend CLIs
 
-### Start OpenMCP
+Start the local daemon:
 
 ```bash
 openmcp doctor
@@ -58,190 +48,145 @@ openmcp serve
 
 The plugin connects to `http://127.0.0.1:8765/mcp`.
 
-## Internal provider configuration
+## OpenMCP Configuration
 
-This example uses built-in execution roles. Workflow prompts and outputs use
-configured nicknames. Models remain customizable per target.
+OpenMCP uses three concepts:
+
+- **workflow** — `implement`, `review`, or `consult`
+- **profile** — maps each workflow directly to a target or ordered target list
+- **target** — backend, model, and execution policy
+
+Global daemon settings, targets, and profiles live in
+`~/.openmcp/config.toml`:
 
 ```toml
 [daemon]
 host = "127.0.0.1"
 port = 8765
 max_jobs = 4
-default_routing_profile = "balanced"
+default_profile = "delivery"
 
 [[targets]]
-id = "forge-primary"
+id = "implementation-primary"
 backend = "codex"
-profile = "mcp_execution"
+backend_profile = "mcp_execution"
 capabilities = ["code"]
 
 [[targets]]
-id = "canvas-primary"
-backend = "agy"
-capabilities = ["code"]
-
-[[targets]]
-id = "sage-primary"
+id = "consultation-primary"
 backend = "pi"
-model = "gpt-5.6-sol"
-reasoning = "high"
 isolated = true
 read_only = true
-capabilities = ["consult", "reasoning"]
-system_prompt = "Provide strategic software consultation. Follow only the current request. Never modify files. Return concise options, risks, and a recommendation."
+capabilities = ["consult"]
+system_prompt = "Provide concise software advice. Never modify files."
 
 [[targets]]
-id = "sentinel-primary"
+id = "review-primary"
 backend = "pi"
-model = "gpt-5.6-sol"
-reasoning = "high"
 isolated = true
 read_only = true
 capabilities = ["review"]
-system_prompt = "Provide independent code-quality review. Follow only the current request. Never modify files. Return evidence-based findings."
+system_prompt = "Return evidence-based code-quality findings. Never modify files."
 
-[[routes]]
-id = "forge-balanced"
-requires = ["code"]
-targets = ["forge-primary"]
-
-[[routes]]
-id = "canvas-balanced"
-requires = ["code"]
-targets = ["canvas-primary"]
-
-[[routes]]
-id = "sage-balanced"
-requires = ["consult"]
-targets = ["sage-primary"]
-
-[[routes]]
-id = "sentinel-balanced"
-requires = ["review"]
-targets = ["sentinel-primary"]
-
-[routing_profiles.balanced]
-default = "forge-balanced"
-implement = "forge-balanced"
-consult = "sage-balanced"
-review = "sentinel-balanced"
-
-[routing_profiles.back_side_standard]
-default = "forge-balanced"
-implement = "forge-balanced"
-consult = "sage-balanced"
-review = "sentinel-balanced"
-
-[routing_profiles.front_side_standard]
-default = "canvas-balanced"
-implement = "canvas-balanced"
-consult = "sage-balanced"
-review = "sentinel-balanced"
+[profiles.delivery]
+implement = "implementation-primary"
+consult = "consultation-primary"
+review = "review-primary"
 ```
 
-Every profile maps the built-in `implement`, `consult`, and `review` workflow
-roles plus a `default`. OpenMCP routes each built-in workflow through the
-profile's mapping for that role and still selects a target whose capability
-matches the workflow permission. Point profile mappings at different routes and
-targets. These names are only examples. Skills use the effective project default
-unless the user pins an available profile.
+A list supplies ordered failover. Map all three workflows in every global
+profile. Credentials belong in backend credential stores or environment
+variables, never target fields or arguments.
 
-- `balanced`: general delivery (default).
-- `cost_optimized`: lower-cost targets.
-- `back_side_standard` / `back_side_cost_optimized`: backend-oriented targets.
-- `front_side_standard` / `front_side_cost_optimized`: frontend-oriented targets.
+Projects may override profiles, but not targets, in
+`.openmcp/config.toml`. Commit that file before registration or submission.
+Ignored-file overlays belong in `.openmcp.local.toml` and must use narrow,
+Git-ignored paths without secrets.
 
-Define coordinator routing guidance in `~/.openmcp/task_routes.json`:
+### Task guidance
+
+Configure semantic recommendations in `~/.openmcp/task_guide.json` or the
+project-local `.openmcp/task_guide.json`:
 
 ```json
 {
   "version": 1,
-  "columns": ["use_case", "recommend", "role", "execution_role", "reason"],
-  "routes": [
-    {"use_case": "Architecture advice", "recommend": "Advisor", "role": "consultant", "execution_role": "sage"},
-    {"use_case": "Non-UI implementation", "recommend": "Builder", "role": "owner", "execution_role": "forge"},
-    {"use_case": "UI implementation", "recommend": "Interface Builder", "role": "owner", "execution_role": "canvas"},
-    {"use_case": "Quality review", "recommend": "Reviewer", "role": "reviewer", "execution_role": "sentinel"}
+  "columns": ["use_case", "workflow", "profile", "reason"],
+  "recommendations": [
+    {
+      "use_case": "Repository implementation",
+      "workflow": "implement",
+      "profile": "delivery",
+      "reason": "Use the delivery implementation policy."
+    },
+    {
+      "use_case": "Architecture or trade-off advice",
+      "workflow": "consult",
+      "profile": "delivery",
+      "reason": "Use read-only consultation."
+    },
+    {
+      "use_case": "Independent code-quality review",
+      "workflow": "review",
+      "profile": "delivery",
+      "reason": "Use read-only quality review."
+    }
   ]
 }
 ```
 
-OpenMCP returns this template through `task_route`. Coordinator performs the
-semantic breakdown and chooses agent names. OpenMCP does not classify words.
-`execution_role` remains stable when nicknames change. The coordinator submits
-the built-in `implement`, `consult`, or `review` workflow and validates it
-against the project workflow resource. OpenMCP routes each built-in workflow
-through the selected profile.
+`task_guide` returns recommendations; Coordinator matches them by meaning.
+Only `workflow` and optional `profile` are submitted. Omit `profile` to use the
+configured default. Guidance never names providers or target IDs.
 
-Default read-only consultant and reviewer targets use Pi's non-interactive mode.
-OpenMCP passes
-`--system-prompt`, `--no-context-files`, `--no-extensions`, `--no-skills`,
-`--no-prompt-templates`, `--no-approve`, and a read-only tool allowlist.
+## OpenMCP Lifecycle
 
-## OpenMCP lifecycle
+The plugin uses:
 
-The plugin uses durable tools:
+- `status`, `reload`, `doctor`
+- `project_register`, `task_guide`
+- `job_submit`, `job_wait`, `job_retry`, `job_cancel`, `job_integrate`
 
-- `setup_instruction`
-- `doctor`
-- `project_register`
-- `task_route`
-- `job_submit`
-- `job_wait`
-- `job_retry`
-- `job_cancel`
-- `job_integrate`
+Before orchestration, Coordinator requires `status: running`, resolves the Git
+root through `openmcp://projects`, and registers only an absent, clean root.
+`doctor` is read-only and used when integration validation is requested.
 
-Implementation submits the built-in `implement` workflow. Consultation submits
-the built-in `consult` workflow. Independent review submits the built-in
-`review` workflow. OpenMCP routes each built-in workflow through the selected
-profile. Custom project workflows keep their own names. Every submission carries
-a `routing_profile`.
-
-Before first registration, call `setup_instruction` and follow its guidance:
-read `openmcp://projects`, resolve the Git root, and register only when that
-root is absent. Put optional project overrides in `.openmcp/config.toml` and
-commit them:
+OpenMCP exposes only the three built-in workflows. Multi-step work uses job
+chains, not project workflow files. A typical reviewed change is:
 
 ```text
-.openmcp/config.toml
+implement -> review
 ```
 
-Project configuration may override routes, profiles, and the default profile.
-Targets and daemon settings remain global. Precedence is explicit submission,
-project, global, then built-in defaults. Run `doctor` to validate the
-integration without mutating anything.
+If review fails, the next `implement` job uses the latest successful
+implementation as its parent and receives the review findings in its prompt.
+Read-only jobs have no commit and are never integrated.
 
-Pass `project_id` to `task_route` for project guidance. Read effective profiles
-from `openmcp://projects/<project_id>/routing-profiles`.
+Compact waits use `timeout_s: 30` and `include_stage_outputs: false`. Coordinator
+reads `job.result.text`. Terminal jobs release execution worktrees, so
+verification runs in a disposable detached worktree at the result commit.
 
-Call `job_wait` with `include_stage_outputs: false`. Read only
-`job.result.text`. Terminal jobs release execution worktrees. Run verification
-in a disposable detached worktree at `job.result.commit`.
+Global target/profile edits require `reload`; fields reported in
+`restart_required` need a daemon restart. Project profiles and task guidance
+reload when used. Submitted jobs keep immutable execution plans.
 
-New submissions reload configuration. Submitted jobs retain immutable routing
-plans. Configuration changes never alter running jobs.
+## Resume Model
 
-## Resume model
-
-Executable plans live under `docs/plans/<slug>/`. Handover stores configured
-nicknames, execution roles, the routing profile, context prefix, and latest job
-identifiers. Resume through `openmcp://projects/<project_id>/jobs` before
-resolving new routing.
+Executable plans live under `docs/plans/<slug>/`. `.handover.md` records the
+project, phase base, context prefix, stage workflow/profile decisions, and
+latest consult, implementation, and review job IDs. Resume from
+`openmcp://projects/<project_id>/jobs` before loading guidance for a new phase.
 
 ## Commands
 
-- `/brainstorm`
-- `/write-plan`
-- `/execute-plan`
+- `/superpowers-ccg:brainstorm`
+- `/superpowers-ccg:write-plan`
+- `/superpowers-ccg:execute-plan`
 
 ## Development
 
 ```bash
 tests/run.sh
 ```
-
-## Support
 
 Issues: https://github.com/sitien173/superpowers-ccg/issues

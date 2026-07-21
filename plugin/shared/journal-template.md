@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 7.1.0 -->
+<!-- ccg-shared-version: 7.2.0 -->
 
 # Phase <N> — Journal: <phase title>
 
@@ -12,11 +12,11 @@ sections.
 ## META
 
 - Plan: docs/plans/<slug>/PLAN.md
-- Owner: <configured nickname>
-- Owner Execution Role: <stable role>
-- Routing Profile: <name>
-- Write job: <OpenMCP job ID or n/a>
-- Review job: <OpenMCP job ID or n/a>
+- Implementation Profile: <name or default>
+- Consultation Profile: <name, default, or n/a>
+- Review Profile: <name or default>
+- Implementation Job: <OpenMCP job ID or n/a>
+- Review Job: <OpenMCP job ID or n/a>
 - Started: <ISO timestamp>
 - Finished: <ISO timestamp>
 
@@ -26,7 +26,7 @@ sections.
 
 ## Quality Review
 
-<!-- Coordinator appends the selected reviewer's response here. -->
+<!-- Coordinator appends the independent review response here. -->
 
 ## Review Result
 

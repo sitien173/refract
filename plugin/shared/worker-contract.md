@@ -1,7 +1,7 @@
-<!-- ccg-shared-version: 7.1.0 -->
+<!-- ccg-shared-version: 7.2.0 -->
 # Worker Contract
 
-Execution contract for the phase owner. This bundled file is read
+Execution contract for the phase implementer. This bundled file is read
 directly from the installed plugin. The per-phase `prompt.md` carries the actual
 tasks; this file defines the stable execution process.
 

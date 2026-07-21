@@ -1,44 +1,46 @@
-# OpenMCP tool contract
+# OpenMCP Tool Contract
 
-The default streamable HTTP endpoint is `http://127.0.0.1:8765/mcp`.
+Default endpoint: `http://127.0.0.1:8765/mcp`.
 
 ## Tools
 
 | Tool | Required inputs | Optional inputs | Purpose |
 | --- | --- | --- | --- |
-| `setup_instruction` | `path` | | Return project-local client setup guidance. |
-| `doctor` | `path` | | Return read-only client integration checks. |
+| `status` | | | Return scheduler health and queue counts. |
+| `reload` | | | Reload global targets and profiles. |
+| `doctor` | `path` | | Return read-only integration checks. |
 | `project_register` | `path` | `alias` | Register a clean Git root. |
-| `task_route` | `task` | `project_id` | Load effective routing guidance. |
-| `job_submit` | `project_id`, `workflow`, `inputs` | `context_key`, `parent_job_id`, `routing_profile` | Queue durable work. |
+| `task_guide` | `task` | `project_id` | Load workflow/profile guidance. |
+| `job_submit` | `project_id`, `workflow`, `inputs` | `context_key`, `parent_job_id`, `profile` | Queue durable work. |
 | `job_wait` | `job_id` | `timeout_s`, `include_stage_outputs` | Wait for completion or timeout. |
 | `job_cancel` | `job_id` | | Cancel queued or running work. |
 | `job_retry` | `job_id` | `from_stage` | Retry failed or interrupted work. |
 | `job_integrate` | `job_id` | | Fast-forward a successful write. |
 
-Tool names may be client-namespaced. Match their OpenMCP suffixes.
+Tool names may be client-namespaced; match their OpenMCP suffixes.
 
-`setup_instruction` and `doctor` never mutate repositories. Setup guidance
-prefers project-level agent instructions. The MCP connection, daemon settings,
-and targets may remain global.
+`status` returns `status`, `workers`, `active_jobs`, and `queued_jobs`.
 
-## Built-in workflows
+`reload` returns `success`, target/profile counts, and `restart_required`.
+Running jobs retain immutable plans. Changes to `home`, `host`, `port`,
+`max_jobs`, `history_turns`, `history_bytes`, or logging require restart.
 
-| Workflow | Internal mode | Behavior |
-| --- | --- | --- |
-| `implement` | Write | Preserves commits for explicit integration. |
-| `review` | Read | Reviews an implementation or project. |
-| `consult` | Read | Inspects, analyzes, or advises. |
+`doctor` never mutates repositories.
 
-Each built-in uses its matching logical role. Every selected routing profile
-must map `implement`, `review`, and `consult` onto routes. Multi-stage project
-workflows remain available under `.openmcp/workflows/*.yaml`.
+## Built-in Workflows
 
-The former `read` and `write` workflows are unsupported. Choose `review` or
-`consult` based on intent. Use `implement` for repository changes.
+| Workflow | Mode | Inputs | Result |
+| --- | --- | --- | --- |
+| `implement` | Write | required `prompt`, optional `commit_message` | Text and optional commit |
+| `review` | Read | required `prompt` | Review text |
+| `consult` | Read | required `prompt` | Analysis text |
 
-`task_route` returns guidance. Its `execution_role` value does not select a
-built-in workflow.
+Only these workflows are available. Project custom workflow files are not
+loaded. The former `read` and `write` workflow names are unsupported.
+
+`task_guide` returns recommendations containing `workflow` and optional
+`profile`. Pass those values to `job_submit`; omit `profile` to use the default.
+Target IDs and provider names are not submission fields.
 
 Common implementation inputs:
 
@@ -57,38 +59,39 @@ Common implementation inputs:
 - `openmcp://jobs/{job_id}`
 - `openmcp://jobs/{job_id}/events`
 - `openmcp://contexts/{project_id}/{context_key}`
-- `openmcp://models`
-- `openmcp://routing-profiles`
-- `openmcp://projects/{project_id}/routing-profiles`
+- `openmcp://targets`
+- `openmcp://profiles`
+- `openmcp://projects/{project_id}/profiles`
 - `openmcp://workflows/{project_id}`
 
-## Job states
+## Job States
 
-- `queued` and `running`: wait or cancel.
-- `succeeded`: inspect results, then integrate eligible writes.
-- `failed`: diagnose, then retry a recoverable stage.
+- `queued`, `running`: wait or cancel.
+- `succeeded`: inspect results and integrate eligible writes.
+- `failed`: diagnose, then retry recoverable work.
 - `cancelled`: terminal until explicitly retried.
-- `interrupted`: retry after confirming resumption remains valid.
-- `integrated`: repository already contains the write result.
+- `interrupted`: retry only when resumption remains useful.
+- `integrated`: repository contains the write result.
 - `integration_conflict`: repository or overlay state changed.
 
-## Parent chains
+## Parent Chains
 
-Set `parent_job_id` for dependent jobs. Children start from their parent's result
-commit while preserving the original integration base.
-
-Recommended chain:
+A child starts from the successful parent's result commit and preserves the
+chain's original integration base.
 
 ```text
-implement -> review -> implement fix
+implement -> review
+implement -> review; implement fix from the latest implement commit
 ```
 
-Integrate the final implementation. Integrate the original implementation when
-review passes without a fix.
+Read-only jobs do not produce commits. They can inspect an implementation as a
+child, but cannot anchor a later child. Put their findings in the next prompt
+and use the latest successful `implement` job as the Git parent.
 
-## Local overlays
+Integrate the final implementation, or the original implementation when review
+passes without a fix. Never integrate `review` or `consult`.
 
-Store local rules in ignored `.openmcp.local.toml`:
+## Local Overlays
 
 ```toml
 [[overlays]]
@@ -97,5 +100,5 @@ exclude = ["config/private.development.json"]
 workflows = ["implement"]
 ```
 
-Matched files must be Git-ignored. Paths cannot contain symlinks. Includes and
-excludes use relative glob patterns. Negated patterns are unsupported.
+Matched files must be Git-ignored. Paths cannot contain symlinks. Use relative
+globs and explicit excludes; never expose secrets.

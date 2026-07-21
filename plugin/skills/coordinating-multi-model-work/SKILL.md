@@ -1,209 +1,167 @@
 ---
 name: coordinating-multi-model-work
-description: "Canonical three-gate (Plan, Execute, Review) workflow coordinating delegated OpenMCP jobs: project setup, task routing, routing profiles, isolated execution, independent review, and resumable integration. Load first for any planning, routing, execution, review, or resume action."
+description: "Canonical Plan → Execute → Review workflow for durable OpenMCP consultation, implementation, independent review, integration, and resume. Load first for any planning, execution, review, or resume action."
 ---
 
 # Coordinating Multi-Model Work
 
-You are Coordinator while this skill is active. Delegated agents use
-nicknames. Provider, model, and CLI identities remain private configuration.
+You are Coordinator while this skill is active. You own the specification,
+phase boundaries, workflow/profile selection, verification, integration, and
+handover. OpenMCP owns isolated worktrees, backend routing, durable jobs, and
+write commits. Keep provider, model, target, and native session identities
+private.
 
-You are the primary workflow owner. Route phases, review specifications,
-supervise jobs, verify evidence, approve integration, and maintain handover.
-Delegate consultation, implementation, and independent quality review. OpenMCP
-owns isolation, contexts, routing, commits, and durable jobs. Do not perform
-delegated implementation. User instructions override this workflow.
+Read [references/tool-contract.md](references/tool-contract.md) completely
+before the first OpenMCP call in a session.
 
-Read [references/tool-contract.md](references/tool-contract.md) before the first
-OpenMCP call in a session for tool signatures, workflows, resources, and states.
+OpenMCP supports exactly three workflows: `implement`, `review`, and `consult`.
+Project custom workflow files are unsupported; represent multi-step work as a
+linear parent job chain.
 
 # Project Setup
 
-Before the first executable repository phase:
+Before the first executable phase:
 
-1. Call `setup_instruction` with the repository root; follow its guidance.
-2. Read `openmcp://projects`. Resolve the Git root and match it there.
-3. Register only when that root is absent: call `project_register` with the
-   clean repository root and an `alias`.
-4. Put any project routing overrides in `.openmcp/config.toml`; keep daemon
-   settings and targets in the global OpenMCP config. Commit config changes.
-5. Store the returned `project_id` in `.handover.md`.
-6. Run `doctor` to validate the integration before submitting jobs.
+1. Confirm OpenMCP tools are available. Call `status` and require `running`.
+2. Resolve the Git root and read `openmcp://projects`.
+3. If the root is absent, require it to be clean and call `project_register`.
+4. Store `project_id` in `.handover.md`.
+5. Call `doctor` only when integration validation is requested.
 
-# Task Routing
+If tools or `status` are unavailable, report
+`http://127.0.0.1:8765/mcp` and stop. Never commit, stash, reset, or delete dirty
+user changes. After global target or profile edits, call `reload` when immediate
+activation is requested and report any `restart_required` fields.
 
-Call `task_route` once before each new phase. Pass the phase request and
-`project_id` when available. Do not reroute an existing phase chain. The tool
-returns task-route definitions. It does not classify work.
+# Task Guidance
 
-You must:
+For each new phase, call `task_guide` once with the complete phase request and
+`project_id`. Match each intended stage to a recommendation by meaning:
 
-1. Break the request into distinct use cases.
-2. Read the returned template semantically.
-3. Choose agent nicknames defined by that template.
-4. Read each delegated route's stable `execution_role`.
-5. Follow configured consultant and reviewer references.
-6. Select one implementation owner per phase.
-7. Split phases whose use cases need different owners.
-8. Keep workflow names out of `# ROUTE`.
+- repository changes → `implement`
+- code-quality review → `review`
+- analysis or advice → `consult`
 
-`recommend` is the public nickname. `role` describes responsibility.
-`execution_role` labels the routing-profile role and context key; it does not
-derive a workflow name. Submit the built-in `implement` workflow for code
-changes, the built-in `consult` workflow for consultation, and the built-in
-`review` workflow for independent quality review. OpenMCP routes each built-in
-workflow through the selected profile and matches a target by capability.
-Confirm `implement`, `consult`, and `review` through
-`openmcp://workflows/<project_id>` before submission. A registered custom
-project workflow keeps its own name. Stop when a required workflow does not
-exist.
+Use the recommended `workflow` and optional `profile`. Omit `profile` when the
+recommendation omits it so OpenMCP uses its default. Validate profiles through
+`openmcp://projects/<project_id>/profiles` and workflows through
+`openmcp://workflows/<project_id>`. Stop on an unavailable or intent-incompatible
+selection. Target IDs and provider names are never submission fields.
 
-# Routing Profiles
-
-This feature is named **Routing Profiles**. Each profile maps stable roles onto
-configured routes and targets.
-
-1. Read `openmcp://projects/<project_id>/routing-profiles` when registered.
-2. Otherwise read `openmcp://routing-profiles`.
-3. Honor an explicit user profile only when available.
-4. Otherwise use the effective default returned by that resource.
-5. Store the selected profile in `.handover.md`.
-6. Pass `routing_profile` with every submitted job.
-
-Keep one profile throughout a job chain. New phases reload configuration.
-Submitted jobs retain their saved execution plans.
+Do not re-run guidance for an active phase chain. Resume its saved workflow and
+profile decisions from `.handover.md` and
+`openmcp://projects/<project_id>/jobs`. New phases load current guidance.
 
 # Gate 1: Plan
 
-Review the request and phase specification. Select one implementation owner
-and one routing profile. Do not design complex solutions unaided.
+1. Check the phase specification against the user request.
+2. Resolve the `implement` recommendation and profiles needed for optional
+   consultation and mandatory review.
+3. Split a phase if it mixes changes that cannot be safely owned by one linear
+   implementation chain.
+4. Define exact scope, acceptance criteria, and fresh verification commands.
 
-Use the `task_route` result before selecting the owner. Make the decision.
-Never expect OpenMCP to infer the owner from task words.
+Consultation is mandatory for unclear, architectural, cross-component,
+high-impact, or tradeoff-heavy work. Skip it only for fully specified,
+low-risk routine work.
 
-Select the configured consultant for non-trivial phases. Skip consultation only
-for fully specified, low-risk routine work. Consultation is mandatory for
-unclear, full-stack, high-impact, architectural, or tradeoff-heavy work.
+For consultation, submit `consult` with one narrow question, a topic-specific
+`context_key`, and the selected profile when present. Wait compactly and use
+only `job.result.text`. A consult job is read-only and has no commit, so it
+cannot anchor implementation; copy the relevant findings into the
+implementation prompt.
 
-## Consultation
-
-1. Submit the built-in `consult` workflow for the consultant.
-2. Use `<plan-slug>/consultant/<execution_role>` as `context_key`.
-3. Ask one narrow question with constraints and desired output.
-4. Call `job_wait` with `include_stage_outputs: false`.
-5. Wait for terminal `succeeded` state.
-6. Reconcile `job.result.text` against user requirements.
-
-Never integrate consultation jobs. Reuse context only within the same plan.
-
-Output:
+Emit:
 
 ```text
 # ROUTE
-- Owner: <selected nickname>
-- Consultant: none | <selected nickname>
-- Reviewer: <selected nickname>
-- Routing Profile: <name>
-- Reason: [one line]
-- Done When: [fresh checks]
+- Sequence: consult? -> implement -> review
+- Implement Profile: <name | default>
+- Consult Profile: <name | default | none>
+- Review Profile: <name | default>
+- Reason: <one line>
+- Done When: <fresh checks>
 ```
 
 # Gate 2: Execute
 
 ## Phase checkpoint
 
-External jobs require a clean repository.
+External jobs require a clean registered repository.
 
-1. Create the phase prompt and context prefix.
+1. Create `phase-<NN>/prompt.md` and any coordination artifacts.
 2. Commit preparation as `chore(plan): prepare phase <N>`.
-3. Record that clean commit as `phase_base`.
-4. Confirm the repository remains clean.
+3. Record that commit as `phase_base` and confirm the root is clean.
 
-The preparation commit becomes the integration base. Never edit the root during
-an isolated chain. Resume through
-`openmcp://projects/<project_id>/jobs` and the context prefix.
+Never mutate the root while an isolated chain is active. Resume through project
+jobs and the saved context prefix rather than reconstructing work locally.
 
 ## Implementation
 
-Submit the built-in `implement` workflow with:
+Use [the implementer prompt](../executing-plans/implementer-prompt.md). Submit
+`implement` with its declared inputs, the saved implementation profile when
+present, and `<plan-slug>/phase-<NN>/implement` as `context_key`. The first write
+has no parent. A same-phase fix uses the latest successful implementation job as
+`parent_job_id`, includes only delta requirements and review findings, and keeps
+the implementation context when continuity is useful.
 
-- `project_id`: stored project identifier.
-- `routing_profile`: stored phase profile.
-- `inputs.prompt`: thin worker dispatch prompt.
-- `inputs.commit_message`: phase Conventional Commit message.
-- `context_key`: `<plan-slug>/phase-<NN>/<owner_execution_role>`.
-- `parent_job_id`: empty initially.
+Call `job_wait` with `timeout_s: 30` and
+`include_stage_outputs: false`. Repeat only for `queued` or `running`. On
+success, inspect `job.result.text` and the result commit; never concatenate stage
+text with the final result. Diagnose a failure before one targeted retry. Stop
+on cancellation or integration conflict unless the user explicitly directs a
+valid recovery.
 
-Then call `job_wait` with `include_stage_outputs: false`.
-
-- `queued` or `running`: wait again.
-- `succeeded`: read `job.result.text`, then continue.
-- `interrupted`: call `job_retry`, then wait.
-- `failed` or `cancelled`: output `BLOCKED`.
-- `integration_conflict`: preserve branches and block.
-
-Never concatenate `stage.text` with `job.result.text`. Compact waits omit
-intermediate outputs and prevent duplicate agent messages.
-
-Workers never change Git history. OpenMCP commits successful implementation stages.
-
-## Same-phase fixes
-
-Submit the `implement` workflow and the same profile. Set `parent_job_id` to the
-latest implement job. Reuse the implementer context key. Send `FIX:` plus only
-delta context. Use a `fix:` commit message.
+Workers never modify Git history. OpenMCP commits successful `implement` jobs.
 
 # Gate 3: Review
 
-Perform specification review. The selected reviewer performs code-quality
-review. Both must pass before integration.
+Coordinator performs specification review; an independent `review` job performs
+code-quality review. Both must pass before integration.
 
 ## Isolated verification
 
-Terminal jobs release their OpenMCP worktrees. Do not expect the execution
-worktree to remain. Create a disposable detached worktree at
-`job.result.commit`. Run every declared check there. Remove that worktree after
-verification.
+Terminal jobs release their OpenMCP worktrees. Create a disposable detached
+worktree at `job.result.commit`, run every declared check there, inspect the
+diff, then remove the worktree.
 
-Review these ranges:
+Review:
 
-- Implementation: `job.integration_base..job.result.commit`.
-- Whole phase: `phase_base..job.result.commit`.
+- implementation delta: `job.integration_base..job.result.commit`
+- whole phase: `phase_base..job.result.commit`
 
-Reject undeclared paths, unmet requirements, missing task notes, missing
-responses, or missing evidence.
+Fail undeclared paths, unmet requirements, missing task records, or missing
+evidence.
 
 ## Independent quality review
 
-1. Submit the built-in `review` workflow with the latest implement job as parent.
-2. Pass the stored routing profile.
-3. Use `<phase-prefix>/reviewer/<reviewer_execution_role>/<latest-implement-job-id>`.
-4. Require review of the exact implementation range.
-5. Wait with `include_stage_outputs: false`.
-6. Inspect only `job.result.text`.
-
-Require:
+Submit `review` with the latest implementation job as parent, a unique
+`<phase-prefix>/review/<implementation-job-id>` context key, and the selected
+review profile when present. Require review of the exact implementation range.
+Inspect only `job.result.text` and require:
 
 ```text
 # CODE QUALITY REVIEW
 - Status: PASS | PASS_WITH_DEBT | FAIL
-- Findings: [severity, path, line, actionable fix]
-- Scope checked: [paths]
+- Findings: <severity, path, line, actionable fix>
+- Scope checked: <paths>
 ```
 
-Correctness and security findings force `FAIL`. Quality findings become
-`PASS_WITH_DEBT`. Failed reviews return to Same-phase fixes.
+Correctness or security findings force `FAIL`; non-blocking quality findings may
+be `PASS_WITH_DEBT`. A review job is read-only and cannot parent a fix. Anchor
+the fix to the latest implementation job and include the review findings in the
+fix prompt, then repeat both reviews.
 
 ## Integration
 
-After both reviews pass, call `job_integrate` on the latest implement job. Never
-merge, cherry-pick, reset, or stage worker changes manually.
+After specification and quality review pass, call `job_integrate` on the latest
+approved `implement` job. Never integrate `review` or `consult`, and never merge,
+cherry-pick, reset, or stage worker changes manually.
 
-Then append review evidence to `journal.md`. Update `.handover.md`. Record
-integrated commits. Commit coordination state as
-`chore(plan): record phase <N>`.
+Append evidence to `journal.md`, update `.handover.md`, and commit coordination
+state as `chore(plan): record phase <N>`.
 
-Output:
+Emit:
 
 ```text
 # REVIEW
@@ -221,48 +179,38 @@ docs/plans/<slug>/
   phase-01/{prompt,notes,journal}.md
 ```
 
-`.handover.md` contains:
+`.handover.md` frontmatter:
 
 ```yaml
 ---
 status: ACTIVE | BLOCKED | DONE
 topic: <one-line topic>
 current_phase: <N>
-owner: <nickname|null>
-owner_execution_role: <role|null>
-consultant: <nickname|null>
-consultant_execution_role: <role|null>
-reviewer: <nickname|null>
-reviewer_execution_role: <role|null>
-routing_profile: <name|null>
 next_action: "Execute Phase <N>"
-phase_base: <commit|null>
 project_id: <OpenMCP project UUID|null>
+phase_base: <commit|null>
 context_prefix: <plan-slug>/phase-<NN>
-job_refs: { phase: <N>, latest_consult: <id|null>, latest_implement: <id|null>, latest_review: <id|null> }
-read_first: [ <file>, ... ]
-completed_tasks: [ { phase, task, summary }, ... ]
-completed_phases: [ { phase, commit, summary }, ... ]
+guidance:
+  implement: { workflow: implement, profile: <name|null> }
+  consult: { workflow: consult, profile: <name|null> }
+  review: { workflow: review, profile: <name|null> }
+job_refs: { phase: <N>, latest_consult: <id|null>, latest_implementation: <id|null>, latest_review: <id|null> }
+read_first: [<file>, ...]
+completed_tasks: [{ phase, task, summary }, ...]
+completed_phases: [{ phase, commit, summary }, ...]
 ---
 ```
 
-OpenMCP remains authoritative during active chains. Rewrite handover after
-integration.
+OpenMCP job records are authoritative while a chain is active. Rewrite handover
+after integration.
 
 # Hard Rules
 
-- Remain the primary workflow owner.
-- Use `task_route`; perform semantic routing.
-- Follow `setup_instruction`; register only an absent, clean project root.
-- Expose delegated agents by nickname only.
-- Delegate implementation but own orchestration.
-- Use configured consultant, owner, and reviewer nicknames.
-- Require independent review for every code-changing phase.
-- Never expose provider-native session identifiers.
-- Never mutate the root during isolated chains.
+- Remain the primary workflow owner; delegate repository changes.
+- Use real OpenMCP results and never simulate job success.
+- Require a running daemon and a clean registered root.
+- Keep one linear implementation chain per phase.
+- Never expose provider, target, model, or native session identities.
 - Never depend on terminal job worktrees remaining present.
-- Never duplicate stage and result output.
-- Never integrate read-only jobs.
-- Never integrate before both reviews pass.
-- Use parent jobs for reviews and fixes.
+- Never integrate read-only jobs or integrate before both reviews pass.
 - No completion claim without fresh evidence.

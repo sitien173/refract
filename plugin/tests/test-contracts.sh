@@ -37,18 +37,19 @@ for path in (root / "shared").glob("*.md"):
     match = re.search(r"ccg-shared-version:\s*([^\s>]+)", path.read_text())
     assert match and match.group(1) == plugin_version, path
 
-toml_blocks = re.findall(r"```toml\n(.*?)```", (root / "README.md").read_text(), re.S)
-assert toml_blocks
-for block in toml_blocks:
+readme = (root / "README.md").read_text()
+for block in re.findall(r"```toml\n(.*?)```", readme, re.S):
     tomllib.loads(block)
 
-json_blocks = re.findall(r"```json\n(.*?)```", (root / "README.md").read_text(), re.S)
-assert json_blocks
-json_documents = [json.loads(block) for block in json_blocks]
-route_template = next(document for document in json_documents if "routes" in document)
-delegated_routes = [route for route in route_template["routes"] if route["role"] != "coordinator"]
-assert delegated_routes
-assert all(route.get("execution_role") for route in delegated_routes)
+json_documents = [
+    json.loads(block)
+    for block in re.findall(r"```json\n(.*?)```", readme, re.S)
+]
+guide = next(document for document in json_documents if "recommendations" in document)
+assert guide["version"] == 1
+assert guide["recommendations"]
+assert all(item.get("use_case") and item.get("workflow") for item in guide["recommendations"])
+assert all("routing_profile" not in item for item in guide["recommendations"])
 PY
 
 workflow_files=(README.md CLAUDE.md commands hooks shared skills)
@@ -65,12 +66,17 @@ if grep -R -E '\bcodex\b|\bagy\b|backend-write|frontend-write|review-read|backen
 fi
 
 if grep -R -E '\b(Forge|Canvas|Sage|Sentinel)\b|forge-write|canvas-write|sage-read|sentinel-read' "${public_workflow_files[@]}"; then
-    printf 'configured agent nickname hard-coded in public workflow\n' >&2
+    printf 'configured target label leaked into public workflow\n' >&2
+    exit 1
+fi
+
+if grep -R -E 'task_route|routing_profile|routing-profile|routing profile|execution_role|setup_instruction|openmcp://models|openmcp://routing-profiles|\.openmcp/workflows' "${workflow_files[@]}"; then
+    printf 'obsolete OpenMCP contract found\n' >&2
     exit 1
 fi
 
 if grep -R -E '`(quality|balanced|cost)`' skills; then
-    printf 'routing profile preset hard-coded in skill\n' >&2
+    printf 'profile preset hard-coded in skill\n' >&2
     exit 1
 fi
 
@@ -80,31 +86,31 @@ grep -q '^## Implementation Response$' shared/journal-template.md
 grep -q '^## Quality Review$' shared/journal-template.md
 grep -q '^## Review Result$' shared/journal-template.md
 grep -q '^## Final Commit$' shared/journal-template.md
+
 grep -q 'Every executable plan' skills/writing-plans/SKILL.md
 grep -q 'Resolve at execution' skills/writing-plans/SKILL.md
-grep -q 'Do not call `task_route` during plan authoring' skills/writing-plans/SKILL.md
-grep -q 'Validate any user-pinned nickname' skills/executing-plans/SKILL.md
-grep -q 'Otherwise use the effective default' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'execution_role' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Do not call `task_guide` during plan authoring' skills/writing-plans/SKILL.md
+grep -q 're-run `task_guide` for an active phase chain' skills/executing-plans/SKILL.md
+grep -q 'OpenMCP supports exactly three workflows' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Project custom workflow files are unsupported' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://workflows/<project_id>' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Do not reroute an existing phase chain' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Existing phase chains keep stored routing decisions' skills/executing-plans/SKILL.md
-grep -q 'workflow: implement' skills/executing-plans/implementer-prompt.md
-grep -q 'Never mutate the root during isolated chains' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'setup_instruction' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Never mutate the root while an isolated chain is active' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Call `status` and require `running`' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'project_register' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'task_route' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'job_submit' skills/executing-plans/implementer-prompt.md
-grep -q 'job_wait' skills/executing-plans/implementer-prompt.md
-grep -q 'include_stage_outputs: false' skills/executing-plans/implementer-prompt.md
+grep -q 'task_guide' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'job.result.text' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'job_integrate' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'parent_job_id' skills/executing-plans/implementer-prompt.md
 grep -q 'openmcp://projects/<project_id>/jobs' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'openmcp://routing-profiles' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'openmcp://projects/<project_id>/routing-profiles' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'routing_profile' skills/executing-plans/implementer-prompt.md
+grep -q 'openmcp://projects/<project_id>/profiles' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You are Coordinator while this skill is active' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Terminal jobs release their OpenMCP worktrees' skills/coordinating-multi-model-work/SKILL.md
+
+grep -q 'workflow: implement' skills/executing-plans/implementer-prompt.md
+grep -q 'job_submit' skills/executing-plans/implementer-prompt.md
+grep -q 'job_wait' skills/executing-plans/implementer-prompt.md
+grep -q 'timeout_s: 30' skills/executing-plans/implementer-prompt.md
+grep -q 'include_stage_outputs: false' skills/executing-plans/implementer-prompt.md
+grep -q '^  profile: <phase implementation profile>$' skills/executing-plans/implementer-prompt.md
+grep -q 'latest successful implementation job' skills/executing-plans/implementer-prompt.md
 
 printf 'contract tests passed\n'
