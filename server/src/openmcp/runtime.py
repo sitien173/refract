@@ -1218,6 +1218,7 @@ class Runtime:
         attempted: set[str],
     ) -> TargetConfig | None:
         now = datetime.now(timezone.utc)
+        healthy: list[TargetConfig] = []
         for target_id in target_ids:
             target = plan.target(target_id)
             if target.id in attempted:
@@ -1226,9 +1227,14 @@ class Runtime:
             health = self.database.target_health(target_key)
             if self._is_open(str(health["circuit_open_until"]), now):
                 continue
-            if self.drivers.available(target):
+            if not self.drivers.available(target):
+                continue
+            healthy.append(target)
+            if self._target_active.get(target_key, 0) < target.max_concurrency:
                 return target
-        return None
+        # If every healthy target is busy, wait behind the first target's
+        # semaphore instead of failing a valid job for temporary saturation.
+        return healthy[0] if healthy else None
 
     @staticmethod
     def _is_open(value: str, now: datetime) -> bool:

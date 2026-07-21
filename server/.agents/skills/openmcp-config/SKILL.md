@@ -85,8 +85,9 @@ review = "sentinel-primary"
 consult = "sage-primary"
 ```
 
-Map all three built-ins. For advanced retry or timeout control, use an inline
-table:
+Map all three built-ins. Each selected target must advertise the corresponding
+`code`, `review`, or `consult` capability. For advanced retry or timeout control,
+use an inline table:
 
 ```toml
 implement = { targets = ["forge-quality", "forge-primary"], max_attempts = 2, timeout_s = 600 }

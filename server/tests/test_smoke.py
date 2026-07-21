@@ -1,4 +1,3 @@
-import asyncio
 import inspect
 import json
 import threading
@@ -11,7 +10,7 @@ import pytest
 from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
-from openmcp.backends.pi import PiParams, execute as pi_execute
+from openmcp.backends.pi import PiParams
 
 
 def test_imports() -> None:

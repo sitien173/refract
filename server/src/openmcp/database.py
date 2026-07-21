@@ -438,26 +438,43 @@ class Database:
         start_commit: str | None = None,
         increment_attempts: bool = False,
     ) -> None:
-        assignments = ["state=?"]
-        values: list[Any] = [state]
-        for column, value in (
-            ("target_id", target_id),
-            ("text", text),
-            ("outputs_json", json.dumps(outputs, ensure_ascii=False) if outputs is not None else None),
-            ("error", error),
-            ("commit_sha", commit),
-            ("start_commit", start_commit),
-        ):
-            if value is not None:
-                assignments.append(f"{column}=?")
-                values.append(value)
-        if increment_attempts:
-            assignments.append("attempts=attempts+1")
-        values.extend((job_id, stage_id))
+        outputs_json = (
+            json.dumps(outputs, ensure_ascii=False)
+            if outputs is not None
+            else None
+        )
         with self._connection:
             self._connection.execute(
-                f"UPDATE stages SET {', '.join(assignments)} WHERE job_id=? AND id=?",
-                values,
+                """
+                UPDATE stages SET
+                    state=?,
+                    target_id=CASE WHEN ? THEN ? ELSE target_id END,
+                    text=CASE WHEN ? THEN ? ELSE text END,
+                    outputs_json=CASE WHEN ? THEN ? ELSE outputs_json END,
+                    error=CASE WHEN ? THEN ? ELSE error END,
+                    commit_sha=CASE WHEN ? THEN ? ELSE commit_sha END,
+                    start_commit=CASE WHEN ? THEN ? ELSE start_commit END,
+                    attempts=attempts+?
+                WHERE job_id=? AND id=?
+                """,
+                (
+                    state,
+                    target_id is not None,
+                    target_id,
+                    text is not None,
+                    text,
+                    outputs is not None,
+                    outputs_json,
+                    error is not None,
+                    error,
+                    commit is not None,
+                    commit,
+                    start_commit is not None,
+                    start_commit,
+                    int(increment_attempts),
+                    job_id,
+                    stage_id,
+                ),
             )
         self.event(job_id, f"stage.{state}", {"stage": stage_id, "target": target_id or ""})
 
@@ -465,15 +482,14 @@ class Database:
         resolved = tuple(dict.fromkeys(stage_ids))
         if not resolved:
             raise ValueError("Retry requires at least one stage")
-        placeholders = ", ".join("?" for _ in resolved)
         with self._connection:
-            self._connection.execute(
-                f"""
-                UPDATE stages SET state='pending', target_id='', text='', outputs_json='[]',
-                    error='', commit_sha='', start_commit=''
-                WHERE job_id=? AND id IN ({placeholders})
+            self._connection.executemany(
+                """
+                UPDATE stages SET state='pending', target_id='', text='',
+                    outputs_json='[]', error='', commit_sha='', start_commit=''
+                WHERE job_id=? AND id=?
                 """,
-                (job_id, *resolved),
+                ((job_id, stage_id) for stage_id in resolved),
             )
             self._connection.execute(
                 "UPDATE jobs SET state='queued', error='', result_commit='', updated_at=? WHERE id=?",
@@ -529,22 +545,14 @@ class Database:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             return None
-        output_columns = (
-            "text, error"
-            if include_stage_outputs
-            else "CASE WHEN id=? THEN text ELSE '' END AS text, '' AS error"
-        )
-        stage_query = f"""
+        stage_rows = self._connection.execute(
+            """
             SELECT id, ordinal, mode, state, attempts, target_id,
-                   {output_columns}, commit_sha, start_commit
+                   text, error, commit_sha, start_commit
             FROM stages WHERE job_id=? ORDER BY ordinal
-        """
-        stage_params = (
-            (job_id,)
-            if include_stage_outputs
-            else (row["result_stage"], job_id)
-        )
-        stage_rows = self._connection.execute(stage_query, stage_params).fetchall()
+            """,
+            (job_id,),
+        ).fetchall()
         artifacts = self._connection.execute(
             "SELECT kind, path FROM artifacts WHERE job_id=? ORDER BY kind, path", (job_id,)
         ).fetchall()

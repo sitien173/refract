@@ -27,7 +27,11 @@ from openmcp.database import Database
 from openmcp.drivers import DriverResult
 from openmcp.models import JobView, StageView
 from openmcp.overlays import OverlayError, load_overlay_rules
-from openmcp.planning import parse_execution_plan, resolve_execution_plan
+from openmcp.planning import (
+    parse_execution_plan,
+    resolve_execution_plan,
+    target_execution_key,
+)
 from openmcp.runtime import Runtime
 from openmcp.workflows import (
     load_workflow,
@@ -693,7 +697,7 @@ id = "premium"
 backend = "codex"
 backend_profile = "mcp_execution"
 args = ["--ephemeral", "--color", "never"]
-capabilities = ["code"]
+capabilities = ["code", "review", "consult"]
 
 [profiles.quality]
 implement = "premium"
@@ -753,6 +757,30 @@ consult = { targets = ["primary", "backup"], max_attempts = 1, timeout_s = 90 }
         max_attempts=1,
         timeout_s=90,
     )
+
+
+def test_profile_rejects_target_without_workflow_capability(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[[targets]]
+id = "implementer"
+backend = "codex"
+capabilities = ["code"]
+
+[profiles.balanced]
+implement = "implementer"
+review = "implementer"
+consult = "implementer"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="workflow 'review' requires capability 'review'",
+    ):
+        load_config(path)
 
 
 def test_config_reads_legacy_selection_names(tmp_path) -> None:
@@ -913,6 +941,56 @@ review = "premium"
     assert base.default_profile == "balanced"
 
 
+def test_project_legacy_profile_resolves_global_custom_route(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    global_path = home / "config.toml"
+    global_path.write_text(
+        """
+[daemon]
+default_profile = "quality"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[[targets]]
+id = "strict-reviewer"
+backend = "pi"
+capabilities = ["review"]
+
+[[routes]]
+id = "strict-global"
+targets = ["strict-reviewer"]
+
+[profiles.quality]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    project = tmp_path / "project"
+    (project / ".openmcp").mkdir(parents=True)
+    (project / ".openmcp" / "config.toml").write_text(
+        """
+[routing_profiles.quality]
+review = "strict-global"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_project_config(project, load_config(global_path))
+
+    assert config.profiles["quality"]["review"].targets == ("strict-reviewer",)
+    assert config.profiles["quality"]["implement"].targets == ("primary",)
+    assert config.profiles["quality"]["consult"].targets == ("primary",)
+
+
 def test_project_config_rejects_daemon_and_target_overrides(tmp_path) -> None:
     project = tmp_path / "project"
     (project / ".openmcp").mkdir(parents=True)
@@ -1037,7 +1115,7 @@ async def test_new_submissions_reload_backend_without_reusing_session(
 [[targets]]
 id = "primary"
 backend = "{backend}"
-capabilities = ["code"]
+capabilities = ["code", "review", "consult"]
 
 [profiles.balanced]
 implement = "primary"
@@ -1705,6 +1783,35 @@ async def test_consult_job_discards_filesystem_changes(tmp_path) -> None:
         assert not (Path(record["worktree"]) / "result.txt").exists()
     finally:
         await runtime.close()
+
+
+def test_target_selection_prefers_available_capacity(tmp_path) -> None:
+    targets = (
+        TargetConfig(id="primary", backend="codex", max_concurrency=1),
+        TargetConfig(id="backup", backend="agy", max_concurrency=1),
+    )
+    runtime = Runtime(_config(tmp_path / "home", targets))
+    runtime.drivers = FakeDrivers()
+    plan = resolve_execution_plan(load_workflow("consult"), runtime.config, "balanced")
+    runtime._target_active[target_execution_key(targets[0])] = 1
+
+    selected = runtime._select_target(
+        plan.selection("consult").targets,
+        plan,
+        set(),
+    )
+
+    assert selected == targets[1]
+
+    runtime._target_active[target_execution_key(targets[1])] = 1
+    saturated = runtime._select_target(
+        plan.selection("consult").targets,
+        plan,
+        set(),
+    )
+
+    assert saturated == targets[0]
+    runtime.database.close()
 
 
 @pytest.mark.asyncio

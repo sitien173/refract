@@ -16,7 +16,9 @@ implement = ["forge-primary", "forge-backup"]
 implement = { targets = ["forge-primary", "forge-backup"], max_attempts = 2, timeout_s = 600 }
 ```
 
-Target lists are ordered for failover.
+Target lists are ordered for failover. A target at `max_concurrency` yields to
+the next available target; when every healthy target is saturated, execution
+waits behind the first target's concurrency semaphore.
 
 ## `[daemon]`
 
@@ -67,7 +69,8 @@ Targets are global only.
 | `max_concurrency` | `1` | Simultaneous jobs allowed on the target. |
 
 Capability conventions are `code`, `review`, `consult`, and `reasoning`.
-Explicit profile mappings select the named target directly.
+Every target selected for a workflow must advertise its required capability:
+`code` for `implement`, `review` for `review`, and `consult` for `consult`.
 
 ## Profiles `[profiles.<name>]`
 

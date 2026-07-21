@@ -65,6 +65,10 @@ class DaemonConfig:
     default_profile: str = "balanced"
     targets: tuple[TargetConfig, ...] = field(default_factory=tuple)
     profiles: dict[str, dict[str, TargetSelection]] = field(default_factory=dict)
+    legacy_selections: dict[str, TargetSelection] = field(
+        default_factory=dict,
+        repr=False,
+    )
     config_path: Path | None = None
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
@@ -289,16 +293,20 @@ def _target_selection(
     *,
     profile_id: str,
     workflow: str,
-    target_ids: set[str],
+    target_by_id: dict[str, TargetConfig],
     legacy_routes: dict[str, TargetSelection],
 ) -> TargetSelection:
     if isinstance(raw, str):
         name = raw.strip()
-        if name in legacy_routes:
-            return legacy_routes[name]
-        selected = (name,) if name else ()
-        max_attempts = len(selected)
-        timeout_s = 0
+        legacy = legacy_routes.get(name)
+        if legacy is not None:
+            selected = legacy.targets
+            max_attempts = legacy.max_attempts
+            timeout_s = legacy.timeout_s
+        else:
+            selected = (name,) if name else ()
+            max_attempts = len(selected)
+            timeout_s = 0
     elif isinstance(raw, list):
         selected = tuple(str(value) for value in raw)
         max_attempts = len(selected)
@@ -325,11 +333,23 @@ def _target_selection(
         max_attempts = 0
         timeout_s = 0
 
-    unknown_targets = set(selected) - target_ids
+    unknown_targets = set(selected) - target_by_id.keys()
     if not selected or unknown_targets:
         raise ValueError(
             f"Profile {profile_id!r} workflow {workflow!r} has invalid targets: "
             f"{sorted(unknown_targets)}"
+        )
+    required = _BUILTIN_WORKFLOW_CAPABILITIES.get(workflow)
+    incapable = [
+        target_id
+        for target_id in selected
+        if required is not None
+        and required not in target_by_id[target_id].capabilities
+    ]
+    if incapable:
+        raise ValueError(
+            f"Profile {profile_id!r} workflow {workflow!r} requires capability "
+            f"{required!r}; targets missing it: {incapable}"
         )
     return TargetSelection(
         targets=selected,
@@ -354,7 +374,7 @@ def _profiles(
         profile_id: dict(mapping) for profile_id, mapping in (base or {}).items()
     }
     inherited = profiles.get(inherited_profile, {})
-    target_ids = {target.id for target in targets}
+    target_by_id = {target.id: target for target in targets}
     for profile_id, mapping in raw.items():
         profile_id = str(profile_id)
         if not isinstance(mapping, dict) or not mapping:
@@ -366,7 +386,7 @@ def _profiles(
                     value,
                     profile_id=profile_id,
                     workflow=str(workflow),
-                    target_ids=target_ids,
+                    target_by_id=target_by_id,
                     legacy_routes=legacy_routes,
                 )
                 for workflow, value in mapping.items()
@@ -572,6 +592,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         default_profile=default_profile,
         targets=targets,
         profiles=profiles,
+        legacy_selections=legacy_routes,
         logging=_logging_config(raw.get("logging"), home),
     )
 
@@ -596,10 +617,17 @@ def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
     if not isinstance(project, dict):
         raise ValueError("[project] must be a TOML table")
 
-    legacy_routes = _legacy_routes(
-        raw.get("routes"),
-        base.targets,
-        include_defaults="routing_profiles" in raw,
+    legacy_routes = (
+        _default_legacy_routes(base.targets)
+        if "routing_profiles" in raw
+        else {}
+    )
+    legacy_routes.update(base.legacy_selections)
+    legacy_routes.update(
+        _legacy_routes(
+            raw.get("routes"),
+            base.targets,
+        )
     )
     profiles = _profiles(
         _renamed_value(raw, "profiles", "routing_profiles"),
@@ -619,6 +647,7 @@ def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
         base,
         default_profile=default_profile,
         profiles=profiles,
+        legacy_selections=legacy_routes,
     )
 
 

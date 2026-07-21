@@ -231,6 +231,9 @@ The selection model uses three plain terms:
 2. A **profile** maps each workflow to its preferred target or target list.
 3. A **target** configures one backend and model.
 
+Every selected target must advertise the workflow capability: `code` for
+`implement`, `review` for `review`, and `consult` for `consult`.
+
 Backend execution configuration belongs to each target: `backend`, `model`,
 `backend_profile`, `reasoning`, `system_prompt`, `isolated`, `read_only`, and
 backend-specific `args`. Each `args` item is passed as one argv token without
@@ -240,7 +243,8 @@ reference](CLI_ARGUMENTS.md) for the available Agy, Codex, and Pi flags,
 OpenMCP-owned transport options, and Windows behavior.
 For example, the `quality` profile selects `forge-quality`, whose target sets
 the model, Codex backend profile, and reasoning effort. A target list provides
-failover in order. Advanced workflow settings can use an inline table:
+failover in order; a target at `max_concurrency` yields to the next available
+target. Advanced workflow settings can use an inline table:
 
 ```toml
 implement = { targets = ["forge-primary", "canvas-primary"], max_attempts = 2, timeout_s = 600 }

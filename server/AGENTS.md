@@ -117,6 +117,7 @@ Sage and Sentinel default to `gpt-5.6-sol`. Configuration can override models.
 lists. The daemon uses `default_profile` when submissions omit one. Profiles
 support cost, quality, latency, offline, or project-specific policies without
 changing workflows. Lists provide failover without another configuration layer.
+Every selected target must advertise the workflow's required capability.
 
 ## Code Conventions
 
