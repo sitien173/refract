@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 7.1.0 -->
+<!-- ccg-shared-version: 7.2.0 -->
 
 # Phase <N> — Decision Notes
 

@@ -1,8 +1,9 @@
 ---
-description: Explore intent, requirements, and trade-offs via dialogue, then write a design doc.
+description: Clarify intent and trade-offs, confirm a design, and write the design document.
 argument-hint: [idea or feature to explore]
 ---
 
-Invoke the `superpowers-ccg:brainstorming` skill. Turn the idea below into a confirmed design. Use the configured consultant for every non-trivial design. Skip consultation only for fully specified, low-risk work.
+Invoke `superpowers-ccg:brainstorming`. Use canonical Gate 1 consultation for
+non-trivial design; skip it only for fully specified, low-risk routine work.
 
 Idea: $ARGUMENTS

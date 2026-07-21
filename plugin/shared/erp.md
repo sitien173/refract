@@ -1,7 +1,7 @@
-<!-- ccg-shared-version: 7.1.0 -->
+<!-- ccg-shared-version: 7.2.0 -->
 # External Response Protocol (ERP)
 
-Worker-facing contract for the selected owner's response. This bundled file is
+Worker-facing contract for the implementation response. This bundled file is
 read directly from the installed plugin.
 
 ## The `# EXTERNAL RESPONSE` block
@@ -11,7 +11,7 @@ Return exactly this block. Each section is what Coordinator scans for.
 ```text
 # EXTERNAL RESPONSE
 ## META
-- Phase / Owner nickname / Started / Finished / Plan dir
+- Phase / Started / Finished / Plan dir
 ## SUMMARY
 [one sentence]
 ## FILES MODIFIED

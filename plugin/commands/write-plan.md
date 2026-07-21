@@ -1,8 +1,10 @@
 ---
-description: Turn a confirmed design into a phase-based implementation plan.
-argument-hint: [design doc path or topic]
+description: Turn a confirmed design into a resumable phase-based implementation plan.
+argument-hint: [design document path or topic]
 ---
 
-Invoke the `superpowers-ccg:writing-plans` skill and follow its workflow to produce a phase-based implementation plan. Do the mandatory resume check first. Record route intent. Defer owner and profile selection until execution unless the user pins them.
+Invoke `superpowers-ccg:writing-plans`. Run the mandatory resume check, record a
+complete task-guidance input per phase, and defer profile selection until
+execution unless the user pins one.
 
-Design / topic: $ARGUMENTS
+Design or topic: $ARGUMENTS

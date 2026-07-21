@@ -1,85 +1,54 @@
 ---
 name: systematic-debugging
-description: "Use when encountering any bug, test failure, or unexpected behaviour, before proposing fixes. Covers root-cause investigation, hypothesis testing, and fixing at the source."
+description: "Finds root causes before fixes. Use for bugs, test failures, crashes, regressions, performance issues, or unexpected behavior."
 ---
 
 # Systematic Debugging
 
-Find the root cause before touching anything. Random fixes waste time and create
-new bugs; symptom patches mask the real defect. Routing and gates live in
-`coordinating-multi-model-work` — load it first.
+Load `coordinating-multi-model-work` first when the investigation may lead to
+repository changes.
 
-## The Iron Law
+## Iron Law
 
+```text
+NO FIX WITHOUT ROOT-CAUSE EVIDENCE
 ```
-NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
-```
 
-You cannot propose a fix until Phase 1 is complete. **Violating the letter of
-this process violates the spirit of debugging.** Systematic is *faster* than
-guess-and-check thrashing — especially under time pressure.
+## Workflow
 
-## Use When
+1. **Reproduce.** Read the full error and stack trace. Record an exact, reliable
+   reproduction and the expected behavior.
+2. **Trace.** Inspect recent changes and follow the bad state backward to its
+   source. At component boundaries, capture inputs and outputs to locate the
+   first divergence.
+3. **Compare.** Find similar working code, read it completely, and list every
+   relevant difference from the failing path.
+4. **Hypothesize.** State one falsifiable claim: “X causes the failure because
+   Y.” Test the smallest possible variable; do not stack speculative changes.
+5. **Fix.** Add a failing regression test, confirm it fails for the diagnosed
+   reason, apply the smallest source fix, then run focused and broader checks.
 
-- Any test failure, bug, crash, unexpected behaviour, build/integration failure,
-  or performance problem.
-- *Especially* when: under time pressure, a fix seems "obvious", you've already
-  tried multiple fixes, or the last fix didn't work.
+For unclear, cross-component, or architecture-sensitive failures, use Gate 1
+consultation. The implementation prompt must carry the reproduction and
+root-cause evidence; the Review gate rejects symptom-only fixes.
 
-## Workflow — Four Phases (complete each before the next)
+## Stop Conditions
 
-1. **Root cause.** Read the full error/stack trace. Reproduce reliably. Check
-   recent changes (`git diff`, new deps, config). In multi-component systems, add
-   diagnostic logging at each boundary and run once to see *where* it breaks.
-   Trace the bad value backward to its source.
-2. **Pattern analysis.** Find similar working code. Read any reference
-   implementation completely. List every difference between working and broken —
-   "that can't matter" is how bugs hide.
-3. **Hypothesis & test.** State one hypothesis: "X is the root cause because Y."
-   Make the smallest change that tests it — one variable at a time. Wrong? Form a
-   new hypothesis; don't stack fixes.
-4. **Fix the root cause.** Start with a failing test that reproduces the bug
-   (`test-driven-development`). Apply one fix. Verify the test passes and nothing
-   else broke. No bundled "while I'm here" changes.
+- Three failed fix attempts: stop, question the model or architecture, and ask
+  the user before another attempt.
+- The issue cannot be reproduced or evidence contradicts the hypothesis: return
+  to tracing, not implementation.
+- A proposed fix lacks a regression test: do not submit it unless the user
+  explicitly waives testing.
 
-**3+ failed fixes ⇒ STOP.** Each fix revealing a new problem elsewhere means the
-architecture is wrong, not the hypothesis. Question fundamentals and ask the user
-before attempting fix #4.
+## Rules
 
-## CCG Routing
-
-- Route each debugging use case through `task_route`. Use the configured
-  consultant for unclear or cross-component failures.
-- The dispatch prompt must require a root-cause hypothesis **with evidence** (boundary logs / failing test) before any fix commit.
-- **Review gate:** fail fixes lacking root-cause evidence or reproduction.
-
-## Hard Rules
-
-- No fix before Phase 1 is complete — investigation precedes proposals.
-- One hypothesis, one change at a time; never bundle fixes or refactors.
-- Every bug fix begins with a failing test reproducing it.
-- 3+ failed fixes → stop and question the architecture with the user.
-
-## Red Flags — STOP, return to Phase 1
-
-- "Quick fix now, investigate later" · "just try changing X and see".
-- Proposing solutions before tracing the data flow.
-- "Skip the test, I'll verify manually" · "it's probably X, let me fix that".
-- "One more fix attempt" after 2+ failures · each fix breaks something new.
-
-## Rationalizations
-
-| Excuse | Reality |
-|---|---|
-| "Issue is simple, skip the process" | Simple bugs have root causes too; the process is fast for them. |
-| "Emergency, no time" | Systematic is faster than thrashing — 95% vs 40% first-fix rate. |
-| "Try this first, investigate later" | The first fix sets the pattern. Do it right from the start. |
-| "Multiple fixes at once saves time" | Can't isolate what worked; causes new bugs. |
-| "Reference too long, I'll adapt it" | Partial understanding guarantees bugs. Read it fully. |
-| "I see the problem" | Seeing the symptom ≠ understanding the root cause. |
+- One hypothesis and one experimental change at a time.
+- Fix the source, not a downstream symptom.
+- Do not bundle refactors or unrelated cleanup with a fix.
+- Record reproduction, root cause, RED → GREEN evidence, and remaining risk.
 
 ## References
 
-- `skills/coordinating-multi-model-work/SKILL.md` — routing, consultation, gates.
-- `skills/test-driven-development/SKILL.md` — Phase 4: failing test before the fix.
-- `skills/verifying-before-completion/SKILL.md` — verify the fix with fresh evidence.
+- `skills/test-driven-development/SKILL.md` — regression-test cycle.
+- `skills/verifying-before-completion/SKILL.md` — fresh completion evidence.

@@ -1,101 +1,70 @@
 ---
 name: verifying-before-completion
-description: "Use when about to claim work is complete, fixed, or passing — before committing, creating PRs, or reporting done. Requires running verification and confirming output before any success claim."
+description: "Requires fresh evidence before claiming work is complete, fixed, passing, ready to integrate, or ready to hand off."
 ---
 
 # Verifying Before Completion
 
-Claiming work is complete without verification is dishonesty, not efficiency.
-Evidence before claims, always. The Review gate semantics live in
-`coordinating-multi-model-work` — load it first.
+Load `coordinating-multi-model-work` first for delegated work. Its Gate 3 owns
+independent review and integration; this skill owns evidence discipline.
 
-## The Iron Law
+## Iron Law
 
-```
-NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
-```
-
-If you haven't run the verification command *in this message*, you cannot claim
-it passes. **Violating the letter of this rule violates the spirit of it** —
-paraphrases, synonyms, and implied success all count as claims.
-
-## Use When
-
-- Work appears complete and the user expects a final status.
-- A phase, plan, bug fix, or refactor is about to be marked done.
-- Before ANY commit, push, PR, task hand-off, or expression of satisfaction
-  ("Great!", "Done!", "should work now").
-
-## The Gate Function
-
-```
-Before claiming any status:
-1. IDENTIFY  — which command proves this claim?
-2. RUN       — execute the full command, fresh and complete
-3. READ      — full output, exit code, failure count
-4. VERIFY    — does the output actually confirm the claim?
-5. ONLY THEN — state the claim WITH its evidence
-Skip a step = guessing, not verifying.
+```text
+NO COMPLETION CLAIM WITHOUT FRESH VERIFICATION EVIDENCE
 ```
 
-## Workflow
+## Gate Function
 
-1. Run the declared integration checks (build, lint, type-check, tests, smoke)
-   fresh — never reuse a previous run.
-   For external jobs, use a disposable detached worktree at
-   `job.result.commit`. Terminal execution worktrees are already released.
-2. Read full output and exit codes; compare against the original request and
-   acceptance criteria, line by line.
-3. Confirm changed files match the expected scope.
-4. Run the Review gate from `coordinating-multi-model-work`.
-5. For bug fixes, verify the red→green cycle: the regression test fails without
-   the fix and passes with it (don't trust a test that only passed once).
-6. Report: task status, files changed, integration result with evidence, Review
-   status, open follow-ups.
+Before any success claim:
 
-## Common Failures
+1. **Identify** the command or inspection that proves the claim.
+2. **Run** it fresh and completely in the correct revision.
+3. **Read** the full output, exit code, and failure count.
+4. **Compare** the evidence with every acceptance criterion.
+5. **Report** only what the evidence supports.
 
-| Claim | Requires | Not sufficient |
-|---|---|---|
-| Tests pass | Test output: 0 failures | A previous run, "should pass" |
-| Build succeeds | Build command: exit 0 | Linter passed, "logs look fine" |
-| Bug fixed | Original-symptom test passes | Code changed, assumed fixed |
-| Regression test works | Red→green cycle verified | Test passed once |
-| Worker completed | Diff shows requested changes | Worker reported "success" |
-| Requirements met | Line-by-line checklist | Tests passing |
+For an OpenMCP implementation, verify in a disposable detached worktree at the
+result commit. Never assume a terminal execution worktree still exists.
 
-## Hard Rules
+## Required Evidence
 
-- No completion claim until required checks pass, or Review returns
-  `PASS_WITH_DEBT` with explicit non-blocking debt. `FAIL` blocks completion.
-- Unrun tests are not passed tests. Partial checks prove nothing.
-- Trust no worker/agent success report — verify the VCS diff directly.
-- Review stays scoped to spec + changed files; broader audit only if the phase
-  checklist asks for it.
-- For external code changes, submit the built-in `review` workflow with the
-  latest implement job as parent. Pass the stored routing profile. Use a unique
-  reviewer context. Fold findings into Review status before `job_integrate`.
+- Declared build, lint, type, test, and smoke commands as applicable.
+- Changed paths and diff match the approved scope.
+- Acceptance criteria checked line by line.
+- Bug fixes show the regression test failing without the fix and passing with it.
+- Specification and independent quality review status.
+- Explicit debt, skipped checks, or environmental blockers.
 
-## Red Flags — STOP
+## Claim Standard
 
-- "should", "probably", "seems to" · satisfaction before evidence.
-- About to commit/push/PR without having run verification.
-- Trusting a worker's success report · relying on a partial check.
-- "Just this once" · "I'm tired and want this done".
+| Claim | Minimum evidence |
+| --- | --- |
+| Tests pass | Fresh test output with zero failures |
+| Build succeeds | Fresh build exit code 0 |
+| Bug is fixed | Original reproduction or regression test now passes |
+| Requirements are met | Criterion-by-criterion evidence |
+| Worker finished correctly | Verified commit, diff, and checks |
 
-## Rationalizations
+`FAIL` blocks completion. `PASS_WITH_DEBT` permits completion only when the debt
+is non-blocking, explicit, and assigned. An unrun check is not a passed check.
+Worker summaries and previous runs are not proof.
 
-| Excuse | Reality |
-|---|---|
-| "Should work now" | Run the verification. |
-| "I'm confident" | Confidence ≠ evidence. |
-| "Linter passed" | Linter ≠ compiler ≠ tests. |
-| "Worker said success" | Verify independently via the diff. |
-| "Partial check is enough" | Partial proves nothing. |
-| "Different words, rule doesn't apply" | Spirit over letter. |
+## Final Report
+
+State:
+
+- status and revision verified,
+- files changed,
+- commands and outcomes,
+- specification and quality review results,
+- debt, skipped checks, and follow-ups.
+
+Avoid “should,” “probably,” or any implied success not backed by the evidence in
+this run.
 
 ## References
 
-- `skills/coordinating-multi-model-work/SKILL.md` — Review gate, PASS / PASS_WITH_DEBT / FAIL semantics.
-- `skills/test-driven-development/SKILL.md` — red→green evidence for regression tests.
-- `skills/systematic-debugging/SKILL.md` — verify a fix resolved the root cause.
+- `skills/coordinating-multi-model-work/SKILL.md` — Gate 3 and integration.
+- `skills/test-driven-development/SKILL.md` — RED → GREEN evidence.
+- `skills/systematic-debugging/SKILL.md` — root-cause verification.

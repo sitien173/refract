@@ -1,59 +1,44 @@
 ---
 name: executing-plans
-description: "Runs or resumes a written plan one phase at a time through the coordinating workflow's Plan, Execute, and Review gates. Use when executing or resuming an implementation phase."
+description: "Runs or resumes one phase of a folder-layout implementation plan through the canonical Plan, Execute, and Review gates."
 ---
 
 # Executing Plans
 
-Thin phase-runner. **Load `coordinating-multi-model-work` first** — it owns the
-gates, job states, review rules, integration, and handover schema. This skill
-adds only what is specific to running a plan phase: setup, resume, and route
-resolution. For OpenMCP tool signatures, workflows, resources, and states, see
-[coordinating's tool contract](../coordinating-multi-model-work/references/tool-contract.md).
+Load `coordinating-multi-model-work` first. It owns OpenMCP setup, guidance,
+job-state handling, verification, review, integration, and handover. This skill
+only adapts that workflow to a written plan.
 
-## Use When
+## Per-Phase Procedure
 
-- An executable (folder-layout) plan exists.
-- The user requests execution or resumption.
+1. Read `PLAN.md`, `.handover.md`, and validated `read_first` paths. Select one
+   phase and confirm its tasks, files, acceptance criteria, checks, and commit.
+2. If `project_id` is absent, run canonical project setup.
+3. Resume before resolving new guidance: read
+   `openmcp://projects/<project_id>/jobs` and reconcile `job_refs` plus
+   `context_prefix` with OpenMCP's records.
+4. For an existing chain, restore its saved workflows and profiles. Do not
+   re-run `task_guide` for an active phase chain; stop if recovery is ambiguous.
+5. For a new phase, call `task_guide` with the phase's complete **Task Guide
+   Input**. Validate a user-pinned profile, otherwise use each matching
+   recommendation or the configured default.
+6. Run Gate 1. Create `phase-<NN>/prompt.md`, `notes.md`, and `journal.md` only
+   when the canonical checkpoint requires them.
+7. Run Gate 2 with `implementer-prompt.md` and one linear implementation chain.
+8. Run Gate 3, integrate the approved implementation, record evidence, and
+   advance handover only after review passes.
+9. After the final phase, mark handover `DONE` and invoke
+   `verifying-before-completion`.
 
-## Per-phase procedure
+## Rules
 
-1. Read `PLAN.md` once; select the requested phase. Read `.handover.md` and its
-   validated `read_first` paths.
-2. **Project setup** (only without a `project_id`): run coordinating's *Project
-   Setup* — `setup_instruction`, then `project_register` for an absent clean
-   root, then `doctor`.
-3. **Resume before routing.** Read `openmcp://projects/<project_id>/jobs`; match
-   `job_refs` and `context_prefix`. For an existing phase chain, restore its
-   stored nickname, execution role, workflow, and profile (recover missing
-   values from the job's workflow, profile, and context key; stop if ambiguous).
-   Never call `task_route` again for that phase.
-4. **New phase routing.** Call `task_route` with the phase route intent and
-   `project_id`. Validate any user-pinned nickname; otherwise select the
-   configured recommendation. Split the phase when its use cases need different
-   owners. Confirm the built-in `implement`/`consult`/`review` workflows against
-   `openmcp://workflows/<project_id>`, and the profile against
-   `openmcp://projects/<project_id>/routing-profiles`.
-5. Confirm the resolved phase has one owner, one routing profile, two to four
-   tasks, files, acceptance criteria, checks, and a commit message.
-6. **Run the three gates per `coordinating-multi-model-work`:** Gate 1 emits
-   `# ROUTE`; Gate 2 checkpoints, submits the built-in `implement` workflow (using
-   `implementer-prompt.md`), and waits compactly; Gate 3 verifies in a
-   disposable worktree, runs independent review, and integrates on PASS.
-7. Append review evidence to `journal.md`, update `.handover.md`, and commit
-   coordination state as `chore(plan): record phase <N>`.
-8. Advance only after Review passes. After the final phase, mark handover `DONE`
-   and invoke `verifying-before-completion`.
-
-## Skill-specific rules
-
-- Flat plans are documentation only — never execute one.
-- Existing phase chains keep stored routing decisions; only new phases reload
-  routes and profiles.
-- Recover ambiguous routing? Stop and ask, rather than re-routing a live chain.
-
-(Job-state handling, worktree verification, review gate, and no-manual-Git rules
-are canonical in `coordinating-multi-model-work`.)
+- Execute folder-layout plans only.
+- Run one phase at a time.
+- Existing phase chains keep stored guidance decisions; new phases load current
+  guidance.
+- Never reconstruct or manually integrate an OpenMCP chain.
+- If plan scope is incomplete or resume state conflicts with OpenMCP, stop and
+  ask rather than guessing.
 
 ## References
 
