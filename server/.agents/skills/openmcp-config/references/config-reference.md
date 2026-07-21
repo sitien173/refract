@@ -141,17 +141,22 @@ on every `task_route` call.
 ```json
 {
   "version": 1,
-  "columns": ["use_case", "recommend", "role", "reason"],
+  "columns": ["use_case", "workflow", "routing_profile", "reason"],
   "routes": [
     {
       "use_case": "Non-UI repository implementation",
-      "recommend": "Forge",
-      "role": "owner",
-      "reason": "Owns non-UI implementation."
+      "workflow": "implement",
+      "routing_profile": "quality",
+      "reason": "Implements repository changes using the quality profile."
     }
   ]
 }
 ```
+
+The coordinator passes `workflow` and `routing_profile` to `job_submit`.
+Profiles resolve workflow roles to internal route IDs, so task-route templates
+should not contain agent recommendation fields. If `routing_profile` is absent,
+OpenMCP uses the configured default profile.
 
 ## CLI argument policy boundary
 

@@ -25,8 +25,9 @@ strict and the message names the exact stage or variable at fault.
   property: `write` stages can commit and share the job's primary worktree;
   `read` stages run in disposable detached worktrees and cannot commit. You pick
   the mode based on whether the stage must change files.
-- **Routes are logical roles.** Use role names like `sentinel`, `forge`, `sage`
-  that the active routing profile maps onto targets. Never name a provider.
+- **Routes are logical roles.** Use profile keys such as `implement`, `review`,
+  and `consult`, which the active routing profile maps onto internal route IDs.
+  Never put a route ID, target ID, or provider name in a workflow stage.
 - **Variables carry data between stages.** A prompt references upstream results
   with `${stages.<stage>.text}`. This only works if the current stage lists that
   stage in `needs`.
@@ -95,12 +96,12 @@ inputs:
 stages:
   review:
     mode: read
-    route: sentinel
+    route: review
     context: reviewer
     prompt: "Review this request and list required changes: ${inputs.prompt}"
   fix:
     mode: write
-    route: forge
+    route: implement
     needs: [review]
     prompt: |
       Implement ${inputs.prompt}
@@ -122,7 +123,7 @@ useful for parallel review or exploration:
 stages:
   survey:
     mode: read
-    route: sentinel
+    route: review
     fanout: 3
     prompt: "Independently review: ${inputs.prompt}"
 ```

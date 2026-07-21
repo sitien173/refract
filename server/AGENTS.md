@@ -61,9 +61,10 @@ Built-in workflows:
 - `consult` for non-committing analysis
 
 `job_submit` accepts `routing_profile` and `parent_job_id`; `job_wait` accepts
-`include_stage_outputs`. Public resources expose role nicknames. Internal
-provider identities remain configuration-only, although configured target
-health is visible through the models resource.
+`include_stage_outputs`. Task-route templates expose workflows and routing
+profiles, not public agent recommendations. Internal provider identities remain
+configuration-only, although configured target health is visible through the
+models resource.
 
 ## Architecture
 

@@ -164,7 +164,11 @@ files. Never expose secrets this way.
 
 `task_routes.json` is guidance the coordinator reads to classify work; it does
 not itself route jobs. Keep it a valid template with `version`, `columns`, and
-`routes`. It reloads on every `task_route` call, so no restart is needed.
+`routes`. Each route entry should identify a `use_case`, `workflow`, and
+`routing_profile`; `reason` is optional explanatory text. Do not add agent
+recommendations or internal route IDs—the coordinator passes only `workflow`
+and `routing_profile` to `job_submit`. It reloads on every `task_route` call, so
+no restart is needed.
 
 ## Reload behavior
 
