@@ -1356,7 +1356,13 @@ def test_job_views_return_result_stage_text_once(tmp_path) -> None:
         worktree="/worktree",
         stages=[("implement", 0, "write"), ("review", 1, "read")],
     )
-    database.set_stage_state("job", "implement", "succeeded", text="implemented")
+    database.set_stage_state(
+        "job",
+        "implement",
+        "succeeded",
+        text="implemented",
+        error="implementation diagnostic",
+    )
     database.set_stage_state("job", "review", "succeeded", text="reviewed")
     database.set_job_state("job", "succeeded")
 
@@ -1368,7 +1374,12 @@ def test_job_views_return_result_stage_text_once(tmp_path) -> None:
     assert compact.result.text == "reviewed"
     assert detailed.result.text == "reviewed"
     assert [stage.text for stage in compact.stages] == ["", ""]
+    assert [stage.error for stage in compact.stages] == ["", ""]
     assert [stage.text for stage in detailed.stages] == ["implemented", ""]
+    assert [stage.error for stage in detailed.stages] == [
+        "implementation diagnostic",
+        "",
+    ]
     database.close()
 
 
