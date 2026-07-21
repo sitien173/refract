@@ -99,24 +99,27 @@ Resources include:
 `task_route` loads task-route definitions for the supplied task. With
 `project_id`, it prefers `.openmcp/task_routes.json`. Otherwise, it loads
 `~/.openmcp/task_routes.json`. OpenMCP returns the template; the coordinator
-performs classification and chooses the agent names from it.
+classifies each use case and selects its workflow and routing profile.
 
 ```json
 {
   "version": 1,
-  "columns": ["use_case", "recommend", "role", "reason"],
+  "columns": ["use_case", "workflow", "routing_profile", "reason"],
   "routes": [
     {
       "use_case": "Non-UI repository implementation",
-      "recommend": "Forge",
-      "role": "owner",
-      "reason": "Owns non-UI implementation."
+      "workflow": "implement",
+      "routing_profile": "quality",
+      "reason": "Implements repository changes using the quality profile."
     }
   ]
 }
 ```
 
-Templates reload on every call. Editing them needs no restart.
+Only `workflow` and `routing_profile` affect `job_submit`. Routing profiles map
+workflow roles to internal route IDs, and routes select configured targets. If
+a task-route entry omits `routing_profile`, submission uses the configured
+default profile. Templates reload on every call; editing them needs no restart.
 
 Example:
 
@@ -420,12 +423,12 @@ inputs:
 stages:
   review:
     mode: read
-    route: sentinel
+    route: review
     context: reviewer
     prompt: "Review this request: ${inputs.prompt}"
   fix:
     mode: write
-    route: forge
+    route: implement
     needs: [review]
     prompt: |
       Implement ${inputs.prompt}

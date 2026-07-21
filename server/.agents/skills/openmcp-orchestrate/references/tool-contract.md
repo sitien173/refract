@@ -48,8 +48,10 @@ workflows remain available under `.openmcp/workflows/*.yaml`.
 The former `read` and `write` workflows are unsupported. Choose `review` or
 `consult` based on intent. Use `implement` for repository changes.
 
-`task_route` returns guidance. Its `execution_role` value does not select a
-built-in workflow.
+`task_route` returns a task-routing template. Match a use case using its
+`workflow` and optional `routing_profile`. Pass those values to `job_submit`.
+Agent labels and internal route IDs are not submission fields; when
+`routing_profile` is absent, omit it to use the configured default.
 
 Common implementation inputs:
 

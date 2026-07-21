@@ -250,7 +250,7 @@ async def doctor(path: str) -> ClientInstructionResult:
 @mcp.tool(
     description=(
         "Load task-route definitions. The coordinator breaks down the task "
-        "and chooses agent names from the returned template."
+        "and chooses workflows and routing profiles from the returned template."
     ),
     structured_output=True,
 )

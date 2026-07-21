@@ -48,7 +48,7 @@ stages:
 | Field | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `mode` | yes | - | `read` or `write` only. |
-| `route` | yes | - | Logical role resolved by the active routing profile. |
+| `route` | yes | - | Logical profile role, such as `implement`, `review`, or `consult`, resolved by the active routing profile. Do not use an internal route or target ID. |
 | `prompt` | yes | - | Supports variable interpolation. |
 | `needs` | no | `[]` | List of upstream stage IDs. |
 | `context` | no | stage ID | Named context lane for continuity. |

@@ -493,11 +493,11 @@ def test_task_route_template_prefers_project_then_global(tmp_path) -> None:
     global_path = home / "task_routes.json"
     project_path = project / ".openmcp" / "task_routes.json"
     global_path.write_text(
-        '{"version": 1, "routes": [{"recommend": "Forge"}]}',
+        '{"version": 1, "routes": [{"routing_profile": "balanced"}]}',
         encoding="utf-8",
     )
     project_path.write_text(
-        '{"version": 1, "routes": [{"recommend": "Builder"}]}',
+        '{"version": 1, "routes": [{"routing_profile": "quality"}]}',
         encoding="utf-8",
     )
 
@@ -505,8 +505,8 @@ def test_task_route_template_prefers_project_then_global(tmp_path) -> None:
     project_path.unlink()
     global_routes = load_task_routes(home, project)
 
-    assert project_routes["routes"][0]["recommend"] == "Builder"
-    assert global_routes["routes"][0]["recommend"] == "Forge"
+    assert project_routes["routes"][0]["routing_profile"] == "quality"
+    assert global_routes["routes"][0]["routing_profile"] == "balanced"
 
 
 def test_task_route_template_requires_nonempty_json_object(tmp_path) -> None:
@@ -526,13 +526,13 @@ async def test_task_route_tool_uses_registered_project_template(tmp_path) -> Non
     home = tmp_path / "home"
     home.mkdir()
     (home / "task_routes.json").write_text(
-        '{"routes": [{"recommend": "Forge"}]}',
+        '{"routes": [{"routing_profile": "balanced"}]}',
         encoding="utf-8",
     )
     directory = root / ".openmcp"
     directory.mkdir()
     (directory / "task_routes.json").write_text(
-        '{"routes": [{"recommend": "Builder"}]}',
+        '{"routes": [{"routing_profile": "quality"}]}',
         encoding="utf-8",
     )
     _git(root, "add", ".openmcp/task_routes.json")
@@ -546,7 +546,7 @@ async def test_task_route_tool_uses_registered_project_template(tmp_path) -> Non
 
         result = await task_route("Implement feature", ctx, project.id)
 
-        assert result.template["routes"][0]["recommend"] == "Builder"
+        assert result.template["routes"][0]["routing_profile"] == "quality"
     finally:
         runtime.database.close()
 

@@ -62,8 +62,9 @@ they reload when used.
 ### 2. Route the task
 
 Call `task_route` with the complete task and project identifier. Apply its
-project-specific routing template. Treat recommended agents and execution roles
-as routing guidance. Select the workflow by intent:
+project-specific routing template. Match each use case to a `workflow` and,
+when present, a `routing_profile`. Do not treat agent labels or route IDs as
+submission profiles. Select the workflow by intent:
 
 - Use `implement` for tasks that may change files.
 - Use `review` for code-quality review.
@@ -71,8 +72,9 @@ as routing guidance. Select the workflow by intent:
 - Use custom workflows only for multi-stage execution.
 
 Each built-in resolves through its matching logical role. Every routing profile
-must map `implement`, `review`, and `consult` onto routes. Ignore
-`execution_role` when selecting built-ins.
+must map `implement`, `review`, and `consult` onto routes. Pass the matched
+`routing_profile` to `job_submit`; if the template omits it, use the project or
+global default profile.
 
 Split mixed work into dependent jobs. Keep unrelated tasks separate.
 
@@ -84,10 +86,11 @@ Call `job_submit` with:
 - A concise commit message for `implement`.
 - A stable topic-specific `context_key`.
 - A `parent_job_id` for dependent review or fix work.
-- A `routing_profile` only when policy requires one.
+- The task-route entry's `routing_profile` when it specifies one.
 
 Prefer context keys shaped like `topic/phase/role`. Reuse them only when
-continuity helps. Use the project default routing profile otherwise.
+continuity helps. Omit `routing_profile` only when the matching entry does not
+specify one, allowing OpenMCP to use the configured default.
 
 ### 4. Wait without busy polling
 
