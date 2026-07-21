@@ -52,11 +52,11 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
         return tuple(args)
 
     if target.backend == "codex":
-        if target.profile:
-            args.extend(["--profile", target.profile])
+        if target.backend_profile:
+            args.extend(["--profile", target.backend_profile])
         if target.model:
             args.extend(["--model", target.model])
-            if target.profile:
+            if target.backend_profile:
                 escaped = target.model.replace("\\", "\\\\").replace('"', '\\"')
                 args.extend(["-c", f'model="{escaped}"'])
         if target.reasoning:

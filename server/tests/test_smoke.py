@@ -1,4 +1,3 @@
-import asyncio
 import inspect
 import json
 import threading
@@ -11,7 +10,7 @@ import pytest
 from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
-from openmcp.backends.pi import PiParams, execute as pi_execute
+from openmcp.backends.pi import PiParams
 
 
 def test_imports() -> None:
@@ -29,7 +28,7 @@ def test_backend_params_are_transport_only() -> None:
     assert {field.name for field in fields(PiParams)} == expected
 
 
-def test_doctor_reports_legacy_routing_profile(monkeypatch, tmp_path, capsys) -> None:
+def test_doctor_validates_legacy_profile_alias(monkeypatch, tmp_path, capsys) -> None:
     from openmcp.cli import main
 
     home = tmp_path / "openmcp"
@@ -46,7 +45,7 @@ default = "forge"
         main(["doctor"])
 
     assert raised.value.code == 1
-    assert "does not map built-in roles" in capsys.readouterr().err
+    assert "does not map built-in workflows" in capsys.readouterr().err
 
 
 def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
@@ -627,7 +626,7 @@ async def test_driver_compiles_agy_and_codex_target_configuration(monkeypatch, t
             id="codex",
             backend="codex",
             model="gpt-5-mini",
-            profile="custom-profile",
+            backend_profile="custom-profile",
             reasoning="high",
             args=("--color", "never"),
         ),

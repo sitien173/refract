@@ -16,7 +16,7 @@ from openmcp.backend_runner import run as _run_backend
 from openmcp.backends.agy import execute as agy_execute
 from openmcp.backends.codex import execute as codex_execute
 from openmcp.backends.pi import execute as pi_execute
-from openmcp.config import load_config, load_task_routes
+from openmcp.config import load_config, load_task_guide
 from openmcp.logging_setup import (
     configure as configure_logging,
     get_logger,
@@ -30,9 +30,10 @@ from openmcp.models import (
     JobView,
     ProjectView,
     SubmissionResult,
-    TaskRouteResult,
+    TaskGuideResult,
 )
 from openmcp.runtime import Runtime
+from openmcp.workflows import BUILTIN_WORKFLOWS
 from openmcp.workspaces import WorkspaceError, inspect_repository
 
 log = get_logger("server")
@@ -199,13 +200,13 @@ def _project_root(path: str) -> str:
 
 
 _DOCTOR_INSTRUCTIONS = """Validate this project's OpenMCP integration without mutations:
-1. Confirm status, reload, doctor, project_register, task_route, job_submit, job_wait, job_cancel, job_retry, and job_integrate are available.
+1. Confirm status, reload, doctor, project_register, task_guide, job_submit, job_wait, job_cancel, job_retry, and job_integrate are available.
 2. Confirm the client's project-level instruction file contains OpenMCP guidance.
 3. Confirm those project instructions override conflicting global behavior.
 4. Resolve the Git root and match it in openmcp://projects.
-5. Read the project workflows and routing profiles resources.
+5. Read the project workflows and profiles resources.
 6. Confirm implement, review, and consult are available.
-7. Confirm the selected profile maps all three workflow roles.
+7. Confirm the selected profile maps all three workflows to targets.
 8. Report PASS or FAIL for each check with exact remediation.
 Do not register projects, submit jobs, or edit configuration during validation."""
 
@@ -227,7 +228,7 @@ async def status(ctx: Context) -> DaemonStatusResult:
 
 
 @mcp.tool(
-    description="Reload daemon routing and target configuration.",
+    description="Reload daemon targets and profiles.",
     structured_output=True,
 )
 @_logged_request("reload")
@@ -249,17 +250,17 @@ async def doctor(path: str) -> ClientInstructionResult:
 
 @mcp.tool(
     description=(
-        "Load task-route definitions. The coordinator breaks down the task "
-        "and chooses workflows and routing profiles from the returned template."
+        "Load task guidance. Use it to choose a workflow and profile for each "
+        "part of the task."
     ),
     structured_output=True,
 )
-@_logged_request("task_route")
-async def task_route(
+@_logged_request("task_guide")
+async def task_guide(
     task: str,
     ctx: Context,
     project_id: str = "",
-) -> TaskRouteResult:
+) -> TaskGuideResult:
     value = task.strip()
     if not value:
         raise ValueError("Task must contain text")
@@ -271,9 +272,9 @@ async def task_route(
         if project is None:
             raise ValueError(f"Unknown project: {resolved_project_id}")
         project_root = Path(project.root)
-    return TaskRouteResult(
+    return TaskGuideResult(
         task=value,
-        template=load_task_routes(runtime.config.home, project_root),
+        guide=load_task_guide(runtime.config.home, project_root),
     )
 
 
@@ -286,7 +287,7 @@ async def job_submit(
     ctx: Context,
     context_key: str = "",
     parent_job_id: str = "",
-    routing_profile: str = "",
+    profile: str = "",
 ) -> SubmissionResult:
     return await _runtime(ctx).submit(
         project_id,
@@ -294,7 +295,7 @@ async def job_submit(
         inputs,
         context_key,
         parent_job_id,
-        routing_profile,
+        profile,
     )
 
 
@@ -430,32 +431,32 @@ async def context_resource(
     return _json(_runtime(ctx).database.context(project_id, context_key))
 
 
-@mcp.resource("openmcp://models", mime_type="application/json")
-async def models_resource() -> str:
+@mcp.resource("openmcp://targets", mime_type="application/json")
+async def targets_resource() -> str:
     return _json(_active_runtime().targets())
 
 
-@mcp.resource("openmcp://routing-profiles", mime_type="application/json")
-async def routing_profiles_resource() -> str:
+@mcp.resource("openmcp://profiles", mime_type="application/json")
+async def profiles_resource() -> str:
     runtime = _active_runtime()
     return _json(
         {
-            "default_routing_profile": runtime.catalog.default_routing_profile,
-            "available": sorted(runtime.catalog.routing_profiles),
+            "default": runtime.catalog.default_profile,
+            "available": sorted(runtime.catalog.profiles),
         }
     )
 
 
 @mcp.resource(
-    "openmcp://projects/{project_id}/routing-profiles",
+    "openmcp://projects/{project_id}/profiles",
     mime_type="application/json",
 )
-async def project_routing_profiles_resource(project_id: str, ctx: Context) -> str:
+async def project_profiles_resource(project_id: str, ctx: Context) -> str:
     catalog = _runtime(ctx).catalog_for_project(project_id)
     return _json(
         {
-            "default_routing_profile": catalog.default_routing_profile,
-            "available": sorted(catalog.routing_profiles),
+            "default": catalog.default_profile,
+            "available": sorted(catalog.profiles),
         }
     )
 
@@ -465,11 +466,7 @@ async def workflows_resource(project_id: str, ctx: Context) -> str:
     project = _runtime(ctx).database.project(project_id)
     if project is None:
         raise ValueError(f"Unknown project: {project_id}")
-    path = Path(project.root) / ".openmcp" / "workflows"
-    names = ["consult", "implement", "review"]
-    if path.exists():
-        names.extend(file.stem for file in sorted(path.glob("*.yaml")))
-    return _json(sorted(set(names)))
+    return _json(BUILTIN_WORKFLOWS)
 
 
 __all__ = [
@@ -484,5 +481,5 @@ __all__ = [
     "reload",
     "run",
     "status",
-    "task_route",
+    "task_guide",
 ]

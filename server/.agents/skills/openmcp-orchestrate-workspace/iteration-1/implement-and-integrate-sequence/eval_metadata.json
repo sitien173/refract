@@ -5,6 +5,7 @@
   "assertions": [
     {"text": "Checks openmcp://projects / resolves the git root before registering"},
     {"text": "Calls project_register only when no matching project exists"},
+    {"text": "Calls task_guide and uses its workflow/profile recommendation"},
     {"text": "Calls job_submit with workflow=implement and inputs containing prompt, commit_message, and a context_key"},
     {"text": "Calls job_wait with a finite timeout and inspects the terminal state"},
     {"text": "Calls job_integrate only after the job succeeds, never before"},

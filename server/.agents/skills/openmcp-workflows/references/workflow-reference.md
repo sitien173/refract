@@ -1,116 +1,104 @@
 # OpenMCP workflow reference
 
-Custom workflows live in `<project>/.openmcp/workflows/*.yaml`. The file stem is
-the workflow name used at submission. Built-in `implement`, `review`, and
-`consult` always exist and need no file.
+OpenMCP supports only built-in workflows. Project custom workflow files are not
+loaded.
 
-## Top-level fields
+## Built-ins
 
-| Field | Required | Purpose |
-| --- | --- | --- |
-| `version` | yes | Must be `1`. |
-| `name` | yes | Matches `^[A-Za-z0-9][A-Za-z0-9._-]*$`. |
-| `inputs` | no | Map of input name to definition. |
-| `stages` | yes | Map of stage ID to stage definition. |
-| `result_stage` | conditional | Required when more than one terminal stage; else inferred. |
-
-## Inputs
-
-```yaml
-inputs:
-  prompt:
-    type: string
-    required: true
-  commit_message:
-    type: string
-```
-
-| Field | Default | Notes |
-| --- | --- | --- |
-| `type` | `string` | One of `string`, `integer`, `number`, `boolean`, `object`, `array`. |
-| `required` | `false` | Missing required inputs reject the submission. |
-
-Input names must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
-
-## Stages
-
-```yaml
-stages:
-  <stage_id>:
-    mode: read | write
-    route: <logical-role>
-    prompt: "..."
-    needs: [<stage_id>, ...]
-    context: <lane-name>
-    fanout: 1
-```
-
-| Field | Required | Default | Notes |
+| Workflow | Mode | Inputs | Result |
 | --- | --- | --- | --- |
-| `mode` | yes | - | `read` or `write` only. |
-| `route` | yes | - | Logical profile role, such as `implement`, `review`, or `consult`, resolved by the active routing profile. Do not use an internal route or target ID. |
-| `prompt` | yes | - | Supports variable interpolation. |
-| `needs` | no | `[]` | List of upstream stage IDs. |
-| `context` | no | stage ID | Named context lane for continuity. |
-| `fanout` | no | `1` | `1`-`16`; `read` stages only. |
+| `implement` | Write | required `prompt`, optional `commit_message` | Text and optional commit |
+| `review` | Read | required `prompt` | Review text |
+| `consult` | Read | required `prompt` | Analysis text |
 
-Stage IDs must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+The former `read` and `write` workflow names are unsupported. Select `review` or
+`consult` according to intent, and `implement` for changes.
 
-## Modes
+## Selection
 
-- `write`: may commit; shares the job's primary worktree. Write stages must form
-  one ordered chain (every pair connected by a dependency path).
-- `read`: cannot commit; runs in a disposable detached worktree; may set
-  `fanout` for parallel passes.
+Callers choose a workflow and optional profile:
 
-Callers select the workflow, not the mode. Mode is chosen by whether a stage
-must change files.
+```json
+{
+  "project_id": "project-id",
+  "workflow": "review",
+  "profile": "quality",
+  "inputs": {
+    "prompt": "Review the implementation for correctness and regressions."
+  },
+  "context_key": "feature/review",
+  "parent_job_id": "implementation-job-id"
+}
+```
 
-## Variables
+Profiles map workflows directly to targets. Provider and target names are not
+submission parameters.
 
-Interpolated inside `prompt` with `${...}`:
+## Write behavior
 
-| Variable | Meaning |
-| --- | --- |
-| `${inputs.<name>}` | A declared input value. |
-| `${project.root}` | The project root path. |
-| `${stages.<stage>.text}` | Upstream stage final text. |
-| `${stages.<stage>.outputs}` | Upstream structured outputs. |
-| `${stages.<stage>.commit}` | Upstream commit reference. |
+`implement` runs in an isolated primary worktree. A successful write may create
+a commit, but the registered project is unchanged until `job_integrate`.
 
-A `${stages.X...}` reference is valid only if `X` is in the current stage's
-`needs` (directly or transitively via the dependency chain). Referencing a
-non-dependency is rejected.
+Use a concise `commit_message` when the job should commit:
 
-## Result stage
+```json
+{
+  "prompt": "Add empty-name validation and run focused tests.",
+  "commit_message": "feat: validate empty names"
+}
+```
 
-- Terminal stage = no other stage depends on it.
-- Exactly one terminal stage: `result_stage` inferred.
-- Multiple terminal stages: `result_stage` required and must name a terminal
-  stage.
+## Read behavior
 
-## Validation rules (loader-enforced)
+`review` and `consult` run read-only in disposable worktrees. They do not require
+integration. Their final text is returned in `result.text`.
 
-The loader raises on each of these; the error names the offending item:
+## Parent job chains
 
-1. `version != 1` -> unsupported version.
-2. `name` fails the name regex.
-3. Unsupported input `type`.
-4. Stage missing `mode`, `route`, or `prompt`.
-5. `mode` not in `{read, write}`.
-6. `fanout` outside `1`-`16`, or `fanout != 1` on a write stage.
-7. `needs` references an unknown stage.
-8. A stage depends on itself.
-9. Dependency graph contains a cycle.
-10. Two write stages not connected by any dependency path ("must be ordered").
-11. Variable references an unknown input/stage or an unsupported field.
-12. Variable references a stage not in `needs`.
-13. `result_stage` unknown or not terminal.
-14. Multiple terminal stages with no `result_stage`.
+`parent_job_id` links dependent submissions. The child starts from the parent's
+result commit while preserving the chain's original integration base.
 
-## Parent chains vs. workflows
+Recommended patterns:
 
-A multi-stage workflow bundles stages into one job. A parent/child job chain
-(`parent_job_id` on `job_submit`) links separate jobs across submissions, each
-starting from the parent's result commit. Use a workflow for a fixed repeatable
-pipeline; use parent chains for ad-hoc, human-in-the-loop iteration.
+```text
+implement -> review
+implement -> review -> implement fix
+```
+
+A parent must be a successful job with a commit. When a read-only job cannot be
+a commit anchor, place its findings explicitly in the next prompt while using
+the latest implementation as the Git parent.
+
+## Context keys
+
+`context_key` identifies conversational continuity independently from Git
+parentage. Use topic-specific keys and reuse only when continuity helps.
+
+```text
+feature/implement
+feature/review
+feature/fix
+```
+
+## Retry
+
+Use `job_retry` only for failed, cancelled, or interrupted jobs. Select
+`from_stage` only when diagnosing persisted stage state; built-ins normally have
+a single `execute` stage. Avoid automatic retry loops.
+
+## Integration
+
+Integrate only a successful `implement` job when:
+
+- requested changes are complete,
+- required review passed,
+- the registered repository remains clean and unchanged.
+
+If a reviewed implementation needs no fix, integrate that implementation. If a
+fix job follows review, integrate the successful fix. Never integrate `review`
+or `consult` jobs.
+
+## Unsupported custom workflows
+
+Do not create `.openmcp/workflows/*.yaml`. Translate multi-step requests into a
+sequence of built-in jobs with explicit prompts and parent relationships.

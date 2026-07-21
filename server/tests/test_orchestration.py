@@ -16,18 +16,22 @@ import pytest
 import openmcp.processes as processes
 from openmcp.config import (
     DaemonConfig,
-    RouteConfig,
     TargetConfig,
+    TargetSelection,
     load_config,
     load_project_config,
-    load_task_routes,
+    load_task_guide,
 )
 from openmcp.backends._shell import ShellCommandCancelled, stream_shell_command_lines
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
 from openmcp.models import JobView, StageView
 from openmcp.overlays import OverlayError, load_overlay_rules
-from openmcp.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
+from openmcp.planning import (
+    parse_execution_plan,
+    resolve_execution_plan,
+    target_execution_key,
+)
 from openmcp.runtime import Runtime
 from openmcp.workflows import (
     load_workflow,
@@ -64,22 +68,19 @@ def _config(home: Path, targets: tuple[TargetConfig, ...] | None = None) -> Daem
     resolved_targets = targets or (
         TargetConfig(id="primary", backend="codex", capabilities=("code", "review")),
     )
+    selection = TargetSelection(
+        targets=tuple(target.id for target in resolved_targets),
+        max_attempts=len(resolved_targets),
+    )
     return DaemonConfig(
         home=home,
         max_jobs=2,
         targets=resolved_targets,
-        routes=(
-            RouteConfig(
-                id="forge",
-                targets=tuple(target.id for target in resolved_targets),
-                max_attempts=len(resolved_targets),
-            ),
-        ),
-        routing_profiles={
+        profiles={
             "balanced": {
-                "implement": "forge",
-                "review": "forge",
-                "consult": "forge",
+                "implement": selection,
+                "review": selection,
+                "consult": selection,
             }
         },
     )
@@ -202,40 +203,6 @@ class ChainedOverlayDrivers(FakeDrivers):
         )
 
 
-class RetriedOverlayDrivers(FakeDrivers):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls = 0
-
-    async def execute(self, *, cwd, session_id, target, **kwargs) -> DriverResult:
-        self.calls += 1
-        path = cwd / "config" / "application.development.json"
-        expected = {
-            1: "original\n",
-            2: "first\n",
-            3: "original\n",
-            4: "rerun\n",
-        }[self.calls]
-        assert path.read_text(encoding="utf-8") == expected
-        path.write_text(
-            {
-                1: "first\n",
-                2: "failed\n",
-                3: "rerun\n",
-                4: "final\n",
-            }[self.calls],
-            encoding="utf-8",
-        )
-        outcome = "TARGET_FATAL" if self.calls == 2 else "SUCCESS"
-        return DriverResult(
-            outcome=outcome,
-            session_id=session_id or f"session-{target.id}",
-            text="overlay retry" if outcome == "SUCCESS" else "",
-            error="failed stage" if outcome != "SUCCESS" else "",
-            error_code="backend_failure" if outcome != "SUCCESS" else "",
-        )
-
-
 def _overlay_repository(tmp_path: Path) -> Path:
     root = _repository(tmp_path)
     (root / ".gitignore").write_text(
@@ -299,8 +266,8 @@ def test_workflow_rejects_parallel_write_stages() -> None:
                 "version": 1,
                 "name": "invalid",
                 "stages": {
-                    "left": {"mode": "write", "route": "implement", "prompt": "left"},
-                    "right": {"mode": "write", "route": "implement", "prompt": "right"},
+                    "left": {"mode": "write", "role": "implement", "prompt": "left"},
+                    "right": {"mode": "write", "role": "implement", "prompt": "right"},
                 },
             }
         )
@@ -315,13 +282,13 @@ def test_workflow_renders_dependency_outputs(tmp_path) -> None:
             "stages": {
                 "implement": {
                     "mode": "write",
-                    "route": "implement",
+                    "role": "implement",
                     "prompt": "${inputs.task}",
                 },
                 "review": {
                     "needs": ["implement"],
                     "mode": "read",
-                    "route": "review",
+                    "role": "review",
                     "prompt": "Review ${stages.implement.text} in ${project.root}",
                 },
             },
@@ -341,8 +308,8 @@ def test_workflow_requires_result_for_multiple_terminal_stages() -> None:
         "version": 1,
         "name": "parallel-review",
         "stages": {
-            "quality": {"mode": "read", "route": "review", "prompt": "quality"},
-            "tests": {"mode": "read", "route": "review", "prompt": "tests"},
+            "quality": {"mode": "read", "role": "review", "prompt": "quality"},
+            "tests": {"mode": "read", "role": "review", "prompt": "tests"},
         },
     }
 
@@ -366,7 +333,7 @@ def test_workflow_validates_types_and_dependency_references() -> None:
             "stages": {
                 "execute": {
                     "mode": "read",
-                    "route": "forge",
+                    "role": "forge",
                     "prompt": "${inputs.count}:${inputs.note}",
                 },
             },
@@ -390,10 +357,10 @@ def test_workflow_validates_types_and_dependency_references() -> None:
                 "name": "bad-reference",
                 "result_stage": "second",
                 "stages": {
-                    "first": {"mode": "read", "route": "forge", "prompt": "first"},
+                    "first": {"mode": "read", "role": "forge", "prompt": "first"},
                     "second": {
                         "mode": "read",
-                        "route": "forge",
+                        "role": "forge",
                         "prompt": "${stages.first.text}",
                     },
                 },
@@ -401,17 +368,17 @@ def test_workflow_validates_types_and_dependency_references() -> None:
         )
 
 
-def test_builtin_workflows_express_intent(tmp_path) -> None:
-    implement = load_workflow(tmp_path, "implement")
-    review = load_workflow(tmp_path, "review")
-    consult = load_workflow(tmp_path, "consult")
+def test_builtin_workflows_express_intent() -> None:
+    implement = load_workflow("implement")
+    review = load_workflow("review")
+    consult = load_workflow("consult")
 
-    assert (implement.stages[0].mode, implement.stages[0].route) == (
+    assert (implement.stages[0].mode, implement.stages[0].role) == (
         "write",
         "implement",
     )
-    assert (review.stages[0].mode, review.stages[0].route) == ("read", "review")
-    assert (consult.stages[0].mode, consult.stages[0].route) == (
+    assert (review.stages[0].mode, review.stages[0].role) == ("read", "review")
+    assert (consult.stages[0].mode, consult.stages[0].role) == (
         "read",
         "consult",
     )
@@ -420,14 +387,14 @@ def test_builtin_workflows_express_intent(tmp_path) -> None:
     assert set(consult.inputs) == {"prompt"}
 
 
-def test_removed_permission_workflows_are_not_available(tmp_path) -> None:
-    for name in ("read", "write"):
-        with pytest.raises(ValueError, match=f"Workflow {name!r} does not exist"):
-            load_workflow(tmp_path, name)
+def test_only_builtin_workflows_are_available() -> None:
+    for name in ("read", "write", "custom"):
+        with pytest.raises(ValueError, match="Unknown workflow"):
+            load_workflow(name)
 
 
-def test_custom_workflow_requires_explicit_route() -> None:
-    with pytest.raises(ValueError, match="requires a route"):
+def test_workflow_stage_requires_explicit_role() -> None:
+    with pytest.raises(ValueError, match="requires a role"):
         parse_workflow(
             {
                 "version": 1,
@@ -437,106 +404,104 @@ def test_custom_workflow_requires_explicit_route() -> None:
         )
 
 
-def test_custom_workflow_requires_explicit_mode() -> None:
+def test_workflow_reads_saved_route_field() -> None:
+    workflow = parse_workflow(
+        {
+            "version": 1,
+            "name": "review",
+            "stages": {
+                "execute": {
+                    "mode": "read",
+                    "route": "review",
+                    "prompt": "inspect",
+                }
+            },
+        }
+    )
+
+    assert workflow.stages[0].role == "review"
+
+
+def test_workflow_stage_requires_explicit_mode() -> None:
     with pytest.raises(ValueError, match="requires a mode"):
         parse_workflow(
             {
                 "version": 1,
                 "name": "invalid",
-                "stages": {"execute": {"route": "consult", "prompt": "inspect"}},
+                "stages": {"execute": {"role": "consult", "prompt": "inspect"}},
             }
         )
 
 
-def test_new_role_resolves_without_workflow_parser_changes(tmp_path) -> None:
-    workflow = parse_workflow(
-        {
-            "version": 1,
-            "name": "analyst",
-            "stages": {
-                "execute": {
-                    "mode": "read",
-                    "route": "analyst",
-                    "prompt": "analyze",
-                },
-            },
-        }
-    )
-    config = DaemonConfig(
-        home=tmp_path,
-        targets=(
-            TargetConfig(
-                id="analyst-primary",
-                backend="pi",
-                args=("--provider", "openai", "--offline"),
-            ),
-        ),
-        routes=(RouteConfig(id="analysis", targets=("analyst-primary",)),),
-        routing_profiles={"balanced": {"analyst": "analysis"}},
-    )
-
-    plan = resolve_execution_plan(workflow, config, "balanced")
-
-    assert plan.route("analyst").id == "analysis"
-    assert plan.target("analyst-primary").backend == "pi"
-    restored = parse_execution_plan(execution_plan_data(plan))
-    assert restored.target("analyst-primary").args == (
-        "--provider", "openai", "--offline",
-    )
-
-
-def test_task_route_template_prefers_project_then_global(tmp_path) -> None:
+def test_task_guide_prefers_project_then_global(tmp_path) -> None:
     home = tmp_path / "home"
     project = tmp_path / "project"
     home.mkdir()
     (project / ".openmcp").mkdir(parents=True)
-    global_path = home / "task_routes.json"
-    project_path = project / ".openmcp" / "task_routes.json"
+    global_path = home / "task_guide.json"
+    project_path = project / ".openmcp" / "task_guide.json"
     global_path.write_text(
-        '{"version": 1, "routes": [{"routing_profile": "balanced"}]}',
+        '{"version": 1, "recommendations": [{"profile": "balanced"}]}',
         encoding="utf-8",
     )
     project_path.write_text(
-        '{"version": 1, "routes": [{"routing_profile": "quality"}]}',
+        '{"version": 1, "recommendations": [{"profile": "quality"}]}',
         encoding="utf-8",
     )
 
-    project_routes = load_task_routes(home, project)
+    project_guide = load_task_guide(home, project)
     project_path.unlink()
-    global_routes = load_task_routes(home, project)
+    global_guide = load_task_guide(home, project)
 
-    assert project_routes["routes"][0]["routing_profile"] == "quality"
-    assert global_routes["routes"][0]["routing_profile"] == "balanced"
+    assert project_guide["recommendations"][0]["profile"] == "quality"
+    assert global_guide["recommendations"][0]["profile"] == "balanced"
 
 
-def test_task_route_template_requires_nonempty_json_object(tmp_path) -> None:
-    with pytest.raises(ValueError, match="Missing task route template"):
-        load_task_routes(tmp_path)
+def test_task_guide_requires_nonempty_json_object(tmp_path) -> None:
+    with pytest.raises(ValueError, match="Missing task guide"):
+        load_task_guide(tmp_path)
 
-    (tmp_path / "task_routes.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "task_guide.json").write_text("[]", encoding="utf-8")
     with pytest.raises(ValueError, match="non-empty JSON object"):
-        load_task_routes(tmp_path)
+        load_task_guide(tmp_path)
+
+
+def test_task_guide_normalizes_legacy_file(tmp_path) -> None:
+    (tmp_path / "task_routes.json").write_text(
+        """{
+  "columns": ["workflow", "routing_profile"],
+  "routes": [{"workflow": "review", "routing_profile": "quality"}]
+}""",
+        encoding="utf-8",
+    )
+
+    guide = load_task_guide(tmp_path)
+
+    assert guide == {
+        "columns": ["workflow", "profile"],
+        "recommendations": [{"workflow": "review", "profile": "quality"}],
+    }
 
 
 @pytest.mark.asyncio
-async def test_task_route_tool_uses_registered_project_template(tmp_path) -> None:
-    from openmcp.server import task_route
+async def test_task_guide_tool_uses_registered_project_guide(tmp_path) -> None:
+    from openmcp.server import task_guide
 
     root = _repository(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
-    (home / "task_routes.json").write_text(
-        '{"routes": [{"routing_profile": "balanced"}]}',
+    (home / "task_guide.json").write_text(
+        '{"recommendations": [{"profile": "balanced"}]}',
         encoding="utf-8",
     )
     directory = root / ".openmcp"
     directory.mkdir()
-    (directory / "task_routes.json").write_text(
-        '{"routes": [{"routing_profile": "quality"}]}',
+    (directory / "task_guide.json").write_text(
+        '{"recommendations": [{"profile": "quality"}]}',
         encoding="utf-8",
     )
-    _git(root, "add", ".openmcp/task_routes.json")
-    _git(root, "commit", "-m", "add task routes")
+    _git(root, "add", ".openmcp/task_guide.json")
+    _git(root, "commit", "-m", "add task guide")
     runtime = Runtime(_config(home))
     try:
         project = runtime.register_project(str(root))
@@ -544,9 +509,9 @@ async def test_task_route_tool_uses_registered_project_template(tmp_path) -> Non
             request_context=SimpleNamespace(lifespan_context=runtime)
         )
 
-        result = await task_route("Implement feature", ctx, project.id)
+        result = await task_guide("Implement feature", ctx, project.id)
 
-        assert result.template["routes"][0]["routing_profile"] == "quality"
+        assert result.guide["recommendations"][0]["profile"] == "quality"
     finally:
         runtime.database.close()
 
@@ -580,23 +545,29 @@ def test_register_project_reports_integrity_constraint(
 
 @pytest.mark.asyncio
 async def test_project_resources_expose_semantic_workflows(tmp_path) -> None:
-    from openmcp.server import project_routing_profiles_resource, workflows_resource
+    from openmcp.server import project_profiles_resource, workflows_resource
 
     root = _repository(tmp_path)
     runtime = Runtime(_config(tmp_path / "home"))
     try:
         project = runtime.register_project(str(root))
+        custom_workflows = root / ".openmcp" / "workflows"
+        custom_workflows.mkdir(parents=True)
+        (custom_workflows / "custom.yaml").write_text(
+            "name: custom\n",
+            encoding="utf-8",
+        )
         ctx = SimpleNamespace(
             request_context=SimpleNamespace(lifespan_context=runtime)
         )
 
         profiles = json.loads(
-            await project_routing_profiles_resource(project.id, ctx)
+            await project_profiles_resource(project.id, ctx)
         )
         workflows = json.loads(await workflows_resource(project.id, ctx))
 
         assert profiles == {
-            "default_routing_profile": "balanced",
+            "default": "balanced",
             "available": ["balanced"],
         }
         assert workflows == ["consult", "implement", "review"]
@@ -607,7 +578,6 @@ async def test_project_resources_expose_semantic_workflows(tmp_path) -> None:
 def test_default_consultant_and_reviewer_are_isolated_pi_targets(tmp_path) -> None:
     config = load_config(tmp_path / "missing.toml")
     targets = {target.id: target for target in config.targets}
-    routes = {route.id: route for route in config.routes}
 
     for target_id in ("sage-primary", "sentinel-primary"):
         target = targets[target_id]
@@ -616,39 +586,57 @@ def test_default_consultant_and_reviewer_are_isolated_pi_targets(tmp_path) -> No
         assert target.isolated
         assert target.read_only
         assert target.system_prompt
-    assert routes["sage"].targets == ("sage-primary",)
-    assert routes["sentinel"].targets == ("sentinel-primary",)
-    assert "default" not in routes
-    assert config.routing_profiles == {
-        "balanced": {
-            "implement": "forge",
-            "review": "sentinel",
-            "consult": "sage",
-        }
-    }
+    assert config.profiles["balanced"]["review"].targets == (
+        "sentinel-primary",
+    )
+    assert config.profiles["balanced"]["consult"].targets == ("sage-primary",)
 
 
 @pytest.mark.parametrize(
-    ("workflow_name", "route_id", "target_id"),
+    ("workflow_name", "target_ids"),
     (
-        ("implement", "forge", "forge-primary"),
-        ("review", "sentinel", "sentinel-primary"),
-        ("consult", "sage", "sage-primary"),
+        ("implement", ("forge-primary", "canvas-primary")),
+        ("review", ("sentinel-primary",)),
+        ("consult", ("sage-primary",)),
     ),
 )
-def test_default_builtins_resolve_semantic_routes(
+def test_default_builtins_resolve_targets(
     tmp_path,
     workflow_name: str,
-    route_id: str,
-    target_id: str,
+    target_ids: tuple[str, ...],
 ) -> None:
     config = load_config(tmp_path / "missing.toml")
-    workflow = load_workflow(tmp_path, workflow_name)
+    workflow = load_workflow(workflow_name)
 
     plan = resolve_execution_plan(workflow, config, "balanced")
 
-    assert plan.route(workflow_name).id == route_id
-    assert plan.targets[0].id == target_id
+    assert plan.selection(workflow_name).targets == target_ids
+
+
+def test_saved_execution_plan_uses_legacy_selection_keys() -> None:
+    plan = parse_execution_plan(
+        {
+            "routing_profile": "balanced",
+            "role_routes": {"review": "sentinel"},
+            "routes": [
+                {
+                    "id": "sentinel",
+                    "targets": ["reviewer"],
+                }
+            ],
+            "targets": [
+                {
+                    "id": "reviewer",
+                    "backend": "pi",
+                    "profile": "legacy-backend-profile",
+                }
+            ],
+        }
+    )
+
+    assert plan.profile == "balanced"
+    assert plan.selection("review").targets == ("reviewer",)
+    assert plan.target("reviewer").backend_profile == "legacy-backend-profile"
 
 
 def test_custom_target_defaults_support_all_semantic_workflows(tmp_path) -> None:
@@ -671,14 +659,14 @@ backend = "codex"
     }
     for workflow_name in ("implement", "review", "consult"):
         plan = resolve_execution_plan(
-            load_workflow(tmp_path, workflow_name),
+            load_workflow(workflow_name),
             config,
             "balanced",
         )
         assert [target.id for target in plan.targets] == ["primary"]
 
 
-def test_config_rejects_profile_routes_without_eligible_targets(tmp_path) -> None:
+def test_default_profile_requires_capable_targets(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
         """
@@ -692,47 +680,138 @@ capabilities = ["code"]
 
     with pytest.raises(
         ValueError,
-        match="role 'review' has no eligible targets on route 'sentinel'",
+        match="Default profile workflow 'review' has no capable targets",
     ):
         load_config(path)
 
 
-def test_config_loads_routing_profile_overlays(tmp_path) -> None:
+def test_config_loads_profile_overlays(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
         """
 [daemon]
-default_routing_profile = "quality"
+default_profile = "quality"
 
 [[targets]]
 id = "premium"
 backend = "codex"
+backend_profile = "mcp_execution"
 args = ["--ephemeral", "--color", "never"]
-capabilities = ["code"]
+capabilities = ["code", "review", "consult"]
 
-[[routes]]
-id = "forge-quality"
-targets = ["premium"]
-
-[routing_profiles.quality]
-implement = "forge-quality"
-review = "forge-quality"
-consult = "forge-quality"
+[profiles.quality]
+implement = "premium"
+review = "premium"
+consult = "premium"
 """,
         encoding="utf-8",
     )
 
     config = load_config(path)
 
-    assert config.default_routing_profile == "quality"
+    assert config.default_profile == "quality"
+    assert config.targets[0].backend_profile == "mcp_execution"
     assert config.targets[0].args == ("--ephemeral", "--color", "never")
-    assert config.routing_profiles == {
-        "quality": {
-            "implement": "forge-quality",
-            "review": "forge-quality",
-            "consult": "forge-quality",
-        },
+    assert {
+        workflow: selection.targets
+        for workflow, selection in config.profiles["quality"].items()
+    } == {
+        "implement": ("premium",),
+        "review": ("premium",),
+        "consult": ("premium",),
     }
+
+
+def test_profile_maps_workflows_directly_to_targets(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[[targets]]
+id = "backup"
+backend = "agy"
+
+[profiles.balanced]
+implement = ["primary", "backup"]
+review = "primary"
+consult = { targets = ["primary", "backup"], max_attempts = 1, timeout_s = 90 }
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.profiles["balanced"]["implement"] == TargetSelection(
+        ("primary", "backup"),
+        max_attempts=2,
+    )
+    assert config.profiles["balanced"]["review"] == TargetSelection(
+        ("primary",),
+        max_attempts=1,
+    )
+    assert config.profiles["balanced"]["consult"] == TargetSelection(
+        ("primary", "backup"),
+        max_attempts=1,
+        timeout_s=90,
+    )
+
+
+def test_profile_rejects_target_without_workflow_capability(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[[targets]]
+id = "implementer"
+backend = "codex"
+capabilities = ["code"]
+
+[profiles.balanced]
+implement = "implementer"
+review = "implementer"
+consult = "implementer"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="workflow 'review' requires capability 'review'",
+    ):
+        load_config(path)
+
+
+def test_config_reads_legacy_selection_names(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[daemon]
+default_routing_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+profile = "legacy-backend-profile"
+
+[[routes]]
+id = "all"
+targets = ["primary"]
+
+[routing_profiles.balanced]
+implement = "all"
+review = "all"
+consult = "all"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.default_profile == "balanced"
+    assert config.targets[0].backend_profile == "legacy-backend-profile"
+    assert config.profiles["balanced"]["implement"].targets == ("primary",)
 
 
 @pytest.mark.parametrize(
@@ -774,7 +853,7 @@ args = ["--extension", "reviewer.ts"]
         load_config(path)
 
 
-def test_config_requires_every_builtin_role(tmp_path) -> None:
+def test_config_requires_every_builtin_workflow(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
         """
@@ -782,100 +861,134 @@ def test_config_requires_every_builtin_role(tmp_path) -> None:
 id = "primary"
 backend = "codex"
 
-[[routes]]
-id = "forge"
-targets = ["primary"]
-
-[routing_profiles.balanced]
-implement = "forge"
+[profiles.balanced]
+implement = "primary"
 """,
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="does not map built-in roles"):
+    with pytest.raises(ValueError, match="does not map built-in workflows"):
         load_config(path)
 
 
-def test_project_config_rejects_profile_route_without_eligible_targets(
-    tmp_path,
-) -> None:
+def test_project_config_rejects_unknown_profile_target(tmp_path) -> None:
     project = tmp_path / "project"
     (project / ".openmcp").mkdir(parents=True)
     (project / ".openmcp" / "config.toml").write_text(
         """
-[[routes]]
-id = "blocked-review"
-targets = ["primary"]
-requires = ["unavailable"]
-
-[routing_profiles.balanced]
-review = "blocked-review"
+[profiles.balanced]
+review = "missing"
 """,
         encoding="utf-8",
     )
+    selection = TargetSelection(("primary",), max_attempts=1)
     base = DaemonConfig(
         home=tmp_path / "home",
         targets=(TargetConfig(id="primary", backend="codex"),),
-        routes=(RouteConfig(id="primary", targets=("primary",)),),
-        routing_profiles={
+        profiles={
             "balanced": {
-                "implement": "primary",
-                "review": "primary",
-                "consult": "primary",
+                "implement": selection,
+                "review": selection,
+                "consult": selection,
             }
         },
     )
 
-    with pytest.raises(
-        ValueError,
-        match="role 'review' has no eligible targets on route 'blocked-review'",
-    ):
+    with pytest.raises(ValueError, match="workflow 'review' has invalid targets"):
         load_project_config(project, base)
 
 
-def test_project_config_overlays_routes_and_profiles(tmp_path) -> None:
+def test_project_config_overlays_profiles(tmp_path) -> None:
     project = tmp_path / "project"
     (project / ".openmcp").mkdir(parents=True)
     (project / ".openmcp" / "config.toml").write_text(
         """
 [project]
-default_routing_profile = "quality"
+default_profile = "quality"
 
-[[routes]]
-id = "review-project"
-targets = ["premium"]
-
-[routing_profiles.quality]
-review = "review-project"
+[profiles.quality]
+review = "premium"
 """,
         encoding="utf-8",
     )
+    primary = TargetSelection(("primary",), max_attempts=1)
     base = DaemonConfig(
         home=tmp_path / "home",
         targets=(
             TargetConfig(id="primary", backend="codex"),
             TargetConfig(id="premium", backend="agy"),
         ),
-        routes=(RouteConfig(id="forge", targets=("primary",)),),
-        routing_profiles={
+        profiles={
             "balanced": {
-                "implement": "forge",
-                "review": "forge",
-                "consult": "forge",
+                "implement": primary,
+                "review": primary,
+                "consult": primary,
             }
         },
     )
 
     project_config = load_project_config(project, base)
 
-    assert project_config.default_routing_profile == "quality"
-    assert project_config.routing_profiles["quality"] == {
-        "implement": "forge",
-        "review": "review-project",
-        "consult": "forge",
+    assert project_config.default_profile == "quality"
+    assert {
+        workflow: selection.targets
+        for workflow, selection in project_config.profiles["quality"].items()
+    } == {
+        "implement": ("primary",),
+        "review": ("premium",),
+        "consult": ("primary",),
     }
-    assert project_config.routes[-1].targets == ("premium",)
-    assert base.default_routing_profile == "balanced"
+    assert base.default_profile == "balanced"
+
+
+def test_project_legacy_profile_resolves_global_custom_route(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    global_path = home / "config.toml"
+    global_path.write_text(
+        """
+[daemon]
+default_profile = "quality"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[[targets]]
+id = "strict-reviewer"
+backend = "pi"
+capabilities = ["review"]
+
+[[routes]]
+id = "strict-global"
+targets = ["strict-reviewer"]
+
+[profiles.quality]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    project = tmp_path / "project"
+    (project / ".openmcp").mkdir(parents=True)
+    (project / ".openmcp" / "config.toml").write_text(
+        """
+[routing_profiles.quality]
+review = "strict-global"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_project_config(project, load_config(global_path))
+
+    assert config.profiles["quality"]["review"].targets == ("strict-reviewer",)
+    assert config.profiles["quality"]["implement"].targets == ("primary",)
+    assert config.profiles["quality"]["consult"].targets == ("primary",)
 
 
 def test_project_config_rejects_daemon_and_target_overrides(tmp_path) -> None:
@@ -917,8 +1030,7 @@ async def test_daemon_management_tools_delegate_to_runtime() -> None:
     reload_result = DaemonReloadResult(
         success=True,
         targets=4,
-        routes=3,
-        routing_profiles=2,
+        profiles=2,
     )
 
     class RuntimeStub:
@@ -937,35 +1049,34 @@ async def test_daemon_management_tools_delegate_to_runtime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_submission_uses_project_route_override(tmp_path) -> None:
+async def test_submission_uses_project_profile_override(tmp_path) -> None:
     root = _repository(tmp_path)
     directory = root / ".openmcp"
     directory.mkdir()
     (directory / "config.toml").write_text(
         """
-[[routes]]
-id = "forge"
-targets = ["project-target"]
+[profiles.balanced]
+consult = "project-target"
 """,
         encoding="utf-8",
     )
     _git(root, "add", ".openmcp/config.toml")
-    _git(root, "commit", "-m", "add project routing")
+    _git(root, "commit", "-m", "add project selection")
     targets = (
         TargetConfig(id="global-target", backend="codex"),
         TargetConfig(id="project-target", backend="agy"),
     )
+    global_selection = TargetSelection(("global-target",), max_attempts=1)
     runtime = Runtime(
         DaemonConfig(
             home=tmp_path / "home",
             max_jobs=1,
             targets=targets,
-            routes=(RouteConfig(id="forge", targets=("global-target",)),),
-            routing_profiles={
+            profiles={
                 "balanced": {
-                    "implement": "forge",
-                    "review": "forge",
-                    "consult": "forge",
+                    "implement": global_selection,
+                    "review": global_selection,
+                    "consult": global_selection,
                 }
             },
         )
@@ -1004,16 +1115,12 @@ async def test_new_submissions_reload_backend_without_reusing_session(
 [[targets]]
 id = "primary"
 backend = "{backend}"
-capabilities = ["code"]
+capabilities = ["code", "review", "consult"]
 
-[[routes]]
-id = "forge"
-targets = ["primary"]
-
-[routing_profiles.balanced]
-implement = "forge"
-review = "forge"
-consult = "forge"
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
 """,
             encoding="utf-8",
         )
@@ -1071,14 +1178,10 @@ max_jobs = 2
 id = "only"
 backend = "pi"
 
-[[routes]]
-id = "all"
-targets = ["only"]
-
-[routing_profiles.balanced]
-implement = "all"
-review = "all"
-consult = "all"
+[profiles.balanced]
+implement = "only"
+review = "only"
+consult = "only"
 """,
             encoding="utf-8",
         )
@@ -1098,9 +1201,32 @@ consult = "all"
 
 def test_database_migrates_execution_state(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
-    Database(path).close()
+    original = Database(path)
+    original.upsert_project(
+        project_id="project",
+        alias="project",
+        root="/project",
+        head_commit="base",
+        clean=True,
+    )
+    original.create_job(
+        job_id="job",
+        project_id="project",
+        workflow="review",
+        profile="quality",
+        workflow_json="{}",
+        inputs={},
+        context_key="review",
+        parent_job_id="",
+        base_commit="base",
+        integration_base="base",
+        branch="openmcp/job",
+        worktree="/worktree",
+        stages=(("execute", 0, "read"),),
+    )
+    original.close()
     connection = sqlite3.connect(path)
-    connection.execute("ALTER TABLE jobs DROP COLUMN routing_profile")
+    connection.execute("ALTER TABLE jobs RENAME COLUMN profile TO routing_profile")
     connection.execute(
         "ALTER TABLE jobs ADD COLUMN result_text TEXT NOT NULL DEFAULT ''"
     )
@@ -1122,6 +1248,7 @@ def test_database_migrates_execution_state(tmp_path) -> None:
     connection.close()
 
     database = Database(path)
+    migrated = database.job_record("job")
     database.close()
     connection = sqlite3.connect(path)
     columns = {
@@ -1139,7 +1266,9 @@ def test_database_migrates_execution_state(tmp_path) -> None:
     }
     connection.close()
 
-    assert "routing_profile" in columns
+    assert migrated is not None
+    assert migrated["profile"] == "quality"
+    assert {"profile", "routing_profile"}.issubset(columns)
     assert "execution_plan_json" in columns
     assert "result_stage" in columns
     assert "result_text" in columns
@@ -1179,7 +1308,7 @@ def test_database_marks_active_work_interrupted(tmp_path) -> None:
         job_id="job",
         project_id="project",
         workflow="consult",
-        routing_profile="balanced",
+        profile="balanced",
         workflow_json="{}",
         inputs={},
         context_key="test",
@@ -1215,7 +1344,7 @@ def test_job_views_return_result_stage_text_once(tmp_path) -> None:
         job_id="job",
         project_id="project",
         workflow="two-stage",
-        routing_profile="balanced",
+        profile="balanced",
         workflow_json="{}",
         result_stage="review",
         inputs={},
@@ -1335,7 +1464,7 @@ async def test_job_wait_uses_runtime_completion_waiter() -> None:
             id="job",
             project_id="project",
             workflow="consult",
-            routing_profile="balanced",
+            profile="balanced",
             state=state,
             context_key="test",
             parent_job_id="",
@@ -1413,7 +1542,7 @@ async def test_mcp_exposes_clean_daemon_contract() -> None:
         "reload",
         "doctor",
         "project_register",
-        "task_route",
+        "task_guide",
         "job_submit",
         "job_wait",
         "job_cancel",
@@ -1421,9 +1550,9 @@ async def test_mcp_exposes_clean_daemon_contract() -> None:
         "job_integrate",
     }
     assert "parent_job_id" in tools["job_submit"].inputSchema["properties"]
-    assert "routing_profile" in tools["job_submit"].inputSchema["properties"]
+    assert "profile" in tools["job_submit"].inputSchema["properties"]
     assert "include_stage_outputs" in tools["job_wait"].inputSchema["properties"]
-    assert set(tools["task_route"].inputSchema["properties"]) == {
+    assert set(tools["task_guide"].inputSchema["properties"]) == {
         "task",
         "project_id",
     }
@@ -1432,11 +1561,11 @@ async def test_mcp_exposes_clean_daemon_contract() -> None:
     assert set(tools["doctor"].inputSchema["properties"]) == {"path"}
     assert resources == {
         "openmcp://projects",
-        "openmcp://models",
-        "openmcp://routing-profiles",
+        "openmcp://targets",
+        "openmcp://profiles",
     }
     assert "openmcp://projects/{project_id}/jobs" in templates
-    assert "openmcp://projects/{project_id}/routing-profiles" in templates
+    assert "openmcp://projects/{project_id}/profiles" in templates
 
 
 @pytest.mark.asyncio
@@ -1599,61 +1728,6 @@ async def test_child_job_inherits_parent_overlay_changes(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_rewinds_overlay_to_selected_stage(tmp_path) -> None:
-    root = _overlay_repository(tmp_path)
-    workflows = root / ".openmcp" / "workflows"
-    workflows.mkdir(parents=True)
-    (workflows / "overlay-retry.yaml").write_text(
-        """version: 1
-name: overlay-retry
-stages:
-  first:
-    mode: write
-    route: implement
-    prompt: first
-  second:
-    needs: [first]
-    mode: write
-    route: implement
-    prompt: second
-""",
-        encoding="utf-8",
-    )
-    _git(root, "add", ".openmcp/workflows/overlay-retry.yaml")
-    _git(root, "commit", "-m", "add overlay retry workflow")
-    (root / ".openmcp.local.toml").write_text(
-        """[[overlays]]
-include = ["config/*.development.json"]
-workflows = ["overlay-retry"]
-""",
-        encoding="utf-8",
-    )
-    runtime = Runtime(_config(tmp_path / "home"))
-    runtime.drivers = RetriedOverlayDrivers()
-    await runtime.start()
-    try:
-        project = runtime.register_project(str(root))
-        submission = await runtime.submit(
-            project.id,
-            "overlay-retry",
-            {},
-        )
-        failed = await runtime.wait(submission.job_id, 10)
-
-        assert failed.state == "failed"
-        retried = await runtime.retry(failed.id, "first")
-        succeeded = await runtime.wait(retried.job_id, 10)
-
-        assert succeeded.state == "succeeded"
-        assert runtime.integrate(succeeded.id).success
-        assert (root / "config" / "application.development.json").read_text(
-            encoding="utf-8"
-        ) == "final\n"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
 async def test_overlay_rejects_tracked_files(tmp_path) -> None:
     root = _repository(tmp_path)
     (root / ".gitignore").write_text(
@@ -1711,8 +1785,37 @@ async def test_consult_job_discards_filesystem_changes(tmp_path) -> None:
         await runtime.close()
 
 
+def test_target_selection_prefers_available_capacity(tmp_path) -> None:
+    targets = (
+        TargetConfig(id="primary", backend="codex", max_concurrency=1),
+        TargetConfig(id="backup", backend="agy", max_concurrency=1),
+    )
+    runtime = Runtime(_config(tmp_path / "home", targets))
+    runtime.drivers = FakeDrivers()
+    plan = resolve_execution_plan(load_workflow("consult"), runtime.config, "balanced")
+    runtime._target_active[target_execution_key(targets[0])] = 1
+
+    selected = runtime._select_target(
+        plan.selection("consult").targets,
+        plan,
+        set(),
+    )
+
+    assert selected == targets[1]
+
+    runtime._target_active[target_execution_key(targets[1])] = 1
+    saturated = runtime._select_target(
+        plan.selection("consult").targets,
+        plan,
+        set(),
+    )
+
+    assert saturated == targets[0]
+    runtime.database.close()
+
+
 @pytest.mark.asyncio
-async def test_route_fails_over_and_preserves_context_session(tmp_path) -> None:
+async def test_profile_targets_fail_over_and_preserve_context_session(tmp_path) -> None:
     root = _repository(tmp_path)
     targets = (
         TargetConfig(id="broken", backend="agy"),
@@ -1748,44 +1851,42 @@ async def test_route_fails_over_and_preserves_context_session(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_selects_configured_routing_profile(tmp_path) -> None:
+async def test_job_selects_configured_profile(tmp_path) -> None:
     root = _repository(tmp_path)
     targets = (
         TargetConfig(
             id="economy",
             backend="codex",
             model="economy-model",
-            profile="economy-profile",
+            backend_profile="economy-profile",
             reasoning="low",
         ),
         TargetConfig(
             id="premium",
             backend="codex",
             model="quality-model",
-            profile="quality-profile",
+            backend_profile="quality-profile",
             reasoning="high",
         ),
     )
+    economy = TargetSelection(("economy",), max_attempts=1)
+    quality = TargetSelection(("premium",), max_attempts=1)
     config = DaemonConfig(
         home=tmp_path / "home",
         targets=targets,
-        routes=(
-            RouteConfig(id="forge-economy", targets=("economy",)),
-            RouteConfig(id="forge-quality", targets=("premium",)),
-        ),
-        routing_profiles={
+        profiles={
             "cost": {
-                "implement": "forge-economy",
-                "review": "forge-economy",
-                "consult": "forge-economy",
+                "implement": economy,
+                "review": economy,
+                "consult": economy,
             },
             "quality": {
-                "implement": "forge-quality",
-                "review": "forge-quality",
-                "consult": "forge-quality",
+                "implement": quality,
+                "review": quality,
+                "consult": quality,
             },
         },
-        default_routing_profile="cost",
+        default_profile="cost",
     )
     runtime = Runtime(config)
     drivers = FakeDrivers()
@@ -1797,11 +1898,11 @@ async def test_job_selects_configured_routing_profile(tmp_path) -> None:
             project.id,
             "consult",
             {"prompt": "inspect"},
-            routing_profile="quality",
+            profile="quality",
         )
         job = await runtime.wait(submission.job_id, 10)
 
-        assert job.routing_profile == "quality"
+        assert job.profile == "quality"
         assert job.stages[0].target_id == "premium"
         assert drivers.targets[-1] == targets[1]
     finally:

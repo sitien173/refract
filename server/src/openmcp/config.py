@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any
 
 
-_BUILTIN_ROLE_ROUTES = {
-    "implement": "forge",
-    "review": "sentinel",
-    "consult": "sage",
+_BUILTIN_WORKFLOW_CAPABILITIES = {
+    "implement": "code",
+    "review": "review",
+    "consult": "consult",
 }
 
 
@@ -22,7 +22,7 @@ class TargetConfig:
     id: str
     backend: str
     model: str = ""
-    profile: str = ""
+    backend_profile: str = ""
     reasoning: str = ""
     system_prompt: str = ""
     isolated: bool = False
@@ -30,15 +30,14 @@ class TargetConfig:
     args: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ("code", "reasoning", "review", "consult")
     max_concurrency: int = 1
-    priority: int = 100
 
 
 @dataclass(slots=True, frozen=True)
-class RouteConfig:
-    id: str
-    requires: tuple[str, ...] = ()
-    targets: tuple[str, ...] = ()
-    max_attempts: int = 2
+class TargetSelection:
+    """Targets and retry policy for one workflow inside a profile."""
+
+    targets: tuple[str, ...]
+    max_attempts: int
     timeout_s: int = 0
 
 
@@ -63,10 +62,13 @@ class DaemonConfig:
     max_jobs: int = 4
     history_turns: int = 8
     history_bytes: int = 65536
-    default_routing_profile: str = "balanced"
+    default_profile: str = "balanced"
     targets: tuple[TargetConfig, ...] = field(default_factory=tuple)
-    routes: tuple[RouteConfig, ...] = field(default_factory=tuple)
-    routing_profiles: dict[str, dict[str, str]] = field(default_factory=dict)
+    profiles: dict[str, dict[str, TargetSelection]] = field(default_factory=dict)
+    legacy_selections: dict[str, TargetSelection] = field(
+        default_factory=dict,
+        repr=False,
+    )
     config_path: Path | None = None
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
@@ -88,28 +90,62 @@ def openmcp_home() -> Path:
     return Path(override).expanduser() if override else Path.home() / ".openmcp"
 
 
-def load_task_routes(
+def load_task_guide(
     home: Path,
     project_root: Path | None = None,
 ) -> dict[str, Any]:
     project_path = (
+        project_root / ".openmcp" / "task_guide.json"
+        if project_root is not None
+        else None
+    )
+    legacy_project_path = (
         project_root / ".openmcp" / "task_routes.json"
         if project_root is not None
         else None
     )
-    path = (
-        project_path
-        if project_path is not None and project_path.exists()
-        else home / "task_routes.json"
-    )
+    if project_path is not None and project_path.exists():
+        path = project_path
+    elif legacy_project_path is not None and legacy_project_path.exists():
+        path = legacy_project_path
+    else:
+        path = home / "task_guide.json"
+        legacy_path = home / "task_routes.json"
+        if not path.exists() and legacy_path.exists():
+            path = legacy_path
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise ValueError(f"Missing task route template: {path}") from exc
+        raise ValueError(f"Missing task guide: {path}") from exc
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid task route template: {path}: {exc.msg}") from exc
+        raise ValueError(f"Invalid task guide: {path}: {exc.msg}") from exc
     if not isinstance(value, dict) or not value:
-        raise ValueError("Task route template must be a non-empty JSON object")
+        raise ValueError("Task guide must be a non-empty JSON object")
+    # Normalize the previous decision-table keys for current MCP clients.
+    legacy_recommendations = value.get("routes")
+    if isinstance(legacy_recommendations, list):
+        if "recommendations" not in value:
+            value = {**value, "recommendations": legacy_recommendations}
+        value.pop("routes", None)
+    recommendations = value.get("recommendations")
+    if isinstance(recommendations, list):
+        normalized: list[Any] = []
+        for recommendation in recommendations:
+            if not isinstance(recommendation, dict):
+                normalized.append(recommendation)
+                continue
+            item = dict(recommendation)
+            if "routing_profile" in item:
+                item.setdefault("profile", item["routing_profile"])
+                item.pop("routing_profile")
+            normalized.append(item)
+        value["recommendations"] = normalized
+    columns = value.get("columns")
+    if isinstance(columns, list):
+        value["columns"] = [
+            "profile" if column == "routing_profile" else column
+            for column in columns
+        ]
     return value
 
 
@@ -121,19 +157,24 @@ def _positive_int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _renamed_value(mapping: dict[str, Any], name: str, legacy: str) -> Any:
+    """Read a renamed setting while rejecting ambiguous mixed configuration."""
+    if name in mapping and legacy in mapping:
+        raise ValueError(f"Use {name!r}, not both {name!r} and legacy {legacy!r}")
+    return mapping.get(name, mapping.get(legacy))
+
+
 def _default_targets() -> tuple[TargetConfig, ...]:
     return (
         TargetConfig(
             id="forge-primary",
             backend="codex",
             capabilities=("code",),
-            priority=10,
         ),
         TargetConfig(
             id="canvas-primary",
             backend="agy",
             capabilities=("code",),
-            priority=20,
         ),
         TargetConfig(
             id="sage-primary",
@@ -149,7 +190,6 @@ def _default_targets() -> tuple[TargetConfig, ...]:
             isolated=True,
             read_only=True,
             capabilities=("consult", "reasoning"),
-            priority=10,
         ),
         TargetConfig(
             id="sentinel-primary",
@@ -165,72 +205,201 @@ def _default_targets() -> tuple[TargetConfig, ...]:
             isolated=True,
             read_only=True,
             capabilities=("review",),
-            priority=10,
         ),
     )
 
 
-def _default_routes(targets: tuple[TargetConfig, ...]) -> tuple[RouteConfig, ...]:
-    codex_ids = tuple(target.id for target in targets if target.backend == "codex")
-    agy_ids = tuple(target.id for target in targets if target.backend == "agy")
-    sage_ids = tuple(target.id for target in targets if "consult" in target.capabilities)
-    sentinel_ids = tuple(target.id for target in targets if "review" in target.capabilities)
-    return (
-        RouteConfig(id="forge", requires=("code",), targets=codex_ids),
-        RouteConfig(id="canvas", requires=("code",), targets=agy_ids),
-        RouteConfig(id="sage", requires=("consult",), targets=sage_ids),
-        RouteConfig(id="sentinel", requires=("review",), targets=sentinel_ids),
+def _default_profiles(
+    targets: tuple[TargetConfig, ...],
+) -> dict[str, dict[str, TargetSelection]]:
+    mapping: dict[str, TargetSelection] = {}
+    for workflow, capability in _BUILTIN_WORKFLOW_CAPABILITIES.items():
+        target_ids = tuple(
+            target.id for target in targets if capability in target.capabilities
+        )
+        if not target_ids:
+            raise ValueError(
+                f"Default profile workflow {workflow!r} has no capable targets"
+            )
+        mapping[workflow] = TargetSelection(
+            targets=target_ids,
+            max_attempts=len(target_ids),
+        )
+    return {"balanced": mapping}
+
+
+def _default_legacy_routes(
+    targets: tuple[TargetConfig, ...],
+) -> dict[str, TargetSelection]:
+    groups = {
+        "forge": tuple(
+            target.id for target in targets if target.backend == "codex"
+        ),
+        "canvas": tuple(
+            target.id for target in targets if target.backend == "agy"
+        ),
+        "sage": tuple(
+            target.id for target in targets if "consult" in target.capabilities
+        ),
+        "sentinel": tuple(
+            target.id for target in targets if "review" in target.capabilities
+        ),
+    }
+    return {
+        name: TargetSelection(target_ids, max_attempts=2)
+        for name, target_ids in groups.items()
+        if target_ids
+    }
+
+
+def _legacy_routes(
+    raw: Any,
+    targets: tuple[TargetConfig, ...],
+    *,
+    include_defaults: bool = False,
+) -> dict[str, TargetSelection]:
+    """Read old named routes so their profile references can be expanded."""
+    if raw is None:
+        return _default_legacy_routes(targets) if include_defaults else {}
+    if not isinstance(raw, list):
+        raise ValueError("Legacy routes must be TOML tables")
+    target_ids = {target.id for target in targets}
+    routes = _default_legacy_routes(targets) if include_defaults else {}
+    configured: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("Each legacy route must be a TOML table")
+        route_id = str(item.get("id", "")).strip()
+        selected = tuple(str(value) for value in item.get("targets", []))
+        unknown = set(selected) - target_ids
+        if not route_id or not selected or unknown:
+            raise ValueError(
+                f"Invalid legacy route {route_id!r}; unknown targets: "
+                f"{sorted(unknown)}"
+            )
+        if route_id in configured:
+            raise ValueError("Legacy route identifiers must be unique")
+        configured.add(route_id)
+        routes[route_id] = TargetSelection(
+            targets=selected,
+            max_attempts=_positive_int(item.get("max_attempts"), 2),
+            timeout_s=max(0, int(item.get("timeout_s", 0))),
+        )
+    return routes
+
+
+def _target_selection(
+    raw: Any,
+    *,
+    profile_id: str,
+    workflow: str,
+    target_by_id: dict[str, TargetConfig],
+    legacy_routes: dict[str, TargetSelection],
+) -> TargetSelection:
+    if isinstance(raw, str):
+        name = raw.strip()
+        legacy = legacy_routes.get(name)
+        if legacy is not None:
+            selected = legacy.targets
+            max_attempts = legacy.max_attempts
+            timeout_s = legacy.timeout_s
+        else:
+            selected = (name,) if name else ()
+            max_attempts = len(selected)
+            timeout_s = 0
+    elif isinstance(raw, list):
+        selected = tuple(str(value) for value in raw)
+        max_attempts = len(selected)
+        timeout_s = 0
+    elif isinstance(raw, dict):
+        allowed = {"targets", "max_attempts", "timeout_s"}
+        unknown_options = set(raw) - allowed
+        if unknown_options:
+            raise ValueError(
+                f"Profile {profile_id!r} workflow {workflow!r} has unsupported "
+                f"settings: {sorted(unknown_options)}"
+            )
+        raw_targets = raw.get("targets", [])
+        if isinstance(raw_targets, str):
+            selected = (raw_targets,)
+        elif isinstance(raw_targets, list):
+            selected = tuple(str(value) for value in raw_targets)
+        else:
+            selected = ()
+        max_attempts = _positive_int(raw.get("max_attempts"), len(selected))
+        timeout_s = max(0, int(raw.get("timeout_s", 0)))
+    else:
+        selected = ()
+        max_attempts = 0
+        timeout_s = 0
+
+    unknown_targets = set(selected) - target_by_id.keys()
+    if not selected or unknown_targets:
+        raise ValueError(
+            f"Profile {profile_id!r} workflow {workflow!r} has invalid targets: "
+            f"{sorted(unknown_targets)}"
+        )
+    required = _BUILTIN_WORKFLOW_CAPABILITIES.get(workflow)
+    incapable = [
+        target_id
+        for target_id in selected
+        if required is not None
+        and required not in target_by_id[target_id].capabilities
+    ]
+    if incapable:
+        raise ValueError(
+            f"Profile {profile_id!r} workflow {workflow!r} requires capability "
+            f"{required!r}; targets missing it: {incapable}"
+        )
+    return TargetSelection(
+        targets=selected,
+        max_attempts=max_attempts,
+        timeout_s=timeout_s,
     )
 
 
-def _routing_profiles(
+def _profiles(
     raw: Any,
-    routes: tuple[RouteConfig, ...],
-) -> dict[str, dict[str, str]]:
-    route_ids = {route.id for route in routes}
+    targets: tuple[TargetConfig, ...],
+    legacy_routes: dict[str, TargetSelection],
+    *,
+    base: dict[str, dict[str, TargetSelection]] | None = None,
+    inherited_profile: str = "balanced",
+) -> dict[str, dict[str, TargetSelection]]:
     if raw is None:
-        raw = {"balanced": _BUILTIN_ROLE_ROUTES}
+        return _default_profiles(targets) if base is None else base
     if not isinstance(raw, dict) or not raw:
-        raise ValueError("[routing_profiles] must contain at least one profile")
-    profiles: dict[str, dict[str, str]] = {}
+        raise ValueError("[profiles] must contain at least one profile")
+    profiles = {
+        profile_id: dict(mapping) for profile_id, mapping in (base or {}).items()
+    }
+    inherited = profiles.get(inherited_profile, {})
+    target_by_id = {target.id: target for target in targets}
     for profile_id, mapping in raw.items():
+        profile_id = str(profile_id)
         if not isinstance(mapping, dict) or not mapping:
-            raise ValueError(f"Routing profile {profile_id!r} must be a table")
-        resolved = {str(role): str(route) for role, route in mapping.items()}
-        missing = set(_BUILTIN_ROLE_ROUTES) - resolved.keys()
+            raise ValueError(f"Profile {profile_id!r} must be a table")
+        resolved = dict(profiles.get(profile_id, inherited))
+        resolved.update(
+            {
+                str(workflow): _target_selection(
+                    value,
+                    profile_id=profile_id,
+                    workflow=str(workflow),
+                    target_by_id=target_by_id,
+                    legacy_routes=legacy_routes,
+                )
+                for workflow, value in mapping.items()
+            }
+        )
+        missing = set(_BUILTIN_WORKFLOW_CAPABILITIES) - resolved.keys()
         if missing:
             raise ValueError(
-                f"Routing profile {profile_id!r} does not map built-in roles: "
+                f"Profile {profile_id!r} does not map built-in workflows: "
                 f"{sorted(missing)}"
             )
-        unknown = set(resolved.values()) - route_ids
-        if unknown:
-            raise ValueError(
-                f"Routing profile {profile_id!r} has unknown routes: {sorted(unknown)}"
-            )
-        profiles[str(profile_id)] = resolved
+        profiles[profile_id] = resolved
     return profiles
-
-
-def _validate_profile_targets(
-    targets: tuple[TargetConfig, ...],
-    routes: tuple[RouteConfig, ...],
-    profiles: dict[str, dict[str, str]],
-) -> None:
-    target_by_id = {target.id: target for target in targets}
-    route_by_id = {route.id: route for route in routes}
-    for profile_id, mapping in profiles.items():
-        for role, route_id in mapping.items():
-            route = route_by_id[route_id]
-            if any(
-                set(route.requires).issubset(target_by_id[target_id].capabilities)
-                for target_id in route.targets
-            ):
-                continue
-            raise ValueError(
-                f"Routing profile {profile_id!r} role {role!r} has no eligible "
-                f"targets on route {route_id!r}"
-            )
 
 
 def validate_target_args(
@@ -297,7 +466,9 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
                 id=target_id,
                 backend=backend,
                 model=str(item.get("model", "")),
-                profile=str(item.get("profile", "")),
+                backend_profile=str(
+                    _renamed_value(item, "backend_profile", "profile") or ""
+                ),
                 reasoning=str(item.get("reasoning", "")),
                 system_prompt=str(item.get("system_prompt", "")),
                 isolated=isolated,
@@ -305,39 +476,11 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
                 args=tuple(args),
                 capabilities=tuple(str(value) for value in capabilities),
                 max_concurrency=_positive_int(item.get("max_concurrency"), 1),
-                priority=int(item.get("priority", 100)),
             )
         )
     if len({target.id for target in targets}) != len(targets):
         raise ValueError("Target identifiers must be unique")
     return tuple(targets)
-
-
-def _routes(raw: Any, targets: tuple[TargetConfig, ...]) -> tuple[RouteConfig, ...]:
-    if not isinstance(raw, list) or not raw:
-        return _default_routes(targets)
-    target_ids = {target.id for target in targets}
-    routes: list[RouteConfig] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            raise ValueError("Each route must be a TOML table")
-        route_id = str(item.get("id", "")).strip()
-        route_targets = tuple(str(value) for value in item.get("targets", []))
-        unknown = set(route_targets) - target_ids
-        if not route_id or not route_targets or unknown:
-            raise ValueError(f"Invalid route {route_id!r}; unknown targets: {sorted(unknown)}")
-        routes.append(
-            RouteConfig(
-                id=route_id,
-                requires=tuple(str(value) for value in item.get("requires", [])),
-                targets=route_targets,
-                max_attempts=_positive_int(item.get("max_attempts"), 2),
-                timeout_s=max(0, int(item.get("timeout_s", 0))),
-            )
-        )
-    if len({route.id for route in routes}) != len(routes):
-        raise ValueError("Route identifiers must be unique")
-    return tuple(routes)
 
 
 def _logging_config(raw: Any, home: Path) -> LoggingConfig:
@@ -405,20 +548,39 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raw = {}
+    unsupported = set(raw) - {
+        "daemon",
+        "logging",
+        "targets",
+        "profiles",
+        # Accepted while existing installations migrate to the shorter names.
+        "routes",
+        "routing_profiles",
+    }
+    if unsupported:
+        raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
     daemon = raw.get("daemon", {})
     if not isinstance(daemon, dict):
         raise ValueError("[daemon] must be a TOML table")
     targets = _targets(raw.get("targets"))
-    routes = _routes(raw.get("routes"), targets)
-    routing_profiles = _routing_profiles(raw.get("routing_profiles"), routes)
-    default_routing_profile = str(
-        daemon.get("default_routing_profile", "balanced")
+    legacy_routes = _legacy_routes(
+        raw.get("routes"),
+        targets,
+        include_defaults="routing_profiles" in raw,
+    )
+    profiles = _profiles(
+        _renamed_value(raw, "profiles", "routing_profiles"),
+        targets,
+        legacy_routes,
+    )
+    default_profile = str(
+        _renamed_value(daemon, "default_profile", "default_routing_profile")
+        or "balanced"
     ).strip()
-    if default_routing_profile not in routing_profiles:
+    if default_profile not in profiles:
         raise ValueError(
-            f"Unknown default routing profile: {default_routing_profile!r}"
+            f"Unknown default profile: {default_profile!r}"
         )
-    _validate_profile_targets(targets, routes, routing_profiles)
     return DaemonConfig(
         home=home,
         config_path=config_path,
@@ -427,10 +589,10 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         max_jobs=_positive_int(daemon.get("max_jobs"), 4),
         history_turns=_positive_int(daemon.get("history_turns"), 8),
         history_bytes=_positive_int(daemon.get("history_bytes"), 65536),
-        default_routing_profile=default_routing_profile,
+        default_profile=default_profile,
         targets=targets,
-        routes=routes,
-        routing_profiles=routing_profiles,
+        profiles=profiles,
+        legacy_selections=legacy_routes,
         logging=_logging_config(raw.get("logging"), home),
     )
 
@@ -441,7 +603,13 @@ def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return base
-    unsupported = set(raw) - {"project", "routes", "routing_profiles"}
+    unsupported = set(raw) - {
+        "project",
+        "profiles",
+        # Accepted while existing installations migrate to the shorter names.
+        "routes",
+        "routing_profiles",
+    }
     if unsupported:
         raise ValueError(f"Unsupported project config sections: {sorted(unsupported)}")
 
@@ -449,66 +617,48 @@ def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
     if not isinstance(project, dict):
         raise ValueError("[project] must be a TOML table")
 
-    raw_routes = raw.get("routes")
-    if raw_routes is None:
-        route_overrides: tuple[RouteConfig, ...] = ()
-    elif not isinstance(raw_routes, list):
-        raise ValueError("Project routes must be TOML tables")
-    elif raw_routes:
-        route_overrides = _routes(raw_routes, base.targets)
-    else:
-        route_overrides = ()
-    route_by_id = {route.id: route for route in base.routes}
-    route_by_id.update({route.id: route for route in route_overrides})
-    routes = tuple(route_by_id.values())
-
-    profiles = {
-        profile_id: dict(mapping)
-        for profile_id, mapping in base.routing_profiles.items()
-    }
-    raw_profiles = raw.get("routing_profiles")
-    if raw_profiles is not None:
-        if not isinstance(raw_profiles, dict) or not raw_profiles:
-            raise ValueError("[routing_profiles] must contain at least one profile")
-        inherited = profiles[base.default_routing_profile]
-        route_ids = set(route_by_id)
-        for profile_id, mapping in raw_profiles.items():
-            if not isinstance(mapping, dict) or not mapping:
-                raise ValueError(f"Routing profile {profile_id!r} must be a table")
-            resolved = {
-                **profiles.get(str(profile_id), inherited),
-                **{str(role): str(route) for role, route in mapping.items()},
-            }
-            unknown = set(resolved.values()) - route_ids
-            if unknown:
-                raise ValueError(
-                    f"Routing profile {profile_id!r} has unknown routes: "
-                    f"{sorted(unknown)}"
-                )
-            profiles[str(profile_id)] = resolved
+    legacy_routes = (
+        _default_legacy_routes(base.targets)
+        if "routing_profiles" in raw
+        else {}
+    )
+    legacy_routes.update(base.legacy_selections)
+    legacy_routes.update(
+        _legacy_routes(
+            raw.get("routes"),
+            base.targets,
+        )
+    )
+    profiles = _profiles(
+        _renamed_value(raw, "profiles", "routing_profiles"),
+        base.targets,
+        legacy_routes,
+        base=base.profiles,
+        inherited_profile=base.default_profile,
+    )
 
     default_profile = str(
-        project.get("default_routing_profile", base.default_routing_profile)
+        _renamed_value(project, "default_profile", "default_routing_profile")
+        or base.default_profile
     ).strip()
     if default_profile not in profiles:
-        raise ValueError(f"Unknown project routing profile: {default_profile!r}")
-    _validate_profile_targets(base.targets, routes, profiles)
+        raise ValueError(f"Unknown project profile: {default_profile!r}")
     return replace(
         base,
-        default_routing_profile=default_profile,
-        routes=routes,
-        routing_profiles=profiles,
+        default_profile=default_profile,
+        profiles=profiles,
+        legacy_selections=legacy_routes,
     )
 
 
 __all__ = [
     "DaemonConfig",
     "LoggingConfig",
-    "RouteConfig",
     "TargetConfig",
+    "TargetSelection",
     "load_config",
     "load_project_config",
-    "load_task_routes",
+    "load_task_guide",
     "openmcp_home",
     "validate_target_args",
 ]

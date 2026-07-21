@@ -50,9 +50,9 @@ variables instead.
 
 OpenMCP still owns the non-interactive transport, workspace, prompt, output
 capture, and durable session argument. The driver translates first-class target
-fields such as `model`, `profile`, `reasoning`, `system_prompt`, `isolated`, and
-`read_only` into CLI arguments before calling a transport-only backend. Avoid
-duplicating those fields or transport-owned options in `args`; target arguments
+fields such as `model`, `backend_profile`, `reasoning`, `system_prompt`,
+`isolated`, and `read_only` into CLI arguments before calling a transport-only
+backend. Avoid duplicating those fields or transport-owned options in `args`; target arguments
 should be options only because OpenMCP supplies the final prompt. The reserved
 end-of-options token `--` is rejected for every backend. Codex `--cd`, `-C`, and
 their attached-value forms are also rejected so a target cannot leave its
@@ -134,8 +134,8 @@ OpenMCP owns `exec`, `--cd`, `--json`, `--output-last-message`, the resume
 subcommand/session ID, the `--` prompt boundary, and the prompt. OpenMCP always
 enables `--yolo` for non-interactive execution. Everything else uses the Codex
 CLI default unless selected by target fields or `args`. The driver translates
-`profile`, `model`, and `reasoning` to their CLI equivalents; arbitrary Codex
-configuration remains available through repeated `-c` entries in `args`.
+`backend_profile`, `model`, and `reasoning` to their CLI equivalents; arbitrary
+Codex configuration remains available through repeated `-c` entries in `args`.
 
 ## Pi (`pi --mode json`)
 

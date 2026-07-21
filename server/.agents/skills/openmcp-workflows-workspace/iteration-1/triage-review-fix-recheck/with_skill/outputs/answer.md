@@ -1,36 +1,19 @@
-# triage workflow
+# Use built-in jobs instead of `triage.yaml`
 
-Reusable three-stage pipeline. Install at `.openmcp/workflows/triage.yaml`.
+OpenMCP does not load project-defined workflow YAML, so do not create
+`.openmcp/workflows/triage.yaml`.
 
-## Stage graph (dependency order)
+Express the sequence with built-in jobs:
 
-1. `review` (read, route `sentinel`) - inspects the request, lists required changes.
-2. `fix` (write, route `forge`, needs `review`) - implements the change using the
-   review findings, then commits.
-3. `verify` (read, route `sentinel`, needs `fix`) - verifies the committed fix.
+1. Submit `consult` (or `review` when inspecting existing code) to identify the
+   required changes.
+2. Submit `implement` with a prompt containing those findings and a
+   `commit_message`.
+3. Submit `review` with the implementation job as `parent_job_id` to verify the
+   committed result.
+4. If verification passes, integrate the implementation job. If fixes are
+   required, submit another `implement` based on the latest implementation state
+   and integrate that successful fix.
 
-## Read vs write
-
-- `review` and `verify` are `read` (no commits, disposable worktrees).
-- `fix` is the only `write` stage, so the write chain is trivially ordered.
-
-## Inputs
-
-- `prompt` (string, required) - the request to triage.
-- `commit_message` (string, optional) - message for the fix commit.
-
-## Result stage
-
-`verify` is the sole terminal stage, so `result_stage` is inferred; it is set
-explicitly for clarity.
-
-## Data flow
-
-- `fix` reads `${stages.review.text}` (review is in its `needs`).
-- `verify` reads `${stages.fix.commit}` (fix is in its `needs`).
-
-## Validation notes
-
-Passes loader rules: `version: 1`, name matches the regex, single write stage,
-no read fanout, acyclic graph, and every `${stages.*}` reference names a stage in
-that stage's `needs`.
+Use stable context keys such as `triage/analysis`, `triage/implement`, and
+`triage/review`. Select configured profiles per job, not providers or targets.
