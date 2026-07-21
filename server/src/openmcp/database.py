@@ -545,14 +545,25 @@ class Database:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             return None
-        stage_rows = self._connection.execute(
-            """
-            SELECT id, ordinal, mode, state, attempts, target_id,
-                   text, error, commit_sha, start_commit
-            FROM stages WHERE job_id=? ORDER BY ordinal
-            """,
-            (job_id,),
-        ).fetchall()
+        if include_stage_outputs:
+            stage_rows = self._connection.execute(
+                """
+                SELECT id, ordinal, mode, state, attempts, target_id,
+                       text, error, commit_sha, start_commit
+                FROM stages WHERE job_id=? ORDER BY ordinal
+                """,
+                (job_id,),
+            ).fetchall()
+        else:
+            stage_rows = self._connection.execute(
+                """
+                SELECT id, ordinal, mode, state, attempts, target_id,
+                       CASE WHEN id=? THEN text ELSE '' END AS text,
+                       '' AS error, commit_sha, start_commit
+                FROM stages WHERE job_id=? ORDER BY ordinal
+                """,
+                (row["result_stage"], job_id),
+            ).fetchall()
         artifacts = self._connection.execute(
             "SELECT kind, path FROM artifacts WHERE job_id=? ORDER BY kind, path", (job_id,)
         ).fetchall()
