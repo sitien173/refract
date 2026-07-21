@@ -1,4 +1,4 @@
-"""Versioned workflow loading, validation, and prompt rendering."""
+"""Built-in workflow definitions, validation, and prompt rendering."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
+_BUILTIN_STAGES = {
+    "implement": ("write", "implement"),
+    "review": ("read", "review"),
+    "consult": ("read", "consult"),
+}
+BUILTIN_WORKFLOWS = tuple(sorted(_BUILTIN_STAGES))
 
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -26,7 +31,7 @@ class InputSpec:
 class StageSpec:
     id: str
     mode: str
-    route: str
+    role: str
     prompt: str
     needs: tuple[str, ...] = ()
     context: str = ""
@@ -50,14 +55,9 @@ def _digest(data: dict[str, Any]) -> str:
 
 
 def _builtin(name: str) -> WorkflowSpec | None:
-    builtins = {
-        "implement": ("write", "implement"),
-        "review": ("read", "review"),
-        "consult": ("read", "consult"),
-    }
-    if name not in builtins:
+    if name not in _BUILTIN_STAGES:
         return None
-    mode, route = builtins[name]
+    mode, role = _BUILTIN_STAGES[name]
     inputs = {"prompt": {"type": "string", "required": True}}
     if name == "implement":
         inputs["commit_message"] = {"type": "string", "required": False}
@@ -68,7 +68,7 @@ def _builtin(name: str) -> WorkflowSpec | None:
         "stages": {
             "execute": {
                 "mode": mode,
-                "route": route,
+                "role": role,
                 "context": "worker",
                 "prompt": "${inputs.prompt}",
             }
@@ -105,7 +105,8 @@ def _parse_stages(raw: Any) -> tuple[StageSpec, ...]:
         if not _NAME_RE.fullmatch(stage_id) or not isinstance(definition, dict):
             raise ValueError(f"Invalid workflow stage {stage_id!r}")
         mode = str(definition.get("mode", "")).strip()
-        route = str(definition.get("route", "")).strip()
+        # ``route`` is accepted only so jobs saved by older releases can resume.
+        role = str(definition.get("role", definition.get("route", ""))).strip()
         prompt = definition.get("prompt")
         needs = definition.get("needs", [])
         fanout = int(definition.get("fanout", 1))
@@ -114,8 +115,8 @@ def _parse_stages(raw: Any) -> tuple[StageSpec, ...]:
             raise ValueError(f"Stage {stage_id!r} requires a mode")
         if mode not in {"read", "write"}:
             raise ValueError(f"Stage {stage_id!r} has invalid mode {mode!r}")
-        if not route:
-            raise ValueError(f"Stage {stage_id!r} requires a route")
+        if not role:
+            raise ValueError(f"Stage {stage_id!r} requires a role")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError(f"Stage {stage_id!r} requires a prompt")
         if not isinstance(needs, list):
@@ -128,7 +129,7 @@ def _parse_stages(raw: Any) -> tuple[StageSpec, ...]:
             StageSpec(
                 id=stage_id,
                 mode=mode,
-                route=route,
+                role=role,
                 prompt=prompt,
                 needs=tuple(str(value) for value in needs),
                 context=str(definition.get("context", stage_id)),
@@ -278,26 +279,13 @@ def workflow_data(workflow: WorkflowSpec) -> dict[str, Any]:
     }
 
 
-def load_workflow(
-    project_root: Path,
-    name: str,
-) -> WorkflowSpec:
+def load_workflow(name: str) -> WorkflowSpec:
     builtin = _builtin(name)
-    if builtin is not None:
-        return parse_workflow(workflow_data(builtin))
-    if not _NAME_RE.fullmatch(name):
-        raise ValueError(f"Invalid workflow name {name!r}")
-    path = project_root / ".openmcp" / "workflows" / f"{name}.yaml"
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise ValueError(f"Workflow {name!r} does not exist") from exc
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Workflow {name!r} is invalid YAML: {exc}") from exc
-    workflow = parse_workflow(data)
-    if workflow.name != name:
-        raise ValueError(f"Workflow file name and workflow name differ: {name!r}")
-    return workflow
+    if builtin is None:
+        raise ValueError(
+            f"Unknown workflow {name!r}; expected one of {BUILTIN_WORKFLOWS}"
+        )
+    return parse_workflow(workflow_data(builtin))
 
 
 def validate_inputs(workflow: WorkflowSpec, values: dict[str, Any]) -> None:
@@ -354,6 +342,7 @@ def render_prompt(
 
 
 __all__ = [
+    "BUILTIN_WORKFLOWS",
     "InputSpec",
     "StageSpec",
     "WorkflowSpec",

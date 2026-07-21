@@ -1,13 +1,12 @@
 {
   "eval_id": 0,
   "eval_name": "triage-review-fix-recheck",
-  "prompt": "Author .openmcp/workflows/triage.yaml: reviewer inspects request and lists changes, coder implements incorporating findings and commits, second reviewer verifies the fix.",
+  "prompt": "Design an OpenMCP sequence that inspects requested changes, implements them, and verifies the implementation. The user asks for .openmcp/workflows/triage.yaml.",
   "assertions": [
-    {"text": "version is 1 and name is a valid workflow name (triage)"},
-    {"text": "Has exactly one write-mode stage (the fix); review and verify are read-mode"},
-    {"text": "The fix stage lists the review stage in needs and references ${stages.review.text} (or .outputs)"},
-    {"text": "The verify stage lists the fix stage in needs"},
-    {"text": "result_stage resolves to the terminal verify stage (inferred or explicit); no multiple-terminal error"},
-    {"text": "Passes all loader validation rules: no fanout on write stage, all variable refs point to declared inputs/dependency stages"}
+    {"text": "States that custom workflow files are unsupported and does not author YAML"},
+    {"text": "Uses only built-in implement, review, and consult workflows"},
+    {"text": "Describes an ordered job sequence with precise prompts and context keys"},
+    {"text": "Uses parent_job_id only where the parent has a successful commit"},
+    {"text": "Identifies the approved implementation job as the integration target"}
   ]
 }

@@ -1,7 +1,7 @@
 # Project Overview
 
 OpenMCP is a loopback HTTP orchestration daemon. It exposes durable project
-jobs through MCP. Jobs use role workflows, routing profiles, named contexts,
+jobs through MCP. Jobs use built-in workflows, profiles, named contexts,
 isolated worktrees, chained commits, and explicit integration.
 
 ## Repository Structure
@@ -11,7 +11,7 @@ src/openmcp/
   backends/           provider-specific CLI adapters and classification
   backend_runner.py   direct Python invocation compatibility service
   cli.py              serve and doctor commands
-  config.py           targets, routes, profiles, and CLI args
+  config.py           targets, profiles, and CLI args
   database.py         SQLite state and migrations
   drivers.py          internal provider dispatch
   models.py           public structured results
@@ -20,7 +20,7 @@ src/openmcp/
   processes.py        cross-platform process-group lifecycle
   runtime.py          scheduler, contexts, retries, and integration
   server.py           MCP tools, resources, and daemon lifecycle
-  workflows.py        built-in and project workflow loading
+  workflows.py        built-in workflow definitions and validation
   workspaces.py       Git isolation and integration
 tests/
   test_smoke.py
@@ -47,7 +47,7 @@ Tools:
 - `reload`
 - `doctor`
 - `project_register`
-- `task_route`
+- `task_guide`
 - `job_submit`
 - `job_wait`
 - `job_cancel`
@@ -60,11 +60,10 @@ Built-in workflows:
 - `review` for non-committing code review
 - `consult` for non-committing analysis
 
-`job_submit` accepts `routing_profile` and `parent_job_id`; `job_wait` accepts
-`include_stage_outputs`. Task-route templates expose workflows and routing
-profiles, not public agent recommendations. Internal provider identities remain
-configuration-only, although configured target health is visible through the
-models resource.
+`job_submit` accepts `profile` and `parent_job_id`; `job_wait` accepts
+`include_stage_outputs`. Task guides recommend workflows and profiles, not
+specific targets. Internal provider identities remain configuration-only,
+although configured target health is visible through the targets resource.
 
 ## Architecture
 
@@ -74,17 +73,17 @@ flowchart TD
     Server --> Runtime
     Runtime --> Database
     Runtime --> Workspaces
-    Runtime --> Profiles[Routing profile]
-    Profiles --> Routes[Role route]
-    Routes --> Drivers
+    Runtime --> Profiles[Profile]
+    Profiles --> Targets[Targets]
+    Targets --> Drivers
     Drivers --> CLIs[Provider CLIs]
 ```
 
 Data flow:
 
 1. Register a clean Git project.
-2. Submit a role workflow and routing profile.
-3. Resolve the role through that profile.
+2. Submit a workflow and profile.
+3. Resolve the workflow to the profile's target list.
 4. Select a healthy configured target.
 5. Execute inside an isolated worktree.
 6. Persist output, context, events, and commits.
@@ -93,8 +92,9 @@ Data flow:
 
 ## Target execution policy
 
-Targets own provider execution settings: `model`, `profile`, `reasoning`,
-`system_prompt`, `isolated`, `read_only`, and backend-specific argv `args`.
+Targets own provider execution settings: `model`, `backend_profile`,
+`reasoning`, `system_prompt`, `isolated`, `read_only`, and backend-specific
+argv `args`.
 Drivers compile those fields into transport-only backend calls. Target args are
 individual argv tokens, never shell syntax; the reserved `--` token and Codex
 workspace overrides are rejected. Target policy and args are captured in the
@@ -111,12 +111,12 @@ turned off by target ordering.
 
 Sage and Sentinel default to `gpt-5.6-sol`. Configuration can override models.
 
-## Routing Profiles
+## Profiles
 
-`[routing_profiles.<name>]` maps logical roles onto route IDs. The daemon uses
-`default_routing_profile` when submissions omit one. Profiles support cost,
-quality, latency, offline, or project-specific policies without changing
-workflow definitions.
+`[profiles.<name>]` maps workflows directly onto targets or ordered target
+lists. The daemon uses `default_profile` when submissions omit one. Profiles
+support cost, quality, latency, offline, or project-specific policies without
+changing workflows. Lists provide failover without another configuration layer.
 
 ## Code Conventions
 
@@ -129,7 +129,7 @@ workflow definitions.
 
 ## Testing
 
-Offline tests cover command construction, routing, persistence, worktree
+Offline tests cover command construction, selection, persistence, worktree
 isolation, job chains, cancellation, migration, and integration. Live tests
 require provider CLIs. Normal test runs skip live markers.
 
@@ -147,10 +147,9 @@ require provider CLIs. Normal test runs skip live markers.
 - Keep HTTP bound to loopback by default.
 - Treat worktrees as Git isolation, not a security sandbox: permission-bypassing write agents can access the host and parent repository.
 
-## Adding Targets and Roles
+## Adding targets and profiles
 
-Targets select internal providers, models, policies, and backend argv options.
-Routes select target pools. Routing profiles map public roles onto routes.
-Configuration and project routing reload for new submissions, while submitted
-jobs retain their immutable plan. Add a workflow only when a new execution
-shape is required; use a project workflow for a new DAG or stage shape.
+Targets configure providers, models, policies, and backend argv options.
+Profiles map built-in workflows directly onto targets. Configuration and project
+selection reload for new submissions, while submitted jobs retain their
+immutable plan. OpenMCP does not load project-defined workflows.

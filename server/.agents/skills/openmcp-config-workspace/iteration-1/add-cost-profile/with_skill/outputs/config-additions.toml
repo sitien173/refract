@@ -1,18 +1,12 @@
-# New cheaper implementer target (codex, gpt-5-mini).
+# New cheaper implementation target.
 [[targets]]
 id = "forge-mini"
 backend = "codex"
 model = "gpt-5-mini"
 capabilities = ["code"]
 
-# Route that pools only the new cheaper target.
-[[routes]]
-id = "forge-mini"
-requires = ["code"]
-targets = ["forge-mini"]
-
-# Cost profile: cheap implement, unchanged review and consult.
-[routing_profiles.cost]
+# Profiles map workflows directly to target IDs.
+[profiles.cost]
 implement = "forge-mini"
-review = "sentinel"
-consult = "sage"
+review = "sentinel-primary"
+consult = "sage-primary"

@@ -1,191 +1,172 @@
 # OpenMCP configuration reference
 
-Global config file: `~/.openmcp/config.toml` (relocate with `OPENMCP_HOME`).
+Global config: `~/.openmcp/config.toml` (relocate with `OPENMCP_HOME`).
 
-## Table of contents
+## Selection model
 
-- [daemon]
-- [logging]
-- Targets
-- Routes
-- Routing profiles
-- Project overrides
-- Local overlays
-- task_routes.json
-- CLI argument policy boundary
+- **Workflow:** `implement`, `review`, or `consult`.
+- **Profile:** maps workflows directly to targets.
+- **Target:** backend/model execution configuration.
 
-## [daemon]
+A profile value may be:
+
+```toml
+implement = "forge-primary"
+implement = ["forge-primary", "forge-backup"]
+implement = { targets = ["forge-primary", "forge-backup"], max_attempts = 2, timeout_s = 600 }
+```
+
+Target lists are ordered for failover.
+
+## `[daemon]`
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `host` | `127.0.0.1` | Listener host. Keep on loopback. |
+| `host` | `127.0.0.1` | Listener host; keep on loopback. |
 | `port` | `8765` | Listener port. |
 | `max_jobs` | `4` | Concurrent job workers. |
 | `history_turns` | `8` | Context turns retained per lane. |
 | `history_bytes` | `65536` | Context byte budget per lane. |
-| `default_routing_profile` | `balanced` | Profile used when a submission omits one. |
+| `default_profile` | `balanced` | Profile used when submission omits one. |
 
-Host, port, worker, and history-limit changes require a daemon restart. Moving
-`OPENMCP_HOME` also requires starting a new daemon process.
+Host, port, worker, history, and home changes require a daemon restart.
 
-## [logging]
+## `[logging]`
 
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `level` | `INFO` | Log level. |
-| `format` | `json` | `text` or newline-delimited `json`. |
-| `file` | `openmcp.log` | Relative paths resolve under `OPENMCP_HOME`; `false` disables the file sink. |
+| `format` | `text` | `text` or newline-delimited `json`. |
+| `file` | `openmcp.log` | Relative paths resolve under `OPENMCP_HOME`; `false` disables. |
 | `console` | `false` | Mirror logs to stderr. |
 | `max_bytes` | `10485760` | Rotation size. |
 | `backup_count` | `5` | Rotated files retained. |
-| `capture_warnings` | `true` | Route Python warnings into logs. |
+| `capture_warnings` | `true` | Send Python warnings to logs. |
 
-Logging changes require a restart. The MCP `reload` tool reports changed static
-settings in `restart_required`. Environment overrides: `OPENMCP_LOG_LEVEL`,
-`OPENMCP_LOG_FORMAT`, `OPENMCP_LOG_FILE` (`-`/`off`/`none` disables),
-`OPENMCP_LOG_CONSOLE`, `OPENMCP_LOG_MAX_BYTES`, `OPENMCP_LOG_BACKUP_COUNT`,
-`OPENMCP_LOG_CAPTURE_WARNINGS`. Prompts and model responses are never logged.
-
-Global targets, routes, routing profiles, and target `args` can be validated and
-activated for subsequent submissions with the MCP `reload` tool. Running jobs
-retain their immutable execution plans. Invalid configuration does not replace
-the active catalog.
+Logging changes require restart. Environment overrides are
+`OPENMCP_LOG_LEVEL`, `OPENMCP_LOG_FORMAT`, `OPENMCP_LOG_FILE`,
+`OPENMCP_LOG_CONSOLE`, `OPENMCP_LOG_MAX_BYTES`,
+`OPENMCP_LOG_BACKUP_COUNT`, and `OPENMCP_LOG_CAPTURE_WARNINGS`.
 
 ## Targets `[[targets]]`
 
-Targets own all provider execution settings. They are global only.
+Targets are global only.
 
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `id` | required | Unique target identifier. |
 | `backend` | required | `agy`, `codex`, or `pi`. |
-| `model` | CLI default | Translated to the backend model flag. |
-| `profile` | CLI default | Codex named profile (`-p`). |
+| `model` | CLI default | Backend model. |
+| `backend_profile` | CLI default | Codex named profile (`-p`). |
 | `reasoning` | CLI default | Reasoning/thinking effort. |
 | `system_prompt` | empty | Backend system prompt. |
-| `isolated` | `false` | Disable ambient project resources (Pi). |
-| `read_only` | `false` | Restrict to read tools (Pi: `read,grep,find,ls`). |
-| `args` | `[]` | Extra argv tokens for options without a first-class field. |
-| `capabilities` | `["code","reasoning","review","consult"]` | Capabilities this target serves. |
-| `max_concurrency` | `1` | Max simultaneous jobs on this target. |
-| `priority` | `100` | Lower is preferred within a route pool. |
+| `isolated` | `false` | Disable ambient project resources for Pi. |
+| `read_only` | `false` | Restrict Pi to `read,grep,find,ls`. |
+| `args` | `[]` | Additional argv tokens. |
+| `capabilities` | all built-ins | Used to derive the built-in profile when profiles are absent. |
+| `max_concurrency` | `1` | Simultaneous jobs allowed on the target. |
 
-Capability convention: `code` for implementers, `review` for reviewers,
-`consult`/`reasoning` for consultants. A route's `requires` must be a subset of
-each pooled target's `capabilities`, or load fails.
+Capability conventions are `code`, `review`, `consult`, and `reasoning`.
+Explicit profile mappings select the named target directly.
 
-## Routes `[[routes]]`
+## Profiles `[profiles.<name>]`
+
+Every profile maps all built-in workflows:
+
+```toml
+[profiles.balanced]
+implement = ["forge-primary", "forge-backup"]
+review = "sentinel-primary"
+consult = "sage-primary"
+```
+
+A string selects one target. A list provides ordered failover. An inline table
+supports:
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `id` | required | Unique route identifier. |
-| `requires` | `()` | Capabilities every pooled target must hold. |
-| `targets` | required | Ordered target ID pool. |
-| `max_attempts` | `2` | Attempts before the route fails. |
-| `timeout_s` | `0` | Per-route timeout; `0` disables it. |
-
-## Routing profiles `[routing_profiles.<name>]`
-
-Maps logical roles onto route IDs. Map all three roles:
-
-```toml
-[routing_profiles.balanced]
-implement = "forge"
-review = "sentinel"
-consult = "sage"
-```
-
-Add distinct profiles for cost, quality, latency, or offline policy. Two roles
-may point at the same route.
+| `targets` | required | Target ID or ordered target ID list. |
+| `max_attempts` | number of targets | Maximum target attempts. |
+| `timeout_s` | `0` | Per-attempt timeout; `0` disables it. |
 
 ## Project overrides `<project>/.openmcp/config.toml`
 
-Projects override routes and profiles only, never targets or daemon settings.
+Projects override profiles only. Targets and daemon settings remain global.
 
 ```toml
 [project]
-default_routing_profile = "quality"
+default_profile = "quality"
 
-[[routes]]
-id = "review-project"
-targets = ["sentinel-primary"]
-
-[routing_profiles.quality]
-review = "review-project"
+[profiles.quality]
+review = "strict-reviewer"
 ```
 
-Precedence: explicit submission profile > project config > global config >
-built-in defaults. Commit project config before registration or submission.
+Unspecified workflow mappings inherit from the same global profile, or from the
+global default when defining a new profile. Precedence is explicit submission,
+project config, global config, then built-in defaults.
 
 ## Local overlays `<project>/.openmcp.local.toml`
 
-Expose Git-ignored files to specific workflows.
-
 ```toml
 [[overlays]]
-include = ["config/**/*.development.json"]
+include = ["config/*.development.json"]
 exclude = ["config/private.development.json"]
 workflows = ["implement"]
 ```
 
-Rules: every matched file must already be Git-ignored; no symlinks in paths;
-relative globs only; use `exclude`, not negated patterns; never expose secrets.
-Overlay files copy into job worktrees and are written back on `job_integrate`
-after hash verification. Concurrent local edits cause an integration conflict.
+Every match must be Git-ignored. Paths cannot contain symlinks. Use relative
+globs and `exclude`, not negated patterns. Never expose secrets. Overlay changes
+are copied back only during `job_integrate` after hash verification.
 
-## task_routes.json
+## `task_guide.json`
 
-Guidance template read by the coordinator; does not route jobs itself. Reloads
-on every `task_route` call.
+Task guidance is read on every `task_guide` call:
 
 ```json
 {
   "version": 1,
-  "columns": ["use_case", "workflow", "routing_profile", "reason"],
-  "routes": [
+  "columns": ["use_case", "workflow", "profile", "reason"],
+  "recommendations": [
     {
-      "use_case": "Non-UI repository implementation",
+      "use_case": "Repository implementation",
       "workflow": "implement",
-      "routing_profile": "quality",
-      "reason": "Implements repository changes using the quality profile."
+      "profile": "quality",
+      "reason": "Use quality execution."
     }
   ]
 }
 ```
 
-The coordinator passes `workflow` and `routing_profile` to `job_submit`.
-Profiles resolve workflow roles to internal route IDs, so task-route templates
-should not contain agent recommendation fields. If `routing_profile` is absent,
-OpenMCP uses the configured default profile.
+The coordinator passes `workflow` and optional `profile` to `job_submit`.
+Recommendations should not contain target IDs or provider names.
+
+## Reload behavior
+
+`reload` validates and activates global targets, profiles, and target arguments
+for subsequent submissions. Running jobs retain their immutable plans. Project
+profiles and task guides reload when used.
+
+`restart_required` reports static changes such as host, port, worker count,
+history, home, or logging.
 
 ## CLI argument policy boundary
 
-`args` items are individual argv tokens launched with `shell=False`. OpenMCP owns
-the transport, workspace, prompt, output capture, and session arguments and
-compiles first-class fields into backend flags. Do not duplicate first-class
-fields or transport-owned options in `args`.
+Every `args` item is one argv token launched without shell parsing. Do not
+repeat first-class target fields in `args`.
 
-Rejected in `args` for every backend:
+Rejected for every backend:
 
-- The end-of-options terminator `--`.
+- `--`
 
 Rejected for Codex:
 
-- `--cd` and `-C` (and attached-value forms) - a target must not leave its
-  isolated worktree.
+- `--cd`, `-C`, and attached-value forms
 
-Rejected for isolated Pi targets:
+Rejected for isolated Pi:
 
-- `--extension`, `-e`, `--skill`, `--prompt-template` (and `--flag=value`
-  forms) - isolation disables ambient resources.
+- `--extension`, `-e`, `--skill`, `--prompt-template`, and `--flag=value`
+  variants
 
-Avoid options that disable persistence (Codex `--ephemeral`, Pi `--no-session`);
-they prevent OpenMCP from resuming the backend context on a later job.
-
-OpenMCP always enables the non-interactive approval mode per backend: Agy
-`--dangerously-skip-permissions`, Codex `--yolo`, Pi `--approve` (or
-`--no-approve` for isolated targets). Normal Pi targets get `--approve` appended
-after `args` so target ordering cannot disable approval; Pi runs with
-`--mode json` placed after `args` so output parsing cannot be replaced.
-
-See the repository `CLI_ARGUMENTS.md` for the full per-backend flag tables.
+Options that disable persistence, such as Codex `--ephemeral` or Pi
+`--no-session`, prevent later context resumption. See `CLI_ARGUMENTS.md` for the
+full backend flag reference.

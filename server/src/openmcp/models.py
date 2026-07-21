@@ -65,7 +65,7 @@ class JobView(BaseModel):
     id: str
     project_id: str
     workflow: str
-    routing_profile: str
+    profile: str
     state: JobState
     context_key: str
     parent_job_id: str
@@ -78,7 +78,7 @@ class JobView(BaseModel):
     result: JobResult = Field(default_factory=JobResult)
 
 
-class ModelTargetView(BaseModel):
+class TargetView(BaseModel):
     id: str
     model: str
     capabilities: list[str]
@@ -108,9 +108,9 @@ class ActionResult(BaseModel):
     error: str = ""
 
 
-class TaskRouteResult(BaseModel):
+class TaskGuideResult(BaseModel):
     task: str
-    template: dict[str, Any]
+    guide: dict[str, Any]
 
 
 class ClientInstructionResult(BaseModel):
@@ -128,8 +128,7 @@ class DaemonStatusResult(BaseModel):
 class DaemonReloadResult(BaseModel):
     success: bool
     targets: int
-    routes: int
-    routing_profiles: int
+    profiles: int
     restart_required: list[str] = Field(default_factory=list)
 
 
@@ -147,11 +146,11 @@ __all__ = [
     "JobResult",
     "JobState",
     "JobView",
-    "ModelTargetView",
+    "TargetView",
     "ProjectView",
     "ResourcePayload",
     "StageState",
     "StageView",
     "SubmissionResult",
-    "TaskRouteResult",
+    "TaskGuideResult",
 ]

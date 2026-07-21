@@ -1,12 +1,12 @@
 {
   "eval_id": 0,
   "eval_name": "add-cost-profile",
-  "prompt": "Global ~/.openmcp/config.toml has forge-primary (codex,code), sentinel-primary (pi review), sage-primary (pi consult), routes forge/sentinel/sage, and a balanced profile. Add a 'cost' profile that runs implement on a new codex target with model gpt-5-mini, keeps review on sentinel and consult on sage. Write the TOML to add.",
+  "prompt": "Global ~/.openmcp/config.toml has targets forge-primary, sentinel-primary, and sage-primary plus a balanced profile. Add a cost profile that uses a new Codex gpt-5-mini target for implement while retaining sentinel-primary for review and sage-primary for consult.",
   "assertions": [
-    {"text": "Defines a new codex [[targets]] with model = gpt-5-mini and capabilities including 'code'"},
-    {"text": "Defines a [[routes]] entry that requires 'code' and pools the new target"},
-    {"text": "[routing_profiles.cost] maps all three roles: implement to the new route, review to the sentinel route, consult to the sage route"},
-    {"text": "No API keys, tokens, or credentials placed in args or any field"},
-    {"text": "Does not move host off loopback or redefine daemon host"}
+    {"text": "Defines a new global Codex [[targets]] entry with model gpt-5-mini and code capability"},
+    {"text": "Defines [profiles.cost] with direct target IDs for implement, review, and consult"},
+    {"text": "Does not add any intermediate grouping configuration"},
+    {"text": "Uses backend_profile, not profile, for a Codex CLI profile when needed"},
+    {"text": "Places no API keys, tokens, or credentials in configuration"}
   ]
 }

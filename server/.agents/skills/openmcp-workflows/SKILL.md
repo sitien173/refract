@@ -1,142 +1,113 @@
 ---
 name: openmcp-workflows
-description: Author and validate custom multi-stage OpenMCP workflow DAGs stored as .openmcp/workflows/*.yaml. Use this skill whenever the user wants a repeatable multi-step job that the built-in implement/review/consult workflows can't express as a single step - for example review-then-fix chains, plan-then-implement, fan-out analysis, or any pipeline where one stage's output feeds the next. Reach for this skill when the user says "make a workflow", "chain review into a fix", "run N reviewers in parallel", "add a stage that depends on", or describes a fixed sequence of agent steps. Prefer it over hand-writing YAML so the DAG passes OpenMCP validation on the first load.
+description: Select OpenMCP built-in workflows and compose safe parent job chains. Use when deciding between implement, review, and consult; sequencing review and fix jobs; preserving context across dependent work; or replacing requests for unsupported custom workflow YAML with supported job chains.
 ---
 
-# OpenMCP custom workflows
+# OpenMCP workflows and job chains
 
-Built-in `implement`, `review`, and `consult` cover single-step jobs. Author a
-custom workflow only when work needs multiple stages wired into a DAG - one
-stage's output flowing into the next, or several read stages fanning out.
+OpenMCP exposes exactly three workflows:
 
-A workflow declares typed `inputs` and named `stages`. Each stage runs in a
-`mode` (`read` or `write`) through a logical `route`, and stages depend on each
-other through `needs`. The selected routing profile resolves route names to
-targets at submission time, so workflows stay provider-agnostic.
+- `implement` changes files in an isolated worktree and may produce a commit.
+- `review` performs read-only code review.
+- `consult` performs read-only analysis or advice.
 
-Read [references/workflow-reference.md](references/workflow-reference.md) for the
-full field tables and every validation rule before writing a non-trivial
-workflow. Re-read the validation section after any load error - the loader is
-strict and the message names the exact stage or variable at fault.
+Project-defined `.openmcp/workflows/*.yaml` files are not loaded. Do not author
+custom workflow files. Use parent job chains for multi-step work.
 
-## Mental model
-
-- **Callers choose workflows, never modes.** `mode` is an internal execution
-  property: `write` stages can commit and share the job's primary worktree;
-  `read` stages run in disposable detached worktrees and cannot commit. You pick
-  the mode based on whether the stage must change files.
-- **Routes are logical roles.** Use profile keys such as `implement`, `review`,
-  and `consult`, which the active routing profile maps onto internal route IDs.
-  Never put a route ID, target ID, or provider name in a workflow stage.
-- **Variables carry data between stages.** A prompt references upstream results
-  with `${stages.<stage>.text}`. This only works if the current stage lists that
-  stage in `needs`.
+Read [references/workflow-reference.md](references/workflow-reference.md) for
+inputs, chaining rules, and integration behavior.
 
 ## Guardrails
 
-The loader rejects a workflow that breaks any of these, so getting them right
-means the workflow works on first submission.
-
-- `version` must be `1`. `name` must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
-- Every stage needs `mode` (`read` or `write`), `route`, and `prompt`.
-- **Write stages must form one ordered chain.** Any two write stages must be
-  connected by a dependency path, directly or transitively. Read stages may run
-  concurrently. This keeps commits linear and integrable.
-- `fanout` is `1`-`16` and only for `read` stages; a write stage cannot fan out.
-- A prompt may reference `${inputs.<name>}`, `${project.root}`, and
-  `${stages.<stage>.text|outputs|commit}`. A referenced stage must be in the
-  current stage's `needs`, or validation fails.
-- Set `result_stage` when there is more than one terminal stage. With a single
-  terminal stage it is inferred. `result_stage` must be terminal.
-- The dependency graph must be acyclic and every `needs` entry must name a real
-  stage.
+- Choose workflow by intent, never by provider or target.
+- Use `implement` only when file changes may be required.
+- Use `review` for evidence-based quality findings.
+- Use `consult` for analysis that is not code review.
+- Set `parent_job_id` only for genuinely dependent jobs.
+- A parent must have succeeded and produced a commit before a child starts from
+  it.
+- Keep one linear implementation chain so integration remains unambiguous.
+- Integrate implementation jobs only; review and consult jobs are read-only.
+- Never create `.openmcp/workflows` YAML.
 
 ## Workflow
 
-### 1. Decide it needs to be custom
+### 1. Classify each step
 
-If the task is a single implement, review, or consult, use the built-in - do not
-author a workflow. Author one only for a genuine multi-stage shape. State this
-briefly if you decide a built-in suffices.
+| Intent | Workflow |
+| --- | --- |
+| Modify repository files | `implement` |
+| Review code or an implementation | `review` |
+| Inspect, plan, explain, or advise | `consult` |
 
-### 2. Name inputs
+A single-step request should use one built-in directly.
 
-Declare the inputs the prompts interpolate. `prompt` is the common one; add a
-`commit_message` when a write stage commits. Types are `string`, `integer`,
-`number`, `boolean`, `object`, `array`. Mark required inputs.
+### 2. Build a parent chain when needed
 
-### 3. Lay out stages and dependencies
+Common reviewed implementation:
 
-Give each stage a role-based `route`, a `mode`, and a `context` lane name.
-Express ordering with `needs`. Read stages that can run in parallel share no
-dependency; write stages must chain.
-
-### 4. Wire data flow
-
-Feed an upstream stage's result into a downstream prompt with
-`${stages.<upstream>.text}`, and only reference stages the downstream lists in
-`needs`.
-
-### 5. Set the result stage
-
-If one stage is terminal (nothing depends on it), it is inferred. Otherwise set
-`result_stage` to the terminal stage whose output is the job result.
-
-## Canonical example: review then fix
-
-```yaml
-version: 1
-name: review-and-fix
-inputs:
-  prompt:
-    type: string
-    required: true
-  commit_message:
-    type: string
-stages:
-  review:
-    mode: read
-    route: review
-    context: reviewer
-    prompt: "Review this request and list required changes: ${inputs.prompt}"
-  fix:
-    mode: write
-    route: implement
-    needs: [review]
-    prompt: |
-      Implement ${inputs.prompt}
-      Address these review findings:
-      ${stages.review.text}
-result_stage: fix
+```text
+implement -> review
 ```
 
-`review` runs read-only, `fix` consumes its findings and commits. `fix` is the
-sole terminal stage, so `result_stage: fix` is explicit here for clarity but
-would also be inferred.
+Review with a required fix:
 
-## Fan-out example
-
-A `read` stage may set `fanout` (2-16) to run several independent passes,
-useful for parallel review or exploration:
-
-```yaml
-stages:
-  survey:
-    mode: read
-    route: review
-    fanout: 3
-    prompt: "Independently review: ${inputs.prompt}"
+```text
+implement -> review -> implement fix
 ```
 
-## Validate before handing off
+Consultation before implementation:
 
-Store the file under `<project>/.openmcp/workflows/<name>.yaml` and commit it. It
-becomes selectable as a workflow name on the next submission (no restart). If a
-job submission returns a validation error, the message names the offending stage
-or variable - fix that specific item against the reference rules rather than
-rewriting the whole file.
+```text
+consult -> implement
+```
+
+Pass the previous job ID as `parent_job_id` only when the next job must inherit
+its committed state. A read-only parent with no commit cannot anchor a child
+worktree; include relevant findings in the next prompt when needed.
+
+### 3. Preserve context intentionally
+
+Use stable `context_key` values such as:
+
+```text
+feature-x/implementation
+feature-x/review
+feature-x/fix
+```
+
+Reuse a key only when conversational continuity is useful. Parent chains carry
+Git state; context keys carry backend conversation state.
+
+### 4. Pass precise inputs
+
+All workflows require `inputs.prompt`. `implement` may also use
+`inputs.commit_message`.
+
+```json
+{
+  "workflow": "implement",
+  "inputs": {
+    "prompt": "Implement validation and run focused tests.",
+    "commit_message": "feat: validate input"
+  }
+}
+```
+
+### 5. Integrate the approved implementation
+
+- If implementation succeeds without review, integrate it when requested.
+- If review passes, integrate the reviewed implementation.
+- If a fix follows review, integrate the successful fix job.
+- Never integrate `review` or `consult`.
+
+## Responding to custom-workflow requests
+
+Explain that custom workflow files are unsupported. Translate the requested DAG
+into built-in jobs and parent links. State the ordered calls, prompts, profiles,
+and integration point instead of producing YAML.
 
 ## Handoff
 
-Report the workflow name and file path, the stage graph in dependency order,
-which stages write versus read, the required inputs, and the result stage.
+Report the chosen workflow sequence, parent relationships, context keys,
+profiles, and which implementation job is eligible for integration.

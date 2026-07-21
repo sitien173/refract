@@ -15,7 +15,6 @@ from typing import Any
 
 from openmcp.config import (
     DaemonConfig,
-    RouteConfig,
     TargetConfig,
     load_config,
     load_project_config,
@@ -28,8 +27,8 @@ from openmcp.models import (
     DaemonReloadResult,
     DaemonStatusResult,
     JobView,
-    ModelTargetView,
     ProjectView,
+    TargetView,
     SubmissionResult,
 )
 from openmcp.overlays import (
@@ -208,7 +207,7 @@ class Runtime:
         inputs: dict[str, Any],
         context_key: str = "",
         parent_job_id: str = "",
-        routing_profile: str = "",
+        profile: str = "",
     ) -> SubmissionResult:
         project = self.database.project(project_id)
         if project is None:
@@ -233,8 +232,8 @@ class Runtime:
             )
         except ValueError as exc:
             raise OrchestrationError(str(exc)) from exc
-        selected_profile = routing_profile.strip() or catalog.default_routing_profile
-        workflow = load_workflow(Path(project.root), workflow_name)
+        selected_profile = profile.strip() or catalog.default_profile
+        workflow = load_workflow(workflow_name)
         try:
             overlay_rules = load_overlay_rules(state.root, workflow.name)
         except OverlayError as exc:
@@ -285,7 +284,7 @@ class Runtime:
                 job_id=job_id,
                 project_id=project.id,
                 workflow=workflow.name,
-                routing_profile=selected_profile,
+                profile=selected_profile,
                 workflow_json=json.dumps(workflow_data(workflow), ensure_ascii=False),
                 execution_plan_json=json.dumps(
                     execution_plan_data(execution_plan),
@@ -323,7 +322,7 @@ class Runtime:
                 "project_id": project.id,
                 "job_id": job_id,
                 "workflow": workflow.name,
-                "routing_profile": selected_profile,
+                "profile": selected_profile,
                 "stage_count": len(workflow.stages),
                 "parent_job_id": parent_job_id,
             },
@@ -593,7 +592,7 @@ class Runtime:
         )
 
     def reload(self) -> DaemonReloadResult:
-        """Reload routing and target configuration for subsequent work.
+        """Reload selection and target configuration for subsequent work.
 
         Listener, scheduler, history, and logging changes cannot be applied safely
         to a running process and are reported as requiring a daemon restart.
@@ -616,8 +615,7 @@ class Runtime:
         result = DaemonReloadResult(
             success=True,
             targets=len(catalog.targets),
-            routes=len(catalog.routes),
-            routing_profiles=len(catalog.routing_profiles),
+            profiles=len(catalog.profiles),
             restart_required=restart_required,
         )
         log.info(
@@ -625,8 +623,7 @@ class Runtime:
             extra={
                 "event": "daemon.reloaded",
                 "targets": result.targets,
-                "routes": result.routes,
-                "routing_profiles": result.routing_profiles,
+                "profiles": result.profiles,
                 "restart_required": restart_required,
             },
         )
@@ -667,16 +664,16 @@ class Runtime:
         if record["execution_plan_json"]:
             return parse_execution_plan(json.loads(record["execution_plan_json"]))
         catalog = self.catalog_for_project(record["project_id"])
-        routing_profile = (
-            record["routing_profile"] or catalog.default_routing_profile
+        profile = (
+            record["profile"] or catalog.default_profile
         )
         try:
-            plan = resolve_execution_plan(workflow, catalog, routing_profile)
+            plan = resolve_execution_plan(workflow, catalog, profile)
         except ValueError as exc:
             raise OrchestrationError(str(exc)) from exc
         serialized = json.dumps(execution_plan_data(plan), ensure_ascii=False)
-        self.database.set_execution_plan(job_id, routing_profile, serialized)
-        record["routing_profile"] = routing_profile
+        self.database.set_execution_plan(job_id, profile, serialized)
+        record["profile"] = profile
         record["execution_plan_json"] = serialized
         return plan
 
@@ -726,16 +723,16 @@ class Runtime:
             log.warning("Cleanup failed for job %s: %s", job_id, exc)
             self.database.event(job_id, "job.cleanup_failed", {"error": str(exc)})
 
-    def targets(self) -> list[ModelTargetView]:
+    def targets(self) -> list[TargetView]:
         now = datetime.now(timezone.utc)
-        views: list[ModelTargetView] = []
+        views: list[TargetView] = []
         for target in self._catalog.targets:
             target_key = target_execution_key(target)
             health = self.database.target_health(target_key)
             open_until = str(health["circuit_open_until"])
             healthy = self.drivers.available(target) and not self._is_open(open_until, now)
             views.append(
-                ModelTargetView(
+                TargetView(
                     id=target.id,
                     model=target.model,
                     capabilities=list(target.capabilities),
@@ -796,14 +793,15 @@ class Runtime:
                 workflow_document["result_stage"] = record["result_stage"]
             # Legacy stage-role names (e.g. "review" -> "sentinel") only apply to
             # jobs without a modern immutable execution plan. When a plan is
-            # persisted its role_routes are keyed by the workflow's role names, so
-            # translating the stage route here would desync plan.route() lookups.
+            # Persisted plans are already keyed by workflow role. This rewrite is
+            # only for jobs created before immutable plans were introduced.
             if not record["execution_plan_json"]:
                 for stage in workflow_document.get("stages", {}).values():
                     if isinstance(stage, dict):
-                        stage["route"] = _LEGACY_ROLES.get(
-                            stage.get("route"),
-                            stage.get("route"),
+                        legacy_role = stage.get("role", stage.get("route"))
+                        stage["role"] = _LEGACY_ROLES.get(
+                            legacy_role,
+                            legacy_role,
                         )
             workflow = parse_workflow(workflow_document)
             plan = self._job_plan(job_id, record, workflow)
@@ -955,7 +953,7 @@ class Runtime:
                     cwd = reader
                 else:
                     cwd = primary
-                result, target_id = await self._execute_with_route(
+                result, target_id = await self._execute_with_targets(
                     job_id=job_id,
                     project=project,
                     context_key=job["context_key"],
@@ -1068,7 +1066,7 @@ class Runtime:
         )
         return True
 
-    async def _execute_with_route(
+    async def _execute_with_targets(
         self,
         *,
         job_id: str,
@@ -1081,12 +1079,12 @@ class Runtime:
         cancel_event: threading.Event,
         lane: str,
     ) -> tuple[DriverResult, str]:
-        route = plan.route(stage.route)
+        selection = plan.selection(stage.role)
         attempted: set[str] = set()
         last_target_id = ""
         last = DriverResult("TARGET_FATAL", "", "", "No healthy target", "no_target")
-        for attempt in range(route.max_attempts):
-            target = self._select_target(route, plan, attempted)
+        for attempt in range(selection.max_attempts):
+            target = self._select_target(selection.targets, plan, attempted)
             if target is None:
                 break
             attempted.add(target.id)
@@ -1122,9 +1120,10 @@ class Runtime:
                     "event": "target.attempt_started",
                     "stage_id": stage.id,
                     "target_id": target.id,
-                    "route": route.id,
+                    "profile": plan.profile,
+                    "workflow": stage.role,
                     "attempt": attempt + 1,
-                    "timeout_s": stage.timeout_s or route.timeout_s,
+                    "timeout_s": stage.timeout_s or selection.timeout_s,
                     "resumed_session": bool(session_id),
                 },
             )
@@ -1144,7 +1143,7 @@ class Runtime:
                             prompt=effective_prompt,
                             cwd=cwd,
                             session_id=session_id,
-                            timeout_s=stage.timeout_s or route.timeout_s,
+                            timeout_s=stage.timeout_s or selection.timeout_s,
                             cancel_event=cancel_event,
                         )
                 finally:
@@ -1198,7 +1197,7 @@ class Runtime:
                         "circuit_open_until": circuit_open_until,
                     },
                 )
-            if attempt + 1 < route.max_attempts:
+            if attempt + 1 < selection.max_attempts:
                 delay = min(8.0, 2.0**attempt) * random.uniform(0.8, 1.2)
                 log.info(
                     "Retrying stage with another target",
@@ -1214,27 +1213,22 @@ class Runtime:
 
     def _select_target(
         self,
-        route: RouteConfig,
+        target_ids: tuple[str, ...],
         plan: ExecutionPlan,
         attempted: set[str],
     ) -> TargetConfig | None:
         now = datetime.now(timezone.utc)
-        candidates: list[tuple[float, int, int, TargetConfig]] = []
-        for order, target_id in enumerate(route.targets):
+        for target_id in target_ids:
             target = plan.target(target_id)
             if target.id in attempted:
-                continue
-            if not set(route.requires).issubset(target.capabilities):
                 continue
             target_key = target_execution_key(target)
             health = self.database.target_health(target_key)
             if self._is_open(str(health["circuit_open_until"]), now):
                 continue
-            if not self.drivers.available(target):
-                continue
-            load = self._target_active.get(target_key, 0) / target.max_concurrency
-            candidates.append((load, target.priority, order, target))
-        return min(candidates, default=(0, 0, 0, None), key=lambda value: value[:3])[3]
+            if self.drivers.available(target):
+                return target
+        return None
 
     @staticmethod
     def _is_open(value: str, now: datetime) -> bool:

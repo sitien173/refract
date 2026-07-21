@@ -61,7 +61,7 @@ class Database:
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL REFERENCES projects(id),
                 workflow TEXT NOT NULL,
-                routing_profile TEXT NOT NULL DEFAULT '',
+                profile TEXT NOT NULL DEFAULT '',
                 workflow_json TEXT NOT NULL,
                 execution_plan_json TEXT NOT NULL DEFAULT '',
                 result_stage TEXT NOT NULL DEFAULT '',
@@ -158,9 +158,17 @@ class Database:
             self._connection.execute(
                 "ALTER TABLE jobs ADD COLUMN integration_base TEXT NOT NULL DEFAULT ''"
             )
-        if "routing_profile" not in columns:
+        if "profile" not in columns:
             self._connection.execute(
-                "ALTER TABLE jobs ADD COLUMN routing_profile TEXT NOT NULL DEFAULT ''"
+                "ALTER TABLE jobs ADD COLUMN profile TEXT NOT NULL DEFAULT ''"
+            )
+        if "routing_profile" in columns:
+            self._connection.execute(
+                """
+                UPDATE jobs
+                SET profile=routing_profile
+                WHERE profile='' AND routing_profile!=''
+                """
             )
         if "execution_plan_json" not in columns:
             self._connection.execute(
@@ -299,7 +307,7 @@ class Database:
         job_id: str,
         project_id: str,
         workflow: str,
-        routing_profile: str,
+        profile: str,
         workflow_json: str,
         execution_plan_json: str = "",
         result_stage: str = "",
@@ -320,7 +328,7 @@ class Database:
             self._connection.execute(
                 """
                 INSERT INTO jobs(
-                    id, project_id, workflow, routing_profile, workflow_json,
+                    id, project_id, workflow, profile, workflow_json,
                     execution_plan_json, result_stage, inputs_json,
                     context_key, parent_job_id, state, base_commit,
                     integration_base, branch, worktree,
@@ -331,7 +339,7 @@ class Database:
                     job_id,
                     project_id,
                     workflow,
-                    routing_profile,
+                    profile,
                     workflow_json,
                     execution_plan_json,
                     result_stage,
@@ -356,7 +364,7 @@ class Database:
         self.event(
             job_id,
             "job.queued",
-            {"workflow": workflow, "routing_profile": routing_profile},
+            {"workflow": workflow, "profile": profile},
         )
 
     def queued_job_ids(self) -> list[str]:
@@ -403,17 +411,17 @@ class Database:
     def set_execution_plan(
         self,
         job_id: str,
-        routing_profile: str,
+        profile: str,
         execution_plan_json: str,
     ) -> None:
         with self._connection:
             self._connection.execute(
                 """
                 UPDATE jobs
-                SET routing_profile=?, execution_plan_json=?, updated_at=?
+                SET profile=?, execution_plan_json=?, updated_at=?
                 WHERE id=?
                 """,
-                (routing_profile, execution_plan_json, utc_now(), job_id),
+                (profile, execution_plan_json, utc_now(), job_id),
             )
 
     def set_stage_state(
@@ -571,7 +579,7 @@ class Database:
             id=row["id"],
             project_id=row["project_id"],
             workflow=row["workflow"],
-            routing_profile=row["routing_profile"],
+            profile=row["profile"],
             state=row["state"],
             context_key=row["context_key"],
             parent_job_id=row["parent_job_id"],

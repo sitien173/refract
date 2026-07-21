@@ -1,7 +1,7 @@
 interface:
   display_name: "OpenMCP Orchestrate"
-  short_description: "Manage and run durable OpenMCP workflows safely"
-  default_prompt: "Use $openmcp-orchestrate to check the daemon, reload configuration when needed, and route, run, review, or integrate this project task safely."
+  short_description: "Manage durable OpenMCP jobs safely"
+  default_prompt: "Use $openmcp-orchestrate to check the daemon, consult task guidance, select a workflow and profile, run jobs, review results, and integrate approved changes safely."
 
 dependencies:
   tools:

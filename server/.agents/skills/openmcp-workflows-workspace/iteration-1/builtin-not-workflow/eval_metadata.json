@@ -1,10 +1,11 @@
 {
   "eval_id": 1,
   "eval_name": "builtin-not-workflow",
-  "prompt": "Null-pointer bug in src/parser.py, just fix and commit. Set it up.",
+  "prompt": "Null-pointer bug in src/parser.py; fix and commit it through OpenMCP.",
   "assertions": [
-    {"text": "Recommends the built-in 'implement' workflow (job_submit workflow=implement), not a custom workflow"},
-    {"text": "Does NOT author a custom .openmcp/workflows/*.yaml file for this single-step task"},
-    {"text": "Explains that a custom workflow is unnecessary for single-step work"}
+    {"text": "Chooses job_submit workflow=implement"},
+    {"text": "Includes a precise prompt and commit_message"},
+    {"text": "Does not create .openmcp/workflows YAML"},
+    {"text": "Identifies the successful implementation as eligible for integration"}
   ]
 }
