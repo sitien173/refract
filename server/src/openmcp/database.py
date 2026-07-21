@@ -545,6 +545,8 @@ class Database:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             return None
+        # Compact views fetch only the final result text and redact every stage
+        # error at the query boundary. Detailed views fetch intermediate output.
         if include_stage_outputs:
             stage_rows = self._connection.execute(
                 """
