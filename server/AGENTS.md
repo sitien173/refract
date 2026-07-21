@@ -43,7 +43,8 @@ uv build
 
 Tools:
 
-- `setup_instruction`
+- `status`
+- `reload`
 - `doctor`
 - `project_register`
 - `task_route`

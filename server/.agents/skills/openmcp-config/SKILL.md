@@ -168,10 +168,18 @@ not itself route jobs. Keep it a valid template with `version`, `columns`, and
 
 ## Reload behavior
 
-Targets, routes, profiles, project config, and `args` reload before each
-submission - running jobs keep their immutable snapshot. Host, port, worker
-count, and `[logging]` settings require a daemon restart. Tell the user when a
-change needs a restart versus taking effect on the next job.
+After editing global targets, routes, profiles, or `args`, call the MCP `reload`
+tool when available to validate and activate the catalog immediately. Check its
+`success` and `restart_required` fields. These settings also reload before each
+submission, and running jobs keep their immutable snapshot. Project route and
+profile overrides reload when used; task-route templates reload on every
+`task_route` call.
+
+Host, port, worker count, history limits, home, and `[logging]` changes are not
+hot-reloaded. `reload` reports changed static fields in `restart_required`; tell
+the user to restart the daemon process. If `reload` rejects invalid global
+configuration, correct it before submitting work—the previous catalog remains
+active.
 
 ## Handoff
 

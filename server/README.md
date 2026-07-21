@@ -59,7 +59,8 @@ The daemon remains loopback-bound unless you explicitly change the host.
 
 Tools:
 
-- `setup_instruction(path)` returns project-local client integration instructions.
+- `status()` returns the running daemon scheduler status.
+- `reload()` reloads global targets, routes, and routing profiles for subsequent work.
 - `doctor(path)` returns read-only client integration checks.
 - `project_register(path, alias)` registers a clean Git project.
 - `task_route(task, project_id)` loads the project task-route template.
@@ -268,10 +269,13 @@ targets. See [the CLI argument reference](CLI_ARGUMENTS.md) for the complete
 transport boundary and policy-ordering rules.
 
 Targets, routes, profiles, and backend CLI arguments reload before each
-submission. Submitted jobs retain an immutable routing snapshot, including the
-selected target arguments and policy. Later configuration changes affect only
-new jobs; a changed backend also starts a new context lane rather than reusing a
-session created by the old target. Host, port, worker, and logging settings require a restart.
+submission and can be refreshed explicitly with the MCP `reload` tool.
+Submitted jobs retain an immutable routing snapshot, including the selected
+target arguments and policy. Later configuration changes affect only new jobs;
+a changed backend also starts a new context lane rather than reusing a session
+created by the old target. `reload` reports changed host, port, worker, history,
+home, and logging settings in `restart_required`; those settings require a
+process restart.
 
 ## Application logging
 
@@ -313,13 +317,12 @@ format, and level without writing credentials.
 
 ## Project configuration
 
-Call `setup_instruction` with a Git project path. It returns client-side setup
-instructions. It never changes project files. Follow the returned guidance using
-the client's project-level instruction mechanism. Keep the MCP connection global
-when useful, but keep project behavior local.
+Keep the MCP connection global when useful, but keep project behavior in the
+client's project-level instruction mechanism. Use `status` to inspect the live
+scheduler and `reload` after global routing or target configuration changes.
 
-Call the MCP `doctor` tool to receive read-only integration checks. The CLI
-`openmcp doctor` command separately checks daemon prerequisites.
+Call the MCP `doctor` tool to receive read-only project integration checks. The
+CLI `openmcp doctor` command separately checks daemon prerequisites.
 
 Project overrides are optional. Create only the files required:
 

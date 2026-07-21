@@ -891,20 +891,49 @@ def test_project_config_rejects_daemon_and_target_overrides(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_instruction_tools_are_read_only(tmp_path) -> None:
-    from openmcp.server import doctor, setup_instruction
+async def test_client_doctor_tool_is_read_only(tmp_path) -> None:
+    from openmcp.server import doctor
 
     root = _repository(tmp_path)
-    setup = await setup_instruction(str(root))
     validation = await doctor(str(root))
 
-    assert setup.root == root.as_posix()
-    assert "project-level instruction file" in setup.instructions
-    assert "Do not modify global agent instructions" in setup.instructions
     assert validation.root == root.as_posix()
     assert "without mutations" in validation.instructions
     assert "PASS or FAIL" in validation.instructions
     assert not (root / ".openmcp").exists()
+
+
+@pytest.mark.asyncio
+async def test_daemon_management_tools_delegate_to_runtime() -> None:
+    from openmcp.models import DaemonReloadResult, DaemonStatusResult
+    from openmcp.server import reload, status
+
+    status_result = DaemonStatusResult(
+        status="running",
+        workers=2,
+        active_jobs=1,
+        queued_jobs=3,
+    )
+    reload_result = DaemonReloadResult(
+        success=True,
+        targets=4,
+        routes=3,
+        routing_profiles=2,
+    )
+
+    class RuntimeStub:
+        def status(self) -> DaemonStatusResult:
+            return status_result
+
+        def reload(self) -> DaemonReloadResult:
+            return reload_result
+
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context=RuntimeStub()),
+    )
+
+    assert await status(ctx) is status_result
+    assert await reload(ctx) is reload_result
 
 
 @pytest.mark.asyncio
@@ -1021,6 +1050,50 @@ consult = "forge"
         assert '"backend": "agy"' in second_record["execution_plan_json"]
     finally:
         await runtime.close()
+
+
+def test_runtime_reload_refreshes_catalog_and_reports_restart_settings(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    path = home / "config.toml"
+    home.mkdir()
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    path.write_text("[daemon]\nmax_jobs = 1\n", encoding="utf-8")
+    runtime = Runtime(load_config(path))
+    try:
+        path.write_text(
+            """[daemon]
+max_jobs = 2
+
+[[targets]]
+id = "only"
+backend = "pi"
+
+[[routes]]
+id = "all"
+targets = ["only"]
+
+[routing_profiles.balanced]
+implement = "all"
+review = "all"
+consult = "all"
+""",
+            encoding="utf-8",
+        )
+
+        first = runtime.reload()
+        second = runtime.reload()
+
+        assert first.success is True
+        assert first.targets == 1
+        assert "max_jobs" in first.restart_required
+        assert second.restart_required == first.restart_required
+        assert [target.id for target in runtime.catalog.targets] == ["only"]
+        assert runtime.config.max_jobs == 1
+    finally:
+        runtime.database.close()
 
 
 def test_database_migrates_execution_state(tmp_path) -> None:
@@ -1336,7 +1409,8 @@ async def test_mcp_exposes_clean_daemon_contract() -> None:
     }
 
     assert set(tools) == {
-        "setup_instruction",
+        "status",
+        "reload",
         "doctor",
         "project_register",
         "task_route",
@@ -1353,7 +1427,8 @@ async def test_mcp_exposes_clean_daemon_contract() -> None:
         "task",
         "project_id",
     }
-    assert set(tools["setup_instruction"].inputSchema["properties"]) == {"path"}
+    assert tools["status"].inputSchema["properties"] == {}
+    assert tools["reload"].inputSchema["properties"] == {}
     assert set(tools["doctor"].inputSchema["properties"]) == {"path"}
     assert resources == {
         "openmcp://projects",

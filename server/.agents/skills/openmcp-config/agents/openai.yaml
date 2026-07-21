@@ -1,7 +1,7 @@
 interface:
   display_name: "OpenMCP Config"
   short_description: "Edit OpenMCP targets, routes, and profiles safely"
-  default_prompt: "Use $openmcp-config to add or change an OpenMCP target, route, routing profile, overlay, or task-route template."
+  default_prompt: "Use $openmcp-config to add or change an OpenMCP target, route, routing profile, overlay, or task-route template, then reload the daemon catalog when applicable."
 
 dependencies:
   tools: []
