@@ -193,7 +193,8 @@
         <button class="close-btn" @click="closeJobDetail()">&times;</button>
       </div>
 
-      <div style="margin-bottom: 1.5rem;" x-if="selectedJob">
+      <template x-if="selectedJob">
+      <div style="margin-bottom: 1.5rem;">
         <p><strong>State:</strong> <span class="badge" :class="'badge-' + selectedJob?.state" x-text="selectedJob?.state"></span></p>
         <p style="margin-top: 0.5rem;"><strong>Workflow:</strong> <span x-text="selectedJob?.workflow"></span></p>
         <p style="margin-top: 0.5rem;"><strong>Project ID:</strong> <span class="code-inline" x-text="selectedJob?.project_id"></span></p>
@@ -201,6 +202,7 @@
         <p style="margin-top: 0.5rem;" x-show="selectedJob?.updated_at"><strong>Updated At:</strong> <span x-text="formatTime(selectedJob?.updated_at)"></span></p>
         <p style="margin-top: 0.5rem;" x-show="selectedJob?.result?.error"><strong>Error:</strong> <span style="color: var(--status-red);" x-text="selectedJob?.result?.error"></span></p>
       </div>
+      </template>
 
       <h4>Event Timeline</h4>
       <div class="events-list">
@@ -209,7 +211,7 @@
             <div class="event-meta">
               <span x-text="formatTime(evt.created_at)"></span> | <span x-text="evt.kind || 'event'"></span>
             </div>
-            <div x-text="evt.data || JSON.stringify(evt)"></div>
+            <div x-text="JSON.stringify(evt.data)"></div>
           </div>
         </template>
         <template x-if="jobEvents.length === 0">
