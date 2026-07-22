@@ -13,6 +13,7 @@ document.addEventListener('alpine:init', () => {
     jobFilter: 'all',
     selectedJob: null,
     jobEvents: [],
+    _jobRequestId: 0,
     
     mainTimer: null,
     jobTimer: null,
@@ -146,6 +147,7 @@ document.addEventListener('alpine:init', () => {
     closeJobDetail() {
       this.selectedJob = null;
       this.jobEvents = [];
+      this._jobRequestId++;
       if (this.jobTimer) {
         clearInterval(this.jobTimer);
         this.jobTimer = null;
@@ -163,16 +165,18 @@ document.addEventListener('alpine:init', () => {
 
     async refreshJobDetail() {
       if (!this.selectedJob) return;
+      const reqId = ++this._jobRequestId;
       const jobId = this.selectedJob.id;
       try {
         const jobRes = await fetch(`/dashboard/api/jobs/${jobId}`);
-        if (jobRes.ok && this.selectedJob?.id === jobId) {
-          this.selectedJob = await jobRes.json();
-        }
+        const jobData = jobRes.ok ? await jobRes.json() : null;
+        if (reqId !== this._jobRequestId) return;
+        if (jobData) this.selectedJob = jobData;
+
         const eventsRes = await fetch(`/dashboard/api/jobs/${jobId}/events`);
-        if (eventsRes.ok && this.selectedJob?.id === jobId) {
-          this.jobEvents = await eventsRes.json();
-        }
+        const eventsData = eventsRes.ok ? await eventsRes.json() : null;
+        if (reqId !== this._jobRequestId) return;
+        if (eventsData) this.jobEvents = eventsData;
       } catch (err) {}
     },
 
