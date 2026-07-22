@@ -39,7 +39,7 @@ OpenMCP runs jobs directly in each registered repository. Jobs for one project
 run in submission order. Jobs for different projects may run concurrently up to
 `max_jobs`.
 
-- `implement` runs once and commits successful tracked changes immediately.
+- `implement` runs once and commits successful non-ignored changes immediately.
 - `review` runs once and must leave the repository unchanged.
 - `consult` runs once and must leave the repository unchanged.
 
