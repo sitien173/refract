@@ -45,7 +45,15 @@ class TargetExecutor:
         last_target_id = ""
         last = DriverResult("TARGET_FATAL", "", "", "No healthy target", "no_target")
         for attempt in range(plan.selection.max_attempts):
+            if cancel_event.is_set():
+                return TargetExecutionResult(
+                    DriverResult("CANCELLED", "", "", "cancelled", "cancelled"),
+                    last_target_id,
+                )
             target = self._select_target(plan.selection.targets, plan, attempted)
+            if target is None and attempted:
+                attempted.clear()
+                target = self._select_target(plan.selection.targets, plan, attempted)
             if target is None:
                 break
             attempted.add(target.id)
@@ -79,7 +87,8 @@ class TargetExecutor:
                 delay = min(8.0, 2.0**attempt) * random.uniform(0.8, 1.2)
                 self.database.event(job_id, "target.retry_scheduled", {"workflow": workflow, "target": target.id, "attempt": attempt + 1, "delay_s": round(delay, 3)})
                 log.info("Retrying target", extra={"event": "target.retry_scheduled", "job_id": job_id, "target_id": target.id, "workflow": workflow, "delay_s": round(delay, 3)})
-                await asyncio.sleep(delay)
+                if await asyncio.to_thread(cancel_event.wait, delay):
+                    break
         return TargetExecutionResult(last, last_target_id)
 
     def _select_target(self, target_ids: tuple[str, ...], plan: ExecutionPlan, attempted: set[str]) -> TargetConfig | None:
@@ -183,6 +192,11 @@ class JobRunner:
                     raise RuntimeError("Read-only workflow modified the repository")
             self.database.finish_job(job_id, "succeeded", text=execution.result.text, commit=result_commit, target_id=execution.target_id)
         except Exception as exc:
+            if not isinstance(exc, (RepositoryError, RuntimeError)):
+                log.exception(
+                    "Unexpected job failure",
+                    extra={"event": "job.exception", "job_id": job_id},
+                )
             error = str(exc)
             if started:
                 try:

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from dataclasses import replace
 
 import pytest
 
+from openmcp.config import TargetSelection
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
 from openmcp.planning import execution_plan_data, resolve_execution_plan
@@ -85,6 +88,18 @@ class MutatingFailureDrivers(FakeDrivers):
         return DriverResult("RETRYABLE", "", "", "target failed", "backend_failure")
 
 
+class RetryDrivers(FakeDrivers):
+    def __init__(self) -> None:
+        super().__init__({"primary": "RETRYABLE"})
+        self.started = asyncio.Event()
+        self.calls = 0
+
+    async def execute(self, **kwargs) -> DriverResult:
+        self.calls += 1
+        self.started.set()
+        return DriverResult("RETRYABLE", "", "", "retry", "backend_failure")
+
+
 @pytest.mark.asyncio
 async def test_failed_execution_resets_changes_and_preserves_dirty_preflight(tmp_path) -> None:
     root = repository(tmp_path)
@@ -101,6 +116,65 @@ async def test_failed_execution_resets_changes_and_preserves_dirty_preflight(tmp
         job = await runtime.wait((await runtime.submit(project.id, "implement", "change")).job_id, 10)
         assert job.state == "failed"
         assert (root / "README.md").read_text(encoding="utf-8") == "operator change\n"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retries_reuse_targets_after_each_failover_pass(tmp_path, monkeypatch) -> None:
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 2)
+    catalog = replace(
+        config(tmp_path / "home"),
+        profiles={
+            "balanced": {
+                "implement": selection,
+                "review": selection,
+                "consult": selection,
+            }
+        },
+    )
+    runtime = Runtime(catalog)
+    runtime.drivers = RetryDrivers()
+    monkeypatch.setattr("openmcp.execution.random.uniform", lambda _a, _b: 0)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        job = await runtime.wait(
+            (await runtime.submit(project.id, "implement", "retry")).job_id,
+            10,
+        )
+        assert job.state == "failed"
+        assert job.attempts == 2
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_interrupts_retry_backoff(tmp_path) -> None:
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 2)
+    catalog = replace(
+        config(tmp_path / "home"),
+        profiles={
+            "balanced": {
+                "implement": selection,
+                "review": selection,
+                "consult": selection,
+            }
+        },
+    )
+    drivers = RetryDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submitted = await runtime.submit(project.id, "implement", "retry")
+        await drivers.started.wait()
+        runtime.cancel(submitted.job_id)
+        assert (await runtime.wait(submitted.job_id, 0.5)).state == "cancelled"
+        assert drivers.calls == 1
     finally:
         await runtime.close()
 
