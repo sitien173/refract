@@ -176,7 +176,14 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
         except RuntimeError:
             return JSONResponse({"error": "OpenMCP runtime is not active"}, status_code=503)
         try:
-            guide = load_task_guide(runtime.config.home)
+            project_id = request.query_params.get("project_id")
+            if project_id:
+                project = runtime.database.project(project_id)
+                if project is None:
+                    return JSONResponse({"error": f"Unknown project: {project_id}"}, status_code=404)
+                guide = load_task_guide(runtime.config.home, Path(project.root))
+            else:
+                guide = load_task_guide(runtime.config.home)
         except ValueError:
             guide = {}
         return _json_response(guide)
@@ -194,7 +201,15 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
             return JSONResponse({"error": f"Invalid JSON body: {exc}"}, status_code=400)
 
         try:
-            written_guide = write_task_guide(payload, home=runtime.config.home)
+            project_id = request.query_params.get("project_id")
+            if project_id:
+                project = runtime.database.project(project_id)
+                if project is None:
+                    return JSONResponse({"error": f"Unknown project: {project_id}"}, status_code=404)
+                proj_path = Path(project.root) / ".openmcp"
+                written_guide = write_task_guide(payload, path=proj_path / "task_guide.json")
+            else:
+                written_guide = write_task_guide(payload, home=runtime.config.home)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:
