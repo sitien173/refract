@@ -83,9 +83,6 @@ def _dict_to_toml_doc(
                 d_table.pop(k, None)
             else:
                 d_table[k] = v
-        for k in list(d_table.keys()):
-            if k not in data["daemon"]:
-                del d_table[k]
 
     # Section: logging
     if "logging" in data and isinstance(data["logging"], dict):
@@ -97,9 +94,6 @@ def _dict_to_toml_doc(
                 l_table.pop(k, None)
             else:
                 l_table[k] = v
-        for k in list(l_table.keys()):
-            if k not in data["logging"]:
-                del l_table[k]
 
     # Section: targets (Array of Tables)
     if "targets" in data:
@@ -114,18 +108,13 @@ def _dict_to_toml_doc(
             target_id = str(target.get("id", ""))
             if target_id and target_id in existing_by_id:
                 t_table = existing_by_id[target_id]
-                existing_keys = set(t_table.keys())
             else:
                 t_table = tomlkit.table()
-                existing_keys = set()
             for k, v in target.items():
                 if v is None:
                     t_table.pop(k, None)
                     continue
                 _set_value(t_table, k, v)
-            # Remove keys not in the new data
-            for k in existing_keys - set(target.keys()):
-                t_table.pop(k, None)
             a.append(t_table)
         doc["targets"] = a
 
@@ -173,9 +162,6 @@ def _dict_to_toml_doc(
                                 wf_table.pop(k, None)
                             else:
                                 _set_value(wf_table, k, v)
-                        for k in list(wf_table.keys()):
-                            if k not in wf_val:
-                                del wf_table[k]
                     elif isinstance(wf_val, list):
                         _set_value(prof_table, wf_name, wf_val)
                     else:
