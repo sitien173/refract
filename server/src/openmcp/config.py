@@ -1,4 +1,4 @@
-"""Daemon configuration loaded from ``~/.openmcp/config.toml``."""
+"""Daemon configuration loading."""
 
 from __future__ import annotations
 
@@ -76,13 +76,6 @@ class DaemonConfig:
     def database_path(self) -> Path:
         return self.home / "openmcp.db"
 
-    @property
-    def runs_path(self) -> Path:
-        return self.home / "runs"
-
-    @property
-    def worktrees_path(self) -> Path:
-        return self.home / "worktrees"
 
 
 def openmcp_home() -> Path:

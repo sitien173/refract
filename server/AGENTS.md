@@ -1,8 +1,8 @@
 # Project Overview
 
-OpenMCP is a loopback HTTP orchestration daemon. It exposes durable project
-jobs through MCP. Jobs use built-in workflows, profiles, named contexts,
-isolated worktrees, chained commits, and explicit integration.
+OpenMCP is a loopback HTTP orchestration daemon. It exposes durable project jobs
+through MCP. Jobs use built-in workflows, profiles, named contexts, direct
+repository execution, and explicit job results.
 
 ## Repository Structure
 
@@ -14,18 +14,15 @@ src/openmcp/
   config.py           targets, profiles, and CLI args
   database.py         SQLite state and migrations
   drivers.py          internal provider dispatch
+  execution.py        job lifecycle and target execution
   models.py           public structured results
-  overlays.py         ignored-file overlay handling
   planning.py         immutable execution-plan snapshots
   processes.py        cross-platform process-group lifecycle
-  runtime.py          scheduler, contexts, retries, and integration
+  repositories.py     direct Git operations
+  runtime.py          public orchestration facade
+  scheduler.py        per-project FIFO scheduler
   server.py           MCP tools, resources, and daemon lifecycle
-  workflows.py        built-in workflow definitions and validation
-  workspaces.py       Git isolation and integration
-tests/
-  test_smoke.py
-  test_orchestration.py
-  test_live_backends.py
+  workflows.py        fixed workflow validation
 ```
 
 ## Development Commands
@@ -41,83 +38,31 @@ uv build
 
 ## Public Contract
 
-Tools:
+Tools: `status`, `reload`, `doctor`, `project_register`, `task_guide`,
+`job_submit`, `job_wait`, `job_cancel`, and `job_retry`.
 
-- `status`
-- `reload`
-- `doctor`
-- `project_register`
-- `task_guide`
-- `job_submit`
-- `job_wait`
-- `job_cancel`
-- `job_retry`
-- `job_integrate`
+Jobs execute directly in registered repositories. The scheduler serializes all
+jobs per project while allowing cross-project concurrency. Successful
+`implement` jobs commit immediately. `review` and `consult` never commit.
 
-Built-in workflows:
-
-- `implement` for isolated changes and explicit integration
-- `review` for non-committing code review
-- `consult` for non-committing analysis
-
-`job_submit` accepts `profile` and `parent_job_id`; `job_wait` accepts
-`include_stage_outputs`. Task guides recommend workflows and profiles, not
-specific targets. Internal provider identities remain configuration-only,
-although configured target health is visible through the targets resource.
-
-## Architecture
-
-```mermaid
-flowchart TD
-    Host -->|HTTP MCP| Server
-    Server --> Runtime
-    Runtime --> Database
-    Runtime --> Workspaces
-    Runtime --> Profiles[Profile]
-    Profiles --> Targets[Targets]
-    Targets --> Drivers
-    Drivers --> CLIs[Provider CLIs]
-```
-
-Data flow:
-
-1. Register a clean Git project.
-2. Submit a workflow and profile.
-3. Resolve the workflow to the profile's target list.
-4. Select a healthy configured target.
-5. Execute inside an isolated worktree.
-6. Persist output, context, events, and commits.
-7. Chain review or fix jobs through parents.
-8. Integrate the latest approved write job explicitly.
+The public job tools are `job_submit`, `job_wait`, `job_cancel`, and
+`job_retry`. Jobs have one result and no stages, parent links, private branches,
+overlays, artifacts, or integration step.
 
 ## Target execution policy
 
 Targets own provider execution settings: `model`, `backend_profile`,
 `reasoning`, `system_prompt`, `isolated`, `read_only`, and backend-specific
-argv `args`.
-Drivers compile those fields into transport-only backend calls. Target args are
-individual argv tokens, never shell syntax; the reserved `--` token and Codex
-workspace overrides are rejected. Target policy and args are captured in the
-immutable execution plan for each job.
+argv `args`. Drivers compile those fields into transport-only backend calls.
+Target args are individual argv tokens, never shell syntax. Target policy and
+args are captured in the immutable execution plan for each job.
 
 ## Pi Isolation
 
 Targets can set `isolated`, `read_only`, and `system_prompt`. Isolated Pi
 invocations disable context files, extensions, skills, prompt templates, and
-project approvals, and cannot explicitly load those resources through `args`.
-Read-only targets receive only `read`, `grep`, `find`, and `ls` tools. Normal Pi
-targets receive `--approve` after configurable args so approval cannot be
-turned off by target ordering.
-
-Sage and Sentinel default to `gpt-5.6-sol`. Configuration can override models.
-
-## Profiles
-
-`[profiles.<name>]` maps workflows directly onto targets or ordered target
-lists. The daemon uses `default_profile` when submissions omit one. Profiles
-support cost, quality, latency, offline, or project-specific policies without
-changing workflows. Lists provide failover without another configuration layer.
-Every selected target must advertise the workflow's required capability.
+project approvals. Read-only targets receive only `read`, `grep`, `find`, and
+`ls` tools. Normal Pi targets receive `--approve` after configurable args.
 
 ## Code Conventions
 
@@ -130,9 +75,9 @@ Every selected target must advertise the workflow's required capability.
 
 ## Testing
 
-Offline tests cover command construction, selection, persistence, worktree
-isolation, job chains, cancellation, migration, and integration. Live tests
-require provider CLIs. Normal test runs skip live markers.
+Offline tests cover command construction, scheduler behavior, persistence,
+direct commits, cancellation, migration, and recovery. Live tests require
+provider CLIs. Normal test runs skip live markers.
 
 ## Security Guardrails
 
@@ -146,7 +91,7 @@ require provider CLIs. Normal test runs skip live markers.
 - Update `uv.lock` only through `uv lock`.
 - Keep Sentinel and Sage read-only by default.
 - Keep HTTP bound to loopback by default.
-- Treat worktrees as Git isolation, not a security sandbox: permission-bypassing write agents can access the host and parent repository.
+- Git isolation is not a security sandbox. Permission-bypassing write agents can access the host and parent repository.
 
 ## Adding targets and profiles
 
