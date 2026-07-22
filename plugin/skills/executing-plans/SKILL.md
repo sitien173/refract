@@ -1,47 +1,41 @@
 ---
 name: executing-plans
-description: "Runs or resumes one phase of a folder-layout implementation plan through the canonical Plan, Execute, and Review gates."
+description: "Runs or resumes one phase of a folder-layout plan through the canonical OpenMCP gates."
 ---
 
 # Executing Plans
 
-Load `coordinating-multi-model-work` first. It owns OpenMCP setup, guidance,
-job-state handling, verification, review, integration, and handover. This skill
-only adapts that workflow to a written plan.
+Load `coordinating-multi-model-work` first. It owns OpenMCP lifecycle, routing,
+review, and handover. This skill owns only the folder-plan phase procedure.
 
-## Per-Phase Procedure
+## Procedure
 
 1. Read `PLAN.md`, `.handover.md`, and validated `read_first` paths. Select one
-   phase and confirm its tasks, files, acceptance criteria, checks, and commit.
-2. If `project_id` is absent, run canonical project setup.
-3. Resume before resolving new guidance: read
-   `openmcp://projects/<project_id>/jobs` and reconcile `job_refs` plus
-   `context_prefix` with OpenMCP's records.
-4. For an existing chain, restore its saved workflows and profiles. Do not
-   re-run `task_guide` for an active phase chain; stop if recovery is ambiguous.
-5. For a new phase, call `task_guide` with the phase's complete **Task Guide
-   Input**. Validate a user-pinned profile, otherwise use each matching
-   recommendation or the configured default.
-6. Run Gate 1. Create `phase-<NN>/prompt.md`, `notes.md`, and `journal.md` only
-   when the canonical checkpoint requires them.
-7. Run Gate 2 with `implementer-prompt.md` and one linear implementation chain.
-8. Run Gate 3, integrate the approved implementation, record evidence, and
-   advance handover only after review passes.
-9. After the final phase, mark handover `DONE` and invoke
-   `verifying-before-completion`.
+   phase and confirm its scope, checks, and commit message.
+2. When `project_id` exists, reconcile handover with
+   `openmcp://projects/<project_id>/jobs` before editing. If a job is active,
+   return to the canonical resume flow.
+3. For an active phase, reuse saved guidance. Do not re-run `task_guide` for an
+   active phase. For a new phase, run canonical setup and guidance.
+4. Create `phase-<NN>/prompt.md`, `notes.md`, and `journal.md` from the bundled
+   templates. Commit only known plan artifacts as
+   `chore(plan): prepare phase <N>`; unrelated changes block execution.
+5. Run any routed consultation. Incorporate its relevant findings and commit
+   only that prompt update.
+6. Retain the clean HEAD before the initial implementation as `phase_base` and
+   confirm it later against that job's `base_commit`.
+7. Run Gate 2 with `implementer-prompt.md`, then Gate 3. A review fix starts a
+   new implementation job and repeats both reviews.
+8. After canonical finalization, advance one phase. After the final phase, mark
+   handover `DONE` and invoke `verifying-before-completion`.
 
 ## Rules
 
-- Execute folder-layout plans only.
-- Run one phase at a time.
-- Existing phase chains keep stored guidance decisions; new phases load current
-  guidance.
-- Never reconstruct or manually integrate an OpenMCP chain.
-- If plan scope is incomplete or resume state conflicts with OpenMCP, stop and
-  ask rather than guessing.
+- Execute folder-layout plans only, one phase at a time.
+- New phases load current guidance; active phases keep saved guidance.
+- Never infer missing scope or reconcile conflicting state by resetting files.
 
 ## References
 
 - `skills/coordinating-multi-model-work/SKILL.md`
 - `skills/executing-plans/implementer-prompt.md`
-- `skills/verifying-before-completion/SKILL.md`

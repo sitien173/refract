@@ -8,16 +8,17 @@ provider, model, target, and native session details out of user-facing prompts.
 
 ```mermaid
 flowchart LR
-    A[Check daemon and project] --> G[Load task guidance]
+    A[Check daemon, branch, and clean project] --> G[Load task guidance]
     G --> C{Consultation needed?}
-    C -->|yes| D[Consult]
-    C -->|no| I[Implement in isolation]
+    C -->|yes| D[Consult current repository]
+    C -->|no| I[Implement directly]
     D --> I
-    I --> S[Coordinator verifies specification]
-    S --> R[Independent quality review]
-    R -->|FAIL| F[Implement fix from latest write]
-    F --> S
-    R -->|PASS| M[Integrate approved implementation]
+    I --> K[OpenMCP commits success to current branch]
+    K --> S[Coordinator verifies specification and checks]
+    S --> R[Independent quality review of current repository]
+    R -->|FAIL| F[New implement job with findings]
+    F --> K
+    R -->|PASS| H[Record handover and evidence]
 ```
 
 The canonical contract is
@@ -100,8 +101,9 @@ variables, never target fields or arguments.
 
 Projects may override profiles, but not targets, in
 `.openmcp/config.toml`. Commit that file before registration or submission.
-Ignored-file overlays belong in `.openmcp.local.toml` and must use narrow,
-Git-ignored paths without secrets.
+OpenMCP now runs directly in the repository: Git-ignored files are visible to
+workers and are never committed, reset, or restored. Do not keep secrets in
+ignored files that a job can read, and do not rely on ignored-file snapshots.
 
 ### Task guidance
 
@@ -145,26 +147,52 @@ The plugin uses:
 
 - `status`, `reload`, `doctor`
 - `project_register`, `task_guide`
-- `job_submit`, `job_wait`, `job_retry`, `job_cancel`, `job_integrate`
+- `job_submit`, `job_wait`, `job_retry`, `job_cancel`
 
 Before orchestration, Coordinator requires `status: running`, resolves the Git
-root through `openmcp://projects`, and registers only an absent, clean root.
-`doctor` is read-only and used when integration validation is requested.
+root through `openmcp://projects`, and registers only a clean repository on an
+attached branch. `doctor` is read-only and used only when client integration
+validation is requested.
 
-OpenMCP exposes only the three built-in workflows. Multi-step work uses job
-chains, not project workflow files. A typical reviewed change is:
+OpenMCP exposes only three one-step workflows. A higher-risk change uses
+sequential jobs:
 
 ```text
-implement -> review
+consult -> implement -> review
 ```
 
-If review fails, the next `implement` job uses the latest successful
-implementation as its parent and receives the review findings in its prompt.
-Read-only jobs have no commit and are never integrated.
+Each job sees the registered repository when it starts. Same-project jobs run in
+FIFO order without overlap; different projects may run concurrently.
+`implement` commits successful changes immediately to the current branch.
+`review` and `consult` must leave the same clean HEAD. A review fix is a new
+`implement` job whose prompt includes the findings.
 
-Compact waits use `timeout_s: 30` and `include_stage_outputs: false`. Coordinator
-reads `job.result.text`. Terminal jobs release execution worktrees, so
-verification runs in a disposable detached worktree at the result commit.
+Submit named fields rather than a generic input object:
+
+```json
+{
+  "project_id": "project-uuid",
+  "workflow": "implement",
+  "prompt": "Implement the approved phase and run its verification checks.",
+  "commit_message": "feat: implement approved phase",
+  "context_key": "plan/phase-01/implement",
+  "profile": "delivery"
+}
+```
+
+Compact waits use `timeout_s: 30`. Coordinator inspects `job.result.text`,
+`job.base_commit`, `job.result.commit`, and errors. Each submission represents
+one complete job.
+
+Before every job, the registered root must be clean on an attached branch. Do
+not edit it while a job is queued or running. After an implementation succeeds,
+Coordinator verifies the current root at the direct result commit and submits
+review only if HEAD and tracked/non-ignored state remain unchanged.
+
+Failed, cancelled, and interrupted jobs that started are restored by OpenMCP to
+their saved base, except ignored files. A dirty-preflight failure leaves the
+pre-existing changes untouched. `job_retry` reruns the whole immutable job; a
+changed prompt requires a new submission.
 
 Global target/profile edits require `reload`; fields reported in
 `restart_required` need a daemon restart. Project profiles and task guidance
@@ -173,9 +201,11 @@ reload when used. Submitted jobs keep immutable execution plans.
 ## Resume Model
 
 Executable plans live under `docs/plans/<slug>/`. `.handover.md` records the
-project, phase base, context prefix, stage workflow/profile decisions, and
-latest consult, implementation, and review job IDs. Resume from
+project, phase base, context prefix, workflow/profile decisions, and latest
+consultation, implementation, and review job IDs. Resume from
 `openmcp://projects/<project_id>/jobs` before loading guidance for a new phase.
+If a job is queued or running, wait without local repository edits. Stop rather
+than resetting when handover, jobs, and current HEAD cannot be reconciled.
 
 ## Commands
 
