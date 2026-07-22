@@ -112,6 +112,8 @@ def _dict_to_toml_doc(
                 t_table = existing_by_id[target_id]
             else:
                 t_table = tomlkit.table()
+            # Migrate legacy target key
+            t_table.pop("profile", None)
             for k, v in target.items():
                 if v is None:
                     t_table.pop(k, None)
@@ -122,7 +124,7 @@ def _dict_to_toml_doc(
 
     # Section: profiles
     if "profiles" in data and isinstance(data["profiles"], dict):
-        # Migrate legacy routing_profiles: rename key to preserve comments
+        # Migrate legacy keys to avoid _renamed_value conflicts
         if "routing_profiles" in doc:
             if "profiles" not in doc:
                 doc["profiles"] = doc.pop("routing_profiles")
