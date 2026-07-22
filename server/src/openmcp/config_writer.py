@@ -13,6 +13,11 @@ import tomlkit
 from openmcp.config import DaemonConfig, load_config, openmcp_home
 
 
+def _values_equal(a: Any, b: Any) -> bool:
+    """Compare two values for equality, handling tomlkit item types."""
+    return str(a) == str(b)
+
+
 def _set_value(table: Any, key: str, value: Any) -> None:
     """Set a key in a tomlkit table, preserving existing array trivia."""
     if isinstance(value, list):
@@ -21,7 +26,7 @@ def _set_value(table: Any, key: str, value: Any) -> None:
             # Rebuild element-by-element to preserve item trivia
             new_items: list[Any] = []
             for i, new_val in enumerate(value):
-                if i < len(existing) and type(existing[i]) is type(new_val) and existing[i] == new_val:
+                if i < len(existing) and _values_equal(existing[i], new_val):
                     new_items.append(existing[i])
                 elif isinstance(new_val, str):
                     new_items.append(tomlkit.string(new_val))
@@ -60,6 +65,10 @@ def _dict_to_toml_doc(
                 raise ValueError(f"targets[{i}] must be a TOML table, got {type(t).__name__}")
     if "profiles" in data and not isinstance(data["profiles"], dict):
         raise ValueError("[profiles] must be a TOML table")
+    if "profiles" in data:
+        for prof_name, prof_data in data["profiles"].items():
+            if not isinstance(prof_data, dict):
+                raise ValueError(f"profiles.{prof_name} must be a TOML table, got {type(prof_data).__name__}")
 
     doc = base_doc if base_doc is not None else tomlkit.document()
 
@@ -138,12 +147,18 @@ def _dict_to_toml_doc(
                     elif isinstance(wf_val, dict):
                         existing = prof_table.get(wf_name)
                         # Preserve compact list form (e.g. implement = ["target"])
-                        # when the incoming dict's targets match the existing array
+                        # only when incoming dict has no retry settings changed
                         if isinstance(existing, tomlkit.items.Array):
                             incoming_targets = wf_val.get("targets", [])
-                            existing_vals = list(existing)
-                            if incoming_targets == existing_vals:
+                            existing_vals = [str(v) for v in existing]
+                            default_max = wf_val.get("max_attempts", 1)
+                            default_timeout = wf_val.get("timeout_s", 0)
+                            if (incoming_targets == existing_vals
+                                    and default_max == 1
+                                    and default_timeout == 0):
                                 continue
+                            # Convert compact list to full table when retry settings change
+                            prof_table[wf_name] = tomlkit.table()
                         if wf_name not in prof_table or not isinstance(prof_table.get(wf_name), dict):
                             prof_table[wf_name] = tomlkit.table()
                         wf_table = prof_table[wf_name]
@@ -192,11 +207,10 @@ def write_config(
                 base_doc = None
         doc = _dict_to_toml_doc(content, base_doc=base_doc)
         toml_text = tomlkit.dumps(doc)
+    elif isinstance(content, tomlkit.TOMLDocument):
+        toml_text = tomlkit.dumps(content)
     else:
-        try:
-            toml_text = tomlkit.dumps(content)
-        except Exception as exc:
-            raise ValueError(f"Invalid TOML content: {exc}") from exc
+        raise ValueError(f"Invalid payload type: expected dict, str, or TOMLDocument, got {type(content).__name__}")
 
     tmp_path = target_path.parent / f".tmp_{uuid.uuid4().hex}.toml"
     try:
