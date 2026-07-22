@@ -131,8 +131,12 @@ def _dict_to_toml_doc(
 
     # Section: profiles
     if "profiles" in data and isinstance(data["profiles"], dict):
-        # Remove legacy routing_profiles key to avoid _renamed_value conflict
-        doc.pop("routing_profiles", None)
+        # Migrate legacy routing_profiles: rename key to preserve comments
+        if "routing_profiles" in doc:
+            if "profiles" not in doc:
+                doc["profiles"] = doc.pop("routing_profiles")
+            else:
+                doc.pop("routing_profiles", None)
         if "profiles" not in doc or not isinstance(doc.get("profiles"), dict):
             doc["profiles"] = tomlkit.table()
         p_table = doc["profiles"]
