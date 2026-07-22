@@ -8,25 +8,11 @@ from pydantic import BaseModel, Field
 
 
 JobState = Literal[
-    "queued",
-    "running",
-    "succeeded",
-    "failed",
-    "cancelled",
-    "interrupted",
-    "integrated",
-    "integration_conflict",
+    "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
 ]
-StageState = Literal[
-    "pending",
-    "ready",
-    "running",
-    "succeeded",
-    "failed",
-    "cancelled",
-    "interrupted",
-    "skipped",
-]
+TERMINAL_STATES: frozenset[str] = frozenset(
+    {"succeeded", "failed", "cancelled", "interrupted"}
+)
 
 
 class ProjectView(BaseModel):
@@ -38,26 +24,9 @@ class ProjectView(BaseModel):
     created_at: str
 
 
-class ArtifactView(BaseModel):
-    kind: str
-    path: str
-
-
-class StageView(BaseModel):
-    id: str
-    state: StageState
-    mode: Literal["read", "write"]
-    attempts: int = 0
-    target_id: str = ""
-    text: str = ""
-    error: str = ""
-    commit: str = ""
-
-
 class JobResult(BaseModel):
     text: str = ""
     commit: str = ""
-    artifacts: list[ArtifactView] = Field(default_factory=list)
     error: str = ""
 
 
@@ -68,13 +37,11 @@ class JobView(BaseModel):
     profile: str
     state: JobState
     context_key: str
-    parent_job_id: str
     base_commit: str
-    integration_base: str
-    branch: str
+    target_id: str = ""
+    attempts: int = 0
     created_at: str
     updated_at: str
-    stages: list[StageView] = Field(default_factory=list)
     result: JobResult = Field(default_factory=JobResult)
 
 
@@ -138,7 +105,6 @@ class ResourcePayload(BaseModel):
 
 __all__ = [
     "ActionResult",
-    "ArtifactView",
     "ClientInstructionResult",
     "ContextStreamView",
     "DaemonReloadResult",
@@ -146,11 +112,10 @@ __all__ = [
     "JobResult",
     "JobState",
     "JobView",
-    "TargetView",
     "ProjectView",
     "ResourcePayload",
-    "StageState",
-    "StageView",
     "SubmissionResult",
+    "TERMINAL_STATES",
+    "TargetView",
     "TaskGuideResult",
 ]

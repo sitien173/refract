@@ -1,4 +1,4 @@
-"""Immutable execution plans for submitted workflows."""
+"""Immutable target plan for one submitted job."""
 
 from __future__ import annotations
 
@@ -8,20 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from openmcp.config import DaemonConfig, TargetConfig, TargetSelection
-from openmcp.workflows import WorkflowSpec
-
-
-@dataclass(slots=True, frozen=True)
-class ExecutionPlan:
-    profile: str
-    workflow_targets: tuple[tuple[str, TargetSelection], ...]
-    targets: tuple[TargetConfig, ...]
-
-    def selection(self, workflow: str) -> TargetSelection:
-        return dict(self.workflow_targets)[workflow]
-
-    def target(self, target_id: str) -> TargetConfig:
-        return next(target for target in self.targets if target.id == target_id)
+from openmcp.workflows import WorkflowDefinition, get_workflow
 
 
 def _target_data(target: TargetConfig) -> dict[str, Any]:
@@ -39,149 +26,104 @@ def _selection_data(selection: TargetSelection) -> dict[str, Any]:
     }
 
 
+def _parse_selection(value: Any) -> TargetSelection:
+    if not isinstance(value, dict):
+        raise ValueError("Execution plan selection must be a mapping")
+    raw_targets = value.get("targets", [])
+    if not isinstance(raw_targets, list):
+        raise ValueError("Execution plan selection targets must be a list")
+    target_ids = tuple(str(item) for item in raw_targets)
+    max_attempts = int(value.get("max_attempts", len(target_ids)))
+    timeout_s = int(value.get("timeout_s", 0))
+    if not target_ids or max_attempts < 1 or timeout_s < 0:
+        raise ValueError("Execution plan has an invalid target selection")
+    return TargetSelection(target_ids, max_attempts, timeout_s)
+
+
+def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
+    if not isinstance(raw, list):
+        raise ValueError("Execution plan targets must be a list")
+    targets: list[TargetConfig] = []
+    for value in raw:
+        if not isinstance(value, dict):
+            raise ValueError("Execution plan targets must contain mappings")
+        try:
+            targets.append(
+                TargetConfig(
+                    id=str(value["id"]),
+                    backend=str(value["backend"]),
+                    model=str(value.get("model", "")),
+                    backend_profile=str(value.get("backend_profile", value.get("profile", ""))),
+                    reasoning=str(value.get("reasoning", "")),
+                    system_prompt=str(value.get("system_prompt", "")),
+                    isolated=bool(value.get("isolated", False)),
+                    read_only=bool(value.get("read_only", False)),
+                    args=tuple(str(item) for item in value.get("args", [])),
+                    capabilities=tuple(str(item) for item in value.get("capabilities", [])),
+                    max_concurrency=int(value.get("max_concurrency", 1)),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Execution plan has an invalid target") from exc
+    return tuple(targets)
+
+
+@dataclass(slots=True, frozen=True)
+class ExecutionPlan:
+    profile: str
+    workflow: str
+    selection: TargetSelection
+    targets: tuple[TargetConfig, ...]
+
+    def target(self, target_id: str) -> TargetConfig:
+        return next(target for target in self.targets if target.id == target_id)
+
+
 def execution_plan_data(plan: ExecutionPlan) -> dict[str, Any]:
     return {
         "profile": plan.profile,
-        "workflows": {
-            workflow: _selection_data(selection)
-            for workflow, selection in plan.workflow_targets
-        },
+        "workflow": plan.workflow,
+        "selection": _selection_data(plan.selection),
         "targets": [_target_data(target) for target in plan.targets],
     }
-
-
-def _parse_selection(value: Any) -> TargetSelection:
-    if isinstance(value, str):
-        target_ids = (value,)
-        max_attempts = 1
-        timeout_s = 0
-    elif isinstance(value, list):
-        target_ids = tuple(str(item) for item in value)
-        max_attempts = len(target_ids)
-        timeout_s = 0
-    elif isinstance(value, dict):
-        raw_targets = value.get("targets", [])
-        if isinstance(raw_targets, str):
-            target_ids = (raw_targets,)
-        elif isinstance(raw_targets, list):
-            target_ids = tuple(str(item) for item in raw_targets)
-        else:
-            target_ids = ()
-        max_attempts = int(value.get("max_attempts", len(target_ids)))
-        timeout_s = int(value.get("timeout_s", 0))
-    else:
-        target_ids = ()
-        max_attempts = 0
-        timeout_s = 0
-    if not target_ids or max_attempts < 1 or timeout_s < 0:
-        raise ValueError("Execution plan has an invalid workflow target selection")
-    return TargetSelection(
-        targets=target_ids,
-        max_attempts=max_attempts,
-        timeout_s=timeout_s,
-    )
-
-
-def _legacy_workflow_targets(data: dict[str, Any]) -> dict[str, TargetSelection]:
-    mapping = data.get("role_routes")
-    groups = data.get("routes")
-    if not isinstance(mapping, dict) or not isinstance(groups, list):
-        raise ValueError("Execution plan workflows must be a mapping")
-    by_id: dict[str, TargetSelection] = {}
-    for value in groups:
-        if not isinstance(value, dict):
-            continue
-        target_ids = tuple(str(item) for item in value.get("targets", []))
-        by_id[str(value["id"])] = TargetSelection(
-            targets=target_ids,
-            max_attempts=int(value.get("max_attempts", 2)),
-            timeout_s=int(value.get("timeout_s", 0)),
-        )
-    try:
-        return {
-            str(workflow): by_id[str(group_id)]
-            for workflow, group_id in mapping.items()
-        }
-    except KeyError as exc:
-        raise ValueError("Execution plan references an unknown legacy route") from exc
 
 
 def parse_execution_plan(data: Any) -> ExecutionPlan:
     if not isinstance(data, dict):
         raise ValueError("Execution plan must be a mapping")
-    raw_targets = data.get("targets")
-    if not isinstance(raw_targets, list):
-        raise ValueError("Execution plan targets must be a list")
-    targets = tuple(
-        TargetConfig(
-            id=str(value["id"]),
-            backend=str(value["backend"]),
-            model=str(value.get("model", "")),
-            backend_profile=str(
-                value.get("backend_profile", value.get("profile", ""))
-            ),
-            reasoning=str(value.get("reasoning", "")),
-            system_prompt=str(value.get("system_prompt", "")),
-            isolated=bool(value.get("isolated", False)),
-            read_only=bool(value.get("read_only", False)),
-            args=tuple(str(item) for item in value.get("args", [])),
-            capabilities=tuple(str(item) for item in value.get("capabilities", [])),
-            max_concurrency=int(value.get("max_concurrency", 1)),
-        )
-        for value in raw_targets
-        if isinstance(value, dict)
-    )
-    raw_workflows = data.get("workflows")
-    if isinstance(raw_workflows, dict):
-        workflows = {
-            str(workflow): _parse_selection(value)
-            for workflow, value in raw_workflows.items()
-        }
-    else:
-        workflows = _legacy_workflow_targets(data)
-    target_ids = {target.id for target in targets}
-    if any(set(selection.targets) - target_ids for selection in workflows.values()):
+    if "selection" not in data:
+        raise ValueError("Execution plan requires one workflow selection")
+    workflow = str(data.get("workflow", ""))
+    get_workflow(workflow)
+    selection = _parse_selection(data["selection"])
+    targets = _parse_targets(data.get("targets"))
+    if set(selection.targets) - {target.id for target in targets}:
         raise ValueError("Execution plan references unknown targets")
-    return ExecutionPlan(
-        profile=str(data.get("profile", data.get("routing_profile", ""))),
-        workflow_targets=tuple(workflows.items()),
-        targets=targets,
-    )
+    return ExecutionPlan(str(data.get("profile", "")), workflow, selection, targets)
 
 
 def resolve_execution_plan(
-    workflow: WorkflowSpec,
+    workflow: WorkflowDefinition,
     config: DaemonConfig,
     profile: str,
 ) -> ExecutionPlan:
     mapping = config.profiles.get(profile)
     if mapping is None:
         raise ValueError(f"Unknown profile: {profile}")
-    workflow_names = {stage.role for stage in workflow.stages}
-    missing = workflow_names - mapping.keys()
-    if missing:
-        raise ValueError(
-            f"Profile {profile!r} does not map workflows: {sorted(missing)}"
-        )
-    workflow_targets = tuple(
-        sorted((name, mapping[name]) for name in workflow_names)
-    )
-    target_ids = {
-        target_id
-        for _, selection in workflow_targets
-        for target_id in selection.targets
-    }
+    selection = mapping.get(workflow.name)
+    if selection is None:
+        raise ValueError(f"Profile {profile!r} does not map workflow {workflow.name!r}")
     target_by_id = {target.id: target for target in config.targets}
     return ExecutionPlan(
-        profile=profile,
-        workflow_targets=workflow_targets,
-        targets=tuple(target_by_id[target_id] for target_id in sorted(target_ids)),
+        profile,
+        workflow.name,
+        selection,
+        tuple(target_by_id[value] for value in selection.targets),
     )
 
 
 def target_execution_key(target: TargetConfig) -> str:
-    data = _target_data(target)
-    encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+    encoded = json.dumps(_target_data(target), sort_keys=True, separators=(",", ":")).encode()
     return f"{target.id}:{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 
