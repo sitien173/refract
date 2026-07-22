@@ -12,16 +12,14 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
-from openmcp.server import _active_runtime, _json
-
 _STATIC_DIR = Path(__file__).parent / "dashboard_static"
 
 
-def _json_response(data: Any, status_code: int = 200) -> Response:
-    return Response(content=_json(data), status_code=status_code, media_type="application/json")
-
-
 def register_dashboard_routes(mcp_server: FastMCP) -> None:
+    from openmcp.server import _active_runtime, _json
+
+    def _json_response(data: Any, status_code: int = 200) -> Response:
+        return Response(content=_json(data), status_code=status_code, media_type="application/json")
     @mcp_server.custom_route("/dashboard/api/status", methods=["GET"])
     async def api_status(request: Request) -> Response:
         try:

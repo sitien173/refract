@@ -62,7 +62,7 @@
             <thead>
               <tr>
                 <th>Target ID</th>
-                <th>Backend</th>
+                <th>Model</th>
                 <th>Capabilities</th>
                 <th>Status</th>
                 <th>Last Error</th>
@@ -72,7 +72,7 @@
               <template x-for="target in targets" :key="target.id">
                 <tr>
                   <td><span class="code-inline" x-text="target.id"></span></td>
-                  <td x-text="target.backend || '-'"></td>
+                  <td x-text="target.model || '-'"></td>
                   <td>
                     <template x-for="cap in (target.capabilities || [])" :key="cap">
                       <span class="badge badge-cancelled" style="margin-right: 4px;" x-text="cap"></span>
@@ -81,7 +81,7 @@
                   <td>
                     <span class="badge" :class="target.healthy ? 'badge-healthy' : 'badge-unhealthy'" x-text="target.healthy ? 'healthy' : 'unhealthy'"></span>
                   </td>
-                  <td x-text="target.last_error || '-'"></td>
+                  <td x-text="target.circuit_open_until || '-'"></td>
                 </tr>
               </template>
               <template x-if="targets.length === 0">
@@ -166,8 +166,8 @@
               <template x-for="proj in projects" :key="proj.id">
                 <tr>
                   <td><span class="code-inline" x-text="proj.id"></span></td>
-                  <td x-text="proj.root_path"></td>
-                  <td x-text="formatTime(proj.registered_at)"></td>
+                  <td x-text="proj.root"></td>
+                  <td x-text="formatTime(proj.created_at)"></td>
                 </tr>
               </template>
               <template x-if="projects.length === 0">
@@ -198,18 +198,18 @@
         <p style="margin-top: 0.5rem;"><strong>Workflow:</strong> <span x-text="selectedJob?.workflow"></span></p>
         <p style="margin-top: 0.5rem;"><strong>Project ID:</strong> <span class="code-inline" x-text="selectedJob?.project_id"></span></p>
         <p style="margin-top: 0.5rem;"><strong>Created At:</strong> <span x-text="formatTime(selectedJob?.created_at)"></span></p>
-        <p style="margin-top: 0.5rem;" x-show="selectedJob?.completed_at"><strong>Completed At:</strong> <span x-text="formatTime(selectedJob?.completed_at)"></span></p>
-        <p style="margin-top: 0.5rem;" x-show="selectedJob?.error"><strong>Error:</strong> <span style="color: var(--status-red);" x-text="selectedJob?.error"></span></p>
+        <p style="margin-top: 0.5rem;" x-show="selectedJob?.updated_at"><strong>Updated At:</strong> <span x-text="formatTime(selectedJob?.updated_at)"></span></p>
+        <p style="margin-top: 0.5rem;" x-show="selectedJob?.result?.error"><strong>Error:</strong> <span style="color: var(--status-red);" x-text="selectedJob?.result?.error"></span></p>
       </div>
 
       <h4>Event Timeline</h4>
       <div class="events-list">
-        <template x-for="evt in jobEvents" :key="evt.id || evt.timestamp">
+        <template x-for="evt in jobEvents" :key="evt.id || evt.created_at">
           <div class="event-item">
             <div class="event-meta">
-              <span x-text="formatTime(evt.timestamp)"></span> | <span x-text="evt.type || 'event'"></span>
+              <span x-text="formatTime(evt.created_at)"></span> | <span x-text="evt.kind || 'event'"></span>
             </div>
-            <div x-text="evt.message || evt.text || JSON.stringify(evt)"></div>
+            <div x-text="evt.data || JSON.stringify(evt)"></div>
           </div>
         </template>
         <template x-if="jobEvents.length === 0">
