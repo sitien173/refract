@@ -163,13 +163,14 @@ document.addEventListener('alpine:init', () => {
 
     async refreshJobDetail() {
       if (!this.selectedJob) return;
+      const jobId = this.selectedJob.id;
       try {
-        const jobRes = await fetch(`/dashboard/api/jobs/${this.selectedJob.id}`);
-        if (jobRes.ok) {
+        const jobRes = await fetch(`/dashboard/api/jobs/${jobId}`);
+        if (jobRes.ok && this.selectedJob?.id === jobId) {
           this.selectedJob = await jobRes.json();
         }
-        const eventsRes = await fetch(`/dashboard/api/jobs/${this.selectedJob.id}/events`);
-        if (eventsRes.ok) {
+        const eventsRes = await fetch(`/dashboard/api/jobs/${jobId}/events`);
+        if (eventsRes.ok && this.selectedJob?.id === jobId) {
           this.jobEvents = await eventsRes.json();
         }
       } catch (err) {}
