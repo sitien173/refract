@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import uuid
@@ -14,6 +15,7 @@ from openmcp.config import DaemonConfig, load_config, openmcp_home
 
 
 def _values_equal(a: Any, b: Any) -> bool:
+
     """Compare two values for equality, handling tomlkit item types."""
     return str(a) == str(b)
 
@@ -229,4 +231,59 @@ def write_config(
     return load_config(target_path)
 
 
-__all__ = ["write_config"]
+def write_task_guide(
+    content: str | dict[str, Any],
+    path: Path | None = None,
+    home: Path | None = None,
+) -> dict[str, Any]:
+    """Validate and write task guide atomically with backup."""
+    from openmcp.config import load_task_guide
+
+    if path is not None:
+        target_path = path
+    elif home is not None:
+        target_path = home / "task_guide.json"
+    else:
+        target_path = openmcp_home() / "task_guide.json"
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(content, str):
+        try:
+            json.loads(content)
+        except Exception as exc:
+            raise ValueError(f"Invalid JSON content: {exc}") from exc
+        json_text = content
+    elif isinstance(content, dict):
+        json_text = json.dumps(content, indent=2)
+    else:
+        raise ValueError(f"Invalid payload type: expected dict or str, got {type(content).__name__}")
+
+    tmp_dir = target_path.parent / f".tmp_dir_{uuid.uuid4().hex}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_file = tmp_dir / "task_guide.json"
+
+    try:
+        tmp_file.write_text(json_text, encoding="utf-8")
+        validated = load_task_guide(home=tmp_dir)
+    except Exception as exc:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if isinstance(exc, ValueError):
+            raise
+        raise ValueError(f"Invalid task guide: {exc}") from exc
+
+    try:
+        if target_path.exists():
+            bak_path = target_path.parent / f"{target_path.name}.bak"
+            shutil.copy2(target_path, bak_path)
+            os.chmod(tmp_file, target_path.stat().st_mode)
+
+        os.replace(tmp_file, target_path)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return load_task_guide(home=target_path.parent)
+
+
+__all__ = ["write_config", "write_task_guide"]
+

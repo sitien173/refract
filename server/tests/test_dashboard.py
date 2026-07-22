@@ -123,6 +123,9 @@ async def test_dashboard_static_index(async_client: httpx.AsyncClient) -> None:
     assert res.status_code == 200
     assert "text/html" in res.headers.get("content-type", "")
     assert "<!DOCTYPE html>" in res.text or "<html" in res.text
+    assert "Task Guide" in res.text
+    assert "fetchTaskGuide()" in res.text
+
 
 
 @pytest.mark.asyncio
@@ -224,5 +227,59 @@ async def test_dashboard_api_put_config_invalid(async_client: httpx.AsyncClient)
     put_res = await async_client.put("/dashboard/api/config", json=invalid_payload)
     assert put_res.status_code == 400
     assert "error" in put_res.json()
+
+
+def test_write_task_guide_valid_and_backup(tmp_path) -> None:
+    from openmcp.config_writer import write_task_guide
+    guide_file = tmp_path / "task_guide.json"
+    guide_file.write_text('{"version": 1, "recommendations": [{"task": "t1", "profile": "p1"}]}', encoding="utf-8")
+
+    new_guide = write_task_guide({"version": 2, "recommendations": [{"task": "t2", "profile": "p2"}]}, path=guide_file)
+    assert new_guide["version"] == 2
+    assert guide_file.exists()
+
+    bak_file = tmp_path / "task_guide.json.bak"
+    assert bak_file.exists()
+    assert '"version": 1' in bak_file.read_text(encoding="utf-8")
+
+
+def test_write_task_guide_invalid_leaves_file_untouched(tmp_path) -> None:
+    from openmcp.config_writer import write_task_guide
+    guide_file = tmp_path / "task_guide.json"
+    guide_file.write_text('{"version": 1}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Task guide must be a non-empty JSON object"):
+        write_task_guide({}, path=guide_file)
+
+    assert '"version": 1' in guide_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_dashboard_api_get_task_guide(async_client: httpx.AsyncClient) -> None:
+    res = await async_client.get("/dashboard/api/task-guide")
+    assert res.status_code == 200
+    assert isinstance(res.json(), dict)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_api_put_task_guide_valid(async_client: httpx.AsyncClient, active_runtime: Runtime, tmp_path) -> None:
+    payload = {"version": 1, "recommendations": [{"task": "test-task", "profile": "balanced"}]}
+    put_res = await async_client.put("/dashboard/api/task-guide", json=payload)
+    assert put_res.status_code == 200
+    res_data = put_res.json()
+    assert res_data.get("version") == 1 or res_data.get("guide", {}).get("version") == 1
+
+    get_res = await async_client.get("/dashboard/api/task-guide")
+    assert get_res.status_code == 200
+    assert get_res.json().get("version") == 1
+
+
+@pytest.mark.asyncio
+async def test_dashboard_api_put_task_guide_invalid(async_client: httpx.AsyncClient) -> None:
+    put_res = await async_client.put("/dashboard/api/task-guide", json={})
+    assert put_res.status_code == 400
+    assert "error" in put_res.json()
+
+
 
 

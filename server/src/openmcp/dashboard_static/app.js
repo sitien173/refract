@@ -25,8 +25,15 @@ document.addEventListener('alpine:init', () => {
     configSuccess: null,
     restartRequired: [],
     configLoading: false,
+
+    taskGuideData: { recommendations: [] },
+    taskGuideRawJson: '{}',
+    taskGuideError: null,
+    taskGuideSuccess: null,
+    taskGuideLoading: false,
     
     mainTimer: null,
+
     jobTimer: null,
     isPaused: false,
 
@@ -332,6 +339,108 @@ document.addEventListener('alpine:init', () => {
       } catch (err) {
         this.configError = 'Network error saving configuration';
       }
+    },
+
+    async fetchTaskGuide() {
+      this.taskGuideLoading = true;
+      this.taskGuideError = null;
+      try {
+        const res = await fetch('/dashboard/api/task-guide');
+        if (res.ok) {
+          const guide = await res.json();
+          this.taskGuideData = guide && typeof guide === 'object' ? guide : {};
+          if (!Array.isArray(this.taskGuideData.recommendations)) {
+            this.taskGuideData.recommendations = [];
+          }
+          this.taskGuideRawJson = JSON.stringify(this.taskGuideData, null, 2);
+        } else {
+          const data = await res.json();
+          this.taskGuideError = data.error || 'Failed to load task guide';
+        }
+      } catch (err) {
+        this.taskGuideError = 'Network error loading task guide';
+      } finally {
+        this.taskGuideLoading = false;
+      }
+    },
+
+    syncGuideToRawJson() {
+      this.taskGuideRawJson = JSON.stringify(this.taskGuideData, null, 2);
+    },
+
+    trySyncRawJsonToGuide() {
+      try {
+        const parsed = JSON.parse(this.taskGuideRawJson);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          this.taskGuideData = parsed;
+          if (!Array.isArray(this.taskGuideData.recommendations)) {
+            this.taskGuideData.recommendations = [];
+          }
+        }
+      } catch (e) {}
+    },
+
+    addRecommendation() {
+      if (!Array.isArray(this.taskGuideData.recommendations)) {
+        this.taskGuideData.recommendations = [];
+      }
+      this.taskGuideData.recommendations.push({ task: '', profile: '' });
+      this.syncGuideToRawJson();
+    },
+
+    removeRecommendation(index) {
+      if (Array.isArray(this.taskGuideData.recommendations)) {
+        this.taskGuideData.recommendations.splice(index, 1);
+        this.syncGuideToRawJson();
+      }
+    },
+
+    validateClientTaskGuide() {
+      let parsed;
+      try {
+        parsed = JSON.parse(this.taskGuideRawJson);
+      } catch (err) {
+        return 'Invalid JSON syntax';
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length === 0) {
+        return 'Task guide must be a non-empty JSON object';
+      }
+      return null;
+    },
+
+    async saveTaskGuide() {
+      this.taskGuideError = null;
+      this.taskGuideSuccess = null;
+
+      const clientErr = this.validateClientTaskGuide();
+      if (clientErr) {
+        this.taskGuideError = clientErr;
+        return;
+      }
+
+      const payload = JSON.parse(this.taskGuideRawJson);
+
+      try {
+        const res = await fetch('/dashboard/api/task-guide', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (res.ok) {
+          this.taskGuideSuccess = 'Task guide saved successfully.';
+          this.taskGuideData = data;
+          if (!Array.isArray(this.taskGuideData.recommendations)) {
+            this.taskGuideData.recommendations = [];
+          }
+          this.taskGuideRawJson = JSON.stringify(this.taskGuideData, null, 2);
+        } else {
+          this.taskGuideError = data.error || 'Failed to save task guide';
+        }
+      } catch (err) {
+        this.taskGuideError = 'Network error saving task guide';
+      }
     }
   }));
 });
+

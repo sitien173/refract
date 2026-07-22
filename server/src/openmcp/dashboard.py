@@ -168,7 +168,42 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
             "restart_required": reload_res.restart_required,
         })
 
+    @mcp_server.custom_route("/dashboard/api/task-guide", methods=["GET"])
+    async def api_get_task_guide(request: Request) -> Response:
+        from openmcp.config import load_task_guide
+        try:
+            runtime = _active_runtime()
+        except RuntimeError:
+            return JSONResponse({"error": "OpenMCP runtime is not active"}, status_code=503)
+        try:
+            guide = load_task_guide(runtime.config.home)
+        except ValueError:
+            guide = {}
+        return _json_response(guide)
+
+    @mcp_server.custom_route("/dashboard/api/task-guide", methods=["PUT"])
+    async def api_put_task_guide(request: Request) -> Response:
+        from openmcp.config_writer import write_task_guide
+        try:
+            runtime = _active_runtime()
+        except RuntimeError:
+            return JSONResponse({"error": "OpenMCP runtime is not active"}, status_code=503)
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            return JSONResponse({"error": f"Invalid JSON body: {exc}"}, status_code=400)
+
+        try:
+            written_guide = write_task_guide(payload, home=runtime.config.home)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": f"Invalid task-guide payload: {exc}"}, status_code=400)
+
+        return _json_response(written_guide)
+
     @mcp_server.custom_route("/dashboard", methods=["GET"])
+
     async def dashboard_index(request: Request) -> Response:
         index_file = _STATIC_DIR / "index.html"
         if not index_file.is_file():
