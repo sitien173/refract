@@ -250,4 +250,10 @@ async def workflows_resource(project_id: str, ctx: Context) -> str:
     return _json(BUILTIN_WORKFLOWS)
 
 
+from openmcp.dashboard import register_dashboard_routes
+
+register_dashboard_routes(mcp)
+
 __all__ = ["doctor", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "reload", "run", "status", "task_guide"]
+
+

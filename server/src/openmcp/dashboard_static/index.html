@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenMCP Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/assets/styles.css">
+  <script defer src="/dashboard/assets/vendor/alpine.min.js"></script>
+  <script defer src="/dashboard/assets/app.js"></script>
+</head>
+<body x-data="dashboardApp">
+  <header class="dashboard-header">
+    <div class="brand">
+      <div class="brand-icon">M</div>
+      <div class="brand-title">OpenMCP Daemon Monitor</div>
+    </div>
+    <div class="status-indicator">
+      <span class="dot" :class="{ 'offline': !isConnected }"></span>
+      <span x-text="isConnected ? 'Daemon Online' : 'Daemon Offline'"></span>
+      <span style="margin-left: 1rem;" x-show="lastUpdated">Updated: <span x-text="lastUpdated"></span></span>
+    </div>
+  </header>
+
+  <nav class="nav-tabs">
+    <button class="tab-btn" :class="{ 'active': activeTab === 'overview' }" @click="activeTab = 'overview'">Overview</button>
+    <button class="tab-btn" :class="{ 'active': activeTab === 'jobs' }" @click="activeTab = 'jobs'">Jobs (<span x-text="jobs.length"></span>)</button>
+    <button class="tab-btn" :class="{ 'active': activeTab === 'projects' }" @click="activeTab = 'projects'">Projects (<span x-text="projects.length"></span>)</button>
+  </nav>
+
+  <main class="dashboard-main">
+    <!-- OVERVIEW TAB -->
+    <div x-show="activeTab === 'overview'">
+      <div class="grid-tiles">
+        <div class="tile">
+          <div class="tile-title">Daemon Status</div>
+          <div class="tile-value">
+            <span class="badge" :class="'badge-' + (statusData.status || 'unknown')" x-text="statusData.status || 'unknown'"></span>
+          </div>
+        </div>
+        <div class="tile">
+          <div class="tile-title">Workers</div>
+          <div class="tile-value" x-text="statusData.workers || 0"></div>
+        </div>
+        <div class="tile">
+          <div class="tile-title">Active Jobs</div>
+          <div class="tile-value" x-text="statusData.active_jobs || 0"></div>
+        </div>
+        <div class="tile">
+          <div class="tile-title">Queued Jobs</div>
+          <div class="tile-value" x-text="statusData.queued_jobs || 0"></div>
+        </div>
+      </div>
+
+      <!-- TARGETS HEALTH GRID -->
+      <div class="section-card">
+        <div class="section-title">
+          <span>Configured Targets & Health</span>
+          <span style="font-size: 0.85rem; color: var(--text-secondary);" x-text="targets.length + ' targets'"></span>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Target ID</th>
+                <th>Backend</th>
+                <th>Capabilities</th>
+                <th>Status</th>
+                <th>Last Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="target in targets" :key="target.id">
+                <tr>
+                  <td><span class="code-inline" x-text="target.id"></span></td>
+                  <td x-text="target.backend || '-'"></td>
+                  <td>
+                    <template x-for="cap in (target.capabilities || [])" :key="cap">
+                      <span class="badge badge-cancelled" style="margin-right: 4px;" x-text="cap"></span>
+                    </template>
+                  </td>
+                  <td>
+                    <span class="badge" :class="target.healthy ? 'badge-healthy' : 'badge-unhealthy'" x-text="target.healthy ? 'healthy' : 'unhealthy'"></span>
+                  </td>
+                  <td x-text="target.last_error || '-'"></td>
+                </tr>
+              </template>
+              <template x-if="targets.length === 0">
+                <tr>
+                  <td colspan="5" style="text-align: center; color: var(--text-muted);">No targets configured</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PROFILES SUMMARY -->
+      <div class="section-card">
+        <div class="section-title">Execution Profiles</div>
+        <p style="color: var(--text-secondary); margin-bottom: 0.5rem;">Default Profile: <span class="code-inline" x-text="profiles.default || 'none'"></span></p>
+        <p style="color: var(--text-secondary);">Available Profiles: 
+          <template x-for="p in (profiles.available || [])" :key="p">
+            <span class="badge badge-cancelled" style="margin-right: 4px;" x-text="p"></span>
+          </template>
+        </p>
+      </div>
+    </div>
+
+    <!-- JOBS TAB -->
+    <div x-show="activeTab === 'jobs'">
+      <div class="section-card">
+        <div class="section-title">Job Management</div>
+        <div class="filter-bar">
+          <template x-for="st in ['all', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted']" :key="st">
+            <button class="filter-btn" :class="{ 'active': jobFilter === st }" @click="jobFilter = st" x-text="st.toUpperCase()"></button>
+          </template>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Job ID</th>
+                <th>Project ID</th>
+                <th>Workflow</th>
+                <th>State</th>
+                <th>Profile</th>
+                <th>Created At</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="job in filteredJobs" :key="job.id">
+                <tr @click="openJobDetail(job)">
+                  <td><span class="code-inline" x-text="job.id.substring(0, 12)"></span></td>
+                  <td><span class="code-inline" x-text="job.project_id.substring(0, 12)"></span></td>
+                  <td x-text="job.workflow"></td>
+                  <td><span class="badge" :class="'badge-' + job.state" x-text="job.state"></span></td>
+                  <td x-text="job.profile || '-'"></td>
+                  <td x-text="formatTime(job.created_at)"></td>
+                </tr>
+              </template>
+              <template x-if="filteredJobs.length === 0">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">No jobs found for state "<span x-text="jobFilter"></span>"</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROJECTS TAB -->
+    <div x-show="activeTab === 'projects'">
+      <div class="section-card">
+        <div class="section-title">Registered Projects</div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Project ID</th>
+                <th>Root Path</th>
+                <th>Registered At</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="proj in projects" :key="proj.id">
+                <tr>
+                  <td><span class="code-inline" x-text="proj.id"></span></td>
+                  <td x-text="proj.root_path"></td>
+                  <td x-text="formatTime(proj.registered_at)"></td>
+                </tr>
+              </template>
+              <template x-if="projects.length === 0">
+                <tr>
+                  <td colspan="3" style="text-align: center; color: var(--text-muted); padding: 2rem;">No projects registered</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- JOB DETAIL MODAL / DRAWER -->
+  <div class="modal-overlay" x-show="selectedJob" style="display: none;" @click.self="closeJobDetail()">
+    <div class="modal-drawer" x-show="selectedJob">
+      <div class="modal-header">
+        <div>
+          <h3>Job Details</h3>
+          <p class="code-inline" style="margin-top: 0.25rem;" x-text="selectedJob?.id"></p>
+        </div>
+        <button class="close-btn" @click="closeJobDetail()">&times;</button>
+      </div>
+
+      <div style="margin-bottom: 1.5rem;" x-if="selectedJob">
+        <p><strong>State:</strong> <span class="badge" :class="'badge-' + selectedJob?.state" x-text="selectedJob?.state"></span></p>
+        <p style="margin-top: 0.5rem;"><strong>Workflow:</strong> <span x-text="selectedJob?.workflow"></span></p>
+        <p style="margin-top: 0.5rem;"><strong>Project ID:</strong> <span class="code-inline" x-text="selectedJob?.project_id"></span></p>
+        <p style="margin-top: 0.5rem;"><strong>Created At:</strong> <span x-text="formatTime(selectedJob?.created_at)"></span></p>
+        <p style="margin-top: 0.5rem;" x-show="selectedJob?.completed_at"><strong>Completed At:</strong> <span x-text="formatTime(selectedJob?.completed_at)"></span></p>
+        <p style="margin-top: 0.5rem;" x-show="selectedJob?.error"><strong>Error:</strong> <span style="color: var(--status-red);" x-text="selectedJob?.error"></span></p>
+      </div>
+
+      <h4>Event Timeline</h4>
+      <div class="events-list">
+        <template x-for="evt in jobEvents" :key="evt.id || evt.timestamp">
+          <div class="event-item">
+            <div class="event-meta">
+              <span x-text="formatTime(evt.timestamp)"></span> | <span x-text="evt.type || 'event'"></span>
+            </div>
+            <div x-text="evt.message || evt.text || JSON.stringify(evt)"></div>
+          </div>
+        </template>
+        <template x-if="jobEvents.length === 0">
+          <p style="color: var(--text-muted); font-size: 0.85rem;">No events recorded for this job.</p>
+        </template>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
