@@ -45,7 +45,7 @@ class Database:
             columns = self._columns("jobs")
             if {"prompt", "commit_message", "result_text", "target_id", "attempts"} <= columns:
                 self._create_support_tables()
-                self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+                self._connection.execute("PRAGMA user_version=5")
                 self._connection.commit()
             else:
                 self._migrate_legacy_jobs()
@@ -65,9 +65,17 @@ class Database:
         }
 
     def _columns(self, table: str) -> set[str]:
+        statements = {
+            "jobs": "PRAGMA table_info(jobs)",
+            "context_sessions": "PRAGMA table_info(context_sessions)",
+        }
+        try:
+            statement = statements[table]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported schema table: {table}") from exc
         return {
             row["name"]
-            for row in self._connection.execute(f"PRAGMA table_info({table})")
+            for row in self._connection.execute(statement)
         }
 
     def _create_schema(self) -> None:
@@ -103,7 +111,7 @@ class Database:
             """
         )
         self._create_support_tables()
-        self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+        self._connection.execute("PRAGMA user_version=5")
         self._connection.commit()
 
     def _create_support_tables(self) -> None:
@@ -153,17 +161,19 @@ class Database:
     def _normalize_legacy_columns(self) -> None:
         columns = self._columns("jobs")
         additions = {
-            "profile": "TEXT NOT NULL DEFAULT ''",
-            "execution_plan_json": "TEXT NOT NULL DEFAULT ''",
-            "result_stage": "TEXT NOT NULL DEFAULT ''",
-            "inputs_json": "TEXT NOT NULL DEFAULT '{}'",
-            "base_commit": "TEXT NOT NULL DEFAULT ''",
-            "result_commit": "TEXT NOT NULL DEFAULT ''",
-            "error": "TEXT NOT NULL DEFAULT ''",
+            "profile": "ALTER TABLE jobs ADD COLUMN profile TEXT NOT NULL DEFAULT ''",
+            "execution_plan_json": (
+                "ALTER TABLE jobs ADD COLUMN execution_plan_json TEXT NOT NULL DEFAULT ''"
+            ),
+            "result_stage": "ALTER TABLE jobs ADD COLUMN result_stage TEXT NOT NULL DEFAULT ''",
+            "inputs_json": "ALTER TABLE jobs ADD COLUMN inputs_json TEXT NOT NULL DEFAULT '{}'",
+            "base_commit": "ALTER TABLE jobs ADD COLUMN base_commit TEXT NOT NULL DEFAULT ''",
+            "result_commit": "ALTER TABLE jobs ADD COLUMN result_commit TEXT NOT NULL DEFAULT ''",
+            "error": "ALTER TABLE jobs ADD COLUMN error TEXT NOT NULL DEFAULT ''",
         }
-        for name, definition in additions.items():
+        for name, statement in additions.items():
             if name not in columns:
-                self._connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+                self._connection.execute(statement)
         columns = self._columns("jobs")
         if "routing_profile" in columns:
             self._connection.execute(
@@ -215,9 +225,14 @@ class Database:
                 "queued": "interrupted",
                 "running": "interrupted",
             }
-            stage_join = ""
             if "stages" in self._tables():
-                stage_join = """
+                rows = self._connection.execute(
+                    """
+                    SELECT j.*, s.text AS stage_text,
+                           s.target_id AS stage_target_id,
+                           s.attempts AS stage_attempts,
+                           s.error AS stage_error
+                    FROM jobs AS j
                     LEFT JOIN stages AS s
                       ON s.job_id=j.id
                      AND s.id=COALESCE(
@@ -226,18 +241,18 @@ class Database:
                           WHERE fallback.job_id=j.id
                           ORDER BY fallback.ordinal DESC LIMIT 1)
                      )
-                """
-            rows = self._connection.execute(
-                f"""
-                SELECT j.*, {"s.text" if stage_join else "''"} AS stage_text,
-                       {"s.target_id" if stage_join else "''"} AS stage_target_id,
-                       {"s.attempts" if stage_join else "0"} AS stage_attempts,
-                       {"s.error" if stage_join else "''"} AS stage_error
-                FROM jobs AS j
-                {stage_join}
-                ORDER BY j.created_at
-                """
-            ).fetchall()
+                    ORDER BY j.created_at
+                    """
+                ).fetchall()
+            else:
+                rows = self._connection.execute(
+                    """
+                    SELECT j.*, '' AS stage_text, '' AS stage_target_id,
+                           0 AS stage_attempts, '' AS stage_error
+                    FROM jobs AS j
+                    ORDER BY j.created_at
+                    """
+                ).fetchall()
             self._connection.execute(
                 """
                 CREATE TABLE jobs_v5 (
@@ -285,12 +300,17 @@ class Database:
                 "INSERT INTO jobs_v5 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 converted_rows,
             )
-            for table in ("artifacts", "stages", "jobs"):
+            drops = {
+                "artifacts": "DROP TABLE artifacts",
+                "stages": "DROP TABLE stages",
+                "jobs": "DROP TABLE jobs",
+            }
+            for table, statement in drops.items():
                 if table in self._tables():
-                    self._connection.execute(f"DROP TABLE {table}")
+                    self._connection.execute(statement)
             self._connection.execute("ALTER TABLE jobs_v5 RENAME TO jobs")
             self._connection.execute("CREATE INDEX jobs_state_idx ON jobs(state, created_at)")
-            self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+            self._connection.execute("PRAGMA user_version=5")
             violations = self._connection.execute("PRAGMA foreign_key_check").fetchall()
             if violations:
                 raise sqlite3.IntegrityError(f"Foreign-key violations: {violations}")
