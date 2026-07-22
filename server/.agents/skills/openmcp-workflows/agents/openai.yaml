@@ -1,7 +1,0 @@
-interface:
-  display_name: "OpenMCP Workflows"
-  short_description: "Choose built-ins and compose job chains"
-  default_prompt: "Use $openmcp-workflows to choose implement, review, or consult and design a safe parent job chain. Do not create custom workflow YAML."
-
-dependencies:
-  tools: []
