@@ -105,7 +105,7 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
             "logging": {
                 "level": cfg.logging.level,
                 "format": cfg.logging.format,
-                "file": str(cfg.logging.file) if cfg.logging.file is not None else None,
+                "file": str(cfg.logging.file) if cfg.logging.file is not None else False,
                 "console": cfg.logging.console,
                 "max_bytes": cfg.logging.max_bytes,
                 "backup_count": cfg.logging.backup_count,
@@ -157,6 +157,8 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
             write_config(payload, path=runtime.config.config_path)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": f"Invalid config payload: {exc}"}, status_code=400)
 
         reload_res = runtime.reload()
         return _json_response({

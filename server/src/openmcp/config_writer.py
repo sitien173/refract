@@ -211,8 +211,13 @@ def write_config(
                 base_doc = tomlkit.parse(target_path.read_text(encoding="utf-8"))
             except Exception:
                 base_doc = None
-        doc = _dict_to_toml_doc(content, base_doc=base_doc)
-        toml_text = tomlkit.dumps(doc)
+        try:
+            doc = _dict_to_toml_doc(content, base_doc=base_doc)
+            toml_text = tomlkit.dumps(doc)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Invalid config structure: {exc}") from exc
     elif isinstance(content, tomlkit.TOMLDocument):
         toml_text = tomlkit.dumps(content)
     else:
