@@ -18,11 +18,26 @@ def _set_value(table: Any, key: str, value: Any) -> None:
     if isinstance(value, list):
         existing = table.get(key)
         if isinstance(existing, tomlkit.items.Array):
+            # Rebuild element-by-element to preserve item trivia
+            new_items: list[Any] = []
+            for i, new_val in enumerate(value):
+                if i < len(existing) and type(existing[i]) is type(new_val) and existing[i] == new_val:
+                    new_items.append(existing[i])
+                elif isinstance(new_val, str):
+                    new_items.append(tomlkit.string(new_val))
+                elif isinstance(new_val, (int, float)):
+                    new_items.append(new_val)
+                elif isinstance(new_val, bool):
+                    new_items.append(new_val)
+                else:
+                    new_items.append(tomlkit.item(new_val))
             existing.clear()
-            existing.extend(value)
+            for item in new_items:
+                existing.append(item)
             return
         arr = tomlkit.array()
-        arr.extend(value)
+        for v in value:
+            arr.append(v)
         table[key] = arr
     else:
         table[key] = value
@@ -121,6 +136,14 @@ def _dict_to_toml_doc(
                     if wf_val is None:
                         prof_table.pop(wf_name, None)
                     elif isinstance(wf_val, dict):
+                        existing = prof_table.get(wf_name)
+                        # Preserve compact list form (e.g. implement = ["target"])
+                        # when the incoming dict's targets match the existing array
+                        if isinstance(existing, tomlkit.items.Array):
+                            incoming_targets = wf_val.get("targets", [])
+                            existing_vals = list(existing)
+                            if incoming_targets == existing_vals:
+                                continue
                         if wf_name not in prof_table or not isinstance(prof_table.get(wf_name), dict):
                             prof_table[wf_name] = tomlkit.table()
                         wf_table = prof_table[wf_name]
@@ -170,7 +193,10 @@ def write_config(
         doc = _dict_to_toml_doc(content, base_doc=base_doc)
         toml_text = tomlkit.dumps(doc)
     else:
-        toml_text = tomlkit.dumps(content)
+        try:
+            toml_text = tomlkit.dumps(content)
+        except Exception as exc:
+            raise ValueError(f"Invalid TOML content: {exc}") from exc
 
     tmp_path = target_path.parent / f".tmp_{uuid.uuid4().hex}.toml"
     try:
