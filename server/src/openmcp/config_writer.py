@@ -24,6 +24,7 @@ def _dict_to_toml_doc(
         if "daemon" not in doc or not isinstance(doc.get("daemon"), dict):
             doc["daemon"] = tomlkit.table()
         d_table = doc["daemon"]
+        d_table.pop("default_routing_profile", None)
         for k, v in data["daemon"].items():
             if v is None:
                 d_table.pop(k, None)
@@ -49,12 +50,21 @@ def _dict_to_toml_doc(
 
     # Section: targets (Array of Tables)
     if "targets" in data and isinstance(data["targets"], list):
+        existing_targets = doc.get("targets")
+        has_existing_aot = isinstance(existing_targets, tomlkit.items.AoT) if existing_targets is not None else False
         a = tomlkit.aot()
-        for target in data["targets"]:
+        for idx, target in enumerate(data["targets"]):
             if isinstance(target, dict):
-                t_table = tomlkit.table()
+                # Preserve existing table to keep comments/trivia
+                if has_existing_aot and idx < len(existing_targets) and isinstance(existing_targets[idx], tomlkit.items.Table):
+                    t_table = existing_targets[idx]
+                    existing_keys = set(t_table.keys())
+                else:
+                    t_table = tomlkit.table()
+                    existing_keys = set()
                 for k, v in target.items():
                     if v is None:
+                        t_table.pop(k, None)
                         continue
                     if isinstance(v, list):
                         arr = tomlkit.array()
@@ -62,11 +72,16 @@ def _dict_to_toml_doc(
                         t_table[k] = arr
                     else:
                         t_table[k] = v
+                # Remove keys not in the new data
+                for k in existing_keys - set(target.keys()):
+                    t_table.pop(k, None)
                 a.append(t_table)
         doc["targets"] = a
 
     # Section: profiles
     if "profiles" in data and isinstance(data["profiles"], dict):
+        # Remove legacy routing_profiles key to avoid _renamed_value conflict
+        doc.pop("routing_profiles", None)
         if "profiles" not in doc or not isinstance(doc.get("profiles"), dict):
             doc["profiles"] = tomlkit.table()
         p_table = doc["profiles"]
