@@ -14,6 +14,17 @@ document.addEventListener('alpine:init', () => {
     selectedJob: null,
     jobEvents: [],
     _jobRequestId: 0,
+
+    configData: {
+      daemon: { host: '127.0.0.1', port: 8765, max_jobs: 4, history_turns: 8, history_bytes: 65536, default_profile: 'balanced' },
+      logging: { level: 'INFO', format: 'text', file: 'openmcp.log', console: false, max_bytes: 10485760, backup_count: 5, capture_warnings: true },
+      targets: [],
+      profiles: {}
+    },
+    configError: null,
+    configSuccess: null,
+    restartRequired: [],
+    configLoading: false,
     
     mainTimer: null,
     jobTimer: null,
@@ -21,6 +32,7 @@ document.addEventListener('alpine:init', () => {
 
     init() {
       this.refreshAll();
+      this.fetchConfig();
       this.startPolling();
       
       document.addEventListener('visibilitychange', () => {
@@ -186,6 +198,139 @@ document.addEventListener('alpine:init', () => {
         return new Date(ts).toLocaleString();
       } catch (e) {
         return ts;
+      }
+    },
+
+    async fetchConfig() {
+      this.configLoading = true;
+      this.configError = null;
+      try {
+        const res = await fetch('/dashboard/api/config');
+        if (res.ok) {
+          this.configData = await res.json();
+        } else {
+          const data = await res.json();
+          this.configError = data.error || 'Failed to load config';
+        }
+      } catch (err) {
+        this.configError = 'Network error loading config';
+      } finally {
+        this.configLoading = false;
+      }
+    },
+
+    addTarget() {
+      if (!this.configData.targets) this.configData.targets = [];
+      this.configData.targets.push({
+        id: 'target-' + (this.configData.targets.length + 1),
+        backend: 'codex',
+        model: '',
+        backend_profile: '',
+        reasoning: '',
+        system_prompt: '',
+        isolated: false,
+        read_only: false,
+        max_concurrency: 1,
+        capabilities: ['code', 'reasoning', 'review', 'consult'],
+        args: []
+      });
+    },
+
+    removeTarget(index) {
+      this.configData.targets.splice(index, 1);
+    },
+
+    addProfile() {
+      const name = prompt('Enter new profile name:');
+      if (!name || !name.trim()) return;
+      const key = name.trim();
+      if (!this.configData.profiles) this.configData.profiles = {};
+      if (this.configData.profiles[key]) return;
+      this.configData.profiles[key] = {
+        implement: { targets: [], max_attempts: 1, timeout_s: 0 },
+        review: { targets: [], max_attempts: 1, timeout_s: 0 },
+        consult: { targets: [], max_attempts: 1, timeout_s: 0 }
+      };
+    },
+
+    removeProfile(key) {
+      if (this.configData.profiles) {
+        delete this.configData.profiles[key];
+      }
+    },
+
+    validateClientConfig() {
+      if (!this.configData.daemon) return 'Daemon configuration missing';
+      const port = parseInt(this.configData.daemon.port, 10);
+      if (isNaN(port) || port <= 0) return 'Daemon port must be a positive integer';
+      const maxJobs = parseInt(this.configData.daemon.max_jobs, 10);
+      if (isNaN(maxJobs) || maxJobs <= 0) return 'Daemon max_jobs must be a positive integer';
+
+      if (!Array.isArray(this.configData.targets) || this.configData.targets.length === 0) {
+        return 'At least one target must be configured';
+      }
+
+      const targetIds = new Set();
+      for (const t of this.configData.targets) {
+        if (!t.id || !t.id.trim()) return 'Target ID cannot be empty';
+        if (targetIds.has(t.id.trim())) return `Duplicate target ID: ${t.id}`;
+        targetIds.add(t.id.trim());
+        if (!['codex', 'agy', 'pi'].includes(t.backend)) {
+          return `Target ${t.id} has invalid backend: ${t.backend}`;
+        }
+      }
+
+      if (!this.configData.profiles || Object.keys(this.configData.profiles).length === 0) {
+        return 'At least one profile must be configured';
+      }
+      const defaultProf = (this.configData.daemon.default_profile || '').trim();
+      if (defaultProf && !this.configData.profiles[defaultProf]) {
+        return `Default profile '${defaultProf}' is not in configured profiles`;
+      }
+
+      return null;
+    },
+
+    async saveConfig() {
+      this.configError = null;
+      this.configSuccess = null;
+
+      const clientErr = this.validateClientConfig();
+      if (clientErr) {
+        this.configError = clientErr;
+        return;
+      }
+
+      const payload = JSON.parse(JSON.stringify(this.configData));
+      payload.daemon.port = parseInt(payload.daemon.port, 10);
+      payload.daemon.max_jobs = parseInt(payload.daemon.max_jobs, 10);
+      payload.daemon.history_turns = parseInt(payload.daemon.history_turns, 10);
+      payload.daemon.history_bytes = parseInt(payload.daemon.history_bytes, 10);
+
+      for (const t of payload.targets) {
+        t.max_concurrency = parseInt(t.max_concurrency, 10) || 1;
+        if (typeof t.args === 'string') {
+          t.args = t.args.split(',').map(s => s.trim()).filter(Boolean);
+        }
+      }
+
+      try {
+        const res = await fetch('/dashboard/api/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          this.configSuccess = 'Configuration saved successfully.';
+          this.restartRequired = data.restart_required || [];
+          await this.fetchConfig();
+          await this.fetchStatus();
+        } else {
+          this.configError = data.error || 'Failed to save configuration';
+        }
+      } catch (err) {
+        this.configError = 'Network error saving configuration';
       }
     }
   }));

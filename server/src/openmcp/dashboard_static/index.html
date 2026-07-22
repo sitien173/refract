@@ -25,6 +25,7 @@
     <button class="tab-btn" :class="{ 'active': activeTab === 'overview' }" @click="activeTab = 'overview'">Overview</button>
     <button class="tab-btn" :class="{ 'active': activeTab === 'jobs' }" @click="activeTab = 'jobs'">Jobs (<span x-text="jobs.length"></span>)</button>
     <button class="tab-btn" :class="{ 'active': activeTab === 'projects' }" @click="activeTab = 'projects'">Projects (<span x-text="projects.length"></span>)</button>
+    <button class="tab-btn" :class="{ 'active': activeTab === 'config' }" @click="activeTab = 'config'; fetchConfig()">Config</button>
   </nav>
 
   <main class="dashboard-main">
@@ -177,6 +178,156 @@
               </template>
             </tbody>
           </table>
+      </div>
+    </div>
+
+    <!-- CONFIG TAB -->
+    <div x-show="activeTab === 'config'">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.5rem; font-weight: 700;">Daemon Configuration</h2>
+        <div>
+          <button class="btn btn-secondary" style="margin-right: 0.5rem;" @click="fetchConfig()" :disabled="configLoading">Reload</button>
+          <button class="btn btn-primary" @click="saveConfig()" :disabled="configLoading">Save Config</button>
+        </div>
+      </div>
+
+      <!-- ACTIVE JOBS BANNERS & NOTIFICATIONS -->
+      <div style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(56, 189, 248, 0.1); border: 1px solid var(--accent-blue); border-radius: 8px; font-size: 0.9rem; color: var(--accent-blue);">
+        Active Jobs: <strong x-text="statusData.active_jobs || 0"></strong> running, <strong x-text="statusData.queued_jobs || 0"></strong> queued. Edits take effect for newly submitted jobs.
+      </div>
+
+      <div x-show="restartRequired && restartRequired.length > 0" style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(251, 191, 36, 0.15); border: 1px solid var(--status-amber); border-radius: 8px; color: var(--status-amber); font-size: 0.9rem;">
+        <strong>Restart Required!</strong> Saved changes to <span x-text="restartRequired.join(', ')"></span> require a manual daemon restart.
+      </div>
+
+      <div x-show="configError" style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(248, 113, 113, 0.15); border: 1px solid var(--status-red); border-radius: 8px; color: var(--status-red); font-size: 0.9rem;" x-text="configError"></div>
+      <div x-show="configSuccess" style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(74, 222, 128, 0.15); border: 1px solid var(--status-green); border-radius: 8px; color: var(--status-green); font-size: 0.9rem;" x-text="configSuccess"></div>
+
+      <!-- DAEMON SETTINGS -->
+      <div class="section-card">
+        <div class="section-title">Daemon Settings</div>
+        <div class="form-grid" x-if="configData.daemon">
+          <div class="form-group">
+            <label>Host</label>
+            <input type="text" class="form-control" x-model="configData.daemon.host">
+          </div>
+          <div class="form-group">
+            <label>Port</label>
+            <input type="number" class="form-control" x-model.number="configData.daemon.port">
+          </div>
+          <div class="form-group">
+            <label>Max Jobs</label>
+            <input type="number" class="form-control" x-model.number="configData.daemon.max_jobs">
+          </div>
+          <div class="form-group">
+            <label>History Turns</label>
+            <input type="number" class="form-control" x-model.number="configData.daemon.history_turns">
+          </div>
+          <div class="form-group">
+            <label>History Bytes</label>
+            <input type="number" class="form-control" x-model.number="configData.daemon.history_bytes">
+          </div>
+          <div class="form-group">
+            <label>Default Profile</label>
+            <input type="text" class="form-control" x-model="configData.daemon.default_profile">
+          </div>
+        </div>
+      </div>
+
+      <!-- TARGETS CONFIGURATION -->
+      <div class="section-card">
+        <div class="section-title">
+          <span>Targets Configuration</span>
+          <button class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.25rem 0.6rem;" @click="addTarget()">+ Add Target</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+          <template x-for="(target, idx) in configData.targets" :key="idx">
+            <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <strong style="color: var(--accent-blue);" x-text="'Target #' + (idx + 1) + ': ' + (target.id || 'unnamed')"></strong>
+                <button class="btn btn-danger" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" @click="removeTarget(idx)">Remove</button>
+              </div>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label>Target ID</label>
+                  <input type="text" class="form-control" x-model="target.id">
+                </div>
+                <div class="form-group">
+                  <label>Backend</label>
+                  <select class="form-control" x-model="target.backend">
+                    <option value="codex">codex</option>
+                    <option value="agy">agy</option>
+                    <option value="pi">pi</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Model</label>
+                  <input type="text" class="form-control" x-model="target.model">
+                </div>
+                <div class="form-group">
+                  <label>Max Concurrency</label>
+                  <input type="number" class="form-control" x-model.number="target.max_concurrency">
+                </div>
+                <div class="form-group">
+                  <label>Reasoning</label>
+                  <input type="text" class="form-control" x-model="target.reasoning">
+                </div>
+                <div class="form-group">
+                  <label>Backend Profile</label>
+                  <input type="text" class="form-control" x-model="target.backend_profile">
+                </div>
+              </div>
+              <div class="form-group" style="margin-top: 0.5rem;">
+                <label>System Prompt</label>
+                <textarea class="form-control" rows="2" x-model="target.system_prompt"></textarea>
+              </div>
+              <div style="display: flex; gap: 1.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+                <label class="checkbox-group">
+                  <input type="checkbox" x-model="target.isolated"> Isolated
+                </label>
+                <label class="checkbox-group">
+                  <input type="checkbox" x-model="target.read_only"> Read Only
+                </label>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- PROFILES CONFIGURATION -->
+      <div class="section-card">
+        <div class="section-title">
+          <span>Profiles & Workflow Mapping</span>
+          <button class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.25rem 0.6rem;" @click="addProfile()">+ Add Profile</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+          <template x-for="(profMap, profName) in configData.profiles" :key="profName">
+            <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <strong style="color: var(--accent-purple);" x-text="'Profile: ' + profName"></strong>
+                <button class="btn btn-danger" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" @click="removeProfile(profName)">Delete Profile</button>
+              </div>
+              <template x-for="wf in ['implement', 'review', 'consult']" :key="wf">
+                <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: var(--bg-secondary); border-radius: 6px;">
+                  <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-primary);" x-text="'Workflow: ' + wf"></div>
+                  <div class="form-grid">
+                    <div class="form-group">
+                      <label>Targets (comma-separated)</label>
+                      <input type="text" class="form-control" :value="Array.isArray(profMap[wf]?.targets) ? profMap[wf].targets.join(', ') : (profMap[wf]?.targets || '')" @input="if (!profMap[wf]) profMap[wf] = {}; profMap[wf].targets = $event.target.value.split(',').map(s=>s.trim()).filter(Boolean)">
+                    </div>
+                    <div class="form-group">
+                      <label>Max Attempts</label>
+                      <input type="number" class="form-control" :value="profMap[wf]?.max_attempts || 1" @input="if (!profMap[wf]) profMap[wf] = {}; profMap[wf].max_attempts = parseInt($event.target.value, 10) || 1">
+                    </div>
+                    <div class="form-group">
+                      <label>Timeout (seconds)</label>
+                      <input type="number" class="form-control" :value="profMap[wf]?.timeout_s || 0" @input="if (!profMap[wf]) profMap[wf] = {}; profMap[wf].timeout_s = parseInt($event.target.value, 10) || 0">
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
         </div>
       </div>
     </div>

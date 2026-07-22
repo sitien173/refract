@@ -143,3 +143,86 @@ async def test_dashboard_api_503_when_no_runtime(monkeypatch) -> None:
         res = await client.get("/dashboard/api/status")
         assert res.status_code == 503
         assert res.json() == {"error": "OpenMCP runtime is not active"}
+
+
+def test_write_config_valid_and_backup(tmp_path) -> None:
+    from openmcp.config_writer import write_config
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("[daemon]\nport = 8765\n", encoding="utf-8")
+
+    new_cfg = write_config({"daemon": {"port": 9000}}, path=cfg_file)
+    assert new_cfg.port == 9000
+    assert cfg_file.read_text(encoding="utf-8").strip().startswith("[daemon]")
+
+    bak_file = tmp_path / "config.toml.bak"
+    assert bak_file.exists()
+    assert "8765" in bak_file.read_text(encoding="utf-8")
+
+
+def test_write_config_invalid_leaves_file_untouched(tmp_path) -> None:
+    from openmcp.config_writer import write_config
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("[daemon]\nport = 8765\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid"):
+        write_config({"targets": [{"id": "bad", "backend": "invalid_backend"}]}, path=cfg_file)
+
+    assert "8765" in cfg_file.read_text(encoding="utf-8")
+
+
+def test_write_config_preserves_comments(tmp_path) -> None:
+    from openmcp.config_writer import write_config
+    cfg_file = tmp_path / "config.toml"
+    initial = "# Custom operator comment\n[daemon]\nhost = \"127.0.0.1\"\nport = 8765\n"
+    cfg_file.write_text(initial, encoding="utf-8")
+
+    write_config({"daemon": {"host": "127.0.0.1", "port": 8888}}, path=cfg_file)
+    text = cfg_file.read_text(encoding="utf-8")
+    assert "# Custom operator comment" in text
+    assert "8888" in text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_api_get_config(async_client: httpx.AsyncClient) -> None:
+    res = await async_client.get("/dashboard/api/config")
+    assert res.status_code == 200
+    data = res.json()
+    assert "daemon" in data
+    assert "targets" in data
+    assert "profiles" in data
+    assert "logging" in data
+
+
+@pytest.mark.asyncio
+async def test_dashboard_api_put_config_valid(async_client: httpx.AsyncClient, active_runtime: Runtime, tmp_path) -> None:
+    from dataclasses import replace
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("[daemon]\nport = 8765\n", encoding="utf-8")
+    active_runtime.config = replace(active_runtime.config, config_path=cfg_file)
+
+    # First GET current config
+    get_res = await async_client.get("/dashboard/api/config")
+    assert get_res.status_code == 200
+    cfg_data = get_res.json()
+
+    # Modify max_jobs
+    cfg_data["daemon"]["max_jobs"] = 8
+
+    put_res = await async_client.put("/dashboard/api/config", json=cfg_data)
+    assert put_res.status_code == 200
+    res_data = put_res.json()
+    assert res_data["success"] is True
+    assert "restart_required" in res_data
+    assert "max_jobs" in res_data["restart_required"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_api_put_config_invalid(async_client: httpx.AsyncClient) -> None:
+    invalid_payload = {
+        "targets": [{"id": "invalid", "backend": "unknown_backend"}]
+    }
+    put_res = await async_client.put("/dashboard/api/config", json=invalid_payload)
+    assert put_res.status_code == 400
+    assert "error" in put_res.json()
+
+
