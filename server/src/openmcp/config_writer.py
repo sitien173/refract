@@ -13,6 +13,21 @@ import tomlkit
 from openmcp.config import DaemonConfig, load_config, openmcp_home
 
 
+def _set_value(table: Any, key: str, value: Any) -> None:
+    """Set a key in a tomlkit table, preserving existing array trivia."""
+    if isinstance(value, list):
+        existing = table.get(key)
+        if isinstance(existing, tomlkit.items.Array):
+            existing.clear()
+            existing.extend(value)
+            return
+        arr = tomlkit.array()
+        arr.extend(value)
+        table[key] = arr
+    else:
+        table[key] = value
+
+
 def _dict_to_toml_doc(
     data: dict[str, Any],
     base_doc: tomlkit.TOMLDocument | None = None,
@@ -83,12 +98,7 @@ def _dict_to_toml_doc(
                 if v is None:
                     t_table.pop(k, None)
                     continue
-                if isinstance(v, list):
-                    arr = tomlkit.array()
-                    arr.extend(v)
-                    t_table[k] = arr
-                else:
-                    t_table[k] = v
+                _set_value(t_table, k, v)
             # Remove keys not in the new data
             for k in existing_keys - set(target.keys()):
                 t_table.pop(k, None)
@@ -117,19 +127,13 @@ def _dict_to_toml_doc(
                         for k, v in wf_val.items():
                             if v is None:
                                 wf_table.pop(k, None)
-                            elif isinstance(v, list):
-                                arr = tomlkit.array()
-                                arr.extend(v)
-                                wf_table[k] = arr
                             else:
-                                wf_table[k] = v
+                                _set_value(wf_table, k, v)
                         for k in list(wf_table.keys()):
                             if k not in wf_val:
                                 del wf_table[k]
                     elif isinstance(wf_val, list):
-                        arr = tomlkit.array()
-                        arr.extend(wf_val)
-                        prof_table[wf_name] = arr
+                        _set_value(prof_table, wf_name, wf_val)
                     else:
                         prof_table[wf_name] = wf_val
                 for wf_name in list(prof_table.keys()):
