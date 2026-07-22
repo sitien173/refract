@@ -257,7 +257,7 @@ def write_task_guide(
     elif isinstance(content, dict):
         json_text = json.dumps(content, indent=2)
     else:
-        raise ValueError(f"Invalid payload type: expected dict or str, got {type(content).__name__}")
+        json_text = json.dumps(content, indent=2)
 
     tmp_dir = target_path.parent / f".tmp_dir_{uuid.uuid4().hex}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
