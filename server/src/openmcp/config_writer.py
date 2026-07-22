@@ -267,7 +267,7 @@ def write_task_guide(
 
     try:
         tmp_file.write_text(json_text, encoding="utf-8")
-        validated = load_task_guide(home=tmp_dir)
+        load_task_guide(home=tmp_dir)
     except Exception as exc:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         if isinstance(exc, ValueError):

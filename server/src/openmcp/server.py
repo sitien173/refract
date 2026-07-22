@@ -250,7 +250,7 @@ async def workflows_resource(project_id: str, ctx: Context) -> str:
     return _json(BUILTIN_WORKFLOWS)
 
 
-from openmcp.dashboard import register_dashboard_routes
+from openmcp.dashboard import register_dashboard_routes  # noqa: E402
 
 register_dashboard_routes(mcp)
 
