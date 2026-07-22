@@ -155,11 +155,13 @@ def _dict_to_toml_doc(
                         if isinstance(existing, tomlkit.items.Array):
                             incoming_targets = wf_val.get("targets", [])
                             existing_vals = [str(v) for v in existing]
-                            default_max = wf_val.get("max_attempts", 1)
-                            default_timeout = wf_val.get("timeout_s", 0)
+                            # The effective default is len(existing) when loaded from compact form
+                            effective_max = len(existing)
+                            incoming_max = wf_val.get("max_attempts", effective_max)
+                            incoming_timeout = wf_val.get("timeout_s", 0)
                             if (incoming_targets == existing_vals
-                                    and default_max == 1
-                                    and default_timeout == 0):
+                                    and incoming_max == effective_max
+                                    and incoming_timeout == 0):
                                 continue
                             # Convert compact list to full table when retry settings change
                             prof_table[wf_name] = tomlkit.table()
@@ -228,6 +230,9 @@ def write_config(
     if target_path.exists():
         bak_path = target_path.parent / f"{target_path.name}.bak"
         shutil.copy2(target_path, bak_path)
+
+    if target_path.exists():
+        os.chmod(tmp_path, target_path.stat().st_mode)
 
     os.replace(tmp_path, target_path)
     return load_config(target_path)
