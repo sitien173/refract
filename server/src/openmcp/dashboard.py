@@ -185,7 +185,8 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
             else:
                 guide = load_task_guide(runtime.config.home)
         except ValueError as exc:
-            if "Missing task guide" in str(exc):
+            msg = str(exc)
+            if msg.startswith("Missing task guide"):
                 guide = {}
             else:
                 return JSONResponse({"error": str(exc)}, status_code=422)
