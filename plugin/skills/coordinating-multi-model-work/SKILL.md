@@ -1,75 +1,86 @@
 ---
 name: coordinating-multi-model-work
-description: "Canonical Plan → Execute → Review workflow for durable OpenMCP consultation, implementation, independent review, integration, and resume. Load first for any planning, execution, review, or resume action."
+description: "Coordinates Plan → Execute → Review through OpenMCP, including setup, routing, job lifecycle, independent review, and resume. Load first for delegated plan work."
 ---
 
 # Coordinating Multi-Model Work
 
-You are Coordinator while this skill is active. You own the specification,
-phase boundaries, workflow/profile selection, verification, integration, and
-handover. OpenMCP owns isolated worktrees, backend routing, durable jobs, and
-write commits. Keep provider, model, target, and native session identities
-private.
+You are Coordinator. You own OpenMCP orchestration, phase boundaries,
+specification review, and handover.
 
-Read [references/tool-contract.md](references/tool-contract.md) completely
-before the first OpenMCP call in a session.
+Other skills have separate ownership:
 
-OpenMCP supports exactly three workflows: `implement`, `review`, and `consult`.
-Project custom workflow files are unsupported; represent multi-step work as a
-linear parent job chain.
+- `brainstorming` — design dialogue
+- `writing-plans` — plan format
+- `executing-plans` — folder-plan phase procedure
+- `systematic-debugging` — root-cause method
+- `test-driven-development` — implementation test cycle
+- `verifying-before-completion` — evidence and claim standard
 
-# Project Setup
+Do not restate those policies here. Read
+[references/tool-contract.md](references/tool-contract.md) before the first
+OpenMCP call in a session.
 
-Before the first executable phase:
+## OpenMCP Contract
 
-1. Confirm OpenMCP tools are available. Call `status` and require `running`.
+OpenMCP provides exactly `consult`, `implement`, and `review`. Each submission
+is one job. Successful implementation commits land directly on the registered
+branch. Same-project jobs run FIFO without overlap.
+
+Keep provider, model, target, and native session identities private. Select only
+workflows and profiles.
+
+## Repository Safety
+
+- Require an attached branch and a clean root before registration and every job.
+- Preserve unknown changes. Never stash, reset, delete, or commit them.
+- Edit or commit known coordination files only when no project job is queued or
+  running.
+- After submission, do not edit the root until that job is terminal.
+- Ignored files are visible to workers and are never committed or restored.
+  Never expose secrets or request ignored-file changes unintentionally.
+- Submit dependent jobs one at a time; verify each result before the next.
+
+## Setup and Resume
+
+1. Call `status`; require `status="running"`. If unavailable, report
+   `http://127.0.0.1:8765/mcp` and stop.
 2. Resolve the Git root and read `openmcp://projects`.
-3. If the root is absent, require it to be clean and call `project_register`.
-4. Store `project_id` in `.handover.md`.
-5. Call `doctor` only when integration validation is requested.
+3. Register an absent clean root with `project_register`; save its `project_id`.
+4. Read `openmcp://projects/<project_id>/jobs` and reconcile active phase jobs
+   before changing files.
+5. Use `doctor` only for client integration checks. After global target or
+   profile edits, use `reload` and report `restart_required`.
 
-If tools or `status` are unavailable, report
-`http://127.0.0.1:8765/mcp` and stop. Never commit, stash, reset, or delete dirty
-user changes. After global target or profile edits, call `reload` when immediate
-activation is requested and report any `restart_required` fields.
+OpenMCP job records are authoritative. If a job is queued or running, wait
+without local edits. If handover, jobs, HEAD, and cleanliness disagree, stop
+rather than guessing.
 
-# Task Guidance
+## Task Guidance
 
 For each new phase, call `task_guide` once with the complete phase request and
-`project_id`. Match each intended stage to a recommendation by meaning:
+`project_id`:
 
-- repository changes → `implement`
+- repository change → `implement`
 - code-quality review → `review`
 - analysis or advice → `consult`
 
-Use the recommended `workflow` and optional `profile`. Omit `profile` when the
-recommendation omits it so OpenMCP uses its default. Validate profiles through
-`openmcp://projects/<project_id>/profiles` and workflows through
-`openmcp://workflows/<project_id>`. Stop on an unavailable or intent-incompatible
-selection. Target IDs and provider names are never submission fields.
+Use the recommended optional profile; omit it to use the configured default.
+Validate selections through `openmcp://projects/<project_id>/profiles` and
+`openmcp://workflows/<project_id>`. Stop on an unavailable or mismatched route.
 
-Do not re-run guidance for an active phase chain. Resume its saved workflow and
-profile decisions from `.handover.md` and
-`openmcp://projects/<project_id>/jobs`. New phases load current guidance.
+An active phase keeps its saved guidance. Do not call `task_guide` again until a
+new phase starts.
 
-# Gate 1: Plan
+## Gate 1: Plan
 
-1. Check the phase specification against the user request.
-2. Resolve the `implement` recommendation and profiles needed for optional
-   consultation and mandatory review.
-3. Split a phase if it mixes changes that cannot be safely owned by one linear
-   implementation chain.
-4. Define exact scope, acceptance criteria, and fresh verification commands.
-
-Consultation is mandatory for unclear, architectural, cross-component,
-high-impact, or tradeoff-heavy work. Skip it only for fully specified,
-low-risk routine work.
-
-For consultation, submit `consult` with one narrow question, a topic-specific
-`context_key`, and the selected profile when present. Wait compactly and use
-only `job.result.text`. A consult job is read-only and has no commit, so it
-cannot anchor implementation; copy the relevant findings into the
-implementation prompt.
+1. Confirm scope, acceptance criteria, risks, and fresh verification commands.
+2. Split work that one implementation job cannot safely own.
+3. Require consultation for unclear, architectural, cross-component,
+   high-impact, or tradeoff-heavy work.
+4. For consultation, first reach a clean coordination checkpoint, submit one
+   narrow `consult` job, wait with a finite timeout, and use `result.text`.
+   Copy relevant findings into the implementation prompt.
 
 Emit:
 
@@ -83,62 +94,45 @@ Emit:
 - Done When: <fresh checks>
 ```
 
-# Gate 2: Execute
+## Gate 2: Execute
 
-## Phase checkpoint
+For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch with
+[implementer-prompt.md](../executing-plans/implementer-prompt.md).
 
-External jobs require a clean registered repository.
+- Submit one `implement` job with the saved route.
+- Wait with `timeout_s: 30`; repeat only while `queued` or `running`.
+- On success, inspect `result.text`, `base_commit`, and `result.commit`. The
+  result commit is already on the current branch.
+- On failure, cancellation, or interruption, inspect the error. Retry once only
+  when the unchanged immutable job remains valid; otherwise submit a new job.
+- Never recover with a local reset. OpenMCP restores started unsuccessful jobs;
+  dirty-preflight changes and ignored files remain untouched.
 
-1. Create `phase-<NN>/prompt.md` and any coordination artifacts.
-2. Commit preparation as `chore(plan): prepare phase <N>`.
-3. Record that commit as `phase_base` and confirm the root is clean.
+## Gate 3: Review
 
-Never mutate the root while an isolated chain is active. Resume through project
-jobs and the saved context prefix rather than reconstructing work locally.
+### Specification and verification
 
-## Implementation
+After implementation is terminal:
 
-Use [the implementer prompt](../executing-plans/implementer-prompt.md). Submit
-`implement` with its declared inputs, the saved implementation profile when
-present, and `<plan-slug>/phase-<NN>/implement` as `context_key`. The first write
-has no parent. A same-phase fix uses the latest successful implementation job as
-`parent_job_id`, includes only delta requirements and review findings, and keeps
-the implementation context when continuity is useful.
+1. Require no active project job, HEAD at `result.commit`, and a clean root.
+2. Inspect `base_commit..result.commit` for the job and
+   `phase_base..result.commit` for the phase.
+3. Check declared paths and acceptance criteria.
+4. Apply `verifying-before-completion` to run every declared command fresh.
+5. Recheck the same HEAD and clean state.
 
-Call `job_wait` with `timeout_s: 30` and
-`include_stage_outputs: false`. Repeat only for `queued` or `running`. On
-success, inspect `job.result.text` and the result commit; never concatenate stage
-text with the final result. Diagnose a failure before one targeted retry. Stop
-on cancellation or integration conflict unless the user explicitly directs a
-valid recovery.
+Any scope, requirement, or evidence failure blocks quality review.
 
-Workers never modify Git history. OpenMCP commits successful `implement` jobs.
+### Independent quality review
 
-# Gate 3: Review
+Submit `review` against the current repository with:
 
-Coordinator performs specification review; an independent `review` job performs
-code-quality review. Both must pass before integration.
+- the exact implementation commit and cumulative phase range,
+- the selected review profile,
+- a unique `<phase-prefix>/review/<implementation-job-id>` context key,
+- no commit message.
 
-## Isolated verification
-
-Terminal jobs release their OpenMCP worktrees. Create a disposable detached
-worktree at `job.result.commit`, run every declared check there, inspect the
-diff, then remove the worktree.
-
-Review:
-
-- implementation delta: `job.integration_base..job.result.commit`
-- whole phase: `phase_base..job.result.commit`
-
-Fail undeclared paths, unmet requirements, missing task records, or missing
-evidence.
-
-## Independent quality review
-
-Submit `review` with the latest implementation job as parent, a unique
-`<phase-prefix>/review/<implementation-job-id>` context key, and the selected
-review profile when present. Require review of the exact implementation range.
-Inspect only `job.result.text` and require:
+Require:
 
 ```text
 # CODE QUALITY REVIEW
@@ -147,19 +141,22 @@ Inspect only `job.result.text` and require:
 - Scope checked: <paths>
 ```
 
-Correctness or security findings force `FAIL`; non-blocking quality findings may
-be `PASS_WITH_DEBT`. A review job is read-only and cannot parent a fix. Anchor
-the fix to the latest implementation job and include the review findings in the
-fix prompt, then repeat both reviews.
+Correctness and security findings force `FAIL`. A review must leave the same
+clean HEAD; attempted writes make the job fail.
 
-## Integration
+A fix is a new `implement` job against the current clean branch. Put the review
+findings and delta requirements in its prompt, then repeat specification
+verification and independent review over the cumulative phase range.
 
-After specification and quality review pass, call `job_integrate` on the latest
-approved `implement` job. Never integrate `review` or `consult`, and never merge,
-cherry-pick, reset, or stage worker changes manually.
+### Finalize
 
-Append evidence to `journal.md`, update `.handover.md`, and commit coordination
-state as `chore(plan): record phase <N>`.
+After both reviews pass and no job is active:
+
+1. Append evidence to `journal.md`.
+2. Update `.handover.md`, including the initial implementation `base_commit` as
+   `phase_base`.
+3. Commit only coordination state as `chore(plan): record phase <N>`.
+4. Confirm the root is clean.
 
 Emit:
 
@@ -170,7 +167,7 @@ Emit:
 - Next: done | debt + owner | retry/clarify
 ```
 
-# Resume Artifacts
+## Handover Contract
 
 ```text
 docs/plans/<slug>/
@@ -178,8 +175,6 @@ docs/plans/<slug>/
   .handover.md
   phase-01/{prompt,notes,journal}.md
 ```
-
-`.handover.md` frontmatter:
 
 ```yaml
 ---
@@ -201,16 +196,4 @@ completed_phases: [{ phase, commit, summary }, ...]
 ---
 ```
 
-OpenMCP job records are authoritative while a chain is active. Rewrite handover
-after integration.
-
-# Hard Rules
-
-- Remain the primary workflow owner; delegate repository changes.
-- Use real OpenMCP results and never simulate job success.
-- Require a running daemon and a clean registered root.
-- Keep one linear implementation chain per phase.
-- Never expose provider, target, model, or native session identities.
-- Never depend on terminal job worktrees remaining present.
-- Never integrate read-only jobs or integrate before both reviews pass.
-- No completion claim without fresh evidence.
+No phase is complete without fresh evidence and both required reviews.

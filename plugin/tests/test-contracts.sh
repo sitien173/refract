@@ -55,7 +55,7 @@ PY
 workflow_files=(README.md CLAUDE.md commands hooks shared skills)
 public_workflow_files=(CLAUDE.md commands hooks shared skills)
 
-if grep -R -E 'git reset --soft|git worktree list --porcelain|inside its isolated worktree|profile="code-review"|\.agents/shared|SESSION_ID|mcp__plugin_superpowers-ccg_openmcp__run|\bConductor\b|\bconductor\b' "${workflow_files[@]}"; then
+if grep -R -E 'git reset --soft|git worktree|isolated worktree|execution worktree|job_integrate|parent_job_id|include_stage_outputs|from_stage|integration_base|integration_conflict|\.openmcp\.local\.toml|profile="code-review"|\.agents/shared|SESSION_ID|mcp__plugin_superpowers-ccg_openmcp__run|\bConductor\b|\bconductor\b' "${workflow_files[@]}"; then
     printf 'forbidden workflow pattern found\n' >&2
     exit 1
 fi
@@ -87,30 +87,46 @@ grep -q '^## Quality Review$' shared/journal-template.md
 grep -q '^## Review Result$' shared/journal-template.md
 grep -q '^## Final Commit$' shared/journal-template.md
 
+for skill in skills/*/SKILL.md; do
+    grep -qi 'owns' "$skill"
+    if [[ "$skill" != "skills/coordinating-multi-model-work/SKILL.md" ]]; then
+        test "$(wc -l < "$skill")" -le 90
+    fi
+done
+test "$(wc -l < skills/coordinating-multi-model-work/SKILL.md)" -le 210
+test "$(wc -l < skills/coordinating-multi-model-work/references/tool-contract.md)" -le 90
+test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 90
+
+if grep -R -E 'job_submit|job_wait|job_retry|job_cancel|project_register|openmcp://' \
+    skills/brainstorming skills/systematic-debugging \
+    skills/test-driven-development skills/verifying-before-completion; then
+    printf 'OpenMCP mechanics leaked into a policy skill\n' >&2
+    exit 1
+fi
+
 grep -q 'Every executable plan' skills/writing-plans/SKILL.md
 grep -q 'Resolve at execution' skills/writing-plans/SKILL.md
-grep -q 'Do not call `task_guide` during plan authoring' skills/writing-plans/SKILL.md
-grep -q 're-run `task_guide` for an active phase chain' skills/executing-plans/SKILL.md
-grep -q 'OpenMCP supports exactly three workflows' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Project custom workflow files are unsupported' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Do not call `task_guide`, register a project, or submit jobs' skills/writing-plans/SKILL.md
+grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
+
+grep -q 'OpenMCP provides exactly `consult`, `implement`, and `review`' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://workflows/<project_id>' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Never mutate the root while an isolated chain is active' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Call `status` and require `running`' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'After submission, do not edit the root' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Call `status`; require' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'project_register' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'task_guide' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'job.result.text' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'job_integrate' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'result.text' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'result commit is already on the current branch' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://projects/<project_id>/jobs' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://projects/<project_id>/profiles' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'You are Coordinator while this skill is active' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Terminal jobs release their OpenMCP worktrees' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Same-project jobs run FIFO' skills/coordinating-multi-model-work/SKILL.md
 
 grep -q 'workflow: implement' skills/executing-plans/implementer-prompt.md
 grep -q 'job_submit' skills/executing-plans/implementer-prompt.md
-grep -q 'job_wait' skills/executing-plans/implementer-prompt.md
-grep -q 'timeout_s: 30' skills/executing-plans/implementer-prompt.md
-grep -q 'include_stage_outputs: false' skills/executing-plans/implementer-prompt.md
+grep -q '^  prompt: |$' skills/executing-plans/implementer-prompt.md
+grep -q '^  commit_message: <phase Conventional Commit message>$' skills/executing-plans/implementer-prompt.md
 grep -q '^  profile: <phase implementation profile>$' skills/executing-plans/implementer-prompt.md
-grep -q 'latest successful implementation job' skills/executing-plans/implementer-prompt.md
+grep -q 'review fix uses a new `implement` job' skills/executing-plans/implementer-prompt.md
 
 printf 'contract tests passed\n'

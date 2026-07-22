@@ -1,12 +1,12 @@
 ---
 name: systematic-debugging
-description: "Finds root causes before fixes. Use for bugs, test failures, crashes, regressions, performance issues, or unexpected behavior."
+description: "Establishes a reproducible root cause before fixing bugs, failures, regressions, or performance problems."
 ---
 
 # Systematic Debugging
 
-Load `coordinating-multi-model-work` first when the investigation may lead to
-repository changes.
+This skill owns diagnosis. `coordinating-multi-model-work` owns delegation;
+`test-driven-development` owns the regression-test cycle.
 
 ## Iron Law
 
@@ -16,39 +16,24 @@ NO FIX WITHOUT ROOT-CAUSE EVIDENCE
 
 ## Workflow
 
-1. **Reproduce.** Read the full error and stack trace. Record an exact, reliable
-   reproduction and the expected behavior.
-2. **Trace.** Inspect recent changes and follow the bad state backward to its
-   source. At component boundaries, capture inputs and outputs to locate the
-   first divergence.
-3. **Compare.** Find similar working code, read it completely, and list every
-   relevant difference from the failing path.
-4. **Hypothesize.** State one falsifiable claim: “X causes the failure because
-   Y.” Test the smallest possible variable; do not stack speculative changes.
-5. **Fix.** Add a failing regression test, confirm it fails for the diagnosed
-   reason, apply the smallest source fix, then run focused and broader checks.
-
-For unclear, cross-component, or architecture-sensitive failures, use Gate 1
-consultation. The implementation prompt must carry the reproduction and
-root-cause evidence; the Review gate rejects symptom-only fixes.
+1. **Reproduce.** Capture the full error, exact steps, and expected behavior.
+2. **Trace.** Follow bad state backward across component boundaries to the first
+   divergence.
+3. **Compare.** Read a similar working path and list relevant differences.
+4. **Hypothesize.** State one falsifiable cause and test the smallest variable.
+5. **Fix.** Pass the reproduction and root cause into a failing regression test,
+   then apply the smallest source correction.
 
 ## Stop Conditions
 
-- Three failed fix attempts: stop, question the model or architecture, and ask
-  the user before another attempt.
-- The issue cannot be reproduced or evidence contradicts the hypothesis: return
-  to tracing, not implementation.
-- A proposed fix lacks a regression test: do not submit it unless the user
-  explicitly waives testing.
+- If reproduction fails or evidence contradicts the hypothesis, return to
+  tracing.
+- After three failed fixes, stop and question the model or architecture.
+- Do not proceed without a regression test unless the user explicitly waives it.
 
 ## Rules
 
-- One hypothesis and one experimental change at a time.
+- Test one hypothesis at a time.
 - Fix the source, not a downstream symptom.
-- Do not bundle refactors or unrelated cleanup with a fix.
+- Exclude unrelated refactors and cleanup.
 - Record reproduction, root cause, RED → GREEN evidence, and remaining risk.
-
-## References
-
-- `skills/test-driven-development/SKILL.md` — regression-test cycle.
-- `skills/verifying-before-completion/SKILL.md` — fresh completion evidence.

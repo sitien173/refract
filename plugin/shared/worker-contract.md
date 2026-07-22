@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 7.2.0 -->
+<!-- ccg-shared-version: 7.3.0 -->
 # Worker Contract
 
 Execution contract for the phase implementer. This bundled file is read
@@ -12,10 +12,10 @@ For each task in order:
 1. Implement test-first where it applies: write the failing test, run it, confirm
    RED; then write minimal code to GREEN. For behavior-preserving refactors,
    establish passing characterization coverage and keep it green.
-2. Do not stage, commit, reset, squash, merge, or integrate. Do not use Git mutation commands. All changes are made directly to the files in
-   the phase directory. After each task, run the fresh verification command from
-   the `Done When` section of the phase prompt. Record RED→GREEN or root-cause
-   evidence in `notes.md`.
+2. Make changes directly in the working repository and
+   stay within the phase's declared file set. After each task, run the fresh
+   verification command from the `Done When` section of the phase prompt. Record
+   RED→GREEN or root-cause evidence in `notes.md`.
 3. Append a `## Task <M>` block to `<plan-dir>/phase-<NN>/notes.md`. If the file
    is missing, create it from the bundled `notes-template.md` path in the prompt.
    Sub-sections per task: Decisions made (not in spec), Spec deviations,

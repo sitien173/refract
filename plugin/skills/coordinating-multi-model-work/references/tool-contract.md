@@ -4,52 +4,30 @@ Default endpoint: `http://127.0.0.1:8765/mcp`.
 
 ## Tools
 
-| Tool | Required inputs | Optional inputs | Purpose |
+| Tool | Required | Optional | Purpose |
 | --- | --- | --- | --- |
-| `status` | | | Return scheduler health and queue counts. |
-| `reload` | | | Reload global targets and profiles. |
-| `doctor` | `path` | | Return read-only integration checks. |
-| `project_register` | `path` | `alias` | Register a clean Git root. |
-| `task_guide` | `task` | `project_id` | Load workflow/profile guidance. |
-| `job_submit` | `project_id`, `workflow`, `inputs` | `context_key`, `parent_job_id`, `profile` | Queue durable work. |
-| `job_wait` | `job_id` | `timeout_s`, `include_stage_outputs` | Wait for completion or timeout. |
-| `job_cancel` | `job_id` | | Cancel queued or running work. |
-| `job_retry` | `job_id` | `from_stage` | Retry failed or interrupted work. |
-| `job_integrate` | `job_id` | | Fast-forward a successful write. |
+| `status` | — | — | Return scheduler health and queue counts. |
+| `reload` | — | — | Reload targets and profiles for later submissions. |
+| `doctor` | `path` | — | Return read-only client checks. |
+| `project_register` | `path` | `alias` | Register a clean attached Git root. |
+| `task_guide` | `task` | `project_id` | Return workflow/profile guidance. |
+| `job_submit` | `project_id`, `workflow`, `prompt` | `commit_message`, `context_key`, `profile` | Queue one job. |
+| `job_wait` | `job_id` | `timeout_s` | Wait for completion or timeout. |
+| `job_cancel` | `job_id` | — | Cancel queued or running work. |
+| `job_retry` | `job_id` | — | Retry a failed, cancelled, or interrupted whole job. |
 
 Tool names may be client-namespaced; match their OpenMCP suffixes.
 
-`status` returns `status`, `workers`, `active_jobs`, and `queued_jobs`.
+## Workflows
 
-`reload` returns `success`, target/profile counts, and `restart_required`.
-Running jobs retain immutable plans. Changes to `home`, `host`, `port`,
-`max_jobs`, `history_turns`, `history_bytes`, or logging require restart.
+| Workflow | Behavior |
+| --- | --- |
+| `implement` | Commit successful tracked and non-ignored untracked changes directly. |
+| `review` | Return review text and leave the repository unchanged. |
+| `consult` | Return advice and leave the repository unchanged. |
 
-`doctor` never mutates repositories.
-
-## Built-in Workflows
-
-| Workflow | Mode | Inputs | Result |
-| --- | --- | --- | --- |
-| `implement` | Write | required `prompt`, optional `commit_message` | Text and optional commit |
-| `review` | Read | required `prompt` | Review text |
-| `consult` | Read | required `prompt` | Analysis text |
-
-Only these workflows are available. Project custom workflow files are not
-loaded. The former `read` and `write` workflow names are unsupported.
-
-`task_guide` returns recommendations containing `workflow` and optional
-`profile`. Pass those values to `job_submit`; omit `profile` to use the default.
-Target IDs and provider names are not submission fields.
-
-Common implementation inputs:
-
-```json
-{
-  "prompt": "Implement the requested change and run focused tests.",
-  "commit_message": "feat: implement requested change"
-}
-```
+Only these workflows are valid. `commit_message` is valid only for `implement`.
+Guidance names workflows and optional profiles, never targets or providers.
 
 ## Resources
 
@@ -64,41 +42,29 @@ Common implementation inputs:
 - `openmcp://projects/{project_id}/profiles`
 - `openmcp://workflows/{project_id}`
 
-## Job States
+## Execution Semantics
 
-- `queued`, `running`: wait or cancel.
-- `succeeded`: inspect results and integrate eligible writes.
-- `failed`: diagnose, then retry recoverable work.
-- `cancelled`: terminal until explicitly retried.
-- `interrupted`: retry only when resumption remains useful.
-- `integrated`: repository contains the write result.
-- `integration_conflict`: repository or overlay state changed.
+- Jobs run in the registered root on the attached branch current at start.
+- Preflight requires a clean repository.
+- Same-project jobs execute FIFO without overlap; different projects may run
+  concurrently up to `max_jobs`.
+- Successful `implement` returns its commit; no-change success returns existing
+  HEAD.
+- Successful `review` and `consult` preserve clean HEAD.
+- Started unsuccessful jobs reset to `base_commit` and remove non-ignored
+  untracked files.
+- Dirty-preflight failures preserve existing changes.
+- Ignored files are visible and are never committed or restored.
 
-## Parent Chains
+## Jobs
 
-A child starts from the successful parent's result commit and preserves the
-chain's original integration base.
+States: `queued`, `running`, `succeeded`, `failed`, `cancelled`, `interrupted`.
 
-```text
-implement -> review
-implement -> review; implement fix from the latest implement commit
-```
+A job includes `base_commit`, `result.text`, `result.commit`, and `result.error`.
+A queued job has no base until execution begins.
 
-Read-only jobs do not produce commits. They can inspect an implementation as a
-child, but cannot anchor a later child. Put their findings in the next prompt
-and use the latest successful `implement` job as the Git parent.
+`job_retry` reuses the ID and immutable plan, retries the whole job, and selects
+a new base at execution. Use a new submission when the prompt must change.
 
-Integrate the final implementation, or the original implementation when review
-passes without a fix. Never integrate `review` or `consult`.
-
-## Local Overlays
-
-```toml
-[[overlays]]
-include = ["config/*.development.json", "themes/**/*.local.css"]
-exclude = ["config/private.development.json"]
-workflows = ["implement"]
-```
-
-Matched files must be Git-ignored. Paths cannot contain symlinks. Use relative
-globs and explicit excludes; never expose secrets.
+`reload` does not alter submitted plans. Report `restart_required`; static daemon
+and logging changes require restart.
