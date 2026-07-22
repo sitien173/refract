@@ -17,10 +17,24 @@ def _dict_to_toml_doc(
     data: dict[str, Any],
     base_doc: tomlkit.TOMLDocument | None = None,
 ) -> tomlkit.TOMLDocument:
+    # Validate section types before processing
+    if "daemon" in data and not isinstance(data["daemon"], dict):
+        raise ValueError("[daemon] must be a TOML table")
+    if "logging" in data and not isinstance(data["logging"], dict):
+        raise ValueError("[logging] must be a TOML table")
+    if "targets" in data:
+        if not isinstance(data["targets"], list):
+            raise ValueError("[targets] must be a TOML array of tables")
+        for i, t in enumerate(data["targets"]):
+            if not isinstance(t, dict):
+                raise ValueError(f"targets[{i}] must be a TOML table, got {type(t).__name__}")
+    if "profiles" in data and not isinstance(data["profiles"], dict):
+        raise ValueError("[profiles] must be a TOML table")
+
     doc = base_doc if base_doc is not None else tomlkit.document()
 
     # Section: daemon
-    if "daemon" in data and isinstance(data["daemon"], dict):
+    if "daemon" in data:
         if "daemon" not in doc or not isinstance(doc.get("daemon"), dict):
             doc["daemon"] = tomlkit.table()
         d_table = doc["daemon"]
@@ -49,33 +63,36 @@ def _dict_to_toml_doc(
                 del l_table[k]
 
     # Section: targets (Array of Tables)
-    if "targets" in data and isinstance(data["targets"], list):
+    if "targets" in data:
         existing_targets = doc.get("targets")
-        has_existing_aot = isinstance(existing_targets, tomlkit.items.AoT) if existing_targets is not None else False
+        existing_by_id: dict[str, Any] = {}
+        if isinstance(existing_targets, tomlkit.items.AoT):
+            for ex_target in existing_targets:
+                if isinstance(ex_target, dict) and "id" in ex_target:
+                    existing_by_id[str(ex_target["id"])] = ex_target
         a = tomlkit.aot()
-        for idx, target in enumerate(data["targets"]):
-            if isinstance(target, dict):
-                # Preserve existing table to keep comments/trivia
-                if has_existing_aot and idx < len(existing_targets) and isinstance(existing_targets[idx], tomlkit.items.Table):
-                    t_table = existing_targets[idx]
-                    existing_keys = set(t_table.keys())
-                else:
-                    t_table = tomlkit.table()
-                    existing_keys = set()
-                for k, v in target.items():
-                    if v is None:
-                        t_table.pop(k, None)
-                        continue
-                    if isinstance(v, list):
-                        arr = tomlkit.array()
-                        arr.extend(v)
-                        t_table[k] = arr
-                    else:
-                        t_table[k] = v
-                # Remove keys not in the new data
-                for k in existing_keys - set(target.keys()):
+        for target in data["targets"]:
+            target_id = str(target.get("id", ""))
+            if target_id and target_id in existing_by_id:
+                t_table = existing_by_id[target_id]
+                existing_keys = set(t_table.keys())
+            else:
+                t_table = tomlkit.table()
+                existing_keys = set()
+            for k, v in target.items():
+                if v is None:
                     t_table.pop(k, None)
-                a.append(t_table)
+                    continue
+                if isinstance(v, list):
+                    arr = tomlkit.array()
+                    arr.extend(v)
+                    t_table[k] = arr
+                else:
+                    t_table[k] = v
+            # Remove keys not in the new data
+            for k in existing_keys - set(target.keys()):
+                t_table.pop(k, None)
+            a.append(t_table)
         doc["targets"] = a
 
     # Section: profiles
