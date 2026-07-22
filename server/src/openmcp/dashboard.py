@@ -184,8 +184,11 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
                 guide = load_task_guide(runtime.config.home, Path(project.root))
             else:
                 guide = load_task_guide(runtime.config.home)
-        except ValueError:
-            guide = {}
+        except ValueError as exc:
+            if "Missing task guide" in str(exc):
+                guide = {}
+            else:
+                return JSONResponse({"error": str(exc)}, status_code=422)
         return _json_response(guide)
 
     @mcp_server.custom_route("/dashboard/api/task-guide", methods=["PUT"])
@@ -199,6 +202,9 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
             payload = await request.json()
         except Exception as exc:
             return JSONResponse({"error": f"Invalid JSON body: {exc}"}, status_code=400)
+
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "Task guide must be a non-empty JSON object"}, status_code=400)
 
         try:
             project_id = request.query_params.get("project_id")
