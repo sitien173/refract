@@ -16,7 +16,7 @@ it does not route or execute OpenMCP jobs.
 3. Divide work into outcome-based phases of two to four related tasks.
 4. Give each phase a complete task-guidance input.
 5. Specify exact files, acceptance criteria, reviewer checks, fresh verification
-   commands, and one Conventional Commit message.
+   commands, and one conventional commit message.
 6. Defer workflow and profile resolution until execution unless the user pins an
    available profile.
 7. Offer `executing-plans`.
