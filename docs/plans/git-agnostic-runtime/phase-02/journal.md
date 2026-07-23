@@ -11,7 +11,7 @@
 - Implementation Job: n/a
 - Review Job: n/a
 - Started: 2026-07-24T01:10:21+07:00
-- Finished: 2026-07-24T01:16:58+07:00
+- Finished: 2026-07-24T01:19:42+07:00
 
 ## Implementation Response
 
@@ -38,6 +38,26 @@ Removed commit-message and workflow-write distinctions while preserving schema v
 - phase-02/notes.md  (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Task 5)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — Required tests pass and remaining commit-message references are schema or migration compatibility code.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 2 fix / Started 2026-07-24T01:18:30+07:00 / Finished 2026-07-24T01:19:42+07:00 / Plan dir docs/plans/git-agnostic-runtime
+## SUMMARY
+Corrected the README capability label to Direct directory execution.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| modified | README.md | Replaced the stale capability label. |
+| modified | docs/plans/git-agnostic-runtime/phase-02/notes.md | Recorded Task 6 evidence. |
+| modified | docs/plans/git-agnostic-runtime/phase-02/journal.md | Recorded this fix response. |
+## NOTES
+- phase-02/notes.md  (## Task 6)
+## SPEC COMPLIANCE
+- Meets Spec? YES — Required tests and source search pass.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

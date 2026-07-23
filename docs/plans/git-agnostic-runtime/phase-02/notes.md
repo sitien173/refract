@@ -111,3 +111,23 @@ Empty sub-sections use `- none`.
 
 ### Test evidence
 - RED -> GREEN: Database default coverage passed. Full suite passed 136 tests, with 2 live tests deselected. Source search returned only four allowed database references.
+
+## Task 6
+
+### Decisions made
+- Correct only the README capability label.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Existing directory-execution wording remains unchanged elsewhere.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- Documentation-only fix verified with the required 58-test suite and source search. Four allowed database compatibility references remain.

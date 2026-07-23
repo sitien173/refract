@@ -8,7 +8,7 @@ OpenMCP is a local coding-agent orchestration daemon.
 - Named context streams
 - Health-aware target selection and failover
 - Configurable profiles
-- Direct repository execution
+- Direct directory execution
 - Per-project FIFO scheduling
 
 ## Architecture
