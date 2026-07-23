@@ -456,7 +456,13 @@ describe('useJob and useJobEvents TanStack Query lifecycle', () => {
       return Promise.reject(new Error('Unknown job events'));
     });
 
-    const wrapper = createWrapper();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
     const { result, rerender } = renderHook(
       ({ id }) => ({
         job: useJob(id, { enabled: true }),
@@ -480,6 +486,11 @@ describe('useJob and useJobEvents TanStack Query lifecycle', () => {
 
     expect(result.current.job.data).toEqual(mockJobB);
     expect(result.current.events.data).toEqual(mockEventsB);
+
+    expect(queryClient.getQueryState(queryKeys.job('job-A'))).toBeDefined();
+    expect(queryClient.getQueryState(queryKeys.jobEvents('job-A'))).toBeDefined();
+    expect(queryClient.getQueryState(queryKeys.job('job-B'))).toBeDefined();
+    expect(queryClient.getQueryState(queryKeys.jobEvents('job-B'))).toBeDefined();
   });
 
   it('unmount while requests are pending aborts both signals and late ignored results after unmount cannot render or reopen anything', async () => {
@@ -634,22 +645,47 @@ describe('useAllJobs provenance and state classification tests', () => {
     await waitFor(() => expect(result.current.hasData).toBe(true));
     expect(result.current.isInitialLoading).toBe(false);
     expect(result.current.hasRefetchError).toBe(false);
+
+    await act(async () => {
+      result.current.jobQueries[0].refetch().catch(() => {});
+    });
+
+    await waitFor(() => expect(result.current.hasRefetchError).toBe(true));
+    expect(result.current.hasData).toBe(true);
+    expect(result.current.isInitialError).toBe(false);
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.jobs).toEqual([]);
   });
 
   it('handles cached projects refetch failure (hasRefetchError=true, retains known jobs)', async () => {
     const mockP1Jobs = [
       { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
     ];
-    vi.mocked(api.fetchProjects).mockResolvedValue([
-      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
-    ] as any);
+    vi.mocked(api.fetchProjects)
+      .mockResolvedValueOnce([
+        { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+      ] as any)
+      .mockRejectedValueOnce(new api.ApiError('/projects', 500));
     vi.mocked(api.fetchProjectJobs).mockResolvedValue(mockP1Jobs as any);
 
-    const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
+    const wrapper = createWrapper();
+    const { result } = renderHook(() => useAllJobs(), { wrapper });
 
     await waitFor(() => expect(result.current.jobs.length).toBe(1));
     expect(result.current.hasData).toBe(true);
     expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.hasRefetchError).toBe(false);
+
+    await act(async () => {
+      result.current.projectsQuery.refetch().catch(() => {});
+    });
+
+    await waitFor(() => expect(result.current.hasRefetchError).toBe(true));
+    expect(result.current.hasData).toBe(true);
+    expect(result.current.isInitialError).toBe(false);
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.jobs.length).toBe(1);
+    expect(result.current.jobs[0].id).toBe('j1');
   });
 
   it('handles one empty success while another is pending (isInitialLoading=true, avoids premature empty)', async () => {

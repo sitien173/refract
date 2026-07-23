@@ -138,3 +138,10 @@
 ### 7. CSS Transition & Media Query Narrowing
 - Narrowed `.inspector` CSS transition in `web/src/styles/app.module.css` to specific `opacity` and `transform` properties instead of `all`.
 - Included `max-width: 100%` and `box-sizing: border-box` at the 768px media query breakpoint for `.inspector`.
+
+### 8. Phase 4 Verification Gap Corrections
+- Updated cached-empty refetch failure and cached-projects refetch failure tests in `web/src/lib/queries.test.tsx` to execute real refetches via hook query objects (`jobQueries[0].refetch()` and `projectsQuery.refetch()`) and await failed state. Confirmed cached data remains intact, `hasRefetchError === true`, `isInitialError === false`, `isInitialLoading === false`, and expected job list/empty array remains.
+- Updated A-to-B isolation test in `web/src/lib/queries.test.tsx` using an explicit `QueryClient` and asserted all four query keys (`queryKeys.job('job-A')`, `queryKeys.jobEvents('job-A')`, `queryKeys.job('job-B')`, and `queryKeys.jobEvents('job-B')`) exist independently in the cache, with active B hook data remaining B after late A resolutions.
+- Added App-level test in `web/src/App.test.tsx` that initializes real `HashRouter` at `#/jobs?selected=<encoded-id>`, confirming the Jobs page title remains sole `h1` and the Job Details `h2` opens for the decoded selection.
+- Formatted abort detection condition in `web/src/lib/api.ts` into standard multi-line TypeScript style without modifying runtime behavior.
+- All 16 web test files passed (144 tests), production build completed cleanly, and diff verified.
