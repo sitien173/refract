@@ -178,9 +178,13 @@ describe('Inspector', () => {
     expect(cssContent).toContain('var(--motion-normal)');
     expect(cssContent).toContain('var(--ease-standard)');
 
-    // Reduced motion override
+    // Mount-time slide-in animation keyframe and property
+    expect(cssContent).toContain('animation: inspectorSlideIn var(--motion-normal) var(--ease-standard);');
+    expect(cssContent).toContain('@keyframes inspectorSlideIn');
+
+    // Reduced motion override (disables both transition and animation)
     expect(cssContent).toContain('@media (prefers-reduced-motion: reduce)');
-    expect(cssContent).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.inspector\s*\{\s*transition:\s*none;\s*\}\s*\}/);
+    expect(cssContent).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.inspector\s*\{[^}]*transition:\s*none;[^}]*animation:\s*none;/);
 
     // Desktop list min-width: 0
     expect(cssContent).toContain('.jobsMainArea {');

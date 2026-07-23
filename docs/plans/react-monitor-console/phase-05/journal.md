@@ -18,24 +18,25 @@
 ## META
 - Phase: Phase 5 - Cutover, Cleanup, and End-to-End Verification
 - Started: 2026-07-23T17:43:15+07:00
-- Finished: 2026-07-23T17:56:30+07:00
+- Finished: 2026-07-23T18:03:30+07:00
 - Plan dir: docs/plans/react-monitor-console/phase-05
 ## SUMMARY
-Finalized Phase 5 cutover with test-first light default theme fixes, rebuilt shipped static console assets, and confirmed zero backend Python modifications.
+Fixed Phase 5 review finding by adding test-first 250ms Inspector mount-time slide-in keyframes in CSS, preserving reduced-motion overrides, rebuilding static dashboard assets, and verifying Python backend immutability.
 ## FILES MODIFIED
 | Action | Path | Change |
-| Modify | web/index.html | Default theme initialization to light when unstored |
-| Modify | web/src/components/ThemeToggle.tsx | Default theme initialization to light when unstored |
-| Modify | web/src/App.test.tsx | Add test-first coverage for light default regardless of OS preference, stored theme restoration, and bi-directional toggle & persistence |
+| Modify | web/src/styles/app.module.css | Add Inspector 250ms mount-time slide-in keyframe animation and reduced-motion animation override |
+| Modify | web/src/components/Inspector.test.tsx | Add test-first CSS contract assertions for Inspector slide-in keyframe animation and reduced-motion override |
 | Modify | src/openmcp/dashboard_static/index.html | Rebuilt production dashboard index.html |
-| Delete | src/openmcp/dashboard_static/assets/index-BLRnQJrJ.js | Removed previous production JS asset bundle |
-| Create | src/openmcp/dashboard_static/assets/index-bQ1rKa_Q.js | Rebuilt production JS asset bundle |
-| Modify | docs/plans/react-monitor-console/phase-05/notes.md | Phase 5 decision notes and RED->GREEN test evidence |
+| Delete | src/openmcp/dashboard_static/assets/index-CYsfQ13X.css | Removed previous production CSS asset bundle |
+| Delete | src/openmcp/dashboard_static/assets/index-bQ1rKa_Q.js | Removed previous production JS asset bundle |
+| Create | src/openmcp/dashboard_static/assets/index-DUyfToPt.css | Rebuilt production CSS asset bundle with inspector slide-in keyframe |
+| Create | src/openmcp/dashboard_static/assets/index-DwVKIXKd.js | Rebuilt production JS asset bundle |
+| Modify | docs/plans/react-monitor-console/phase-05/notes.md | Task 7 decision notes and RED->GREEN test evidence for Inspector mount slide-in fix |
 | Modify | docs/plans/react-monitor-console/phase-05/journal.md | Update META finished timestamp and append ERP implementation response |
 ## NOTES
-- docs/plans/react-monitor-console/phase-05/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Task 5, ## Task 6)
+- docs/plans/react-monitor-console/phase-05/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Task 5, ## Task 6, ## Task 7)
 ## SPEC COMPLIANCE
-- Meets Spec? YES — All phase acceptance criteria verified including offline assets, light theme default test-first fix, HTTP 200 responses, job evidence, Python immutability, and fresh wheel build.
+- Meets Spec? YES — All Phase 5 criteria and review finding resolution verified including 250ms Inspector slide-in keyframes, reduced-motion overrides, test-first contract coverage, production asset build, clean tests, and backend Python immutability.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

@@ -135,3 +135,31 @@
 - Wheel inspection: contains `openmcp/dashboard_static/` assets (7 files) and 0 files under `web/`.
 - HTTP 200 verified for `/dashboard`, `/dashboard/`, and all static asset URLs.
 - `git diff --check`, `git status --porcelain src/openmcp`, and `git diff --stat -- 'src/openmcp/*.py'` verified (0 python files changed).
+
+## Task 7
+
+### Decisions made
+- Added CSS keyframe animation `@keyframes inspectorSlideIn` to `.inspector` using tokens `var(--motion-normal)` (250ms) and `var(--ease-standard)` (`cubic-bezier(0.4, 0, 0.2, 1)`) so mount-time slide-in occurs seamlessly.
+- Extended `@media (prefers-reduced-motion: reduce)` block on `.inspector` to disable both transition and keyframe animation (`animation: none; transition: none;`).
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Minimal slide-in translation distance of `translateX(16px)` provides an elegant entry animation matching design tokens.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN:
+  - Added CSS contract assertions in `web/src/components/Inspector.test.tsx` verifying `animation: inspectorSlideIn var(--motion-normal) var(--ease-standard);`, `@keyframes inspectorSlideIn`, and `@media (prefers-reduced-motion: reduce)` override.
+  - Ran `npm --prefix web test -- --run src/components/Inspector.test.tsx` and observed RED state (`FAIL src/components/Inspector.test.tsx`).
+  - Added `@keyframes inspectorSlideIn` and `animation` / `reduced-motion` override rules to `web/src/styles/app.module.css`.
+  - Re-ran tests, confirming GREEN state (149 passed across 16 test files in `npm --prefix web test -- --run`).
+- Production static assets rebuilt with `npm --prefix web run build` (`src/openmcp/dashboard_static/assets/index-DUyfToPt.css`, `index-DwVKIXKd.js`).
+- `uv run pytest tests/test_dashboard.py` passed (27 tests passed).
+- `git diff a79b9308cad381323dff328fcc465eed8113cd73 --stat -- 'src/openmcp/*.py'` confirmed 0 backend Python lines changed.
