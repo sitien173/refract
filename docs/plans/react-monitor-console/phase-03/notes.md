@@ -127,4 +127,3 @@
   - `src/views/Profiles.test.tsx`: GREEN (6 tests passed)
   - `src/App.test.tsx`: GREEN (10 tests passed)
   - Full web test suite: GREEN (89 tests passed)
-
