@@ -11,7 +11,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
 
 from openmcp.config import DaemonConfig, TargetConfig
 from openmcp.database import Database
@@ -19,8 +18,6 @@ from openmcp.drivers import DriverRegistry, DriverResult
 from openmcp.logging_setup import get_logger, log_context
 from openmcp.models import ProjectView, TargetView
 from openmcp.planning import ExecutionPlan, parse_execution_plan, target_execution_key
-from openmcp.repositories import RepositoryError, commit, inspect_repository, reset
-from openmcp.workflows import get_workflow
 
 
 log = get_logger("execution")
@@ -167,64 +164,26 @@ class JobRunner:
             return
         root = Path(project.root)
         log.info("Job started", extra={"event": "job.started", "job_id": job_id, "project_id": project.id, "workflow": record["workflow"]})
-        started = False
-        base_commit = ""
         final_state = "failed"
         try:
-            state = inspect_repository(root)
-            if not state.clean:
-                raise RepositoryError("Project worktree must be clean before execution")
-            base_commit = state.head
-            self.database.start_job(job_id, base_commit)
-            started = True
+            self.database.start_job(job_id, "")
             plan = parse_execution_plan(json.loads(record["execution_plan_json"]))
             execution = await self.targets.execute(job_id=job_id, project=project, workflow=record["workflow"], context_key=record["context_key"], plan=plan, prompt=record["prompt"], cwd=root, cancel_event=cancel_event)
             if execution.result.outcome != "SUCCESS" or cancel_event.is_set():
                 final_state = "interrupted" if cancel_event.is_set() and self.is_closing() else "cancelled" if cancel_event.is_set() else "failed"
                 raise RuntimeError(execution.result.error or execution.result.outcome)
-            workflow = get_workflow(record["workflow"])
-            result_commit = base_commit
-            if workflow.writes:
-                result_commit = commit(root, job_id, str(record["commit_message"]))
-            else:
-                after = inspect_repository(root)
-                if not after.clean or after.head != base_commit:
-                    raise RuntimeError("Read-only workflow modified the repository")
-            self.database.finish_job(job_id, "succeeded", text=execution.result.text, commit=result_commit, target_id=execution.target_id)
+            self.database.finish_job(job_id, "succeeded", text=execution.result.text, commit="", target_id=execution.target_id)
         except Exception as exc:
-            if not isinstance(exc, (RepositoryError, RuntimeError)):
+            if not isinstance(exc, RuntimeError):
                 log.exception(
                     "Unexpected job failure",
                     extra={"event": "job.exception", "job_id": job_id},
                 )
             error = str(exc)
-            if started:
-                try:
-                    reset(root, base_commit)
-                except RepositoryError as reset_exc:
-                    error = f"{error}\nRepository reset failed: {reset_exc}"
             self.database.finish_job(job_id, final_state, error=error)
         finally:
-            try:
-                observed = inspect_repository(root)
-            except RepositoryError:
-                pass
-            else:
-                self.database.upsert_project(project_id=project.id, alias=project.alias, root=observed.root.as_posix(), head_commit=observed.head, clean=observed.clean)
             completed = self.database.job(job_id)
             log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project.id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
-
-    def recover(self, record: dict[str, Any]) -> None:
-        project = self.database.project(record["project_id"])
-        if project is None or not record["base_commit"]:
-            return
-        try:
-            root = Path(project.root)
-            reset(root, record["base_commit"])
-            observed = inspect_repository(root)
-            self.database.upsert_project(project_id=project.id, alias=project.alias, root=observed.root.as_posix(), head_commit=observed.head, clean=observed.clean)
-        except RepositoryError as exc:
-            self.database.set_job_state(record["id"], "interrupted", error=f"Recovery reset failed: {exc}")
 
 
 __all__ = ["JobRunner", "TargetExecutor", "TargetExecutionResult"]

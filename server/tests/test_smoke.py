@@ -50,8 +50,10 @@ implement = "primary"
 
     with pytest.raises(SystemExit) as raised:
         main(["doctor"])
+    captured = capsys.readouterr()
     assert raised.value.code == 0
-    assert "does not map built-in workflows" not in capsys.readouterr().err
+    assert "does not map built-in workflows" not in captured.err
+    assert "git" not in json.loads(captured.out)
 
 
 def test_serve_reports_configuration_errors(monkeypatch, tmp_path, capsys) -> None:

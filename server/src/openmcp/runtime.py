@@ -23,7 +23,6 @@ from openmcp.models import (
     TargetView,
 )
 from openmcp.planning import execution_plan_data, resolve_execution_plan
-from openmcp.repositories import RepositoryError, inspect_repository
 from openmcp.scheduler import ProjectScheduler
 from openmcp.workflows import get_workflow, validate_request
 
@@ -58,10 +57,8 @@ class Runtime:
     async def start(self) -> None:
         self._closing = False
         interrupted = self.database.interrupt_active_jobs()
-        for record in interrupted:
-            self.runner.recover(record)
         await self.scheduler.start(self.database.queued_jobs())
-        log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "recovered_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
+        log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
 
     async def close(self) -> None:
         self._closing = True
@@ -70,23 +67,20 @@ class Runtime:
         log.info("Scheduler stopped", extra={"event": "scheduler.stopped"})
 
     def register_project(self, path: str, alias: str = "") -> ProjectView:
-        try:
-            state = inspect_repository(Path(path))
-        except RepositoryError as exc:
-            raise OrchestrationError(str(exc)) from exc
-        if not state.clean:
-            raise OrchestrationError("Project worktree must be clean before registration")
-        resolved_alias = alias.strip() or state.root.name
+        resolved = Path(path).expanduser().resolve()
+        if not resolved.is_dir():
+            raise OrchestrationError(f"Project path does not exist: {resolved}")
+        resolved_alias = alias.strip() or resolved.name
         if not resolved_alias:
             raise OrchestrationError("Project alias cannot be empty")
         try:
-            return self.database.upsert_project(project_id=str(uuid.uuid4()), alias=resolved_alias, root=state.root.as_posix(), head_commit=state.head, clean=state.clean)
+            return self.database.upsert_project(project_id=str(uuid.uuid4()), alias=resolved_alias, root=resolved.as_posix(), head_commit="", clean=True)
         except sqlite3.IntegrityError as exc:
             constraint = str(exc).rsplit(":", 1)[-1].strip()
             if constraint == "projects.alias":
                 message = f"Project alias already exists: {resolved_alias}"
             elif constraint == "projects.root":
-                message = f"Project root already registered: {state.root.as_posix()}"
+                message = f"Project root already registered: {resolved.as_posix()}"
             else:
                 message = "Project registration violates a database constraint"
             raise OrchestrationError(message) from exc

@@ -64,7 +64,6 @@ def _doctor(config: DaemonConfig | None = None) -> int:
     payload = {
         "home": config.home.as_posix(),
         "home_writable": writable_path.is_dir() and os.access(writable_path, os.W_OK),
-        "git": shutil.which("git") or "",
         "logging": {
             "level": logging_config.level,
             "format": logging_config.format,
@@ -84,11 +83,10 @@ def _doctor(config: DaemonConfig | None = None) -> int:
         "Prerequisite check completed",
         extra={
             "event": "doctor.completed",
-            "git_available": bool(payload["git"]),
             "target_count": len(config.targets),
         },
     )
-    return 0 if payload["git"] else 1
+    return 0
 
 
 def _apply_logging_overrides(args: argparse.Namespace) -> None:

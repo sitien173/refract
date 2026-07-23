@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from dataclasses import replace
 
 import pytest
@@ -16,58 +17,60 @@ from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, gi
 
 
 @pytest.mark.asyncio
-async def test_implement_commits_directly(tmp_path) -> None:
+async def test_implement_succeeds_with_dirty_worktree_and_leaves_changes(tmp_path) -> None:
     root = repository(tmp_path)
+    baseline = git(root, "rev-parse", "HEAD")
+    (root / "README.md").write_text("dirty\n", encoding="utf-8")
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FakeDrivers(mutate=True)
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
-        submission = await runtime.submit(project.id, "implement", "create the result", commit_message="feat: add result")
+        submission = await runtime.submit(project.id, "implement", "create the result", commit_message="ignored")
         job = await runtime.wait(submission.job_id, 10)
         assert job.state == "succeeded"
         assert (root / "result.txt").exists()
-        assert git(root, "log", "-1", "--format=%s") == "feat: add result"
-        assert job.result.commit == git(root, "rev-parse", "HEAD")
+        assert (root / "README.md").read_text(encoding="utf-8") == "dirty\n"
+        assert git(root, "rev-parse", "HEAD") == baseline
+        assert job.base_commit == ""
+        assert job.result.commit == ""
         assert "stages" not in job.model_dump()
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_implement_without_changes_keeps_head(tmp_path) -> None:
+async def test_implement_without_changes_uses_empty_result_placeholder(tmp_path) -> None:
     root = repository(tmp_path)
-    baseline = git(root, "rev-parse", "HEAD")
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FakeDrivers()
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect only")).job_id, 10)
-        assert job.state == "succeeded" and job.result.commit == baseline
+        assert job.state == "succeeded" and job.result.commit == ""
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("workflow", ["review", "consult"])
-async def test_read_workflows_leave_repository_unchanged(tmp_path, workflow) -> None:
+async def test_read_workflows_store_empty_commit_placeholder(tmp_path, workflow) -> None:
     root = repository(tmp_path)
-    baseline = git(root, "rev-parse", "HEAD")
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FakeDrivers()
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
         job = await runtime.wait((await runtime.submit(project.id, workflow, "inspect")).job_id, 10)
-        assert job.state == "succeeded" and job.result.commit == baseline
+        assert job.state == "succeeded" and job.result.commit == ""
         assert git(root, "status", "--porcelain") == ""
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_mutating_review_is_reset_and_failed(tmp_path) -> None:
+async def test_mutating_review_succeeds_and_leaves_changes(tmp_path) -> None:
     root = repository(tmp_path)
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FakeDrivers(mutate=True)
@@ -75,8 +78,8 @@ async def test_mutating_review_is_reset_and_failed(tmp_path) -> None:
     try:
         project = runtime.register_project(str(root))
         job = await runtime.wait((await runtime.submit(project.id, "review", "review")).job_id, 10)
-        assert job.state == "failed" and "modified the repository" in job.result.error
-        assert not (root / "result.txt").exists()
+        assert job.state == "succeeded" and job.result.commit == ""
+        assert (root / "result.txt").exists()
     finally:
         await runtime.close()
 
@@ -101,7 +104,7 @@ class RetryDrivers(FakeDrivers):
 
 
 @pytest.mark.asyncio
-async def test_failed_execution_resets_changes_and_preserves_dirty_preflight(tmp_path) -> None:
+async def test_failed_execution_leaves_changes_and_preserves_dirty_preflight(tmp_path) -> None:
     root = repository(tmp_path)
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = MutatingFailureDrivers()
@@ -110,12 +113,12 @@ async def test_failed_execution_resets_changes_and_preserves_dirty_preflight(tmp
         project = runtime.register_project(str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "change")).job_id, 10)
         assert job.state == "failed"
-        assert (root / "README.md").read_text(encoding="utf-8") == "baseline\n"
-        assert not (root / "partial.txt").exists()
+        assert (root / "README.md").read_text(encoding="utf-8") == "agent change\n"
+        assert (root / "partial.txt").exists()
         (root / "README.md").write_text("operator change\n", encoding="utf-8")
         job = await runtime.wait((await runtime.submit(project.id, "implement", "change")).job_id, 10)
         assert job.state == "failed"
-        assert (root / "README.md").read_text(encoding="utf-8") == "operator change\n"
+        assert (root / "README.md").read_text(encoding="utf-8") == "agent change\n"
     finally:
         await runtime.close()
 
@@ -200,32 +203,73 @@ async def test_queued_and_running_cancellation(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_startup_recovers_persisted_running_job(tmp_path) -> None:
+async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) -> None:
     root = repository(tmp_path)
     home = tmp_path / "home"
     catalog = config(home)
     database = Database(catalog.database_path)
-    project = database.upsert_project(project_id="project", alias="project", root=root.as_posix(), head_commit=git(root, "rev-parse", "HEAD"), clean=True)
+    project = database.upsert_project(project_id="project", alias="project", root=root.as_posix(), head_commit="", clean=True)
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     database.create_job(job_id="running", project_id=project.id, workflow="implement", profile="balanced", prompt="change", commit_message="", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="implement")
-    database.start_job("running", git(root, "rev-parse", "HEAD"))
+    database.start_job("running", "")
     (root / "partial.txt").write_text("partial\n", encoding="utf-8")
     database.close()
     runtime = Runtime(catalog)
     await runtime.start()
     try:
-        recovered = runtime.database.job("running")
-        assert recovered and recovered.state == "interrupted"
-        assert not (root / "partial.txt").exists()
+        interrupted = runtime.database.job("running")
+        assert interrupted and interrupted.state == "interrupted"
+        assert interrupted.base_commit == ""
+        assert (root / "partial.txt").read_text(encoding="utf-8") == "partial\n"
     finally:
         await runtime.close()
 
 
-@pytest.mark.asyncio
-async def test_registration_and_execution_reject_detached_head(tmp_path) -> None:
-    root = repository(tmp_path)
+def test_registration_accepts_plain_directory_and_preserves_placeholders(tmp_path) -> None:
+    root = tmp_path / "plain-project"
+    root.mkdir()
     runtime = Runtime(config(tmp_path / "home"))
-    git(root, "checkout", "--detach")
-    with pytest.raises(OrchestrationError, match="attached branch"):
-        runtime.register_project(str(root))
-    runtime.database.close()
+    try:
+        project = runtime.register_project(str(root))
+        assert project.root == root.resolve().as_posix()
+        assert project.head_commit == ""
+        assert project.clean is True
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.parametrize("path_kind", ["missing", "file"])
+def test_registration_rejects_missing_or_file_paths(tmp_path, path_kind) -> None:
+    path = tmp_path / "project"
+    if path_kind == "file":
+        path.write_text("not a directory\n", encoding="utf-8")
+    runtime = Runtime(config(tmp_path / f"home-{path_kind}"))
+    try:
+        with pytest.raises(OrchestrationError):
+            runtime.register_project(str(path))
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_plain_directory_execution_spawns_no_git(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "plain-project"
+    root.mkdir()
+
+    original_run = subprocess.run
+
+    def fail_git_spawn(command, *args, **kwargs):
+        if command and command[0] == "git":
+            raise AssertionError("OpenMCP spawned Git")
+        return original_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fail_git_spawn)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        job = await runtime.wait((await runtime.submit(project.id, "consult", "inspect")).job_id, 10)
+        assert job.state == "succeeded"
+    finally:
+        await runtime.close()

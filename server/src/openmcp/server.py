@@ -19,7 +19,6 @@ from openmcp.backends.pi import execute as pi_execute
 from openmcp.config import load_config, load_task_guide
 from openmcp.logging_setup import configure as configure_logging, get_logger, log_context
 from openmcp.models import ActionResult, ClientInstructionResult, DaemonReloadResult, DaemonStatusResult, JobView, ProjectView, SubmissionResult, TERMINAL_STATES, TaskGuideResult
-from openmcp.repositories import RepositoryError, inspect_repository
 from openmcp.runtime import Runtime
 from openmcp.workflows import BUILTIN_WORKFLOWS
 
@@ -94,23 +93,23 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
 
 
 def _project_root(path: str) -> str:
-    try:
-        return inspect_repository(Path(path)).root.as_posix()
-    except RepositoryError as exc:
-        raise ValueError(str(exc)) from exc
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_dir():
+        raise ValueError(f"Project path does not exist: {resolved}")
+    return resolved.as_posix()
 
 
 _DOCTOR_INSTRUCTIONS = """Validate this project's OpenMCP integration without mutations:
 1. Confirm status, reload, doctor, project_register, task_guide, job_submit, job_wait, job_cancel, and job_retry are available.
 2. Confirm the client's project-level instruction file contains OpenMCP guidance.
-3. Resolve the Git root and match it in openmcp://projects.
+3. Resolve the project directory and match it in openmcp://projects.
 4. Confirm implement, review, and consult are available.
 5. Confirm the selected profile maps all three workflows to targets.
 6. Report PASS or FAIL for each check with exact remediation.
 Do not register projects, submit jobs, or edit configuration during validation."""
 
 
-@mcp.tool(description="Register a clean Git project.", structured_output=True)
+@mcp.tool(description="Register a project directory.", structured_output=True)
 @_logged_request("project_register")
 async def project_register(path: str, ctx: Context, alias: str = "") -> ProjectView:
     return _runtime(ctx).register_project(path, alias)
