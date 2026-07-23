@@ -112,3 +112,23 @@ gets a block even if all `none`.
 
 ### Test evidence
 - RED -> GREEN: Transport regression tests first observed hardcoded host and port, then targeted tests passed 48 tests and the full suite passed 106 tests with 2 deselected.
+
+## Task 6
+
+### Decisions made
+- Installation now points to the existing explicit Configuration example.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- The configuration example remains in its current README section.
+
+### Assumptions
+- Users read the referenced Configuration section before continuing.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- GREEN: README inspection shows configuration creation before doctor and serve; full suite passed 106 tests with 2 deselected.

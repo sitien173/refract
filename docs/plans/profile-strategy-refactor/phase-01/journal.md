@@ -71,6 +71,26 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 1 documentation correction / 2026-07-23T06:17:00Z / 2026-07-23T06:18:12Z / docs/plans/profile-strategy-refactor
+## SUMMARY
+README installation now requires explicit configuration before doctor and serve.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| modified | README.md | Added the required configuration step before daemon checks and startup. |
+| modified | docs/plans/profile-strategy-refactor/phase-01/notes.md | Recorded documentation correction evidence. |
+| modified | docs/plans/profile-strategy-refactor/phase-01/journal.md | Recorded this correction response. |
+## NOTES
+- phase-01/notes.md  (## Task 6)
+## SPEC COMPLIANCE
+- Meets Spec? YES  — README ordering is corrected and the full suite passes.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 <!-- Coordinator appends the independent review response here. -->

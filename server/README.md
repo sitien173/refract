@@ -27,6 +27,12 @@ at least one configured backend CLI must be on `PATH`.
 
 ```bash
 uv sync --all-extras
+```
+
+Create `~/.openmcp/config.toml` using the explicit configuration shown below.
+Then verify and start the daemon:
+
+```bash
 uv run openmcp doctor
 uv run openmcp serve
 ```
