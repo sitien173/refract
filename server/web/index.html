@@ -8,7 +8,7 @@
       (function() {
         try {
           var storedTheme = localStorage.getItem('theme');
-          if (storedTheme === 'dark' || (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          if (storedTheme === 'dark') {
             document.documentElement.setAttribute('data-theme', 'dark');
           } else {
             document.documentElement.setAttribute('data-theme', 'light');

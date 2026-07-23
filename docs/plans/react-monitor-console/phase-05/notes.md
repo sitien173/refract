@@ -105,15 +105,15 @@
 
 ### Test evidence
 - RED -> GREEN:
-  - Added unit test `initializes to light theme when no stored theme exists regardless of OS dark preference` in `web/src/App.test.tsx`.
-  - Initial test run produced RED state (`AssertionError: expected 'dark' to be 'light'`).
-  - Modified `web/index.html` and `web/src/components/ThemeToggle.tsx` to default to `'light'`.
-  - Re-ran tests, confirming GREEN state (all 146 tests passed in `npm --prefix web test -- --run`).
+  - Added unit test suite `Theme management` in `web/src/App.test.tsx` testing unstored initialization under dark OS preference, stored light/dark restoration, bi-directional toggling, and persistence updates.
+  - Initial test run produced RED state (`FAIL src/App.test.tsx > AppShell, Routing and ThemeToggle > Theme management > initializes to light theme when unstored even under dark OS preference` — expected `'dark'` to be `'light'`).
+  - Modified `web/index.html` and `web/src/components/ThemeToggle.tsx` to default to `'light'` when unstored without checking OS `prefers-color-scheme`.
+  - Re-ran tests, confirming GREEN state (149 passed across 16 test files in `npm --prefix web test -- --run`).
 
 ## Task 6
 
 ### Decisions made
-- Verified packaging, offline asset isolation, theme persistence, and HTTP serving end-to-end.
+- Verified packaging, offline asset isolation, theme persistence, and HTTP serving end-to-end after correcting theme initialization and rebuilding static assets.
 
 ### Spec deviations
 - none
@@ -128,10 +128,10 @@
 - none
 
 ### Test evidence
-- `npm --prefix web test -- --run` passed (146 tests passed).
-- `npm --prefix web run build` passed (production bundle built).
+- `npm --prefix web test -- --run` passed (149 tests passed across 16 test files).
+- `npm --prefix web run build` passed (production bundle built `index-bQ1rKa_Q.js`).
 - `uv run pytest tests/test_dashboard.py` passed (27 tests passed).
 - `uv build` passed (built `dist/openmcp-1.2.0-py3-none-any.whl`).
 - Wheel inspection: contains `openmcp/dashboard_static/` assets (7 files) and 0 files under `web/`.
-- HTTP 200 verified for `/dashboard`, `/dashboard/`, and all 6 static asset URLs (`/dashboard/assets/assets/*`).
-- `git diff --check`, `git status --porcelain src/openmcp`, and `git diff --stat -- 'src/openmcp/*.py'` are all clean.
+- HTTP 200 verified for `/dashboard`, `/dashboard/`, and all static asset URLs.
+- `git diff --check`, `git status --porcelain src/openmcp`, and `git diff --stat -- 'src/openmcp/*.py'` verified (0 python files changed).

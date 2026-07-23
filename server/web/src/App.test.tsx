@@ -111,30 +111,66 @@ describe('AppShell, Routing and ThemeToggle', () => {
     );
   });
 
-  it('toggles light/dark theme and updates localStorage', () => {
-    render(<ThemeToggle />);
-    const btn = screen.getByRole('button', { name: /Switch to/i });
-    expect(btn).toBeInTheDocument();
+  describe('Theme management', () => {
+    it('initializes to light theme when unstored even under dark OS preference', () => {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: query.includes('dark'),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }));
 
-    fireEvent.click(btn);
-    const newTheme = document.documentElement.getAttribute('data-theme');
-    expect(newTheme).toMatch(/dark|light/);
-    expect(localStorage.getItem('theme')).toBe(newTheme);
-  });
-
-  it('handles blocked localStorage gracefully when toggling theme', () => {
-    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('Access denied');
-    });
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('Access denied');
+      render(<ThemeToggle />);
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
     });
 
-    render(<ThemeToggle />);
-    const btn = screen.getByRole('button', { name: /Switch to/i });
-    expect(btn).toBeInTheDocument();
+    it('restores stored light theme', () => {
+      localStorage.setItem('theme', 'light');
+      render(<ThemeToggle />);
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    });
 
-    expect(() => fireEvent.click(btn)).not.toThrow();
-    vi.restoreAllMocks();
+    it('restores stored dark theme', () => {
+      localStorage.setItem('theme', 'dark');
+      render(<ThemeToggle />);
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    });
+
+    it('toggles in both directions (light -> dark -> light) and updates persistence', () => {
+      render(<ThemeToggle />);
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+
+      const btnDark = screen.getByRole('button', { name: /Switch to dark mode/i });
+      fireEvent.click(btnDark);
+
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+      expect(localStorage.getItem('theme')).toBe('dark');
+
+      const btnLight = screen.getByRole('button', { name: /Switch to light mode/i });
+      fireEvent.click(btnLight);
+
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+      expect(localStorage.getItem('theme')).toBe('light');
+    });
+
+    it('handles blocked localStorage gracefully when toggling theme', () => {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('Access denied');
+      });
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('Access denied');
+      });
+
+      render(<ThemeToggle />);
+      const btn = screen.getByRole('button', { name: /Switch to/i });
+      expect(btn).toBeInTheDocument();
+
+      expect(() => fireEvent.click(btn)).not.toThrow();
+      vi.restoreAllMocks();
+    });
   });
 });

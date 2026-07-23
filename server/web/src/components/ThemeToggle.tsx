@@ -13,9 +13,7 @@ export const ThemeToggle: React.FC = () => {
     } catch {
       // Storage access blocked or unavailable
     }
-    return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light';
+    return 'light';
   });
 
   useEffect(() => {
