@@ -447,7 +447,7 @@
 
 .tableRow:hover,
 .tableRow:focus-within {
-  background-color: var(--color-surface-hover);
+  background-color: var(--bg-surface-hover);
 }
 
 .dataTable td {

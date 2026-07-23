@@ -91,8 +91,12 @@ describe('Overview view', () => {
     // Area 4: Projects summary (Total: 2, Clean: 1, Dirty: 1)
     expect(screen.getByText('Projects Summary')).toBeTruthy();
 
-    // Area 5: Profiles summary (Default: standard, Available: 3)
+    // Area 5: Profiles summary (Default: standard, Available: standard, fast, thorough)
     expect(screen.getByText('Profiles Summary')).toBeTruthy();
+    expect(screen.getAllByText('standard').length).toBeGreaterThan(0);
+    expect(screen.getByText('fast')).toBeTruthy();
+    expect(screen.getByText('thorough')).toBeTruthy();
+    expect(screen.getByText('Default')).toBeTruthy();
   });
 
   it('renders mixed loaded and loading resources independently without whole-page blocking', () => {

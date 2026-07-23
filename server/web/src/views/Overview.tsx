@@ -239,14 +239,21 @@ export const Overview: React.FC = () => {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xs)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className={styles.metricLabel}>Default Profile</span>
-                <span className={styles.metricValue}>{profilesData?.default || 'None'}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className={styles.metricLabel}>Available Profiles</span>
-                <span className={styles.metricValue}>{profilesData?.available ? profilesData.available.length : 0}</span>
-              </div>
+              {(!profilesData?.available || profilesData.available.length === 0) ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span className={styles.metricLabel}>Default Profile</span>
+                  <span className={styles.metricValue}>{profilesData?.default || 'None'}</span>
+                </div>
+              ) : (
+                profilesData.available.map((name) => (
+                  <div key={name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className={styles.metricLabel}>{name}</span>
+                    {name === profilesData.default && (
+                      <span className={styles.brandBadge}>Default</span>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           )}
         </Panel>

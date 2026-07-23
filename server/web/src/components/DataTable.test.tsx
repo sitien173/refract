@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import fs from 'fs';
+import path from 'path';
 import { DataTable } from './DataTable';
 
 interface TestItem {
@@ -47,5 +49,12 @@ describe('DataTable', () => {
 
     expect(screen.getByText('Item One')).toBeTruthy();
     expect(screen.getByText('Item Two')).toBeTruthy();
+  });
+
+  it('uses valid --bg-surface-hover token for table row hover/focus state', () => {
+    const cssPath = path.resolve(__dirname, '../styles/app.module.css');
+    const cssContent = fs.readFileSync(cssPath, 'utf8');
+    expect(cssContent).toContain('--bg-surface-hover');
+    expect(cssContent).not.toContain('--color-surface-hover');
   });
 });
