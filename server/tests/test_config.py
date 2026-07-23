@@ -326,6 +326,79 @@ consult = "primary"
     assert set(resolved.profiles["base"]) == {"implement", "review", "consult"}
 
 
+def test_project_self_extends_without_base_parent_is_unknown(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    (root / ".openmcp" / "config.toml").write_text(
+        """[profiles.missing]
+extends = "missing"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    base = _layered_base_config(tmp_path)
+
+    with pytest.raises(ValueError, match="missing.*extends unknown parent 'missing'"):
+        load_project_config(root, base)
+
+
+def test_project_child_inherits_project_shadow_not_base_snapshot(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    (root / ".openmcp" / "config.toml").write_text(
+        """[profiles.base]
+consult = "primary"
+
+[profiles.child]
+extends = "base"
+review = "primary"
+""",
+        encoding="utf-8",
+    )
+    base = _layered_base_config(tmp_path)
+
+    resolved = load_project_config(root, base)
+
+    assert set(resolved.profiles["child"]) == {"consult", "review"}
+
+
+def test_child_workflow_override_replaces_selection_policy(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _profile_chain_config(
+            """[profiles.base]
+implement = { targets = ["primary"], max_attempts = 2, timeout_s = 10 }
+
+[profiles.child]
+extends = "base"
+implement = { targets = ["primary"], max_attempts = 1, timeout_s = 3 }
+"""
+        ),
+        encoding="utf-8",
+    )
+
+    catalog = load_config(path)
+
+    assert catalog.profiles["child"]["implement"].max_attempts == 1
+    assert catalog.profiles["child"]["implement"].timeout_s == 3
+
+
+def test_global_self_extends_remains_a_cycle(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _profile_chain_config(
+            """[profiles.self]
+extends = "self"
+consult = "primary"
+"""
+        ).replace('default_profile = "child"', 'default_profile = "self"'),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="self -> self"):
+        load_config(path)
+
+
 def test_project_cycles_remain_cycles_with_base_snapshots(tmp_path) -> None:
     root = tmp_path / "project"
     (root / ".openmcp").mkdir(parents=True)

@@ -288,8 +288,15 @@ def _resolve_profile_maps(
         parent = declaration.extends
         if parent is None:
             resolved: dict[str, TargetSelection] = {}
-        elif parent == profile_id and snapshots is not None and profile_id in snapshots:
-            resolved = dict(snapshots[profile_id])
+        elif parent == profile_id:
+            if snapshots is None:
+                resolved = resolve(parent)
+            elif profile_id in snapshots:
+                resolved = dict(snapshots[profile_id])
+            else:
+                raise ValueError(
+                    f"Profile {profile_id!r} extends unknown parent {parent!r}"
+                )
         elif parent in declarations:
             resolved = resolve(parent)
         elif snapshots is not None and parent in snapshots:

@@ -107,3 +107,23 @@ gets a block even if all `none`.
 
 ### Test evidence
 - RED -> GREEN: Dashboard declaration and unchanged GET-to-PUT tests passed with `python -m pytest tests/test_dashboard.py tests/test_config.py tests/test_planning.py tests/test_smoke.py`, 87 tests passed.
+
+## Task 6
+
+### Decisions made
+- Project self-parent resolution now requires a base snapshot.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Global self-parent declarations still recurse to produce cycle diagnostics.
+
+### Assumptions
+- Project child references prefer project declarations over base snapshots.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Missing-base project self-extends initially reported `missing -> missing`; after the targeted branch fix, `python -m pytest tests/test_config.py tests/test_planning.py` passed 36 tests and the full suite passed 128 tests.

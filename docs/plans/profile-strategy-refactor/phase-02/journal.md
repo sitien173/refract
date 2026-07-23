@@ -11,7 +11,7 @@
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-07-23T06:31:33Z
-- Finished: 2026-07-23T06:46:36Z
+- Finished: 2026-07-23T06:49:25Z
 
 ## Implementation Response
 
@@ -43,6 +43,27 @@ Implemented explicit profile inheritance, partial profiles, project layering, an
 - phase-02/notes.md  (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Task 5)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — Required profile, layering, dashboard, documentation, and test behavior passes.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 2 fix / 2026-07-23T06:47:00Z / 2026-07-23T06:49:25Z / docs/plans/profile-strategy-refactor
+## SUMMARY
+Fixed project self-extends parent selection and added inheritance regressions.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modified | src/openmcp/config.py | Require a base snapshot for project self-extends while retaining global self-cycles. |
+| Modified | tests/test_config.py | Added regressions for missing bases, shadow precedence, and full selection replacement. |
+| Modified | docs/plans/profile-strategy-refactor/phase-02/notes.md | Recorded Task 6 decisions and test evidence. |
+| Modified | docs/plans/profile-strategy-refactor/phase-02/journal.md | Recorded the fix response. |
+## NOTES
+- phase-02/notes.md  (## Task 6)
+## SPEC COMPLIANCE
+- Meets Spec? YES — Focused and full test suites pass.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT
