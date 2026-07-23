@@ -329,6 +329,36 @@ describe('Jobs View', () => {
     expect(screen.getByTestId('location').textContent).toContain('foo=2');
   });
 
+  it('supports keyboard accessibility for native Open job button with both Enter and Space activation while preserving native button semantics and row whitespace behavior', () => {
+    renderJobs();
+
+    const openBtn = screen.getByRole('button', { name: 'Open job job-2' }) as HTMLButtonElement;
+    expect(openBtn.tagName).toBe('BUTTON');
+    expect(openBtn.getAttribute('type')).toBe('button');
+
+    // Confirm parent tr has no faux button roles or tabindices
+    const tr = openBtn.closest('tr');
+    expect(tr?.getAttribute('role')).toBeNull();
+    expect(tr?.getAttribute('tabindex')).toBeNull();
+
+    // Test Enter activation
+    openBtn.focus();
+    expect(document.activeElement).toBe(openBtn);
+    fireEvent.keyDown(openBtn, { key: 'Enter', code: 'Enter' });
+    expect(screen.getByTestId('location').textContent).toBe('?selected=job-2');
+
+    // Reset URL to /jobs and test Space activation
+    const closeBtn = screen.getByRole('button', { name: /close/i });
+    fireEvent.click(closeBtn);
+    expect(screen.getByTestId('location').textContent).toBe('');
+
+    const openBtn1 = screen.getByRole('button', { name: 'Open job job-1' });
+    openBtn1.focus();
+    expect(document.activeElement).toBe(openBtn1);
+    fireEvent.keyDown(openBtn1, { key: ' ', code: 'Space' });
+    expect(screen.getByTestId('location').textContent).toBe('?selected=job-1');
+  });
+
   it('directly opens inspector when loaded with ?selected=<id>', () => {
     renderJobs(['/jobs?selected=job-1']);
 

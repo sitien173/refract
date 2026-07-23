@@ -145,3 +145,17 @@
 - Added App-level test in `web/src/App.test.tsx` that initializes real `HashRouter` at `#/jobs?selected=<encoded-id>`, confirming the Jobs page title remains sole `h1` and the Job Details `h2` opens for the decoded selection.
 - Formatted abort detection condition in `web/src/lib/api.ts` into standard multi-line TypeScript style without modifying runtime behavior.
 - All 16 web test files passed (144 tests), production build completed cleanly, and diff verified.
+
+### 9. Phase 4 Review Finding Corrections (Job 2de94dbe-b12f-41da-8db0-6b71ba48e749)
+- Added focused CSS contract test suite to `web/src/components/Inspector.test.tsx` verifying:
+  - Phase 4 inspector styling uses Flowforge tokens for surface (`var(--color-surface)`), border (`var(--color-border-subdued)`), radius (`var(--radius-xs)`), elevation (`var(--elev-depth4)`), padding (`var(--space-lg)`), motion (`var(--motion-normal)`), and standard easing (`var(--ease-standard)`).
+  - Reduced-motion `@media (prefers-reduced-motion: reduce)` override disables inspector transitions (`transition: none`).
+  - Desktop list container `.jobsMainArea` keeps `min-width: 0`.
+  - `@media (max-width: 768px)` breakpoint stacks `.inspector` with full width (`100%`) and `max-width: 100%`.
+  - No fixed or absolute inspector positioning (`position: fixed` / `position: absolute`).
+  - Zero raw palette values (hex codes, `rgb()`, or `hsl()`) in Phase 4 inspector styles, confirming dark parity relies strictly on CSS variables.
+- Added keyboard-accessibility coverage in `web/src/views/Jobs.tsx` and `web/src/views/Jobs.test.tsx` for native `Open job <id>` button:
+  - Enabled keyboard activation for Enter and Space using `onKeyDown` with `e.preventDefault()`, preserving native `<button type="button">` semantics and preventing duplicate selection in browser environments.
+  - Verified `<tr>` elements contain no faux button roles or tabindices.
+  - Verified row whitespace click activation and interactive-descendant suppression remain intact.
+- Ran full web test suite (16 test files, 146 tests passing), production build (`npm --prefix web run build`), and `git diff --check`.

@@ -77,6 +77,12 @@ export const Jobs: React.FC = () => {
           aria-label={`Open job ${job.id}`}
           className={styles.openJobBtn}
           onClick={() => handleSelectJob(job.id)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleSelectJob(job.id);
+            }
+          }}
         >
           Open job {job.id}
         </button>

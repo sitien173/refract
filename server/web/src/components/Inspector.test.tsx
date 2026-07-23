@@ -162,4 +162,48 @@ describe('Inspector', () => {
     expect(notAvailables.length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/Base to Result: Not available → Not available/)).toBeInTheDocument();
   });
+
+  it('enforces Phase 4 CSS styling contract tokens, motion overrides, responsive stacking, dark parity, and positioning rules', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const cssPath = path.resolve(__dirname, '../styles/app.module.css');
+    const cssContent = fs.readFileSync(cssPath, 'utf8');
+
+    // Surface, border, radius, elevation, padding, motion and easing tokens
+    expect(cssContent).toContain('background-color: var(--color-surface);');
+    expect(cssContent).toContain('var(--color-border-subdued)');
+    expect(cssContent).toContain('border-radius: var(--radius-xs);');
+    expect(cssContent).toContain('box-shadow: var(--elev-depth4);');
+    expect(cssContent).toContain('padding: var(--space-lg);');
+    expect(cssContent).toContain('var(--motion-normal)');
+    expect(cssContent).toContain('var(--ease-standard)');
+
+    // Reduced motion override
+    expect(cssContent).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(cssContent).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.inspector\s*\{\s*transition:\s*none;\s*\}\s*\}/);
+
+    // Desktop list min-width: 0
+    expect(cssContent).toContain('.jobsMainArea {');
+    expect(cssContent).toContain('min-width: 0;');
+
+    // 768px breakpoint stacking with full width and max-width: 100%
+    expect(cssContent).toContain('@media (max-width: 768px)');
+    expect(cssContent).toMatch(/\.inspector\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*100%;/);
+
+    // No fixed or absolute positioning for inspector
+    const inspectorRuleBlock = cssContent.match(/\.inspector\s*\{([^}]+)\}/);
+    expect(inspectorRuleBlock).not.toBeNull();
+    if (inspectorRuleBlock) {
+      expect(inspectorRuleBlock[1]).not.toContain('position: fixed');
+      expect(inspectorRuleBlock[1]).not.toContain('position: absolute');
+    }
+
+    // No raw palette values in Phase 4 inspector styles (dark parity via variables)
+    const inspectorSectionIndex = cssContent.indexOf('/* Phase 4 Jobs & Inspector Layout */');
+    expect(inspectorSectionIndex).toBeGreaterThan(-1);
+    const phase4Css = cssContent.slice(inspectorSectionIndex);
+    expect(phase4Css).not.toMatch(/#[0-9a-fA-F]{3,8}/);
+    expect(phase4Css).not.toMatch(/\brgb\(/i);
+    expect(phase4Css).not.toMatch(/\bhsl\(/i);
+  });
 });
