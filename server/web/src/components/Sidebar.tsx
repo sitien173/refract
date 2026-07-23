@@ -1,4 +1,5 @@
 import React from 'react';
+import { NavLink, Link } from 'react-router-dom';
 import styles from '../styles/app.module.css';
 import activitySvg from '../assets/icons/activity.svg';
 import folderSvg from '../assets/icons/folder.svg';
@@ -9,53 +10,80 @@ import slidersSvg from '../assets/icons/sliders.svg';
 interface NavItemDef {
   id: string;
   label: string;
+  path: string;
   icon: string;
+  disabled?: boolean;
 }
 
 const navItems: NavItemDef[] = [
-  { id: 'overview', label: 'Overview', icon: activitySvg },
-  { id: 'projects', label: 'Projects', icon: folderSvg },
-  { id: 'jobs', label: 'Jobs', icon: layersSvg },
-  { id: 'targets', label: 'Targets', icon: cpuSvg },
-  { id: 'profiles', label: 'Profiles', icon: slidersSvg },
+  { id: 'overview', label: 'Overview', path: '/', icon: activitySvg },
+  { id: 'projects', label: 'Projects', path: '/projects', icon: folderSvg },
+  { id: 'jobs', label: 'Jobs - Unavailable', path: '/jobs', icon: layersSvg, disabled: true },
+  { id: 'targets', label: 'Targets', path: '/targets', icon: cpuSvg },
+  { id: 'profiles', label: 'Profiles', path: '/profiles', icon: slidersSvg },
 ];
 
 export const Sidebar: React.FC = () => {
   return (
     <aside className={styles.sidebar}>
       <div className={styles.sidebarHeader}>
-        <a href="/dashboard" className={styles.brand}>
+        <Link to="/" className={styles.brand}>
           <span>OpenMCP</span>
           <span className={styles.brandBadge}>Console</span>
-        </a>
+        </Link>
       </div>
       <nav className={styles.navSection} aria-label="Main Navigation">
         <ul className={styles.navList}>
           {navItems.map((item) => {
-            const isSelected = item.id === 'overview';
+            if (item.disabled) {
+              return (
+                <li
+                  key={item.id}
+                  className={styles.navItemDisabled}
+                  aria-disabled="true"
+                >
+                  <span
+                    className={styles.navIcon}
+                    style={
+                      {
+                        '--icon-url': `url(${item.icon})`,
+                        maskImage: `url(${item.icon})`,
+                        WebkitMaskImage: `url(${item.icon})`,
+                      } as React.CSSProperties
+                    }
+                    aria-hidden="true"
+                    data-testid={`nav-icon-${item.id}`}
+                  />
+                  <span>{item.label}</span>
+                </li>
+              );
+            }
+
             return (
-              <li
-                key={item.id}
-                className={
-                  isSelected
-                    ? `${styles.navItem} ${styles.navItemActive}`
-                    : styles.navItem
-                }
-                aria-current={isSelected ? 'page' : undefined}
-              >
-                <span
-                  className={styles.navIcon}
-                  style={
-                    {
-                      '--icon-url': `url(${item.icon})`,
-                      maskImage: `url(${item.icon})`,
-                      WebkitMaskImage: `url(${item.icon})`,
-                    } as React.CSSProperties
+              <li key={item.id}>
+                <NavLink
+                  to={item.path}
+                  end={item.path === '/'}
+                  className={({ isActive }) =>
+                    isActive
+                      ? `${styles.navItem} ${styles.navItemActive}`
+                      : styles.navItem
                   }
-                  aria-hidden="true"
-                  data-testid={`nav-icon-${item.id}`}
-                />
-                <span>{item.label}</span>
+                >
+                  <span
+                    className={styles.navIcon}
+                    style={
+                      {
+                        '--icon-url': `url(${item.icon})`,
+                        maskImage: `url(${item.icon})`,
+                        WebkitMaskImage: `url(${item.icon})`,
+                      } as React.CSSProperties
+                    }
+                    aria-hidden="true"
+                    data-testid={`nav-icon-${item.id}`}
+                  />
+                  <span>{item.label}</span>
+                </NavLink>
               </li>
             );
           })}

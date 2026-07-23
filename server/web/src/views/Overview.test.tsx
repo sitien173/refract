@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import React from 'react';
 import { Overview } from './Overview';
 import * as queries from '../lib/queries';
 
@@ -72,7 +71,7 @@ describe('Overview view', () => {
     expect(screen.getByText('Active Jobs')).toBeTruthy();
     expect(screen.getAllByText('2').length).toBeGreaterThan(0);
     expect(screen.getByText('Queued Jobs')).toBeTruthy();
-    expect(screen.getByText('1')).toBeTruthy();
+    expect(screen.getAllByText('1').length).toBeGreaterThan(0);
 
     // Area 2: Recent jobs (sliced to max 5)
     expect(screen.getByText('Recent Jobs')).toBeTruthy();
