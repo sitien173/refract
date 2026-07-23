@@ -142,7 +142,8 @@ export function useAllJobs() {
     const numPendingNoData = jobQueries.filter((q) => q.data === undefined && !q.isError).length;
     const numRefetchError = jobQueries.filter((q) => q.data !== undefined && q.isError).length;
 
-    isInitialLoading = numPendingNoData > 0;
+    const hasUsableRows = jobs.length > 0;
+    isInitialLoading = !hasUsableRows && numPendingNoData > 0;
     isInitialError = !isInitialLoading && numFailedNoData === projects.length && numWithData === 0;
     hasPartialFailure =
       !isInitialLoading && !isInitialError && numWithData > 0 && numFailedNoData > 0;
@@ -151,7 +152,7 @@ export function useAllJobs() {
       !isInitialError &&
       !hasPartialFailure &&
       (projectsQuery.isError || numRefetchError > 0);
-    hasData = numWithData > 0;
+    hasData = hasUsableRows || numWithData > 0;
   }
 
   const isLoading = isInitialLoading;

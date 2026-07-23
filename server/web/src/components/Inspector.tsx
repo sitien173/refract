@@ -84,12 +84,12 @@ export const Inspector: React.FC<InspectorProps> = ({ jobId, onClose }) => {
             <div className={styles.inspectorRow}>
               <span className={styles.inspectorLabel}>Result Commit</span>
               <span className={styles.inspectorValue}>
-                {data.result?.commit || (data as any).result_commit || 'Not available'}
+                {data.result?.commit || 'Not available'}
               </span>
             </div>
             <div className={styles.commitRelationship}>
               Base to Result: {data.base_commit || 'Not available'} →{' '}
-              {data.result?.commit || (data as any).result_commit || 'Not available'}
+              {data.result?.commit || 'Not available'}
             </div>
           </div>
         </div>

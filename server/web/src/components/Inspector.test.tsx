@@ -30,9 +30,11 @@ describe('Inspector', () => {
     workflow: 'build-deploy',
     profile: 'production',
     state: 'succeeded' as const,
+    context_key: 'ctx-1',
+    target_id: 'target-1',
     attempts: 2,
     base_commit: 'abc1234',
-    result_commit: 'def5678',
+    result: { text: 'success', commit: 'def5678', error: '' },
     created_at: '2026-01-01T10:00:00Z',
     updated_at: '2026-01-01T10:05:00Z',
   };
@@ -145,8 +147,8 @@ describe('Inspector', () => {
   it('renders Not available fallback for empty base_commit and result_commit', () => {
     const jobNoCommits = {
       ...defaultJob,
-      base_commit: null as any,
-      result_commit: '',
+      base_commit: '',
+      result: { text: '', commit: '', error: '' },
     };
     vi.mocked(queries.useJob).mockReturnValue({
       data: jobNoCommits,

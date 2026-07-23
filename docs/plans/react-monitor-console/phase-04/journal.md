@@ -15,27 +15,29 @@
 
 # EXTERNAL RESPONSE
 ## META
-- Phase 4 / Started 2026-07-23T17:07:26+07:00 / Finished 2026-07-23T17:23:15+07:00 / Plan dir docs/plans/react-monitor-console/phase-04
+- Phase 4 / Started 2026-07-23T17:07:26+07:00 / Finished 2026-07-23T17:29:30+07:00 / Plan dir docs/plans/react-monitor-console/phase-04
 ## SUMMARY
-Completed Phase 4 implementing filtered cross-project Jobs view, URL-driven job Inspector, live EventTimeline lifecycle, and rebuilt production dashboard.
+Completed Phase 4 specification-review corrections: fixed useAllJobs initial loading semantics to retain available rows, added real TanStack Query lifecycle and useAllJobs provenance tests, extended EventTimeline and routing/URL tests, cleaned Inspector commit schema to use Job.result.commit, narrowed inspector CSS transitions, and rebuilt static dashboard artifacts.
 ## FILES MODIFIED
 | Action | Path | Change |
-| Modify | docs/plans/react-monitor-console/phase-04/journal.md | Record completion and ERP response |
-| Modify | docs/plans/react-monitor-console/phase-04/notes.md | Add Task 2, Task 3, and Task 4 decision notes and test evidence |
+| Modify | docs/plans/react-monitor-console/phase-04/journal.md | Update journal response and commit tracking |
+| Modify | docs/plans/react-monitor-console/phase-04/notes.md | Append Phase 4 correction evidence |
 | Modify | src/openmcp/dashboard_static/index.html | Rebuilt production static bundle |
-| Delete | src/openmcp/dashboard_static/assets/index-6CVHuMSo.js | Removed stale build asset |
-| Delete | src/openmcp/dashboard_static/assets/index-DEPmSDBP.css | Removed stale build asset |
-| Create | src/openmcp/dashboard_static/assets/index-C6umfp6o.js | Added rebuilt bundle asset |
-| Create | src/openmcp/dashboard_static/assets/index-DKU__w7Q.css | Added rebuilt bundle asset |
-| Modify | web/src/components/DataTable.test.tsx | Add vitest import for type checking |
-| Create | web/src/components/Inspector.tsx | Docked non-modal debug inspector component |
-| Create | web/src/components/Inspector.test.tsx | Tests for Inspector fields, states, and independent timeline mounting |
-| Modify | web/src/views/Jobs.tsx | Filtered jobs table view with URL selection, state handling, and inspector integration |
-| Create | web/src/views/Jobs.test.tsx | Tests for Jobs view routing, filtering, states, URL selection, and focus restoration |
+| Delete | src/openmcp/dashboard_static/assets/index-C6umfp6o.js | Removed stale build asset |
+| Delete | src/openmcp/dashboard_static/assets/index-DKU__w7Q.css | Removed stale build asset |
+| Create | src/openmcp/dashboard_static/assets/index-CYsfQ13X.css | Added rebuilt bundle asset |
+| Create | src/openmcp/dashboard_static/assets/index-NiMjqDS-.js | Added rebuilt bundle asset |
+| Modify | web/src/components/EventTimeline.test.tsx | Extended tests for cached empty refetch error and full-history replacement without duplicates |
+| Modify | web/src/components/Inspector.tsx | Use declared Job.result.commit exclusively |
+| Modify | web/src/components/Inspector.test.tsx | Update tests to use valid Job schema |
+| Modify | web/src/lib/queries.ts | Correct useAllJobs isInitialLoading semantics |
+| Modify | web/src/lib/queries.test.tsx | Add real TanStack Query lifecycle and useAllJobs provenance test suites |
+| Modify | web/src/styles/app.module.css | Narrow inspector CSS transitions and add max-width 100% at 768px breakpoint |
+| Modify | web/src/views/Jobs.test.tsx | Extend routing and URL test suite |
 ## NOTES
-- docs/plans/react-monitor-console/phase-04/notes.md (## Task 2, ## Task 3, ## Task 4)
+- docs/plans/react-monitor-console/phase-04/notes.md (## Task 2, ## Task 3, ## Task 4, ## Correction Evidence)
 ## SPEC COMPLIANCE
-- Meets Spec? YES — All phase requirements implemented, 16 test files (124 tests) passing, build succeeded, git diff check clean.
+- Meets Spec? YES — All Phase 4 requirements and review corrections addressed, 16 test files (143 tests) passing, build succeeded, git diff check clean.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

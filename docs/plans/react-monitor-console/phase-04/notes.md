@@ -93,3 +93,48 @@
 ### Test evidence
 - RED -> GREEN:
   - web/src/views/Jobs.test.tsx: Tested A-to-B switching, history Back navigation, URL parameter preservation, focus restoration, and unmounting on close. Confirmed GREEN (16 test files, 124 tests passing).
+
+## Correction Evidence
+
+### 1. useAllJobs Initial Loading Semantics
+- Fixed `useAllJobs` in `web/src/lib/queries.ts` so `isInitialLoading` is true only when no usable job rows exist (`!hasUsableRows`) and pending fan-outs remain (`numPendingNoData > 0`). Available rows are retained without full initial-loading replacement or premature empty state rendering while unresolved fan-outs remain.
+
+### 2. TanStack Query Lifecycle Tests
+- Added real TanStack Query lifecycle test suite to `web/src/lib/queries.test.tsx` without mocking hooks under test:
+  - Proved detail and event requests start in parallel on selection.
+  - Proved rerendering from job A to job B aborts both A signals.
+  - Proved B resolving followed by late signal-ignoring A resolution retains B results only and keeps A/B keys isolated.
+  - Proved unmounting while requests are pending aborts both signals and late ignored results after unmount cannot render or reopen anything.
+  - Proved advancing fake timers after unmount causes no detail or event polls.
+
+### 3. useAllJobs Provenance Tests
+- Added provenance test suite to `web/src/lib/queries.test.tsx`:
+  - Covered all initially failed fan-outs (`isInitialError=true`, `isInitialLoading=false`, `hasData=false`).
+  - Covered partial rows (`hasPartialFailure=true`, keeps successful rows).
+  - Covered partial empty (`hasPartialFailure=true`, `hasData=true`, `jobs=[]`).
+  - Covered cached empty followed by refetch failure (`hasRefetchError=true`).
+  - Covered cached projects refetch failure (`hasRefetchError=true`).
+  - Covered one empty success while another is pending (`isInitialLoading=true`, no premature empty state).
+  - Asserted no premature empty or full initial-loading replacement when usable data exists.
+
+### 4. EventTimeline Coverage
+- Extended `web/src/components/EventTimeline.test.tsx`:
+  - Tested cached empty (`[]`) plus refetch error asserting both refresh warning and empty message.
+  - Tested full-history replacement from `[event 1]` to `[event 1, event 2]` confirming exactly two rendered events and zero duplicate event elements.
+
+### 5. Routing and URL Tests
+- Extended `web/src/views/Jobs.test.tsx`:
+  - Tested direct `#/jobs?selected=<id>`.
+  - Tested missing and empty selection (`/jobs` and `/jobs?selected=`) keeping inspector closed.
+  - Tested direct selected ID absent from aggregate mounting inspector and querying ID.
+  - Tested encoded IDs containing `/`, `?`, and `&`.
+  - Tested navigating from unselected to selected, then Browser Back returning to unselected URL and closing inspector.
+  - Tested explicit close replacement preserving duplicate unrelated search parameters (`foo=1&foo=2`).
+
+### 6. Inspector Commit Contract
+- Removed `(data as any).result_commit` fallback from `web/src/components/Inspector.tsx`.
+- Updated `Inspector.tsx` and `web/src/components/Inspector.test.tsx` to use valid `Job.result.commit` schema exclusively.
+
+### 7. CSS Transition & Media Query Narrowing
+- Narrowed `.inspector` CSS transition in `web/src/styles/app.module.css` to specific `opacity` and `transform` properties instead of `all`.
+- Included `max-width: 100%` and `box-sizing: border-box` at the 768px media query breakpoint for `.inspector`.

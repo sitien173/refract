@@ -385,4 +385,59 @@ describe('Jobs View', () => {
     expect(queries.useJob).toHaveBeenCalledWith('job-2', { enabled: true });
     expect(screen.getByTestId('location').textContent).toContain('selected=job-2');
   });
+
+  it('keeps inspector closed when selection parameter is missing or empty string', () => {
+    const { unmount } = renderJobs(['/jobs']);
+    expect(screen.queryByRole('heading', { name: 'Job Details' })).not.toBeInTheDocument();
+    unmount();
+
+    renderJobs(['/jobs?selected=']);
+    expect(screen.queryByRole('heading', { name: 'Job Details' })).not.toBeInTheDocument();
+  });
+
+  it('mounts inspector and queries requested job when direct selected ID is absent from aggregate', () => {
+    renderJobs(['/jobs?selected=absent-job-999']);
+
+    expect(screen.getByRole('heading', { name: 'Job Details' })).toBeInTheDocument();
+    expect(queries.useJob).toHaveBeenCalledWith('absent-job-999', { enabled: true });
+  });
+
+  it('handles encoded IDs containing slash, question mark, and ampersand', () => {
+    const encodedId = encodeURIComponent('job/complex?param=1&other=2');
+    renderJobs([`/jobs?selected=${encodedId}`]);
+
+    expect(screen.getByRole('heading', { name: 'Job Details' })).toBeInTheDocument();
+    expect(queries.useJob).toHaveBeenCalledWith('job/complex?param=1&other=2', { enabled: true });
+  });
+
+  it('navigates from unselected to selected, then Browser Back returns to unselected URL and closes inspector', () => {
+    renderJobs(['/jobs']);
+
+    expect(screen.queryByRole('heading', { name: 'Job Details' })).not.toBeInTheDocument();
+
+    const openBtn = screen.getByRole('button', { name: 'Open job job-2' });
+    fireEvent.click(openBtn);
+
+    expect(screen.getByRole('heading', { name: 'Job Details' })).toBeInTheDocument();
+    expect(screen.getByTestId('location').textContent).toContain('selected=job-2');
+
+    const backBtn = screen.getByTestId('back-btn');
+    fireEvent.click(backBtn);
+
+    expect(screen.queryByRole('heading', { name: 'Job Details' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('location').textContent).toBe('');
+  });
+
+  it('explicit close uses replace and preserves duplicate unrelated search parameters', () => {
+    renderJobs(['/jobs?foo=1&foo=2&selected=job-1']);
+
+    const closeBtn = screen.getByRole('button', { name: /close/i });
+    fireEvent.click(closeBtn);
+
+    expect(screen.queryByRole('heading', { name: 'Job Details' })).not.toBeInTheDocument();
+    const loc = screen.getByTestId('location').textContent;
+    expect(loc).not.toContain('selected');
+    expect(loc).toContain('foo=1');
+    expect(loc).toContain('foo=2');
+  });
 });

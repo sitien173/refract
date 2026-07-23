@@ -104,4 +104,52 @@ describe('EventTimeline', () => {
     expect(screen.getByText('Could not refresh. Showing last known data.')).toBeInTheDocument();
     expect(screen.getByText('job.started')).toBeInTheDocument();
   });
+
+  it('renders cached-refetch warning and empty message when refetch fails with cached empty array', () => {
+    vi.mocked(queries.useJobEvents).mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: true,
+    } as any);
+
+    render(<EventTimeline jobId="j1" />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('Could not refresh. Showing last known data.')).toBeInTheDocument();
+    expect(screen.getByText('No events recorded.')).toBeInTheDocument();
+  });
+
+  it('handles full-history replacement from [event 1] to [event 1, event 2] with exactly two rendered events and no duplicates', () => {
+    const initialEvents = [
+      { id: 1, kind: 'event 1', created_at: '2026-01-01T10:00:00Z', data: { step: 1 } },
+    ];
+    vi.mocked(queries.useJobEvents).mockReturnValue({
+      data: initialEvents,
+      isLoading: false,
+      isError: false,
+    } as any);
+
+    const { rerender } = render(<EventTimeline jobId="j1" />, { wrapper: createWrapper() });
+
+    let items = screen.getAllByRole('listitem');
+    expect(items.length).toBe(1);
+    expect(items[0]).toHaveTextContent('event 1');
+
+    const updatedEvents = [
+      { id: 1, kind: 'event 1', created_at: '2026-01-01T10:00:00Z', data: { step: 1 } },
+      { id: 2, kind: 'event 2', created_at: '2026-01-01T10:01:00Z', data: { step: 2 } },
+    ];
+    vi.mocked(queries.useJobEvents).mockReturnValue({
+      data: updatedEvents,
+      isLoading: false,
+      isError: false,
+    } as any);
+
+    rerender(<EventTimeline jobId="j1" />);
+
+    items = screen.getAllByRole('listitem');
+    expect(items.length).toBe(2);
+    expect(items[0]).toHaveTextContent('event 1');
+    expect(items[1]).toHaveTextContent('event 2');
+    expect(screen.getAllByText('event 1').length).toBe(1);
+  });
 });

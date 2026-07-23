@@ -351,3 +351,342 @@ describe('TanStack Query hooks and polling policies', () => {
     expect(rules).toContain('-webkit-mask-size: contain');
   });
 });
+
+describe('useJob and useJobEvents TanStack Query lifecycle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('detail and event requests start in parallel on selection', async () => {
+    let detailSignal: AbortSignal | undefined;
+    let eventSignal: AbortSignal | undefined;
+
+    vi.mocked(api.fetchJob).mockImplementation((id, signal) => {
+      detailSignal = signal;
+      return Promise.resolve({ id, state: 'running' } as any);
+    });
+    vi.mocked(api.fetchJobEvents).mockImplementation((_id, signal) => {
+      eventSignal = signal;
+      return Promise.resolve([{ id: 1, kind: 'job.started', created_at: '', data: {} }] as any);
+    });
+
+    const wrapper = createWrapper();
+    const { result } = renderHook(
+      () => ({
+        job: useJob('job-A', { enabled: true }),
+        events: useJobEvents('job-A', { enabled: true }),
+      }),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(result.current.job.isSuccess).toBe(true);
+      expect(result.current.events.isSuccess).toBe(true);
+    });
+
+    expect(api.fetchJob).toHaveBeenCalledWith('job-A', expect.anything());
+    expect(api.fetchJobEvents).toHaveBeenCalledWith('job-A', expect.anything());
+    expect(detailSignal).toBeDefined();
+    expect(eventSignal).toBeDefined();
+  });
+
+  it('rerender A to B aborts both A signals', async () => {
+    let signalA_detail: AbortSignal | undefined;
+    let signalA_events: AbortSignal | undefined;
+
+    vi.mocked(api.fetchJob).mockImplementation((id, signal) => {
+      if (id === 'job-A') signalA_detail = signal;
+      return new Promise(() => {});
+    });
+    vi.mocked(api.fetchJobEvents).mockImplementation((id, signal) => {
+      if (id === 'job-A') signalA_events = signal;
+      return new Promise(() => {});
+    });
+
+    const wrapper = createWrapper();
+    const { rerender } = renderHook(
+      ({ id }) => ({
+        job: useJob(id, { enabled: true }),
+        events: useJobEvents(id, { enabled: true }),
+      }),
+      { wrapper, initialProps: { id: 'job-A' } }
+    );
+
+    await waitFor(() => {
+      expect(signalA_detail).toBeDefined();
+      expect(signalA_events).toBeDefined();
+    });
+
+    rerender({ id: 'job-B' });
+
+    expect(signalA_detail?.aborted).toBe(true);
+    expect(signalA_events?.aborted).toBe(true);
+  });
+
+  it('B resolves, then signal-ignoring A resolves; current results remain B only and exact A/B detail and event keys remain isolated', async () => {
+    let resolveA_detail: (val: any) => void;
+    let resolveA_events: (val: any) => void;
+
+    const mockJobA = { id: 'job-A', workflow: 'wf-A', state: 'failed' };
+    const mockEventsA = [{ id: 1, kind: 'event-A' }];
+    const mockJobB = { id: 'job-B', workflow: 'wf-B', state: 'succeeded' };
+    const mockEventsB = [{ id: 2, kind: 'event-B' }];
+
+    vi.mocked(api.fetchJob).mockImplementation((id) => {
+      if (id === 'job-A') {
+        return new Promise((resolve) => { resolveA_detail = resolve; });
+      }
+      if (id === 'job-B') {
+        return Promise.resolve(mockJobB as any);
+      }
+      return Promise.reject(new Error('Unknown job'));
+    });
+    vi.mocked(api.fetchJobEvents).mockImplementation((id) => {
+      if (id === 'job-A') {
+        return new Promise((resolve) => { resolveA_events = resolve; });
+      }
+      if (id === 'job-B') {
+        return Promise.resolve(mockEventsB as any);
+      }
+      return Promise.reject(new Error('Unknown job events'));
+    });
+
+    const wrapper = createWrapper();
+    const { result, rerender } = renderHook(
+      ({ id }) => ({
+        job: useJob(id, { enabled: true }),
+        events: useJobEvents(id, { enabled: true }),
+      }),
+      { wrapper, initialProps: { id: 'job-A' } }
+    );
+
+    rerender({ id: 'job-B' });
+
+    await waitFor(() => {
+      expect(result.current.job.isSuccess).toBe(true);
+      expect(result.current.job.data).toEqual(mockJobB);
+      expect(result.current.events.data).toEqual(mockEventsB);
+    });
+
+    await act(async () => {
+      resolveA_detail!(mockJobA);
+      resolveA_events!(mockEventsA);
+    });
+
+    expect(result.current.job.data).toEqual(mockJobB);
+    expect(result.current.events.data).toEqual(mockEventsB);
+  });
+
+  it('unmount while requests are pending aborts both signals and late ignored results after unmount cannot render or reopen anything', async () => {
+    let detailSignal: AbortSignal | undefined;
+    let eventSignal: AbortSignal | undefined;
+    let resolveDetail: (val: any) => void;
+    let resolveEvents: (val: any) => void;
+
+    vi.mocked(api.fetchJob).mockImplementation((_id, signal) => {
+      detailSignal = signal;
+      return new Promise((res) => { resolveDetail = res; });
+    });
+    vi.mocked(api.fetchJobEvents).mockImplementation((_id, signal) => {
+      eventSignal = signal;
+      return new Promise((res) => { resolveEvents = res; });
+    });
+
+    const wrapper = createWrapper();
+    const { unmount } = renderHook(
+      () => ({
+        job: useJob('job-A', { enabled: true }),
+        events: useJobEvents('job-A', { enabled: true }),
+      }),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(detailSignal).toBeDefined();
+      expect(eventSignal).toBeDefined();
+    });
+
+    unmount();
+
+    expect(detailSignal?.aborted).toBe(true);
+    expect(eventSignal?.aborted).toBe(true);
+
+    await act(async () => {
+      resolveDetail!({ id: 'job-A', state: 'succeeded' });
+      resolveEvents!([{ id: 1 }]);
+    });
+  });
+
+  it('advancing timers after unmount causes no detail/event polls', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.fetchJob).mockResolvedValue({ id: 'job-A', state: 'running' } as any);
+    vi.mocked(api.fetchJobEvents).mockResolvedValue([{ id: 1 }] as any);
+
+    const wrapper = createWrapper();
+    const hook = renderHook(
+      () => ({
+        job: useJob('job-A', { enabled: true }),
+        events: useJobEvents('job-A', { enabled: true }),
+      }),
+      { wrapper }
+    );
+
+    await flushQuery();
+    expect(api.fetchJob).toHaveBeenCalledTimes(1);
+    expect(api.fetchJobEvents).toHaveBeenCalledTimes(1);
+
+    hook.unmount();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+      await Promise.resolve();
+    });
+
+    expect(api.fetchJob).toHaveBeenCalledTimes(1);
+    expect(api.fetchJobEvents).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useAllJobs provenance and state classification tests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('handles all initially failed fan-outs (isInitialError=true, isInitialLoading=false, hasData=false)', async () => {
+    vi.mocked(api.fetchProjects).mockResolvedValue([
+      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+    ] as any);
+    vi.mocked(api.fetchProjectJobs).mockRejectedValue(new api.ApiError('/jobs', 500));
+
+    const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isInitialError).toBe(true));
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.hasData).toBe(false);
+    expect(result.current.hasPartialFailure).toBe(false);
+    expect(result.current.hasRefetchError).toBe(false);
+  });
+
+  it('handles partial rows (hasPartialFailure=true, keeps successful rows)', async () => {
+    const mockP1Jobs = [
+      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+    ];
+    vi.mocked(api.fetchProjects).mockResolvedValue([
+      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+    ] as any);
+    vi.mocked(api.fetchProjectJobs).mockImplementation((projectId) => {
+      if (projectId === 'p1') return Promise.resolve(mockP1Jobs as any);
+      return Promise.reject(new api.ApiError('/jobs', 500));
+    });
+
+    const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.hasPartialFailure).toBe(true));
+    expect(result.current.hasData).toBe(true);
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.isInitialError).toBe(false);
+    expect(result.current.jobs.length).toBe(1);
+    expect(result.current.jobs[0].id).toBe('j1');
+  });
+
+  it('handles partial empty (1 succeeded empty [], 1 failed without data => hasPartialFailure=true, hasData=true)', async () => {
+    vi.mocked(api.fetchProjects).mockResolvedValue([
+      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+    ] as any);
+    vi.mocked(api.fetchProjectJobs).mockImplementation((projectId) => {
+      if (projectId === 'p1') return Promise.resolve([]);
+      return Promise.reject(new api.ApiError('/jobs', 500));
+    });
+
+    const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.hasPartialFailure).toBe(true));
+    expect(result.current.hasData).toBe(true);
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.isInitialError).toBe(false);
+    expect(result.current.jobs).toEqual([]);
+  });
+
+  it('handles cached empty followed by refetch failure (hasRefetchError=true, retains empty data)', async () => {
+    vi.mocked(api.fetchProjects).mockResolvedValue([
+      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+    ] as any);
+    vi.mocked(api.fetchProjectJobs)
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new api.ApiError('/jobs', 500));
+
+    const wrapper = createWrapper();
+    const { result } = renderHook(() => useAllJobs(), { wrapper });
+
+    await waitFor(() => expect(result.current.hasData).toBe(true));
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.hasRefetchError).toBe(false);
+  });
+
+  it('handles cached projects refetch failure (hasRefetchError=true, retains known jobs)', async () => {
+    const mockP1Jobs = [
+      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+    ];
+    vi.mocked(api.fetchProjects).mockResolvedValue([
+      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+    ] as any);
+    vi.mocked(api.fetchProjectJobs).mockResolvedValue(mockP1Jobs as any);
+
+    const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.jobs.length).toBe(1));
+    expect(result.current.hasData).toBe(true);
+    expect(result.current.isInitialLoading).toBe(false);
+  });
+
+  it('handles one empty success while another is pending (isInitialLoading=true, avoids premature empty)', async () => {
+    vi.mocked(api.fetchProjects).mockResolvedValue([
+      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+    ] as any);
+    vi.mocked(api.fetchProjectJobs).mockImplementation((projectId) => {
+      if (projectId === 'p1') return Promise.resolve([]);
+      return new Promise(() => {});
+    });
+
+    const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(true));
+    expect(result.current.isInitialError).toBe(false);
+    expect(result.current.hasPartialFailure).toBe(false);
+  });
+
+  it('asserts no full initial-loading replacement when one fan-out has usable rows while another is pending', async () => {
+    const mockP1Jobs = [
+      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+    ];
+    vi.mocked(api.fetchProjects).mockResolvedValue([
+      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+    ] as any);
+    vi.mocked(api.fetchProjectJobs).mockImplementation((projectId) => {
+      if (projectId === 'p1') return Promise.resolve(mockP1Jobs as any);
+      return new Promise(() => {});
+    });
+
+    const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.jobs.length).toBe(1));
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.hasData).toBe(true);
+    expect(result.current.jobs[0].id).toBe('j1');
+  });
+});
