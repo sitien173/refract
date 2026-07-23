@@ -150,17 +150,24 @@ TASK_COMPLETE
 - Findings: none
 - Scope checked: cumulative Phase 1 range `bedda7fd6856566845c2b5aa291c42f32449bb2d..0257e7eec7d8061641aafd69a91b6d6ab44f7912`.
 
+### PR review correction
+
+# CODE QUALITY REVIEW
+- Status: PASS
+- Findings: none
+- Scope checked: `src/openmcp/server.py`, `tests/test_server.py`, and `docs/plans/profile-strategy-refactor/phase-01/notes.md`.
+
 ## Review Result
 
 - Spec Status: PASS
 - Quality Status: PASS
-- Targeted tests: 84 passed
-- Full suite: 108 passed, 2 deselected
-- Forbidden-reference scan: no matches
+- Shutdown regression: 1 passed
+- Server tests: 5 passed
+- Full suite: 131 passed, 2 deselected
 - Diff check: passed
 - Debt: none
 
 ## Final Commit
 
-- Implementation: 0257e7eec7d8061641aafd69a91b6d6ab44f7912
+- Implementation: 4e3b91eb1c7df9ef2d99e5432dff3cb7afee4a93
 - State record: this journal update's commit
