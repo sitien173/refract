@@ -52,5 +52,5 @@ TASK_COMPLETE
 
 ## Final Commit
 
-- Implementation: pending
+- Implementation: e063cd22ce8c4035b84e27e8479e6eb8bd2fdd73
 - State record: this journal update's commit
