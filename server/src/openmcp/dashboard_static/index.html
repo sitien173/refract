@@ -13,10 +13,13 @@
           } else {
             document.documentElement.setAttribute('data-theme', 'light');
           }
-        } catch (e) {}
+        } catch (error) {
+          document.documentElement.setAttribute('data-theme', 'light');
+          console.warn('Unable to restore theme preference; using light mode.', error);
+        }
       })();
     </script>
-    <script type="module" crossorigin src="/dashboard/assets/assets/index-DwVKIXKd.js"></script>
+    <script type="module" crossorigin src="/dashboard/assets/assets/index-C4nXDPoQ.js"></script>
     <link rel="stylesheet" crossorigin href="/dashboard/assets/assets/index-DUyfToPt.css">
   </head>
   <body>

@@ -147,7 +147,9 @@ async def test_dashboard_static_index(async_client: httpx.AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_dashboard_static_assets(async_client: httpx.AsyncClient) -> None:
-    import glob, os
+    import glob
+    import os
+
     js_files = glob.glob("src/openmcp/dashboard_static/assets/*.js")
     assert len(js_files) > 0
     asset_name = os.path.basename(js_files[0])

@@ -13,7 +13,10 @@
           } else {
             document.documentElement.setAttribute('data-theme', 'light');
           }
-        } catch (e) {}
+        } catch (error) {
+          document.documentElement.setAttribute('data-theme', 'light');
+          console.warn('Unable to restore theme preference; using light mode.', error);
+        }
       })();
     </script>
   </head>

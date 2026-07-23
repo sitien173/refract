@@ -112,6 +112,29 @@ describe('AppShell, Routing and ThemeToggle', () => {
   });
 
   describe('Theme management', () => {
+    it('falls back to light and warns when bootstrap storage access fails', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const html = fs.readFileSync(path.resolve(__dirname, '../index.html'), 'utf8');
+      const bootstrap = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+      const error = new Error('Access denied');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw error;
+      });
+
+      document.documentElement.removeAttribute('data-theme');
+      expect(bootstrap).toBeDefined();
+      new Function(bootstrap as string)();
+
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+      expect(warn).toHaveBeenCalledWith(
+        'Unable to restore theme preference; using light mode.',
+        error
+      );
+      vi.restoreAllMocks();
+    });
+
     it('initializes to light theme when unstored even under dark OS preference', () => {
       window.matchMedia = vi.fn().mockImplementation((query: string) => ({
         matches: query.includes('dark'),
@@ -158,11 +181,13 @@ describe('AppShell, Routing and ThemeToggle', () => {
     });
 
     it('handles blocked localStorage gracefully when toggling theme', () => {
+      const error = new Error('Access denied');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-        throw new Error('Access denied');
+        throw error;
       });
       vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-        throw new Error('Access denied');
+        throw error;
       });
 
       render(<ThemeToggle />);
@@ -170,6 +195,14 @@ describe('AppShell, Routing and ThemeToggle', () => {
       expect(btn).toBeInTheDocument();
 
       expect(() => fireEvent.click(btn)).not.toThrow();
+      expect(warn).toHaveBeenCalledWith(
+        'Unable to read theme preference; using light mode.',
+        error
+      );
+      expect(warn).toHaveBeenCalledWith(
+        'Unable to persist theme preference.',
+        error
+      );
       vi.restoreAllMocks();
     });
   });

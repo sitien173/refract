@@ -10,8 +10,8 @@ export const ThemeToggle: React.FC = () => {
     try {
       const stored = localStorage.getItem('theme');
       if (stored === 'dark' || stored === 'light') return stored;
-    } catch {
-      // Storage access blocked or unavailable
+    } catch (error) {
+      console.warn('Unable to read theme preference; using light mode.', error);
     }
     return 'light';
   });
@@ -20,8 +20,8 @@ export const ThemeToggle: React.FC = () => {
     document.documentElement.setAttribute('data-theme', theme);
     try {
       localStorage.setItem('theme', theme);
-    } catch {
-      // Storage access blocked or unavailable
+    } catch (error) {
+      console.warn('Unable to persist theme preference.', error);
     }
   }, [theme]);
 
