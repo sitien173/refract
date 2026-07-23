@@ -15,7 +15,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         <TopBar />
         <main className={styles.contentArea}>
           {children || (
-            <div className={styles.placeholderCard}>
+            <div className={styles.placeholderPanel}>
               <h2>Monitor Console</h2>
               <p style={{ marginTop: '8px', color: 'var(--color-text-subdued)' }}>
                 Phase 1 Flowforge application shell ready.

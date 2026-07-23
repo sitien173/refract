@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { App } from './App';
 import { ThemeToggle } from './components/ThemeToggle';
 
@@ -7,16 +7,15 @@ describe('AppShell and ThemeToggle', () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.removeAttribute('data-theme');
-    window.history.pushState({}, '', '/dashboard/');
   });
 
-  it('renders navigation links in sidebar', () => {
+  it('renders static navigation buttons in sidebar', () => {
     render(<App />);
-    expect(screen.getAllByText('Overview').length).toBeGreaterThan(0);
-    expect(screen.getByText('Projects')).toBeInTheDocument();
-    expect(screen.getByText('Jobs')).toBeInTheDocument();
-    expect(screen.getByText('Targets')).toBeInTheDocument();
-    expect(screen.getByText('Profiles')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Projects' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Jobs' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Targets' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Profiles' })).toBeInTheDocument();
   });
 
   it('toggles light/dark theme and updates localStorage', () => {
@@ -28,5 +27,21 @@ describe('AppShell and ThemeToggle', () => {
     const newTheme = document.documentElement.getAttribute('data-theme');
     expect(newTheme).toMatch(/dark|light/);
     expect(localStorage.getItem('theme')).toBe(newTheme);
+  });
+
+  it('handles blocked localStorage gracefully when toggling theme', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('Access denied');
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Access denied');
+    });
+
+    render(<ThemeToggle />);
+    const btn = screen.getByRole('button', { name: /Switch to/i });
+    expect(btn).toBeInTheDocument();
+
+    expect(() => fireEvent.click(btn)).not.toThrow();
+    vi.restoreAllMocks();
   });
 });

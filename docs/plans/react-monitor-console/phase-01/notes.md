@@ -31,6 +31,8 @@
 ## Task 3
 ### Decisions made
 - Vendored Flowforge design tokens in `colors_and_type.css` with updated relative font paths (`../fonts/`), Libre Franklin woff2 fonts, OFL license, and Lucide SVG icons with ISC license.
+- Removed unused SVG icons (`alert-triangle.svg`, `check-circle.svg`, `x-circle.svg`) so every vendored icon is referenced in source.
+- Cleaned trailing whitespace in `web/src/fonts/OFL.txt`.
 ### Spec deviations
 - none
 ### Tradeoffs accepted
@@ -45,7 +47,10 @@
 ## Task 4
 ### Decisions made
 - Built `AppShell`, `Sidebar` (200px width), `TopBar` (64px height), and `ThemeToggle` (`data-theme` attribute + `localStorage` persistence).
-- Embedded inline theme script in `index.html` head to prevent light theme flash before React mount.
+- Removed React Router components (`BrowserRouter`, `NavLink`, `Routes`, `Route`) from `web/src` for Phase 1 static shell compliance; kept package installed for future phases.
+- Rendered accessible static buttons in `Sidebar` with brand link pointing strictly to `/dashboard`.
+- Applied Flowforge `--color-navigation-container` surface for selected nav state and `--color-surface` border token rules.
+- Guarded `localStorage` reads and writes in `ThemeToggle` with `try/catch`.
 ### Spec deviations
 - none
 ### Tradeoffs accepted
@@ -55,7 +60,7 @@
 ### Follow-ups for human
 - none
 ### Test evidence
-- RED -> GREEN: Vitest tests in `web/src/App.test.tsx` verified sidebar navigation links and theme toggle functionality.
+- RED -> GREEN: `! tgrep 'BrowserRouter|NavLink|<Routes|<Route' web/src -n` returned zero matches. Vitest tests in `web/src/App.test.tsx` verified static buttons and guarded theme persistence.
 
 ## Task 5
 ### Decisions made
@@ -83,4 +88,4 @@
 ### Follow-ups for human
 - none
 ### Test evidence
-- RED -> GREEN: Verification checks for file existence, asset pathing, no external network calls, clean pytest runs, and unchanged Python backend passed.
+- RED -> GREEN: Verification checks for file existence, asset pathing, no external network calls, clean pytest runs, no router components, zero whitespace errors, and unchanged Python backend passed.

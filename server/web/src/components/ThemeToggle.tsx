@@ -7,8 +7,12 @@ export const ThemeToggle: React.FC = () => {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const current = document.documentElement.getAttribute('data-theme');
     if (current === 'dark' || current === 'light') return current;
-    const stored = localStorage.getItem('theme');
-    if (stored === 'dark' || stored === 'light') return stored;
+    try {
+      const stored = localStorage.getItem('theme');
+      if (stored === 'dark' || stored === 'light') return stored;
+    } catch {
+      // Storage access blocked or unavailable
+    }
     return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
       ? 'dark'
       : 'light';
@@ -16,7 +20,11 @@ export const ThemeToggle: React.FC = () => {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
+    try {
+      localStorage.setItem('theme', theme);
+    } catch {
+      // Storage access blocked or unavailable
+    }
   }, [theme]);
 
   const toggleTheme = () => {
