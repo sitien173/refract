@@ -153,4 +153,3 @@
   - Executed `npx vitest run` in `web`: 32 passing tests across 4 test suites.
   - Executed `npm run build` in `web`: Production build completed successfully, updating `src/openmcp/dashboard_static/`.
 - Root cause (bugfix only): `.statusIcon` CSS rule used `mask: var(--icon-url)...` shorthand referencing unset `--icon-url`, conflicting with inline `maskImage` set in `TopBar.tsx`.
-
