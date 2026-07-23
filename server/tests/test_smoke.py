@@ -28,14 +28,21 @@ def test_backend_params_are_transport_only() -> None:
     assert {field.name for field in fields(PiParams)} == expected
 
 
-def test_doctor_validates_legacy_profile_alias(monkeypatch, tmp_path, capsys) -> None:
+def test_doctor_accepts_partial_profiles(monkeypatch, tmp_path, capsys) -> None:
     from openmcp.cli import main
 
     home = tmp_path / "openmcp"
     home.mkdir()
     (home / "config.toml").write_text(
-        """[routing_profiles.balanced]
-default = "forge"
+        """[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[profiles.balanced]
+implement = "primary"
 """,
         encoding="utf-8",
     )
@@ -43,9 +50,39 @@ default = "forge"
 
     with pytest.raises(SystemExit) as raised:
         main(["doctor"])
+    assert raised.value.code == 0
+    assert "does not map built-in workflows" not in capsys.readouterr().err
 
+
+def test_serve_reports_configuration_errors(monkeypatch, tmp_path, capsys) -> None:
+    from openmcp.cli import main
+
+    monkeypatch.setenv("OPENMCP_HOME", str(tmp_path / "missing-home"))
+
+    with pytest.raises(SystemExit) as raised:
+        main(["serve"])
+
+    error = capsys.readouterr().err
     assert raised.value.code == 1
-    assert "does not map built-in workflows" in capsys.readouterr().err
+    assert "Configuration error" in error
+    assert "Missing config file" in error
+
+
+def test_serve_reports_invalid_configuration(monkeypatch, tmp_path, capsys) -> None:
+    from openmcp.cli import main
+
+    home = tmp_path / "openmcp"
+    home.mkdir()
+    (home / "config.toml").write_text("[daemon]\ndefault_profile = 'balanced'\n", encoding="utf-8")
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+
+    with pytest.raises(SystemExit) as raised:
+        main(["serve"])
+
+    error = capsys.readouterr().err
+    assert raised.value.code == 1
+    assert "Configuration error" in error
+    assert "[targets]" in error
 
 
 def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:

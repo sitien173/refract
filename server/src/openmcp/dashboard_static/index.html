@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenMCP Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/assets/styles.css">
+  <script defer src="/dashboard/assets/vendor/alpine.min.js"></script>
+  <script defer src="/dashboard/assets/app.js"></script>
+</head>
+<body x-data="dashboardApp" x-ignore>
+  <header class="dashboard-header">
+    <div class="brand">
+      <div class="brand-icon">M</div>
+      <div class="brand-title">OpenMCP Daemon Monitor</div>
+    </div>
+    <div class="status-indicator">
+      <span class="dot" :class="{ 'offline': !isConnected }"></span>
+      <span x-text="isConnected ? 'Daemon Online' : 'Daemon Offline'"></span>
+      <span style="margin-left: 1rem;" x-show="lastUpdated">Updated: <span x-text="lastUpdated"></span></span>
+    </div>
+  </header>
+
+  <nav class="nav-tabs">
+    <button class="tab-btn" :class="{ 'active': activeTab === 'overview' }" @click="activeTab = 'overview'">Overview</button>
+    <button class="tab-btn" :class="{ 'active': activeTab === 'jobs' }" @click="activeTab = 'jobs'">Jobs (<span x-text="jobs.length"></span>)</button>
+    <button class="tab-btn" :class="{ 'active': activeTab === 'projects' }" @click="activeTab = 'projects'">Projects (<span x-text="projects.length"></span>)</button>
+    <button class="tab-btn" :class="{ 'active': activeTab === 'config' }" @click="activeTab = 'config'; fetchConfig()">Config</button>
+    <button class="tab-btn" :class="{ 'active': activeTab === 'task-guide' }" @click="activeTab = 'task-guide'; fetchTaskGuide()">Task Guide</button>
+  </nav>
+
+
+  <main class="dashboard-main">
+    <!-- OVERVIEW TAB -->
+    <div x-show="activeTab === 'overview'">
+      <div class="grid-tiles">
+        <div class="tile">
+          <div class="tile-title">Daemon Status</div>
+          <div class="tile-value">
+            <span class="badge" :class="'badge-' + (statusData.status || 'unknown')" x-text="statusData.status || 'unknown'"></span>
+          </div>
+        </div>
+        <div class="tile">
+          <div class="tile-title">Workers</div>
+          <div class="tile-value" x-text="statusData.workers || 0"></div>
+        </div>
+        <div class="tile">
+          <div class="tile-title">Active Jobs</div>
+          <div class="tile-value" x-text="statusData.active_jobs || 0"></div>
+        </div>
+        <div class="tile">
+          <div class="tile-title">Queued Jobs</div>
+          <div class="tile-value" x-text="statusData.queued_jobs || 0"></div>
+        </div>
+      </div>
+
+      <!-- TARGETS HEALTH GRID -->
+      <div class="section-card">
+        <div class="section-title">
+          <span>Configured Targets & Health</span>
+          <span style="font-size: 0.85rem; color: var(--text-secondary);" x-text="targets.length + ' targets'"></span>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Target ID</th>
+                <th>Model</th>
+                <th>Capabilities</th>
+                <th>Status</th>
+                <th>Circuit Open Until</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="target in targets" :key="target.id">
+                <tr>
+                  <td><span class="code-inline" x-text="target.id"></span></td>
+                  <td x-text="target.model || '-'"></td>
+                  <td>
+                    <template x-for="cap in (target.capabilities || [])" :key="cap">
+                      <span class="badge badge-cancelled" style="margin-right: 4px;" x-text="cap"></span>
+                    </template>
+                  </td>
+                  <td>
+                    <span class="badge" :class="target.healthy ? 'badge-healthy' : 'badge-unhealthy'" x-text="target.healthy ? 'healthy' : 'unhealthy'"></span>
+                  </td>
+                  <td x-text="target.circuit_open_until || '-'"></td>
+                </tr>
+              </template>
+              <template x-if="targets.length === 0">
+                <tr>
+                  <td colspan="5" style="text-align: center; color: var(--text-muted);">No targets configured</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PROFILES SUMMARY -->
+      <div class="section-card">
+        <div class="section-title">Execution Profiles</div>
+        <p style="color: var(--text-secondary); margin-bottom: 0.5rem;">Default Profile: <span class="code-inline" x-text="profiles.default || 'none'"></span></p>
+        <p style="color: var(--text-secondary);">Available Profiles: 
+          <template x-for="p in (profiles.available || [])" :key="p">
+            <span class="badge badge-cancelled" style="margin-right: 4px;" x-text="p"></span>
+          </template>
+        </p>
+      </div>
+    </div>
+
+    <!-- JOBS TAB -->
+    <div x-show="activeTab === 'jobs'">
+      <div class="section-card">
+        <div class="section-title">Job Management</div>
+        <div class="filter-bar">
+          <template x-for="st in ['all', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted']" :key="st">
+            <button class="filter-btn" :class="{ 'active': jobFilter === st }" @click="jobFilter = st" x-text="st.toUpperCase()"></button>
+          </template>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Job ID</th>
+                <th>Project ID</th>
+                <th>Workflow</th>
+                <th>State</th>
+                <th>Profile</th>
+                <th>Created At</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="job in filteredJobs" :key="job.id">
+                <tr @click="openJobDetail(job)">
+                  <td><span class="code-inline" x-text="job.id.substring(0, 12)"></span></td>
+                  <td><span class="code-inline" x-text="job.project_id.substring(0, 12)"></span></td>
+                  <td x-text="job.workflow"></td>
+                  <td><span class="badge" :class="'badge-' + job.state" x-text="job.state"></span></td>
+                  <td x-text="job.profile || '-'"></td>
+                  <td x-text="formatTime(job.created_at)"></td>
+                </tr>
+              </template>
+              <template x-if="filteredJobs.length === 0">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">No jobs found for state "<span x-text="jobFilter"></span>"</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROJECTS TAB -->
+    <div x-show="activeTab === 'projects'">
+      <div class="section-card">
+        <div class="section-title">Registered Projects</div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Project ID</th>
+                <th>Root Path</th>
+                <th>Registered At</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="proj in projects" :key="proj.id">
+                <tr>
+                  <td><span class="code-inline" x-text="proj.id"></span></td>
+                  <td x-text="proj.root"></td>
+                  <td x-text="formatTime(proj.created_at)"></td>
+                </tr>
+              </template>
+              <template x-if="projects.length === 0">
+                <tr>
+                  <td colspan="3" style="text-align: center; color: var(--text-muted); padding: 2rem;">No projects registered</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+      </div>
+    </div>
+
+    <!-- CONFIG TAB -->
+    <div x-show="activeTab === 'config'">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.5rem; font-weight: 700;">Daemon Configuration</h2>
+        <div>
+          <button class="btn btn-secondary" style="margin-right: 0.5rem;" @click="fetchConfig()" :disabled="configLoading">Reload</button>
+          <button class="btn btn-primary" @click="saveConfig()" :disabled="configLoading">Save Config</button>
+        </div>
+      </div>
+
+      <!-- ACTIVE JOBS BANNERS & NOTIFICATIONS -->
+      <div style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(56, 189, 248, 0.1); border: 1px solid var(--accent-blue); border-radius: 8px; font-size: 0.9rem; color: var(--accent-blue);">
+        Active Jobs: <strong x-text="statusData.active_jobs || 0"></strong> running, <strong x-text="statusData.queued_jobs || 0"></strong> queued. Edits take effect for newly submitted jobs.
+      </div>
+
+      <div x-show="restartRequired && restartRequired.length > 0" style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(251, 191, 36, 0.15); border: 1px solid var(--status-amber); border-radius: 8px; color: var(--status-amber); font-size: 0.9rem;">
+        <strong>Restart Required!</strong> Saved changes to <span x-text="restartRequired.join(', ')"></span> require a manual daemon restart.
+      </div>
+
+      <div x-show="configError" style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(248, 113, 113, 0.15); border: 1px solid var(--status-red); border-radius: 8px; color: var(--status-red); font-size: 0.9rem;" x-text="configError"></div>
+      <div x-show="configSuccess" style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(74, 222, 128, 0.15); border: 1px solid var(--status-green); border-radius: 8px; color: var(--status-green); font-size: 0.9rem;" x-text="configSuccess"></div>
+
+      <!-- DAEMON SETTINGS -->
+      <div class="section-card">
+        <div class="section-title">Daemon Settings</div>
+        <template x-if="configData.daemon"><div class="form-grid">
+          <div class="form-group">
+            <label>Host</label>
+            <input type="text" class="form-control" x-model="configData.daemon.host">
+          </div>
+          <div class="form-group">
+            <label>Port</label>
+            <input type="number" class="form-control" x-model.number="configData.daemon.port">
+          </div>
+          <div class="form-group">
+            <label>Max Jobs</label>
+            <input type="number" class="form-control" x-model.number="configData.daemon.max_jobs">
+          </div>
+          <div class="form-group">
+            <label>History Turns</label>
+            <input type="number" class="form-control" x-model.number="configData.daemon.history_turns">
+          </div>
+          <div class="form-group">
+            <label>History Bytes</label>
+            <input type="number" class="form-control" x-model.number="configData.daemon.history_bytes">
+          </div>
+          <div class="form-group">
+            <label>Default Profile</label>
+            <input type="text" class="form-control" x-model="configData.daemon.default_profile">
+          </div>
+        </div></template>
+      </div>
+
+      <!-- TARGETS CONFIGURATION -->
+      <div class="section-card">
+        <div class="section-title">
+          <span>Targets Configuration</span>
+          <button class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.25rem 0.6rem;" @click="addTarget()">+ Add Target</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+          <template x-for="(target, idx) in configData.targets" :key="idx">
+            <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <strong style="color: var(--accent-blue);" x-text="'Target #' + (idx + 1) + ': ' + (target.id || 'unnamed')"></strong>
+                <button class="btn btn-danger" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" @click="removeTarget(idx)">Remove</button>
+              </div>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label>Target ID</label>
+                  <input type="text" class="form-control" x-model="target.id">
+                </div>
+                <div class="form-group">
+                  <label>Backend</label>
+                  <select class="form-control" x-model="target.backend">
+                    <option value="codex">codex</option>
+                    <option value="agy">agy</option>
+                    <option value="pi">pi</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Model</label>
+                  <input type="text" class="form-control" x-model="target.model">
+                </div>
+                <div class="form-group">
+                  <label>Max Concurrency</label>
+                  <input type="number" class="form-control" x-model.number="target.max_concurrency">
+                </div>
+                <div class="form-group">
+                  <label>Reasoning</label>
+                  <input type="text" class="form-control" x-model="target.reasoning">
+                </div>
+                <div class="form-group">
+                  <label>Backend Profile</label>
+                  <input type="text" class="form-control" x-model="target.backend_profile">
+                </div>
+              </div>
+              <div class="form-group" style="margin-top: 0.5rem;">
+                <label>System Prompt</label>
+                <textarea class="form-control" rows="2" x-model="target.system_prompt"></textarea>
+              </div>
+              <div style="display: flex; gap: 1.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+                <label class="checkbox-group">
+                  <input type="checkbox" x-model="target.isolated"> Isolated
+                </label>
+                <label class="checkbox-group">
+                  <input type="checkbox" x-model="target.read_only"> Read Only
+                </label>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- PROFILES CONFIGURATION -->
+      <div class="section-card">
+        <div class="section-title">
+          <span>Profiles & Workflow Mapping</span>
+          <button class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.25rem 0.6rem;" @click="addProfile()">+ Add Profile</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+          <template x-for="(profMap, profName) in configData.profiles" :key="profName">
+            <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <strong style="color: var(--accent-purple);" x-text="'Profile: ' + profName"></strong>
+                <button class="btn btn-danger" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" @click="removeProfile(profName)">Delete Profile</button>
+              </div>
+              <div class="form-group" style="margin-bottom: 0.75rem;">
+                <label>Parent Profile (optional)</label>
+                <input type="text" class="form-control" x-model="profMap.extends" placeholder="Leave blank for no parent">
+              </div>
+              <template x-for="wf in ['implement', 'review', 'consult']" :key="wf">
+                <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: var(--bg-secondary); border-radius: 6px;">
+                  <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-primary);" x-text="'Workflow: ' + wf"></div>
+                  <div class="form-grid">
+                    <div class="form-group">
+                      <label>Targets (comma-separated)</label>
+                      <input type="text" class="form-control" :value="Array.isArray(profMap[wf]?.targets) ? profMap[wf].targets.join(', ') : (profMap[wf]?.targets || '')" @input="if (!profMap[wf]) profMap[wf] = {}; profMap[wf].targets = $event.target.value.split(',').map(s=>s.trim()).filter(Boolean)">
+                    </div>
+                    <div class="form-group">
+                      <label>Max Attempts</label>
+                      <input type="number" class="form-control" :value="profMap[wf]?.max_attempts || 1" @input="if (!profMap[wf]) profMap[wf] = {}; profMap[wf].max_attempts = parseInt($event.target.value, 10) || 1">
+                    </div>
+                    <div class="form-group">
+                      <label>Timeout (seconds)</label>
+                      <input type="number" class="form-control" :value="profMap[wf]?.timeout_s || 0" @input="if (!profMap[wf]) profMap[wf] = {}; profMap[wf].timeout_s = parseInt($event.target.value, 10) || 0">
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- TASK GUIDE TAB -->
+    <div x-show="activeTab === 'task-guide'">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.5rem; font-weight: 700;">Task Guide Configuration</h2>
+        <div>
+          <button class="btn btn-secondary" style="margin-right: 0.5rem;" @click="fetchTaskGuide()" :disabled="taskGuideLoading">Reload</button>
+          <button class="btn btn-primary" @click="saveTaskGuide()" :disabled="taskGuideLoading">Save Task Guide</button>
+        </div>
+      </div>
+
+      <div x-show="taskGuideError" style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(248, 113, 113, 0.15); border: 1px solid var(--status-red); border-radius: 8px; color: var(--status-red); font-size: 0.9rem;" x-text="taskGuideError"></div>
+      <div x-show="taskGuideSuccess" style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: rgba(74, 222, 128, 0.15); border: 1px solid var(--status-green); border-radius: 8px; color: var(--status-green); font-size: 0.9rem;" x-text="taskGuideSuccess"></div>
+
+      <!-- STRUCTURED RECOMMENDATIONS FORM -->
+      <div class="section-card">
+        <div class="section-title">
+          <span>Task Guidance & Recommendations</span>
+          <button class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.25rem 0.6rem;" @click="addRecommendation()">+ Add Recommendation</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+          <template x-for="(rec, idx) in (taskGuideData.recommendations || [])" :key="idx">
+            <div style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <strong style="color: var(--accent-blue);" x-text="'Recommendation #' + (idx + 1)"></strong>
+                <button class="btn btn-danger" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" @click="removeRecommendation(idx)">Remove</button>
+              </div>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label>Task Pattern</label>
+                  <input type="text" class="form-control" x-model="rec.task" @input="syncGuideToRawJson()">
+                </div>
+                <div class="form-group">
+                  <label>Profile</label>
+                  <input type="text" class="form-control" x-model="rec.profile" @input="syncGuideToRawJson()">
+                </div>
+              </div>
+            </div>
+          </template>
+          <template x-if="!taskGuideData.recommendations || taskGuideData.recommendations.length === 0">
+            <p style="color: var(--text-muted); font-size: 0.9rem;">No recommendations configured yet.</p>
+          </template>
+        </div>
+      </div>
+
+      <!-- RAW JSON EDITOR -->
+      <div class="section-card">
+        <div class="section-title">
+          <span>Raw Task Guide JSON</span>
+        </div>
+        <div class="form-group">
+          <label>JSON Content</label>
+          <textarea class="form-control" rows="12" style="font-family: monospace; font-size: 0.85rem;" x-model="taskGuideRawJson" @input="trySyncRawJsonToGuide()"></textarea>
+        </div>
+      </div>
+    </div>
+  </main>
+
+
+  <!-- JOB DETAIL MODAL / DRAWER -->
+  <div class="modal-overlay" x-show="selectedJob" style="display: none;" @click.self="closeJobDetail()">
+    <div class="modal-drawer" x-show="selectedJob">
+      <div class="modal-header">
+        <div>
+          <h3>Job Details</h3>
+          <p class="code-inline" style="margin-top: 0.25rem;" x-text="selectedJob?.id"></p>
+        </div>
+        <button class="close-btn" @click="closeJobDetail()">&times;</button>
+      </div>
+
+      <template x-if="selectedJob">
+      <div style="margin-bottom: 1.5rem;">
+        <p><strong>State:</strong> <span class="badge" :class="'badge-' + selectedJob?.state" x-text="selectedJob?.state"></span></p>
+        <p style="margin-top: 0.5rem;"><strong>Workflow:</strong> <span x-text="selectedJob?.workflow"></span></p>
+        <p style="margin-top: 0.5rem;"><strong>Project ID:</strong> <span class="code-inline" x-text="selectedJob?.project_id"></span></p>
+        <p style="margin-top: 0.5rem;"><strong>Created At:</strong> <span x-text="formatTime(selectedJob?.created_at)"></span></p>
+        <p style="margin-top: 0.5rem;" x-show="selectedJob?.updated_at"><strong>Updated At:</strong> <span x-text="formatTime(selectedJob?.updated_at)"></span></p>
+        <p style="margin-top: 0.5rem;" x-show="selectedJob?.result?.error"><strong>Error:</strong> <span style="color: var(--status-red);" x-text="selectedJob?.result?.error"></span></p>
+      </div>
+      </template>
+
+      <h4>Event Timeline</h4>
+      <div class="events-list">
+        <template x-for="evt in jobEvents" :key="evt.id || evt.created_at">
+          <div class="event-item">
+            <div class="event-meta">
+              <span x-text="formatTime(evt.created_at)"></span> | <span x-text="evt.kind || 'event'"></span>
+            </div>
+            <div x-text="JSON.stringify(evt.data)"></div>
+          </div>
+        </template>
+        <template x-if="jobEvents.length === 0">
+          <p style="color: var(--text-muted); font-size: 0.85rem;">No events recorded for this job.</p>
+        </template>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
