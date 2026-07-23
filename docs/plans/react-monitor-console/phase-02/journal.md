@@ -79,7 +79,6 @@ None
 
 ## NEXT
 TASK_COMPLETE
-
 # EXTERNAL RESPONSE
 ## META
 - Phase: 2
@@ -180,4 +179,3 @@ None
 
 ## NEXT
 TASK_COMPLETE
-
