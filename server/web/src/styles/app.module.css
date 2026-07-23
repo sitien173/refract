@@ -291,3 +291,185 @@
     padding: var(--space-md);
   }
 }
+
+/* Phase 3 Shared Components */
+.panelContainer {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border-subdued);
+  border-radius: var(--radius-xs);
+  padding: var(--space-md) var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.panelCompact {
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.panelHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.panelTitle {
+  font-size: var(--type-text-lg-size);
+  font-weight: 600;
+  color: var(--color-text-default);
+  margin: 0;
+}
+
+.panelSupportingText {
+  font-size: var(--type-text-xs-size);
+  color: var(--color-text-subdued);
+  margin: 0;
+}
+
+.panelBody {
+  margin-top: var(--space-xs);
+}
+
+.emptyStateContainer {
+  background-color: var(--color-surface);
+  border: 1px dashed var(--color-border-subdued);
+  border-radius: var(--radius-xs);
+  padding: var(--space-xl);
+  text-align: center;
+}
+
+.emptyStateMessage {
+  font-size: var(--type-text-sm-size);
+  color: var(--color-text-subdued);
+  margin: 0;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--type-text-xs-size);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.statusBadgeIcon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  flex-shrink: 0;
+  background-color: currentColor;
+  mask: var(--icon-url) no-repeat center / contain;
+  -webkit-mask: var(--icon-url) no-repeat center / contain;
+}
+
+.statusBadgeLabel {
+  font-size: var(--type-text-xs-size);
+}
+
+.badgeToneSuccess {
+  background-color: var(--color-decorative-green);
+  color: var(--color-text-code-green);
+}
+
+.badgeToneWarning {
+  background-color: var(--color-decorative-yellow);
+  color: var(--color-icon-yellow);
+}
+
+.badgeToneError {
+  background-color: var(--color-decorative-red);
+  color: var(--color-text-red);
+}
+
+.badgeToneInfo {
+  background-color: var(--color-decorative-blue);
+  color: var(--color-icon-blue);
+}
+
+.badgeToneNeutral {
+  background-color: var(--color-surface-muted);
+  color: var(--color-text-subdued);
+}
+
+.tableOverflowRegion {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-border-subdued);
+  border-radius: var(--radius-xs);
+  background-color: var(--color-surface);
+}
+
+.tableOverflowRegion:focus-visible {
+  outline: 2px solid var(--color-action-interactive);
+  outline-offset: -2px;
+}
+
+.dataTable {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: var(--type-text-sm-size);
+}
+
+.tableCaption {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.dataTable th {
+  height: var(--layout-table-header-height, 44px);
+  padding: 0 var(--space-md);
+  background-color: var(--color-surface-muted);
+  border-bottom: 1px solid var(--color-border-subdued);
+  font-weight: 600;
+  color: var(--color-text-default);
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.tableRow {
+  height: var(--layout-table-row-height, 56px);
+  border-bottom: 1px solid var(--color-border-subdued);
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+
+.tableRow:last-child {
+  border-bottom: none;
+}
+
+.tableRow:hover,
+.tableRow:focus-within {
+  background-color: var(--color-surface-hover);
+}
+
+.dataTable td {
+  padding: 0 var(--space-md);
+  color: var(--color-text-default);
+  white-space: nowrap;
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+
+.navItemDisabled {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radius-xs);
+  font-size: var(--type-text-sm-size);
+  color: var(--color-text-disabled);
+  background: transparent;
+  cursor: not-allowed;
+  user-select: none;
+  box-sizing: border-box;
+}
+
