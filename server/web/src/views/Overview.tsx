@@ -16,23 +16,29 @@ export const Overview: React.FC = () => {
 
   const { jobs, projectsQuery } = allJobsResult;
 
-  const hasRefetchError =
-    (statusQuery.isError && Boolean(statusQuery.data)) ||
-    (targetsQuery.isError && Boolean(targetsQuery.data)) ||
-    (profilesQuery.isError && Boolean(profilesQuery.data)) ||
-    (allJobsResult.isError && jobs.length > 0 && !(allJobsResult.errors && allJobsResult.errors.length > 0)) ||
-    (projectsQuery.isError && Boolean(projectsQuery.data));
+  const jobQueries = allJobsResult.jobQueries ?? [];
+  const hasJobsData =
+    projectsQuery.data !== undefined &&
+    (projectsQuery.data.length === 0 ||
+      jobQueries.some((q) => q.data !== undefined) ||
+      jobs.length > 0);
 
   const hasPartialJobError = Boolean(
     allJobsResult.errors && allJobsResult.errors.length > 0 && jobs.length > 0
   );
 
+  const hasRefetchError =
+    (statusQuery.isError && Boolean(statusQuery.data)) ||
+    (targetsQuery.isError && Boolean(targetsQuery.data)) ||
+    (profilesQuery.isError && Boolean(profilesQuery.data)) ||
+    (allJobsResult.isError && hasJobsData && !hasPartialJobError);
+
   const recentJobs = jobs.slice(0, 5);
 
-  const isJobsLoading = (allJobsResult.isLoading || projectsQuery.isLoading) && jobs.length === 0;
+  const isJobsLoading = (allJobsResult.isLoading || projectsQuery.isLoading) && !hasJobsData;
   const isJobsInitialError =
     (allJobsResult.isError || projectsQuery.isError) &&
-    jobs.length === 0 &&
+    !hasJobsData &&
     !allJobsResult.isLoading &&
     !projectsQuery.isLoading;
 

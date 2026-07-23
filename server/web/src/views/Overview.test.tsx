@@ -176,4 +176,40 @@ describe('Overview view', () => {
     expect(screen.getByText('Could not load jobs for all projects. Showing partial results.')).toBeTruthy();
     expect(screen.getByText('j1')).toBeTruthy();
   });
+
+  it('shows refetch warning and empty state for cached empty projects with refetch error without initial error', () => {
+    vi.mocked(queries.useStatus).mockReturnValue({ data: { workers: 1, active_jobs: 0, queued_jobs: 0 } } as any);
+    vi.mocked(queries.useTargets).mockReturnValue({ data: [] } as any);
+    vi.mocked(queries.useProfiles).mockReturnValue({ data: { default: 'std', available: [] } } as any);
+    vi.mocked(queries.useAllJobs).mockReturnValue({
+      jobs: [],
+      isError: true,
+      errors: [],
+      projectsQuery: { data: [], isError: true },
+    } as any);
+
+    render(<Overview />);
+
+    expect(screen.getByText('Could not refresh. Showing last known data.')).toBeTruthy();
+    expect(screen.getByText('No recent jobs found.')).toBeTruthy();
+    expect(screen.queryByText('Failed to load recent jobs.')).toBeNull();
+  });
+
+  it('shows initial error when there is a true initial jobs/projects failure without cached data', () => {
+    vi.mocked(queries.useStatus).mockReturnValue({ data: { workers: 1, active_jobs: 0, queued_jobs: 0 } } as any);
+    vi.mocked(queries.useTargets).mockReturnValue({ data: [] } as any);
+    vi.mocked(queries.useProfiles).mockReturnValue({ data: { default: 'std', available: [] } } as any);
+    vi.mocked(queries.useAllJobs).mockReturnValue({
+      jobs: [],
+      isLoading: false,
+      isError: true,
+      errors: [],
+      projectsQuery: { data: undefined, isLoading: false, isError: true },
+    } as any);
+
+    render(<Overview />);
+
+    expect(screen.getByText('Failed to load recent jobs.')).toBeTruthy();
+    expect(screen.queryByText('Could not refresh. Showing last known data.')).toBeNull();
+  });
 });
