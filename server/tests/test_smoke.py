@@ -28,14 +28,21 @@ def test_backend_params_are_transport_only() -> None:
     assert {field.name for field in fields(PiParams)} == expected
 
 
-def test_doctor_validates_legacy_profile_alias(monkeypatch, tmp_path, capsys) -> None:
+def test_doctor_validates_profile_completeness(monkeypatch, tmp_path, capsys) -> None:
     from openmcp.cli import main
 
     home = tmp_path / "openmcp"
     home.mkdir()
     (home / "config.toml").write_text(
-        """[routing_profiles.balanced]
-default = "forge"
+        """[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[profiles.balanced]
+implement = "primary"
 """,
         encoding="utf-8",
     )

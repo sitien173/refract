@@ -14,6 +14,12 @@ launchers are resolved through their matching PowerShell shim with
 `-NonInteractive`; values in target `args` are individual argv tokens, not a
 shell command and not a shell-quoted string.
 
+## Daemon configuration
+
+`~/.openmcp/config.toml` is required. It must contain non-empty `targets` and
+`profiles` sections. `[daemon].default_profile` is also required and must name
+one configured profile. OpenMCP does not fabricate configuration entries.
+
 ## Target configuration
 
 Every target accepts an `args` array for backend-specific options that do not

@@ -10,6 +10,22 @@ from openmcp.workflows import get_workflow
 from tests.orchestration_helpers import config
 
 
+def _explicit_config() -> str:
+    return """[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+capabilities = ["code", "review", "consult"]
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+"""
+
+
 def test_task_guide_prefers_project_then_global(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -25,6 +41,85 @@ def test_default_builtins_resolve_capable_targets(tmp_path) -> None:
     catalog = config(tmp_path / "home")
     for name in ("implement", "review", "consult"):
         assert resolve_execution_plan(get_workflow(name), catalog, "balanced").selection.targets == ("primary",)
+
+
+def test_missing_config_file_is_rejected(tmp_path) -> None:
+    with pytest.raises(ValueError, match="Missing config file"):
+        load_config(tmp_path / "config.toml")
+
+
+@pytest.mark.parametrize(
+    ("section", "config"),
+    [
+        ("targets", '[daemon]\ndefault_profile = "balanced"\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n'),
+        ("profiles", '[daemon]\ndefault_profile = "balanced"\n[[targets]]\nid = "primary"\nbackend = "codex"\n'),
+    ],
+)
+def test_required_config_sections_must_be_present(tmp_path, section, config) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(config, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=section):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("section", "config"),
+    [
+        (
+            "targets",
+            '[daemon]\ndefault_profile = "balanced"\n[targets]\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n',
+        ),
+        (
+            "profiles",
+            '[daemon]\ndefault_profile = "balanced"\n[[targets]]\nid = "primary"\nbackend = "codex"\n[profiles]\n',
+        ),
+    ],
+)
+def test_required_config_sections_must_not_be_empty(tmp_path, section, config) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(config, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=section):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    "daemon", ["[daemon]", '[daemon]\ndefault_profile = "missing"'],
+)
+def test_default_profile_must_be_explicit_and_known(tmp_path, daemon) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config().replace('[daemon]\ndefault_profile = "balanced"', daemon), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="default_profile"):
+        load_config(path)
+
+
+def test_removed_global_profile_aliases_are_rejected(tmp_path) -> None:
+    legacy_profiles = "routing_" + "profiles"
+    legacy_default = "default_" + "routing_" + "profile"
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f"[{legacy_profiles}.balanced]\n"
+        f"{legacy_default} = \"balanced\"\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        load_config(path)
+
+
+def test_removed_project_profile_aliases_are_rejected(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    legacy_profiles = "routing_" + "profiles"
+    (root / ".openmcp" / "config.toml").write_text(
+        f"[{legacy_profiles}.quality]\nimplement = \"primary\"\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        load_project_config(root, config(tmp_path / "home"))
 
 
 def test_project_config_overlays_profiles(tmp_path) -> None:
@@ -55,6 +150,8 @@ def test_custom_target_defaults_support_all_semantic_workflows(tmp_path, monkeyp
     (home / "config.toml").write_text("""[[targets]]
 id = "primary"
 backend = "codex"
+[daemon]
+default_profile = "balanced"
 [profiles.balanced]
 implement = "primary"
 review = "primary"

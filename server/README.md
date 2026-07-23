@@ -86,6 +86,10 @@ Job states are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and
 
 OpenMCP reads `~/.openmcp/config.toml`.
 
+Configuration is explicit. The file must define non-empty `targets` and
+`profiles` sections, plus `[daemon].default_profile` naming a defined profile.
+OpenMCP does not fabricate targets, profiles, or a default profile.
+
 ```toml
 [daemon]
 host = "127.0.0.1"

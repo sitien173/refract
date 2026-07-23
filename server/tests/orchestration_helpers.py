@@ -28,7 +28,7 @@ def repository(tmp_path: Path) -> Path:
 def config(home: Path, targets: tuple[TargetConfig, ...] | None = None) -> DaemonConfig:
     resolved_targets = targets or (TargetConfig(id="primary", backend="codex", capabilities=("code", "review", "consult")),)
     selection = TargetSelection(tuple(target.id for target in resolved_targets), len(resolved_targets))
-    return DaemonConfig(home=home, max_jobs=2, targets=resolved_targets, profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}})
+    return DaemonConfig(home=home, max_jobs=2, default_profile="balanced", targets=resolved_targets, profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}})
 
 
 class FakeDrivers:

@@ -18,6 +18,25 @@ from openmcp.logging_setup import (
 )
 
 
+def _strict_config(logging: str) -> str:
+    return f"""[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+capabilities = ["code", "review", "consult"]
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+
+[logging]
+{logging}
+"""
+
+
 @pytest.fixture(autouse=True)
 def _close_test_logging():
     shutdown()
@@ -30,8 +49,8 @@ def test_logging_config_loads_relative_to_openmcp_home(tmp_path, monkeypatch) ->
     home.mkdir()
     path = home / "config.toml"
     path.write_text(
-        """
-[logging]
+        _strict_config(
+            """
 level = "debug"
 format = "json"
 file = "logs/service.jsonl"
@@ -40,6 +59,7 @@ max_bytes = 4096
 backup_count = 7
 capture_warnings = false
 """,
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENMCP_HOME", str(home))
@@ -194,7 +214,7 @@ def test_invalid_logging_configuration_is_rejected(tmp_path, monkeypatch) -> Non
     home = tmp_path / "state"
     home.mkdir()
     path = home / "config.toml"
-    path.write_text("[logging]\nformat = 'xml'\n", encoding="utf-8")
+    path.write_text(_strict_config("format = 'xml'"), encoding="utf-8")
     monkeypatch.setenv("OPENMCP_HOME", str(home))
 
     with pytest.raises(ValueError, match="format"):

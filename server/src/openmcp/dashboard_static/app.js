@@ -16,7 +16,7 @@ document.addEventListener('alpine:init', () => {
     _jobRequestId: 0,
 
     configData: {
-      daemon: { host: '127.0.0.1', port: 8765, max_jobs: 4, history_turns: 8, history_bytes: 65536, default_profile: 'balanced' },
+      daemon: { host: '127.0.0.1', port: 8765, max_jobs: 4, history_turns: 8, history_bytes: 65536, default_profile: '' },
       logging: { level: 'INFO', format: 'text', file: 'openmcp.log', console: false, max_bytes: 10485760, backup_count: 5, capture_warnings: true },
       targets: [],
       profiles: {}
@@ -291,7 +291,8 @@ document.addEventListener('alpine:init', () => {
         return 'At least one profile must be configured';
       }
       const defaultProf = (this.configData.daemon.default_profile || '').trim();
-      if (defaultProf && !this.configData.profiles[defaultProf]) {
+      if (!defaultProf) return 'A default profile must be configured';
+      if (!this.configData.profiles[defaultProf]) {
         return `Default profile '${defaultProf}' is not in configured profiles`;
       }
 
@@ -443,4 +444,3 @@ document.addEventListener('alpine:init', () => {
     }
   }));
 });
-

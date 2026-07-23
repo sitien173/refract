@@ -10,6 +10,23 @@ from openmcp.server import mcp
 from tests.orchestration_helpers import config, repository
 
 
+def _strict_config(port: int = 8765) -> str:
+    return f"""[daemon]
+port = {port}
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+capabilities = ["code", "review", "consult"]
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+"""
+
+
 @pytest_asyncio.fixture
 async def active_runtime(tmp_path, monkeypatch):
     cfg = config(tmp_path)
@@ -151,7 +168,7 @@ async def test_dashboard_api_503_when_no_runtime(monkeypatch) -> None:
 def test_write_config_valid_and_backup(tmp_path) -> None:
     from openmcp.config_writer import write_config
     cfg_file = tmp_path / "config.toml"
-    cfg_file.write_text("[daemon]\nport = 8765\n", encoding="utf-8")
+    cfg_file.write_text(_strict_config(), encoding="utf-8")
 
     new_cfg = write_config({"daemon": {"port": 9000}}, path=cfg_file)
     assert new_cfg.port == 9000
@@ -165,7 +182,7 @@ def test_write_config_valid_and_backup(tmp_path) -> None:
 def test_write_config_invalid_leaves_file_untouched(tmp_path) -> None:
     from openmcp.config_writer import write_config
     cfg_file = tmp_path / "config.toml"
-    cfg_file.write_text("[daemon]\nport = 8765\n", encoding="utf-8")
+    cfg_file.write_text(_strict_config(), encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid"):
         write_config({"targets": [{"id": "bad", "backend": "invalid_backend"}]}, path=cfg_file)
@@ -176,13 +193,52 @@ def test_write_config_invalid_leaves_file_untouched(tmp_path) -> None:
 def test_write_config_preserves_comments(tmp_path) -> None:
     from openmcp.config_writer import write_config
     cfg_file = tmp_path / "config.toml"
-    initial = "# Custom operator comment\n[daemon]\nhost = \"127.0.0.1\"\nport = 8765\n"
+    initial = "# Custom operator comment\n" + _strict_config()
     cfg_file.write_text(initial, encoding="utf-8")
 
     write_config({"daemon": {"host": "127.0.0.1", "port": 8888}}, path=cfg_file)
     text = cfg_file.read_text(encoding="utf-8")
     assert "# Custom operator comment" in text
     assert "8888" in text
+
+
+def test_write_config_does_not_migrate_removed_profile_alias(tmp_path) -> None:
+    from openmcp.config_writer import write_config
+
+    legacy_profiles = "routing_" + "profiles"
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        f"""[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+capabilities = ["code", "review", "consult"]
+
+[{legacy_profiles}.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid configuration"):
+        write_config(
+            {
+                "profiles": {
+                    "balanced": {
+                        "implement": "primary",
+                        "review": "primary",
+                        "consult": "primary",
+                    }
+                }
+            },
+            path=cfg_file,
+        )
+
+    assert legacy_profiles in cfg_file.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -279,7 +335,4 @@ async def test_dashboard_api_put_task_guide_invalid(async_client: httpx.AsyncCli
     put_res = await async_client.put("/dashboard/api/task-guide", json={})
     assert put_res.status_code == 400
     assert "error" in put_res.json()
-
-
-
 

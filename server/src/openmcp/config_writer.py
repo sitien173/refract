@@ -79,7 +79,6 @@ def _dict_to_toml_doc(
         if "daemon" not in doc or not isinstance(doc.get("daemon"), dict):
             doc["daemon"] = tomlkit.table()
         d_table = doc["daemon"]
-        d_table.pop("default_routing_profile", None)
         for k, v in data["daemon"].items():
             if v is None:
                 d_table.pop(k, None)
@@ -124,12 +123,6 @@ def _dict_to_toml_doc(
 
     # Section: profiles
     if "profiles" in data and isinstance(data["profiles"], dict):
-        # Migrate legacy keys to avoid _renamed_value conflicts
-        if "routing_profiles" in doc:
-            if "profiles" not in doc:
-                doc["profiles"] = doc.pop("routing_profiles")
-            else:
-                doc.pop("routing_profiles", None)
         if "profiles" not in doc or not isinstance(doc.get("profiles"), dict):
             doc["profiles"] = tomlkit.table()
         p_table = doc["profiles"]
@@ -288,4 +281,3 @@ def write_task_guide(
 
 
 __all__ = ["write_config", "write_task_guide"]
-
