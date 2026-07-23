@@ -1,4 +1,6 @@
 import React from 'react';
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -287,14 +289,17 @@ describe('TanStack Query hooks and polling policies', () => {
     expect(result.current.dataUpdatedAt).toBe(dataUpdatedAt);
   });
 
-  it('useAllJobs merges project jobs, sorts newest first with id tie-breaker, and preserves partial data on error', async () => {
+  it('useAllJobs merges project jobs, sorts newest first with deterministic ascending ID tie-breaker for equal created_at, and preserves partial data on error', async () => {
     const mockProjects = [
       { id: 'p1', alias: 'proj1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
       { id: 'p2', alias: 'proj2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
     ];
+    // Supplied with equal created_at jobs (j-tie2 and j-tie1) in inverse ID order
     const mockP1Jobs = [
       { id: 'j-old', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
       { id: 'j-tie2', project_id: 'p1', created_at: '2026-01-01T12:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+      { id: 'j-tie1', project_id: 'p1', created_at: '2026-01-01T12:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+      { id: 'j-newest', project_id: 'p1', created_at: '2026-01-01T14:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
     ];
 
     vi.mocked(api.fetchProjects).mockResolvedValue(mockProjects as any);
@@ -305,10 +310,26 @@ describe('TanStack Query hooks and polling policies', () => {
 
     const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
 
-    await waitFor(() => expect(result.current.jobs.length).toBe(2));
+    await waitFor(() => expect(result.current.jobs.length).toBe(4));
 
-    expect(result.current.jobs.map(j => j.id)).toEqual(['j-tie2', 'j-old']);
+    // Asserts newest-first (14:00 -> 12:00 -> 10:00) with deterministic ascending ID tie-break (j-tie1 before j-tie2)
+    expect(result.current.jobs.map(j => j.id)).toEqual(['j-newest', 'j-tie1', 'j-tie2', 'j-old']);
     expect(result.current.errors.length).toBe(1);
     expect(result.current.errors[0].projectId).toBe('p2');
+  });
+
+  it('defines statusIcon mask rules explicitly without unset shorthand references', () => {
+    const cssPath = path.resolve(__dirname, '../styles/app.module.css');
+    const cssContent = fs.readFileSync(cssPath, 'utf8');
+    const statusIconMatch = cssContent.match(/\.statusIcon\s*\{([^}]+)\}/);
+    expect(statusIconMatch).not.toBeNull();
+    const rules = statusIconMatch![1];
+    expect(rules).not.toContain('var(--icon-url)');
+    expect(rules).toContain('mask-repeat: no-repeat');
+    expect(rules).toContain('-webkit-mask-repeat: no-repeat');
+    expect(rules).toContain('mask-position: center');
+    expect(rules).toContain('-webkit-mask-position: center');
+    expect(rules).toContain('mask-size: contain');
+    expect(rules).toContain('-webkit-mask-size: contain');
   });
 });

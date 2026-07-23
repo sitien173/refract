@@ -126,3 +126,31 @@
 ### Test evidence
 - RED -> GREEN: Repaired the missing test work in `api.test.ts` and `queries.test.tsx`. The final fresh full web run reports 31 passing tests, up from the prior 23; the build also passes. No query production defect was exposed.
 - Root cause (bugfix only): - none
+
+## Task 7
+
+### Decisions made
+- Fixed status icon mask rules in `web/src/styles/app.module.css` by removing `mask: var(--icon-url)` shorthand which referenced an unset CSS variable and replacing it with explicit longhand `mask-repeat`, `mask-position`, `mask-size`, and `-webkit-` vendor properties.
+- Added explicit unit assertion in `web/src/lib/queries.test.tsx` verifying that `app.module.css` statusIcon rules define exact longhand mask properties without unset `--icon-url` shorthand.
+- Updated `useAllJobs` test in `web/src/lib/queries.test.tsx` to supply equal `created_at` jobs in inverse ID order (`j-tie2` before `j-tie1`) alongside newest and oldest jobs, asserting deterministic ascending ID tie-break after newest-first sorting (`['j-newest', 'j-tie1', 'j-tie2', 'j-old']`).
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN:
+  - `web/src/lib/queries.test.tsx`: Added `defines statusIcon mask rules explicitly without unset shorthand references` test which failed initially when `app.module.css` referenced `var(--icon-url)` (RED state: `expected rules not to contain var(--icon-url)`). After updating `app.module.css`, the test passed cleanly (GREEN state).
+  - `web/src/lib/queries.test.tsx`: Updated `useAllJobs` test to include equal `created_at` jobs in inverse ID order and verified ascending ID tie-breaker sorting.
+  - Executed `npx vitest run` in `web`: 32 passing tests across 4 test suites.
+  - Executed `npm run build` in `web`: Production build completed successfully, updating `src/openmcp/dashboard_static/`.
+- Root cause (bugfix only): `.statusIcon` CSS rule used `mask: var(--icon-url)...` shorthand referencing unset `--icon-url`, conflicting with inline `maskImage` set in `TopBar.tsx`.
+
