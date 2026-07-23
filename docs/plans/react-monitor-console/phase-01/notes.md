@@ -48,7 +48,7 @@
 ### Decisions made
 - Built `AppShell`, `Sidebar` (200px width), `TopBar` (64px height), and `ThemeToggle` (`data-theme` attribute + `localStorage` persistence).
 - Removed React Router components (`BrowserRouter`, `NavLink`, `Routes`, `Route`) from `web/src` for Phase 1 static shell compliance; kept package installed for future phases.
-- Rendered accessible static buttons in `Sidebar` with brand link pointing strictly to `/dashboard`.
+- Rendered accessible static list items in `Sidebar` with brand link pointing strictly to `/dashboard`.
 - Applied Flowforge `--color-navigation-container` surface for selected nav state and `--color-surface` border token rules.
 - Guarded `localStorage` reads and writes in `ThemeToggle` with `try/catch`.
 ### Spec deviations
@@ -60,7 +60,7 @@
 ### Follow-ups for human
 - none
 ### Test evidence
-- RED -> GREEN: `! tgrep 'BrowserRouter|NavLink|<Routes|<Route' web/src -n` returned zero matches. Vitest tests in `web/src/App.test.tsx` verified static buttons and guarded theme persistence.
+- RED -> GREEN: `! tgrep 'BrowserRouter|NavLink|<Routes|<Route' web/src -n` returned zero matches. Vitest tests in `web/src/App.test.tsx` verified static items and guarded theme persistence.
 
 ## Task 5
 ### Decisions made
