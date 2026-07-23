@@ -151,6 +151,26 @@ capabilities = ["code", "review", "consult"]
 """
 
 
+def _deep_profile_config(count: int, *, cycle: bool = False) -> str:
+    declarations: list[str] = []
+    indices = range(count - 1, -1, -1) if not cycle else range(count)
+    for index in indices:
+        declarations.append(f"[profiles.p{index}]")
+        if cycle:
+            declarations.append(
+                f'extends = "p{0 if index == count - 1 else index + 1}"'
+            )
+        elif index:
+            declarations.append(f'extends = "p{index - 1}"')
+        else:
+            declarations.append('consult = "primary"')
+        declarations.append("")
+    return _profile_chain_config("\n".join(declarations)).replace(
+        'default_profile = "child"',
+        f'default_profile = "p{count - 1 if not cycle else 0}"',
+    )
+
+
 def test_profiles_resolve_chains_without_declaration_order(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
@@ -175,6 +195,27 @@ implement = "primary"
     assert set(catalog.profiles["child"]) == {"implement", "review", "consult"}
     assert catalog.profile_declarations["child"].extends == "middle"
     assert set(catalog.profile_declarations["child"].workflows) == {"consult"}
+
+
+def test_deep_valid_profile_chain_does_not_use_recursion(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_deep_profile_config(1100), encoding="utf-8")
+
+    catalog = load_config(path)
+
+    assert set(catalog.profiles["p1099"]) == {"consult"}
+
+
+def test_deep_profile_cycle_reports_ordered_closed_cycle(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_deep_profile_config(1100, cycle=True), encoding="utf-8")
+
+    with pytest.raises(ValueError) as raised:
+        load_config(path)
+
+    message = str(raised.value)
+    assert message.startswith("Profile inheritance cycle: p0 -> p1")
+    assert message.endswith("p1099 -> p0")
 
 
 def test_extends_only_profile_loads(tmp_path) -> None:

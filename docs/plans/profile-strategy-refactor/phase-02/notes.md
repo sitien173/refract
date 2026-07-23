@@ -127,3 +127,23 @@ gets a block even if all `none`.
 
 ### Test evidence
 - RED -> GREEN: Missing-base project self-extends initially reported `missing -> missing`; after the targeted branch fix, `python -m pytest tests/test_config.py tests/test_planning.py` passed 36 tests and the full suite passed 128 tests.
+
+## Task 7
+
+### Decisions made
+- Replaced recursive profile traversal with iterative path unwinding.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Path indexing adds a small per-chain map for linear cycle checks.
+
+### Assumptions
+- Deep configuration sizes are bounded by available memory, not Python call depth.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Deep valid and cyclic chains initially exposed `RecursionError`; after iterative resolution, `python -m pytest tests/test_config.py tests/test_planning.py` passed 38 tests and the full suite passed 130 tests.

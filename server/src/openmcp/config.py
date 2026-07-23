@@ -268,50 +268,54 @@ def _resolve_profile_maps(
     snapshots: dict[str, dict[str, TargetSelection]] | None = None,
 ) -> dict[str, dict[str, TargetSelection]]:
     memo: dict[str, dict[str, TargetSelection]] = {}
-    visiting: list[str] = []
-
-    def resolve(profile_id: str) -> dict[str, TargetSelection]:
-        if profile_id in memo:
-            return dict(memo[profile_id])
-        if profile_id in visiting:
-            cycle = visiting[visiting.index(profile_id):] + [profile_id]
-            raise ValueError(
-                f"Profile inheritance cycle: {' -> '.join(cycle)}"
-            )
-        declaration = declarations.get(profile_id)
-        if declaration is None:
-            if snapshots is not None and profile_id in snapshots:
-                return dict(snapshots[profile_id])
-            raise ValueError(f"Unknown profile parent {profile_id!r}")
-
-        visiting.append(profile_id)
-        parent = declaration.extends
-        if parent is None:
-            resolved: dict[str, TargetSelection] = {}
-        elif parent == profile_id:
-            if snapshots is None:
-                resolved = resolve(parent)
-            elif profile_id in snapshots:
-                resolved = dict(snapshots[profile_id])
-            else:
+    for start_profile in declarations:
+        if start_profile in memo:
+            continue
+        path: list[str] = []
+        path_index: dict[str, int] = {}
+        profile_id = start_profile
+        while True:
+            if profile_id in memo:
+                resolved = dict(memo[profile_id])
+                break
+            if profile_id in path_index:
+                cycle = path[path_index[profile_id]:] + [profile_id]
+                raise ValueError(
+                    f"Profile inheritance cycle: {' -> '.join(cycle)}"
+                )
+            declaration = declarations[profile_id]
+            path_index[profile_id] = len(path)
+            path.append(profile_id)
+            parent = declaration.extends
+            if parent is None:
+                resolved = {}
+                break
+            if parent == profile_id:
+                if snapshots is None:
+                    cycle = [profile_id, profile_id]
+                    raise ValueError(
+                        f"Profile inheritance cycle: {' -> '.join(cycle)}"
+                    )
+                if profile_id in snapshots:
+                    resolved = dict(snapshots[profile_id])
+                    break
                 raise ValueError(
                     f"Profile {profile_id!r} extends unknown parent {parent!r}"
                 )
-        elif parent in declarations:
-            resolved = resolve(parent)
-        elif snapshots is not None and parent in snapshots:
-            resolved = dict(snapshots[parent])
-        else:
+            if parent in declarations:
+                profile_id = parent
+                continue
+            if snapshots is not None and parent in snapshots:
+                resolved = dict(snapshots[parent])
+                break
             raise ValueError(
                 f"Profile {profile_id!r} extends unknown parent {parent!r}"
             )
-        resolved.update(declaration.workflows)
-        visiting.pop()
-        memo[profile_id] = resolved
-        return dict(resolved)
 
-    for profile_id in declarations:
-        resolve(profile_id)
+        for profile_id in reversed(path):
+            resolved = dict(resolved)
+            resolved.update(declarations[profile_id].workflows)
+            memo[profile_id] = resolved
     return memo
 
 
