@@ -107,6 +107,41 @@ describe('API client wrappers', () => {
     expect(result).toEqual(mockProfiles);
   });
 
+  it('rejects transport failures with endpoint and original cause', async () => {
+    const cause = new TypeError('network unavailable');
+    (global.fetch as any).mockRejectedValueOnce(cause);
+
+    try {
+      await fetchStatus();
+      throw new Error('expected fetchStatus to reject');
+    } catch (err: any) {
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.endpoint).toBe('/dashboard/api/status');
+      expect(err.status).toBeUndefined();
+      expect(err.cause).toBe(cause);
+    }
+  });
+
+  it('rejects JSON decode failures with endpoint and original cause', async () => {
+    const cause = new SyntaxError('invalid JSON');
+    (global.fetch as any).mockResolvedValueOnce({
+      ok: true,
+      json: async () => {
+        throw cause;
+      },
+    });
+
+    try {
+      await fetchStatus();
+      throw new Error('expected fetchStatus to reject');
+    } catch (err: any) {
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.endpoint).toBe('/dashboard/api/status');
+      expect(err.status).toBeUndefined();
+      expect(err.cause).toBe(cause);
+    }
+  });
+
   it('rejects with ApiError containing endpoint and HTTP status on non-ok response', async () => {
     (global.fetch as any).mockResolvedValueOnce({
       ok: false,

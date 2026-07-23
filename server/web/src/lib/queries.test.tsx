@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   useStatus,
   useProjects,
@@ -17,6 +17,15 @@ import {
 import * as api from './api';
 
 vi.mock('./api');
+
+async function flushQuery() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    vi.advanceTimersByTime(0);
+    await Promise.resolve();
+  });
+}
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -37,6 +46,8 @@ describe('TanStack Query hooks and polling policies', () => {
   });
 
   afterEach(() => {
+    focusManager.setFocused(true);
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -107,6 +118,173 @@ describe('TanStack Query hooks and polling policies', () => {
     await waitFor(() => expect(eventsResult.current.isSuccess).toBe(true));
     expect(eventsResult.current.data).toEqual(mockEvents);
     expect(api.fetchJobEvents).toHaveBeenCalledWith('j1', expect.anything());
+  });
+
+  it('polls status every 3000ms while mounted', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.fetchStatus).mockResolvedValue({
+      status: 'running',
+      workers: 1,
+      active_jobs: 1,
+      queued_jobs: 0,
+    });
+
+    const { result } = renderHook(() => useStatus(), { wrapper: createWrapper() });
+    expect(api.fetchStatus).toHaveBeenCalledTimes(1);
+    await flushQuery();
+    expect(result.current.isSuccess).toBe(true);
+    expect(api.fetchStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2999);
+      await Promise.resolve();
+    });
+    expect(api.fetchStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    await flushQuery();
+    expect(api.fetchStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('polls enabled job detail and events every 2000ms', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.fetchJob).mockResolvedValue({ id: 'j1', state: 'running' } as any);
+    vi.mocked(api.fetchJobEvents).mockResolvedValue([{ id: 1 }] as any);
+
+    const { result } = renderHook(
+      () => ({
+        job: useJob('j1', { enabled: true }),
+        events: useJobEvents('j1', { enabled: true }),
+      }),
+      { wrapper: createWrapper() }
+    );
+    await flushQuery();
+    expect(result.current.job.isSuccess).toBe(true);
+    expect(result.current.events.isSuccess).toBe(true);
+    expect(api.fetchJob).toHaveBeenCalledTimes(1);
+    expect(api.fetchJobEvents).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1999);
+      await Promise.resolve();
+    });
+    expect(api.fetchJob).toHaveBeenCalledTimes(1);
+    expect(api.fetchJobEvents).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    await flushQuery();
+    expect(api.fetchJob).toHaveBeenCalledTimes(2);
+    expect(api.fetchJobEvents).toHaveBeenCalledTimes(2);
+  });
+
+  it('suppresses polling while the window is hidden', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.fetchStatus).mockResolvedValue({
+      status: 'running',
+      workers: 1,
+      active_jobs: 0,
+      queued_jobs: 0,
+    });
+
+    const { result } = renderHook(() => useStatus(), { wrapper: createWrapper() });
+    await flushQuery();
+    expect(result.current.isSuccess).toBe(true);
+    focusManager.setFocused(false);
+
+    await act(async () => {
+      vi.advanceTimersByTime(6000);
+      await Promise.resolve();
+    });
+    expect(api.fetchStatus).toHaveBeenCalledTimes(1);
+    focusManager.setFocused(true);
+    await flushQuery();
+  });
+
+  it('refetches immediately when window visibility is restored', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.fetchStatus).mockResolvedValue({
+      status: 'running',
+      workers: 1,
+      active_jobs: 0,
+      queued_jobs: 0,
+    });
+
+    const { result } = renderHook(() => useStatus(), { wrapper: createWrapper() });
+    await flushQuery();
+    expect(result.current.isSuccess).toBe(true);
+    focusManager.setFocused(false);
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+      await Promise.resolve();
+    });
+    expect(api.fetchStatus).toHaveBeenCalledTimes(1);
+
+    focusManager.setFocused(true);
+    await flushQuery();
+    expect(api.fetchStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops disabled job polling and unmounted job polling', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.fetchJob).mockResolvedValue({ id: 'j1', state: 'running' } as any);
+
+    const disabled = renderHook(() => useJob('j1', { enabled: false }), {
+      wrapper: createWrapper(),
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(4000);
+      await Promise.resolve();
+    });
+    expect(api.fetchJob).not.toHaveBeenCalled();
+    disabled.unmount();
+
+    const mounted = renderHook(() => useJob('j1', { enabled: true }), {
+      wrapper: createWrapper(),
+    });
+    await flushQuery();
+    expect(mounted.result.current.isSuccess).toBe(true);
+    expect(api.fetchJob).toHaveBeenCalledTimes(1);
+    mounted.unmount();
+
+    await act(async () => {
+      vi.advanceTimersByTime(4000);
+      await Promise.resolve();
+    });
+    expect(api.fetchJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains status data and dataUpdatedAt after a failed refetch', async () => {
+    vi.useFakeTimers();
+    const status = {
+      status: 'running' as const,
+      workers: 2,
+      active_jobs: 1,
+      queued_jobs: 0,
+    };
+    vi.mocked(api.fetchStatus)
+      .mockResolvedValueOnce(status)
+      .mockRejectedValueOnce(new Error('temporary failure'));
+
+    const { result } = renderHook(() => useStatus(), { wrapper: createWrapper() });
+    await flushQuery();
+    expect(result.current.isSuccess).toBe(true);
+    const dataUpdatedAt = result.current.dataUpdatedAt;
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+      await Promise.resolve();
+    });
+    await flushQuery();
+    expect(result.current.isError).toBe(true);
+
+    expect(result.current.data).toEqual(status);
+    expect(result.current.dataUpdatedAt).toBe(dataUpdatedAt);
   });
 
   it('useAllJobs merges project jobs, sorts newest first with id tie-breaker, and preserves partial data on error', async () => {
