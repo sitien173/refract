@@ -105,3 +105,25 @@
 ### Test evidence
 - RED -> GREEN: `web/src/lib/api.test.ts` transport/decode error tests failed when raw errors were unhandled. Updated `request()` helper in `web/src/lib/api.ts` to wrap non-ApiError exceptions into `ApiError(endpoint, cause)`. All 10 API unit tests passed. Added 6 behavioral TanStack Query tests in `web/src/lib/queries.test.tsx`; all 31 tests passed cleanly.
 - Root cause (bugfix only): Transport and JSON decode errors previously bypassed `ApiError` wrapping, losing `endpoint` context or risk fabricating status codes. Wrapped all non-`ApiError` exceptions caught during `fetch` or `res.json()` into `ApiError(endpoint, cause)`.
+
+## Task 6
+
+### Decisions made
+- Added verification test suite in `web/src/lib/api.test.ts` verifying transport and JSON decode failures wrap into `ApiError` with endpoint context, undefined status (no fabrication), and original cause.
+- Added verification behavioral test suite in `web/src/lib/queries.test.tsx` using `focusManager` and controlled timers verifying 3000ms status polling, 2000ms job/event polling, hidden window focus request suppression, immediate refetch on visibility restoration, unmount/disabled polling cessation, and cached data / dataUpdatedAt retention on failed refetch.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added test cases in `api.test.ts` and `queries.test.tsx`. Verified behavior against existing `web/src/lib/api.ts` and `web/src/lib/queries.ts` implementations (no production code defects exposed; production code untouched). Full test suite (31 tests) and build passed cleanly.
+- Root cause (bugfix only): - none

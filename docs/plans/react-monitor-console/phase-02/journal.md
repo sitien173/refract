@@ -9,7 +9,7 @@
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-07-23T15:40:15+07:00
-- Finished: 2026-07-23T15:57:00+07:00
+- Finished: 2026-07-23T15:59:00+07:00
 
 ## Implementation Response
 
@@ -76,6 +76,35 @@ Hardened API error context retention for transport and JSON decode failures and 
 
 ## SPEC COMPLIANCE
 - Meets Spec? YES — Hardened ApiError endpoint context, added behavioral polling and visibility tests, unit tests and build pass clean.
+
+## CLARIFICATIONS NEEDED
+None
+
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase: 2
+- Started: 2026-07-23T15:40:15+07:00
+- Finished: 2026-07-23T15:59:00+07:00
+- Plan dir: docs/plans/react-monitor-console/phase-02
+
+## SUMMARY
+Added behavioral unit and integration tests covering transport/decode ApiError context retention and TanStack Query polling recovery.
+
+## FILES MODIFIED
+| Action | Path | Change |
+| Modify | web/src/lib/api.test.ts | Added unit tests verifying transport and JSON decode failures throw ApiError with endpoint context and original cause without status fabrication |
+| Modify | web/src/lib/queries.test.tsx | Added behavioral tests for 3000ms/2000ms polling, tab hidden suppression, focus restoration refetch, unmount/disabled cessation, and data retention |
+| Modify | docs/plans/react-monitor-console/phase-02/notes.md | Recorded Task 6 decision notes and test evidence |
+| Modify | docs/plans/react-monitor-console/phase-02/journal.md | Appended Task 6 ERP response |
+
+## NOTES
+- phase-02/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Task 5, ## Task 6)
+
+## SPEC COMPLIANCE
+- Meets Spec? YES — Full verification test suite added and passing; all Done When requirements covered.
 
 ## CLARIFICATIONS NEEDED
 None
