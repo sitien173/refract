@@ -177,6 +177,71 @@
   background-color: var(--color-surface-subtle);
 }
 
+.topBarMetrics {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--type-text-xs-size);
+  font-weight: 600;
+}
+
+.statusRunning {
+  background-color: var(--color-decorative-green);
+  color: var(--color-icon-green);
+}
+
+.statusDegraded {
+  background-color: var(--color-decorative-yellow);
+  color: var(--color-icon-yellow);
+}
+
+.statusDisconnected {
+  background-color: var(--color-decorative-red);
+  color: var(--color-icon-red);
+}
+
+.statusConnecting {
+  background-color: var(--color-surface-muted);
+  color: var(--color-text-subdued);
+}
+
+.statusIcon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  background-color: currentColor;
+  mask: var(--icon-url) no-repeat center / contain;
+  -webkit-mask: var(--icon-url) no-repeat center / contain;
+}
+
+.metricChip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  font-size: var(--type-text-xs-size);
+  color: var(--color-text-subdued);
+  background-color: var(--color-surface-muted);
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+}
+
+.metricLabel {
+  font-weight: 500;
+}
+
+.metricValue {
+  font-weight: 600;
+  color: var(--color-text-default);
+}
+
 /* CSS-only narrow-screen adaptation */
 @media (max-width: 768px) {
   .appLayout {
