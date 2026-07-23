@@ -15,6 +15,35 @@ from starlette.staticfiles import StaticFiles
 _STATIC_DIR = Path(__file__).parent / "dashboard_static"
 
 
+def _profile_config_data(config: Any) -> dict[str, dict[str, Any]]:
+    if config.profile_declarations:
+        return {
+            profile_id: {
+                **({"extends": declaration.extends} if declaration.extends else {}),
+                **{
+                    workflow: {
+                        "targets": list(selection.targets),
+                        "max_attempts": selection.max_attempts,
+                        "timeout_s": selection.timeout_s,
+                    }
+                    for workflow, selection in declaration.workflows.items()
+                },
+            }
+            for profile_id, declaration in config.profile_declarations.items()
+        }
+    return {
+        profile_id: {
+            workflow: {
+                "targets": list(selection.targets),
+                "max_attempts": selection.max_attempts,
+                "timeout_s": selection.timeout_s,
+            }
+            for workflow, selection in profile_map.items()
+        }
+        for profile_id, profile_map in config.profiles.items()
+    }
+
+
 def register_dashboard_routes(mcp_server: FastMCP) -> None:
     from openmcp.server import _active_runtime, _json
 
@@ -127,17 +156,7 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
                 }
                 for t in cfg.targets
             ],
-            "profiles": {
-                prof_name: {
-                    wf_name: {
-                        "targets": list(sel.targets),
-                        "max_attempts": sel.max_attempts,
-                        "timeout_s": sel.timeout_s,
-                    }
-                    for wf_name, sel in prof_map.items()
-                }
-                for prof_name, prof_map in cfg.profiles.items()
-            },
+            "profiles": _profile_config_data(cfg),
         }
         return _json_response(data)
 

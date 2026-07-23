@@ -136,6 +136,12 @@ def _dict_to_toml_doc(
             prof_table = p_table[prof_name]
             if isinstance(prof_data, dict):
                 for wf_name, wf_val in prof_data.items():
+                    if wf_name == "extends":
+                        if wf_val is None:
+                            prof_table.pop(wf_name, None)
+                        else:
+                            prof_table[wf_name] = wf_val
+                        continue
                     if wf_val is None:
                         prof_table.pop(wf_name, None)
                     elif isinstance(wf_val, dict):

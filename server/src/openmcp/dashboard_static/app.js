@@ -253,11 +253,7 @@ document.addEventListener('alpine:init', () => {
       const key = name.trim();
       if (!this.configData.profiles) this.configData.profiles = {};
       if (this.configData.profiles[key]) return;
-      this.configData.profiles[key] = {
-        implement: { targets: [], max_attempts: 1, timeout_s: 0 },
-        review: { targets: [], max_attempts: 1, timeout_s: 0 },
-        consult: { targets: [], max_attempts: 1, timeout_s: 0 }
-      };
+      this.configData.profiles[key] = { extends: '' };
     },
 
     removeProfile(key) {
@@ -319,6 +315,13 @@ document.addEventListener('alpine:init', () => {
         t.max_concurrency = parseInt(t.max_concurrency, 10) || 1;
         if (typeof t.args === 'string') {
           t.args = t.args.split(',').map(s => s.trim()).filter(Boolean);
+        }
+      }
+
+      for (const profile of Object.values(payload.profiles || {})) {
+        if (typeof profile.extends === 'string') {
+          profile.extends = profile.extends.trim();
+          if (!profile.extends) delete profile.extends;
         }
       }
 

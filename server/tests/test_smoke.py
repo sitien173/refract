@@ -28,7 +28,7 @@ def test_backend_params_are_transport_only() -> None:
     assert {field.name for field in fields(PiParams)} == expected
 
 
-def test_doctor_validates_profile_completeness(monkeypatch, tmp_path, capsys) -> None:
+def test_doctor_accepts_partial_profiles(monkeypatch, tmp_path, capsys) -> None:
     from openmcp.cli import main
 
     home = tmp_path / "openmcp"
@@ -50,9 +50,8 @@ implement = "primary"
 
     with pytest.raises(SystemExit) as raised:
         main(["doctor"])
-
-    assert raised.value.code == 1
-    assert "does not map built-in workflows" in capsys.readouterr().err
+    assert raised.value.code == 0
+    assert "does not map built-in workflows" not in capsys.readouterr().err
 
 
 def test_serve_reports_configuration_errors(monkeypatch, tmp_path, capsys) -> None:

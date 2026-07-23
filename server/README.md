@@ -132,6 +132,19 @@ review = "sentinel-primary"
 consult = "sage-primary"
 ```
 
+A profile may explicitly inherit one parent. Child workflow selections replace
+the parent's selection for that workflow. Profiles may be partial; an unmapped
+workflow is rejected when its execution plan is resolved.
+
+```toml
+[profiles.fast]
+extends = "balanced"
+implement = ["forge-primary"]
+
+[profiles.advisor]
+consult = "sage-primary"
+```
+
 A workflow selects intent. A profile maps each workflow to one target or an
 ordered target list. Targets hold backend execution policy. Every target must
 advertise the capability required by its workflow.

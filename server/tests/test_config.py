@@ -138,6 +138,231 @@ consult = "primary"
     assert resolve_execution_plan(get_workflow("implement"), resolved, "quality").selection.targets == ("primary",)
 
 
+def _profile_chain_config(profiles: str) -> str:
+    return f"""[daemon]
+default_profile = "child"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+capabilities = ["code", "review", "consult"]
+
+{profiles}
+"""
+
+
+def test_profiles_resolve_chains_without_declaration_order(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _profile_chain_config(
+            """[profiles.child]
+extends = "middle"
+consult = "primary"
+
+[profiles.middle]
+extends = "base"
+review = "primary"
+
+[profiles.base]
+implement = "primary"
+"""
+        ),
+        encoding="utf-8",
+    )
+
+    catalog = load_config(path)
+
+    assert set(catalog.profiles["child"]) == {"implement", "review", "consult"}
+    assert catalog.profile_declarations["child"].extends == "middle"
+    assert set(catalog.profile_declarations["child"].workflows) == {"consult"}
+
+
+def test_extends_only_profile_loads(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _profile_chain_config(
+            """[profiles.base]
+implement = "primary"
+
+[profiles.child]
+extends = "base"
+"""
+        ),
+        encoding="utf-8",
+    )
+
+    catalog = load_config(path)
+
+    assert catalog.profiles["child"] == catalog.profiles["base"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [
+        ("extends = \"\"\nconsult = \"primary\"", "non-empty string"),
+        ("extends = 1\nconsult = \"primary\"", "non-empty string"),
+    ],
+)
+def test_extends_must_be_non_empty_string(tmp_path, profile, expected) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_profile_chain_config(f"[profiles.child]\n{profile}\n"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected):
+        load_config(path)
+
+
+def test_empty_no_parent_profile_is_rejected(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_profile_chain_config("[profiles.child]\n"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="declare extends or a workflow"):
+        load_config(path)
+
+
+def test_unknown_profile_parent_names_child_and_parent(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _profile_chain_config("[profiles.child]\nextends = \"missing\"\n"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="child.*missing"):
+        load_config(path)
+
+
+def test_profile_inheritance_cycle_names_ordered_closed_cycle(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _profile_chain_config(
+            """[profiles.a]
+extends = "b"
+consult = "primary"
+
+[profiles.b]
+extends = "c"
+
+[profiles.c]
+extends = "a"
+"""
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="a -> b -> c -> a"):
+        load_config(path)
+
+
+def _layered_base_config(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _profile_chain_config(
+            """[profiles.base]
+implement = "primary"
+review = "primary"
+
+[profiles.shadow]
+consult = "primary"
+"""
+        ).replace('default_profile = "child"', 'default_profile = "base"'),
+        encoding="utf-8",
+    )
+    return load_config(path)
+
+
+def test_consult_only_profile_is_partial(tmp_path) -> None:
+    catalog = _layered_base_config(tmp_path)
+
+    assert set(catalog.profiles["shadow"]) == {"consult"}
+
+
+def test_project_profile_replaces_same_name_base_profile(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    (root / ".openmcp" / "config.toml").write_text(
+        """[profiles.shadow]
+review = "primary"
+""",
+        encoding="utf-8",
+    )
+    base = _layered_base_config(tmp_path)
+
+    resolved = load_project_config(root, base)
+
+    assert set(resolved.profiles["shadow"]) == {"review"}
+    assert set(base.profiles["shadow"]) == {"consult"}
+
+
+def test_project_profile_extends_base_profile_across_layers(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    (root / ".openmcp" / "config.toml").write_text(
+        """[profiles.child]
+extends = "base"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    base = _layered_base_config(tmp_path)
+
+    resolved = load_project_config(root, base)
+
+    assert set(resolved.profiles["child"]) == {"implement", "review", "consult"}
+
+
+def test_project_self_extends_uses_shadowed_base_snapshot(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    (root / ".openmcp" / "config.toml").write_text(
+        """[profiles.base]
+extends = "base"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    base = _layered_base_config(tmp_path)
+
+    resolved = load_project_config(root, base)
+
+    assert set(resolved.profiles["base"]) == {"implement", "review", "consult"}
+
+
+def test_project_cycles_remain_cycles_with_base_snapshots(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    (root / ".openmcp" / "config.toml").write_text(
+        """[profiles.a]
+extends = "b"
+
+[profiles.b]
+extends = "a"
+""",
+        encoding="utf-8",
+    )
+    base = _layered_base_config(tmp_path)
+
+    with pytest.raises(ValueError, match="a -> b -> a"):
+        load_project_config(root, base)
+
+
+def test_project_load_does_not_mutate_base_declarations(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    (root / ".openmcp" / "config.toml").write_text(
+        """[profiles.child]
+extends = "base"
+""",
+        encoding="utf-8",
+    )
+    base = _layered_base_config(tmp_path)
+    base_profiles = {name: dict(mapping) for name, mapping in base.profiles.items()}
+    base_declarations = dict(base.profile_declarations)
+
+    load_project_config(root, base)
+
+    assert base.profiles == base_profiles
+    assert base.profile_declarations == base_declarations
+
+
 @pytest.mark.parametrize("backend,args", [("agy", ("--",)), ("codex", ("--cd", "/other")), ("pi", ("--extension", "unsafe.ts"))])
 def test_config_rejects_reserved_target_args(backend, args) -> None:
     with pytest.raises(ValueError):

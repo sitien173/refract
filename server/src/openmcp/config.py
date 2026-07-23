@@ -42,6 +42,14 @@ class TargetSelection:
 
 
 @dataclass(slots=True, frozen=True)
+class ProfileDeclaration:
+    """Normalized raw declaration for one profile."""
+
+    extends: str | None = None
+    workflows: dict[str, TargetSelection] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
 class LoggingConfig:
     """Application log sinks and retention policy."""
 
@@ -65,6 +73,7 @@ class DaemonConfig:
     default_profile: str = ""
     targets: tuple[TargetConfig, ...] = field(default_factory=tuple)
     profiles: dict[str, dict[str, TargetSelection]] = field(default_factory=dict)
+    profile_declarations: dict[str, ProfileDeclaration] = field(default_factory=dict)
     config_path: Path | None = None
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
@@ -216,48 +225,87 @@ def _target_selection(
     )
 
 
-def _profiles(
+def _profile_declarations(
     raw: Any,
     targets: tuple[TargetConfig, ...],
-    *,
-    base: dict[str, dict[str, TargetSelection]] | None = None,
-    inherited_profile: str = "balanced",
-) -> dict[str, dict[str, TargetSelection]]:
-    if raw is None:
-        if base is None:
-            raise ValueError("[profiles] must contain at least one profile")
-        return base
+) -> dict[str, ProfileDeclaration]:
     if not isinstance(raw, dict) or not raw:
         raise ValueError("[profiles] must contain at least one profile")
-    profiles = {
-        profile_id: dict(mapping) for profile_id, mapping in (base or {}).items()
-    }
-    inherited = profiles.get(inherited_profile, {})
     target_by_id = {target.id: target for target in targets}
-    for profile_id, mapping in raw.items():
-        profile_id = str(profile_id)
+    declarations: dict[str, ProfileDeclaration] = {}
+    for raw_profile_id, mapping in raw.items():
+        profile_id = str(raw_profile_id)
         if not isinstance(mapping, dict) or not mapping:
-            raise ValueError(f"Profile {profile_id!r} must be a table")
-        resolved = dict(profiles.get(profile_id, inherited))
-        resolved.update(
-            {
-                str(workflow): _target_selection(
-                    value,
-                    profile_id=profile_id,
-                    workflow=str(workflow),
-                    target_by_id=target_by_id,
-                )
-                for workflow, value in mapping.items()
-            }
-        )
-        missing = set(_BUILTIN_WORKFLOW_CAPABILITIES) - resolved.keys()
-        if missing:
             raise ValueError(
-                f"Profile {profile_id!r} does not map built-in workflows: "
-                f"{sorted(missing)}"
+                f"Profile {profile_id!r} must declare extends or a workflow"
             )
-        profiles[profile_id] = resolved
-    return profiles
+        raw_extends = mapping.get("extends")
+        if raw_extends is None:
+            extends = None
+        elif not isinstance(raw_extends, str) or not raw_extends.strip():
+            raise ValueError(
+                f"Profile {profile_id!r} extends must be a non-empty string"
+            )
+        else:
+            extends = raw_extends.strip()
+        workflows = {
+            str(workflow): _target_selection(
+                value,
+                profile_id=profile_id,
+                workflow=str(workflow),
+                target_by_id=target_by_id,
+            )
+            for workflow, value in mapping.items()
+            if workflow != "extends"
+        }
+        declarations[profile_id] = ProfileDeclaration(extends, workflows)
+    return declarations
+
+
+def _resolve_profile_maps(
+    declarations: dict[str, ProfileDeclaration],
+    *,
+    snapshots: dict[str, dict[str, TargetSelection]] | None = None,
+) -> dict[str, dict[str, TargetSelection]]:
+    memo: dict[str, dict[str, TargetSelection]] = {}
+    visiting: list[str] = []
+
+    def resolve(profile_id: str) -> dict[str, TargetSelection]:
+        if profile_id in memo:
+            return dict(memo[profile_id])
+        if profile_id in visiting:
+            cycle = visiting[visiting.index(profile_id):] + [profile_id]
+            raise ValueError(
+                f"Profile inheritance cycle: {' -> '.join(cycle)}"
+            )
+        declaration = declarations.get(profile_id)
+        if declaration is None:
+            if snapshots is not None and profile_id in snapshots:
+                return dict(snapshots[profile_id])
+            raise ValueError(f"Unknown profile parent {profile_id!r}")
+
+        visiting.append(profile_id)
+        parent = declaration.extends
+        if parent is None:
+            resolved: dict[str, TargetSelection] = {}
+        elif parent == profile_id and snapshots is not None and profile_id in snapshots:
+            resolved = dict(snapshots[profile_id])
+        elif parent in declarations:
+            resolved = resolve(parent)
+        elif snapshots is not None and parent in snapshots:
+            resolved = dict(snapshots[parent])
+        else:
+            raise ValueError(
+                f"Profile {profile_id!r} extends unknown parent {parent!r}"
+            )
+        resolved.update(declaration.workflows)
+        visiting.pop()
+        memo[profile_id] = resolved
+        return dict(resolved)
+
+    for profile_id in declarations:
+        resolve(profile_id)
+    return memo
 
 
 def validate_target_args(
@@ -436,7 +484,8 @@ def load_config(path: Path | None = None) -> DaemonConfig:
     if "profiles" not in raw:
         raise ValueError("Missing required [profiles] section")
     targets = _targets(raw["targets"])
-    profiles = _profiles(raw["profiles"], targets)
+    profile_declarations = _profile_declarations(raw["profiles"], targets)
+    profiles = _resolve_profile_maps(profile_declarations)
     default_profile = str(daemon.get("default_profile", "")).strip()
     if not default_profile:
         raise ValueError("[daemon].default_profile must be set")
@@ -455,6 +504,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         default_profile=default_profile,
         targets=targets,
         profiles=profiles,
+        profile_declarations=profile_declarations,
         logging=_logging_config(raw.get("logging"), home),
     )
 
@@ -479,12 +529,19 @@ def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
     if unsupported_project:
         raise ValueError(f"Unsupported project settings: {sorted(unsupported_project)}")
 
-    profiles = _profiles(
-        raw.get("profiles"),
-        base.targets,
-        base=base.profiles,
-        inherited_profile=base.default_profile,
-    )
+    if "profiles" not in raw:
+        profiles = {profile_id: dict(mapping) for profile_id, mapping in base.profiles.items()}
+        profile_declarations = dict(base.profile_declarations)
+    else:
+        project_declarations = _profile_declarations(raw["profiles"], base.targets)
+        project_profiles = _resolve_profile_maps(
+            project_declarations,
+            snapshots=base.profiles,
+        )
+        profiles = {profile_id: dict(mapping) for profile_id, mapping in base.profiles.items()}
+        profiles.update(project_profiles)
+        profile_declarations = dict(base.profile_declarations)
+        profile_declarations.update(project_declarations)
 
     default_profile = str(project.get("default_profile", base.default_profile)).strip()
     if default_profile not in profiles:
@@ -493,12 +550,14 @@ def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
         base,
         default_profile=default_profile,
         profiles=profiles,
+        profile_declarations=profile_declarations,
     )
 
 
 __all__ = [
     "DaemonConfig",
     "LoggingConfig",
+    "ProfileDeclaration",
     "TargetConfig",
     "TargetSelection",
     "load_config",

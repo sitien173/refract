@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_asyncio
+from dataclasses import replace
 
 import openmcp.server
 from openmcp.runtime import Runtime
@@ -142,6 +143,7 @@ async def test_dashboard_static_index(async_client: httpx.AsyncClient) -> None:
     assert "<!DOCTYPE html>" in res.text or "<html" in res.text
     assert "Task Guide" in res.text
     assert "fetchTaskGuide()" in res.text
+    assert "Parent Profile" in res.text
 
 
 
@@ -267,8 +269,41 @@ async def test_dashboard_api_get_config(async_client: httpx.AsyncClient) -> None
 
 
 @pytest.mark.asyncio
+async def test_dashboard_get_config_preserves_profile_declarations(
+    async_client: httpx.AsyncClient,
+    active_runtime: Runtime,
+) -> None:
+    from openmcp.config import ProfileDeclaration
+
+    selection = next(iter(active_runtime.catalog.profiles["balanced"].values()))
+    cfg = replace(
+        active_runtime.catalog,
+        profile_declarations={
+            "base": ProfileDeclaration(workflows={"implement": selection}),
+            "child": ProfileDeclaration(
+                extends="base",
+                workflows={"consult": selection},
+            ),
+        },
+    )
+    active_runtime.config = cfg
+    active_runtime._catalog = cfg
+
+    res = await async_client.get("/dashboard/api/config")
+
+    assert res.status_code == 200
+    assert res.json()["profiles"]["child"] == {
+        "extends": "base",
+        "consult": {
+            "targets": ["primary"],
+            "max_attempts": 1,
+            "timeout_s": 0,
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_dashboard_api_put_config_valid(async_client: httpx.AsyncClient, active_runtime: Runtime, tmp_path) -> None:
-    from dataclasses import replace
     cfg_file = tmp_path / "config.toml"
     cfg_file.write_text("[daemon]\nport = 8765\n", encoding="utf-8")
     active_runtime.config = replace(active_runtime.config, config_path=cfg_file)
@@ -287,6 +322,44 @@ async def test_dashboard_api_put_config_valid(async_client: httpx.AsyncClient, a
     assert res_data["success"] is True
     assert "restart_required" in res_data
     assert "max_jobs" in res_data["restart_required"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_unchanged_get_put_preserves_extends(
+    async_client: httpx.AsyncClient,
+    active_runtime: Runtime,
+    tmp_path,
+) -> None:
+    from openmcp.config import load_config
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        _strict_config()
+        .replace('default_profile = "balanced"', 'default_profile = "base"')
+        .replace(
+            "[profiles.balanced]\nimplement = \"primary\"\nreview = \"primary\"\nconsult = \"primary\"",
+            """[profiles.base]
+implement = "primary"
+
+[profiles.child]
+extends = "base"
+consult = "primary"
+"""),
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_file)
+    active_runtime.config = cfg
+    active_runtime._catalog = cfg
+
+    get_res = await async_client.get("/dashboard/api/config")
+    put_res = await async_client.put("/dashboard/api/config", json=get_res.json())
+
+    assert get_res.status_code == 200
+    assert put_res.status_code == 200
+    text = cfg_file.read_text(encoding="utf-8")
+    assert 'extends = "base"' in text
+    assert '[profiles.child]' in text
+    assert '[profiles.child.consult]' in text
 
 
 @pytest.mark.asyncio
@@ -349,4 +422,3 @@ async def test_dashboard_api_put_task_guide_invalid(async_client: httpx.AsyncCli
     put_res = await async_client.put("/dashboard/api/task-guide", json={})
     assert put_res.status_code == 400
     assert "error" in put_res.json()
-
