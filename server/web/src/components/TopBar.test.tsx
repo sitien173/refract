@@ -96,6 +96,8 @@ describe('TopBar component connection state and counts', () => {
     );
 
     expect(screen.getByTestId('status-pill')).toHaveTextContent('Running');
+    const initialLastUpdatedText = screen.getByTestId('last-updated').textContent;
+    expect(initialLastUpdatedText).not.toBe('—');
 
     // Second render: error during background refetch
     vi.mocked(queries.useStatus).mockReturnValue({
@@ -115,6 +117,7 @@ describe('TopBar component connection state and counts', () => {
     expect(screen.getByTestId('count-workers')).toHaveTextContent('3');
     expect(screen.getByTestId('count-active')).toHaveTextContent('1');
     expect(screen.getByTestId('count-queued')).toHaveTextContent('0');
+    expect(screen.getByTestId('last-updated')).toHaveTextContent(initialLastUpdatedText!);
   });
 
   it('recovers connection status on subsequent successful fetch', () => {

@@ -152,3 +152,32 @@ None
 
 ## NEXT
 TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase: 2
+- Started: 2026-07-23T16:18:00+07:00
+- Finished: 2026-07-23T16:19:00+07:00
+- Plan dir: docs/plans/react-monitor-console/phase-02
+
+## SUMMARY
+Asserted exact retained top bar last-updated timestamp in success-to-background-error TopBar unit test.
+
+## FILES MODIFIED
+| Action | Path | Change |
+| Modify | web/src/components/TopBar.test.tsx | Captured displayed last-updated timestamp post-success and asserted exact equality after background error refetch |
+| Modify | docs/plans/react-monitor-console/phase-02/notes.md | Appended Task 8 decision notes, TDD test evidence, and root cause diagnosis |
+| Modify | docs/plans/react-monitor-console/phase-02/journal.md | Appended Phase 2 review finding resolution ERP response |
+
+## NOTES
+- phase-02/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Task 5, ## Task 6, ## Task 7, ## Task 8)
+
+## SPEC COMPLIANCE
+- Meets Spec? YES — All Phase 2 review findings fixed, 32 web unit tests pass, production web build passes.
+
+## CLARIFICATIONS NEEDED
+None
+
+## NEXT
+TASK_COMPLETE
+

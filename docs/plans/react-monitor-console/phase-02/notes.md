@@ -153,3 +153,26 @@
   - Executed `npx vitest run` in `web`: 32 passing tests across 4 test suites.
   - Executed `npm run build` in `web`: Production build completed successfully, updating `src/openmcp/dashboard_static/`.
 - Root cause (bugfix only): `.statusIcon` CSS rule used `mask: var(--icon-url)...` shorthand referencing unset `--icon-url`, conflicting with inline `maskImage` set in `TopBar.tsx`.
+
+## Task 8
+
+### Decisions made
+- Updated success-to-background-error `TopBar` test to capture `last-updated` display string after initial success and assert exact equality on `screen.getByTestId('last-updated')` after background error refetch.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: `web/src/components/TopBar.test.tsx` captured post-success `last-updated` timestamp display (`initialLastUpdatedText`) and asserted exact equality after failed background refetch.
+- Executed `npx vitest run` in `web`: 32 passing tests across 4 test suites.
+- Executed `npm run build` in `web`: Production web build passed cleanly.
+- Root cause (bugfix only): `TopBar` success-to-background-error test verified retained counts but omitted an explicit equality assertion verifying retained `last-updated` timestamp display match.
