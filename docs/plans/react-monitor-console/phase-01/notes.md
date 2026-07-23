@@ -89,3 +89,20 @@
 - none
 ### Test evidence
 - RED -> GREEN: Verification checks for file existence, asset pathing, no external network calls, clean pytest runs, no router components, zero whitespace errors, and unchanged Python backend passed.
+
+## Task 7
+### Decisions made
+- Deleted `web/src/vite-env.d.ts` and added `"types": ["vite/client"]` to `web/tsconfig.json` to keep imports typed within allowed files.
+- Converted dead `<button>` controls in `web/src/components/Sidebar.tsx` to noninteractive `<ul>`/`<li>` semantic list items with `aria-current="page"` for Overview.
+- Removed custom letter-spacing tracking on `.brandBadge` and removed all `cursor: pointer` rules in `web/src/styles/app.module.css`.
+- Rebuilt production assets into `src/openmcp/dashboard_static/` and updated `web/src/App.test.tsx` for list item structure.
+### Spec deviations
+- none
+### Tradeoffs accepted
+- none
+### Assumptions
+- None.
+### Follow-ups for human
+- none
+### Test evidence
+- RED -> GREEN: `test ! -e web/src/vite-env.d.ts`, `! tgrep -F 'letter-spacing' web/src/styles/app.module.css -n`, `! tgrep -F 'cursor: pointer' web/src/styles/app.module.css -n`, `npm --prefix web test -- --run`, `npm --prefix web run build`, `uv run pytest tests/test_dashboard.py -k 'dashboard_static'`, and `git diff --check` all passed cleanly.

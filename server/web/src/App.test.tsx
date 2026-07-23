@@ -9,13 +9,15 @@ describe('AppShell and ThemeToggle', () => {
     document.documentElement.removeAttribute('data-theme');
   });
 
-  it('renders static navigation buttons in sidebar', () => {
+  it('renders static navigation items in sidebar', () => {
     render(<App />);
-    expect(screen.getByRole('button', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Projects' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Jobs' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Targets' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Profiles' })).toBeInTheDocument();
+    const overviewItem = screen.getByText('Overview').closest('li');
+    expect(overviewItem).toBeInTheDocument();
+    expect(overviewItem).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByText('Projects')).toBeInTheDocument();
+    expect(screen.getByText('Jobs')).toBeInTheDocument();
+    expect(screen.getByText('Targets')).toBeInTheDocument();
+    expect(screen.getByText('Profiles')).toBeInTheDocument();
   });
 
   it('toggles light/dark theme and updates localStorage', () => {

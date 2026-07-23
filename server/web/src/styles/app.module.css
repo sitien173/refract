@@ -44,7 +44,6 @@
 .brandBadge {
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
   background-color: var(--color-navigation-container);
   color: var(--color-navigation-inverse);
   padding: 2px 6px;
@@ -53,10 +52,16 @@
 }
 
 .navSection {
+  flex: 1;
+}
+
+.navList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  flex: 1;
 }
 
 .navItem {
@@ -72,15 +77,10 @@
   border: 0;
   width: 100%;
   text-align: left;
-  cursor: pointer;
   user-select: none;
   transition: background-color var(--motion-fast) var(--ease-standard);
   text-decoration: none;
   box-sizing: border-box;
-}
-
-.navItem:hover {
-  background-color: var(--color-surface-muted);
 }
 
 .navItemActive {
@@ -174,7 +174,6 @@
   color: var(--color-text-default);
   font-size: var(--type-text-xs-size);
   font-weight: 500;
-  cursor: pointer;
   transition: background-color var(--motion-fast) var(--ease-standard);
 }
 
@@ -201,7 +200,7 @@
     margin-bottom: 0;
   }
 
-  .navSection {
+  .navList {
     flex-direction: row;
     flex-wrap: wrap;
     padding: var(--space-xs);

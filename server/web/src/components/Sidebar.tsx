@@ -30,26 +30,27 @@ export const Sidebar: React.FC = () => {
         </a>
       </div>
       <nav className={styles.navSection} aria-label="Main Navigation">
-        {navItems.map((item) => {
-          const isSelected = item.id === 'overview';
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={
-                isSelected
-                  ? `${styles.navItem} ${styles.navItemActive}`
-                  : styles.navItem
-              }
-              aria-current={isSelected ? 'page' : undefined}
-            >
-              <span className={styles.navIcon}>
-                <img src={item.icon} alt="" width={16} height={16} />
-              </span>
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
+        <ul className={styles.navList}>
+          {navItems.map((item) => {
+            const isSelected = item.id === 'overview';
+            return (
+              <li
+                key={item.id}
+                className={
+                  isSelected
+                    ? `${styles.navItem} ${styles.navItemActive}`
+                    : styles.navItem
+                }
+                aria-current={isSelected ? 'page' : undefined}
+              >
+                <span className={styles.navIcon}>
+                  <img src={item.icon} alt="" width={16} height={16} />
+                </span>
+                <span>{item.label}</span>
+              </li>
+            );
+          })}
+        </ul>
       </nav>
       <div className={styles.sidebarFooter}>
         <span>OpenMCP v0.1.0</span>
