@@ -48,6 +48,29 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 1 correction / 2026-07-23T06:10:00Z / 2026-07-23T06:15:14Z / docs/plans/profile-strategy-refactor
+## SUMMARY
+Serve now loads strict configuration before transport and honors CLI overrides.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| modified | src/openmcp/cli.py | Loaded strict configuration and applied configured transport before CLI overrides. |
+| modified | src/openmcp/server.py | Reused preloaded configuration during lifespan startup and cleared it on shutdown. |
+| modified | tests/test_server.py | Added configured transport and CLI precedence regressions. |
+| modified | tests/test_smoke.py | Added missing and invalid serve configuration error coverage. |
+| modified | docs/plans/profile-strategy-refactor/phase-01/notes.md | Recorded correction decisions and test evidence. |
+| modified | docs/plans/profile-strategy-refactor/phase-01/journal.md | Recorded this correction response. |
+## NOTES
+- phase-01/notes.md  (## Task 5)
+## SPEC COMPLIANCE
+- Meets Spec? YES  — Targeted and full test gates pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 <!-- Coordinator appends the independent review response here. -->

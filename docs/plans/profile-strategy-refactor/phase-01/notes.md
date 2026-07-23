@@ -90,3 +90,25 @@ gets a block even if all `none`.
 ### Test evidence
 - RED -> GREEN: Clean-environment server import failed on import-time loading, then passed after startup deferral.
 - GREEN: Targeted phase gates passed 78 tests; full suite passed 102 tests with 2 deselected.
+
+## Task 5
+
+### Decisions made
+- The CLI owns pre-transport configuration loading.
+- Server lifespan reuses preloaded configuration and loads it directly otherwise.
+- Preloaded configuration is cleared after transport shutdown.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- FastMCP keeps loopback defaults until `serve` applies strict configuration.
+
+### Assumptions
+- `cli.main` is the canonical daemon startup path.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Transport regression tests first observed hardcoded host and port, then targeted tests passed 48 tests and the full suite passed 106 tests with 2 deselected.

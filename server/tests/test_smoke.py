@@ -55,6 +55,37 @@ implement = "primary"
     assert "does not map built-in workflows" in capsys.readouterr().err
 
 
+def test_serve_reports_configuration_errors(monkeypatch, tmp_path, capsys) -> None:
+    from openmcp.cli import main
+
+    monkeypatch.setenv("OPENMCP_HOME", str(tmp_path / "missing-home"))
+
+    with pytest.raises(SystemExit) as raised:
+        main(["serve"])
+
+    error = capsys.readouterr().err
+    assert raised.value.code == 1
+    assert "Configuration error" in error
+    assert "Missing config file" in error
+
+
+def test_serve_reports_invalid_configuration(monkeypatch, tmp_path, capsys) -> None:
+    from openmcp.cli import main
+
+    home = tmp_path / "openmcp"
+    home.mkdir()
+    (home / "config.toml").write_text("[daemon]\ndefault_profile = 'balanced'\n", encoding="utf-8")
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+
+    with pytest.raises(SystemExit) as raised:
+        main(["serve"])
+
+    error = capsys.readouterr().err
+    assert raised.value.code == 1
+    assert "Configuration error" in error
+    assert "[targets]" in error
+
+
 def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
     from openmcp.backends.codex import _extract_session_id_from_latest_session
 

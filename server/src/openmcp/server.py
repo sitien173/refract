@@ -32,7 +32,8 @@ _ACTIVE_RUNTIME: Runtime | None = None
 @asynccontextmanager
 async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
     global _ACTIVE_RUNTIME, _DAEMON_CONFIG
-    _DAEMON_CONFIG = load_config()
+    if _DAEMON_CONFIG is None:
+        _DAEMON_CONFIG = load_config()
     configure_logging(_DAEMON_CONFIG.logging)
     runtime = Runtime(_DAEMON_CONFIG)
     await runtime.start()
@@ -42,6 +43,7 @@ async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
     finally:
         _ACTIVE_RUNTIME = None
         await runtime.close()
+        _DAEMON_CONFIG = None
 
 
 mcp = FastMCP("openmcp", host="127.0.0.1", port=8765, streamable_http_path="/mcp", json_response=True, lifespan=_lifespan)
@@ -256,4 +258,3 @@ from openmcp.dashboard import register_dashboard_routes
 register_dashboard_routes(mcp)
 
 __all__ = ["doctor", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "reload", "run", "status", "task_guide"]
-

@@ -114,12 +114,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(2)
 
     _apply_logging_overrides(args)
-    # Import after CLI overrides so server startup uses the final settings.
+    try:
+        config = load_config()
+    except ValueError as exc:
+        sys.stderr.write(f"Configuration error: {exc}\n")
+        raise SystemExit(1) from exc
+    # Import after configuration so startup uses the final settings.
     from openmcp import server
 
-    if getattr(args, "host", None):
+    server._DAEMON_CONFIG = config
+    server.mcp.settings.host = config.host
+    server.mcp.settings.port = config.port
+    if getattr(args, "host", None) is not None:
         server.mcp.settings.host = args.host
-    if getattr(args, "port", None):
+    if getattr(args, "port", None) is not None:
         server.mcp.settings.port = args.port
     log.info(
         "Launching HTTP transport",
@@ -136,6 +144,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     except Exception:
         log.exception("Daemon terminated unexpectedly", extra={"event": "cli.failed"})
         raise
+    finally:
+        server._DAEMON_CONFIG = None
 
 
 __all__ = ["main"]

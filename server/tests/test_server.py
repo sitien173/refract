@@ -10,6 +10,24 @@ from openmcp.models import JobView
 from openmcp.server import mcp
 
 
+def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
+    return f"""[daemon]
+host = "{host}"
+port = {port}
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+capabilities = ["code", "review", "consult"]
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+"""
+
+
 def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
     env = os.environ.copy()
     env["OPENMCP_HOME"] = str(tmp_path / "missing-home")
@@ -21,6 +39,58 @@ def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_serve_uses_configured_transport(tmp_path, monkeypatch) -> None:
+    from openmcp import cli, server
+
+    home = tmp_path / "openmcp"
+    home.mkdir()
+    (home / "config.toml").write_text(_serve_config("127.0.0.2", 9123), encoding="utf-8")
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    captured: dict[str, object] = {}
+    old_host = server.mcp.settings.host
+    old_port = server.mcp.settings.port
+
+    def fake_run(*, transport: str) -> None:
+        captured["transport"] = transport
+        captured["host"] = server.mcp.settings.host
+        captured["port"] = server.mcp.settings.port
+
+    monkeypatch.setattr(server.mcp, "run", fake_run)
+    try:
+        cli.main(["serve"])
+    finally:
+        server.mcp.settings.host = old_host
+        server.mcp.settings.port = old_port
+
+    assert captured == {"transport": "streamable-http", "host": "127.0.0.2", "port": 9123}
+
+
+def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
+    from openmcp import cli, server
+
+    home = tmp_path / "openmcp"
+    home.mkdir()
+    (home / "config.toml").write_text(_serve_config("127.0.0.2", 9123), encoding="utf-8")
+    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    captured: dict[str, object] = {}
+    old_host = server.mcp.settings.host
+    old_port = server.mcp.settings.port
+
+    def fake_run(*, transport: str) -> None:
+        captured["transport"] = transport
+        captured["host"] = server.mcp.settings.host
+        captured["port"] = server.mcp.settings.port
+
+    monkeypatch.setattr(server.mcp, "run", fake_run)
+    try:
+        cli.main(["serve", "--host", "127.0.0.3", "--port", "9234"])
+    finally:
+        server.mcp.settings.host = old_host
+        server.mcp.settings.port = old_port
+
+    assert captured == {"transport": "streamable-http", "host": "127.0.0.3", "port": 9234}
 
 
 @pytest.mark.asyncio
