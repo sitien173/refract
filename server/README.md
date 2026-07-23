@@ -27,6 +27,12 @@ at least one configured backend CLI must be on `PATH`.
 
 ```bash
 uv sync --all-extras
+```
+
+Create `~/.openmcp/config.toml` using the explicit configuration shown below.
+Then verify and start the daemon:
+
+```bash
 uv run openmcp doctor
 uv run openmcp serve
 ```
@@ -86,6 +92,10 @@ Job states are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and
 
 OpenMCP reads `~/.openmcp/config.toml`.
 
+Configuration is explicit. The file must define non-empty `targets` and
+`profiles` sections, plus `[daemon].default_profile` naming a defined profile.
+OpenMCP does not fabricate targets, profiles, or a default profile.
+
 ```toml
 [daemon]
 host = "127.0.0.1"
@@ -119,6 +129,19 @@ capabilities = ["review"]
 [profiles.balanced]
 implement = "forge-primary"
 review = "sentinel-primary"
+consult = "sage-primary"
+```
+
+A profile may explicitly inherit one parent. Child workflow selections replace
+the parent's selection for that workflow. Profiles may be partial; an unmapped
+workflow is rejected when its execution plan is resolved.
+
+```toml
+[profiles.fast]
+extends = "balanced"
+implement = ["forge-primary"]
+
+[profiles.advisor]
 consult = "sage-primary"
 ```
 

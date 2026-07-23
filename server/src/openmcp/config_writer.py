@@ -54,6 +54,10 @@ def _dict_to_toml_doc(
     data: dict[str, Any],
     base_doc: tomlkit.TOMLDocument | None = None,
 ) -> tomlkit.TOMLDocument:
+    unsupported = set(data) - {"daemon", "logging", "targets", "profiles"}
+    if unsupported:
+        raise ValueError(f"Unsupported config keys: {sorted(unsupported)}")
+
     # Validate section types before processing
     if "daemon" in data and not isinstance(data["daemon"], dict):
         raise ValueError("[daemon] must be a TOML table")
@@ -79,7 +83,6 @@ def _dict_to_toml_doc(
         if "daemon" not in doc or not isinstance(doc.get("daemon"), dict):
             doc["daemon"] = tomlkit.table()
         d_table = doc["daemon"]
-        d_table.pop("default_routing_profile", None)
         for k, v in data["daemon"].items():
             if v is None:
                 d_table.pop(k, None)
@@ -124,12 +127,6 @@ def _dict_to_toml_doc(
 
     # Section: profiles
     if "profiles" in data and isinstance(data["profiles"], dict):
-        # Migrate legacy keys to avoid _renamed_value conflicts
-        if "routing_profiles" in doc:
-            if "profiles" not in doc:
-                doc["profiles"] = doc.pop("routing_profiles")
-            else:
-                doc.pop("routing_profiles", None)
         if "profiles" not in doc or not isinstance(doc.get("profiles"), dict):
             doc["profiles"] = tomlkit.table()
         p_table = doc["profiles"]
@@ -139,6 +136,12 @@ def _dict_to_toml_doc(
             prof_table = p_table[prof_name]
             if isinstance(prof_data, dict):
                 for wf_name, wf_val in prof_data.items():
+                    if wf_name == "extends":
+                        if wf_val is None:
+                            prof_table.pop(wf_name, None)
+                        else:
+                            prof_table[wf_name] = wf_val
+                        continue
                     if wf_val is None:
                         prof_table.pop(wf_name, None)
                     elif isinstance(wf_val, dict):
@@ -288,4 +291,3 @@ def write_task_guide(
 
 
 __all__ = ["write_config", "write_task_guide"]
-

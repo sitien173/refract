@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from openmcp.config import load_config
 from openmcp.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
 from openmcp.workflows import get_workflow
 from tests.orchestration_helpers import config
@@ -23,3 +24,26 @@ def test_plan_rejects_legacy_multi_workflow_shape(tmp_path) -> None:
     data["workflows"] = {"review": "primary"}
     with pytest.raises(ValueError, match="selection"):
         parse_execution_plan(data)
+
+
+def test_partial_profile_rejects_only_unmapped_workflow_at_plan_resolution(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "consult-only"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+capabilities = ["code", "review", "consult"]
+
+[profiles.consult-only]
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    catalog = load_config(path)
+
+    assert resolve_execution_plan(get_workflow("consult"), catalog, "consult-only")
+    with pytest.raises(ValueError, match="does not map workflow 'implement'"):
+        resolve_execution_plan(get_workflow("implement"), catalog, "consult-only")

@@ -15,7 +15,7 @@ Alpine.data('dashboardApp', () => ({
     _jobRequestId: 0,
 
     configData: {
-      daemon: { host: '127.0.0.1', port: 8765, max_jobs: 4, history_turns: 8, history_bytes: 65536, default_profile: 'balanced' },
+      daemon: { host: '127.0.0.1', port: 8765, max_jobs: 4, history_turns: 8, history_bytes: 65536, default_profile: '' },
       logging: { level: 'INFO', format: 'text', file: 'openmcp.log', console: false, max_bytes: 10485760, backup_count: 5, capture_warnings: true },
       targets: [],
       profiles: {}
@@ -252,11 +252,7 @@ Alpine.data('dashboardApp', () => ({
       const key = name.trim();
       if (!this.configData.profiles) this.configData.profiles = {};
       if (this.configData.profiles[key]) return;
-      this.configData.profiles[key] = {
-        implement: { targets: [], max_attempts: 1, timeout_s: 0 },
-        review: { targets: [], max_attempts: 1, timeout_s: 0 },
-        consult: { targets: [], max_attempts: 1, timeout_s: 0 }
-      };
+      this.configData.profiles[key] = { extends: '' };
     },
 
     removeProfile(key) {
@@ -290,7 +286,8 @@ Alpine.data('dashboardApp', () => ({
         return 'At least one profile must be configured';
       }
       const defaultProf = (this.configData.daemon.default_profile || '').trim();
-      if (defaultProf && !this.configData.profiles[defaultProf]) {
+      if (!defaultProf) return 'A default profile must be configured';
+      if (!this.configData.profiles[defaultProf]) {
         return `Default profile '${defaultProf}' is not in configured profiles`;
       }
 
@@ -317,6 +314,13 @@ Alpine.data('dashboardApp', () => ({
         t.max_concurrency = parseInt(t.max_concurrency, 10) || 1;
         if (typeof t.args === 'string') {
           t.args = t.args.split(',').map(s => s.trim()).filter(Boolean);
+        }
+      }
+
+      for (const profile of Object.values(payload.profiles || {})) {
+        if (typeof profile.extends === 'string') {
+          profile.extends = profile.extends.trim();
+          if (!profile.extends) delete profile.extends;
         }
       }
 
@@ -444,4 +448,3 @@ Alpine.data('dashboardApp', () => ({
 
 document.body.removeAttribute('x-ignore');
 Alpine.initTree(document.body);
-

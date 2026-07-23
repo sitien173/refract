@@ -25,14 +25,16 @@ from openmcp.workflows import BUILTIN_WORKFLOWS
 
 
 log = get_logger("server")
-_DAEMON_CONFIG = load_config()
-configure_logging(_DAEMON_CONFIG.logging)
+_DAEMON_CONFIG = None
 _ACTIVE_RUNTIME: Runtime | None = None
 
 
 @asynccontextmanager
 async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
-    global _ACTIVE_RUNTIME
+    global _ACTIVE_RUNTIME, _DAEMON_CONFIG
+    if _DAEMON_CONFIG is None:
+        _DAEMON_CONFIG = load_config()
+    configure_logging(_DAEMON_CONFIG.logging)
     runtime = Runtime(_DAEMON_CONFIG)
     await runtime.start()
     _ACTIVE_RUNTIME = runtime
@@ -40,10 +42,13 @@ async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
         yield runtime
     finally:
         _ACTIVE_RUNTIME = None
-        await runtime.close()
+        try:
+            await runtime.close()
+        finally:
+            _DAEMON_CONFIG = None
 
 
-mcp = FastMCP("openmcp", host=_DAEMON_CONFIG.host, port=_DAEMON_CONFIG.port, streamable_http_path="/mcp", json_response=True, lifespan=_lifespan)
+mcp = FastMCP("openmcp", host="127.0.0.1", port=8765, streamable_http_path="/mcp", json_response=True, lifespan=_lifespan)
 
 
 async def run(backend: Literal["agy", "codex", "pi"], PROMPT: str, cd: str, SESSION_ID: str = "", timeout_s: int = 0) -> dict[str, Any]:
@@ -255,5 +260,3 @@ from openmcp.dashboard import register_dashboard_routes  # noqa: E402
 register_dashboard_routes(mcp)
 
 __all__ = ["doctor", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "reload", "run", "status", "task_guide"]
-
-

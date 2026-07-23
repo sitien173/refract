@@ -309,6 +309,10 @@
                 <strong style="color: var(--accent-purple);" x-text="'Profile: ' + profName"></strong>
                 <button class="btn btn-danger" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" @click="removeProfile(profName)">Delete Profile</button>
               </div>
+              <div class="form-group" style="margin-bottom: 0.75rem;">
+                <label>Parent Profile (optional)</label>
+                <input type="text" class="form-control" x-model="profMap.extends" placeholder="Leave blank for no parent">
+              </div>
               <template x-for="wf in ['implement', 'review', 'consult']" :key="wf">
                 <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: var(--bg-secondary); border-radius: 6px;">
                   <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-primary);" x-text="'Workflow: ' + wf"></div>
