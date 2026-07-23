@@ -42,6 +42,9 @@ async function request<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
     if (err instanceof ApiError) {
       throw err;
     }
+    if (signal?.aborted || (err instanceof Error && err.name === 'AbortError') || (err as { name?: string })?.name === 'AbortError') {
+      throw err;
+    }
     throw new ApiError(endpoint, err);
   }
 }

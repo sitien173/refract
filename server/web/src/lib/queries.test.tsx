@@ -316,6 +316,24 @@ describe('TanStack Query hooks and polling policies', () => {
     expect(result.current.jobs.map(j => j.id)).toEqual(['j-newest', 'j-tie1', 'j-tie2', 'j-old']);
     expect(result.current.errors.length).toBe(1);
     expect(result.current.errors[0].projectId).toBe('p2');
+    expect(result.current.hasData).toBe(true);
+    expect(result.current.hasPartialFailure).toBe(true);
+    expect(result.current.isInitialError).toBe(false);
+  });
+
+  it('useAllJobs provides explicit aggregate state classification fields (hasData, isInitialLoading, isInitialError, hasPartialFailure, hasRefetchError)', async () => {
+    vi.mocked(api.fetchProjects).mockResolvedValue([
+      { id: 'p1', alias: 'proj1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+    ] as any);
+    vi.mocked(api.fetchProjectJobs).mockRejectedValue(new api.ApiError('/jobs', 500));
+
+    const { result } = renderHook(() => useAllJobs(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isInitialError).toBe(true));
+    expect(result.current.hasData).toBe(false);
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.hasPartialFailure).toBe(false);
+    expect(result.current.hasRefetchError).toBe(false);
   });
 
   it('defines statusIcon mask rules explicitly without unset shorthand references', () => {

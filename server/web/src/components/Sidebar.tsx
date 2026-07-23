@@ -18,7 +18,7 @@ interface NavItemDef {
 const navItems: NavItemDef[] = [
   { id: 'overview', label: 'Overview', path: '/', icon: activitySvg },
   { id: 'projects', label: 'Projects', path: '/projects', icon: folderSvg },
-  { id: 'jobs', label: 'Jobs - Unavailable', path: '/jobs', icon: layersSvg, disabled: true },
+  { id: 'jobs', label: 'Jobs', path: '/jobs', icon: layersSvg },
   { id: 'targets', label: 'Targets', path: '/targets', icon: cpuSvg },
   { id: 'profiles', label: 'Profiles', path: '/profiles', icon: slidersSvg },
 ];

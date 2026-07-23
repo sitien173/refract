@@ -122,11 +122,41 @@ export function useAllJobs() {
     return a.id.localeCompare(b.id);
   });
 
-  const isLoading =
-    projectsQuery.isLoading ||
-    (projects.length > 0 && jobQueries.some((q) => q.isLoading && !q.data));
+  const hasProjectsData = projectsQuery.data !== undefined;
+
+  let hasData = false;
+  let isInitialLoading = false;
+  let isInitialError = false;
+  let hasPartialFailure = false;
+  let hasRefetchError = false;
+
+  if (!hasProjectsData) {
+    isInitialLoading = projectsQuery.isLoading;
+    isInitialError = projectsQuery.isError;
+  } else if (projects.length === 0) {
+    hasData = true;
+    hasRefetchError = projectsQuery.isError;
+  } else {
+    const numWithData = jobQueries.filter((q) => q.data !== undefined).length;
+    const numFailedNoData = jobQueries.filter((q) => q.isError && q.data === undefined).length;
+    const numPendingNoData = jobQueries.filter((q) => q.data === undefined && !q.isError).length;
+    const numRefetchError = jobQueries.filter((q) => q.data !== undefined && q.isError).length;
+
+    isInitialLoading = numPendingNoData > 0;
+    isInitialError = !isInitialLoading && numFailedNoData === projects.length && numWithData === 0;
+    hasPartialFailure =
+      !isInitialLoading && !isInitialError && numWithData > 0 && numFailedNoData > 0;
+    hasRefetchError =
+      !isInitialLoading &&
+      !isInitialError &&
+      !hasPartialFailure &&
+      (projectsQuery.isError || numRefetchError > 0);
+    hasData = numWithData > 0;
+  }
+
+  const isLoading = isInitialLoading;
   const isFetching = projectsQuery.isFetching || jobQueries.some((q) => q.isFetching);
-  const isError = projectsQuery.isError || errors.length > 0;
+  const isError = isInitialError || errors.length > 0;
 
   return {
     jobs,
@@ -136,5 +166,10 @@ export function useAllJobs() {
     errors,
     projectsQuery,
     jobQueries,
+    hasData,
+    isInitialLoading,
+    isInitialError,
+    hasPartialFailure,
+    hasRefetchError,
   };
 }

@@ -57,4 +57,51 @@ describe('DataTable', () => {
     expect(cssContent).toContain('--bg-surface-hover');
     expect(cssContent).not.toContain('--color-surface-hover');
   });
+
+  it('supports optional onRowClick that fires on non-interactive cell content and ignores interactive descendants without making tr interactive in A11y tree', async () => {
+    const fireEvent = (await import('@testing-library/react')).fireEvent;
+    const handleRowClick = vi.fn();
+    const handleButtonClick = vi.fn();
+
+    const clickableColumns = [
+      { key: 'name', header: 'Name', render: (item: TestItem) => item.name },
+      {
+        key: 'action',
+        header: 'Action',
+        render: (item: TestItem) => (
+          <button type="button" onClick={handleButtonClick}>
+            Action {item.id}
+          </button>
+        ),
+      },
+    ];
+
+    const { container } = render(
+      <DataTable
+        caption="Clickable Table"
+        columns={clickableColumns}
+        rows={items}
+        getRowKey={(item) => item.id}
+        onRowClick={handleRowClick}
+        selectedRowKey="1"
+      />
+    );
+
+    const rows = container.querySelectorAll('tbody tr');
+    expect(rows[0].getAttribute('role')).toBeNull();
+    expect(rows[0].getAttribute('tabindex')).toBeNull();
+
+    // Click non-interactive cell content
+    const cellText = screen.getByText('Item One');
+    fireEvent.click(cellText);
+    expect(handleRowClick).toHaveBeenCalledTimes(1);
+    expect(handleRowClick).toHaveBeenCalledWith(items[0]);
+
+    // Click interactive button
+    const btn = screen.getByRole('button', { name: 'Action 1' });
+    fireEvent.click(btn);
+    expect(handleButtonClick).toHaveBeenCalledTimes(1);
+    // onRowClick should NOT have been called again
+    expect(handleRowClick).toHaveBeenCalledTimes(1);
+  });
 });

@@ -5,6 +5,7 @@ import { queryClient } from './lib/queryClient';
 import { AppShell } from './components/AppShell';
 import { Overview } from './views/Overview';
 import { Projects } from './views/Projects';
+import { Jobs } from './views/Jobs';
 import { Targets } from './views/Targets';
 import { Profiles } from './views/Profiles';
 
@@ -16,6 +17,7 @@ export const App: React.FC = () => {
           <Routes>
             <Route path="/" element={<Overview />} />
             <Route path="/projects" element={<Projects />} />
+            <Route path="/jobs" element={<Jobs />} />
             <Route path="/targets" element={<Targets />} />
             <Route path="/profiles" element={<Profiles />} />
             <Route path="*" element={<Navigate to="/" replace />} />

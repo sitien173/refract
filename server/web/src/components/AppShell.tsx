@@ -12,6 +12,8 @@ function getTitleFromPath(pathname: string): string {
   switch (pathname) {
     case '/projects':
       return 'Projects';
+    case '/jobs':
+      return 'Jobs';
     case '/targets':
       return 'Targets';
     case '/profiles':

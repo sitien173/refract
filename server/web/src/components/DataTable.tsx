@@ -14,6 +14,8 @@ export interface DataTableProps<T> {
   rows: T[];
   getRowKey: (row: T) => string;
   className?: string;
+  onRowClick?: (row: T) => void;
+  selectedRowKey?: string;
 }
 
 export function DataTable<T>({
@@ -22,6 +24,8 @@ export function DataTable<T>({
   rows,
   getRowKey,
   className,
+  onRowClick,
+  selectedRowKey,
 }: DataTableProps<T>): React.ReactElement {
   const captionText = typeof caption === 'string' ? caption : 'Data Table';
 
@@ -46,8 +50,27 @@ export function DataTable<T>({
         <tbody>
           {rows.map((row) => {
             const key = getRowKey(row);
+            const isSelected = selectedRowKey !== undefined && selectedRowKey === key;
+            const rowClassName = `${styles.tableRow} ${
+              onRowClick ? styles.tableRowClickable : ''
+            } ${isSelected ? styles.tableRowSelected : ''}`.trim();
+
             return (
-              <tr key={key} className={styles.tableRow}>
+              <tr
+                key={key}
+                className={rowClassName}
+                onClick={(e) => {
+                  if (!onRowClick) return;
+                  const target = e.target as HTMLElement | null;
+                  if (
+                    target &&
+                    target.closest('button, a, input, select, textarea, [role="button"]')
+                  ) {
+                    return;
+                  }
+                  onRowClick(row);
+                }}
+              >
                 {columns.map((col) => (
                   <td key={`${key}-${col.key}`} className={col.className}>
                     {col.render(row)}

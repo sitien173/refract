@@ -163,4 +163,20 @@ describe('API client wrappers', () => {
       expect(err.status).toBe(404);
     }
   });
+
+  it('rethrows original abort error unchanged when request signal is aborted', async () => {
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    (global.fetch as any).mockRejectedValue(abortError);
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(fetchJob('j1', controller.signal)).rejects.toBe(abortError);
+    try {
+      await fetchJob('j1', controller.signal);
+    } catch (err: any) {
+      expect(err).not.toBeInstanceOf(ApiError);
+      expect(err).toBe(abortError);
+    }
+  });
 });

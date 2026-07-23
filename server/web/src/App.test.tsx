@@ -13,6 +13,7 @@ describe('AppShell, Routing and ThemeToggle', () => {
   const routes = [
     { hash: '#/', title: 'Overview', activeName: /Overview/i },
     { hash: '#/projects', title: 'Projects', activeName: /Projects/i },
+    { hash: '#/jobs', title: 'Jobs', activeName: /^Jobs$/i },
     { hash: '#/targets', title: 'Targets', activeName: /Targets/i },
     { hash: '#/profiles', title: 'Profiles', activeName: /Profiles/i },
   ];
@@ -48,19 +49,20 @@ describe('AppShell, Routing and ThemeToggle', () => {
     expect(window.location.hash).toBe('#/');
   });
 
-  it('asserts unknown hash redirect (e.g. #/jobs) replaces hash with #/', async () => {
-    window.location.hash = '#/jobs';
+  it('asserts unknown hash redirect (e.g. #/unknown) replaces hash with #/', async () => {
+    window.location.hash = '#/unknown';
     render(<App />);
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
     expect(window.location.hash).toBe('#/');
   });
 
-  it('renders disabled Jobs semantics', () => {
+  it('renders active Jobs nav item when navigating to #/jobs', () => {
+    window.location.hash = '#/jobs';
     render(<App />);
-    const jobsDisabledItem = screen.getByText('Jobs - Unavailable').closest('li');
-    expect(jobsDisabledItem).toHaveAttribute('aria-disabled', 'true');
-    expect(jobsDisabledItem?.querySelector('a')).toBeNull();
+    const jobsLink = screen.getByRole('link', { name: /^Jobs$/i });
+    expect(jobsLink).toBeInTheDocument();
+    expect(jobsLink).toHaveClass(/navItemActive/);
   });
 
   it('renders nav icons as CSS masks inheriting currentColor', () => {
