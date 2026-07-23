@@ -425,7 +425,7 @@
 }
 
 .dataTable th {
-  height: var(--layout-table-header-height, 44px);
+  height: var(--layout-table-header-height);
   padding: 0 var(--space-md);
   background-color: var(--color-surface-muted);
   border-bottom: 1px solid var(--color-border-subdued);
@@ -436,7 +436,7 @@
 }
 
 .tableRow {
-  height: var(--layout-table-row-height, 56px);
+  height: var(--layout-table-row-height);
   border-bottom: 1px solid var(--color-border-subdued);
   transition: background-color var(--motion-fast) var(--ease-standard);
 }
@@ -472,4 +472,3 @@
   user-select: none;
   box-sizing: border-box;
 }
-

@@ -87,4 +87,19 @@ describe('Profiles view', () => {
     render(<Profiles />);
     expect(screen.getByText('No profiles available.')).toBeTruthy();
   });
+
+  it('renders cached data with warning banner on refetch error', () => {
+    vi.mocked(queries.useProfiles).mockReturnValue({
+      data: {
+        default: 'standard',
+        available: ['standard', 'fast'],
+      },
+      isLoading: false,
+      isError: true,
+    } as any);
+
+    render(<Profiles />);
+    expect(screen.getAllByText('standard').length).toBeGreaterThan(0);
+    expect(screen.getByText('Could not refresh. Showing last known data.')).toBeTruthy();
+  });
 });

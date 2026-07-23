@@ -49,7 +49,7 @@ const badgeConfigs: Record<BadgeState, BadgeConfig> = {
   cancelled: {
     label: 'Cancelled',
     icon: circleXSvg,
-    toneClass: styles.badgeToneNeutral,
+    toneClass: styles.badgeToneError,
   },
   interrupted: {
     label: 'Interrupted',

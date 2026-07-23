@@ -10,38 +10,57 @@ describe('AppShell, Routing and ThemeToggle', () => {
     window.location.hash = '#/';
   });
 
-  it('renders HashRouter navigation items and active state', () => {
-    render(<App />);
-    expect(screen.getByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
+  const routes = [
+    { hash: '#/', title: 'Overview', activeName: /Overview/i },
+    { hash: '#/projects', title: 'Projects', activeName: /Projects/i },
+    { hash: '#/targets', title: 'Targets', activeName: /Targets/i },
+    { hash: '#/profiles', title: 'Profiles', activeName: /Profiles/i },
+  ];
 
-    const overviewLink = screen.getByRole('link', { name: /Overview/i });
-    expect(overviewLink).toBeInTheDocument();
-    expect(overviewLink).toHaveClass(/navItemActive/);
+  routes.forEach(({ hash, title }) => {
+    it(`directly initializes hash ${hash}, asserts route title '${title}' and exact active navigation`, () => {
+      window.location.hash = hash;
+      render(<App />);
 
-    const jobsDisabledItem = screen.getByText('Jobs - Unavailable').closest('li');
-    expect(jobsDisabledItem).toHaveAttribute('aria-disabled', 'true');
-    expect(jobsDisabledItem?.querySelector('a')).toBeNull();
+      expect(screen.getByRole('heading', { level: 1, name: title })).toBeInTheDocument();
+
+      routes.forEach((r) => {
+        const link = screen.getByRole('link', { name: r.activeName });
+        if (r.hash === hash) {
+          expect(link).toHaveClass(/navItemActive/);
+        } else {
+          expect(link).not.toHaveClass(/navItemActive/);
+        }
+      });
+    });
   });
 
-  it('navigates between views via HashRouter links', async () => {
+  it('asserts brand navigation returns to Overview without reload', async () => {
+    window.location.hash = '#/projects';
     render(<App />);
 
-    const projectsLink = screen.getByRole('link', { name: /Projects/i });
-    fireEvent.click(projectsLink);
-
-    expect(await screen.findByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument();
 
     const brandLink = screen.getByRole('link', { name: /OpenMCP Console/i });
     fireEvent.click(brandLink);
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
+    expect(window.location.hash).toBe('#/');
   });
 
-  it('redirects unknown hash route (e.g. #/jobs) to Overview', async () => {
+  it('asserts unknown hash redirect (e.g. #/jobs) replaces hash with #/', async () => {
     window.location.hash = '#/jobs';
     render(<App />);
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
+    expect(window.location.hash).toBe('#/');
+  });
+
+  it('renders disabled Jobs semantics', () => {
+    render(<App />);
+    const jobsDisabledItem = screen.getByText('Jobs - Unavailable').closest('li');
+    expect(jobsDisabledItem).toHaveAttribute('aria-disabled', 'true');
+    expect(jobsDisabledItem?.querySelector('a')).toBeNull();
   });
 
   it('renders nav icons as CSS masks inheriting currentColor', () => {

@@ -50,4 +50,11 @@ describe('StatusBadge', () => {
     render(<StatusBadge state="degraded" />);
     expect(screen.getByText('Degraded')).toBeTruthy();
   });
+
+  it('renders cancelled status using error tone', () => {
+    const { container } = render(<StatusBadge state="cancelled" />);
+    const badge = container.querySelector('[data-testid="status-badge-cancelled"]');
+    expect(badge).toBeTruthy();
+    expect(badge?.className).toContain('badgeToneError');
+  });
 });

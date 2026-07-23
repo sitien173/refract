@@ -9,7 +9,7 @@
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-07-23T16:30:49+07:00
-- Finished: 2026-07-23T16:45:15+07:00
+- Finished: 2026-07-23T16:50:10+07:00
 
 ## Implementation Response
 
@@ -17,43 +17,27 @@
 ## META
 - Phase: Phase 3
 - Started: 2026-07-23T16:30:49+07:00
-- Finished: 2026-07-23T16:45:15+07:00
+- Finished: 2026-07-23T16:50:10+07:00
 - Plan dir: docs/plans/react-monitor-console/phase-03
 ## SUMMARY
-Implemented Phase 3 monitor views (Overview, Projects, Targets, Profiles), shared Flowforge UI components, HashRouter navigation, and updated production assets.
+Fixed all Phase 3 specification gaps for data states, cancelled status badge styling, independent Overview panels, timestamps, cached-data-plus-error handling, and HashRouter navigation tests.
 ## FILES MODIFIED
 | Action | Path | Change |
-| Create | web/src/lib/presentation.ts | Circuit state derivation and commit/date format helpers |
-| Create | web/src/lib/presentation.test.ts | Unit tests for presentation helpers |
-| Create | web/src/assets/icons/circle-x.svg | Lucide SVG icon for failed state |
-| Create | web/src/components/StatusBadge.tsx | Shared StatusBadge component with 13 states |
-| Create | web/src/components/StatusBadge.test.tsx | Unit tests for StatusBadge |
-| Create | web/src/components/EmptyState.tsx | Shared EmptyState component |
-| Create | web/src/components/EmptyState.test.tsx | Unit tests for EmptyState |
-| Create | web/src/components/Panel.tsx | Shared Panel component |
-| Create | web/src/components/Panel.test.tsx | Unit tests for Panel |
-| Create | web/src/components/DataTable.tsx | Shared DataTable component with focusable region and semantic markup |
-| Create | web/src/components/DataTable.test.tsx | Unit tests for DataTable |
-| Create | web/src/views/Overview.tsx | Aggregating Overview view |
-| Create | web/src/views/Overview.test.tsx | Unit tests for Overview view |
-| Create | web/src/views/Projects.tsx | Projects dense table view |
-| Create | web/src/views/Projects.test.tsx | Unit tests for Projects view |
-| Create | web/src/views/Targets.tsx | Targets dense table view |
-| Create | web/src/views/Targets.test.tsx | Unit tests for Targets view |
-| Create | web/src/views/Profiles.tsx | Profiles view |
-| Create | web/src/views/Profiles.test.tsx | Unit tests for Profiles view |
-| Modify | web/src/App.tsx | Wire HashRouter, routes, and query provider |
-| Modify | web/src/App.test.tsx | Router, brand nav, disabled jobs, and unknown route tests |
-| Modify | web/src/components/AppShell.tsx | Derive route title for TopBar |
-| Modify | web/src/components/Sidebar.tsx | HashRouter NavLinks and noninteractive disabled Jobs item |
-| Modify | web/src/styles/app.module.css | Flowforge component styles |
-| Modify | src/openmcp/dashboard_static/ | Rebuilt static bundle files |
-| Modify | docs/plans/react-monitor-console/phase-03/notes.md | Phase 3 task decision notes |
-| Modify | docs/plans/react-monitor-console/phase-03/journal.md | Phase 3 execution journal |
+| Modify | web/src/styles/app.module.css | Removed fallback literals from table height tokens and removed trailing blank line at EOF |
+| Modify | web/src/components/StatusBadge.tsx | Used badgeToneError for cancelled job status |
+| Modify | web/src/components/StatusBadge.test.tsx | Added test for cancelled status badge error tone |
+| Modify | web/src/views/Overview.tsx | Rendered 5 panels independently, added time dateTime timestamps, cached-refetch and partial-results warnings |
+| Modify | web/src/views/Overview.test.tsx | Added tests for independent panels, mixed loading/error, empty states, partial job failure warning, and timestamps |
+| Modify | web/src/views/Targets.test.tsx | Added cached-data-plus-error test |
+| Modify | web/src/views/Profiles.test.tsx | Added cached-data-plus-error test |
+| Modify | web/src/App.test.tsx | Directly initialized supported hash routes, asserted exact active nav, brand return, and unknown redirect |
+| Modify | src/openmcp/dashboard_static/ | Rebuilt production static assets |
+| Modify | docs/plans/react-monitor-console/phase-03/notes.md | Recorded Task 5 decision notes and test evidence |
+| Modify | docs/plans/react-monitor-console/phase-03/journal.md | Updated execution journal |
 ## NOTES
-- phase-03/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4)
+- phase-03/notes.md (## Task 5)
 ## SPEC COMPLIANCE
-- Meets Spec? YES — All Phase 3 views, components, routing, and tests implemented and verified.
+- Meets Spec? YES — All Phase 3 specification gaps resolved and verified with unit tests and production build.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

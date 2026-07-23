@@ -15,7 +15,7 @@ describe('Overview view', () => {
     vi.resetAllMocks();
   });
 
-  it('renders all five summary areas with live data', () => {
+  it('renders all five summary areas with live data and time dateTime elements', () => {
     vi.mocked(queries.useStatus).mockReturnValue({
       data: { status: 'running', workers: 4, active_jobs: 2, queued_jobs: 1 },
       isLoading: false,
@@ -63,7 +63,7 @@ describe('Overview view', () => {
       },
     } as any);
 
-    render(<Overview />);
+    const { container } = render(<Overview />);
 
     // Area 1: Worker / active / queued status
     expect(screen.getByText('Workers')).toBeTruthy();
@@ -79,6 +79,10 @@ describe('Overview view', () => {
     expect(screen.getByText('j5')).toBeTruthy();
     expect(screen.queryByText('j6')).toBeNull();
 
+    // Timestamp requirement check
+    const timeEl = container.querySelector('time[dateTime="2026-07-23T10:00:00Z"]');
+    expect(timeEl).toBeTruthy();
+
     // Area 3: Target counts (Total: 2, Healthy: 1, Degraded: 1, Open Circuit: 1)
     expect(screen.getByText('Target Health')).toBeTruthy();
     expect(screen.getByText('Total Targets')).toBeTruthy();
@@ -91,14 +95,53 @@ describe('Overview view', () => {
     expect(screen.getByText('Profiles Summary')).toBeTruthy();
   });
 
-  it('renders initial loading state when data is not yet available', () => {
+  it('renders mixed loaded and loading resources independently without whole-page blocking', () => {
     vi.mocked(queries.useStatus).mockReturnValue({ isLoading: true, data: undefined } as any);
-    vi.mocked(queries.useTargets).mockReturnValue({ isLoading: true, data: undefined } as any);
-    vi.mocked(queries.useProfiles).mockReturnValue({ isLoading: true, data: undefined } as any);
-    vi.mocked(queries.useAllJobs).mockReturnValue({ isLoading: true, jobs: [], projectsQuery: { isLoading: true } } as any);
+    vi.mocked(queries.useTargets).mockReturnValue({
+      data: [{ id: 't1', model: 'gpt-4', capabilities: [], max_concurrency: 1, active: 0, healthy: true, circuit_open_until: '' }],
+      isLoading: false,
+    } as any);
+    vi.mocked(queries.useProfiles).mockReturnValue({ data: { default: 'std', available: ['std'] }, isLoading: false } as any);
+    vi.mocked(queries.useAllJobs).mockReturnValue({ jobs: [], isLoading: false, projectsQuery: { data: [], isLoading: false } } as any);
 
     render(<Overview />);
-    expect(screen.getByRole('status')).toBeTruthy();
+
+    // System Status is loading
+    expect(screen.getByText('Loading system status...')).toBeTruthy();
+    // Target Health panel displays loaded data
+    expect(screen.getByText('Target Health')).toBeTruthy();
+    expect(screen.getByText('Total Targets')).toBeTruthy();
+  });
+
+  it('renders panel initial error alongside other successful panels', () => {
+    vi.mocked(queries.useStatus).mockReturnValue({ isError: true, data: undefined } as any);
+    vi.mocked(queries.useTargets).mockReturnValue({
+      data: [{ id: 't1', model: 'gpt-4', capabilities: [], max_concurrency: 1, active: 0, healthy: true, circuit_open_until: '' }],
+      isLoading: false,
+    } as any);
+    vi.mocked(queries.useProfiles).mockReturnValue({ data: { default: 'std', available: ['std'] }, isLoading: false } as any);
+    vi.mocked(queries.useAllJobs).mockReturnValue({ jobs: [], isLoading: false, projectsQuery: { data: [], isLoading: false } } as any);
+
+    render(<Overview />);
+
+    // System Status panel shows inline error
+    expect(screen.getByText('Failed to load system status.')).toBeTruthy();
+    // Profiles panel shows successful data
+    expect(screen.getByText('Profiles Summary')).toBeTruthy();
+    expect(screen.getByText('std')).toBeTruthy();
+  });
+
+  it('renders successful empty summaries gracefully', () => {
+    vi.mocked(queries.useStatus).mockReturnValue({ data: { status: 'running', workers: 0, active_jobs: 0, queued_jobs: 0 } } as any);
+    vi.mocked(queries.useTargets).mockReturnValue({ data: [] } as any);
+    vi.mocked(queries.useProfiles).mockReturnValue({ data: { default: '', available: [] } } as any);
+    vi.mocked(queries.useAllJobs).mockReturnValue({ jobs: [], isLoading: false, projectsQuery: { data: [] } } as any);
+
+    render(<Overview />);
+
+    expect(screen.getByText('No recent jobs found.')).toBeTruthy();
+    expect(screen.getByText('Profiles Summary')).toBeTruthy();
+    expect(screen.getByText('None')).toBeTruthy();
   });
 
   it('shows refetch warning banner when query is in error with cached data', () => {
@@ -112,5 +155,21 @@ describe('Overview view', () => {
 
     render(<Overview />);
     expect(screen.getByText('Could not refresh. Showing last known data.')).toBeTruthy();
+  });
+
+  it('shows partial-results warning for useAllJobs project errors while retaining jobs', () => {
+    vi.mocked(queries.useStatus).mockReturnValue({ data: { workers: 1, active_jobs: 0, queued_jobs: 0 } } as any);
+    vi.mocked(queries.useTargets).mockReturnValue({ data: [] } as any);
+    vi.mocked(queries.useProfiles).mockReturnValue({ data: { default: 'std', available: ['std'] } } as any);
+    vi.mocked(queries.useAllJobs).mockReturnValue({
+      jobs: [{ id: 'j1', project_id: 'p1', workflow: 'wf1', profile: 'std', state: 'succeeded', created_at: '2026-07-23T10:00:00Z' }],
+      errors: [{ projectId: 'p2', error: new Error('Failed to fetch p2 jobs') }],
+      projectsQuery: { data: [{ id: 'p1' }, { id: 'p2' }] },
+    } as any);
+
+    render(<Overview />);
+
+    expect(screen.getByText('Could not load jobs for all projects. Showing partial results.')).toBeTruthy();
+    expect(screen.getByText('j1')).toBeTruthy();
   });
 });

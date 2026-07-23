@@ -111,4 +111,26 @@ describe('Targets view', () => {
     render(<Targets />);
     expect(screen.getByText('No targets found.')).toBeTruthy();
   });
+
+  it('renders cached data with warning banner on refetch error', () => {
+    vi.mocked(queries.useTargets).mockReturnValue({
+      data: [
+        {
+          id: 'target-1',
+          model: 'gpt-4o',
+          capabilities: ['coding'],
+          max_concurrency: 2,
+          active: 1,
+          healthy: true,
+          circuit_open_until: '',
+        },
+      ],
+      isLoading: false,
+      isError: true,
+    } as any);
+
+    render(<Targets />);
+    expect(screen.getByText('target-1')).toBeTruthy();
+    expect(screen.getByText('Could not refresh. Showing last known data.')).toBeTruthy();
+  });
 });

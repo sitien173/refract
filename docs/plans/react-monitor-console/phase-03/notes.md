@@ -95,3 +95,36 @@
 - RED -> GREEN:
   - `src/views/Profiles.test.tsx`: RED (missing module), GREEN (5 tests passed)
   - `src/App.test.tsx`: GREEN (6 tests passed covering router, brand nav, disabled Jobs, unknown route redirect)
+
+## Task 5
+
+### Decisions made
+- Removed EOF blank line and fallback literals from `--layout-table-header-height` and `--layout-table-row-height` in `app.module.css`.
+- Updated `cancelled` job status in `StatusBadge` to use `badgeToneError` tone as required by DESIGN specs.
+- Updated `Overview` view to render its 5 panels independently without whole-page loading/error short-circuiting.
+- Added distinct partial-results warning banner for `useAllJobs` project job failures while retaining successful jobs.
+- Added `<time dateTime={j.created_at}>` timestamp wrapping in Overview job table.
+- Added cached-data-plus-error tests for Targets and Profiles.
+- Added App routing tests directly initializing each supported hash (`#/`, `#/projects`, `#/targets`, `#/profiles`), asserting exact active navigation, brand navigation returning without reload, and unknown route redirect replacing hash with `#/`.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN:
+  - `src/components/StatusBadge.test.tsx`: GREEN (16 tests passed)
+  - `src/views/Overview.test.tsx`: GREEN (6 tests passed)
+  - `src/views/Targets.test.tsx`: GREEN (6 tests passed)
+  - `src/views/Profiles.test.tsx`: GREEN (6 tests passed)
+  - `src/App.test.tsx`: GREEN (10 tests passed)
+  - Full web test suite: GREEN (89 tests passed)
+
