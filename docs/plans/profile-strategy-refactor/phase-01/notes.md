@@ -154,3 +154,25 @@ gets a block even if all `none`.
 ### Test evidence
 - RED -> GREEN: New dict-payload tests first had 2 failures, then targeted tests passed 41 tests and the full suite passed 108 tests with 2 deselected.
 - GREEN: Phase 1 absence scan passed with no matches.
+
+## Task 8
+
+### Decisions made
+- Nested `finally` is used for the smallest shutdown correction.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- The close exception remains the propagated shutdown error.
+
+### Assumptions
+- Clearing both globals is required after every lifespan shutdown attempt.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Focused regression failed with `_DAEMON_CONFIG` still set, then passed after the nested `finally` correction.
+- GREEN: `uv run pytest tests/test_server.py` passed 5 tests; `uv run pytest` passed 131 tests with 2 deselected.
+- Root cause (bugfix only): `_DAEMON_CONFIG = None` followed `await runtime.close()`, so close failure skipped the assignment.

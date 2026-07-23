@@ -113,6 +113,27 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 1 shutdown correction / 2026-07-23T07:08:00Z / 2026-07-23T07:11:42Z / docs/plans/profile-strategy-refactor
+## SUMMARY
+Lifespan shutdown now clears runtime state even when close fails.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| modified | src/openmcp/server.py | Added nested cleanup finally while preserving close exceptions. |
+| modified | tests/test_server.py | Added the focused failing-close regression. |
+| modified | docs/plans/profile-strategy-refactor/phase-01/notes.md | Recorded RED, GREEN, and root-cause evidence. |
+| modified | docs/plans/profile-strategy-refactor/phase-01/journal.md | Recorded this correction response. |
+## NOTES
+- phase-01/notes.md  (## Task 8)
+## SPEC COMPLIANCE
+- Meets Spec? YES  — Focused, server, and full test gates pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 ### Initial review
