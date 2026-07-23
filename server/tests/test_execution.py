@@ -203,6 +203,28 @@ async def test_queued_and_running_cancellation(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_shutdown_interrupts_active_job(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    drivers = BlockingDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    project = runtime.register_project(str(root))
+    submitted = await runtime.submit(project.id, "implement", "block")
+    await drivers.started.wait()
+
+    await runtime.close()
+
+    database = Database(catalog.database_path)
+    try:
+        job = database.job(submitted.job_id)
+        assert job and job.state == "interrupted"
+    finally:
+        database.close()
+
+
+@pytest.mark.asyncio
 async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) -> None:
     root = repository(tmp_path)
     home = tmp_path / "home"

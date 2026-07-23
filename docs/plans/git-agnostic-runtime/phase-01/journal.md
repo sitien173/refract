@@ -11,7 +11,7 @@
 - Implementation Job: n/a
 - Review Job: n/a
 - Started: 2026-07-24T00:52:13+07:00
-- Finished: 2026-07-24T01:03:15+07:00
+- Finished: 2026-07-24T01:06:17+07:00
 
 ## Implementation Response
 
@@ -38,6 +38,26 @@ OpenMCP now registers directories and runs jobs without Git inspection or mutati
 - phase-01/notes.md  (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Task 5)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — Required tests and Git-agnostic checks pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 1 fix / Started 2026-07-24T01:04:00+07:00 / Finished 2026-07-24T01:06:17+07:00 / Plan dir docs/plans/git-agnostic-runtime
+## SUMMARY
+Added shutdown coverage proving active jobs persist as interrupted.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| modified | tests/test_execution.py | Added active-job shutdown interruption coverage. |
+| modified | docs/plans/git-agnostic-runtime/phase-01/notes.md | Recorded Task 6 evidence. |
+| modified | docs/plans/git-agnostic-runtime/phase-01/journal.md | Recorded this fix response. |
+## NOTES
+- phase-01/notes.md  (## Task 6)
+## SPEC COMPLIANCE
+- Meets Spec? YES — Shutdown coverage passes without production changes.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

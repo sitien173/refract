@@ -114,3 +114,23 @@ Empty sub-sections use `- none`.
 
 ### Test evidence
 - RED -> GREEN: Replacement lifecycle tests passed; the required suite passed 49 tests. Full suite passed 132 tests, with 2 live tests deselected.
+
+## Task 6
+
+### Decisions made
+- Reopen the database after shutdown to verify persisted state.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- This is characterization coverage; production behavior already maps shutdown cancellation to interruption.
+
+### Assumptions
+- Runtime.close() waits for active jobs before closing persistence.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- Characterization coverage: `uv run python -m pytest tests/test_execution.py -k shutdown_interrupts_active_job` passed 1 test.
