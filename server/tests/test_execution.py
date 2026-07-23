@@ -37,8 +37,6 @@ async def test_implement_succeeds_with_dirty_worktree_and_leaves_changes(tmp_pat
         assert (root / "result.txt").exists()
         assert (root / "README.md").read_text(encoding="utf-8") == "dirty\n"
         assert git(root, "rev-parse", "HEAD") == baseline
-        assert job.base_commit == ""
-        assert job.result.commit == ""
         assert "stages" not in job.model_dump()
     finally:
         await runtime.close()
@@ -53,7 +51,7 @@ async def test_implement_without_changes_uses_empty_result_placeholder(tmp_path)
     try:
         project = runtime.register_project(str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect only")).job_id, 10)
-        assert job.state == "succeeded" and job.result.commit == ""
+        assert job.state == "succeeded"
     finally:
         await runtime.close()
 
@@ -68,7 +66,7 @@ async def test_read_workflows_store_empty_commit_placeholder(tmp_path, workflow)
     try:
         project = runtime.register_project(str(root))
         job = await runtime.wait((await runtime.submit(project.id, workflow, "inspect")).job_id, 10)
-        assert job.state == "succeeded" and job.result.commit == ""
+        assert job.state == "succeeded"
         assert git(root, "status", "--porcelain") == ""
     finally:
         await runtime.close()
@@ -83,7 +81,7 @@ async def test_mutating_review_succeeds_and_leaves_changes(tmp_path) -> None:
     try:
         project = runtime.register_project(str(root))
         job = await runtime.wait((await runtime.submit(project.id, "review", "review")).job_id, 10)
-        assert job.state == "succeeded" and job.result.commit == ""
+        assert job.state == "succeeded"
         assert (root / "result.txt").exists()
     finally:
         await runtime.close()
@@ -235,10 +233,10 @@ async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) 
     home = tmp_path / "home"
     catalog = config(home)
     database = Database(catalog.database_path)
-    project = database.upsert_project(project_id="project", alias="project", root=root.as_posix(), head_commit="", clean=True)
+    project = database.upsert_project(project_id="project", alias="project", root=root.as_posix())
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     database.create_job(job_id="running", project_id=project.id, workflow="implement", profile="balanced", prompt="change", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="implement")
-    database.start_job("running", "")
+    database.start_job("running")
     (root / "partial.txt").write_text("partial\n", encoding="utf-8")
     database.close()
     runtime = Runtime(catalog)
@@ -246,21 +244,18 @@ async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) 
     try:
         interrupted = runtime.database.job("running")
         assert interrupted and interrupted.state == "interrupted"
-        assert interrupted.base_commit == ""
         assert (root / "partial.txt").read_text(encoding="utf-8") == "partial\n"
     finally:
         await runtime.close()
 
 
-def test_registration_accepts_plain_directory_and_preserves_placeholders(tmp_path) -> None:
+def test_registration_accepts_plain_directory(tmp_path) -> None:
     root = tmp_path / "plain-project"
     root.mkdir()
     runtime = Runtime(config(tmp_path / "home"))
     try:
         project = runtime.register_project(str(root))
         assert project.root == root.resolve().as_posix()
-        assert project.head_commit == ""
-        assert project.clean is True
     finally:
         runtime.database.close()
 

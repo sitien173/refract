@@ -68,6 +68,7 @@ async def test_dashboard_api_projects(async_client: httpx.AsyncClient, active_ru
     assert isinstance(projects, list)
     assert len(projects) == 1
     assert projects[0]["id"] == project.id
+    assert {"head_commit", "clean"}.isdisjoint(projects[0])
 
 
 @pytest.mark.asyncio
@@ -94,6 +95,8 @@ async def test_dashboard_api_job_detail_and_events(async_client: httpx.AsyncClie
     res_job = await async_client.get(f"/dashboard/api/jobs/{job_id}")
     assert res_job.status_code == 200
     assert res_job.json()["id"] == job_id
+    assert "base_commit" not in res_job.json()
+    assert "commit" not in res_job.json()["result"]
 
     res_events = await async_client.get(f"/dashboard/api/jobs/{job_id}/events")
     assert res_events.status_code == 200

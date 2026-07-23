@@ -291,15 +291,15 @@ describe('TanStack Query hooks and polling policies', () => {
 
   it('useAllJobs merges project jobs, sorts newest first with deterministic ascending ID tie-breaker for equal created_at, and preserves partial data on error', async () => {
     const mockProjects = [
-      { id: 'p1', alias: 'proj1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
-      { id: 'p2', alias: 'proj2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+      { id: 'p1', alias: 'proj1', root: '/p1', created_at: '2026-01-01' },
+      { id: 'p2', alias: 'proj2', root: '/p2', created_at: '2026-01-01' },
     ];
     // Supplied with equal created_at jobs (j-tie2 and j-tie1) in inverse ID order
     const mockP1Jobs = [
-      { id: 'j-old', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
-      { id: 'j-tie2', project_id: 'p1', created_at: '2026-01-01T12:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
-      { id: 'j-tie1', project_id: 'p1', created_at: '2026-01-01T12:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
-      { id: 'j-newest', project_id: 'p1', created_at: '2026-01-01T14:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+      { id: 'j-old', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', error: '' } },
+      { id: 'j-tie2', project_id: 'p1', created_at: '2026-01-01T12:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', error: '' } },
+      { id: 'j-tie1', project_id: 'p1', created_at: '2026-01-01T12:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', error: '' } },
+      { id: 'j-newest', project_id: 'p1', created_at: '2026-01-01T14:00:00Z', workflow: 'wf', profile: '', state: 'running', context_key: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', error: '' } },
     ];
 
     vi.mocked(api.fetchProjects).mockResolvedValue(mockProjects as any);
@@ -323,7 +323,7 @@ describe('TanStack Query hooks and polling policies', () => {
 
   it('useAllJobs provides explicit aggregate state classification fields (hasData, isInitialLoading, isInitialError, hasPartialFailure, hasRefetchError)', async () => {
     vi.mocked(api.fetchProjects).mockResolvedValue([
-      { id: 'p1', alias: 'proj1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+      { id: 'p1', alias: 'proj1', root: '/p1', created_at: '2026-01-01' },
     ] as any);
     vi.mocked(api.fetchProjectJobs).mockRejectedValue(new api.ApiError('/jobs', 500));
 
@@ -575,8 +575,8 @@ describe('useAllJobs provenance and state classification tests', () => {
 
   it('handles all initially failed fan-outs (isInitialError=true, isInitialLoading=false, hasData=false)', async () => {
     vi.mocked(api.fetchProjects).mockResolvedValue([
-      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
-      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+      { id: 'p1', alias: 'p1', root: '/p1', created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', created_at: '2026-01-01' },
     ] as any);
     vi.mocked(api.fetchProjectJobs).mockRejectedValue(new api.ApiError('/jobs', 500));
 
@@ -591,11 +591,11 @@ describe('useAllJobs provenance and state classification tests', () => {
 
   it('handles partial rows (hasPartialFailure=true, keeps successful rows)', async () => {
     const mockP1Jobs = [
-      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', error: '' } },
     ];
     vi.mocked(api.fetchProjects).mockResolvedValue([
-      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
-      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+      { id: 'p1', alias: 'p1', root: '/p1', created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', created_at: '2026-01-01' },
     ] as any);
     vi.mocked(api.fetchProjectJobs).mockImplementation((projectId) => {
       if (projectId === 'p1') return Promise.resolve(mockP1Jobs as any);
@@ -614,8 +614,8 @@ describe('useAllJobs provenance and state classification tests', () => {
 
   it('handles partial empty (1 succeeded empty [], 1 failed without data => hasPartialFailure=true, hasData=true)', async () => {
     vi.mocked(api.fetchProjects).mockResolvedValue([
-      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
-      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+      { id: 'p1', alias: 'p1', root: '/p1', created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', created_at: '2026-01-01' },
     ] as any);
     vi.mocked(api.fetchProjectJobs).mockImplementation((projectId) => {
       if (projectId === 'p1') return Promise.resolve([]);
@@ -633,7 +633,7 @@ describe('useAllJobs provenance and state classification tests', () => {
 
   it('handles cached empty followed by refetch failure (hasRefetchError=true, retains empty data)', async () => {
     vi.mocked(api.fetchProjects).mockResolvedValue([
-      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+      { id: 'p1', alias: 'p1', root: '/p1', created_at: '2026-01-01' },
     ] as any);
     vi.mocked(api.fetchProjectJobs)
       .mockResolvedValueOnce([])
@@ -659,11 +659,11 @@ describe('useAllJobs provenance and state classification tests', () => {
 
   it('handles cached projects refetch failure (hasRefetchError=true, retains known jobs)', async () => {
     const mockP1Jobs = [
-      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', error: '' } },
     ];
     vi.mocked(api.fetchProjects)
       .mockResolvedValueOnce([
-        { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
+        { id: 'p1', alias: 'p1', root: '/p1', created_at: '2026-01-01' },
       ] as any)
       .mockRejectedValueOnce(new api.ApiError('/projects', 500));
     vi.mocked(api.fetchProjectJobs).mockResolvedValue(mockP1Jobs as any);
@@ -690,8 +690,8 @@ describe('useAllJobs provenance and state classification tests', () => {
 
   it('handles one empty success while another is pending (isInitialLoading=true, avoids premature empty)', async () => {
     vi.mocked(api.fetchProjects).mockResolvedValue([
-      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
-      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+      { id: 'p1', alias: 'p1', root: '/p1', created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', created_at: '2026-01-01' },
     ] as any);
     vi.mocked(api.fetchProjectJobs).mockImplementation((projectId) => {
       if (projectId === 'p1') return Promise.resolve([]);
@@ -707,11 +707,11 @@ describe('useAllJobs provenance and state classification tests', () => {
 
   it('asserts no full initial-loading replacement when one fan-out has usable rows while another is pending', async () => {
     const mockP1Jobs = [
-      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', base_commit: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', commit: '', error: '' } },
+      { id: 'j1', project_id: 'p1', created_at: '2026-01-01T10:00:00Z', workflow: 'wf', profile: '', state: 'succeeded', context_key: '', target_id: '', attempts: 1, updated_at: '', result: { text: '', error: '' } },
     ];
     vi.mocked(api.fetchProjects).mockResolvedValue([
-      { id: 'p1', alias: 'p1', root: '/p1', head_commit: '1', clean: true, created_at: '2026-01-01' },
-      { id: 'p2', alias: 'p2', root: '/p2', head_commit: '2', clean: true, created_at: '2026-01-01' },
+      { id: 'p1', alias: 'p1', root: '/p1', created_at: '2026-01-01' },
+      { id: 'p2', alias: 'p2', root: '/p2', created_at: '2026-01-01' },
     ] as any);
     vi.mocked(api.fetchProjectJobs).mockImplementation((projectId) => {
       if (projectId === 'p1') return Promise.resolve(mockP1Jobs as any);

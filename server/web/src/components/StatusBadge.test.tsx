@@ -12,8 +12,6 @@ describe('StatusBadge', () => {
     'interrupted',
     'healthy',
     'degraded',
-    'clean',
-    'dirty',
     'circuit-open',
     'circuit-closed',
     'circuit-unknown',

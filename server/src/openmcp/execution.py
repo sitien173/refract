@@ -166,13 +166,13 @@ class JobRunner:
         log.info("Job started", extra={"event": "job.started", "job_id": job_id, "project_id": project.id, "workflow": record["workflow"]})
         final_state = "failed"
         try:
-            self.database.start_job(job_id, "")
+            self.database.start_job(job_id)
             plan = parse_execution_plan(json.loads(record["execution_plan_json"]))
             execution = await self.targets.execute(job_id=job_id, project=project, workflow=record["workflow"], context_key=record["context_key"], plan=plan, prompt=record["prompt"], cwd=root, cancel_event=cancel_event)
             if execution.result.outcome != "SUCCESS" or cancel_event.is_set():
                 final_state = "interrupted" if cancel_event.is_set() and self.is_closing() else "cancelled" if cancel_event.is_set() else "failed"
                 raise RuntimeError(execution.result.error or execution.result.outcome)
-            self.database.finish_job(job_id, "succeeded", text=execution.result.text, commit="", target_id=execution.target_id)
+            self.database.finish_job(job_id, "succeeded", text=execution.result.text, target_id=execution.target_id)
         except Exception as exc:
             if not isinstance(exc, RuntimeError):
                 log.exception(

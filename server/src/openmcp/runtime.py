@@ -1,4 +1,4 @@
-"""Public facade for durable direct-repository jobs."""
+"""Public facade for durable direct-directory jobs."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ class Runtime:
         if not resolved_alias:
             raise OrchestrationError("Project alias cannot be empty")
         try:
-            return self.database.upsert_project(project_id=str(uuid.uuid4()), alias=resolved_alias, root=resolved.as_posix(), head_commit="", clean=True)
+            return self.database.upsert_project(project_id=str(uuid.uuid4()), alias=resolved_alias, root=resolved.as_posix())
         except sqlite3.IntegrityError as exc:
             constraint = str(exc).rsplit(":", 1)[-1].strip()
             if constraint == "projects.alias":

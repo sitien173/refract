@@ -17,14 +17,11 @@ export interface Project {
   id: string;
   alias: string;
   root: string;
-  head_commit: string;
-  clean: boolean;
   created_at: string;
 }
 
 export interface JobResult {
   text: string;
-  commit: string;
   error: string;
 }
 
@@ -35,7 +32,6 @@ export interface Job {
   profile: string;
   state: JobState;
   context_key: string;
-  base_commit: string;
   target_id: string;
   attempts: number;
   created_at: string;

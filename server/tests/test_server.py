@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openmcp.models import JobView
+from openmcp.models import JobResult, JobView, ProjectView
 from openmcp.server import _DOCTOR_INSTRUCTIONS, _project_root, mcp
 
 
@@ -118,7 +118,9 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert set(tools["job_submit"].inputSchema["properties"]) == {"project_id", "workflow", "prompt", "context_key", "profile"}
     assert set(tools["job_wait"].inputSchema["properties"]) == {"job_id", "timeout_s"}
     assert set(tools["job_retry"].inputSchema["properties"]) == {"job_id"}
-    assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts"}.isdisjoint(JobView.model_fields)
+    assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts", "base_commit"}.isdisjoint(JobView.model_fields)
+    assert "commit" not in JobResult.model_fields
+    assert {"head_commit", "clean"}.isdisjoint(ProjectView.model_fields)
 
 
 @pytest.mark.asyncio

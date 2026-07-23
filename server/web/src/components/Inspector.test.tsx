@@ -33,8 +33,7 @@ describe('Inspector', () => {
     context_key: 'ctx-1',
     target_id: 'target-1',
     attempts: 2,
-    base_commit: 'abc1234',
-    result: { text: 'success', commit: 'def5678', error: '' },
+    result: { text: 'success', error: '' },
     created_at: '2026-01-01T10:00:00Z',
     updated_at: '2026-01-01T10:05:00Z',
   };
@@ -125,7 +124,7 @@ describe('Inspector', () => {
     expect(screen.getByText('job-123')).toBeInTheDocument();
   });
 
-  it('renders all detail fields, status badge, timestamps, commit values and commit relationship', () => {
+  it('renders all detail fields and status information', () => {
     vi.mocked(queries.useJob).mockReturnValue({
       data: defaultJob,
       isLoading: false,
@@ -139,28 +138,6 @@ describe('Inspector', () => {
     expect(screen.getByText('production')).toBeInTheDocument();
     expect(screen.getByText('proj-1')).toBeInTheDocument();
     expect(screen.getByText('2')).toBeInTheDocument();
-    expect(screen.getByText('abc1234')).toBeInTheDocument();
-    expect(screen.getByText('def5678')).toBeInTheDocument();
-    expect(screen.getByText(/Base to Result: abc1234 → def5678/)).toBeInTheDocument();
-  });
-
-  it('renders Not available fallback for empty base_commit and result_commit', () => {
-    const jobNoCommits = {
-      ...defaultJob,
-      base_commit: '',
-      result: { text: '', commit: '', error: '' },
-    };
-    vi.mocked(queries.useJob).mockReturnValue({
-      data: jobNoCommits,
-      isLoading: false,
-      isError: false,
-    } as any);
-
-    render(<Inspector jobId="job-123" onClose={vi.fn()} />, { wrapper: createWrapper() });
-
-    const notAvailables = screen.getAllByText('Not available');
-    expect(notAvailables.length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText(/Base to Result: Not available → Not available/)).toBeInTheDocument();
   });
 
   it('enforces Phase 4 CSS styling contract tokens, motion overrides, responsive stacking, dark parity, and positioning rules', async () => {

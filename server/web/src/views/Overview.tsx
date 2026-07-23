@@ -72,8 +72,6 @@ export const Overview: React.FC = () => {
 
   const projectList = projectsData ?? [];
   const totalProjects = projectList.length;
-  const cleanProjects = projectList.filter((p) => p.clean).length;
-  const dirtyProjects = projectList.filter((p) => !p.clean).length;
 
   const profilesData = profilesQuery.data;
   const isProfilesLoading = profilesQuery.isLoading && !profilesData;
@@ -220,14 +218,6 @@ export const Overview: React.FC = () => {
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span className={styles.metricLabel}>Total Projects</span>
                 <span className={styles.metricValue}>{totalProjects}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className={styles.metricLabel}>Clean</span>
-                <span className={styles.metricValue} style={{ color: 'var(--color-text-code-green)' }}>{cleanProjects}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className={styles.metricLabel}>Dirty</span>
-                <span className={styles.metricValue} style={{ color: 'var(--color-icon-yellow)' }}>{dirtyProjects}</span>
               </div>
             </div>
           )}

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import inspect
 import json
 import sqlite3
 
+import pytest
+
 from openmcp.database import Database
-
-
-def test_create_job_signature_omits_commit_message() -> None:
-    assert "commit_message" not in inspect.signature(Database.create_job).parameters
 
 
 def create_legacy_database(path) -> None:
@@ -34,32 +31,81 @@ def create_legacy_database(path) -> None:
     connection.close()
 
 
-def test_fresh_database_uses_job_level_schema(tmp_path) -> None:
+def create_v5_database(path, *, invalid_foreign_key: bool = False) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        PRAGMA foreign_keys=OFF;
+        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, head_commit TEXT NOT NULL, clean INTEGER NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, commit_message TEXT NOT NULL DEFAULT '', execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, base_commit TEXT NOT NULL DEFAULT '', result_text TEXT NOT NULL DEFAULT '', result_commit TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
+        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
+        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
+        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
+    """)
+    connection.execute("PRAGMA user_version=5")
+    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?)", ("project", "project", "/project", "head", 0, "2026-01-01"))
+    project_id = "missing" if invalid_foreign_key else "project"
+    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", project_id, "consult", "balanced", "prompt", "legacy message", "{}", "consult", "succeeded", "base", "result text", "result", "target", 2, "", "2026-01-01", "2026-01-02"))
+    connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", ("job", "2026-01-01", "job.queued", "{}"))
+    connection.execute("INSERT INTO context_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ("project", "consult", "consult", "target", "target", "", "session", "2026-01-01"))
+    connection.execute("INSERT INTO context_turns(project_id, context_key, role, target_id, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", ("project", "consult", "consult", "target", "prompt", "response", "2026-01-01"))
+    connection.execute("INSERT INTO target_health VALUES (?, ?, ?, ?)", ("target", 1, "", "2026-01-01"))
+    connection.commit()
+    connection.close()
+
+
+def table_columns(database: Database, table: str) -> set[str]:
+    return {row["name"] for row in database._connection.execute(f"PRAGMA table_info({table})")}
+
+
+def test_fresh_database_uses_v6_schema(tmp_path) -> None:
     database = Database(tmp_path / "openmcp.db")
-    columns = {row["name"] for row in database._connection.execute("PRAGMA table_info(jobs)")}
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 5
-    assert {"prompt", "commit_message", "result_text", "target_id", "attempts"} <= columns
-    assert {"workflow_json", "parent_job_id", "branch", "worktree"}.isdisjoint(columns)
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "created_at", "updated_at"}
     assert "stages" not in tables and "artifacts" not in tables
     database.close()
 
 
-def test_create_job_uses_empty_commit_message_default(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
-    project = database.upsert_project(project_id="project", alias="project", root="/project", head_commit="", clean=True)
-    database.create_job(
-        job_id="job",
-        project_id=project.id,
-        workflow="consult",
-        profile="balanced",
-        prompt="inspect",
-        execution_plan_json="{}",
-        context_key="consult",
-    )
-    value = database._connection.execute("SELECT commit_message FROM jobs WHERE id='job'").fetchone()[0]
-    assert value == ""
+def test_v5_migrates_to_v6_preserving_rows_and_support_data(tmp_path) -> None:
+    path = tmp_path / "openmcp.db"
+    create_v5_database(path)
+    database = Database(path)
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "created_at", "updated_at"}
+    assert database.project("project") and database.project("project").root == "/project"
+    job = database.job("job")
+    assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
+    assert database.events("job")[0]["kind"] == "job.queued"
+    assert database._connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0] == 1
+    assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
+    assert database._connection.execute("SELECT COUNT(*) FROM target_health").fetchone()[0] == 1
+    assert not {"projects_v6", "jobs_v6"} & {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     database.close()
+
+
+def test_reopening_v6_is_a_noop(tmp_path) -> None:
+    path = tmp_path / "openmcp.db"
+    first = Database(path)
+    first.close()
+    second = Database(path)
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 6
+    second.close()
+
+
+def test_v5_migration_rolls_back_on_integrity_failure(tmp_path) -> None:
+    path = tmp_path / "openmcp.db"
+    create_v5_database(path, invalid_foreign_key=True)
+    with pytest.raises(sqlite3.IntegrityError):
+        Database(path)
+    connection = sqlite3.connect(path)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert {row[1] for row in connection.execute("PRAGMA table_info(projects)")} == {"id", "alias", "root", "head_commit", "clean", "created_at"}
+    assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+    connection.close()
 
 
 def test_legacy_jobs_collapse_to_historical_results(tmp_path) -> None:
@@ -68,7 +114,7 @@ def test_legacy_jobs_collapse_to_historical_results(tmp_path) -> None:
     database = Database(path)
     completed, interrupted, queued, conflict = (database.job(value) for value in ("completed", "running", "queued", "conflict"))
     assert completed and completed.state == "succeeded"
-    assert completed.result.text == "legacy response" and completed.result.commit == "result-sha"
+    assert completed.result.text == "legacy response"
     assert completed.target_id == "legacy-target" and completed.attempts == 2
     assert interrupted and interrupted.state == "interrupted"
     assert queued and queued.state == "interrupted"

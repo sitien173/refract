@@ -77,8 +77,7 @@ Example submission:
 ```
 
 Job states are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and
-`interrupted`. A completed job exposes `result.text`, `result.commit`, and
-`result.error`.
+`interrupted`. A completed job exposes `result.text` and `result.error`.
 
 ## Configuration
 
@@ -150,16 +149,11 @@ Isolated Pi targets disable context files, extensions, skills, prompt templates,
 and project approvals. Read-only Pi targets receive only `read`, `grep`, `find`,
 and `ls`. Normal Pi targets receive `--approve` after configurable args.
 
-## Upgrade from worktree jobs
+## Upgrade from previous schemas
 
 The first startup rebuilds legacy job records. Completed history remains
 readable. Legacy queued and running jobs become interrupted. Historical
-unintegrated commits are not applied to the current branch.
-
-OpenMCP does not remove historical worktrees or `openmcp/*` branches. Inspect
-registered repositories with `git worktree list` and remove obsolete entries
-manually before running `git worktree prune`. Delete `~/.openmcp/worktrees/`
-only after confirming no listed worktree is needed.
+repository metadata is discarded during migration.
 
 ## Direct Python compatibility API
 

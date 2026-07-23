@@ -35,7 +35,7 @@ describe('API client wrappers', () => {
   });
 
   it('fetchProjects fetches /dashboard/api/projects', async () => {
-    const mockProjects = [{ id: 'p1', alias: 'proj1', root: '/path', head_commit: 'abc', clean: true, created_at: '2026-01-01' }];
+    const mockProjects = [{ id: 'p1', alias: 'proj1', root: '/path', created_at: '2026-01-01' }];
     (global.fetch as any).mockResolvedValueOnce({
       ok: true,
       json: async () => mockProjects,
@@ -47,7 +47,7 @@ describe('API client wrappers', () => {
   });
 
   it('fetchProjectJobs fetches encoded project jobs path', async () => {
-    const mockJobs = [{ id: 'j1', project_id: 'p/1', workflow: 'wf', profile: 'default', state: 'queued', context_key: '', base_commit: '', target_id: '', attempts: 0, created_at: '', updated_at: '', result: { text: '', commit: '', error: '' } }];
+    const mockJobs = [{ id: 'j1', project_id: 'p/1', workflow: 'wf', profile: 'default', state: 'queued', context_key: '', target_id: '', attempts: 0, created_at: '', updated_at: '', result: { text: '', error: '' } }];
     (global.fetch as any).mockResolvedValueOnce({
       ok: true,
       json: async () => mockJobs,
@@ -60,7 +60,7 @@ describe('API client wrappers', () => {
 
   it('fetchJob fetches encoded job detail path with signal', async () => {
     const controller = new AbortController();
-    const mockJob = { id: 'j1', project_id: 'p1', workflow: 'wf', profile: 'default', state: 'running', context_key: '', base_commit: '', target_id: '', attempts: 0, created_at: '', updated_at: '', result: { text: '', commit: '', error: '' } };
+    const mockJob = { id: 'j1', project_id: 'p1', workflow: 'wf', profile: 'default', state: 'running', context_key: '', target_id: '', attempts: 0, created_at: '', updated_at: '', result: { text: '', error: '' } };
     (global.fetch as any).mockResolvedValueOnce({
       ok: true,
       json: async () => mockJob,

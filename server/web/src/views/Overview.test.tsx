@@ -55,8 +55,8 @@ describe('Overview view', () => {
       errors: [],
       projectsQuery: {
         data: [
-          { id: 'p1', alias: 'main-app', root: '/app', head_commit: '123456789', clean: true, created_at: '2026-07-01T00:00:00Z' },
-          { id: 'p2', alias: 'service-b', root: '/b', head_commit: 'abcdef987', clean: false, created_at: '2026-07-02T00:00:00Z' },
+          { id: 'p1', alias: 'main-app', root: '/app', created_at: '2026-07-01T00:00:00Z' },
+          { id: 'p2', alias: 'service-b', root: '/b', created_at: '2026-07-02T00:00:00Z' },
         ],
         isLoading: false,
         isError: false,

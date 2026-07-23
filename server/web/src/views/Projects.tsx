@@ -1,8 +1,7 @@
 import React from 'react';
 import { useProjects } from '../lib/queries';
-import { formatDate, formatCommit } from '../lib/presentation';
+import { formatDate } from '../lib/presentation';
 import { DataTable } from '../components/DataTable';
-import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { Project } from '../lib/types';
 import styles from '../styles/app.module.css';
@@ -31,18 +30,6 @@ export const Projects: React.FC = () => {
   const columns = [
     { key: 'alias', header: 'Alias', render: (p: Project) => p.alias },
     { key: 'root', header: 'Root Path', render: (p: Project) => p.root },
-    {
-      key: 'head_commit',
-      header: 'Head Commit',
-      render: (p: Project) => (
-        <code title={p.head_commit}>{formatCommit(p.head_commit)}</code>
-      ),
-    },
-    {
-      key: 'clean',
-      header: 'Status',
-      render: (p: Project) => <StatusBadge state={p.clean ? 'clean' : 'dirty'} />,
-    },
     {
       key: 'created_at',
       header: 'Created Time',
