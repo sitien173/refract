@@ -58,6 +58,8 @@ to avoid a light-theme flash.
 - `web/index.html`
 - `web/src/main.tsx`
 - `web/src/App.tsx`
+- `web/src/App.test.tsx`
+- `web/src/setupTests.ts`
 - `web/src/styles/colors_and_type.css`
 - `web/src/styles/app.module.css`
 - `web/src/fonts/*.woff2`
@@ -86,6 +88,7 @@ to avoid a light-theme flash.
 - `npm --prefix web install`
 - `npm --prefix web ci`
 - `npm --prefix web run build`
+- `npm --prefix web test -- --run`
 - `test -f src/openmcp/dashboard_static/index.html`
 - `test -d src/openmcp/dashboard_static/assets`
 - `test ! -e src/openmcp/dashboard_static/app.js`
