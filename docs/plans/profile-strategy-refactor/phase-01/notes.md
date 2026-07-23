@@ -132,3 +132,25 @@ gets a block even if all `none`.
 
 ### Test evidence
 - GREEN: README inspection shows configuration creation before doctor and serve; full suite passed 106 tests with 2 deselected.
+
+## Task 7
+
+### Decisions made
+- Dict payloads accept only the four supported top-level sections.
+- Unsupported keys fail before TOML document construction.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Unsupported payloads fail before backups or file replacement.
+
+### Assumptions
+- Partial updates continue using any subset of supported sections.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: New dict-payload tests first had 2 failures, then targeted tests passed 41 tests and the full suite passed 108 tests with 2 deselected.
+- GREEN: Phase 1 absence scan passed with no matches.

@@ -91,6 +91,27 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 1 writer correction / 2026-07-23T06:20:00Z / 2026-07-23T06:23:32Z / docs/plans/profile-strategy-refactor
+## SUMMARY
+Config writer dict payloads now reject unsupported top-level keys without modifying files.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| modified | src/openmcp/config_writer.py | Rejected unsupported top-level dict payload keys before TOML construction. |
+| modified | tests/test_dashboard.py | Added alias and route dict-payload regressions. |
+| modified | docs/plans/profile-strategy-refactor/phase-01/notes.md | Recorded correction decisions and test evidence. |
+| modified | docs/plans/profile-strategy-refactor/phase-01/journal.md | Recorded this correction response. |
+## NOTES
+- phase-01/notes.md  (## Task 7)
+## SPEC COMPLIANCE
+- Meets Spec? YES  — Targeted tests, full suite, and absence scan pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 <!-- Coordinator appends the independent review response here. -->

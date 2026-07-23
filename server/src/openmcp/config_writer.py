@@ -54,6 +54,10 @@ def _dict_to_toml_doc(
     data: dict[str, Any],
     base_doc: tomlkit.TOMLDocument | None = None,
 ) -> tomlkit.TOMLDocument:
+    unsupported = set(data) - {"daemon", "logging", "targets", "profiles"}
+    if unsupported:
+        raise ValueError(f"Unsupported config keys: {sorted(unsupported)}")
+
     # Validate section types before processing
     if "daemon" in data and not isinstance(data["daemon"], dict):
         raise ValueError("[daemon] must be a TOML table")

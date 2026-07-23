@@ -190,6 +190,20 @@ def test_write_config_invalid_leaves_file_untouched(tmp_path) -> None:
     assert "8765" in cfg_file.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("unsupported_key", ["routes", "routing_" + "profiles"])
+def test_write_config_rejects_unsupported_dict_keys(tmp_path, unsupported_key) -> None:
+    from openmcp.config_writer import write_config
+
+    cfg_file = tmp_path / "config.toml"
+    original = _strict_config()
+    cfg_file.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=unsupported_key):
+        write_config({unsupported_key: [], "daemon": {"port": 9000}}, path=cfg_file)
+
+    assert cfg_file.read_text(encoding="utf-8") == original
+
+
 def test_write_config_preserves_comments(tmp_path) -> None:
     from openmcp.config_writer import write_config
     cfg_file = tmp_path / "config.toml"
