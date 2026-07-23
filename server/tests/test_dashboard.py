@@ -141,19 +141,19 @@ async def test_dashboard_static_index(async_client: httpx.AsyncClient) -> None:
     assert res.status_code == 200
     assert "text/html" in res.headers.get("content-type", "")
     assert "<!DOCTYPE html>" in res.text or "<html" in res.text
-    assert "Task Guide" in res.text
-    assert "fetchTaskGuide()" in res.text
-    assert "Parent Profile" in res.text
-
+    assert "OpenMCP Monitor Console" in res.text
+    assert "/dashboard/assets/assets/" in res.text
 
 
 @pytest.mark.asyncio
 async def test_dashboard_static_assets(async_client: httpx.AsyncClient) -> None:
-    res = await async_client.get("/dashboard/assets/styles.css")
+    import glob, os
+    js_files = glob.glob("src/openmcp/dashboard_static/assets/*.js")
+    assert len(js_files) > 0
+    asset_name = os.path.basename(js_files[0])
+    res = await async_client.get(f"/dashboard/assets/assets/{asset_name}")
     assert res.status_code == 200
 
-    res_vendor = await async_client.get("/dashboard/assets/vendor/alpine.min.js")
-    assert res_vendor.status_code == 200
 
 
 @pytest.mark.asyncio
