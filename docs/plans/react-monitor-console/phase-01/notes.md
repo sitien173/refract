@@ -106,3 +106,19 @@
 - none
 ### Test evidence
 - RED -> GREEN: `test ! -e web/src/vite-env.d.ts`, `! tgrep -F 'letter-spacing' web/src/styles/app.module.css -n`, `! tgrep -F 'cursor: pointer' web/src/styles/app.module.css -n`, `npm --prefix web test -- --run`, `npm --prefix web run build`, `uv run pytest tests/test_dashboard.py -k 'dashboard_static'`, and `git diff --check` all passed cleanly.
+
+## Task 8
+### Decisions made
+- Replaced `<img>` SVG elements in `Sidebar.tsx` with `<span>` elements using CSS mask (`maskImage` / `WebkitMaskImage` / `--icon-url`) and `background-color: currentColor`.
+- Guaranteed sidebar icons inherit text `currentColor` across both light and dark themes without adding new dependencies or modifying SVG path data.
+- Added characterization test in `App.test.tsx` verifying sidebar icons render as CSS masks using the inheriting path.
+### Spec deviations
+- none
+### Tradeoffs accepted
+- none
+### Assumptions
+- none
+### Follow-ups for human
+- none
+### Test evidence
+- RED -> GREEN: `npm --prefix web test -- --run`, `npm --prefix web run build`, `uv run pytest tests/test_dashboard.py -k 'dashboard_static'`, and `git diff --check` all passed cleanly.

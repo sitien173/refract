@@ -43,9 +43,18 @@ export const Sidebar: React.FC = () => {
                 }
                 aria-current={isSelected ? 'page' : undefined}
               >
-                <span className={styles.navIcon}>
-                  <img src={item.icon} alt="" width={16} height={16} />
-                </span>
+                <span
+                  className={styles.navIcon}
+                  style={
+                    {
+                      '--icon-url': `url(${item.icon})`,
+                      maskImage: `url(${item.icon})`,
+                      WebkitMaskImage: `url(${item.icon})`,
+                    } as React.CSSProperties
+                  }
+                  aria-hidden="true"
+                  data-testid={`nav-icon-${item.id}`}
+                />
                 <span>{item.label}</span>
               </li>
             );

@@ -92,15 +92,11 @@
 .navIcon {
   width: 16px;
   height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: inline-block;
   flex-shrink: 0;
-}
-
-.navIcon img {
-  width: 16px;
-  height: 16px;
+  background-color: currentColor;
+  mask: var(--icon-url) no-repeat center / contain;
+  -webkit-mask: var(--icon-url) no-repeat center / contain;
 }
 
 .sidebarFooter {

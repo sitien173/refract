@@ -20,6 +20,16 @@ describe('AppShell and ThemeToggle', () => {
     expect(screen.getByText('Profiles')).toBeInTheDocument();
   });
 
+  it('renders nav icons as CSS masks inheriting currentColor', () => {
+    render(<App />);
+    const icon = screen.getByTestId('nav-icon-overview');
+    expect(icon).toBeInTheDocument();
+    expect(icon.tagName.toLowerCase()).toBe('span');
+    expect(icon.style.getPropertyValue('--icon-url')).toMatch(
+      /url\(.*(?:activity\.svg|data:image\/svg\+xml)/
+    );
+  });
+
   it('toggles light/dark theme and updates localStorage', () => {
     render(<ThemeToggle />);
     const btn = screen.getByRole('button', { name: /Switch to/i });
