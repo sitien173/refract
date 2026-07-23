@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -101,3 +102,37 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert set(tools["job_wait"].inputSchema["properties"]) == {"job_id", "timeout_s"}
     assert set(tools["job_retry"].inputSchema["properties"]) == {"job_id"}
     assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts"}.isdisjoint(JobView.model_fields)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_clears_state_when_runtime_close_fails(monkeypatch) -> None:
+    import openmcp.server as server
+
+    config = SimpleNamespace(logging=object())
+
+    class FailingRuntime:
+        def __init__(self, received_config) -> None:
+            assert received_config is config
+
+        async def start(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(server, "load_config", lambda: config)
+    monkeypatch.setattr(server, "configure_logging", lambda _: None)
+    monkeypatch.setattr(server, "Runtime", FailingRuntime)
+    server._DAEMON_CONFIG = None
+    server._ACTIVE_RUNTIME = None
+
+    try:
+        with pytest.raises(RuntimeError, match="close failed"):
+            async with server._lifespan(server.mcp):
+                assert server._ACTIVE_RUNTIME is not None
+        observed = (server._ACTIVE_RUNTIME, server._DAEMON_CONFIG)
+    finally:
+        server._ACTIVE_RUNTIME = None
+        server._DAEMON_CONFIG = None
+
+    assert observed == (None, None)

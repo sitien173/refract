@@ -1,5 +1,4 @@
-document.addEventListener('alpine:init', () => {
-  Alpine.data('dashboardApp', () => ({
+Alpine.data('dashboardApp', () => ({
     activeTab: 'overview',
     isConnected: true,
     lastUpdated: null,
@@ -446,4 +445,6 @@ document.addEventListener('alpine:init', () => {
       }
     }
   }));
-});
+
+document.body.removeAttribute('x-ignore');
+Alpine.initTree(document.body);

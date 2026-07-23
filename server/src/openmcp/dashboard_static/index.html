@@ -8,7 +8,7 @@
   <script defer src="/dashboard/assets/vendor/alpine.min.js"></script>
   <script defer src="/dashboard/assets/app.js"></script>
 </head>
-<body x-data="dashboardApp">
+<body x-data="dashboardApp" x-ignore>
   <header class="dashboard-header">
     <div class="brand">
       <div class="brand-icon">M</div>
@@ -208,7 +208,7 @@
       <!-- DAEMON SETTINGS -->
       <div class="section-card">
         <div class="section-title">Daemon Settings</div>
-        <div class="form-grid" x-if="configData.daemon">
+        <template x-if="configData.daemon"><div class="form-grid">
           <div class="form-group">
             <label>Host</label>
             <input type="text" class="form-control" x-model="configData.daemon.host">
@@ -233,7 +233,7 @@
             <label>Default Profile</label>
             <input type="text" class="form-control" x-model="configData.daemon.default_profile">
           </div>
-        </div>
+        </div></template>
       </div>
 
       <!-- TARGETS CONFIGURATION -->

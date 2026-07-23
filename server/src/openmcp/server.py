@@ -42,8 +42,10 @@ async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
         yield runtime
     finally:
         _ACTIVE_RUNTIME = None
-        await runtime.close()
-        _DAEMON_CONFIG = None
+        try:
+            await runtime.close()
+        finally:
+            _DAEMON_CONFIG = None
 
 
 mcp = FastMCP("openmcp", host="127.0.0.1", port=8765, streamable_http_path="/mcp", json_response=True, lifespan=_lifespan)
@@ -253,7 +255,7 @@ async def workflows_resource(project_id: str, ctx: Context) -> str:
     return _json(BUILTIN_WORKFLOWS)
 
 
-from openmcp.dashboard import register_dashboard_routes
+from openmcp.dashboard import register_dashboard_routes  # noqa: E402
 
 register_dashboard_routes(mcp)
 
