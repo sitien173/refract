@@ -5,21 +5,20 @@ import pytest
 from openmcp.workflows import BUILTIN_WORKFLOWS, get_workflow, validate_request
 
 
-def test_fixed_workflows_expose_capability_and_write_behavior() -> None:
+def test_fixed_workflows_expose_capability_without_write_behavior() -> None:
     assert BUILTIN_WORKFLOWS == ("consult", "implement", "review")
     assert get_workflow("implement").capability == "code"
-    assert get_workflow("implement").writes
+    assert not hasattr(get_workflow("implement"), "writes")
     assert get_workflow("review").capability == "review"
-    assert not get_workflow("review").writes
+    assert not hasattr(get_workflow("review"), "writes")
     assert get_workflow("consult").capability == "consult"
 
 
-def test_request_validation_normalizes_prompt_and_commit_message() -> None:
-    assert validate_request(get_workflow("implement"), "  change it  ", "  feat: change  ") == ("change it", "feat: change")
+def test_request_validation_normalizes_prompt_only() -> None:
+    assert validate_request(get_workflow("implement"), "  change it  ") == "change it"
+    assert validate_request(get_workflow("review"), " review it ") == "review it"
     with pytest.raises(ValueError, match="Prompt must contain text"):
-        validate_request(get_workflow("review"), "  ", "")
-    with pytest.raises(ValueError, match="only valid for implement"):
-        validate_request(get_workflow("review"), "review it", "feat: invalid")
+        validate_request(get_workflow("review"), "  ")
 
 
 def test_unknown_workflow_is_rejected() -> None:

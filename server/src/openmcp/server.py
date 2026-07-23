@@ -151,8 +151,8 @@ async def task_guide(task: str, ctx: Context, project_id: str = "") -> TaskGuide
 
 @mcp.tool(description="Queue a durable project workflow.", structured_output=True)
 @_logged_request("job_submit")
-async def job_submit(project_id: str, workflow: str, prompt: str, ctx: Context, commit_message: str = "", context_key: str = "", profile: str = "") -> SubmissionResult:
-    return await _runtime(ctx).submit(project_id, workflow, prompt, commit_message=commit_message, context_key=context_key, profile=profile)
+async def job_submit(project_id: str, workflow: str, prompt: str, ctx: Context, context_key: str = "", profile: str = "") -> SubmissionResult:
+    return await _runtime(ctx).submit(project_id, workflow, prompt, context_key=context_key, profile=profile)
 
 
 @mcp.tool(description="Wait for job completion or timeout.", structured_output=True)

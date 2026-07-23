@@ -85,20 +85,20 @@ class Runtime:
                 message = "Project registration violates a database constraint"
             raise OrchestrationError(message) from exc
 
-    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, commit_message: str = "", context_key: str = "", profile: str = "") -> SubmissionResult:
+    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "") -> SubmissionResult:
         project = self.database.project(project_id)
         if project is None:
             raise OrchestrationError(f"Unknown project: {project_id}")
         try:
             workflow = get_workflow(workflow_name)
-            resolved_prompt, resolved_message = validate_request(workflow, prompt, commit_message)
+            resolved_prompt = validate_request(workflow, prompt)
             catalog = load_project_config(Path(project.root), self._reload_catalog())
             selected_profile = profile.strip() or catalog.default_profile
             plan = resolve_execution_plan(workflow, catalog, selected_profile)
         except ValueError as exc:
             raise OrchestrationError(str(exc)) from exc
         job_id = str(uuid.uuid4())
-        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow.name, profile=selected_profile, prompt=resolved_prompt, commit_message=resolved_message, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow.name)
+        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow.name, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow.name)
         self.scheduler.enqueue(job_id, project.id)
         log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow.name, "profile": selected_profile})
         return SubmissionResult(job_id=job_id, state="queued")

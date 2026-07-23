@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import subprocess
 from dataclasses import replace
@@ -16,6 +17,10 @@ from openmcp.workflows import get_workflow
 from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, git, repository
 
 
+def test_runtime_submit_signature_omits_commit_message() -> None:
+    assert "commit_message" not in inspect.signature(Runtime.submit).parameters
+
+
 @pytest.mark.asyncio
 async def test_implement_succeeds_with_dirty_worktree_and_leaves_changes(tmp_path) -> None:
     root = repository(tmp_path)
@@ -26,7 +31,7 @@ async def test_implement_succeeds_with_dirty_worktree_and_leaves_changes(tmp_pat
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
-        submission = await runtime.submit(project.id, "implement", "create the result", commit_message="ignored")
+        submission = await runtime.submit(project.id, "implement", "create the result")
         job = await runtime.wait(submission.job_id, 10)
         assert job.state == "succeeded"
         assert (root / "result.txt").exists()
@@ -232,7 +237,7 @@ async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) 
     database = Database(catalog.database_path)
     project = database.upsert_project(project_id="project", alias="project", root=root.as_posix(), head_commit="", clean=True)
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    database.create_job(job_id="running", project_id=project.id, workflow="implement", profile="balanced", prompt="change", commit_message="", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="implement")
+    database.create_job(job_id="running", project_id=project.id, workflow="implement", profile="balanced", prompt="change", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="implement")
     database.start_job("running", "")
     (root / "partial.txt").write_text("partial\n", encoding="utf-8")
     database.close()

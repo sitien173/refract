@@ -9,13 +9,12 @@ from dataclasses import dataclass
 class WorkflowDefinition:
     name: str
     capability: str
-    writes: bool
 
 
 _WORKFLOWS = {
-    "implement": WorkflowDefinition("implement", "code", True),
-    "review": WorkflowDefinition("review", "review", False),
-    "consult": WorkflowDefinition("consult", "consult", False),
+    "implement": WorkflowDefinition("implement", "code"),
+    "review": WorkflowDefinition("review", "review"),
+    "consult": WorkflowDefinition("consult", "consult"),
 }
 BUILTIN_WORKFLOWS = tuple(sorted(_WORKFLOWS))
 
@@ -29,18 +28,11 @@ def get_workflow(name: str) -> WorkflowDefinition:
         ) from exc
 
 
-def validate_request(
-    workflow: WorkflowDefinition,
-    prompt: str,
-    commit_message: str,
-) -> tuple[str, str]:
+def validate_request(workflow: WorkflowDefinition, prompt: str) -> str:
     resolved_prompt = prompt.strip()
-    resolved_message = commit_message.strip()
     if not resolved_prompt:
         raise ValueError("Prompt must contain text")
-    if resolved_message and not workflow.writes:
-        raise ValueError("commit_message is only valid for implement")
-    return resolved_prompt, resolved_message
+    return resolved_prompt
 
 
 __all__ = [

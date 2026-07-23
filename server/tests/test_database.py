@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import inspect
 import json
 import sqlite3
 
 from openmcp.database import Database
+
+
+def test_create_job_signature_omits_commit_message() -> None:
+    assert "commit_message" not in inspect.signature(Database.create_job).parameters
 
 
 def create_legacy_database(path) -> None:
@@ -37,6 +42,23 @@ def test_fresh_database_uses_job_level_schema(tmp_path) -> None:
     assert {"prompt", "commit_message", "result_text", "target_id", "attempts"} <= columns
     assert {"workflow_json", "parent_job_id", "branch", "worktree"}.isdisjoint(columns)
     assert "stages" not in tables and "artifacts" not in tables
+    database.close()
+
+
+def test_create_job_uses_empty_commit_message_default(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project", head_commit="", clean=True)
+    database.create_job(
+        job_id="job",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="inspect",
+        execution_plan_json="{}",
+        context_key="consult",
+    )
+    value = database._connection.execute("SELECT commit_message FROM jobs WHERE id='job'").fetchone()[0]
+    assert value == ""
     database.close()
 
 

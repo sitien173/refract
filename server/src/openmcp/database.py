@@ -364,14 +364,14 @@ class Database:
     def _project_view(row: sqlite3.Row) -> ProjectView:
         return ProjectView(id=row["id"], alias=row["alias"], root=row["root"], head_commit=row["head_commit"], clean=bool(row["clean"]), created_at=row["created_at"])
 
-    def create_job(self, *, job_id: str, project_id: str, workflow: str, profile: str, prompt: str, commit_message: str, execution_plan_json: str, context_key: str) -> None:
+    def create_job(self, *, job_id: str, project_id: str, workflow: str, profile: str, prompt: str, execution_plan_json: str, context_key: str) -> None:
         now = utc_now()
         with self._connection:
             self._connection.execute(
-                """INSERT INTO jobs(id, project_id, workflow, profile, prompt, commit_message,
+                """INSERT INTO jobs(id, project_id, workflow, profile, prompt,
                    execution_plan_json, context_key, state, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)""",
-                (job_id, project_id, workflow, profile, prompt, commit_message, execution_plan_json, context_key, now, now),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)""",
+                (job_id, project_id, workflow, profile, prompt, execution_plan_json, context_key, now, now),
             )
         self.event(job_id, "job.queued", {"workflow": workflow, "profile": profile})
 
