@@ -83,3 +83,25 @@
 ### Test evidence
 - RED -> GREEN: `web/src/components/TopBar.test.tsx` failed before implementing connection state pills and testids. Implemented status derivation logic and count retention in `TopBar.tsx`, updated `App.tsx` with `QueryClientProvider`, and added CSS module classes in `app.module.css`. All 5 TopBar tests and full test suite (23 tests) passed.
 - Root cause (bugfix only): - none
+
+## Task 5
+
+### Decisions made
+- Extended `ApiError` constructor to accept optional cause parameter (`new ApiError(endpoint, statusOrCause, message)`). For network transport or JSON decode errors, `ApiError` captures `endpoint` and original `cause` without fabricating an HTTP status code.
+- Added comprehensive behavioral TanStack Query integration tests for 3000ms general status polling, 2000ms job/event polling, hidden window focus suppression via `focusManager`, immediate refetch on visibility restoration, unmount/disabled polling cessation, and cached data / dataUpdatedAt retention on background query failure.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: `web/src/lib/api.test.ts` transport/decode error tests failed when raw errors were unhandled. Updated `request()` helper in `web/src/lib/api.ts` to wrap non-ApiError exceptions into `ApiError(endpoint, cause)`. All 10 API unit tests passed. Added 6 behavioral TanStack Query tests in `web/src/lib/queries.test.tsx`; all 31 tests passed cleanly.
+- Root cause (bugfix only): Transport and JSON decode errors previously bypassed `ApiError` wrapping, losing `endpoint` context or risk fabricating status codes. Wrapped all non-`ApiError` exceptions caught during `fetch` or `res.json()` into `ApiError(endpoint, cause)`.

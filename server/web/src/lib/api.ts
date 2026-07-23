@@ -9,22 +9,41 @@ import {
 
 export class ApiError extends Error {
   endpoint: string;
-  status: number;
+  status?: number;
 
-  constructor(endpoint: string, status: number, message?: string) {
-    super(message || `Request to ${endpoint} failed with status ${status}`);
-    this.name = 'ApiError';
-    this.endpoint = endpoint;
-    this.status = status;
+  constructor(endpoint: string, statusOrCause?: number | unknown, message?: string) {
+    if (typeof statusOrCause === 'number') {
+      super(message || `Request to ${endpoint} failed with status ${statusOrCause}`);
+      this.name = 'ApiError';
+      this.endpoint = endpoint;
+      this.status = statusOrCause;
+    } else {
+      const cause = statusOrCause;
+      const causeMsg = cause instanceof Error ? cause.message : String(cause || '');
+      super(
+        message || `Request to ${endpoint} failed: ${causeMsg}`,
+        cause ? { cause } : undefined
+      );
+      this.name = 'ApiError';
+      this.endpoint = endpoint;
+      this.cause = cause;
+    }
   }
 }
 
 async function request<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(endpoint, { signal });
-  if (!res.ok) {
-    throw new ApiError(endpoint, res.status);
+  try {
+    const res = await fetch(endpoint, { signal });
+    if (!res.ok) {
+      throw new ApiError(endpoint, res.status);
+    }
+    return await (res.json() as Promise<T>);
+  } catch (err: unknown) {
+    if (err instanceof ApiError) {
+      throw err;
+    }
+    throw new ApiError(endpoint, err);
   }
-  return res.json() as Promise<T>;
 }
 
 export function fetchStatus(signal?: AbortSignal): Promise<DaemonStatus> {
