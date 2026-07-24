@@ -1,0 +1,39 @@
+{
+  "name": "superpowers-ccg",
+  "version": "7.6.0",
+  "description": "Plan, execute, and review workflow for multi-agent coding tasks.",
+  "author": {
+    "name": "sitien173",
+    "url": "https://github.com/sitien173"
+  },
+  "homepage": "https://github.com/sitien173/superpowers-ccg",
+  "repository": "https://github.com/sitien173/superpowers-ccg",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "tdd",
+    "debugging",
+    "multi-agent",
+    "workflows"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Superpowers CCG",
+    "shortDescription": "Plan, execute, and review coding workflow.",
+    "longDescription": "A three-gate workflow for planning, executing, and independently reviewing multi-agent coding tasks.",
+    "developerName": "sitien173",
+    "category": "Productivity",
+    "capabilities": [
+      "Skills",
+      "MCP"
+    ],
+    "websiteURL": "https://github.com/sitien173/superpowers-ccg",
+    "defaultPrompt": [
+      "Brainstorm a feature before planning it.",
+      "Write a phase-based implementation plan.",
+      "Execute the active implementation plan."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

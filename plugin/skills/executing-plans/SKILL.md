@@ -22,10 +22,11 @@ review, and handover. This skill owns only the folder-plan phase procedure.
    `chore(plan): prepare phase <N>`; unrelated changes block execution.
 5. Run any routed consultation. Incorporate its relevant findings and commit
    only that prompt update.
-6. Retain the clean HEAD before the initial implementation as `phase_base` and
-   confirm it later against that job's `base_commit`.
-7. Run Gate 2 with `implementer-prompt.md`, then Gate 3. A review fix starts a
-   new implementation job and repeats both reviews.
+6. Record the clean HEAD before the initial implementation as `phase_base`; you
+   own this reference, since OpenMCP tracks no base commit.
+7. Run Gate 2 with `implementer-prompt.md`, then Gate 3. Blocking findings run
+   the coordinator's bounded review–fix loop, which re-reviews only the fix
+   delta.
 8. After canonical finalization, advance one phase. After the final phase, mark
    handover `DONE` and invoke `verifying-before-completion`.
 

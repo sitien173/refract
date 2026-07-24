@@ -75,6 +75,11 @@ if grep -R -E 'task_route|routing_profile|routing-profile|routing profile|execut
     exit 1
 fi
 
+if grep -R -E 'commit_message|base_commit|result_commit|result\.commit|head_commit|workflow\.writes|\.writes|project\.clean' "${workflow_files[@]}"; then
+    printf 'stale Git-lifecycle field found\n' >&2
+    exit 1
+fi
+
 if grep -R -E '`(quality|balanced|cost)`' skills; then
     printf 'profile preset hard-coded in skill\n' >&2
     exit 1
@@ -116,7 +121,8 @@ grep -q 'Call `status`; require' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'project_register' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'task_guide' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'result.text' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'result commit is already on the current branch' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'commit the reconciled diff' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'You own the entire Git lifecycle' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://projects/<project_id>/jobs' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://projects/<project_id>/profiles' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
@@ -125,7 +131,7 @@ grep -q 'Same-project jobs run FIFO' skills/coordinating-multi-model-work/SKILL.
 grep -q 'workflow: implement' skills/executing-plans/implementer-prompt.md
 grep -q 'job_submit' skills/executing-plans/implementer-prompt.md
 grep -q '^  prompt: |$' skills/executing-plans/implementer-prompt.md
-grep -q '^  commit_message: <phase Conventional Commit message>$' skills/executing-plans/implementer-prompt.md
+grep -q 'A review fix is a resumed `implement` job' skills/executing-plans/implementer-prompt.md
 grep -q '^  profile: <phase implementation profile>$' skills/executing-plans/implementer-prompt.md
 grep -q 'review fix uses a new `implement` job' skills/executing-plans/implementer-prompt.md
 

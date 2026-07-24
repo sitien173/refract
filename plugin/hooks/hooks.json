@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/superpowers-ccg-session-start.sh\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/superpowers-ccg-session-start.sh\"",
             "timeout": 10
           }
         ]
