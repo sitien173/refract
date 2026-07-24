@@ -131,7 +131,7 @@ grep -q 'Same-project jobs run FIFO' skills/coordinating-multi-model-work/SKILL.
 grep -q 'workflow: implement' skills/executing-plans/implementer-prompt.md
 grep -q 'job_submit' skills/executing-plans/implementer-prompt.md
 grep -q '^  prompt: |$' skills/executing-plans/implementer-prompt.md
-grep -q 'the worker edits files but never commits' skills/executing-plans/implementer-prompt.md
+grep -q 'A review fix is a resumed `implement` job' skills/executing-plans/implementer-prompt.md
 grep -q '^  profile: <phase implementation profile>$' skills/executing-plans/implementer-prompt.md
 grep -q 'review fix uses a new `implement` job' skills/executing-plans/implementer-prompt.md
 
