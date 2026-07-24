@@ -56,7 +56,7 @@ def create_v5_database(path, *, invalid_foreign_key: bool = False) -> None:
 
 
 def table_columns(database: Database, table: str) -> set[str]:
-    return {row["name"] for row in database._connection.execute(f"PRAGMA table_info({table})")}
+    return database._columns(table)
 
 
 def test_fresh_database_uses_v6_schema(tmp_path) -> None:

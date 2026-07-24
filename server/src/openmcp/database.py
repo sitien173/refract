@@ -46,7 +46,7 @@ class Database:
             if self._is_v6_schema(columns):
                 self._create_support_tables()
                 if self._connection.execute("PRAGMA user_version").fetchone()[0] != _SCHEMA_VERSION:
-                    self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+                    self._connection.execute("PRAGMA user_version=6")
                     self._connection.commit()
             elif {"prompt", "result_text", "target_id", "attempts"} <= columns:
                 self._migrate_v5_to_v6()
@@ -372,9 +372,15 @@ class Database:
                 "INSERT INTO jobs_v6 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 converted_rows,
             )
-            for table in ("artifacts", "stages", "jobs", "projects"):
+            drops = {
+                "artifacts": "DROP TABLE artifacts",
+                "stages": "DROP TABLE stages",
+                "jobs": "DROP TABLE jobs",
+                "projects": "DROP TABLE projects",
+            }
+            for table, statement in drops.items():
                 if table in self._tables():
-                    self._connection.execute(f"DROP TABLE {table}")
+                    self._connection.execute(statement)
             self._connection.execute("ALTER TABLE projects_v6 RENAME TO projects")
             self._connection.execute("ALTER TABLE jobs_v6 RENAME TO jobs")
             self._connection.execute("CREATE INDEX jobs_state_idx ON jobs(state, created_at)")
