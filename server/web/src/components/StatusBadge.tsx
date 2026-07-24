@@ -13,8 +13,6 @@ export type BadgeState =
   | JobState
   | 'healthy'
   | 'degraded'
-  | 'clean'
-  | 'dirty'
   | 'circuit-open'
   | 'circuit-closed'
   | 'circuit-unknown';
@@ -63,16 +61,6 @@ const badgeConfigs: Record<BadgeState, BadgeConfig> = {
   },
   degraded: {
     label: 'Degraded',
-    icon: triangleAlertSvg,
-    toneClass: styles.badgeToneWarning,
-  },
-  clean: {
-    label: 'Clean',
-    icon: circleCheckSvg,
-    toneClass: styles.badgeToneSuccess,
-  },
-  dirty: {
-    label: 'Dirty',
     icon: triangleAlertSvg,
     toneClass: styles.badgeToneWarning,
   },

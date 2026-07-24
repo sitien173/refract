@@ -65,10 +65,9 @@ describe('Jobs View', () => {
       context_key: 'ctx-2',
       target_id: 'target-1',
       attempts: 1,
-      base_commit: 'aaa',
       created_at: '2026-01-01T12:00:00Z',
       updated_at: '2026-01-01T12:01:00Z',
-      result: { text: '', commit: 'bbb', error: '' },
+      result: { text: '', error: '' },
     },
     {
       id: 'job-1',
@@ -79,10 +78,9 @@ describe('Jobs View', () => {
       context_key: 'ctx-1',
       target_id: 'target-1',
       attempts: 1,
-      base_commit: 'ccc',
       created_at: '2026-01-01T10:00:00Z',
       updated_at: '2026-01-01T10:05:00Z',
-      result: { text: 'done', commit: 'ddd', error: '' },
+      result: { text: 'done', error: '' },
     },
   ];
 

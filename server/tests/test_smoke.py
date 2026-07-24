@@ -28,7 +28,13 @@ def test_backend_params_are_transport_only() -> None:
     assert {field.name for field in fields(PiParams)} == expected
 
 
-def test_doctor_accepts_partial_profiles(monkeypatch, tmp_path, capsys) -> None:
+@pytest.mark.parametrize(
+    ("home_writable", "executable", "exit_code"),
+    [(True, "/usr/bin/codex", 0), (True, None, 1), (False, "/usr/bin/codex", 1)],
+)
+def test_doctor_checks_prerequisites_and_accepts_partial_profiles(
+    monkeypatch, tmp_path, capsys, home_writable, executable, exit_code
+) -> None:
     from openmcp.cli import main
 
     home = tmp_path / "openmcp"
@@ -47,11 +53,15 @@ implement = "primary"
         encoding="utf-8",
     )
     monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setattr("openmcp.cli.os.access", lambda *_: home_writable)
+    monkeypatch.setattr("openmcp.cli.shutil.which", lambda _: executable)
 
     with pytest.raises(SystemExit) as raised:
         main(["doctor"])
-    assert raised.value.code == 0
-    assert "does not map built-in workflows" not in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert raised.value.code == exit_code
+    assert "does not map built-in workflows" not in captured.err
+    assert "git" not in json.loads(captured.out)
 
 
 def test_serve_reports_configuration_errors(monkeypatch, tmp_path, capsys) -> None:

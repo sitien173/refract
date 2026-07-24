@@ -79,12 +79,11 @@ describe('AppShell, Routing and ThemeToggle', () => {
         project_id: 'p1',
         state: 'running',
         context_key: '',
-        base_commit: 'abc',
         target_id: '',
         attempts: 1,
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
-        result: { text: '', commit: 'def', error: '' },
+        result: { text: '', error: '' },
       } as any)
     );
     vi.spyOn(api, 'fetchJobEvents').mockResolvedValue([]);

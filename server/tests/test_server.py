@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from openmcp.models import JobView
-from openmcp.server import mcp
+from openmcp.models import JobResult, JobView, ProjectView
+from openmcp.server import _DOCTOR_INSTRUCTIONS, _project_root, mcp
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -27,6 +27,23 @@ implement = "primary"
 review = "primary"
 consult = "primary"
 """
+
+
+def test_doctor_instructions_do_not_claim_git_ownership() -> None:
+    assert "Git" not in _DOCTOR_INSTRUCTIONS
+    assert "git" not in _DOCTOR_INSTRUCTIONS
+
+
+def test_project_root_accepts_plain_directory_and_rejects_files(tmp_path) -> None:
+    root = tmp_path / "plain-project"
+    root.mkdir()
+    assert _project_root(str(root)) == root.resolve().as_posix()
+    with pytest.raises(ValueError):
+        _project_root(str(tmp_path / "missing"))
+    file_path = tmp_path / "project.txt"
+    file_path.write_text("file\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        _project_root(str(file_path))
 
 
 def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
@@ -98,10 +115,12 @@ def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
 async def test_mcp_exposes_direct_job_contract() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     assert "job_integrate" not in tools
-    assert set(tools["job_submit"].inputSchema["properties"]) == {"project_id", "workflow", "prompt", "commit_message", "context_key", "profile"}
+    assert set(tools["job_submit"].inputSchema["properties"]) == {"project_id", "workflow", "prompt", "context_key", "profile"}
     assert set(tools["job_wait"].inputSchema["properties"]) == {"job_id", "timeout_s"}
     assert set(tools["job_retry"].inputSchema["properties"]) == {"job_id"}
-    assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts"}.isdisjoint(JobView.model_fields)
+    assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts", "base_commit"}.isdisjoint(JobView.model_fields)
+    assert "commit" not in JobResult.model_fields
+    assert {"head_commit", "clean"}.isdisjoint(ProjectView.model_fields)
 
 
 @pytest.mark.asyncio

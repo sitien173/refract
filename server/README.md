@@ -8,22 +8,21 @@ OpenMCP is a local coding-agent orchestration daemon.
 - Named context streams
 - Health-aware target selection and failover
 - Configurable profiles
-- Direct repository execution
+- Direct directory execution
 - Per-project FIFO scheduling
 
 ## Architecture
 
 - `server.py` exposes MCP tools, resources, and daemon lifecycle.
-- `runtime.py` composes persistence, scheduler, execution, and repositories.
+- `runtime.py` composes persistence, scheduler, and execution.
 - `scheduler.py` serializes each project's jobs.
 - `execution.py` runs job lifecycles and target failover.
-- `repositories.py` performs direct Git inspection, commits, and resets.
 - `database.py` persists jobs, events, contexts, and target health.
 
 ## Installation
 
-OpenMCP supports Windows, macOS, and Linux with Python 3.12 or newer. Git and
-at least one configured backend CLI must be on `PATH`.
+OpenMCP supports Windows, macOS, and Linux with Python 3.12 or newer. At
+least one configured backend CLI must be on `PATH`.
 
 ```bash
 uv sync --all-extras
@@ -39,20 +38,14 @@ uv run openmcp serve
 
 The default endpoint is `http://127.0.0.1:8765/mcp`.
 
-## Direct repository execution
+## Direct project execution
 
-OpenMCP runs jobs directly in each registered repository. Jobs for one project
+OpenMCP runs jobs directly in each registered directory. Jobs for one project
 run in submission order. Jobs for different projects may run concurrently up to
-`max_jobs`.
+`max_jobs`. OpenMCP does not inspect or mutate project files.
 
-- `implement` runs once and commits successful non-ignored changes immediately.
-- `review` runs once and must leave the repository unchanged.
-- `consult` runs once and must leave the repository unchanged.
-
-Failed, cancelled, and interrupted jobs that started execution reset tracked
-state to their saved base commit and remove non-ignored untracked files. A job
-that finds pre-existing changes fails without resetting them. Ignored files are
-visible directly and are never restored by OpenMCP.
+- `implement`, `review`, and `consult` each run once.
+- Failed, cancelled, and interrupted jobs retain their project changes.
 
 ## MCP contract
 
@@ -61,9 +54,9 @@ Tools:
 - `status()` returns scheduler status.
 - `reload()` reloads targets and profiles for later submissions.
 - `doctor(path)` returns read-only client integration checks.
-- `project_register(path, alias)` registers a clean attached Git branch.
+- `project_register(path, alias)` registers an existing directory.
 - `task_guide(task, project_id)` loads workflow and profile guidance.
-- `job_submit(project_id, workflow, prompt, commit_message, context_key, profile)` queues work.
+- `job_submit(project_id, workflow, prompt, context_key, profile)` queues work.
 - `job_wait(job_id, timeout_s)` waits for completion or timeout.
 - `job_cancel(job_id)` cancels queued or running work.
 - `job_retry(job_id)` retries failed, cancelled, or interrupted work.
@@ -78,15 +71,13 @@ Example submission:
   "project_id": "project-uuid",
   "workflow": "implement",
   "prompt": "Add validation for empty names and run focused tests.",
-  "commit_message": "feat: validate empty names",
   "context_key": "validation/implement",
   "profile": "quality"
 }
 ```
 
 Job states are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and
-`interrupted`. A completed job exposes `result.text`, `result.commit`, and
-`result.error`.
+`interrupted`. A completed job exposes `result.text` and `result.error`.
 
 ## Configuration
 
@@ -158,16 +149,11 @@ Isolated Pi targets disable context files, extensions, skills, prompt templates,
 and project approvals. Read-only Pi targets receive only `read`, `grep`, `find`,
 and `ls`. Normal Pi targets receive `--approve` after configurable args.
 
-## Upgrade from worktree jobs
+## Upgrade from previous schemas
 
 The first startup rebuilds legacy job records. Completed history remains
 readable. Legacy queued and running jobs become interrupted. Historical
-unintegrated commits are not applied to the current branch.
-
-OpenMCP does not remove historical worktrees or `openmcp/*` branches. Inspect
-registered repositories with `git worktree list` and remove obsolete entries
-manually before running `git worktree prune`. Delete `~/.openmcp/worktrees/`
-only after confirming no listed worktree is needed.
+repository metadata is discarded during migration.
 
 ## Direct Python compatibility API
 

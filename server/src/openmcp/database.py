@@ -1,4 +1,4 @@
-"""SQLite persistence for direct repository jobs."""
+"""SQLite persistence for direct project jobs."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from openmcp.models import ContextStreamView, JobResult, JobView, ProjectView
 
 
 log = get_logger("database")
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 
 def utc_now() -> str:
@@ -43,10 +43,14 @@ class Database:
             self._create_schema()
         else:
             columns = self._columns("jobs")
-            if {"prompt", "commit_message", "result_text", "target_id", "attempts"} <= columns:
+            if self._is_v6_schema(columns):
                 self._create_support_tables()
-                self._connection.execute("PRAGMA user_version=5")
-                self._connection.commit()
+                if self._connection.execute("PRAGMA user_version").fetchone()[0] != _SCHEMA_VERSION:
+                    self._connection.execute("PRAGMA user_version=6")
+                    self._connection.commit()
+            elif {"prompt", "result_text", "target_id", "attempts"} <= columns:
+                self._migrate_v5_to_v6()
+                self._create_support_tables()
             else:
                 self._migrate_legacy_jobs()
                 self._create_support_tables()
@@ -55,6 +59,13 @@ class Database:
             "Database schema is current",
             extra={"event": "database.migrated", "schema_version": _SCHEMA_VERSION},
         )
+
+    def _is_v6_schema(self, job_columns: set[str]) -> bool:
+        return job_columns == {
+            "id", "project_id", "workflow", "profile", "prompt",
+            "execution_plan_json", "context_key", "state", "result_text",
+            "target_id", "attempts", "error", "created_at", "updated_at",
+        } and self._columns("projects") == {"id", "alias", "root", "created_at"}
 
     def _tables(self) -> set[str]:
         return {
@@ -67,6 +78,7 @@ class Database:
     def _columns(self, table: str) -> set[str]:
         statements = {
             "jobs": "PRAGMA table_info(jobs)",
+            "projects": "PRAGMA table_info(projects)",
             "context_sessions": "PRAGMA table_info(context_sessions)",
         }
         try:
@@ -85,8 +97,6 @@ class Database:
                 id TEXT PRIMARY KEY,
                 alias TEXT NOT NULL UNIQUE,
                 root TEXT NOT NULL UNIQUE,
-                head_commit TEXT NOT NULL,
-                clean INTEGER NOT NULL,
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS jobs (
@@ -95,13 +105,10 @@ class Database:
                 workflow TEXT NOT NULL,
                 profile TEXT NOT NULL,
                 prompt TEXT NOT NULL,
-                commit_message TEXT NOT NULL DEFAULT '',
                 execution_plan_json TEXT NOT NULL,
                 context_key TEXT NOT NULL,
                 state TEXT NOT NULL,
-                base_commit TEXT NOT NULL DEFAULT '',
                 result_text TEXT NOT NULL DEFAULT '',
-                result_commit TEXT NOT NULL DEFAULT '',
                 target_id TEXT NOT NULL DEFAULT '',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 error TEXT NOT NULL DEFAULT '',
@@ -111,7 +118,7 @@ class Database:
             """
         )
         self._create_support_tables()
-        self._connection.execute("PRAGMA user_version=5")
+        self._connection.execute("PRAGMA user_version=6")
         self._connection.commit()
 
     def _create_support_tables(self) -> None:
@@ -167,8 +174,6 @@ class Database:
             ),
             "result_stage": "ALTER TABLE jobs ADD COLUMN result_stage TEXT NOT NULL DEFAULT ''",
             "inputs_json": "ALTER TABLE jobs ADD COLUMN inputs_json TEXT NOT NULL DEFAULT '{}'",
-            "base_commit": "ALTER TABLE jobs ADD COLUMN base_commit TEXT NOT NULL DEFAULT ''",
-            "result_commit": "ALTER TABLE jobs ADD COLUMN result_commit TEXT NOT NULL DEFAULT ''",
             "error": "ALTER TABLE jobs ADD COLUMN error TEXT NOT NULL DEFAULT ''",
         }
         for name, statement in additions.items():
@@ -214,6 +219,68 @@ class Database:
                 )
                 self._connection.execute("DROP TABLE context_sessions_legacy")
 
+    def _migrate_v5_to_v6(self) -> None:
+        self._connection.execute("PRAGMA foreign_keys=OFF")
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.execute(
+                """CREATE TABLE projects_v6 (
+                    id TEXT PRIMARY KEY,
+                    alias TEXT NOT NULL UNIQUE,
+                    root TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
+                )"""
+            )
+            self._connection.execute(
+                """INSERT INTO projects_v6(id, alias, root, created_at)
+                   SELECT id, alias, root, created_at FROM projects"""
+            )
+            self._connection.execute(
+                """CREATE TABLE jobs_v6 (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL REFERENCES projects(id),
+                    workflow TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    execution_plan_json TEXT NOT NULL,
+                    context_key TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    result_text TEXT NOT NULL DEFAULT '',
+                    target_id TEXT NOT NULL DEFAULT '',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )"""
+            )
+            self._connection.execute(
+                """INSERT INTO jobs_v6(
+                    id, project_id, workflow, profile, prompt,
+                    execution_plan_json, context_key, state, result_text,
+                    target_id, attempts, error, created_at, updated_at
+                ) SELECT id, project_id, workflow, profile, prompt,
+                    execution_plan_json, context_key, state, result_text,
+                    target_id, attempts, error, created_at, updated_at
+                FROM jobs"""
+            )
+            self._connection.execute("DROP TABLE jobs")
+            self._connection.execute("DROP TABLE projects")
+            self._connection.execute("ALTER TABLE projects_v6 RENAME TO projects")
+            self._connection.execute("ALTER TABLE jobs_v6 RENAME TO jobs")
+            self._connection.execute("CREATE INDEX jobs_state_idx ON jobs(state, created_at)")
+            self._connection.execute("PRAGMA user_version=6")
+            if self._connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise sqlite3.IntegrityError("Foreign-key violations during v5 migration")
+            integrity = self._connection.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise sqlite3.IntegrityError(f"Integrity check failed: {integrity}")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        finally:
+            self._connection.execute("PRAGMA foreign_keys=ON")
+
     def _migrate_legacy_jobs(self) -> None:
         self._connection.execute("PRAGMA foreign_keys=OFF")
         try:
@@ -254,27 +321,34 @@ class Database:
                     """
                 ).fetchall()
             self._connection.execute(
-                """
-                CREATE TABLE jobs_v5 (
+                """CREATE TABLE projects_v6 (
+                    id TEXT PRIMARY KEY,
+                    alias TEXT NOT NULL UNIQUE,
+                    root TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
+                )"""
+            )
+            self._connection.execute(
+                """INSERT INTO projects_v6(id, alias, root, created_at)
+                   SELECT id, alias, root, created_at FROM projects"""
+            )
+            self._connection.execute(
+                """CREATE TABLE jobs_v6 (
                     id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL REFERENCES projects(id),
                     workflow TEXT NOT NULL,
                     profile TEXT NOT NULL,
                     prompt TEXT NOT NULL,
-                    commit_message TEXT NOT NULL DEFAULT '',
                     execution_plan_json TEXT NOT NULL,
                     context_key TEXT NOT NULL,
                     state TEXT NOT NULL,
-                    base_commit TEXT NOT NULL DEFAULT '',
                     result_text TEXT NOT NULL DEFAULT '',
-                    result_commit TEXT NOT NULL DEFAULT '',
                     target_id TEXT NOT NULL DEFAULT '',
                     attempts INTEGER NOT NULL DEFAULT 0,
                     error TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
-                )
-                """
+                )"""
             )
             converted_rows = []
             for row in rows:
@@ -287,33 +361,35 @@ class Database:
                 converted_rows.append(
                     (
                         row["id"], row["project_id"], row["workflow"], row["profile"],
-                        str(inputs.get("prompt", "")), str(inputs.get("commit_message", "")),
-                        row["execution_plan_json"] or "{}", row["context_key"],
-                        state_map.get(row["state"], row["state"]), row["base_commit"] or "",
-                        row["stage_text"] or "", row["result_commit"] or "",
-                        row["stage_target_id"] or "", int(row["stage_attempts"] or 0),
-                        row["error"] or row["stage_error"] or "", row["created_at"],
-                        row["updated_at"],
+                        str(inputs.get("prompt", "")), row["execution_plan_json"] or "{}",
+                        row["context_key"], state_map.get(row["state"], row["state"]),
+                        row["stage_text"] or "", row["stage_target_id"] or "",
+                        int(row["stage_attempts"] or 0), row["error"] or row["stage_error"] or "",
+                        row["created_at"], row["updated_at"],
                     )
                 )
             self._connection.executemany(
-                "INSERT INTO jobs_v5 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO jobs_v6 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 converted_rows,
             )
             drops = {
                 "artifacts": "DROP TABLE artifacts",
                 "stages": "DROP TABLE stages",
                 "jobs": "DROP TABLE jobs",
+                "projects": "DROP TABLE projects",
             }
             for table, statement in drops.items():
                 if table in self._tables():
                     self._connection.execute(statement)
-            self._connection.execute("ALTER TABLE jobs_v5 RENAME TO jobs")
+            self._connection.execute("ALTER TABLE projects_v6 RENAME TO projects")
+            self._connection.execute("ALTER TABLE jobs_v6 RENAME TO jobs")
             self._connection.execute("CREATE INDEX jobs_state_idx ON jobs(state, created_at)")
-            self._connection.execute("PRAGMA user_version=5")
-            violations = self._connection.execute("PRAGMA foreign_key_check").fetchall()
-            if violations:
-                raise sqlite3.IntegrityError(f"Foreign-key violations: {violations}")
+            self._connection.execute("PRAGMA user_version=6")
+            if self._connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise sqlite3.IntegrityError("Foreign-key violations during legacy migration")
+            integrity = self._connection.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise sqlite3.IntegrityError(f"Integrity check failed: {integrity}")
             self._connection.commit()
         except Exception:
             self._connection.rollback()
@@ -337,21 +413,20 @@ class Database:
             self.event(row["id"], "job.interrupted", {})
         return rows
 
-    def upsert_project(self, *, project_id: str, alias: str, root: str, head_commit: str, clean: bool) -> ProjectView:
+    def upsert_project(self, *, project_id: str, alias: str, root: str) -> ProjectView:
         existing = self._connection.execute("SELECT id, created_at FROM projects WHERE root=?", (root,)).fetchone()
         created_at = existing["created_at"] if existing else utc_now()
         resolved_id = existing["id"] if existing else project_id
         with self._connection:
             self._connection.execute(
                 """
-                INSERT INTO projects(id, alias, root, head_commit, clean, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET alias=excluded.alias, root=excluded.root,
-                    head_commit=excluded.head_commit, clean=excluded.clean
+                INSERT INTO projects(id, alias, root, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET alias=excluded.alias, root=excluded.root
                 """,
-                (resolved_id, alias, root, head_commit, int(clean), created_at),
+                (resolved_id, alias, root, created_at),
             )
-        return ProjectView(id=resolved_id, alias=alias, root=root, head_commit=head_commit, clean=clean, created_at=created_at)
+        return ProjectView(id=resolved_id, alias=alias, root=root, created_at=created_at)
 
     def project(self, project_id: str) -> ProjectView | None:
         row = self._connection.execute("SELECT * FROM projects WHERE id=? OR alias=?", (project_id, project_id)).fetchone()
@@ -362,16 +437,16 @@ class Database:
 
     @staticmethod
     def _project_view(row: sqlite3.Row) -> ProjectView:
-        return ProjectView(id=row["id"], alias=row["alias"], root=row["root"], head_commit=row["head_commit"], clean=bool(row["clean"]), created_at=row["created_at"])
+        return ProjectView(id=row["id"], alias=row["alias"], root=row["root"], created_at=row["created_at"])
 
-    def create_job(self, *, job_id: str, project_id: str, workflow: str, profile: str, prompt: str, commit_message: str, execution_plan_json: str, context_key: str) -> None:
+    def create_job(self, *, job_id: str, project_id: str, workflow: str, profile: str, prompt: str, execution_plan_json: str, context_key: str) -> None:
         now = utc_now()
         with self._connection:
             self._connection.execute(
-                """INSERT INTO jobs(id, project_id, workflow, profile, prompt, commit_message,
+                """INSERT INTO jobs(id, project_id, workflow, profile, prompt,
                    execution_plan_json, context_key, state, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)""",
-                (job_id, project_id, workflow, profile, prompt, commit_message, execution_plan_json, context_key, now, now),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)""",
+                (job_id, project_id, workflow, profile, prompt, execution_plan_json, context_key, now, now),
             )
         self.event(job_id, "job.queued", {"workflow": workflow, "profile": profile})
 
@@ -387,12 +462,12 @@ class Database:
             self._connection.execute("UPDATE jobs SET state=?, error=?, updated_at=? WHERE id=?", (state, error, utc_now(), job_id))
         self.event(job_id, f"job.{state}", {"error": error} if error else {})
 
-    def start_job(self, job_id: str, base_commit: str) -> None:
+    def start_job(self, job_id: str) -> None:
         with self._connection:
             self._connection.execute(
-                """UPDATE jobs SET state='running', base_commit=?, result_text='', result_commit='',
+                """UPDATE jobs SET state='running', result_text='',
                    target_id='', error='', updated_at=? WHERE id=?""",
-                (base_commit, utc_now(), job_id),
+                (utc_now(), job_id),
             )
         self.event(job_id, "job.running", {})
 
@@ -400,20 +475,20 @@ class Database:
         with self._connection:
             self._connection.execute("UPDATE jobs SET target_id=?, attempts=attempts+1, updated_at=? WHERE id=?", (target_id, utc_now(), job_id))
 
-    def finish_job(self, job_id: str, state: str, *, text: str = "", commit: str = "", target_id: str = "", error: str = "") -> None:
+    def finish_job(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "") -> None:
         with self._connection:
             self._connection.execute(
-                """UPDATE jobs SET state=?, result_text=?, result_commit=?,
+                """UPDATE jobs SET state=?, result_text=?,
                    target_id=CASE WHEN ?='' THEN target_id ELSE ? END, error=?, updated_at=?
                    WHERE id=?""",
-                (state, text, commit, target_id, target_id, error, utc_now(), job_id),
+                (state, text, target_id, target_id, error, utc_now(), job_id),
             )
         self.event(job_id, f"job.{state}", {"error": error} if error else {})
 
     def reset_retry(self, job_id: str) -> None:
         with self._connection:
             self._connection.execute(
-                """UPDATE jobs SET state='queued', base_commit='', result_text='', result_commit='',
+                """UPDATE jobs SET state='queued', result_text='',
                    target_id='', error='', updated_at=? WHERE id=?""",
                 (utc_now(), job_id),
             )
@@ -431,7 +506,7 @@ class Database:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if row is None:
             return None
-        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], state=row["state"], context_key=row["context_key"], base_commit=row["base_commit"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], commit=row["result_commit"], error=row["error"]))
+        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], state=row["state"], context_key=row["context_key"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], error=row["error"]))
 
     def jobs(self, project_id: str) -> list[JobView]:
         rows = self._connection.execute("SELECT id FROM jobs WHERE project_id=? ORDER BY created_at DESC", (project_id,)).fetchall()

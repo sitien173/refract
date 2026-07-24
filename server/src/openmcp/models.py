@@ -19,14 +19,11 @@ class ProjectView(BaseModel):
     id: str
     alias: str
     root: str
-    head_commit: str
-    clean: bool
     created_at: str
 
 
 class JobResult(BaseModel):
     text: str = ""
-    commit: str = ""
     error: str = ""
 
 
@@ -37,7 +34,6 @@ class JobView(BaseModel):
     profile: str
     state: JobState
     context_key: str
-    base_commit: str
     target_id: str = ""
     attempts: int = 0
     created_at: str

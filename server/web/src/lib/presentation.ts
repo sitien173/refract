@@ -34,10 +34,3 @@ export function formatDate(isoString: string): string {
     hour12: false,
   });
 }
-
-export function formatCommit(commit: string): string {
-  if (!commit || commit.trim() === '') {
-    return '—';
-  }
-  return commit.length > 7 ? commit.slice(0, 7) : commit;
-}

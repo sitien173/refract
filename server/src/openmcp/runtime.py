@@ -1,4 +1,4 @@
-"""Public facade for durable direct-repository jobs."""
+"""Public facade for durable direct-directory jobs."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from openmcp.models import (
     TargetView,
 )
 from openmcp.planning import execution_plan_data, resolve_execution_plan
-from openmcp.repositories import RepositoryError, inspect_repository
 from openmcp.scheduler import ProjectScheduler
 from openmcp.workflows import get_workflow, validate_request
 
@@ -58,10 +57,8 @@ class Runtime:
     async def start(self) -> None:
         self._closing = False
         interrupted = self.database.interrupt_active_jobs()
-        for record in interrupted:
-            self.runner.recover(record)
         await self.scheduler.start(self.database.queued_jobs())
-        log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "recovered_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
+        log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
 
     async def close(self) -> None:
         self._closing = True
@@ -70,41 +67,38 @@ class Runtime:
         log.info("Scheduler stopped", extra={"event": "scheduler.stopped"})
 
     def register_project(self, path: str, alias: str = "") -> ProjectView:
-        try:
-            state = inspect_repository(Path(path))
-        except RepositoryError as exc:
-            raise OrchestrationError(str(exc)) from exc
-        if not state.clean:
-            raise OrchestrationError("Project worktree must be clean before registration")
-        resolved_alias = alias.strip() or state.root.name
+        resolved = Path(path).expanduser().resolve()
+        if not resolved.is_dir():
+            raise OrchestrationError(f"Project path does not exist: {resolved}")
+        resolved_alias = alias.strip() or resolved.name
         if not resolved_alias:
             raise OrchestrationError("Project alias cannot be empty")
         try:
-            return self.database.upsert_project(project_id=str(uuid.uuid4()), alias=resolved_alias, root=state.root.as_posix(), head_commit=state.head, clean=state.clean)
+            return self.database.upsert_project(project_id=str(uuid.uuid4()), alias=resolved_alias, root=resolved.as_posix())
         except sqlite3.IntegrityError as exc:
             constraint = str(exc).rsplit(":", 1)[-1].strip()
             if constraint == "projects.alias":
                 message = f"Project alias already exists: {resolved_alias}"
             elif constraint == "projects.root":
-                message = f"Project root already registered: {state.root.as_posix()}"
+                message = f"Project root already registered: {resolved.as_posix()}"
             else:
                 message = "Project registration violates a database constraint"
             raise OrchestrationError(message) from exc
 
-    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, commit_message: str = "", context_key: str = "", profile: str = "") -> SubmissionResult:
+    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "") -> SubmissionResult:
         project = self.database.project(project_id)
         if project is None:
             raise OrchestrationError(f"Unknown project: {project_id}")
         try:
             workflow = get_workflow(workflow_name)
-            resolved_prompt, resolved_message = validate_request(workflow, prompt, commit_message)
+            resolved_prompt = validate_request(workflow, prompt)
             catalog = load_project_config(Path(project.root), self._reload_catalog())
             selected_profile = profile.strip() or catalog.default_profile
             plan = resolve_execution_plan(workflow, catalog, selected_profile)
         except ValueError as exc:
             raise OrchestrationError(str(exc)) from exc
         job_id = str(uuid.uuid4())
-        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow.name, profile=selected_profile, prompt=resolved_prompt, commit_message=resolved_message, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow.name)
+        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow.name, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow.name)
         self.scheduler.enqueue(job_id, project.id)
         log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow.name, "profile": selected_profile})
         return SubmissionResult(job_id=job_id, state="queued")

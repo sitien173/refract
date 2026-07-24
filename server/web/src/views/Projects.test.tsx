@@ -19,16 +19,12 @@ describe('Projects view', () => {
           id: 'p1',
           alias: 'main-service',
           root: '/home/ngosi/main-service',
-          head_commit: '1234567890abcdef',
-          clean: true,
           created_at: '2026-07-23T10:00:00Z',
         },
         {
           id: 'p2',
           alias: 'worker-agent',
           root: '/home/ngosi/worker-agent',
-          head_commit: 'fedcba0987654321',
-          clean: false,
           created_at: '2026-07-23T11:00:00Z',
         },
       ],
@@ -41,13 +37,6 @@ describe('Projects view', () => {
     expect(screen.getByText('main-service')).toBeTruthy();
     expect(screen.getByText('worker-agent')).toBeTruthy();
     expect(screen.getByText('/home/ngosi/main-service')).toBeTruthy();
-
-    const commitCode = screen.getByTitle('1234567890abcdef');
-    expect(commitCode).toBeTruthy();
-    expect(commitCode.textContent).toBe('1234567');
-
-    expect(screen.getByText('Clean')).toBeTruthy();
-    expect(screen.getByText('Dirty')).toBeTruthy();
 
     const timeElements = container.querySelectorAll('time');
     expect(timeElements.length).toBe(2);
@@ -94,8 +83,6 @@ describe('Projects view', () => {
           id: 'p1',
           alias: 'main-service',
           root: '/app',
-          head_commit: '1234567',
-          clean: true,
           created_at: '2026-07-23T10:00:00Z',
         },
       ],

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveCircuitState, formatDate, formatCommit } from './presentation';
+import { deriveCircuitState, formatDate } from './presentation';
 
 describe('presentation helpers', () => {
   describe('deriveCircuitState', () => {
@@ -34,17 +34,6 @@ describe('presentation helpers', () => {
     it('returns fallback for empty or invalid date', () => {
       expect(formatDate('')).toBe('—');
       expect(formatDate('invalid')).toBe('—');
-    });
-  });
-
-  describe('formatCommit', () => {
-    it('truncates commit hash to 7 chars', () => {
-      expect(formatCommit('1234567890abcdef')).toBe('1234567');
-    });
-
-    it('handles short or empty commit hash', () => {
-      expect(formatCommit('123')).toBe('123');
-      expect(formatCommit('')).toBe('—');
     });
   });
 });

@@ -76,22 +76,6 @@ export const Inspector: React.FC<InspectorProps> = ({ jobId, onClose }) => {
             <span className={styles.inspectorLabel}>State</span>
             <StatusBadge state={data.state} />
           </div>
-          <div className={styles.inspectorSection}>
-            <div className={styles.inspectorRow}>
-              <span className={styles.inspectorLabel}>Base Commit</span>
-              <span className={styles.inspectorValue}>{data.base_commit || 'Not available'}</span>
-            </div>
-            <div className={styles.inspectorRow}>
-              <span className={styles.inspectorLabel}>Result Commit</span>
-              <span className={styles.inspectorValue}>
-                {data.result?.commit || 'Not available'}
-              </span>
-            </div>
-            <div className={styles.commitRelationship}>
-              Base to Result: {data.base_commit || 'Not available'} →{' '}
-              {data.result?.commit || 'Not available'}
-            </div>
-          </div>
         </div>
       )}
 

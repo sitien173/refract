@@ -61,34 +61,34 @@ def _doctor(config: DaemonConfig | None = None) -> int:
     writable_path = config.home
     while not writable_path.exists() and writable_path != writable_path.parent:
         writable_path = writable_path.parent
+    home_writable = writable_path.is_dir() and os.access(writable_path, os.W_OK)
+    targets = {
+        target.id: {
+            "backend": target.backend,
+            "executable": shutil.which(target.backend) or "",
+        }
+        for target in config.targets
+    }
     payload = {
         "home": config.home.as_posix(),
-        "home_writable": writable_path.is_dir() and os.access(writable_path, os.W_OK),
-        "git": shutil.which("git") or "",
+        "home_writable": home_writable,
         "logging": {
             "level": logging_config.level,
             "format": logging_config.format,
             "file": logging_config.file.as_posix() if logging_config.file else "",
             "console": logging_config.console,
         },
-        "targets": {
-            target.id: {
-                "backend": target.backend,
-                "executable": shutil.which(target.backend) or "",
-            }
-            for target in config.targets
-        },
+        "targets": targets,
     }
     sys.stdout.write(json.dumps(payload, indent=2) + "\n")
     log.info(
         "Prerequisite check completed",
         extra={
             "event": "doctor.completed",
-            "git_available": bool(payload["git"]),
             "target_count": len(config.targets),
         },
     )
-    return 0 if payload["git"] else 1
+    return 0 if home_writable and all(target["executable"] for target in targets.values()) else 1
 
 
 def _apply_logging_overrides(args: argparse.Namespace) -> None:
