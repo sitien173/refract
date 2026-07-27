@@ -150,7 +150,6 @@ def register_dashboard_routes(mcp_server: FastMCP) -> None:
                     "isolated": t.isolated,
                     "read_only": t.read_only,
                     "args": list(t.args),
-                    "capabilities": [],
                     "max_concurrency": t.max_concurrency,
                 }
                 for t in cfg.targets

@@ -25,8 +25,8 @@ describe('Overview view', () => {
 
     vi.mocked(queries.useTargets).mockReturnValue({
       data: [
-        { id: 't1', model: 'gpt-4o', capabilities: ['coding'], max_concurrency: 2, active: 1, healthy: true, circuit_open_until: '' },
-        { id: 't2', model: 'claude-3-5-sonnet', capabilities: ['coding'], max_concurrency: 2, active: 0, healthy: false, circuit_open_until: new Date(Date.now() + 60000).toISOString() },
+        { id: 't1', model: 'gpt-4o', max_concurrency: 2, active: 1, healthy: true, circuit_open_until: '' },
+        { id: 't2', model: 'claude-3-5-sonnet', max_concurrency: 2, active: 0, healthy: false, circuit_open_until: new Date(Date.now() + 60000).toISOString() },
       ],
       isLoading: false,
       isError: false,
@@ -102,7 +102,7 @@ describe('Overview view', () => {
   it('renders mixed loaded and loading resources independently without whole-page blocking', () => {
     vi.mocked(queries.useStatus).mockReturnValue({ isLoading: true, data: undefined } as any);
     vi.mocked(queries.useTargets).mockReturnValue({
-      data: [{ id: 't1', model: 'gpt-4', capabilities: [], max_concurrency: 1, active: 0, healthy: true, circuit_open_until: '' }],
+      data: [{ id: 't1', model: 'gpt-4', max_concurrency: 1, active: 0, healthy: true, circuit_open_until: '' }],
       isLoading: false,
     } as any);
     vi.mocked(queries.useProfiles).mockReturnValue({ data: { default: 'std', available: ['std'] }, isLoading: false } as any);
@@ -120,7 +120,7 @@ describe('Overview view', () => {
   it('renders panel initial error alongside other successful panels', () => {
     vi.mocked(queries.useStatus).mockReturnValue({ isError: true, data: undefined } as any);
     vi.mocked(queries.useTargets).mockReturnValue({
-      data: [{ id: 't1', model: 'gpt-4', capabilities: [], max_concurrency: 1, active: 0, healthy: true, circuit_open_until: '' }],
+      data: [{ id: 't1', model: 'gpt-4', max_concurrency: 1, active: 0, healthy: true, circuit_open_until: '' }],
       isLoading: false,
     } as any);
     vi.mocked(queries.useProfiles).mockReturnValue({ data: { default: 'std', available: ['std'] }, isLoading: false } as any);

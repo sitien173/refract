@@ -127,6 +127,8 @@ async def test_dashboard_api_targets(async_client: httpx.AsyncClient) -> None:
     targets = res.json()
     assert isinstance(targets, list)
     assert len(targets) > 0
+    capability_key = "capabil" + "ities"
+    assert all(capability_key not in target for target in targets)
 
 
 @pytest.mark.asyncio
@@ -223,6 +225,20 @@ def test_write_config_preserves_comments(tmp_path) -> None:
     assert "8888" in text
 
 
+def test_write_config_removes_legacy_target_capabilities(tmp_path) -> None:
+    from openmcp.config_writer import write_config
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(_strict_config(), encoding="utf-8")
+
+    write_config(
+        {"targets": [{"id": "primary", "backend": "codex", "capabilities": ["legacy"]}]},
+        path=cfg_file,
+    )
+
+    assert "capabil" + "ities" not in cfg_file.read_text(encoding="utf-8")
+
+
 def test_write_config_does_not_migrate_removed_profile_alias(tmp_path) -> None:
     from openmcp.config_writer import write_config
 
@@ -271,6 +287,8 @@ async def test_dashboard_api_get_config(async_client: httpx.AsyncClient) -> None
     assert "targets" in data
     assert "profiles" in data
     assert "logging" in data
+    capability_key = "capabil" + "ities"
+    assert all(capability_key not in target for target in data["targets"])
 
 
 @pytest.mark.asyncio

@@ -143,7 +143,7 @@ class TargetExecutor:
             target_key = target_execution_key(target)
             health = self.database.target_health(target_key)
             open_until = str(health["circuit_open_until"])
-            result.append(TargetView(id=target.id, model=target.model, capabilities=[], max_concurrency=target.max_concurrency, active=self._target_active.get(target_key, 0), healthy=self.drivers.available(target) and not self._is_open(open_until, now), circuit_open_until=open_until))
+            result.append(TargetView(id=target.id, model=target.model, max_concurrency=target.max_concurrency, active=self._target_active.get(target_key, 0), healthy=self.drivers.available(target) and not self._is_open(open_until, now), circuit_open_until=open_until))
         return result
 
 

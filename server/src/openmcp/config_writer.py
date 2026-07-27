@@ -115,9 +115,12 @@ def _dict_to_toml_doc(
                 t_table = existing_by_id[target_id]
             else:
                 t_table = tomlkit.table()
-            # Migrate legacy target key
+            # Migrate legacy target keys
             t_table.pop("profile", None)
+            t_table.pop("capabilities", None)
             for k, v in target.items():
+                if k == "capabilities":
+                    continue
                 if v is None:
                     t_table.pop(k, None)
                     continue

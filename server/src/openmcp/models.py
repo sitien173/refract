@@ -44,7 +44,6 @@ class JobView(BaseModel):
 class TargetView(BaseModel):
     id: str
     model: str
-    capabilities: list[str]
     max_concurrency: int
     active: int
     healthy: bool

@@ -84,7 +84,7 @@ describe('API client wrappers', () => {
   });
 
   it('fetchTargets fetches /dashboard/api/targets', async () => {
-    const mockTargets = [{ id: 't1', model: 'claude-3-5-sonnet', capabilities: ['tool'], max_concurrency: 1, active: 0, healthy: true, circuit_open_until: '' }];
+    const mockTargets = [{ id: 't1', model: 'claude-3-5-sonnet', max_concurrency: 1, active: 0, healthy: true, circuit_open_until: '' }];
     (global.fetch as any).mockResolvedValueOnce({
       ok: true,
       json: async () => mockTargets,

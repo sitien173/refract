@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openmcp.models import JobResult, JobView, ProjectView
+from openmcp.models import JobResult, JobView, ProjectView, TargetView
 from openmcp.server import _DOCTOR_INSTRUCTIONS, _project_root, mcp
 
 
@@ -121,6 +121,8 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts", "base_commit"}.isdisjoint(JobView.model_fields)
     assert "commit" not in JobResult.model_fields
     assert {"head_commit", "clean"}.isdisjoint(ProjectView.model_fields)
+    capability_key = "capabil" + "ities"
+    assert capability_key not in TargetView.model_fields
 
 
 @pytest.mark.asyncio

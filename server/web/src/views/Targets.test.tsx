@@ -19,7 +19,6 @@ describe('Targets view', () => {
         {
           id: 'target-1',
           model: 'gpt-4o',
-          capabilities: ['code_execution', 'web_search'],
           max_concurrency: 4,
           active: 2,
           healthy: true,
@@ -28,7 +27,6 @@ describe('Targets view', () => {
         {
           id: 'target-2',
           model: 'claude-3-5-sonnet',
-          capabilities: ['reasoning'],
           max_concurrency: 2,
           active: 1,
           healthy: false,
@@ -43,7 +41,7 @@ describe('Targets view', () => {
 
     expect(screen.getByText('target-1')).toBeTruthy();
     expect(screen.getByText('gpt-4o')).toBeTruthy();
-    expect(screen.getByText('code_execution, web_search')).toBeTruthy();
+    expect(screen.queryByText('Capabilities')).toBeNull();
     expect(screen.getByText('2 / 4')).toBeTruthy();
     expect(screen.getByText('Healthy')).toBeTruthy();
     expect(screen.getByText('Closed')).toBeTruthy();
@@ -62,7 +60,6 @@ describe('Targets view', () => {
         {
           id: 't-degraded-open',
           model: 'local-llm',
-          capabilities: [],
           max_concurrency: 1,
           active: 0,
           healthy: false,
@@ -118,7 +115,6 @@ describe('Targets view', () => {
         {
           id: 'target-1',
           model: 'gpt-4o',
-          capabilities: ['coding'],
           max_concurrency: 2,
           active: 1,
           healthy: true,

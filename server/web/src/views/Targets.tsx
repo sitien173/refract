@@ -32,11 +32,6 @@ export const Targets: React.FC = () => {
     { key: 'id', header: 'Target ID', render: (t: Target) => t.id },
     { key: 'model', header: 'Model', render: (t: Target) => t.model },
     {
-      key: 'capabilities',
-      header: 'Capabilities',
-      render: (t: Target) => t.capabilities.join(', ') || '—',
-    },
-    {
       key: 'active',
       header: 'Active / Capacity',
       render: (t: Target) => `${t.active} / ${t.max_concurrency}`,

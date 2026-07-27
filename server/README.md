@@ -99,7 +99,6 @@ default_profile = "balanced"
 [[targets]]
 id = "forge-primary"
 backend = "codex"
-capabilities = ["code"]
 
 [[targets]]
 id = "sage-primary"
@@ -107,7 +106,6 @@ backend = "pi"
 model = "gpt-5.6-sol"
 isolated = true
 read_only = true
-capabilities = ["consult"]
 
 [[targets]]
 id = "sentinel-primary"
@@ -115,7 +113,6 @@ backend = "pi"
 model = "gpt-5.6-sol"
 isolated = true
 read_only = true
-capabilities = ["review"]
 
 [profiles.balanced]
 implement = "forge-primary"
@@ -137,8 +134,7 @@ consult = "sage-primary"
 ```
 
 A workflow selects intent. A profile maps each workflow to one target or an
-ordered target list. Targets hold backend execution policy. Every target must
-advertise the capability required by its workflow.
+ordered target list. Targets hold backend execution policy.
 
 Targets, profiles, and project configuration reload for later submissions.
 Submitted jobs retain immutable selection snapshots.

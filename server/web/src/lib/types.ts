@@ -56,7 +56,6 @@ export interface JobEvent {
 export interface Target {
   id: string;
   model: string;
-  capabilities: string[];
   max_concurrency: number;
   active: number;
   healthy: boolean;
