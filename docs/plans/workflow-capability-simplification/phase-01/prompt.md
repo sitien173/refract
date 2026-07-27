@@ -8,10 +8,10 @@ Simplify core workflow and target routing.
 
 ## Tasks
 
-- task-1: Replace workflow definitions with validated strings.
+- task-1: Validate fixed workflow and profile names.
 - task-2: Remove capabilities from target configuration.
 - task-3: Remove capabilities from new plan snapshots.
-- task-4: Reject unknown profile workflow keys.
+- task-4: Preserve transitional public adapter compatibility.
 
 ## Context
 
@@ -21,9 +21,10 @@ Old snapshots containing capability fields must remain parseable. Workflow names
 remain durable context roles and public MCP values.
 
 Use test-first coverage for unknown profile keys. Preserve passing
-characterization coverage for routing and legacy plan parsing. Do not change
-public target response models or dashboard files during this phase. Do not add
-dynamic workflows or the separate job-plan workflow invariant.
+characterization coverage for routing and legacy plan parsing. Public adapters
+may return empty capability lists until Phase 2 removes those fields. Do not
+change public target response models during this phase. Do not add dynamic
+workflows or the separate job-plan workflow invariant.
 
 ## Files
 
@@ -31,6 +32,8 @@ dynamic workflows or the separate job-plan workflow invariant.
 - `src/openmcp/config.py`
 - `src/openmcp/planning.py`
 - `src/openmcp/runtime.py`
+- `src/openmcp/execution.py`
+- `src/openmcp/dashboard.py`
 - `tests/test_workflows.py`
 - `tests/test_config.py`
 - `tests/test_planning.py`
@@ -48,6 +51,8 @@ dynamic workflows or the separate job-plan workflow invariant.
 - New plans omit capabilities.
 - Legacy plans containing capabilities still parse.
 - Target selection and retries remain unchanged.
+- Existing target and config endpoints remain operational.
+- `uv run pytest tests/test_dashboard.py`
 - `uv run pytest tests/test_workflows.py tests/test_config.py tests/test_planning.py tests/test_execution.py`
 - `tgrep -n "WorkflowDefinition|_BUILTIN_WORKFLOW_CAPABILITIES|capabilities" src/openmcp/workflows.py src/openmcp/config.py src/openmcp/planning.py src/openmcp/runtime.py`
 - `git diff --check`

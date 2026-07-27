@@ -24,6 +24,8 @@ containing capability fields must remain parseable.
 - Modify: `src/openmcp/config.py`
 - Modify: `src/openmcp/planning.py`
 - Modify: `src/openmcp/runtime.py`
+- Modify: `src/openmcp/execution.py`
+- Modify: `src/openmcp/dashboard.py`
 - Modify: `tests/test_workflows.py`
 - Modify: `tests/test_config.py`
 - Modify: `tests/test_planning.py`
@@ -33,8 +35,8 @@ containing capability fields must remain parseable.
 **Tasks:**
 1. Replace `WorkflowDefinition` with validated workflow strings.
 2. Remove target capabilities from configuration and plan snapshots.
-3. Reject unknown profile workflow keys during loading.
-4. Update core fixtures and workflow-routing tests.
+3. Return empty transitional capabilities from existing public adapters.
+4. Reject unknown profile workflow keys and update focused tests.
 
 **Acceptance Criteria:**
 - `BUILTIN_WORKFLOWS` remains unchanged.
@@ -44,6 +46,7 @@ containing capability fields must remain parseable.
 - New execution plans contain no capabilities.
 - Legacy execution plans containing capabilities still parse.
 - Target selection and retry behavior remain unchanged.
+- Existing target and config endpoints remain operational.
 - No database migration is introduced.
 
 **Reviewer Checklist:**
@@ -51,6 +54,7 @@ containing capability fields must remain parseable.
 - Fixed workflow discovery remains compatible.
 - No dynamic workflow registry is introduced.
 - Capability removal does not alter read-only policy.
+- Transitional public fields contain no configured metadata.
 - Old queued jobs remain executable.
 - No unrelated target validation is added.
 
