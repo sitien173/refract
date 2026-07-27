@@ -9,12 +9,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-
-_BUILTIN_WORKFLOW_CAPABILITIES = {
-    "implement": "code",
-    "review": "review",
-    "consult": "consult",
-}
+from openmcp.workflows import get_workflow
 
 
 @dataclass(slots=True, frozen=True)
@@ -28,7 +23,6 @@ class TargetConfig:
     isolated: bool = False
     read_only: bool = False
     args: tuple[str, ...] = ()
-    capabilities: tuple[str, ...] = ("code", "reasoning", "review", "consult")
     max_concurrency: int = 1
 
 
@@ -206,18 +200,6 @@ def _target_selection(
             f"Profile {profile_id!r} workflow {workflow!r} has invalid targets: "
             f"{sorted(unknown_targets)}"
         )
-    required = _BUILTIN_WORKFLOW_CAPABILITIES.get(workflow)
-    incapable = [
-        target_id
-        for target_id in selected
-        if required is not None
-        and required not in target_by_id[target_id].capabilities
-    ]
-    if incapable:
-        raise ValueError(
-            f"Profile {profile_id!r} workflow {workflow!r} requires capability "
-            f"{required!r}; targets missing it: {incapable}"
-        )
     return TargetSelection(
         targets=selected,
         max_attempts=max_attempts,
@@ -248,16 +230,17 @@ def _profile_declarations(
             )
         else:
             extends = raw_extends.strip()
-        workflows = {
-            str(workflow): _target_selection(
+        workflows: dict[str, TargetSelection] = {}
+        for raw_workflow, value in mapping.items():
+            if raw_workflow == "extends":
+                continue
+            workflow = get_workflow(str(raw_workflow))
+            workflows[workflow] = _target_selection(
                 value,
                 profile_id=profile_id,
-                workflow=str(workflow),
+                workflow=workflow,
                 target_by_id=target_by_id,
             )
-            for workflow, value in mapping.items()
-            if workflow != "extends"
-        }
         declarations[profile_id] = ProfileDeclaration(extends, workflows)
     return declarations
 
@@ -371,12 +354,6 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
         backend = str(item.get("backend", "")).strip()
         if not target_id or backend not in {"agy", "codex", "pi"}:
             raise ValueError(f"Invalid target: {item!r}")
-        capabilities = item.get(
-            "capabilities",
-            ["code", "reasoning", "review", "consult"],
-        )
-        if not isinstance(capabilities, list):
-            raise ValueError(f"Target {target_id!r} capabilities must be a list")
         args = item.get("args", [])
         if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
             raise ValueError(f"Target {target_id!r} args must be a list of strings")
@@ -395,7 +372,6 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
                 isolated=isolated,
                 read_only=bool(item.get("read_only", False)),
                 args=tuple(args),
-                capabilities=tuple(str(value) for value in capabilities),
                 max_concurrency=_positive_int(item.get("max_concurrency"), 1),
             )
         )

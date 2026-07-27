@@ -15,6 +15,16 @@ def test_plan_snapshots_one_workflow_selection(tmp_path) -> None:
     assert data["profile"] == "balanced"
     assert data["workflow"] == "implement"
     assert data["selection"] == {"targets": ["primary"], "max_attempts": 1, "timeout_s": 0}
+    assert "capabilities" not in data["targets"][0]
+    assert parse_execution_plan(data) == plan
+
+
+def test_legacy_plan_target_capabilities_still_parse(tmp_path) -> None:
+    catalog = config(tmp_path / "home")
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    data = execution_plan_data(plan)
+    data["targets"][0]["capabilities"] = ["code"]
+
     assert parse_execution_plan(data) == plan
 
 

@@ -271,6 +271,19 @@ def test_unknown_profile_parent_names_child_and_parent(tmp_path) -> None:
         load_config(path)
 
 
+def test_unknown_profile_workflow_key_is_rejected(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _profile_chain_config(
+            "[profiles.balanced]\nunknown = \"primary\"\n"
+        ).replace('default_profile = "child"', 'default_profile = "balanced"'),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unknown workflow 'unknown'"):
+        load_config(path)
+
+
 def test_profile_inheritance_cycle_names_ordered_closed_cycle(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
@@ -498,5 +511,5 @@ consult = "primary"
 """, encoding="utf-8")
     monkeypatch.setenv("OPENMCP_HOME", str(home))
     catalog = load_config(home / "config.toml")
-    assert TargetConfig(id="primary", backend="codex").capabilities == ("code", "reasoning", "review", "consult")
+    assert not hasattr(TargetConfig(id="primary", backend="codex"), "capabilities")
     assert all(resolve_execution_plan(get_workflow(name), catalog, "balanced").selection.targets == ("primary",) for name in ("implement", "review", "consult"))

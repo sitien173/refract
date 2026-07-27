@@ -98,9 +98,9 @@ class Runtime:
         except ValueError as exc:
             raise OrchestrationError(str(exc)) from exc
         job_id = str(uuid.uuid4())
-        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow.name, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow.name)
+        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow)
         self.scheduler.enqueue(job_id, project.id)
-        log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow.name, "profile": selected_profile})
+        log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})
         return SubmissionResult(job_id=job_id, state="queued")
 
     async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:

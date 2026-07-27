@@ -5,13 +5,11 @@ import pytest
 from openmcp.workflows import BUILTIN_WORKFLOWS, get_workflow, validate_request
 
 
-def test_fixed_workflows_expose_capability_without_write_behavior() -> None:
+def test_fixed_workflows_are_validated_strings() -> None:
     assert BUILTIN_WORKFLOWS == ("consult", "implement", "review")
-    assert get_workflow("implement").capability == "code"
-    assert not hasattr(get_workflow("implement"), "writes")
-    assert get_workflow("review").capability == "review"
-    assert not hasattr(get_workflow("review"), "writes")
-    assert get_workflow("consult").capability == "consult"
+    assert get_workflow("implement") == "implement"
+    assert get_workflow("review") == "review"
+    assert get_workflow("consult") == "consult"
 
 
 def test_request_validation_normalizes_prompt_only() -> None:

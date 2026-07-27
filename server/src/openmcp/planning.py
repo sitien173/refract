@@ -8,12 +8,11 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from openmcp.config import DaemonConfig, TargetConfig, TargetSelection
-from openmcp.workflows import WorkflowDefinition, get_workflow
+from openmcp.workflows import get_workflow
 
 
 def _target_data(target: TargetConfig) -> dict[str, Any]:
     value = asdict(target)
-    value["capabilities"] = list(target.capabilities)
     value["args"] = list(target.args)
     return value
 
@@ -59,7 +58,6 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
                     isolated=bool(value.get("isolated", False)),
                     read_only=bool(value.get("read_only", False)),
                     args=tuple(str(item) for item in value.get("args", [])),
-                    capabilities=tuple(str(item) for item in value.get("capabilities", [])),
                     max_concurrency=int(value.get("max_concurrency", 1)),
                 )
             )
@@ -93,8 +91,7 @@ def parse_execution_plan(data: Any) -> ExecutionPlan:
         raise ValueError("Execution plan must be a mapping")
     if "selection" not in data:
         raise ValueError("Execution plan requires one workflow selection")
-    workflow = str(data.get("workflow", ""))
-    get_workflow(workflow)
+    workflow = get_workflow(str(data.get("workflow", "")))
     selection = _parse_selection(data["selection"])
     targets = _parse_targets(data.get("targets"))
     if set(selection.targets) - {target.id for target in targets}:
@@ -103,20 +100,20 @@ def parse_execution_plan(data: Any) -> ExecutionPlan:
 
 
 def resolve_execution_plan(
-    workflow: WorkflowDefinition,
+    workflow: str,
     config: DaemonConfig,
     profile: str,
 ) -> ExecutionPlan:
     mapping = config.profiles.get(profile)
     if mapping is None:
         raise ValueError(f"Unknown profile: {profile}")
-    selection = mapping.get(workflow.name)
+    selection = mapping.get(workflow)
     if selection is None:
-        raise ValueError(f"Profile {profile!r} does not map workflow {workflow.name!r}")
+        raise ValueError(f"Profile {profile!r} does not map workflow {workflow!r}")
     target_by_id = {target.id: target for target in config.targets}
     return ExecutionPlan(
         profile,
-        workflow.name,
+        workflow,
         selection,
         tuple(target_by_id[value] for value in selection.targets),
     )
