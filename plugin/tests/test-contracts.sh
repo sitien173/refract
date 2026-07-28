@@ -114,7 +114,17 @@ grep -q 'Resolve at execution' skills/writing-plans/SKILL.md
 grep -q 'Do not call `task_guide`, register a project, or submit jobs' skills/writing-plans/SKILL.md
 grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
 
-grep -q 'OpenMCP provides exactly `consult`, `implement`, and `review`' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'OpenMCP provides four fixed workflows' skills/coordinating-multi-model-work/SKILL.md
+grep -q '`consult`, `implement`, `other`, and' skills/coordinating-multi-model-work/SKILL.md
+grep -q '^`review`\. Canonical gates' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Profiles may be partial' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q '`other` requires an explicit mapping' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'other = "implementation-primary"' README.md
+if grep -R -E '^[[:space:]]*capabilities[[:space:]]*=' \
+    README.md CLAUDE.md commands hooks shared skills; then
+    printf 'Removed OpenMCP target capabilities remain documented\n' >&2
+    exit 1
+fi
 grep -q 'openmcp://workflows/<project_id>' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'After submission, do not edit the root' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Call `status`; require' skills/coordinating-multi-model-work/SKILL.md

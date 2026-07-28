@@ -53,7 +53,7 @@ The plugin connects to `http://127.0.0.1:8765/mcp`.
 
 OpenMCP uses three concepts:
 
-- **workflow** — `implement`, `review`, or `consult`
+- **workflow** — `consult`, `implement`, `other`, or `review`
 - **profile** — maps each workflow directly to a target or ordered target list
 - **target** — backend, model, and execution policy
 
@@ -71,14 +71,12 @@ default_profile = "delivery"
 id = "implementation-primary"
 backend = "codex"
 backend_profile = "mcp_execution"
-capabilities = ["code"]
 
 [[targets]]
 id = "consultation-primary"
 backend = "pi"
 isolated = true
 read_only = true
-capabilities = ["consult"]
 system_prompt = "Provide concise software advice. Never modify files."
 
 [[targets]]
@@ -86,18 +84,20 @@ id = "review-primary"
 backend = "pi"
 isolated = true
 read_only = true
-capabilities = ["review"]
 system_prompt = "Return evidence-based code-quality findings. Never modify files."
 
 [profiles.delivery]
 implement = "implementation-primary"
 consult = "consultation-primary"
 review = "review-primary"
+other = "implementation-primary"
 ```
 
-A list supplies ordered failover. Map all three workflows in every global
-profile. Credentials belong in backend credential stores or environment
-variables, never target fields or arguments.
+A list supplies ordered failover. Profiles may be partial. Map every workflow
+the profile must support. Missing mappings fail during plan resolution.
+`other` requires an explicit mapping and never falls back. Credentials belong
+in backend credential stores or environment variables, never target fields or
+arguments.
 
 Projects may override profiles, but not targets, in
 `.openmcp/config.toml`. Commit that file before registration or submission.
@@ -133,6 +133,12 @@ project-local `.openmcp/task_guide.json`:
       "workflow": "review",
       "profile": "delivery",
       "reason": "Use read-only quality review."
+    },
+    {
+      "use_case": "Other explicitly supported work",
+      "workflow": "other",
+      "profile": "delivery",
+      "reason": "Use the profile's explicit catch-all route."
     }
   ]
 }
@@ -156,12 +162,15 @@ OpenMCP does not check cleanliness; a dirty tree does not block submission.
 `doctor` is read-only and used only when client integration validation is
 requested.
 
-OpenMCP exposes only three one-step workflows. A higher-risk change uses
-sequential jobs:
+OpenMCP exposes four one-step workflows. This plugin's canonical gates use
+three of them. A higher-risk change uses sequential jobs:
 
 ```text
 consult -> implement -> review
 ```
+
+`other` remains an explicit catch-all route. Use it only when task guidance
+selects it.
 
 Each job runs in the registered directory when it starts and leaves every
 filesystem change in place. Same-project jobs run in FIFO order without overlap;

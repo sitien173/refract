@@ -26,8 +26,10 @@ Review, or resume action. It is the canonical workflow and handover contract.
   cleanliness; a dirty tree does not block submission.
 - You own all Git: cleanliness checks, diffs, commits, resets, and restoration.
   Never assume OpenMCP committed, reset, or restored anything.
-- Use `task_guide`; submit prompt-only `implement`, `consult`, or `review` jobs
-  with an optional `profile`. Never pass a commit-message field.
+- OpenMCP accepts prompt-only `consult`, `implement`, `other`, and `review`
+  jobs with an optional `profile`. Never pass a commit-message field.
+- Canonical gates use `consult`, `implement`, and `review`. Use `other` only
+  through explicit task guidance and profile mapping.
 - Project workflow files are unsupported; submit one direct job at a time.
 - Keep active phase guidance decisions; load current guidance only for new
   phases.

@@ -22,13 +22,16 @@ Tool names may be client-namespaced; match their OpenMCP suffixes.
 
 | Workflow | Behavior |
 | --- | --- |
-| `implement` | Run the prompt in the project directory and leave every filesystem change in place; you commit. |
-| `review` | Return review text; run against a read-only target so it cannot mutate files. |
 | `consult` | Return advice; run against a read-only target so it cannot mutate files. |
+| `implement` | Run repository implementation and leave filesystem changes in place; you commit. |
+| `other` | Run explicitly supported catch-all work through its configured target. |
+| `review` | Return review text; run against a read-only target so it cannot mutate files. |
 
-Only these workflows are valid. No workflow commits, resets, or restores; you
-own all Git. Guidance names workflows and optional profiles, never targets or
-providers.
+Only these four workflows are valid. Profiles may be partial. Missing mappings
+fail during execution-plan resolution. `other` requires an explicit mapping and
+never falls back. Workflows route jobs but do not enforce write safety. No
+workflow commits, resets, or restores; you own all Git. Guidance names workflows
+and optional profiles, never targets or providers.
 
 ## Resources
 
@@ -54,8 +57,7 @@ providers.
 - OpenMCP never commits, resets, or restores. Filesystem changes from every
   terminal state (success, failure, cancellation, interruption) remain on disk
   for you to inspect and reconcile.
-- Prevent mutation for `review` and `consult` with a read-only target, not a
-  workflow flag.
+- Prevent mutation with a read-only target, not a workflow name.
 - A worker session is resumed by `project_id` + `context_key` + `workflow` +
   target key, keyed primarily on `context_key`. Reusing one `context_key` across
   jobs continues the same session per workflow.

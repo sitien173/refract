@@ -39,9 +39,11 @@ one line that you skipped coordination.
 
 ## OpenMCP Contract
 
-OpenMCP provides exactly `consult`, `implement`, and `review`, one job per
-submission, run in the registered directory. OpenMCP never touches Git; you own
-every commit, reset, and cleanliness check. Same-project jobs run FIFO without overlap.
+OpenMCP provides four fixed workflows: `consult`, `implement`, `other`, and
+`review`. Canonical gates use `consult`, `implement`, and `review`. Use `other`
+only when task guidance selects its explicit profile mapping. Every submission
+creates one job in the registered directory. OpenMCP never touches Git; you own
+every commit, reset, and cleanliness check. Same-project jobs run FIFO.
 
 Keep provider, model, target, and native session identities private. Select only
 workflows and profiles.
@@ -52,9 +54,9 @@ OpenMCP resumes a worker session by the combination of `project_id`,
 `context_key`, `workflow`, and target key. `context_key` is the primary key.
 
 Use one stable `context_key` for the whole plan: the plan id (`<plan-slug>`).
-Submit every `consult`, `implement`, and `review` job, across every phase, with
-that same key; the differing `workflow` keeps each session distinct while phases
-continue the same worker session. Never derive a per-phase or per-job key.
+Submit every routed job across every phase with that same key. The differing
+`workflow` keeps each session distinct while phases continue the same worker
+session. Never derive a per-phase or per-job key.
 
 The session persists per workflow, so keep prompts thin on resume. The first
 `implement` and first `review` job on the plan carry the full contract for their
@@ -99,6 +101,7 @@ For each new phase, call `task_guide` once with the complete phase request and
 - repository change → `implement`
 - code-quality review → `review`
 - analysis or advice → `consult`
+- other explicitly supported work → `other`
 
 Use the recommended optional profile, or omit it for the configured default.
 Validate via `openmcp://projects/<project_id>/profiles` and `openmcp://workflows/<project_id>`; stop on an unavailable or mismatched route.
