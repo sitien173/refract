@@ -13,7 +13,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "mcp[cli]>=1.21.2",
+    "mcp[cli]>=1.21.2,<2",
     "pydantic>=2",
     "tomlkit>=0.12.0",
 ]

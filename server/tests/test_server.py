@@ -5,7 +5,10 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
+
+from starlette.applications import Starlette
 
 import pytest
 
@@ -79,6 +82,7 @@ def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
 
 def test_serve_uses_configured_transport(tmp_path, monkeypatch) -> None:
     from openmcp import cli, server
+    import uvicorn
 
     home = tmp_path / "openmcp"
     home.mkdir()
@@ -88,23 +92,26 @@ def test_serve_uses_configured_transport(tmp_path, monkeypatch) -> None:
     old_host = server.mcp.settings.host
     old_port = server.mcp.settings.port
 
-    def fake_run(*, transport: str) -> None:
-        captured["transport"] = transport
-        captured["host"] = server.mcp.settings.host
-        captured["port"] = server.mcp.settings.port
+    monkeypatch.setattr(server, "create_application", lambda: "application")
 
-    monkeypatch.setattr(server.mcp, "run", fake_run)
+    def fake_run(application, *, host: str, port: int) -> None:
+        captured["application"] = application
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
     try:
         cli.main(["serve"])
     finally:
         server.mcp.settings.host = old_host
         server.mcp.settings.port = old_port
 
-    assert captured == {"transport": "streamable-http", "host": "127.0.0.2", "port": 9123}
+    assert captured == {"application": "application", "host": "127.0.0.2", "port": 9123}
 
 
 def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
     from openmcp import cli, server
+    import uvicorn
 
     home = tmp_path / "openmcp"
     home.mkdir()
@@ -114,19 +121,21 @@ def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
     old_host = server.mcp.settings.host
     old_port = server.mcp.settings.port
 
-    def fake_run(*, transport: str) -> None:
-        captured["transport"] = transport
-        captured["host"] = server.mcp.settings.host
-        captured["port"] = server.mcp.settings.port
+    monkeypatch.setattr(server, "create_application", lambda: "application")
 
-    monkeypatch.setattr(server.mcp, "run", fake_run)
+    def fake_run(application, *, host: str, port: int) -> None:
+        captured["application"] = application
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
     try:
         cli.main(["serve", "--host", "127.0.0.3", "--port", "9234"])
     finally:
         server.mcp.settings.host = old_host
         server.mcp.settings.port = old_port
 
-    assert captured == {"transport": "streamable-http", "host": "127.0.0.3", "port": 9234}
+    assert captured == {"application": "application", "host": "127.0.0.3", "port": 9234}
 
 
 @pytest.mark.asyncio
@@ -241,7 +250,106 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lifespan_clears_state_when_runtime_close_fails(monkeypatch) -> None:
+async def test_application_lifespan_shares_runtime_across_sessions(monkeypatch) -> None:
+    import openmcp.server as server
+
+    config = SimpleNamespace(logging=object())
+    events: list[object] = []
+
+    class Runtime:
+        def __init__(self, received_config) -> None:
+            assert received_config is config
+            events.append("runtime.create")
+            self.database = SimpleNamespace(projects=lambda: [])
+
+        async def start(self) -> None:
+            events.append("runtime.start")
+
+        async def close(self) -> None:
+            events.append(("runtime.close", server._ACTIVE_RUNTIME))
+
+    class SessionManager:
+        @asynccontextmanager
+        async def run(self):
+            events.append("session.enter")
+            try:
+                yield
+            finally:
+                events.append("session.exit")
+
+    session_manager = SessionManager()
+    child = Starlette()
+    monkeypatch.setattr(server.mcp, "streamable_http_app", lambda: child)
+    monkeypatch.setattr(server.mcp, "_session_manager", session_manager)
+    monkeypatch.setattr(server, "Runtime", Runtime)
+    monkeypatch.setattr(server, "configure_logging", lambda _: None)
+    server._DAEMON_CONFIG = config
+    server._ACTIVE_RUNTIME = None
+
+    try:
+        application = server.create_application()
+        async with application.router.lifespan_context(application):
+            assert events == ["runtime.create", "runtime.start", "session.enter"]
+            async with server._lifespan(server.mcp) as first_session:
+                assert server._active_runtime() is first_session
+            assert await server.projects_resource() == "[]"
+            async with server._lifespan(server.mcp) as second_session:
+                assert second_session is first_session
+            assert events == ["runtime.create", "runtime.start", "session.enter"]
+        assert events == [
+            "runtime.create",
+            "runtime.start",
+            "session.enter",
+            "session.exit",
+            ("runtime.close", None),
+        ]
+        assert server._ACTIVE_RUNTIME is None
+        assert server._DAEMON_CONFIG is None
+    finally:
+        server._ACTIVE_RUNTIME = None
+        server._DAEMON_CONFIG = None
+
+
+@pytest.mark.asyncio
+async def test_application_lifespan_cleans_up_after_start_failure(monkeypatch) -> None:
+    import openmcp.server as server
+
+    config = SimpleNamespace(logging=object())
+    events: list[str] = []
+
+    class FailingRuntime:
+        def __init__(self, received_config) -> None:
+            assert received_config is config
+
+        async def start(self) -> None:
+            events.append("runtime.start")
+            raise RuntimeError("start failed")
+
+        async def close(self) -> None:
+            events.append("runtime.close")
+
+    monkeypatch.setattr(server.mcp, "streamable_http_app", lambda: Starlette())
+    monkeypatch.setattr(server.mcp, "_session_manager", SimpleNamespace())
+    monkeypatch.setattr(server, "configure_logging", lambda _: None)
+    monkeypatch.setattr(server, "Runtime", FailingRuntime)
+    server._DAEMON_CONFIG = config
+    server._ACTIVE_RUNTIME = None
+
+    try:
+        application = server.create_application()
+        with pytest.raises(RuntimeError, match="start failed"):
+            async with application.router.lifespan_context(application):
+                pass
+        assert events == ["runtime.start", "runtime.close"]
+        assert server._ACTIVE_RUNTIME is None
+        assert server._DAEMON_CONFIG is None
+    finally:
+        server._ACTIVE_RUNTIME = None
+        server._DAEMON_CONFIG = None
+
+
+@pytest.mark.asyncio
+async def test_application_lifespan_clears_state_when_runtime_close_fails(monkeypatch) -> None:
     import openmcp.server as server
 
     config = SimpleNamespace(logging=object())
@@ -256,19 +364,25 @@ async def test_lifespan_clears_state_when_runtime_close_fails(monkeypatch) -> No
         async def close(self) -> None:
             raise RuntimeError("close failed")
 
-    monkeypatch.setattr(server, "load_config", lambda: config)
+    @asynccontextmanager
+    async def session_manager_run():
+        yield
+
+    session_manager = SimpleNamespace(run=session_manager_run)
+    monkeypatch.setattr(server.mcp, "streamable_http_app", lambda: Starlette())
+    monkeypatch.setattr(server.mcp, "_session_manager", session_manager)
     monkeypatch.setattr(server, "configure_logging", lambda _: None)
     monkeypatch.setattr(server, "Runtime", FailingRuntime)
-    server._DAEMON_CONFIG = None
+    server._DAEMON_CONFIG = config
     server._ACTIVE_RUNTIME = None
 
     try:
+        application = server.create_application()
         with pytest.raises(RuntimeError, match="close failed"):
-            async with server._lifespan(server.mcp):
+            async with application.router.lifespan_context(application):
                 assert server._ACTIVE_RUNTIME is not None
-        observed = (server._ACTIVE_RUNTIME, server._DAEMON_CONFIG)
+        assert server._ACTIVE_RUNTIME is None
+        assert server._DAEMON_CONFIG is None
     finally:
         server._ACTIVE_RUNTIME = None
         server._DAEMON_CONFIG = None
-
-    assert observed == (None, None)

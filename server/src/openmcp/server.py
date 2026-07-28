@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Literal, ParamSpec, TypeVar, cast
 
 from mcp.server.fastmcp import Context, FastMCP
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from openmcp.backend_runner import run as _run_backend
 from openmcp.backends.agy import execute as agy_execute
@@ -31,21 +33,7 @@ _MCP_WAIT_TIMEOUT_S = 30
 
 @asynccontextmanager
 async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
-    global _ACTIVE_RUNTIME, _DAEMON_CONFIG
-    if _DAEMON_CONFIG is None:
-        _DAEMON_CONFIG = load_config()
-    configure_logging(_DAEMON_CONFIG.logging)
-    runtime = Runtime(_DAEMON_CONFIG)
-    await runtime.start()
-    _ACTIVE_RUNTIME = runtime
-    try:
-        yield runtime
-    finally:
-        _ACTIVE_RUNTIME = None
-        try:
-            await runtime.close()
-        finally:
-            _DAEMON_CONFIG = None
+    yield _active_runtime()
 
 
 mcp = FastMCP("openmcp", host="127.0.0.1", port=8765, streamable_http_path="/mcp", json_response=True, lifespan=_lifespan)
@@ -64,6 +52,35 @@ def _active_runtime() -> Runtime:
     if _ACTIVE_RUNTIME is None:
         raise RuntimeError("OpenMCP runtime is not active")
     return _ACTIVE_RUNTIME
+
+
+def create_application() -> Starlette:
+    mcp_application = mcp.streamable_http_app()
+    session_manager = mcp.session_manager
+
+    @asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
+        global _ACTIVE_RUNTIME, _DAEMON_CONFIG
+        if _DAEMON_CONFIG is None:
+            _DAEMON_CONFIG = load_config()
+        config = _DAEMON_CONFIG
+        configure_logging(config.logging)
+        runtime: Runtime | None = None
+        try:
+            runtime = Runtime(config)
+            await runtime.start()
+            _ACTIVE_RUNTIME = runtime
+            async with session_manager.run():
+                yield
+        finally:
+            _ACTIVE_RUNTIME = None
+            try:
+                if runtime is not None:
+                    await runtime.close()
+            finally:
+                _DAEMON_CONFIG = None
+
+    return Starlette(routes=[Mount("/", app=mcp_application)], lifespan=lifespan)
 
 
 _P = ParamSpec("_P")
@@ -265,4 +282,4 @@ from openmcp.dashboard import register_dashboard_routes  # noqa: E402
 
 register_dashboard_routes(mcp)
 
-__all__ = ["doctor", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "reload", "run", "status", "task_guide"]
+__all__ = ["create_application", "doctor", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "reload", "run", "status", "task_guide"]

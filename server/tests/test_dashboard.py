@@ -49,6 +49,28 @@ async def async_client(active_runtime):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_available_before_and_after_mcp_session(tmp_path, monkeypatch) -> None:
+    cfg = config(tmp_path)
+    monkeypatch.setattr(openmcp.server, "_DAEMON_CONFIG", cfg)
+    monkeypatch.setattr(openmcp.server, "_ACTIVE_RUNTIME", None)
+    monkeypatch.setattr(openmcp.server.mcp, "_session_manager", None)
+    application = openmcp.server.create_application()
+
+    async with application.router.lifespan_context(application):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application),
+            base_url="http://127.0.0.1:8765",
+        ) as client:
+            before = await client.get("/dashboard/api/status")
+            async with openmcp.server._lifespan(openmcp.server.mcp):
+                pass
+            after = await client.get("/dashboard/api/status")
+
+    assert before.status_code == 200
+    assert after.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_dashboard_api_status(async_client: httpx.AsyncClient) -> None:
     res = await async_client.get("/dashboard/api/status")
     assert res.status_code == 200

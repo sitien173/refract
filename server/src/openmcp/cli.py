@@ -138,7 +138,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         },
     )
     try:
-        server.mcp.run(transport="streamable-http")
+        import uvicorn
+
+        uvicorn.run(
+            server.create_application(),
+            host=server.mcp.settings.host,
+            port=server.mcp.settings.port,
+        )
     except KeyboardInterrupt:
         log.info("Shutdown requested", extra={"event": "cli.interrupted"})
     except Exception:
