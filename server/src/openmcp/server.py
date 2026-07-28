@@ -26,6 +26,7 @@ from openmcp.workflows import BUILTIN_WORKFLOWS
 log = get_logger("server")
 _DAEMON_CONFIG = None
 _ACTIVE_RUNTIME: Runtime | None = None
+_MCP_WAIT_TIMEOUT_S = 30
 
 
 @asynccontextmanager
@@ -157,7 +158,10 @@ async def job_submit(project_id: str, workflow: str, prompt: str, ctx: Context, 
 
 @mcp.tool(description="Wait for job completion or timeout.", structured_output=True)
 @_logged_request("job_wait")
-async def job_wait(job_id: str, ctx: Context, timeout_s: int = 0) -> JobView:
+async def job_wait(job_id: str, ctx: Context, timeout_s: int = _MCP_WAIT_TIMEOUT_S) -> JobView:
+    if timeout_s < 0:
+        raise ValueError("timeout_s cannot be negative")
+    timeout_s = min(timeout_s or _MCP_WAIT_TIMEOUT_S, _MCP_WAIT_TIMEOUT_S)
     runtime = _runtime(ctx)
     job = runtime.database.job(job_id)
     if job is None:
@@ -165,7 +169,10 @@ async def job_wait(job_id: str, ctx: Context, timeout_s: int = 0) -> JobView:
     await ctx.report_progress(progress=1.0 if job.state in TERMINAL_STATES else 0.0, total=1.0, message=job.state)
     if job.state in TERMINAL_STATES:
         return job
-    refreshed = await runtime.wait(job_id, timeout_s)
+    await runtime.wait(job_id, timeout_s)
+    refreshed = runtime.database.job(job_id)
+    if refreshed is None:
+        raise ValueError(f"Unknown job: {job_id}")
     await ctx.report_progress(progress=1.0 if refreshed.state in TERMINAL_STATES else 0.0, total=1.0, message=refreshed.state)
     return refreshed
 

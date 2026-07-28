@@ -58,6 +58,10 @@ Tools:
 - `task_guide(task, project_id)` loads workflow and profile guidance.
 - `job_submit(project_id, workflow, prompt, context_key, profile)` queues work.
 - `job_wait(job_id, timeout_s)` waits for completion or timeout.
+  Public waits are bounded to 30 seconds. Omitted and zero values use 30
+  seconds; smaller positive values are preserved; larger values are clamped.
+  Negative values are rejected. Poll again to observe later job states.
+  Terminal jobs return immediately with their structured result.
 - `job_cancel(job_id)` cancels queued or running work.
 - `job_retry(job_id)` retries failed, cancelled, or interrupted work.
 

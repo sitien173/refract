@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from openmcp.models import JobResult, JobView, ProjectView, TargetView
-from openmcp.server import _DOCTOR_INSTRUCTIONS, _project_root, mcp, workflows_resource
+from openmcp.server import _DOCTOR_INSTRUCTIONS, _project_root, job_wait, mcp, workflows_resource
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -135,12 +135,109 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert "job_integrate" not in tools
     assert set(tools["job_submit"].inputSchema["properties"]) == {"project_id", "workflow", "prompt", "context_key", "profile"}
     assert set(tools["job_wait"].inputSchema["properties"]) == {"job_id", "timeout_s"}
+    assert tools["job_wait"].inputSchema["properties"]["timeout_s"]["default"] == 30
     assert set(tools["job_retry"].inputSchema["properties"]) == {"job_id"}
     assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts", "base_commit"}.isdisjoint(JobView.model_fields)
     assert "commit" not in JobResult.model_fields
     assert {"head_commit", "clean"}.isdisjoint(ProjectView.model_fields)
     capability_key = "capabil" + "ities"
     assert capability_key not in TargetView.model_fields
+
+
+def _job_view(state: str) -> JobView:
+    return JobView(
+        id="job-1",
+        project_id="project-1",
+        workflow="implement",
+        profile="balanced",
+        state=state,
+        context_key="implement",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timeout_s", "expected_timeout_s"),
+    [(None, 30), (0, 30), (5, 5), (30, 30), (45, 30)],
+)
+async def test_job_wait_bounds_public_timeout(timeout_s: int | None, expected_timeout_s: int) -> None:
+    initial = _job_view("running")
+    latest = _job_view("succeeded")
+    waits: list[tuple[str, int]] = []
+    database_reads = 0
+
+    class Database:
+        def job(self, job_id: str) -> JobView:
+            nonlocal database_reads
+            assert job_id == initial.id
+            database_reads += 1
+            return initial if database_reads == 1 else latest
+
+    class Runtime:
+        database = Database()
+
+        async def wait(self, job_id: str, timeout_s: int) -> JobView:
+            waits.append((job_id, timeout_s))
+            return initial
+
+    progress_messages: list[str] = []
+
+    async def report_progress(*, progress: float, total: float, message: str) -> None:
+        progress_messages.append(message)
+
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context=Runtime()),
+        report_progress=report_progress,
+    )
+    if timeout_s is None:
+        result = await job_wait(initial.id, ctx)
+    else:
+        result = await job_wait(initial.id, ctx, timeout_s)
+
+    assert waits == [(initial.id, expected_timeout_s)]
+    assert result is latest
+    assert progress_messages == ["running", "succeeded"]
+
+
+@pytest.mark.asyncio
+async def test_job_wait_rejects_negative_timeout_before_job_lookup() -> None:
+    class Database:
+        def job(self, job_id: str) -> JobView:
+            raise AssertionError("job lookup should not happen")
+
+    runtime = SimpleNamespace(database=Database())
+    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+
+    with pytest.raises(ValueError, match="negative"):
+        await job_wait("job-1", ctx, timeout_s=-1)
+
+
+@pytest.mark.asyncio
+async def test_job_wait_returns_terminal_job_without_waiting() -> None:
+    terminal = _job_view("failed")
+    waits: list[str] = []
+
+    class Database:
+        @staticmethod
+        def job(job_id: str) -> JobView:
+            return terminal
+
+    class Runtime:
+        database = Database()
+
+        async def wait(self, job_id: str, timeout_s: int) -> JobView:
+            waits.append(job_id)
+            return terminal
+
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context=Runtime()),
+        report_progress=lambda **kwargs: asyncio.sleep(0),
+    )
+
+    assert await job_wait(terminal.id, ctx) is terminal
+    assert waits == []
 
 
 @pytest.mark.asyncio
