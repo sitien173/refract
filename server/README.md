@@ -44,7 +44,7 @@ OpenMCP runs jobs directly in each registered directory. Jobs for one project
 run in submission order. Jobs for different projects may run concurrently up to
 `max_jobs`. OpenMCP does not inspect or mutate project files.
 
-- `implement`, `review`, and `consult` each run once.
+- `implement`, `review`, `consult`, and `other` each run once.
 - Failed, cancelled, and interrupted jobs retain their project changes.
 
 ## MCP contract
@@ -61,8 +61,8 @@ Tools:
 - `job_cancel(job_id)` cancels queued or running work.
 - `job_retry(job_id)` retries failed, cancelled, or interrupted work.
 
-Built-in workflows are `implement`, `review`, and `consult`. Project-local
-custom workflow files are not loaded.
+Built-in workflows are `implement`, `review`, `consult`, and `other`.
+Project-local custom workflow files are not loaded.
 
 Example submission:
 
@@ -118,6 +118,7 @@ read_only = true
 implement = "forge-primary"
 review = "sentinel-primary"
 consult = "sage-primary"
+other = "forge-primary"
 ```
 
 A profile may explicitly inherit one parent. Child workflow selections replace

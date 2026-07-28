@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-BUILTIN_WORKFLOWS = ("consult", "implement", "review")
+BUILTIN_WORKFLOWS = ("consult", "implement", "other", "review")
 
 
 def get_workflow(name: str) -> str:

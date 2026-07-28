@@ -19,6 +19,15 @@ def test_plan_snapshots_one_workflow_selection(tmp_path) -> None:
     assert parse_execution_plan(data) == plan
 
 
+def test_other_plan_snapshot_round_trips(tmp_path) -> None:
+    catalog = config(tmp_path / "home")
+    plan = resolve_execution_plan(get_workflow("other"), catalog, "balanced")
+    data = execution_plan_data(plan)
+
+    assert data["workflow"] == "other"
+    assert parse_execution_plan(data) == plan
+
+
 def test_legacy_plan_target_capabilities_still_parse(tmp_path) -> None:
     catalog = config(tmp_path / "home")
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
@@ -57,3 +66,5 @@ consult = "primary"
     assert resolve_execution_plan(get_workflow("consult"), catalog, "consult-only")
     with pytest.raises(ValueError, match="does not map workflow 'implement'"):
         resolve_execution_plan(get_workflow("implement"), catalog, "consult-only")
+    with pytest.raises(ValueError, match="does not map workflow 'other'"):
+        resolve_execution_plan(get_workflow("other"), catalog, "consult-only")

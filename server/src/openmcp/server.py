@@ -103,8 +103,8 @@ _DOCTOR_INSTRUCTIONS = """Validate this project's OpenMCP integration without mu
 1. Confirm status, reload, doctor, project_register, task_guide, job_submit, job_wait, job_cancel, and job_retry are available.
 2. Confirm the client's project-level instruction file contains OpenMCP guidance.
 3. Resolve the project directory and match it in openmcp://projects.
-4. Confirm implement, review, and consult are available.
-5. Confirm the selected profile maps all three workflows to targets.
+4. Confirm implement, review, consult, and other are available.
+5. Confirm the selected profile maps all four workflows to targets.
 6. Report PASS or FAIL for each check with exact remediation.
 Do not register projects, submit jobs, or edit configuration during validation."""
 

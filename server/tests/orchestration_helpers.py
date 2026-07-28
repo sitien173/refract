@@ -33,13 +33,14 @@ def config(home: Path, targets: tuple[TargetConfig, ...] | None = None) -> Daemo
         max_jobs=2,
         default_profile="balanced",
         targets=resolved_targets,
-        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection, "other": selection}},
         profile_declarations={
             "balanced": ProfileDeclaration(
                 workflows={
                     "implement": selection,
                     "review": selection,
                     "consult": selection,
+                    "other": selection,
                 }
             )
         },

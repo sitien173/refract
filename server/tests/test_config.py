@@ -43,6 +43,15 @@ def test_default_builtins_resolve_capable_targets(tmp_path) -> None:
         assert resolve_execution_plan(get_workflow(name), catalog, "balanced").selection.targets == ("primary",)
 
 
+def test_explicit_other_profile_mapping_loads(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config().replace('consult = "primary"', 'consult = "primary"\nother = "primary"'), encoding="utf-8")
+
+    catalog = load_config(path)
+
+    assert resolve_execution_plan(get_workflow("other"), catalog, "balanced").selection.targets == ("primary",)
+
+
 def test_missing_config_file_is_rejected(tmp_path) -> None:
     with pytest.raises(ValueError, match="Missing config file"):
         load_config(tmp_path / "config.toml")
@@ -508,8 +517,9 @@ default_profile = "balanced"
 implement = "primary"
 review = "primary"
 consult = "primary"
+other = "primary"
 """, encoding="utf-8")
     monkeypatch.setenv("OPENMCP_HOME", str(home))
     catalog = load_config(home / "config.toml")
     assert not hasattr(TargetConfig(id="primary", backend="codex"), "capabilities")
-    assert all(resolve_execution_plan(get_workflow(name), catalog, "balanced").selection.targets == ("primary",) for name in ("implement", "review", "consult"))
+    assert all(resolve_execution_plan(get_workflow(name), catalog, "balanced").selection.targets == ("primary",) for name in ("implement", "review", "consult", "other"))

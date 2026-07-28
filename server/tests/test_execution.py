@@ -57,7 +57,7 @@ async def test_implement_without_changes_uses_empty_result_placeholder(tmp_path)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("workflow", ["review", "consult"])
+@pytest.mark.parametrize("workflow", ["review", "consult", "other"])
 async def test_read_workflows_store_empty_commit_placeholder(tmp_path, workflow) -> None:
     root = repository(tmp_path)
     runtime = Runtime(config(tmp_path / "home"))
@@ -83,6 +83,27 @@ async def test_mutating_review_succeeds_and_leaves_changes(tmp_path) -> None:
         job = await runtime.wait((await runtime.submit(project.id, "review", "review")).job_id, 10)
         assert job.state == "succeeded"
         assert (root / "result.txt").exists()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_other_job_plan_and_context_retain_role(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submitted = await runtime.submit(project.id, "other", "inspect", context_key="shared")
+        job = await runtime.wait(submitted.job_id, 10)
+        record = runtime.database.job_record(submitted.job_id)
+        assert job.workflow == "other"
+        assert job.context_key == "shared"
+        assert record is not None
+        assert json.loads(record["execution_plan_json"])["workflow"] == "other"
+        context = runtime.database.context(project.id, "shared")
+        assert [(stream.role, stream.turns) for stream in context] == [("other", 1)]
     finally:
         await runtime.close()
 

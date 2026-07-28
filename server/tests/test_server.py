@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -8,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from openmcp.models import JobResult, JobView, ProjectView, TargetView
-from openmcp.server import _DOCTOR_INSTRUCTIONS, _project_root, mcp
+from openmcp.server import _DOCTOR_INSTRUCTIONS, _project_root, mcp, workflows_resource
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -26,12 +28,28 @@ capabilities = ["code", "review", "consult"]
 implement = "primary"
 review = "primary"
 consult = "primary"
+other = "primary"
 """
 
 
 def test_doctor_instructions_do_not_claim_git_ownership() -> None:
     assert "Git" not in _DOCTOR_INSTRUCTIONS
     assert "git" not in _DOCTOR_INSTRUCTIONS
+    assert "implement, review, consult, and other" in _DOCTOR_INSTRUCTIONS
+    assert "all four workflows" in _DOCTOR_INSTRUCTIONS
+
+
+def test_workflows_resource_discovers_other(monkeypatch) -> None:
+    class Database:
+        @staticmethod
+        def project(project_id):
+            return object()
+
+    runtime = SimpleNamespace(database=Database())
+    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+    assert tuple(json.loads(asyncio.run(workflows_resource("project", ctx)))) == (
+        "consult", "implement", "other", "review"
+    )
 
 
 def test_project_root_accepts_plain_directory_and_rejects_files(tmp_path) -> None:
