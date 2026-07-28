@@ -30,6 +30,35 @@ The CLI currently calls `mcp.run(transport="streamable-http")`.
 Preserve host and port overrides while routing through the new
 application factory. Do not migrate to MCP SDK v2.
 
+Consultation requires this lifecycle order:
+
+1. Build `mcp.streamable_http_app()` once.
+2. Create and start one runtime.
+3. Set `_ACTIVE_RUNTIME`.
+4. Enter `mcp.session_manager.run()` once.
+5. Serve all mounted routes.
+6. Exit the session manager.
+7. Clear `_ACTIVE_RUNTIME`.
+8. Close the runtime exactly once.
+9. Clear `_DAEMON_CONFIG`, including close failures.
+
+Use an outer `Starlette` application. Mount the MCP application at
+`/`. Session lifespan must only yield `_active_runtime()`. It must
+never create, start, or close runtime state.
+
+Build the application after CLI overrides. Pass the selected host
+and port directly to Uvicorn. Do not mutate router lifespan
+internals. Do not enter the child application lifespan. Do not run
+the session manager twice.
+
+Tests must enter application lifespan explicitly. HTTPX ASGI
+transport does not enter it automatically. Assert shutdown ordering,
+sequential session identity, dashboard availability before sessions,
+global resource availability, and CLI precedence.
+
+Constrain the dependency exactly as `mcp[cli]>=1.21.2,<2`. Update
+only through `uv lock`, then inspect the lock diff.
+
 ## Files
 
 - `src/openmcp/server.py`
