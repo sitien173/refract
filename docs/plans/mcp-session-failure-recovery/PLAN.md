@@ -1,6 +1,6 @@
 # MCP Session Failure Recovery Plan
 
-Status: ACTIVE
+Status: DONE
 Context key: `mcp-session-failure-recovery`
 
 ## Confirmed Problem
@@ -179,3 +179,16 @@ Fresh final evidence requires:
 
 The live smoke check must use two sequential MCP sessions. It must
 also query dashboard status between and after those sessions.
+
+## Completion Evidence
+
+- Phase 1 implementation: `f62077d`
+- Phase 1 review: PASS
+- Phase 2 implementation: `89f4f85`
+- Phase 2 review: PASS
+- Final specification review: PASS
+- Full suite: 157 passed, 2 deselected
+- Lockfile check: PASS
+- Distribution build: PASS
+- Sequential MCP session smoke: PASS
+- Dashboard checks before, between, and after sessions: PASS
