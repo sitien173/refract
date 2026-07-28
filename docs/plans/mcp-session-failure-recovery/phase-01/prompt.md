@@ -23,6 +23,17 @@ behind the pending wait and lose their response receivers.
 This phase must not change runtime, scheduler, backend, retry, or
 provider timeout semantics.
 
+Consultation requires these implementation details:
+
+- Publish `timeout_s=30` in the generated MCP schema.
+- Normalize only inside `server.job_wait`.
+- Map zero to 30 seconds.
+- Preserve positive values below 30 seconds.
+- Clamp larger values to 30 seconds.
+- Reject negative values before job lookup.
+- Avoid real 30-second sleeps in tests.
+- Assert returned timeout state is freshly reread.
+
 ## Files
 
 - `src/openmcp/server.py`
