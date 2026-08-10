@@ -1,4 +1,4 @@
-"""FastMCP daemon surface and direct-run compatibility facade."""
+"""MCPServer v2 daemon surface and direct-run compatibility facade."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Literal, ParamSpec, TypeVar, cast
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -27,16 +28,28 @@ from openmcp.workflows import BUILTIN_WORKFLOWS
 
 log = get_logger("server")
 _DAEMON_CONFIG = None
-_ACTIVE_RUNTIME: Runtime | None = None
 _MCP_WAIT_TIMEOUT_S = 30
 
 
 @asynccontextmanager
-async def _lifespan(_: FastMCP) -> AsyncIterator[Runtime]:
-    yield _active_runtime()
+async def _lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
+    global _DAEMON_CONFIG
+    config = _DAEMON_CONFIG or load_config()
+    runtime: Runtime | None = None
+    try:
+        configure_logging(config.logging)
+        runtime = Runtime(config)
+        await runtime.start()
+        yield runtime
+    finally:
+        try:
+            if runtime is not None:
+                await runtime.close()
+        finally:
+            _DAEMON_CONFIG = None
 
 
-mcp = FastMCP("openmcp", host="127.0.0.1", port=8765, streamable_http_path="/mcp", json_response=True, lifespan=_lifespan)
+mcp = MCPServer("openmcp", lifespan=_lifespan)
 
 
 async def run(backend: Literal["agy", "codex", "pi"], PROMPT: str, cd: str, SESSION_ID: str = "", timeout_s: int = 0) -> dict[str, Any]:
@@ -48,37 +61,20 @@ def _runtime(ctx: Context) -> Runtime:
     return cast(Runtime, ctx.request_context.lifespan_context)
 
 
-def _active_runtime() -> Runtime:
-    if _ACTIVE_RUNTIME is None:
-        raise RuntimeError("OpenMCP runtime is not active")
-    return _ACTIVE_RUNTIME
-
-
-def create_application() -> Starlette:
-    mcp_application = mcp.streamable_http_app()
+def create_application(host: str | None = None) -> Starlette:
+    config_host = getattr(_DAEMON_CONFIG, "host", "127.0.0.1")
+    mcp_application = mcp.streamable_http_app(
+        streamable_http_path="/mcp",
+        json_response=False,
+        stateless_http=False,
+        host=host or config_host,
+    )
     session_manager = mcp.session_manager
 
     @asynccontextmanager
     async def lifespan(_: Starlette) -> AsyncIterator[None]:
-        global _ACTIVE_RUNTIME, _DAEMON_CONFIG
-        if _DAEMON_CONFIG is None:
-            _DAEMON_CONFIG = load_config()
-        config = _DAEMON_CONFIG
-        configure_logging(config.logging)
-        runtime: Runtime | None = None
-        try:
-            runtime = Runtime(config)
-            await runtime.start()
-            _ACTIVE_RUNTIME = runtime
-            async with session_manager.run():
-                yield
-        finally:
-            _ACTIVE_RUNTIME = None
-            try:
-                if runtime is not None:
-                    await runtime.close()
-            finally:
-                _DAEMON_CONFIG = None
+        async with session_manager.run():
+            yield
 
     return Starlette(routes=[Mount("/", app=mcp_application)], lifespan=lifespan)
 
@@ -185,9 +181,9 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-@mcp.resource("openmcp://projects", mime_type="application/json")
-async def projects_resource() -> str:
-    return _json(_active_runtime().database.projects())
+@mcp.resource("openmcp://projects{?scope}", mime_type="application/json")
+async def projects_resource(ctx: Context, scope: str = "") -> str:
+    return _json(_runtime(ctx).database.projects())
 
 
 @mcp.resource("openmcp://projects/{project_id}", mime_type="application/json")
@@ -225,14 +221,14 @@ async def context_resource(project_id: str, context_key: str, ctx: Context) -> s
     return _json(_runtime(ctx).database.context(project_id, context_key))
 
 
-@mcp.resource("openmcp://targets", mime_type="application/json")
-async def targets_resource() -> str:
-    return _json(_active_runtime().targets())
+@mcp.resource("openmcp://targets{?scope}", mime_type="application/json")
+async def targets_resource(ctx: Context, scope: str = "") -> str:
+    return _json(_runtime(ctx).targets())
 
 
-@mcp.resource("openmcp://profiles", mime_type="application/json")
-async def profiles_resource() -> str:
-    runtime = _active_runtime()
+@mcp.resource("openmcp://profiles{?scope}", mime_type="application/json")
+async def profiles_resource(ctx: Context, scope: str = "") -> str:
+    runtime = _runtime(ctx)
     return _json({"default": runtime.catalog.default_profile, "available": sorted(runtime.catalog.profiles)})
 
 

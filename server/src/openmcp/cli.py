@@ -119,31 +119,25 @@ def main(argv: Sequence[str] | None = None) -> None:
     except ValueError as exc:
         sys.stderr.write(f"Configuration error: {exc}\n")
         raise SystemExit(1) from exc
+    # Resolve transport settings locally; MCPServer has no mutable transport config.
+    host = args.host if getattr(args, "host", None) is not None else config.host
+    port = args.port if getattr(args, "port", None) is not None else config.port
+
     # Import after configuration so startup uses the final settings.
     from openmcp import server
 
     server._DAEMON_CONFIG = config
-    server.mcp.settings.host = config.host
-    server.mcp.settings.port = config.port
-    if getattr(args, "host", None) is not None:
-        server.mcp.settings.host = args.host
-    if getattr(args, "port", None) is not None:
-        server.mcp.settings.port = args.port
     log.info(
         "Launching HTTP transport",
-        extra={
-            "event": "cli.serve",
-            "host": server.mcp.settings.host,
-            "port": server.mcp.settings.port,
-        },
+        extra={"event": "cli.serve", "host": host, "port": port},
     )
     try:
         import uvicorn
 
         uvicorn.run(
-            server.create_application(),
-            host=server.mcp.settings.host,
-            port=server.mcp.settings.port,
+            server.create_application(host=host),
+            host=host,
+            port=port,
         )
     except KeyboardInterrupt:
         log.info("Shutdown requested", extra={"event": "cli.interrupted"})
