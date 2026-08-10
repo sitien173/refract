@@ -43,7 +43,6 @@ claude plugin install superpowers-ccg
 Start the local daemon:
 
 ```bash
-openmcp doctor
 openmcp serve
 ```
 
@@ -152,15 +151,13 @@ configured default. Guidance never names providers or target IDs.
 
 The plugin uses:
 
-- `status`, `reload`, `doctor`
+- `status`
 - `project_register`, `task_guide`
 - `job_submit`, `job_wait`, `job_retry`, `job_cancel`
 
 Before orchestration, Coordinator requires `status: running`, resolves the Git
 root through `openmcp://projects`, and registers it on an attached branch.
 OpenMCP does not check cleanliness; a dirty tree does not block submission.
-`doctor` is read-only and used only when client integration validation is
-requested.
 
 OpenMCP exposes four one-step workflows. This plugin's canonical gates use
 three of them. A higher-risk change uses sequential jobs:

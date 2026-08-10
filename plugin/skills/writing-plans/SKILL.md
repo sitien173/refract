@@ -10,16 +10,12 @@ it does not route or execute OpenMCP jobs.
 
 ## Workflow
 
-1. Search `docs/plans/*/.handover.md`. Resume or surface any overlapping
-   `ACTIVE` or `BLOCKED` plan.
-2. Read the confirmed design and only enough code to scope implementation.
-3. Divide work into outcome-based phases of two to four related tasks.
-4. Give each phase a complete task-guidance input.
-5. Specify exact files, acceptance criteria, reviewer checks, fresh verification
+1. Read the confirmed design and only enough code to scope implementation.
+2. Divide work into outcome-based phases of two to four related tasks.
+3. Give each phase a complete task-guidance input.
+4. Specify exact files, acceptance criteria, reviewer checks, fresh verification
    commands, and one conventional commit message.
-6. Defer workflow and profile resolution until execution unless the user pins an
-   available profile.
-7. Offer `executing-plans`.
+5. Offer `executing-plans`.
 
 ## Storage
 
@@ -28,6 +24,7 @@ Every executable plan uses:
 ```text
 docs/plans/<slug>/
   PLAN.md
+  DESIGN.md
   .handover.md
 ```
 
@@ -44,7 +41,7 @@ implementation plan to folder layout before execution.
 ### Phase N: <outcome>
 
 **Task Guide Input:** <complete phase request and distinct use cases>
-**Profile:** `<user-pinned profile>` | `Resolve at execution`
+
 **Goal:** <one outcome>
 
 **Files:**

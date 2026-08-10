@@ -7,8 +7,6 @@ Default endpoint: `http://127.0.0.1:8765/mcp`.
 | Tool | Required | Optional | Purpose |
 | --- | --- | --- | --- |
 | `status` | — | — | Return scheduler health and queue counts. |
-| `reload` | — | — | Reload targets and profiles for later submissions. |
-| `doctor` | `path` | — | Return read-only client checks. |
 | `project_register` | `path` | `alias` | Register your project directory. |
 | `task_guide` | `task` | `project_id` | Return workflow/profile guidance. |
 | `job_submit` | `project_id`, `workflow`, `prompt` | `context_key`, `profile` | Queue one job. |
@@ -73,6 +71,3 @@ stores no commit or base fields; read Git state directly from the working tree.
 not reset the working tree, and a daemon restart does not restore files;
 reconcile existing changes before retrying. Use a new submission when the prompt
 must change.
-
-`reload` does not alter submitted plans. Report `restart_required`; static daemon
-and logging changes require restart.

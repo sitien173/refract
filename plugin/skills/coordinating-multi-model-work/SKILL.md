@@ -86,8 +86,6 @@ resets, or restores; assume it did none of these.
 3. Register an absent Git root with `project_register`; save its `project_id`.
 4. Read `openmcp://projects/<project_id>/jobs` and reconcile active phase jobs
    before changing files.
-5. Use `doctor` only for client integration checks. After global target or
-   profile edits, use `reload` and report `restart_required`.
 
 OpenMCP job records are authoritative for job state, but Git state lives only in
 your working tree. If a job is queued or running, wait without local edits; if
