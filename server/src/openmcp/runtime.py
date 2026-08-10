@@ -14,7 +14,6 @@ from openmcp.execution import JobRunner, TargetExecutor
 from openmcp.logging_setup import get_logger
 from openmcp.models import (
     ActionResult,
-    DaemonReloadResult,
     DaemonStatusResult,
     JobView,
     ProjectView,
@@ -144,12 +143,6 @@ class Runtime:
 
     def status(self) -> DaemonStatusResult:
         return DaemonStatusResult(status="stopping" if self._closing else "running", workers=self.scheduler.workers, active_jobs=self.scheduler.active_jobs, queued_jobs=self.scheduler.queued_jobs)
-
-    def reload(self) -> DaemonReloadResult:
-        catalog = self._reload_catalog()
-        restart_fields = ("home", "host", "port", "max_jobs", "history_turns", "history_bytes", "logging")
-        restart_required = [field for field in restart_fields if getattr(self.config, field) != getattr(catalog, field)]
-        return DaemonReloadResult(success=True, targets=len(catalog.targets), profiles=len(catalog.profiles), restart_required=restart_required)
 
     @property
     def catalog(self) -> DaemonConfig:

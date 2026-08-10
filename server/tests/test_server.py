@@ -13,7 +13,7 @@ from starlette.applications import Starlette
 import pytest
 
 from openmcp.models import JobResult, JobView, ProjectView, TargetView
-from openmcp.server import _DOCTOR_INSTRUCTIONS, _project_root, job_wait, mcp, workflows_resource
+from openmcp.server import job_wait, mcp, workflows_resource
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -35,13 +35,6 @@ other = "primary"
 """
 
 
-def test_doctor_instructions_do_not_claim_git_ownership() -> None:
-    assert "Git" not in _DOCTOR_INSTRUCTIONS
-    assert "git" not in _DOCTOR_INSTRUCTIONS
-    assert "implement, review, consult, and other" in _DOCTOR_INSTRUCTIONS
-    assert "all four workflows" in _DOCTOR_INSTRUCTIONS
-
-
 def test_workflows_resource_discovers_other(monkeypatch) -> None:
     class Database:
         @staticmethod
@@ -53,18 +46,6 @@ def test_workflows_resource_discovers_other(monkeypatch) -> None:
     assert tuple(json.loads(asyncio.run(workflows_resource("project", ctx)))) == (
         "consult", "implement", "other", "review"
     )
-
-
-def test_project_root_accepts_plain_directory_and_rejects_files(tmp_path) -> None:
-    root = tmp_path / "plain-project"
-    root.mkdir()
-    assert _project_root(str(root)) == root.resolve().as_posix()
-    with pytest.raises(ValueError):
-        _project_root(str(tmp_path / "missing"))
-    file_path = tmp_path / "project.txt"
-    file_path.write_text("file\n", encoding="utf-8")
-    with pytest.raises(ValueError):
-        _project_root(str(file_path))
 
 
 def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
@@ -141,6 +122,7 @@ def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_mcp_exposes_direct_job_contract() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
+    assert {"doctor", "reload"}.isdisjoint(tools)
     assert "job_integrate" not in tools
     assert set(tools["job_submit"].inputSchema["properties"]) == {"project_id", "workflow", "prompt", "context_key", "profile"}
     assert set(tools["job_wait"].inputSchema["properties"]) == {"job_id", "timeout_s"}

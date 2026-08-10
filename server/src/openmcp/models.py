@@ -75,23 +75,11 @@ class TaskGuideResult(BaseModel):
     guide: dict[str, Any]
 
 
-class ClientInstructionResult(BaseModel):
-    root: str
-    instructions: str
-
-
 class DaemonStatusResult(BaseModel):
     status: Literal["running", "stopping"]
     workers: int
     active_jobs: int
     queued_jobs: int
-
-
-class DaemonReloadResult(BaseModel):
-    success: bool
-    targets: int
-    profiles: int
-    restart_required: list[str] = Field(default_factory=list)
 
 
 class ResourcePayload(BaseModel):
@@ -100,9 +88,7 @@ class ResourcePayload(BaseModel):
 
 __all__ = [
     "ActionResult",
-    "ClientInstructionResult",
     "ContextStreamView",
-    "DaemonReloadResult",
     "DaemonStatusResult",
     "JobResult",
     "JobState",

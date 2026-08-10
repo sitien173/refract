@@ -38,7 +38,7 @@ uv build
 
 ## Public Contract
 
-Tools: `status`, `reload`, `doctor`, `project_register`, `task_guide`,
+Tools: `status`, `project_register`, `task_guide`,
 `job_submit`, `job_wait`, `job_cancel`, and `job_retry`.
 
 Jobs execute directly in registered repositories. The scheduler serializes all

@@ -52,8 +52,6 @@ run in submission order. Jobs for different projects may run concurrently up to
 Tools:
 
 - `status()` returns scheduler status.
-- `reload()` reloads targets and profiles for later submissions.
-- `doctor(path)` returns read-only client integration checks.
 - `project_register(path, alias)` registers an existing directory.
 - `task_guide(task, project_id)` loads workflow and profile guidance.
 - `job_submit(project_id, workflow, prompt, context_key, profile)` queues work.
