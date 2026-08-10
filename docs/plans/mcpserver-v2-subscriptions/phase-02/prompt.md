@@ -24,6 +24,15 @@ Notification delivery failures must be logged and must never change a job
 outcome. Do not add persistence or replay for notifications, stdio, a second
 URI scheme, or scheduler changes.
 
+## Consultation Findings
+
+Use one MCP SDK v2 `InMemorySubscriptionBus` and publish exact job URIs only
+after database transitions persist. Inject an async notifier through Runtime
+and JobRunner, logging ordinary notification failures without affecting job
+outcomes. Await publication rather than creating detached tasks. Cover startup
+interruption, queued and running cancellation, and retry-to-queued transitions.
+Do not retain request Context for scheduler notifications.
+
 ## Files
 
 - `src/openmcp/models.py`
