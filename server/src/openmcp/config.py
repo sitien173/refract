@@ -141,12 +141,20 @@ def load_task_guide(
     return value
 
 
-def _positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
+def _positive_int(value: Any, default: int, name: str) -> int:
+    if value is None:
         return default
-    return parsed if parsed > 0 else default
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _boolean(value: Any, default: bool, name: str) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be true or false")
+    return value
 
 
 def _renamed_value(mapping: dict[str, Any], name: str, legacy: str) -> Any:
@@ -169,7 +177,12 @@ def _target_selection(
         max_attempts = len(selected)
         timeout_s = 0
     elif isinstance(raw, list):
-        selected = tuple(str(value) for value in raw)
+        if not all(isinstance(value, str) for value in raw):
+            raise ValueError(
+                f"Profile {profile_id!r} workflow {workflow!r} targets "
+                "must contain only strings"
+            )
+        selected = tuple(value.strip() for value in raw)
         max_attempts = len(selected)
         timeout_s = 0
     elif isinstance(raw, dict):
@@ -182,20 +195,34 @@ def _target_selection(
             )
         raw_targets = raw.get("targets", [])
         if isinstance(raw_targets, str):
-            selected = (raw_targets,)
+            selected = (raw_targets.strip(),)
         elif isinstance(raw_targets, list):
-            selected = tuple(str(value) for value in raw_targets)
+            if not all(isinstance(value, str) for value in raw_targets):
+                raise ValueError(
+                    f"Profile {profile_id!r} workflow {workflow!r} targets "
+                    "must contain only strings"
+                )
+            selected = tuple(value.strip() for value in raw_targets)
         else:
             selected = ()
-        max_attempts = _positive_int(raw.get("max_attempts"), len(selected))
-        timeout_s = max(0, int(raw.get("timeout_s", 0)))
+        max_attempts = _positive_int(
+            raw.get("max_attempts"), len(selected), "max_attempts"
+        )
+        raw_timeout = raw.get("timeout_s", 0)
+        if (
+            isinstance(raw_timeout, bool)
+            or not isinstance(raw_timeout, int)
+            or raw_timeout < 0
+        ):
+            raise ValueError("timeout_s must be a non-negative integer")
+        timeout_s = raw_timeout
     else:
         selected = ()
         max_attempts = 0
         timeout_s = 0
 
     unknown_targets = set(selected) - target_by_id.keys()
-    if not selected or unknown_targets:
+    if not selected or unknown_targets or len(set(selected)) != len(selected):
         raise ValueError(
             f"Profile {profile_id!r} workflow {workflow!r} has invalid targets: "
             f"{sorted(unknown_targets)}"
@@ -350,29 +377,57 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
     for item in raw:
         if not isinstance(item, dict):
             raise ValueError("Each target must be a TOML table")
-        target_id = str(item.get("id", "")).strip()
-        backend = str(item.get("backend", "")).strip()
+        raw_target_id = item.get("id", "")
+        raw_backend = item.get("backend", "")
+        target_id = raw_target_id.strip() if isinstance(raw_target_id, str) else ""
+        backend = raw_backend.strip() if isinstance(raw_backend, str) else ""
         if not target_id or backend not in {"agy", "codex", "pi"}:
             raise ValueError(f"Invalid target: {item!r}")
         args = item.get("args", [])
         if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
             raise ValueError(f"Target {target_id!r} args must be a list of strings")
-        isolated = bool(item.get("isolated", False))
+        isolated = _boolean(item.get("isolated"), False, f"Target {target_id!r} isolated")
+        read_only = _boolean(
+            item.get("read_only"), False, f"Target {target_id!r} read_only"
+        )
+        text_fields = {
+            "model": item.get("model", ""),
+            "reasoning": item.get("reasoning", ""),
+            "system_prompt": item.get("system_prompt", ""),
+        }
+        invalid_text = [
+            name for name, value in text_fields.items() if not isinstance(value, str)
+        ]
+        if invalid_text:
+            raise ValueError(
+                f"Target {target_id!r} settings must be strings: {invalid_text}"
+            )
+        raw_backend_profile = _renamed_value(item, "backend_profile", "profile")
+        if raw_backend_profile is None:
+            backend_profile = ""
+        elif isinstance(raw_backend_profile, str):
+            backend_profile = raw_backend_profile
+        else:
+            raise ValueError(
+                f"Target {target_id!r} backend_profile must be a string"
+            )
         validate_target_args(target_id, backend, tuple(args), isolated=isolated)
         targets.append(
             TargetConfig(
                 id=target_id,
                 backend=backend,
-                model=str(item.get("model", "")),
-                backend_profile=str(
-                    _renamed_value(item, "backend_profile", "profile") or ""
-                ),
-                reasoning=str(item.get("reasoning", "")),
-                system_prompt=str(item.get("system_prompt", "")),
+                model=text_fields["model"],
+                backend_profile=backend_profile,
+                reasoning=text_fields["reasoning"],
+                system_prompt=text_fields["system_prompt"],
                 isolated=isolated,
-                read_only=bool(item.get("read_only", False)),
+                read_only=read_only,
                 args=tuple(args),
-                max_concurrency=_positive_int(item.get("max_concurrency"), 1),
+                max_concurrency=_positive_int(
+                    item.get("max_concurrency"),
+                    1,
+                    f"Target {target_id!r} max_concurrency",
+                ),
             )
         )
     if len({target.id for target in targets}) != len(targets):
@@ -480,14 +535,24 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         raise ValueError(
             f"Unknown [daemon].default_profile: {default_profile!r}"
         )
+    host = daemon.get("host", "127.0.0.1")
+    if not isinstance(host, str) or not host.strip():
+        raise ValueError("[daemon].host must be a non-empty string")
+    port = _positive_int(daemon.get("port"), 8765, "[daemon].port")
+    if port > 65535:
+        raise ValueError("[daemon].port must not exceed 65535")
     return DaemonConfig(
         home=home,
         config_path=config_path,
-        host=str(daemon.get("host", "127.0.0.1")),
-        port=_positive_int(daemon.get("port"), 8765),
-        max_jobs=_positive_int(daemon.get("max_jobs"), 4),
-        history_turns=_positive_int(daemon.get("history_turns"), 8),
-        history_bytes=_positive_int(daemon.get("history_bytes"), 65536),
+        host=host.strip(),
+        port=port,
+        max_jobs=_positive_int(daemon.get("max_jobs"), 4, "[daemon].max_jobs"),
+        history_turns=_positive_int(
+            daemon.get("history_turns"), 8, "[daemon].history_turns"
+        ),
+        history_bytes=_positive_int(
+            daemon.get("history_bytes"), 65536, "[daemon].history_bytes"
+        ),
         default_profile=default_profile,
         targets=targets,
         profiles=profiles,

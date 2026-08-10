@@ -523,3 +523,48 @@ other = "primary"
     catalog = load_config(home / "config.toml")
     assert not hasattr(TargetConfig(id="primary", backend="codex"), "capabilities")
     assert all(resolve_execution_plan(get_workflow(name), catalog, "balanced").selection.targets == ("primary",) for name in ("implement", "review", "consult", "other"))
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "expected"),
+    [
+        ("isolated", '"false"', "true or false"),
+        ("read_only", "1", "true or false"),
+        ("max_concurrency", "0", "positive integer"),
+        ("backend_profile", "false", "must be a string"),
+    ],
+)
+def test_target_policy_types_are_strict(tmp_path, setting, value, expected) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _explicit_config().replace(
+            'backend = "codex"',
+            f'backend = "codex"\n{setting} = {value}',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "expected"),
+    [
+        ("port", "65536", "must not exceed"),
+        ("max_jobs", '"4"', "positive integer"),
+        ("history_turns", "false", "positive integer"),
+    ],
+)
+def test_daemon_integer_types_are_strict(tmp_path, setting, value, expected) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _explicit_config().replace(
+            'default_profile = "balanced"',
+            f'default_profile = "balanced"\n{setting} = {value}',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        load_config(path)

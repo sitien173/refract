@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Generator
 
 from . import BackendResult, classify_backend_output
-from ._shell import ShellCommandCancelled, stream_shell_command_lines
+from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
 log = get_logger("codex")
@@ -52,6 +52,7 @@ def run_shell_command(
         line_transform=lambda line: line.rstrip("\r\n"),
         terminate_wait_s=5,
         cancel_event=cancel_event,
+        check_returncode=True,
     )
 
 
@@ -157,14 +158,15 @@ def _resolve_session_id(
     started_at: float,
     fallback_session_id: str,
 ) -> tuple[str, str]:
-    candidates: tuple[tuple[str, str], ...] = (
-        ("stdout-jsonl:thread.started", parsed_session_id.strip()),
-        ("last-message:session-id-line", _extract_session_id_from_stdout(last_message)),
-        ("stdout:session-id-line", _extract_session_id_from_stdout(stdout_text)),
-        ("codex-jsonl", _extract_session_id_from_latest_session(cwd, prompt, started_at)),
-        ("params:SESSION_ID", fallback_session_id.strip()),
+    candidates = (
+        ("stdout-jsonl:thread.started", parsed_session_id.strip),
+        ("last-message:session-id-line", lambda: _extract_session_id_from_stdout(last_message)),
+        ("stdout:session-id-line", lambda: _extract_session_id_from_stdout(stdout_text)),
+        ("codex-jsonl", lambda: _extract_session_id_from_latest_session(cwd, prompt, started_at)),
+        ("params:SESSION_ID", fallback_session_id.strip),
     )
-    for source, value in candidates:
+    for source, resolve in candidates:
+        value = resolve()
         if value:
             return value, source
     return "", ""
@@ -239,6 +241,7 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     err_message = ""
     started_at = time.time()
     timed_out = False
+    execution_failed = False
 
     try:
         for line in run_shell_command(
@@ -255,6 +258,10 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         log.warning("codex subprocess timeout after %ss", params.timeout_s)
         err_message += f"\n\n[timeout] {exc}"
         timed_out = True
+    except ShellCommandFailed as exc:
+        log.warning("codex subprocess exited with status %d", exc.returncode)
+        err_message = str(exc)
+        execution_failed = True
     except Exception as exc:  # noqa: BLE001
         # Subprocess exception strings can contain the complete argv, including
         # the user prompt. Keep application logs metadata-only.
@@ -354,6 +361,10 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         result.outcome = "FATAL"
         result.error_class = "timeout"
         result.error = err_message.strip() or "subprocess timed out"
+    if execution_failed:
+        result.outcome = "FATAL"
+        result.error_class = "execution_error"
+        result.error = err_message.strip() or "codex execution failed"
     if params.cancel_event is not None and params.cancel_event.is_set():
         result.outcome = "FATAL"
         result.error_class = "cancelled"

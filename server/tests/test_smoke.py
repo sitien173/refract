@@ -1,5 +1,7 @@
 import inspect
 import json
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import fields
@@ -11,6 +13,24 @@ from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.pi import PiParams
+
+
+def test_shell_stream_reports_nonzero_exit_after_output() -> None:
+    from openmcp.backends._shell import ShellCommandFailed, stream_shell_command_lines
+
+    executable_name = Path(sys.executable).name
+    command = [sys.executable, "-c", "print('unknown option'); raise SystemExit(2)"]
+    stream = stream_shell_command_lines(
+        command,
+        executable_name=executable_name,
+        line_transform=str.strip,
+        terminate_wait_s=1,
+        check_returncode=True,
+    )
+
+    assert next(stream) == "unknown option"
+    with pytest.raises(ShellCommandFailed, match="status 2"):
+        next(stream)
 
 
 def test_imports() -> None:
@@ -254,6 +274,54 @@ async def test_agy_prefers_stdout_reply_over_noisy_log_file(monkeypatch, tmp_pat
     assert out.agent_messages == "pong from agy"
 
 
+@pytest.mark.asyncio
+async def test_agy_timeout_with_partial_output_is_fatal(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield "partial reply"
+        raise subprocess.TimeoutExpired(cmd=["agy"], timeout=1)
+
+    monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await agy_backend.execute(AgyParams(PROMPT="x", cd=tmp_path, timeout_s=1))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "timeout"
+
+
+def test_agy_continuation_propagates_failure(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import agy as agy_backend
+
+    results = iter(
+        [
+            BackendResult(
+                outcome="OK",
+                SESSION_ID="session-id",
+                agent_messages="first reply",
+                error="",
+                error_class="",
+            ),
+            BackendResult(
+                outcome="FATAL",
+                SESSION_ID="session-id",
+                agent_messages="partial continuation",
+                error="continuation failed",
+                error_class="execution_error",
+            ),
+        ]
+    )
+    monkeypatch.setattr(agy_backend, "_execute_once", lambda params: next(results))
+    monkeypatch.setattr(agy_backend, "_agy_has_pending_tasks", lambda *args: True)
+
+    out = agy_backend._execute_sync(AgyParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "execution_error"
+    assert out.agent_messages == "first reply\n\npartial continuation"
+
+
 def test_tool_signature() -> None:
     from openmcp.server import run
 
@@ -295,6 +363,82 @@ async def test_codex_uses_input_session_id_when_no_extraction_sources_match(monk
     assert out.SESSION_ID == "resume-session-id"
     assert out.agent_messages == "PONG"
     assert out.error_class == ""
+
+
+def test_codex_session_resolution_skips_filesystem_when_stdout_has_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from openmcp.backends import codex as codex_backend
+
+    session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
+
+    def fail_scan(*args):
+        raise AssertionError("session filesystem should not be scanned")
+
+    monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", fail_scan)
+
+    assert codex_backend._resolve_session_id(
+        parsed_session_id=session_id,
+        last_message="",
+        stdout_text="",
+        cwd=tmp_path,
+        prompt="x",
+        started_at=time.time(),
+        fallback_session_id="",
+    ) == (session_id, "stdout-jsonl:thread.started")
+
+
+@pytest.mark.asyncio
+async def test_codex_nonzero_exit_is_fatal_despite_diagnostic_output(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from openmcp.backends import codex as codex_backend
+    from openmcp.backends._shell import ShellCommandFailed
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield "error: unknown option"
+        raise ShellCommandFailed(2)
+
+    monkeypatch.setattr(codex_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(
+        codex_backend,
+        "_extract_session_id_from_latest_session",
+        lambda *args: "",
+    )
+
+    out = await codex_backend.execute(CodexParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "execution_error"
+
+
+@pytest.mark.asyncio
+async def test_pi_nonzero_exit_is_fatal_despite_agent_output(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from openmcp.backends import pi as pi_backend
+    from openmcp.backends._shell import ShellCommandFailed
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield json.dumps(
+            {
+                "type": "message_end",
+                "message": {"role": "assistant", "content": "partial"},
+            }
+        )
+        raise ShellCommandFailed(2)
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "execution_error"
 
 
 @pytest.mark.asyncio

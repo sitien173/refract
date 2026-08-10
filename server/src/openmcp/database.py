@@ -506,11 +506,18 @@ class Database:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if row is None:
             return None
-        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], state=row["state"], context_key=row["context_key"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], error=row["error"]))
+        return self._job_view(row)
 
     def jobs(self, project_id: str) -> list[JobView]:
-        rows = self._connection.execute("SELECT id FROM jobs WHERE project_id=? ORDER BY created_at DESC", (project_id,)).fetchall()
-        return [job for row in rows if (job := self.job(row["id"])) is not None]
+        rows = self._connection.execute(
+            "SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC",
+            (project_id,),
+        ).fetchall()
+        return [self._job_view(row) for row in rows]
+
+    @staticmethod
+    def _job_view(row: sqlite3.Row) -> JobView:
+        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], state=row["state"], context_key=row["context_key"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], error=row["error"]))
 
     def session(self, project_id: str, context_key: str, role: str, target_key: str, lane: str = "") -> str:
         row = self._connection.execute("SELECT session_id FROM context_sessions WHERE project_id=? AND context_key=? AND role=? AND target_key=? AND lane=?", (project_id, context_key, role, target_key, lane)).fetchone()
@@ -538,7 +545,13 @@ class Database:
         for row in rows:
             target = f"{row['target_id']}#{row['lane']}" if row["lane"] else row["target_id"]
             roles.setdefault(row["role"], {})[target] = row["session_id"]
-        return [ContextStreamView(project_id=project_id, context_key=context_key, role=role, turns=self._connection.execute("SELECT COUNT(*) FROM context_turns WHERE project_id=? AND context_key=? AND role=?", (project_id, context_key, role)).fetchone()[0], sessions=sessions) for role, sessions in roles.items()]
+        turn_rows = self._connection.execute(
+            """SELECT role, COUNT(*) AS turns FROM context_turns
+               WHERE project_id=? AND context_key=? GROUP BY role""",
+            (project_id, context_key),
+        ).fetchall()
+        turns = {row["role"]: row["turns"] for row in turn_rows}
+        return [ContextStreamView(project_id=project_id, context_key=context_key, role=role, turns=turns.get(role, 0), sessions=roles.get(role, {})) for role in sorted(roles.keys() | turns.keys())]
 
     def target_health(self, target_id: str) -> dict[str, Any]:
         row = self._connection.execute("SELECT * FROM target_health WHERE target_id=?", (target_id,)).fetchone()

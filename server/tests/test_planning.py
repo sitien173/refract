@@ -45,6 +45,35 @@ def test_plan_rejects_legacy_multi_workflow_shape(tmp_path) -> None:
         parse_execution_plan(data)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backend", "unknown"),
+        ("max_concurrency", 0),
+        ("isolated", "false"),
+        ("args", [1]),
+    ],
+)
+def test_plan_rejects_invalid_persisted_targets(tmp_path, field, value) -> None:
+    data = execution_plan_data(
+        resolve_execution_plan(get_workflow("review"), config(tmp_path / "home"), "balanced")
+    )
+    data["targets"][0][field] = value
+
+    with pytest.raises(ValueError, match="invalid target"):
+        parse_execution_plan(data)
+
+
+def test_plan_rejects_duplicate_target_identifiers(tmp_path) -> None:
+    data = execution_plan_data(
+        resolve_execution_plan(get_workflow("review"), config(tmp_path / "home"), "balanced")
+    )
+    data["targets"].append(dict(data["targets"][0]))
+
+    with pytest.raises(ValueError, match="unique"):
+        parse_execution_plan(data)
+
+
 def test_partial_profile_rejects_only_unmapped_workflow_at_plan_resolution(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Generator
 
 from . import BackendResult, classify_backend_output
-from ._shell import ShellCommandCancelled, stream_shell_command_lines
+from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
 log = get_logger("pi")
@@ -45,6 +45,7 @@ def run_shell_command(
         line_transform=lambda line: line.rstrip("\r\n"),
         terminate_wait_s=5,
         cancel_event=cancel_event,
+        check_returncode=True,
     )
 
 
@@ -137,7 +138,8 @@ def _execute_sync(params: PiParams) -> BackendResult:
     log.debug("pi command prepared args=%d", len(cmd))
 
     lines: list[str] = []
-    timeout_error = ""
+    command_error = ""
+    command_error_class = ""
     try:
         for line in run_shell_command(
             cmd,
@@ -147,29 +149,36 @@ def _execute_sync(params: PiParams) -> BackendResult:
         ):
             lines.append(line)
     except ShellCommandCancelled:
-        timeout_error = "cancelled"
+        command_error = "cancelled"
+        command_error_class = "cancelled"
         log.warning("pi subprocess cancelled")
     except subprocess.TimeoutExpired as exc:
-        timeout_error = f"timeout: {exc}"
+        command_error = f"timeout: {exc}"
+        command_error_class = "timeout"
         log.warning("pi subprocess timeout after %ss", params.timeout_s)
+    except ShellCommandFailed as exc:
+        command_error = str(exc)
+        command_error_class = "execution_error"
+        log.warning("pi subprocess exited with status %d", exc.returncode)
     except Exception as exc:  # noqa: BLE001
-        timeout_error = f"unexpected: {exc}"
+        command_error = f"unexpected: {exc}"
+        command_error_class = "execution_error"
         # A subprocess exception may embed argv and therefore the prompt.
         log.error("pi: unexpected error during stream type=%s", type(exc).__name__)
 
     agent_messages, extracted_session_id, diagnostics = _extract_output(lines)
     session_id = extracted_session_id or params.SESSION_ID
-    error_text = "\n".join(part for part in (timeout_error, diagnostics) if part).strip()
+    error_text = "\n".join(part for part in (command_error, diagnostics) if part).strip()
     result = classify_backend_output(
         backend_name="pi",
         agent_messages=agent_messages,
         session_id=session_id,
         error_text=error_text,
     )
-    if timeout_error and result.outcome == "OK":
+    if command_error and result.outcome == "OK":
         result.outcome = "FATAL"
-        result.error_class = "timeout"
-        result.error = timeout_error
+        result.error_class = command_error_class
+        result.error = command_error
     if params.cancel_event is not None and params.cancel_event.is_set():
         result.outcome = "FATAL"
         result.error_class = "cancelled"

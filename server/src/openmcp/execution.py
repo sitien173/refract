@@ -58,19 +58,24 @@ class TargetExecutor:
             target_key = target_execution_key(target)
             session_id = self.database.session(project.id, context_key, workflow, target_key)
             effective_prompt = prompt if session_id else self._with_history(project.id, context_key, workflow, prompt)
-            self.database.record_job_attempt(job_id, target.id)
             self.database.event(job_id, "target.selected", {"workflow": workflow, "target": target.id, "attempt": attempt + 1})
             semaphore = self._target_semaphores.setdefault(target_key, asyncio.Semaphore(target.max_concurrency))
             self._target_active.setdefault(target_key, 0)
+            if not await self._acquire_target(semaphore, cancel_event):
+                return TargetExecutionResult(
+                    DriverResult("CANCELLED", "", "", "cancelled", "cancelled"),
+                    target.id,
+                )
+            self.database.record_job_attempt(job_id, target.id)
             started_at = time.monotonic()
             log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt + 1, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
-            async with semaphore:
-                self._target_active[target_key] += 1
-                try:
-                    with log_context(target_id=target.id):
-                        last = await self.drivers.execute(target=target, prompt=effective_prompt, cwd=cwd, session_id=session_id, timeout_s=plan.selection.timeout_s, cancel_event=cancel_event)
-                finally:
-                    self._target_active[target_key] -= 1
+            self._target_active[target_key] += 1
+            try:
+                with log_context(target_id=target.id):
+                    last = await self.drivers.execute(target=target, prompt=effective_prompt, cwd=cwd, session_id=session_id, timeout_s=plan.selection.timeout_s, cancel_event=cancel_event)
+            finally:
+                self._target_active[target_key] -= 1
+                semaphore.release()
             self.database.event(job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": attempt + 1, "outcome": last.outcome, "error_code": last.error_code})
             log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": attempt + 1, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
             if last.outcome == "SUCCESS":
@@ -87,6 +92,19 @@ class TargetExecutor:
                 if await asyncio.to_thread(cancel_event.wait, delay):
                     break
         return TargetExecutionResult(last, last_target_id)
+
+    @staticmethod
+    async def _acquire_target(semaphore: asyncio.Semaphore, cancel_event: threading.Event) -> bool:
+        while not cancel_event.is_set():
+            try:
+                await asyncio.wait_for(semaphore.acquire(), 0.1)
+            except TimeoutError:
+                continue
+            if cancel_event.is_set():
+                semaphore.release()
+                return False
+            return True
+        return False
 
     def _select_target(self, target_ids: tuple[str, ...], plan: ExecutionPlan, attempted: set[str]) -> TargetConfig | None:
         now = datetime.now(timezone.utc)

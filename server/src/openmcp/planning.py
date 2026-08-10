@@ -7,7 +7,12 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from openmcp.config import DaemonConfig, TargetConfig, TargetSelection
+from openmcp.config import (
+    DaemonConfig,
+    TargetConfig,
+    TargetSelection,
+    validate_target_args,
+)
 from openmcp.workflows import get_workflow
 
 
@@ -31,10 +36,21 @@ def _parse_selection(value: Any) -> TargetSelection:
     raw_targets = value.get("targets", [])
     if not isinstance(raw_targets, list):
         raise ValueError("Execution plan selection targets must be a list")
-    target_ids = tuple(str(item) for item in raw_targets)
-    max_attempts = int(value.get("max_attempts", len(target_ids)))
-    timeout_s = int(value.get("timeout_s", 0))
-    if not target_ids or max_attempts < 1 or timeout_s < 0:
+    if not all(isinstance(item, str) and item for item in raw_targets):
+        raise ValueError("Execution plan target identifiers must be strings")
+    target_ids = tuple(raw_targets)
+    max_attempts = value.get("max_attempts", len(target_ids))
+    timeout_s = value.get("timeout_s", 0)
+    if (
+        not target_ids
+        or len(set(target_ids)) != len(target_ids)
+        or isinstance(max_attempts, bool)
+        or not isinstance(max_attempts, int)
+        or max_attempts < 1
+        or isinstance(timeout_s, bool)
+        or not isinstance(timeout_s, int)
+        or timeout_s < 0
+    ):
         raise ValueError("Execution plan has an invalid target selection")
     return TargetSelection(target_ids, max_attempts, timeout_s)
 
@@ -47,22 +63,53 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
         if not isinstance(value, dict):
             raise ValueError("Execution plan targets must contain mappings")
         try:
+            target_id = value["id"]
+            backend = value["backend"]
+            args = value.get("args", [])
+            max_concurrency = value.get("max_concurrency", 1)
+            isolated = value.get("isolated", False)
+            read_only = value.get("read_only", False)
+            text_values = (
+                value.get("model", ""),
+                value.get("backend_profile", value.get("profile", "")),
+                value.get("reasoning", ""),
+                value.get("system_prompt", ""),
+            )
+            if (
+                not isinstance(target_id, str)
+                or not target_id
+                or backend not in {"agy", "codex", "pi"}
+                or not isinstance(args, list)
+                or not all(isinstance(item, str) for item in args)
+                or isinstance(max_concurrency, bool)
+                or not isinstance(max_concurrency, int)
+                or max_concurrency < 1
+                or not isinstance(isolated, bool)
+                or not isinstance(read_only, bool)
+                or not all(isinstance(item, str) for item in text_values)
+            ):
+                raise ValueError
+            validate_target_args(
+                target_id, backend, tuple(args), isolated=isolated
+            )
             targets.append(
                 TargetConfig(
-                    id=str(value["id"]),
-                    backend=str(value["backend"]),
-                    model=str(value.get("model", "")),
-                    backend_profile=str(value.get("backend_profile", value.get("profile", ""))),
-                    reasoning=str(value.get("reasoning", "")),
-                    system_prompt=str(value.get("system_prompt", "")),
-                    isolated=bool(value.get("isolated", False)),
-                    read_only=bool(value.get("read_only", False)),
-                    args=tuple(str(item) for item in value.get("args", [])),
-                    max_concurrency=int(value.get("max_concurrency", 1)),
+                    id=target_id,
+                    backend=backend,
+                    model=text_values[0],
+                    backend_profile=text_values[1],
+                    reasoning=text_values[2],
+                    system_prompt=text_values[3],
+                    isolated=isolated,
+                    read_only=read_only,
+                    args=tuple(args),
+                    max_concurrency=max_concurrency,
                 )
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("Execution plan has an invalid target") from exc
+    if len({target.id for target in targets}) != len(targets):
+        raise ValueError("Execution plan target identifiers must be unique")
     return tuple(targets)
 
 

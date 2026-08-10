@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Generator
 
 from . import BackendResult, classify_backend_output
-from ._shell import ShellCommandCancelled, stream_shell_command_lines
+from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
 log = get_logger("agy")
@@ -58,6 +58,7 @@ def run_shell_command(
         terminate_wait_s=10,
         suppress_stdout_close_errors=True,
         cancel_event=cancel_event,
+        check_returncode=True,
     )
 
 
@@ -144,6 +145,7 @@ def _execute_once(params: AgyParams) -> BackendResult:
     cwd = os.fspath(cd)
     error_text = ""
     execution_error = False
+    timed_out = False
     agent_messages = ""
     log_text = ""
 
@@ -171,14 +173,14 @@ def _execute_once(params: AgyParams) -> BackendResult:
             # Keep OpenMCP-owned transport arguments after target arguments:
             # callers may tune the CLI, but cannot replace the prompt or log.
             cmd.extend(["--print", params.PROMPT])
-            stdout_lines = list(
-                run_shell_command(
-                    cmd,
-                    cwd=cwd,
-                    timeout_s=params.timeout_s,
-                    cancel_event=params.cancel_event,
-                )
-            )
+            stdout_lines = []
+            for line in run_shell_command(
+                cmd,
+                cwd=cwd,
+                timeout_s=params.timeout_s,
+                cancel_event=params.cancel_event,
+            ):
+                stdout_lines.append(line)
             try:
                 log_text = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
             except OSError:
@@ -201,6 +203,11 @@ def _execute_once(params: AgyParams) -> BackendResult:
     except subprocess.TimeoutExpired as exc:
         log.warning("agy subprocess timeout after %ss", params.timeout_s)
         error_text = f"timeout: {exc}"
+        timed_out = True
+    except ShellCommandFailed as exc:
+        log.warning("agy subprocess exited with status %d", exc.returncode)
+        error_text = str(exc)
+        execution_error = True
     except Exception as exc:  # noqa: BLE001
         # A subprocess exception may embed argv and therefore the prompt.
         log.error("agy: unexpected error during run type=%s", type(exc).__name__)
@@ -230,6 +237,15 @@ def _execute_once(params: AgyParams) -> BackendResult:
             agent_messages=agent_messages,
             error=error_text or "agy execution failed",
             error_class="execution_error",
+        )
+
+    if timed_out:
+        return BackendResult(
+            outcome="FATAL",
+            SESSION_ID=extracted_session_id,
+            agent_messages=agent_messages,
+            error=error_text or "agy subprocess timed out",
+            error_class="timeout",
         )
 
     result = _classify_output(agent_messages, extracted_session_id, error_text)
@@ -275,9 +291,11 @@ def _execute_sync(params: AgyParams) -> BackendResult:
         )
         if continuation.outcome != "OK":
             log.warning("agy: continuation %d returned outcome=%s; stopping loop", continuations, continuation.outcome)
-            result.agent_messages = (merged_messages + "\n\n" + (continuation.agent_messages or "")).strip()
-            result.error = continuation.error or result.error
-            return result
+            continuation.agent_messages = (
+                merged_messages + "\n\n" + (continuation.agent_messages or "")
+            ).strip()
+            continuation.SESSION_ID = continuation.SESSION_ID or session_id
+            return continuation
         if continuation.SESSION_ID:
             session_id = continuation.SESSION_ID
         merged_messages = (merged_messages + "\n\n" + continuation.agent_messages).strip()

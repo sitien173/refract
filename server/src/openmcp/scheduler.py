@@ -55,7 +55,9 @@ class ProjectScheduler:
         self._schedule(project_id)
 
     async def wait(self, job_id: str, timeout_s: int = 0) -> None:
-        event = self._completion_events.setdefault(job_id, asyncio.Event())
+        event = self._completion_events.get(job_id)
+        if event is None:
+            return
         if timeout_s > 0:
             try:
                 await asyncio.wait_for(event.wait(), timeout_s)
@@ -72,7 +74,10 @@ class ProjectScheduler:
         project_id = self._queued_projects.pop(job_id, "")
         if not project_id:
             return "missing"
-        self._queues[project_id].remove(job_id)
+        queue = self._queues[project_id]
+        queue.remove(job_id)
+        if not queue:
+            self._queues.pop(project_id, None)
         self.signal(job_id)
         return "queued"
 
@@ -85,13 +90,21 @@ class ProjectScheduler:
         if self._workers:
             await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
+        for job_id in tuple(self._completion_events):
+            self.signal(job_id)
+        self._queues.clear()
+        self._queued_projects.clear()
+        self._scheduled_projects.clear()
 
     def signal(self, job_id: str) -> None:
-        self._completion_events.setdefault(job_id, asyncio.Event()).set()
+        event = self._completion_events.pop(job_id, None)
+        if event is not None:
+            event.set()
 
     def _schedule(self, project_id: str) -> None:
         if (
-            project_id in self._active_projects
+            self._closing
+            or project_id in self._active_projects
             or project_id in self._scheduled_projects
             or not self._queues.get(project_id)
         ):
@@ -121,6 +134,8 @@ class ProjectScheduler:
                     self._active_projects.discard(project_id)
                     self.signal(job_id)
                     self._schedule(project_id)
+                    if not self._queues.get(project_id):
+                        self._queues.pop(project_id, None)
             finally:
                 self._ready.task_done()
 

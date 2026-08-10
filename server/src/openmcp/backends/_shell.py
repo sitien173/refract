@@ -20,6 +20,14 @@ class ShellCommandCancelled(subprocess.SubprocessError):
     """Raised after a caller cancels an active backend process."""
 
 
+class ShellCommandFailed(subprocess.SubprocessError):
+    """Raised when a backend process exits unsuccessfully."""
+
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+        super().__init__(f"backend command exited with status {returncode}")
+
+
 def stream_shell_command_lines(
     cmd: list[str],
     *,
@@ -31,6 +39,7 @@ def stream_shell_command_lines(
     errors: str | None = None,
     suppress_stdout_close_errors: bool = False,
     cancel_event: threading.Event | None = None,
+    check_returncode: bool = False,
 ) -> Generator[str, None, None]:
     """Execute a command and stream combined stdout and stderr lines."""
     popen_cmd = cmd.copy()
@@ -98,6 +107,7 @@ def stream_shell_command_lines(
     finally:
         terminate_process_tree(process, wait_s=terminate_wait_s)
         thread.join(timeout=terminate_wait_s)
+        process.poll()
 
     while not output_queue.empty():
         try:
@@ -111,6 +121,12 @@ def stream_shell_command_lines(
         raise subprocess.TimeoutExpired(cmd=popen_cmd, timeout=float(timeout_s or 0))
     if cancelled:
         raise ShellCommandCancelled("backend command cancelled")
+    if check_returncode and process.returncode:
+        raise ShellCommandFailed(process.returncode)
 
 
-__all__ = ["ShellCommandCancelled", "stream_shell_command_lines"]
+__all__ = [
+    "ShellCommandCancelled",
+    "ShellCommandFailed",
+    "stream_shell_command_lines",
+]

@@ -127,6 +127,20 @@ class RetryDrivers(FakeDrivers):
         return DriverResult("RETRYABLE", "", "", "retry", "backend_failure")
 
 
+class SaturatedTargetDrivers(FakeDrivers):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.calls = 0
+
+    async def execute(self, *, cancel_event, **kwargs) -> DriverResult:
+        self.calls += 1
+        self.started.set()
+        while not cancel_event.is_set():
+            await asyncio.sleep(0.01)
+        return DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+
+
 @pytest.mark.asyncio
 async def test_failed_execution_leaves_changes_and_preserves_dirty_preflight(tmp_path) -> None:
     root = repository(tmp_path)
@@ -244,6 +258,66 @@ async def test_shutdown_interrupts_active_job(tmp_path) -> None:
     try:
         job = database.job(submitted.job_id)
         assert job and job.state == "interrupted"
+    finally:
+        database.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_interrupts_target_capacity_wait(tmp_path) -> None:
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    first_root = repository(tmp_path / "first")
+    second_root = repository(tmp_path / "second")
+    drivers = SaturatedTargetDrivers()
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        first_project = runtime.register_project(str(first_root), "first")
+        second_project = runtime.register_project(str(second_root), "second")
+        first = await runtime.submit(first_project.id, "implement", "block")
+        await drivers.started.wait()
+        second = await runtime.submit(second_project.id, "implement", "wait")
+        while runtime.database.job(second.job_id).state != "running":
+            await asyncio.sleep(0)
+
+        assert runtime.cancel(second.job_id).state == "running"
+        second_job = await runtime.wait(second.job_id, 1)
+        assert second_job.state == "cancelled"
+        assert second_job.attempts == 0
+        assert drivers.calls == 1
+        runtime.cancel(first.job_id)
+        await runtime.wait(first.job_id, 1)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_interrupts_target_capacity_wait(tmp_path) -> None:
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    first_root = repository(tmp_path / "first")
+    second_root = repository(tmp_path / "second")
+    catalog = config(tmp_path / "home")
+    drivers = SaturatedTargetDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    first_project = runtime.register_project(str(first_root), "first")
+    second_project = runtime.register_project(str(second_root), "second")
+    first = await runtime.submit(first_project.id, "implement", "block")
+    await drivers.started.wait()
+    second = await runtime.submit(second_project.id, "implement", "wait")
+    while runtime.database.job(second.job_id).state != "running":
+        await asyncio.sleep(0)
+
+    await asyncio.wait_for(runtime.close(), 1)
+
+    database = Database(catalog.database_path)
+    try:
+        assert database.job(first.job_id).state == "interrupted"
+        assert database.job(second.job_id).state == "interrupted"
+        assert drivers.calls == 1
     finally:
         database.close()
 

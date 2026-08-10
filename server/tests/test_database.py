@@ -122,3 +122,69 @@ def test_legacy_jobs_collapse_to_historical_results(tmp_path) -> None:
     assert database.events("completed")[0]["kind"] == "legacy.event"
     assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
     database.close()
+
+
+def test_jobs_load_with_one_query(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(
+        project_id="project", alias="project", root="/project"
+    )
+    for job_id in ("first", "second"):
+        database.create_job(
+            job_id=job_id,
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt=job_id,
+            execution_plan_json="{}",
+            context_key="consult",
+        )
+    statements: list[str] = []
+    database._connection.set_trace_callback(statements.append)
+
+    jobs = database.jobs(project.id)
+
+    database._connection.set_trace_callback(None)
+    assert {job.id for job in jobs} == {"first", "second"}
+    assert len([statement for statement in statements if statement.startswith("SELECT")]) == 1
+    database.close()
+
+
+def test_context_includes_sessionless_turns_with_fixed_query_count(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(
+        project_id="project", alias="project", root="/project"
+    )
+    database.append_turn(
+        project_id=project.id,
+        context_key="shared",
+        role="consult",
+        target_id="sage",
+        target_key="sage",
+        session_id="",
+        prompt="question",
+        response="answer",
+    )
+    database.append_turn(
+        project_id=project.id,
+        context_key="shared",
+        role="review",
+        target_id="sentinel",
+        target_key="sentinel",
+        session_id="review-session",
+        prompt="review",
+        response="approved",
+    )
+    statements: list[str] = []
+    database._connection.set_trace_callback(statements.append)
+
+    streams = database.context(project.id, "shared")
+
+    database._connection.set_trace_callback(None)
+    assert [stream.role for stream in streams] == ["consult", "review"]
+    assert streams[0].turns == 1
+    assert streams[0].sessions == {}
+    assert streams[1].turns == 1
+    assert streams[1].sessions == {"sentinel": "review-session"}
+    assert len([statement for statement in statements if statement.startswith("SELECT")]) == 2
+    database.close()
