@@ -23,6 +23,16 @@ defaults, stateful HTTP, and `json_response=False`. Move transport settings to
 the injected `Context`. Preserve tools, resources, scheduler behavior,
 persistence, and public errors. Do not add subscriptions in this phase.
 
+## Consultation Findings
+
+MCP SDK v2 rejects `Context` parameters on static resources. The static
+runtime-backed `openmcp://projects`, `openmcp://targets`, and
+`openmcp://profiles` resources therefore conflict with the plan's Context-only
+access rule. Do not replace them with URI templates or introduce a replacement
+runtime global without explicit direction, because either changes the public
+resource contract or violates the stated lifecycle design. Preserve this issue
+as a clarification if it remains unresolved.
+
 ## Files
 
 - `pyproject.toml`
