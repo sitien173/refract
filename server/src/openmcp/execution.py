@@ -7,7 +7,7 @@ import json
 import random
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +16,7 @@ from openmcp.config import DaemonConfig, TargetConfig
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry, DriverResult
 from openmcp.logging_setup import get_logger, log_context
-from openmcp.models import ProjectView, TargetView
+from openmcp.models import ProjectView, TargetView, job_resource_uri
 from openmcp.planning import ExecutionPlan, parse_execution_plan, target_execution_key
 
 
@@ -165,32 +165,61 @@ class TargetExecutor:
         return result
 
 
+JobNotifier = Callable[[str], Awaitable[None]]
+
+
+async def _noop_notifier(_: str) -> None:
+    return None
+
+
 class JobRunner:
-    def __init__(self, database: Database, targets: TargetExecutor, *, is_closing: Callable[[], bool]) -> None:
+    def __init__(
+        self,
+        database: Database,
+        targets: TargetExecutor,
+        *,
+        is_closing: Callable[[], bool],
+        notifier: JobNotifier | None = None,
+    ) -> None:
         self.database = database
         self.targets = targets
         self.is_closing = is_closing
+        self.notifier = notifier or _noop_notifier
+
+    async def _notify(self, job_id: str) -> None:
+        try:
+            await self.notifier(job_resource_uri(job_id))
+        except Exception:
+            log.warning(
+                "Job resource notification failed",
+                extra={"event": "job.resource_notification_failed", "job_id": job_id},
+                exc_info=True,
+            )
 
     async def run(self, job_id: str, cancel_event: threading.Event) -> None:
         started_at = time.monotonic()
         record = self.database.job_record(job_id)
         if record is None or record["state"] != "queued":
             return
-        project = self.database.project(record["project_id"])
+        project_id = str(record["project_id"])
+        project = self.database.project(project_id)
         if project is None:
             self.database.finish_job(job_id, "failed", error="Project was removed")
+            await self._notify(job_id)
             return
         root = Path(project.root)
         log.info("Job started", extra={"event": "job.started", "job_id": job_id, "project_id": project.id, "workflow": record["workflow"]})
         final_state = "failed"
         try:
             self.database.start_job(job_id)
+            await self._notify(job_id)
             plan = parse_execution_plan(json.loads(record["execution_plan_json"]))
             execution = await self.targets.execute(job_id=job_id, project=project, workflow=record["workflow"], context_key=record["context_key"], plan=plan, prompt=record["prompt"], cwd=root, cancel_event=cancel_event)
             if execution.result.outcome != "SUCCESS" or cancel_event.is_set():
                 final_state = "interrupted" if cancel_event.is_set() and self.is_closing() else "cancelled" if cancel_event.is_set() else "failed"
                 raise RuntimeError(execution.result.error or execution.result.outcome)
             self.database.finish_job(job_id, "succeeded", text=execution.result.text, target_id=execution.target_id)
+            await self._notify(job_id)
         except Exception as exc:
             if not isinstance(exc, RuntimeError):
                 log.exception(
@@ -199,9 +228,10 @@ class JobRunner:
                 )
             error = str(exc)
             self.database.finish_job(job_id, final_state, error=error)
+            await self._notify(job_id)
         finally:
             completed = self.database.job(job_id)
-            log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project.id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
+            log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
 
 
-__all__ = ["JobRunner", "TargetExecutor", "TargetExecutionResult"]
+__all__ = ["JobNotifier", "JobRunner", "TargetExecutor", "TargetExecutionResult"]

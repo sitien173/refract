@@ -10,7 +10,7 @@ from pathlib import Path
 from openmcp.config import DaemonConfig, load_config, load_project_config
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry
-from openmcp.execution import JobRunner, TargetExecutor
+from openmcp.execution import JobNotifier, JobRunner, TargetExecutor
 from openmcp.logging_setup import get_logger
 from openmcp.models import (
     ActionResult,
@@ -20,6 +20,7 @@ from openmcp.models import (
     SubmissionResult,
     TERMINAL_STATES,
     TargetView,
+    job_resource_uri,
 )
 from openmcp.planning import execution_plan_data, resolve_execution_plan
 from openmcp.scheduler import ProjectScheduler
@@ -33,17 +34,37 @@ class OrchestrationError(ValueError):
     pass
 
 
+async def _noop_notifier(_: str) -> None:
+    return None
+
+
 class Runtime:
-    def __init__(self, config: DaemonConfig) -> None:
+    def __init__(self, config: DaemonConfig, *, notifier: JobNotifier | None = None) -> None:
         self.config = config
         self.config.home.mkdir(parents=True, exist_ok=True)
         self.database = Database(config.database_path)
         self._catalog = config
         self._closing = False
+        self.notifier = notifier or _noop_notifier
         self.target_executor = TargetExecutor(config, self.database, DriverRegistry())
-        self.runner = JobRunner(self.database, self.target_executor, is_closing=lambda: self._closing)
+        self.runner = JobRunner(
+            self.database,
+            self.target_executor,
+            is_closing=lambda: self._closing,
+            notifier=self._notify_job_resource,
+        )
         self.scheduler = ProjectScheduler(config.max_jobs, self.runner.run)
         log.debug("Runtime initialized", extra={"event": "runtime.initialized", "database": config.database_path.as_posix(), "max_jobs": config.max_jobs})
+
+    async def _notify_job_resource(self, resource_uri: str) -> None:
+        try:
+            await self.notifier(resource_uri)
+        except Exception:
+            log.warning(
+                "Job resource notification failed",
+                extra={"event": "job.resource_notification_failed", "resource_uri": resource_uri},
+                exc_info=True,
+            )
 
     @property
     def drivers(self) -> DriverRegistry:
@@ -56,6 +77,8 @@ class Runtime:
     async def start(self) -> None:
         self._closing = False
         interrupted = self.database.interrupt_active_jobs()
+        for job in interrupted:
+            await self._notify_job_resource(job_resource_uri(job["id"]))
         await self.scheduler.start(self.database.queued_jobs())
         log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
 
@@ -98,9 +121,10 @@ class Runtime:
             raise OrchestrationError(str(exc)) from exc
         job_id = str(uuid.uuid4())
         self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow)
+        await self._notify_job_resource(job_resource_uri(job_id))
         self.scheduler.enqueue(job_id, project.id)
         log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})
-        return SubmissionResult(job_id=job_id, state="queued")
+        return SubmissionResult(job_id=job_id, state="queued", resource_uri=job_resource_uri(job_id))
 
     async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:
         job = self.database.job(job_id)
@@ -114,7 +138,7 @@ class Runtime:
             raise OrchestrationError(f"Unknown job: {job_id}")
         return refreshed
 
-    def cancel(self, job_id: str) -> ActionResult:
+    async def cancel(self, job_id: str) -> ActionResult:
         job = self.database.job(job_id)
         if job is None:
             raise OrchestrationError(f"Unknown job: {job_id}")
@@ -122,6 +146,7 @@ class Runtime:
             location = self.scheduler.cancel(job_id)
             if location == "queued":
                 self.database.finish_job(job_id, "cancelled")
+                await self._notify_job_resource(job_resource_uri(job_id))
                 return ActionResult(success=True, job_id=job_id, state="cancelled")
             if location == "running":
                 self.database.event(job_id, "job.cancellation_requested", {})
@@ -138,8 +163,9 @@ class Runtime:
         if job.state not in {"failed", "cancelled", "interrupted"}:
             raise OrchestrationError(f"Job cannot be retried from {job.state}")
         self.database.reset_retry(job_id)
+        await self._notify_job_resource(job_resource_uri(job_id))
         self.scheduler.enqueue(job_id, job.project_id)
-        return SubmissionResult(job_id=job_id, state="queued")
+        return SubmissionResult(job_id=job_id, state="queued", resource_uri=job_resource_uri(job_id))
 
     def status(self) -> DaemonStatusResult:
         return DaemonStatusResult(status="stopping" if self._closing else "running", workers=self.scheduler.workers, active_jobs=self.scheduler.active_jobs, queued_jobs=self.scheduler.queued_jobs)

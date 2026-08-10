@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from openmcp.models import JobResult, JobView, ProjectView, TargetView
-from openmcp.server import job_wait, mcp, profiles_resource, projects_resource, targets_resource, workflows_resource
+from openmcp.models import JobResult, JobView, ProjectView, SubmissionResult, TargetView
+from openmcp.server import job_wait, mcp, profiles_resource, projects_resource, publish_job_resource, subscription_bus, targets_resource, workflows_resource
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -133,9 +133,22 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert set(tools["job_retry"].input_schema["properties"]) == {"job_id"}
     assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts", "base_commit"}.isdisjoint(JobView.model_fields)
     assert "commit" not in JobResult.model_fields
+    assert {"resource_uri"} <= SubmissionResult.model_fields.keys()
     assert {"head_commit", "clean"}.isdisjoint(ProjectView.model_fields)
     capability_key = "capabil" + "ities"
     assert capability_key not in TargetView.model_fields
+
+
+@pytest.mark.asyncio
+async def test_job_resource_updates_use_subscription_bus() -> None:
+    events: list[object] = []
+    unsubscribe = subscription_bus.subscribe(events.append)
+    try:
+        await publish_job_resource("openmcp://jobs/job-1")
+    finally:
+        unsubscribe()
+    assert len(events) == 1
+    assert events[0].uri == "openmcp://jobs/job-1"
 
 
 @pytest.mark.asyncio
@@ -264,8 +277,9 @@ async def test_application_lifespan_shares_runtime_across_sessions(monkeypatch) 
     events: list[str] = []
 
     class Runtime:
-        def __init__(self, received_config) -> None:
+        def __init__(self, received_config, *, notifier) -> None:
             assert received_config is config
+            assert notifier is server.publish_job_resource
             events.append("runtime.create")
 
         async def start(self) -> None:
@@ -294,8 +308,9 @@ async def test_application_lifespan_cleans_up_after_start_failure(monkeypatch) -
     events: list[str] = []
 
     class FailingRuntime:
-        def __init__(self, received_config) -> None:
+        def __init__(self, received_config, *, notifier) -> None:
             assert received_config is config
+            assert notifier is server.publish_job_resource
 
         async def start(self) -> None:
             events.append("runtime.start")
@@ -323,8 +338,9 @@ async def test_application_lifespan_clears_state_when_runtime_close_fails(monkey
     config = SimpleNamespace(logging=object())
 
     class FailingRuntime:
-        def __init__(self, received_config) -> None:
+        def __init__(self, received_config, *, notifier) -> None:
             assert received_config is config
+            assert notifier is server.publish_job_resource
 
         async def start(self) -> None:
             return None

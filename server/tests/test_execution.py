@@ -22,6 +22,58 @@ def test_runtime_submit_signature_omits_commit_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submission_result_includes_exact_job_resource_uri(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(project.id, "implement", "inspect")
+        assert submission.resource_uri == f"openmcp://jobs/{submission.job_id}"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_job_state_transitions_notify_after_persistence(tmp_path) -> None:
+    root = repository(tmp_path)
+    notifications: list[str] = []
+
+    async def notify(uri: str) -> None:
+        notifications.append(uri)
+
+    runtime = Runtime(config(tmp_path / "home"), notifier=notify)
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(project.id, "implement", "inspect")
+        await runtime.wait(submission.job_id, 10)
+        assert notifications == [submission.resource_uri] * 3
+        assert runtime.database.job(submission.job_id).state == "succeeded"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_notification_failure_does_not_change_job_outcome(tmp_path) -> None:
+    root = repository(tmp_path)
+
+    async def notify(_: str) -> None:
+        raise RuntimeError("subscription unavailable")
+
+    runtime = Runtime(config(tmp_path / "home"), notifier=notify)
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(project.id, "implement", "inspect")
+        assert (await runtime.wait(submission.job_id, 10)).state == "succeeded"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_implement_succeeds_with_dirty_worktree_and_leaves_changes(tmp_path) -> None:
     root = repository(tmp_path)
     baseline = git(root, "rev-parse", "HEAD")
@@ -192,6 +244,29 @@ async def test_retries_reuse_targets_after_each_failover_pass(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_retry_transition_notifies_the_same_job_resource(tmp_path) -> None:
+    root = repository(tmp_path)
+    notifications: list[str] = []
+
+    async def notify(uri: str) -> None:
+        notifications.append(uri)
+
+    runtime = Runtime(config(tmp_path / "home"), notifier=notify)
+    runtime.drivers = RetryDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(project.id, "implement", "retry")
+        assert (await runtime.wait(submission.job_id, 10)).state == "failed"
+        retried = await runtime.retry(submission.job_id)
+        assert retried.resource_uri == submission.resource_uri
+        assert (await runtime.wait(retried.job_id, 10)).state == "failed"
+        assert notifications == [submission.resource_uri] * 6
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_cancellation_interrupts_retry_backoff(tmp_path) -> None:
     root = repository(tmp_path)
     selection = TargetSelection(("primary",), 2)
@@ -213,7 +288,7 @@ async def test_cancellation_interrupts_retry_backoff(tmp_path) -> None:
         project = runtime.register_project(str(root))
         submitted = await runtime.submit(project.id, "implement", "retry")
         await drivers.started.wait()
-        runtime.cancel(submitted.job_id)
+        await runtime.cancel(submitted.job_id)
         assert (await runtime.wait(submitted.job_id, 0.5)).state == "cancelled"
         assert drivers.calls == 1
     finally:
@@ -224,7 +299,12 @@ async def test_cancellation_interrupts_retry_backoff(tmp_path) -> None:
 async def test_queued_and_running_cancellation(tmp_path) -> None:
     root = repository(tmp_path)
     drivers = BlockingDrivers()
-    runtime = Runtime(config(tmp_path / "home"))
+    notifications: list[str] = []
+
+    async def notify(uri: str) -> None:
+        notifications.append(uri)
+
+    runtime = Runtime(config(tmp_path / "home"), notifier=notify)
     runtime.drivers = drivers
     await runtime.start()
     try:
@@ -232,10 +312,12 @@ async def test_queued_and_running_cancellation(tmp_path) -> None:
         first = await runtime.submit(project.id, "implement", "block")
         second = await runtime.submit(project.id, "review", "never run")
         await drivers.started.wait()
-        assert runtime.cancel(second.job_id).state == "cancelled"
-        assert runtime.cancel(first.job_id).state == "running"
+        assert (await runtime.cancel(second.job_id)).state == "cancelled"
+        assert (await runtime.cancel(first.job_id)).state == "running"
         assert (await runtime.wait(first.job_id, 10)).state == "cancelled"
         assert (await runtime.wait(second.job_id, 10)).state == "cancelled"
+        assert [uri for uri in notifications if uri == first.resource_uri] == [first.resource_uri] * 3
+        assert [uri for uri in notifications if uri == second.resource_uri] == [second.resource_uri] * 2
     finally:
         await runtime.close()
 
@@ -281,12 +363,12 @@ async def test_cancel_interrupts_target_capacity_wait(tmp_path) -> None:
         while runtime.database.job(second.job_id).state != "running":
             await asyncio.sleep(0)
 
-        assert runtime.cancel(second.job_id).state == "running"
+        assert (await runtime.cancel(second.job_id)).state == "running"
         second_job = await runtime.wait(second.job_id, 1)
         assert second_job.state == "cancelled"
         assert second_job.attempts == 0
         assert drivers.calls == 1
-        runtime.cancel(first.job_id)
+        await runtime.cancel(first.job_id)
         await runtime.wait(first.job_id, 1)
     finally:
         await runtime.close()
@@ -334,11 +416,17 @@ async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) 
     database.start_job("running")
     (root / "partial.txt").write_text("partial\n", encoding="utf-8")
     database.close()
-    runtime = Runtime(catalog)
+    notifications: list[str] = []
+
+    async def notify(uri: str) -> None:
+        notifications.append(uri)
+
+    runtime = Runtime(catalog, notifier=notify)
     await runtime.start()
     try:
         interrupted = runtime.database.job("running")
         assert interrupted and interrupted.state == "interrupted"
+        assert notifications == ["openmcp://jobs/running"]
         assert (root / "partial.txt").read_text(encoding="utf-8") == "partial\n"
     finally:
         await runtime.close()

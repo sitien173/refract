@@ -12,6 +12,8 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Literal, ParamSpec, 
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
+from mcp.server.subscriptions import InMemorySubscriptionBus
+from mcp.shared.subscriptions import ResourceUpdated
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -29,6 +31,11 @@ from openmcp.workflows import BUILTIN_WORKFLOWS
 log = get_logger("server")
 _DAEMON_CONFIG = None
 _MCP_WAIT_TIMEOUT_S = 30
+subscription_bus = InMemorySubscriptionBus()
+
+
+async def publish_job_resource(resource_uri: str) -> None:
+    await subscription_bus.publish(ResourceUpdated(uri=resource_uri))
 
 
 @asynccontextmanager
@@ -38,7 +45,7 @@ async def _lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
     runtime: Runtime | None = None
     try:
         configure_logging(config.logging)
-        runtime = Runtime(config)
+        runtime = Runtime(config, notifier=publish_job_resource)
         await runtime.start()
         yield runtime
     finally:
@@ -49,7 +56,7 @@ async def _lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
             _DAEMON_CONFIG = None
 
 
-mcp = MCPServer("openmcp", lifespan=_lifespan)
+mcp = MCPServer("openmcp", lifespan=_lifespan, subscriptions=subscription_bus)
 
 
 async def run(backend: Literal["agy", "codex", "pi"], PROMPT: str, cd: str, SESSION_ID: str = "", timeout_s: int = 0) -> dict[str, Any]:
@@ -164,7 +171,7 @@ async def job_wait(job_id: str, ctx: Context, timeout_s: int = _MCP_WAIT_TIMEOUT
 @mcp.tool(description="Cancel a queued or running job.", structured_output=True)
 @_logged_request("job_cancel")
 async def job_cancel(job_id: str, ctx: Context) -> ActionResult:
-    return _runtime(ctx).cancel(job_id)
+    return await _runtime(ctx).cancel(job_id)
 
 
 @mcp.tool(description="Retry a failed or interrupted job.", structured_output=True)
@@ -245,4 +252,4 @@ async def workflows_resource(project_id: str, ctx: Context) -> str:
     return _json(BUILTIN_WORKFLOWS)
 
 
-__all__ = ["create_application", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "run", "status", "task_guide"]
+__all__ = ["create_application", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "publish_job_resource", "run", "status", "subscription_bus", "task_guide"]

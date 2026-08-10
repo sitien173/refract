@@ -13,6 +13,11 @@ JobState = Literal[
 TERMINAL_STATES: frozenset[str] = frozenset(
     {"succeeded", "failed", "cancelled", "interrupted"}
 )
+JOB_RESOURCE_URI_TEMPLATE = "openmcp://jobs/{job_id}"
+
+
+def job_resource_uri(job_id: str) -> str:
+    return JOB_RESOURCE_URI_TEMPLATE.format(job_id=job_id)
 
 
 class ProjectView(BaseModel):
@@ -61,6 +66,7 @@ class ContextStreamView(BaseModel):
 class SubmissionResult(BaseModel):
     job_id: str
     state: JobState
+    resource_uri: str
 
 
 class ActionResult(BaseModel):
@@ -92,7 +98,9 @@ __all__ = [
     "DaemonStatusResult",
     "JobResult",
     "JobState",
+    "JOB_RESOURCE_URI_TEMPLATE",
     "JobView",
+    "job_resource_uri",
     "ProjectView",
     "ResourcePayload",
     "SubmissionResult",

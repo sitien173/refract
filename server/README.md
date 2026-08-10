@@ -81,6 +81,25 @@ Example submission:
 Job states are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and
 `interrupted`. A completed job exposes `result.text` and `result.error`.
 
+### Subscription-aware job updates
+
+`job_submit` and `job_retry` return `resource_uri`, using the exact
+`openmcp://jobs/{job_id}` URI for the durable job resource. Clients that support
+SDK v2 `subscriptions/listen` can observe transitions without polling:
+
+1. Submit the job and retain its `resource_uri`.
+2. Open `subscriptions/listen` with that URI in `resource_subscriptions`.
+3. After the listen acknowledgement, immediately read the job resource. This
+   closes the race with queued or terminal transitions that happened before the
+   listener was active.
+4. When `notifications/resources/updated` arrives for the URI, read the same
+   resource again; the notification carries no duplicated job payload.
+
+If a listener disconnects or misses an update, reconnect, establish the exact
+URI subscription again, and perform another immediate read. SQLite remains the
+source of truth. Clients without subscriptions can continue using
+`job_wait`, whose public wait remains bounded to 30 seconds.
+
 ## Configuration
 
 OpenMCP reads `~/.openmcp/config.toml`.
