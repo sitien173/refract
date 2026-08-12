@@ -127,10 +127,7 @@ async def status(ctx: Context) -> DaemonStatusResult:
 
 @mcp.tool(description="Load task guidance for choosing a workflow and profile.", structured_output=True)
 @_logged_request("task_guide")
-async def task_guide(task: str, ctx: Context, project_id: str = "") -> TaskGuideResult:
-    value = task.strip()
-    if not value:
-        raise ValueError("Task must contain text")
+async def task_guide(ctx: Context, project_id: str = "") -> TaskGuideResult:
     runtime = _runtime(ctx)
     project_root = None
     if project_id.strip():
@@ -138,7 +135,7 @@ async def task_guide(task: str, ctx: Context, project_id: str = "") -> TaskGuide
         if project is None:
             raise ValueError(f"Unknown project: {project_id.strip()}")
         project_root = Path(project.root)
-    return TaskGuideResult(task=value, guide=load_task_guide(runtime.config.home, project_root))
+    return TaskGuideResult(guide=load_task_guide(runtime.config.home, project_root))
 
 
 @mcp.tool(description="Queue a durable project workflow.", structured_output=True)

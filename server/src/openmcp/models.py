@@ -77,7 +77,6 @@ class ActionResult(BaseModel):
 
 
 class TaskGuideResult(BaseModel):
-    task: str
     guide: dict[str, Any]
 
 

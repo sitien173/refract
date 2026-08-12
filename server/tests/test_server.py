@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from openmcp.models import JobResult, JobView, ProjectView, SubmissionResult, TargetView
-from openmcp.server import job_wait, mcp, profiles_resource, projects_resource, publish_job_resource, subscription_bus, targets_resource, workflows_resource
+from openmcp.server import job_wait, mcp, profiles_resource, projects_resource, publish_job_resource, subscription_bus, targets_resource, task_guide, workflows_resource
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -128,6 +128,7 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert {"doctor", "reload"}.isdisjoint(tools)
     assert "job_integrate" not in tools
     assert set(tools["job_submit"].input_schema["properties"]) == {"project_id", "workflow", "prompt", "context_key", "profile"}
+    assert set(tools["task_guide"].input_schema["properties"]) == {"project_id"}
     assert set(tools["job_wait"].input_schema["properties"]) == {"job_id", "timeout_s"}
     assert tools["job_wait"].input_schema["properties"]["timeout_s"]["default"] == 30
     assert set(tools["job_retry"].input_schema["properties"]) == {"job_id"}
@@ -137,6 +138,20 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert {"head_commit", "clean"}.isdisjoint(ProjectView.model_fields)
     capability_key = "capabil" + "ities"
     assert capability_key not in TargetView.model_fields
+
+
+@pytest.mark.asyncio
+async def test_task_guide_does_not_echo_a_task(tmp_path) -> None:
+    class Database:
+        @staticmethod
+        def project(project_id: str):
+            raise AssertionError("project lookup should not happen")
+
+    (tmp_path / "task_guide.json").write_text('{"scope": "global"}', encoding="utf-8")
+    runtime = SimpleNamespace(config=SimpleNamespace(home=tmp_path), database=Database())
+    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+
+    assert (await task_guide(ctx)).model_dump() == {"guide": {"scope": "global"}}
 
 
 @pytest.mark.asyncio
