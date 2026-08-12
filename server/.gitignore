@@ -1,6 +1,9 @@
 # Legacy nested repos (retired; kept on disk only)
 agymcp/
 codexmcp/
+.agents/
+.claude/
+.codex/
 
 # Node tooling
 node_modules/
@@ -34,7 +37,6 @@ Thumbs.db
 
 .tgrep/
 .ogrep/
-docs/
 
 # uv lockfiles inside subprojects we don't track
 openmcp/uv.lock

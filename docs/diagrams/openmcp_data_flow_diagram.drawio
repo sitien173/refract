@@ -1,0 +1,88 @@
+<mxfile>
+  <diagram id="autolayout" name="Page-1">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="e_client" value="MCP Client / User" style="shape=ellipse;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="330" y="0" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_register" value="1.0 Register Project&#xa;&amp; Validate Request" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="110" y="110" width="200" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2_config" value="D2: Targets &amp; Profiles&#xa;Config Store" style="shape=partialRectangle;collapsible=0;dropTarget=0;pointerEvents=0;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;top=0;bottom=0;" vertex="1" parent="1">
+          <mxGeometry x="330" y="110" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_plan" value="2.0 Resolve Execution Plan" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="110" y="210" width="210" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="d1_sqlite" value="D1: SQLite State Store&#xa;(Projects, Jobs, Plans)" style="shape=partialRectangle;collapsible=0;dropTarget=0;pointerEvents=0;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;top=0;bottom=0;" vertex="1" parent="1">
+          <mxGeometry x="0" y="640" width="210" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p3_queue" value="3.0 Enqueue &amp; Schedule&#xa;Per-Project FIFO" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="110" y="320" width="210" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p4_exec" value="4.0 Compile Argv &amp;&#xa;Spawn Provider CLI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="140" y="420" width="210" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_provider" value="Provider CLI &amp; LLM&#xa;(AGY / Codex / Pi)" style="shape=ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="150" y="530" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p5_commit" value="5.0 Commit Git Changes&#xa;&amp; Settle Job Result" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="530" width="210" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_git_repo" value="Git Repository&#xa;(Target Codebase)" style="shape=ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="640" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p6_notify" value="6.0 Publish Event &amp;&#xa;Return Job View" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="640" width="200" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="job_submit request" style="html=1;rounded=0;" edge="1" parent="1" source="e_client" target="p1_register">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="280" y="30"/><mxPoint x="210" y="30"/><mxPoint x="210" y="30"/><mxPoint x="210" y="30"/><mxPoint x="210" y="90"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="Target policy" style="html=1;rounded=0;" edge="1" parent="1" source="d2_config" target="p2_plan">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="340" y="200"/><mxPoint x="340" y="250"/><mxPoint x="340" y="250"/><mxPoint x="340" y="250"/><mxPoint x="330" y="250"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="Submission params" style="html=1;rounded=0;" edge="1" parent="1" source="p1_register" target="p2_plan">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="210" y="180"/><mxPoint x="210" y="200"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="Save execution plan" style="html=1;rounded=0;" edge="1" parent="1" source="p2_plan" target="d1_sqlite">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="80" y="250"/><mxPoint x="50" y="250"/><mxPoint x="50" y="250"/><mxPoint x="50" y="250"/><mxPoint x="50" y="620"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="Enqueue job" style="html=1;rounded=0;" edge="1" parent="1" source="p2_plan" target="p3_queue">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="210" y="280"/><mxPoint x="210" y="310"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="State QUEUED" style="html=1;rounded=0;" edge="1" parent="1" source="p3_queue" target="d1_sqlite">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="130" y="390"/><mxPoint x="130" y="620"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="Dispatch worker" style="html=1;rounded=0;" edge="1" parent="1" source="p3_queue" target="p4_exec">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="230" y="390"/><mxPoint x="230" y="410"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="State RUNNING" style="html=1;rounded=0;" edge="1" parent="1" source="p4_exec" target="d1_sqlite">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="150" y="490"/><mxPoint x="150" y="620"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="CLI argv + prompt" style="html=1;rounded=0;" edge="1" parent="1" source="p4_exec" target="e_provider">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="220" y="490"/><mxPoint x="220" y="520"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="Exit code &amp; output" style="html=1;rounded=0;" edge="1" parent="1" source="e_provider" target="p4_exec">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="280" y="530"/><mxPoint x="280" y="510"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e10" value="Raw result" style="html=1;rounded=0;" edge="1" parent="1" source="p4_exec" target="p5_commit">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="350" y="530"/><mxPoint x="350" y="560"/><mxPoint x="350" y="560"/><mxPoint x="350" y="560"/><mxPoint x="350" y="560"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="Git commit (implement)" style="html=1;rounded=0;" edge="1" parent="1" source="p5_commit" target="e_git_repo">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="440" y="600"/><mxPoint x="440" y="620"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e12" value="State COMPLETED" style="html=1;rounded=0;" edge="1" parent="1" source="p5_commit" target="d1_sqlite">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="400" y="610"/><mxPoint x="400" y="620"/><mxPoint x="400" y="620"/><mxPoint x="400" y="620"/><mxPoint x="180" y="620"/><mxPoint x="180" y="620"/><mxPoint x="180" y="620"/><mxPoint x="180" y="620"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="Job event" style="html=1;rounded=0;" edge="1" parent="1" source="p5_commit" target="p6_notify">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="530" y="600"/><mxPoint x="530" y="620"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e14" value="job_wait result" style="html=1;rounded=0;" edge="1" parent="1" source="p6_notify" target="e_client">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="630" y="500"/><mxPoint x="630" y="30"/><mxPoint x="630" y="30"/><mxPoint x="630" y="30"/><mxPoint x="520" y="30"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

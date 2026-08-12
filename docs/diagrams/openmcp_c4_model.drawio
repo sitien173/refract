@@ -1,0 +1,150 @@
+<mxfile>
+  <diagram id="system-context" name="System Context">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="mcp_client" value="Developer / MCP Client&#xa;[Person]&#xa;Submits software engineering tasks &amp; queries via MCP protocol" style="shape=mxgraph.c4.person2;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#083F75;strokeColor=#06315C;" vertex="1" parent="1">
+          <mxGeometry x="300" y="0" width="200" height="180" as="geometry"/>
+        </mxCell>
+        <UserObject label="OpenMCP Daemon&#xa;[Software System]&#xa;Loopback HTTP orchestration daemon managing durable AI coding jobs" link="data:page/id,containers" id="openmcp_system">
+          <mxCell style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#1061B0;strokeColor=#0D5091;" vertex="1" parent="1">
+          <mxGeometry x="280" y="250" width="240" height="120" as="geometry"/>
+        </mxCell>
+        </UserObject>
+        <mxCell id="sqlite_db" value="SQLite Database&#xa;[Container: SQLite 3]&#xa;Stores projects, jobs, execution plan snapshots, and logs" style="shape=cylinder3;size=15;boundedLbl=1;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#23A2D9;strokeColor=#0E7DAD;" vertex="1" parent="1">
+          <mxGeometry x="0" y="430" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="provider_clis" value="AI Provider CLIs&#xa;[Software System: CLI Subprocesses]&#xa;Executes provider tools: agy (Antigravity), codex, pi" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#8C8496;strokeColor=#736782;" vertex="1" parent="1">
+          <mxGeometry x="280" y="430" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="git_repos" value="Target Repositories&#xa;[Software System: Git]&#xa;Local project repositories modified or analyzed by jobs" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#8C8496;strokeColor=#736782;" vertex="1" parent="1">
+          <mxGeometry x="550" y="430" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="Submits tasks &amp; monitors status via MCP (HTTP/JSON-RPC)" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="mcp_client" target="openmcp_system">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="400" y="180"/><mxPoint x="400" y="230"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="Persists job state &amp; execution history" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="openmcp_system" target="sqlite_db">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="200" y="310"/><mxPoint x="120" y="310"/><mxPoint x="120" y="310"/><mxPoint x="120" y="310"/><mxPoint x="120" y="420"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="Invokes CLI adapters with prompt &amp; args" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="openmcp_system" target="provider_clis">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="400" y="370"/><mxPoint x="400" y="420"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="Reads codebase &amp; commits successful implement workflows" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="openmcp_system" target="git_repos">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="590" y="310"/><mxPoint x="670" y="310"/><mxPoint x="670" y="310"/><mxPoint x="670" y="310"/><mxPoint x="670" y="420"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="containers" name="Containers">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="c_client" value="MCP Client / IDE&#xa;[Person]&#xa;Cursor, VSCode, Claude Desktop, or agy CLI" style="shape=mxgraph.c4.person2;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#083F75;strokeColor=#06315C;" vertex="1" parent="1">
+          <mxGeometry x="160" y="0" width="200" height="180" as="geometry"/>
+        </mxCell>
+        <UserObject label="Starlette / MCP Server&#xa;[Container: Python / Starlette / mcp-sdk]&#xa;Exposes `/mcp` endpoints, subscription bus &amp; MCP tool handlers" link="data:page/id,components" id="c_server">
+          <mxCell style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#23A2D9;strokeColor=#0E7DAD;" vertex="1" parent="1">
+          <mxGeometry x="140" y="250" width="240" height="120" as="geometry"/>
+        </mxCell>
+        </UserObject>
+        <mxCell id="c_runtime" value="Orchestration Runtime&#xa;[Container: Python / asyncio]&#xa;Manages per-project FIFO queues, concurrency, &amp; job execution lifecycles" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#23A2D9;strokeColor=#0E7DAD;" vertex="1" parent="1">
+          <mxGeometry x="140" y="430" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="c_database" value="SQLite State Store&#xa;[Container: SQLite 3 (WAL mode)]&#xa;Durable storage for projects, jobs, execution plans, and migrations" style="shape=cylinder3;size=15;boundedLbl=1;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#23A2D9;strokeColor=#0E7DAD;" vertex="1" parent="1">
+          <mxGeometry x="0" y="620" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="c_drivers" value="Backend Drivers &amp; Process Engine&#xa;[Container: Python / asyncio.subprocess]&#xa;Compiles execution plans into backend argv &amp; manages process groups" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#23A2D9;strokeColor=#0E7DAD;" vertex="1" parent="1">
+          <mxGeometry x="280" y="620" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="c_clis" value="Host Provider CLI Binaries&#xa;[Software System: Subprocesses]&#xa;agy, codex, pi executables on host PATH" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#8C8496;strokeColor=#736782;" vertex="1" parent="1">
+          <mxGeometry x="140" y="800" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="c_repos" value="Git Workspaces&#xa;[Software System: Git]&#xa;Target repositories registered for execution" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#8C8496;strokeColor=#736782;" vertex="1" parent="1">
+          <mxGeometry x="410" y="800" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="JSON-RPC / SSE over HTTP (loopback)" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="c_client" target="c_server">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="260" y="180"/><mxPoint x="260" y="230"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="Delegates tool requests &amp; subscribes to notifications" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="c_server" target="c_runtime">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="260" y="370"/><mxPoint x="260" y="420"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="Reads/writes job state &amp; migrations" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="c_runtime" target="c_database">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="190" y="550"/><mxPoint x="190" y="600"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="Submits resolved execution plans for execution" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="c_runtime" target="c_drivers">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="330" y="550"/><mxPoint x="330" y="600"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="Spawns process group with compiled args" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="c_drivers" target="c_clis">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="330" y="740"/><mxPoint x="330" y="790"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="Runs in repo dir &amp; commits git changes" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="c_drivers" target="c_repos">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="460" y="740"/><mxPoint x="460" y="790"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="components" name="Components">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="comp_server" value="MCP Server Facade&#xa;[Component: openmcp.server]&#xa;Exposes status, project_register, task_guide, job_submit, job_wait, job_cancel, job_retry" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="690" y="0" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="comp_runtime" value="Runtime Facade&#xa;[Component: openmcp.runtime]&#xa;Orchestrates database, scheduler, runner, and config reload" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="690" y="190" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="comp_scheduler" value="Project Scheduler&#xa;[Component: openmcp.scheduler]&#xa;Per-project FIFO queue serializing jobs per project while permitting cross-project concurrency" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="600" y="370" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="comp_runner" value="Job Runner&#xa;[Component: openmcp.execution]&#xa;Manages job lifecycle state transitions: QUEUED -&gt; RUNNING -&gt; COMPLETED / FAILED" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="550" y="560" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="comp_planner" value="Execution Planner&#xa;[Component: openmcp.planning]&#xa;Builds immutable execution plan snapshots (model, profile, system prompt, target args)" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="0" y="740" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="comp_driver" value="Driver Registry&#xa;[Component: openmcp.drivers / backends]&#xa;Translates target policy into argv for agy, codex, and pi backends" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="280" y="740" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="comp_processes" value="Process Group Manager&#xa;[Component: openmcp.processes]&#xa;Cross-platform process group creation, signal propagation, and graceful termination" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="280" y="930" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="comp_repo" value="Git Repository Manager&#xa;[Component: openmcp.repositories]&#xa;Executes git status checks and commits code changes on implement workflow completion" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="550" y="740" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="comp_db" value="Database DAO&#xa;[Component: openmcp.database]&#xa;SQLite database transactions, schema migrations, and job history" style="rounded=1;arcSize=10;html=1;whiteSpace=wrap;fontSize=12;fontColor=#ffffff;align=center;fillColor=#63BEF2;strokeColor=#2086C9;" vertex="1" parent="1">
+          <mxGeometry x="830" y="740" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="Calls runtime methods" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_server" target="comp_runtime">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="810" y="120"/><mxPoint x="810" y="170"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="Queries &amp; persists records" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_runtime" target="comp_db">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="890" y="310"/><mxPoint x="890" y="730"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="Enqueues submitted jobs" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_runtime" target="comp_scheduler">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="770" y="310"/><mxPoint x="770" y="360"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="Executes job via async worker pool" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_scheduler" target="comp_runner">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="700" y="490"/><mxPoint x="700" y="540"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="Resolves immutable plan" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_runner" target="comp_planner">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="390" y="600"/><mxPoint x="120" y="600"/><mxPoint x="120" y="600"/><mxPoint x="120" y="600"/><mxPoint x="120" y="730"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="Dispatches plan to backend driver" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_runner" target="comp_driver">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="480" y="640"/><mxPoint x="400" y="640"/><mxPoint x="400" y="640"/><mxPoint x="400" y="640"/><mxPoint x="400" y="730"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="Spawns process group" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_driver" target="comp_processes">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="400" y="860"/><mxPoint x="400" y="910"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="Commits git changes on implement success" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_runner" target="comp_repo">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="670" y="680"/><mxPoint x="670" y="730"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="Updates job final state &amp; results" style="endArrow=blockThin;endFill=1;endSize=10;html=1;fontSize=11;fontColor=#404040;strokeColor=#828282;labelBackgroundColor=#ffffff;rounded=0;" edge="1" parent="1" source="comp_runner" target="comp_db">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="820" y="620"/><mxPoint x="830" y="620"/><mxPoint x="830" y="620"/><mxPoint x="830" y="620"/><mxPoint x="830" y="730"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
