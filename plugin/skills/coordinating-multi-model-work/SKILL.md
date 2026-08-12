@@ -80,8 +80,7 @@ resets, or restores; assume it did none of these.
 
 ## Setup and Resume
 
-1. Call `status`; require `status="running"`. If unavailable, report
-   `http://127.0.0.1:8765/mcp` and stop.
+1. Call `status`; require `status="running"`. If unavailable, report and stop.
 2. Resolve the Git root and read `openmcp://projects`.
 3. Register an absent Git root with `project_register`; save its `project_id`.
 4. Read `openmcp://projects/<project_id>/jobs` and reconcile active phase jobs
@@ -134,7 +133,7 @@ For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch wit
 [implementer-prompt.md](../executing-plans/implementer-prompt.md).
 
 - Submit one prompt-only `implement` job with the saved route.
-- Wait with `timeout_s: 30`; repeat only while `queued` or `running`.
+- Wait with `timeout_s: 300`; wait for the job to finish and read `result.text` on success or `result.error` on failure.
 - On success, read `result.text`, then inspect the actual filesystem changes,
   run the phase validation, and commit the reconciled diff with the phase commit
   message only after validation passes.

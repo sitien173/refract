@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 10.0.1 -->
+<!-- ccg-shared-version: 10.0.2 -->
 # Worker Contract
 
 Execution contract for the phase implementer. This bundled file is read
