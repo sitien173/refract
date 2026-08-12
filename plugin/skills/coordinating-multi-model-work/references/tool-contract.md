@@ -8,7 +8,7 @@ Default endpoint: `http://127.0.0.1:8765/mcp`.
 | --- | --- | --- | --- |
 | `status` | — | — | Return scheduler health and queue counts. |
 | `project_register` | `path` | `alias` | Register your project directory. |
-| `task_guide` | `task` | `project_id` | Return workflow/profile guidance. |
+| `task_guide` | `project_id` | — | Return workflow/profile guidance. |
 | `job_submit` | `project_id`, `workflow`, `prompt` | `context_key`, `profile` | Queue one job. |
 | `job_wait` | `job_id` | `timeout_s` | Wait for completion or timeout. |
 | `job_cancel` | `job_id` | — | Cancel queued or running work. |
