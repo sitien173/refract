@@ -305,7 +305,7 @@ OpenMCP exposes seven core tools:
 | `project_register(path, alias)` | Registers local directory for jobs. |
 | `task_guide(project_id)` | Loads workflow and profile guidance. |
 | `job_submit(project_id, workflow, prompt, context_key, profile)` | Enqueues work for execution. |
-| `job_wait(job_id, timeout_s)` | Waits for job completion up to 30 seconds. |
+| `job_wait(job_id, timeout_s)` | Waits for job completion up to 300 seconds. |
 | `job_cancel(job_id)` | Cancels queued or running job. |
 | `job_retry(job_id)` | Retries non-terminal or failed job. |
 

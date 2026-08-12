@@ -30,7 +30,7 @@ from openmcp.workflows import BUILTIN_WORKFLOWS
 
 log = get_logger("server")
 _DAEMON_CONFIG = None
-_MCP_WAIT_TIMEOUT_S = 30
+_MCP_WAIT_TIMEOUT_S = 300
 subscription_bus = InMemorySubscriptionBus()
 
 
