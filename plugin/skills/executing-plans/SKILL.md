@@ -27,8 +27,25 @@ review, and handover. This skill owns only the folder-plan phase procedure.
 7. Run Gate 2 with `implementer-prompt.md`, then Gate 3. Blocking findings run
    the coordinator's bounded review–fix loop, which re-reviews only the fix
    delta.
-8. After canonical finalization, advance one phase. After the final phase, mark
-   handover `DONE` and invoke `verifying-before-completion`.
+8. After canonical finalization, advance one phase. After the final phase, run
+   closeout.
+
+## Closeout
+
+Run once, after the final phase finalizes:
+
+1. Write `CLOSEOUT.md` at the plan root from the bundled template.
+2. Collect candidate follow-ups from every phase `notes.md` and every
+   non-blocking review finding. Present the list and file only accepted ones as
+   `inbox` rows. Record every decision in `CLOSEOUT.md`.
+3. Flip each `backlog_ids` row to `done` with
+   `ref: <slug> <phase_base>..<HEAD>`.
+4. Mark handover `DONE`.
+5. Commit as `chore(plan): close <slug>`.
+6. Invoke `verifying-before-completion`.
+
+Close rows from `backlog_ids`, never by matching titles. See
+`shared/backlog-contract.md`.
 
 ## Rules
 

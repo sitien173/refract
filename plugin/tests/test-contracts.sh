@@ -98,6 +98,17 @@ grep -q 'CLOSEOUT.md' skills/writing-plans/SKILL.md
 grep -q 'B-NNN` backlog id' skills/brainstorming/SKILL.md
 grep -q 'Never write to the backlog' skills/brainstorming/SKILL.md
 
+grep -q '^## Shipped$' shared/closeout-template.md
+grep -q '^## Retro$' shared/closeout-template.md
+grep -q '^## Follow-ups$' shared/closeout-template.md
+grep -q 'shared/closeout-template.md' hooks/superpowers-ccg-session-start.sh
+grep -q '^## Closeout$' skills/executing-plans/SKILL.md
+grep -q 'chore(plan): close <slug>' skills/executing-plans/SKILL.md
+grep -q 'never by matching titles' skills/executing-plans/SKILL.md
+grep -q 'Accepted debt must never be lost' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Blocking findings are never filed' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Filing a row never creates its own commit' skills/coordinating-multi-model-work/SKILL.md
+
 for skill in skills/*/SKILL.md; do
     grep -qi 'owns' "$skill"
     if [[ "$skill" != "skills/coordinating-multi-model-work/SKILL.md" ]]; then

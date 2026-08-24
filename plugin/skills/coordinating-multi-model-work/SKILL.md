@@ -207,10 +207,16 @@ further.
 After both reviews pass and no job is active:
 
 1. Append evidence to `journal.md`.
-2. Update `.handover.md`, recording the HEAD you captured before the initial
+2. On `PASS_WITH_DEBT`, file one `inbox` backlog row per debt entry, source
+   `<slug>/ph-NN debt`, priority `P1` when the debt carries correctness or
+   security risk and `P2` otherwise. Accepted debt must never be lost.
+   Blocking findings are never filed; they are fixed inside the phase.
+   See `shared/backlog-contract.md`.
+3. Update `.handover.md`, recording the HEAD you captured before the initial
    implementation as `phase_base`.
-3. Commit only coordination state as `chore(plan): record phase <N>`.
-4. Confirm the root is clean.
+4. Commit coordination state and any debt rows as
+   `chore(plan): record phase <N>`. Filing a row never creates its own commit.
+5. Confirm the root is clean.
 
 Emit:
 
