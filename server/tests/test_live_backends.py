@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from openmcp.backends.agy import AgyParams, execute as agy_execute
+from openmcp.backends.claude import ClaudeParams, execute as claude_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 
 
@@ -35,3 +36,8 @@ async def test_live_codex_execute() -> None:
     _assert_live_result("codex", out)
 
 
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_live_claude_execute() -> None:
+    out = await claude_execute(ClaudeParams(PROMPT=PROMPT, cd=Path.cwd()))
+    _assert_live_result("claude", out)

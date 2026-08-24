@@ -325,6 +325,62 @@ def test_agy_continuation_propagates_failure(monkeypatch, tmp_path) -> None:
     assert out.agent_messages == "first reply\n\npartial continuation"
 
 
+@pytest.mark.asyncio
+async def test_backend_runner_dispatches_claude_without_pi_fallback(monkeypatch, tmp_path) -> None:
+    from openmcp.backend_runner import run
+
+    captured = {}
+
+    async def fake_claude(params):
+        captured["params"] = params
+        return BackendResult(
+            outcome="OK",
+            SESSION_ID="claude-session",
+            agent_messages="PONG",
+            error="",
+            error_class="",
+        )
+
+    async def fail_pi(params):
+        pytest.fail("claude must not fall through to pi")
+
+    out = await run(
+        "claude",
+        "prompt",
+        str(tmp_path),
+        "input-session",
+        42,
+        pi_executor=fail_pi,
+        claude_executor=fake_claude,
+    )
+
+    assert isinstance(captured["params"], ClaudeParams)
+    assert captured["params"].PROMPT == "prompt"
+    assert captured["params"].cd == tmp_path
+    assert captured["params"].SESSION_ID == "input-session"
+    assert captured["params"].timeout_s == 42
+    assert captured["params"].args == ()
+    assert out == {
+        "success": True,
+        "SESSION_ID": "claude-session",
+        "agent_messages": "PONG",
+        "error": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_backend_runner_rejects_unknown_backend_without_pi_fallback(tmp_path) -> None:
+    from openmcp.backend_runner import run
+
+    async def fail_pi(params):
+        pytest.fail("unknown backend must not fall through to pi")
+
+    out = await run("unknown", "prompt", str(tmp_path), pi_executor=fail_pi)
+
+    assert out["success"] is False
+    assert "unknown" in out["error"]
+
+
 def test_tool_signature() -> None:
     from openmcp.server import run
 

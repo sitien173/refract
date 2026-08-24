@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
+from openmcp.backends.claude import ClaudeParams, execute as claude_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.pi import PiParams, execute as pi_execute
 from openmcp.logging_setup import get_logger
@@ -16,7 +17,7 @@ from openmcp.logging_setup import get_logger
 
 log = get_logger("backend_runner")
 
-BackendName = Literal["agy", "codex", "pi"]
+BackendName = Literal["agy", "codex", "pi", "claude"]
 
 
 def _validate_cd(cd: Any) -> Path | None:
@@ -47,6 +48,7 @@ async def run(
     agy_executor: Callable[[AgyParams], Awaitable[BackendResult]] = agy_execute,
     codex_executor: Callable[[CodexParams], Awaitable[BackendResult]] = codex_execute,
     pi_executor: Callable[[PiParams], Awaitable[BackendResult]] = pi_execute,
+    claude_executor: Callable[[ClaudeParams], Awaitable[BackendResult]] = claude_execute,
 ) -> dict[str, Any]:
     """Run one backend with the harness CLI's default execution settings.
 
@@ -87,7 +89,7 @@ async def run(
                     timeout_s=timeout_s,
                 )
             )
-        else:
+        elif backend == "pi":
             backend_result = await pi_executor(
                 PiParams(
                     PROMPT=PROMPT,
@@ -97,6 +99,22 @@ async def run(
                     timeout_s=timeout_s,
                 )
             )
+        elif backend == "claude":
+            backend_result = await claude_executor(
+                ClaudeParams(
+                    PROMPT=PROMPT,
+                    cd=cd_path,
+                    SESSION_ID=SESSION_ID,
+                    timeout_s=timeout_s,
+                )
+            )
+        else:
+            return {
+                "success": False,
+                "SESSION_ID": SESSION_ID or "",
+                "agent_messages": "",
+                "error": f"unsupported backend: {backend}",
+            }
         if backend_result.outcome == "OK":
             result = {
                 "success": True,

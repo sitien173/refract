@@ -19,6 +19,7 @@ from starlette.routing import Mount
 
 from openmcp.backend_runner import run as _run_backend
 from openmcp.backends.agy import execute as agy_execute
+from openmcp.backends.claude import execute as claude_execute
 from openmcp.backends.codex import execute as codex_execute
 from openmcp.backends.pi import execute as pi_execute
 from openmcp.config import load_config, load_task_guide
@@ -59,9 +60,9 @@ async def _lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
 mcp = MCPServer("openmcp", lifespan=_lifespan, subscriptions=subscription_bus)
 
 
-async def run(backend: Literal["agy", "codex", "pi"], PROMPT: str, cd: str, SESSION_ID: str = "", timeout_s: int = 0) -> dict[str, Any]:
+async def run(backend: Literal["agy", "codex", "pi", "claude"], PROMPT: str, cd: str, SESSION_ID: str = "", timeout_s: int = 0) -> dict[str, Any]:
     """Run one backend through the legacy direct-invocation API."""
-    return await _run_backend(backend, PROMPT, cd, SESSION_ID, timeout_s, agy_executor=agy_execute, codex_executor=codex_execute, pi_executor=pi_execute)
+    return await _run_backend(backend, PROMPT, cd, SESSION_ID, timeout_s, agy_executor=agy_execute, codex_executor=codex_execute, pi_executor=pi_execute, claude_executor=claude_execute)
 
 
 def _runtime(ctx: Context) -> Runtime:
