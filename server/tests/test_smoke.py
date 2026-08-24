@@ -459,6 +459,31 @@ async def test_claude_json_result_uses_last_result_and_transport_argv(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_claude_new_session_argv_omits_resume(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import claude as claude_backend
+
+    captured = {}
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        captured["cmd"] = cmd
+        yield json.dumps({"type": "result", "subtype": "success", "session_id": "new-session", "result": "PONG"})
+
+    monkeypatch.setattr(claude_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await claude_backend.execute(
+        ClaudeParams(PROMPT="--prompt", cd=tmp_path, args=("--tools", "Read"))
+    )
+
+    assert captured["cmd"] == [
+        "claude", "--tools", "Read", "-p", "--permission-mode",
+        "bypassPermissions", "--output-format", "json", "--", "--prompt",
+    ]
+    assert "--resume" not in captured["cmd"]
+    assert out.SESSION_ID == "new-session"
+
+
+@pytest.mark.asyncio
 async def test_claude_error_result_is_fatal(monkeypatch, tmp_path) -> None:
     from openmcp.backends import claude as claude_backend
 
