@@ -11,6 +11,7 @@ import pytest
 
 from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
+from openmcp.backends.claude import ClaudeParams
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.pi import PiParams
 
@@ -37,6 +38,7 @@ def test_imports() -> None:
     import openmcp.server  # noqa: F401
     import openmcp.cli  # noqa: F401
     import openmcp.backends.agy  # noqa: F401
+    import openmcp.backends.claude  # noqa: F401
     import openmcp.backends.codex  # noqa: F401
     import openmcp.backends.pi  # noqa: F401
 
@@ -44,6 +46,7 @@ def test_imports() -> None:
 def test_backend_params_are_transport_only() -> None:
     expected = {"PROMPT", "cd", "SESSION_ID", "args", "timeout_s", "cancel_event"}
     assert {field.name for field in fields(AgyParams)} == expected
+    assert {field.name for field in fields(ClaudeParams)} == expected
     assert {field.name for field in fields(CodexParams)} == expected
     assert {field.name for field in fields(PiParams)} == expected
 
@@ -413,6 +416,150 @@ async def test_codex_nonzero_exit_is_fatal_despite_diagnostic_output(
 
     assert out.outcome == "FATAL"
     assert out.error_class == "execution_error"
+
+
+@pytest.mark.asyncio
+async def test_claude_json_result_uses_last_result_and_transport_argv(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import claude as claude_backend
+
+    captured = {}
+    first_session = "first-session"
+    final_session = "final-session"
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        yield "Claude diagnostic: startup hook"
+        yield json.dumps({"type": "assistant", "message": "ignore me"})
+        yield json.dumps({"type": "result", "subtype": "success", "session_id": first_session, "result": "first"})
+        yield "not JSON diagnostic"
+        yield json.dumps({"type": "result", "subtype": "success", "session_id": final_session, "result": "PONG"})
+
+    monkeypatch.setattr(claude_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await claude_backend.execute(
+        ClaudeParams(PROMPT="--prompt", cd=tmp_path, args=("--tools", "Read"))
+    )
+
+    assert captured["cmd"] == [
+        "claude", "--tools", "Read", "-p", "--permission-mode",
+        "bypassPermissions", "--output-format", "json", "--", "--prompt",
+    ]
+    assert Path(captured["cwd"]) == tmp_path.absolute()
+    assert out.outcome == "OK"
+    assert out.SESSION_ID == final_session
+    assert out.agent_messages == "PONG"
+
+
+@pytest.mark.asyncio
+async def test_claude_error_result_is_fatal(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import claude as claude_backend
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield json.dumps({
+            "type": "result",
+            "subtype": "error_during_login",
+            "is_error": True,
+            "result": "login failed",
+            "api_error_status": 401,
+        })
+
+    monkeypatch.setattr(claude_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await claude_backend.execute(ClaudeParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "fatal_backend"
+    assert "login failed" in out.error
+    assert "401" in out.error
+
+
+@pytest.mark.asyncio
+async def test_claude_result_falls_back_to_input_session_id(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import claude as claude_backend
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield json.dumps({"type": "result", "subtype": "success", "result": "PONG"})
+
+    monkeypatch.setattr(claude_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await claude_backend.execute(
+        ClaudeParams(PROMPT="x", cd=tmp_path, SESSION_ID="resume-session")
+    )
+
+    assert out.outcome == "OK"
+    assert out.SESSION_ID == "resume-session"
+
+
+@pytest.mark.asyncio
+async def test_claude_nonzero_exit_is_fatal_despite_agent_output(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import claude as claude_backend
+    from openmcp.backends._shell import ShellCommandFailed
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield json.dumps({"type": "result", "subtype": "success", "session_id": "session", "result": "partial"})
+        raise ShellCommandFailed(2)
+
+    monkeypatch.setattr(claude_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await claude_backend.execute(ClaudeParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "execution_error"
+    assert out.agent_messages == "partial"
+
+
+@pytest.mark.asyncio
+async def test_claude_timeout_and_cancel_are_mapped(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import claude as claude_backend
+    from openmcp.backends._shell import ShellCommandCancelled
+
+    def timeout_run(cmd, cwd=None, **kwargs):
+        yield "partial"
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=1)
+
+    monkeypatch.setattr(claude_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(claude_backend, "run_shell_command", timeout_run)
+    timed_out = await claude_backend.execute(ClaudeParams(PROMPT="x", cd=tmp_path, timeout_s=1))
+    assert timed_out.outcome == "FATAL"
+    assert timed_out.error_class == "timeout"
+
+    def cancel_run(cmd, cwd=None, **kwargs):
+        raise ShellCommandCancelled("cancelled")
+        yield "unreachable"
+
+    monkeypatch.setattr(claude_backend, "run_shell_command", cancel_run)
+    cancelled = await claude_backend.execute(ClaudeParams(PROMPT="x", cd=tmp_path))
+    assert cancelled.outcome == "FATAL"
+    assert cancelled.error_class == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_missing_claude_cli_is_fatal(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import claude as claude_backend
+
+    monkeypatch.setattr(claude_backend.shutil, "which", lambda name: None)
+
+    out = await claude_backend.execute(ClaudeParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "missing_cli"
+
+
+@pytest.mark.asyncio
+async def test_bad_cd_claude_fatal() -> None:
+    from openmcp.backends import claude as claude_backend
+
+    out = await claude_backend.execute(
+        ClaudeParams(PROMPT="x", cd=Path("C:/definitely/not/real/path"))
+    )
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "bad_cd"
 
 
 @pytest.mark.asyncio
