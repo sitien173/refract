@@ -77,6 +77,20 @@ grep -q '^## Quality Review$' shared/journal-template.md
 grep -q '^## Review Result$' shared/journal-template.md
 grep -q '^## Final Commit$' shared/journal-template.md
 
+for status in inbox ready in-plan done declined; do
+    grep -q "\`${status}\`" shared/backlog-contract.md
+done
+grep -q '<!-- next id: B-001 -->' shared/backlog-contract.md
+grep -q 'in the same edit that appends the row' shared/backlog-contract.md
+grep -q 'No column alignment' shared/backlog-contract.md
+grep -q 'only when no project job is active' shared/backlog-contract.md
+grep -q 'docs/plans/BACKLOG.md' shared/backlog-contract.md
+grep -q 'shared/backlog-contract.md' hooks/superpowers-ccg-session-start.sh
+grep -q 'shared/backlog-contract.md' commands/backlog.md
+for verb in 'add <text>' 'triage'; do
+    grep -q "${verb}" commands/backlog.md
+done
+
 for skill in skills/*/SKILL.md; do
     grep -qi 'owns' "$skill"
     if [[ "$skill" != "skills/coordinating-multi-model-work/SKILL.md" ]]; then
