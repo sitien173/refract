@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 10.0.3 -->
+<!-- ccg-shared-version: 10.1.0 -->
 
 # Closeout: <slug>
 
