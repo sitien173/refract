@@ -370,12 +370,15 @@ async def test_backend_runner_dispatches_claude_without_pi_fallback(monkeypatch,
 
 @pytest.mark.asyncio
 async def test_backend_runner_rejects_unknown_backend_without_pi_fallback(tmp_path) -> None:
-    from openmcp.backend_runner import run
+    from typing import cast
+
+    from openmcp.backend_runner import BackendName, run
 
     async def fail_pi(params):
         pytest.fail("unknown backend must not fall through to pi")
 
-    out = await run("unknown", "prompt", str(tmp_path), pi_executor=fail_pi)
+    # Deliberately outside BackendName: guards callers that bypass the literal.
+    out = await run(cast(BackendName, "unknown"), "prompt", str(tmp_path), pi_executor=fail_pi)
 
     assert out["success"] is False
     assert "unknown" in out["error"]
