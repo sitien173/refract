@@ -6,8 +6,12 @@ Research performed on Windows on 2026-07-18 with:
 - Codex CLI 0.144.5
 - Pi coding agent 0.80.10
 
+Claude Code research performed on Linux on 2026-08-24 with Claude Code
+(`claude`) 2.1.220.
+
 CLI flags can change between releases. Re-run `agy --help`, `codex exec --help`,
-`codex exec resume --help`, and `pi --help` after upgrading a backend.
+`codex exec resume --help`, `pi --help`, and `claude --help` after upgrading a
+backend.
 
 OpenMCP launches argv directly with `shell=False`. On Windows, npm `.cmd`
 launchers are resolved through their matching PowerShell shim with
@@ -185,3 +189,76 @@ overridden. For `isolated = true`, the driver instead adds `--no-approve`,
 `--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become
 `--system-prompt`, `--model`, and `--thinking` respectively. OpenMCP places
 `--mode json` after target arguments so output parsing cannot be replaced.
+
+## Claude Code (`claude -p`)
+
+Available execution options:
+
+| Group | Flags |
+|---|---|
+| Model | `--model`, `--fallback-model`, `--effort`, `--betas`, `--max-budget-usd` |
+| Prompt | `--system-prompt`, `--append-system-prompt` |
+| Output | `-p`/`--print`, `--output-format` (`text`, `json`, `stream-json`), `--input-format`, `--json-schema`, `--include-partial-messages`, `--verbose` |
+| Session | `-r`/`--resume`, `-c`/`--continue`, `--session-id`, `--fork-session`, `--no-session-persistence`, `-n`/`--name`, `--from-pr` |
+| Tools | `--tools`, `--allowed-tools`, `--disallowed-tools`, `--permission-mode`, `--dangerously-skip-permissions` |
+| Resources | `--add-dir`, `--agent`, `--agents`, `--plugin-dir`, `--plugin-url`, `--mcp-config`, `--strict-mcp-config`, `--settings`, `--setting-sources`, `--file` |
+| Isolation | `--safe-mode`, `--bare`, `--disable-slash-commands` |
+| Execution model | `--bg`/`--background`, `-w`/`--worktree`, `--tmux`, `--ide`, `--chrome` |
+
+`agents`, `auth`, `doctor`, `mcp`, `plugin`, `project`, `install`, `update`, and
+`ultrareview` are subcommands, not execution options.
+
+`--permission-mode` accepts `acceptEdits`, `auto`, `bypassPermissions`,
+`manual`, `dontAsk`, and `plan`. `--effort` accepts `low`, `medium`, `high`,
+`xhigh`, and `max`.
+
+Claude Code has no working-root flag. The workspace comes from the subprocess
+working directory, which OpenMCP sets.
+
+OpenMCP owns `-p`, `--output-format json`, `--resume`, the `--` prompt boundary,
+and the prompt. OpenMCP always enables `--permission-mode bypassPermissions` for
+non-interactive execution. Transport flags are appended after target arguments so
+a target cannot replace `--output-format`. The compiled argv is:
+
+```
+claude [target args] -p --permission-mode bypassPermissions \
+       --output-format json [--resume <session-id>] -- <prompt>
+```
+
+The `--` separator is required rather than cosmetic. `--tools` and `--add-dir`
+are variadic, so without it a trailing prompt beginning with `-` can be consumed
+as a flag value.
+
+Target field translation:
+
+| Field | Emitted argv |
+|---|---|
+| `isolated = true` | `--safe-mode --strict-mcp-config` |
+| `system_prompt` | `--system-prompt <value>` |
+| `read_only = true` | `--tools Read,Grep,Glob` |
+| `model` | `--model <value>` |
+| `reasoning` | `--effort <value>` |
+
+`--safe-mode` disables CLAUDE.md, skills, plugins, hooks, MCP servers, custom
+commands, custom agents, output styles, workflows, custom themes, and
+keybindings. Authentication, model selection, built-in tools, and permissions
+continue to work normally, and admin-managed policy settings still apply. That
+combination is what makes it the usable analogue to Pi isolation.
+
+`backend_profile` has no Claude Code equivalent and is ignored.
+
+Unsupported target arguments, documented rather than rejected in code, matching
+the existing treatment of Codex `--ephemeral` and Pi `--no-session`:
+
+| Argument | Reason |
+|---|---|
+| `--no-session-persistence` | Sessions are never written to disk, so OpenMCP cannot resume the context on a later job. |
+| `--fork-session` | Resuming allocates a new session ID instead of reusing the original, breaking durable session continuity. |
+| `--bg`, `--background` | Returns immediately as a background agent, so there is no result to capture. |
+| `-w`, `--worktree` | Creates its own git worktree, which conflicts with the workspace OpenMCP assigns. |
+| `--bare` | Restricts Anthropic authentication to `ANTHROPIC_API_KEY` or `apiKeyHelper` and never reads OAuth or the keychain, so subscription logins fail. Use `--safe-mode` for isolation instead. |
+
+`validate_target_args` adds no Claude-specific rule. The reserved `--` token and
+the NUL byte check already apply to every backend. Claude Code has no
+workspace-root flag to escape, so `--add-dir` is permitted for the same reason
+Codex `--add-dir` is permitted.

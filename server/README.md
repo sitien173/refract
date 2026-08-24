@@ -8,7 +8,7 @@ It exposes AI agent workflows through Model Context Protocol tools.
 - Direct repository execution with automatic git commits on success.
 - Per-project FIFO job scheduling with multi-project concurrency.
 - Immutable execution plan snapshots for every job.
-- Multi-provider support for Antigravity, Codex, and Pi backends.
+- Multi-provider support for Antigravity, Codex, Pi, and Claude Code backends.
 - Real-time job status updates via MCP subscriptions.
 - Isolated and read-only execution modes for sensitive tasks.
 
@@ -29,16 +29,16 @@ It exposes AI agent workflows through Model Context Protocol tools.
         ▼
 [Job Runner & Target Executor]
         │
-        ├─────────────────┬─────────────────┐
-        ▼                 ▼                 ▼
-[AGY Adapter]     [Codex Adapter]    [Pi Adapter]
-        │                 │                 │
-        └─────────────────┼─────────────────┘
-                          ▼
-            [Host Provider CLI Process]
-                          │
-                          ▼
-              [Target Git Workspace]
+        ├──────────────┬──────────────┬──────────────┐
+        ▼              ▼              ▼              ▼
+  [AGY Adapter] [Codex Adapter] [Pi Adapter] [Claude Adapter]
+        │              │              │              │
+        └──────────────┴──────┬───────┴──────────────┘
+                              ▼
+                 [Host Provider CLI Process]
+                              │
+                              ▼
+                   [Target Git Workspace]
 ```
 
 Visual diagrams are available in `docs/diagrams/`:
@@ -52,7 +52,8 @@ Visual diagrams are available in `docs/diagrams/`:
 
 - Python 3.12 or newer.
 - `uv` package manager installed.
-- At least one supported backend CLI on `PATH`.
+- At least one supported backend CLI on `PATH`: `agy`, `codex`, `pi`, or
+  `claude`.
 
 ### Installation
 
@@ -234,6 +235,23 @@ id = "agy-gemini-3.1-pro-high-review"
 backend = "agy"
 model = "Gemini 3.1 Pro (High)"
 
+# claude backend configuration
+
+[[targets]]
+id = "claude-opus-high-code"
+backend = "claude"
+model = "opus"
+reasoning = "high"
+isolated = true
+
+[[targets]]
+id = "claude-sonnet-medium-review"
+backend = "claude"
+model = "sonnet"
+reasoning = "medium"
+isolated = true
+read_only = true
+
 # Profiles configuration
 
 [profiles.base]
@@ -267,6 +285,11 @@ implement = "pi-deepseek/deepseek-v4-flash-high-code"
 
 [profiles.codebase_explorer]
 extends   = "deepseek_impl"
+
+[profiles.claude_impl]
+extends   = "base"
+implement = "claude-opus-high-code"
+review = ["claude-sonnet-medium-review"]
 ```
 
 ### Starting the Daemon
@@ -289,11 +312,19 @@ OpenMCP provides four built-in workflows:
 - `consult`: Answers architectural questions without committing.
 - `other`: Single execution task without automatic commits.
 
-### Pi Target Isolation
+### Target Isolation
 
 Targets using the `pi` backend support policy enforcement:
 - `isolated = true`: Disables context files, extensions, and templates.
 - `read_only = true`: Restricts tools to `read`, `grep`, `find`, and `ls`.
+
+Targets using the `claude` backend support the same two fields:
+- `isolated = true`: Disables CLAUDE.md, skills, plugins, hooks, MCP servers,
+  and custom commands and agents.
+- `read_only = true`: Restricts tools to `Read`, `Grep`, and `Glob`.
+
+See [CLI_ARGUMENTS.md](CLI_ARGUMENTS.md) for the full per-backend flag
+reference.
 
 ## MCP Tool Surface
 
