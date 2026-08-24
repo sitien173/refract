@@ -381,7 +381,7 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
         raw_backend = item.get("backend", "")
         target_id = raw_target_id.strip() if isinstance(raw_target_id, str) else ""
         backend = raw_backend.strip() if isinstance(raw_backend, str) else ""
-        if not target_id or backend not in {"agy", "codex", "pi"}:
+        if not target_id or backend not in {"agy", "codex", "pi", "claude"}:
             raise ValueError(f"Invalid target: {item!r}")
         args = item.get("args", [])
         if not isinstance(args, list) or not all(isinstance(value, str) for value in args):

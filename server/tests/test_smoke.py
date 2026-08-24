@@ -439,12 +439,18 @@ async def test_claude_json_result_uses_last_result_and_transport_argv(monkeypatc
     monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
 
     out = await claude_backend.execute(
-        ClaudeParams(PROMPT="--prompt", cd=tmp_path, args=("--tools", "Read"))
+        ClaudeParams(
+            PROMPT="--prompt",
+            cd=tmp_path,
+            SESSION_ID="resume-session",
+            args=("--tools", "Read"),
+        )
     )
 
     assert captured["cmd"] == [
         "claude", "--tools", "Read", "-p", "--permission-mode",
-        "bypassPermissions", "--output-format", "json", "--", "--prompt",
+        "bypassPermissions", "--output-format", "json", "--resume",
+        "resume-session", "--", "--prompt",
     ]
     assert Path(captured["cwd"]) == tmp_path.absolute()
     assert out.outcome == "OK"
@@ -786,6 +792,153 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
         "--thinking",
         "xhigh",
     )
+
+
+@pytest.mark.asyncio
+async def test_driver_compiles_claude_isolated_target_args(monkeypatch, tmp_path) -> None:
+    import openmcp.drivers as drivers_module
+    from openmcp.config import TargetConfig
+
+    captured = {}
+
+    async def fake_execute(params):
+        captured["params"] = params
+        return BackendResult(outcome="OK", SESSION_ID="session", agent_messages="reviewed", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, "claude_execute", fake_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(
+            id="claude-isolated",
+            backend="claude",
+            isolated=True,
+            system_prompt="sentinel instructions",
+            read_only=True,
+            model="claude-model",
+            reasoning="high",
+            args=("--verbose",),
+        ),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=60,
+        cancel_event=threading.Event(),
+    )
+
+    assert captured["params"].args == (
+        "--verbose",
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--system-prompt",
+        "sentinel instructions",
+        "--tools",
+        "Read,Grep,Glob",
+        "--model",
+        "claude-model",
+        "--effort",
+        "high",
+    )
+
+
+@pytest.mark.asyncio
+async def test_driver_compiles_claude_read_only_args(monkeypatch, tmp_path) -> None:
+    import openmcp.drivers as drivers_module
+    from openmcp.config import TargetConfig
+
+    captured = {}
+
+    async def fake_execute(params):
+        captured["args"] = params.args
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="reviewed", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, "claude_execute", fake_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(id="claude-read-only", backend="claude", read_only=True),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+    )
+
+    assert captured["args"] == ("--tools", "Read,Grep,Glob")
+
+
+@pytest.mark.asyncio
+async def test_driver_compiles_claude_model_and_reasoning_args(monkeypatch, tmp_path) -> None:
+    import openmcp.drivers as drivers_module
+    from openmcp.config import TargetConfig
+
+    captured = {}
+
+    async def fake_execute(params):
+        captured["args"] = params.args
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="reviewed", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, "claude_execute", fake_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(
+            id="claude-policy",
+            backend="claude",
+            model="claude-model",
+            reasoning="xhigh",
+        ),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+    )
+
+    assert captured["args"] == ("--model", "claude-model", "--effort", "xhigh")
+
+
+@pytest.mark.asyncio
+async def test_driver_dispatches_claude_instead_of_pi(monkeypatch, tmp_path) -> None:
+    import openmcp.drivers as drivers_module
+    from openmcp.config import TargetConfig
+
+    calls = []
+
+    async def fake_claude(params):
+        calls.append("claude")
+        return BackendResult(outcome="OK", SESSION_ID="session", agent_messages="reviewed", error="", error_class="")
+
+    async def fake_pi(params):
+        calls.append("pi")
+        return BackendResult(outcome="OK", SESSION_ID="pi", agent_messages="wrong", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, "claude_execute", fake_claude)
+    monkeypatch.setattr(drivers_module, "pi_execute", fake_pi)
+    result = await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(id="claude", backend="claude"),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+    )
+
+    assert calls == ["claude"]
+    assert result.outcome == "SUCCESS"
+    assert result.session_id == "session"
+
+
+@pytest.mark.asyncio
+async def test_driver_rejects_unrecognized_backend_without_fallthrough(tmp_path) -> None:
+    import openmcp.drivers as drivers_module
+    from openmcp.config import TargetConfig
+
+    result = await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(id="unknown", backend="unknown"),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+    )
+
+    assert result.outcome == "TARGET_FATAL"
+    assert result.error_code == "invalid_args"
 
 
 @pytest.mark.asyncio

@@ -499,10 +499,19 @@ extends = "base"
     assert base.profile_declarations == base_declarations
 
 
-@pytest.mark.parametrize("backend,args", [("agy", ("--",)), ("codex", ("--cd", "/other")), ("pi", ("--extension", "unsafe.ts"))])
+@pytest.mark.parametrize("backend,args", [("agy", ("--",)), ("codex", ("--cd", "/other")), ("pi", ("--extension", "unsafe.ts")), ("claude", ("--",))])
 def test_config_rejects_reserved_target_args(backend, args) -> None:
     with pytest.raises(ValueError):
         validate_target_args("unsafe", backend, args, isolated=backend == "pi")
+
+
+def test_claude_target_loads_without_error(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config().replace('backend = "codex"', 'backend = "claude"'), encoding="utf-8")
+
+    catalog = load_config(path)
+
+    assert catalog.targets[0].backend == "claude"
 
 
 def test_custom_target_defaults_support_all_semantic_workflows(tmp_path, monkeypatch) -> None:

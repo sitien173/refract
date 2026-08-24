@@ -10,6 +10,7 @@ from typing import Literal
 
 from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
+from openmcp.backends.claude import ClaudeParams, execute as claude_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.pi import PiParams, execute as pi_execute
 from openmcp.config import TargetConfig, validate_target_args
@@ -86,6 +87,19 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
             args.extend(["--model", target.model])
         if target.reasoning:
             args.extend(["--thinking", target.reasoning])
+        return tuple(args)
+
+    if target.backend == "claude":
+        if target.isolated:
+            args.extend(["--safe-mode", "--strict-mcp-config"])
+        if target.system_prompt:
+            args.extend(["--system-prompt", target.system_prompt])
+        if target.read_only:
+            args.extend(["--tools", "Read,Grep,Glob"])
+        if target.model:
+            args.extend(["--model", target.model])
+        if target.reasoning:
+            args.extend(["--effort", target.reasoning])
     return tuple(args)
 
 
@@ -156,7 +170,7 @@ class DriverRegistry:
                     cancel_event=cancel_event,
                 )
             )
-        else:
+        elif target.backend == "pi":
             result = await pi_execute(
                 PiParams(
                     PROMPT=prompt,
@@ -166,6 +180,25 @@ class DriverRegistry:
                     timeout_s=timeout_s,
                     cancel_event=cancel_event,
                 )
+            )
+        elif target.backend == "claude":
+            result = await claude_execute(
+                ClaudeParams(
+                    PROMPT=prompt,
+                    cd=cwd,
+                    SESSION_ID=session_id,
+                    args=args,
+                    timeout_s=timeout_s,
+                    cancel_event=cancel_event,
+                )
+            )
+        else:
+            return DriverResult(
+                outcome="TARGET_FATAL",
+                session_id=session_id,
+                text="",
+                error=f"Unsupported backend: {target.backend}",
+                error_code="invalid_args",
             )
         return _normalize(result)
 

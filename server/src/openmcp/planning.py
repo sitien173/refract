@@ -78,7 +78,7 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
             if (
                 not isinstance(target_id, str)
                 or not target_id
-                or backend not in {"agy", "codex", "pi"}
+                or backend not in {"agy", "codex", "pi", "claude"}
                 or not isinstance(args, list)
                 or not all(isinstance(item, str) for item in args)
                 or isinstance(max_concurrency, bool)
