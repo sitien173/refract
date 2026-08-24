@@ -26,11 +26,13 @@ docs/plans/<slug>/
   PLAN.md
   DESIGN.md
   .handover.md
+  CLOSEOUT.md   # written at closeout, not at authoring
 ```
 
 Initialize handover with the canonical schema: active status, phase zero, null
-project and job fields, and empty completion lists. Do not create phase
-directories until execution.
+project and job fields, and empty completion lists. Record every backlog row this
+plan will close in `backlog_ids`. Do not create phase directories until
+execution.
 
 A documentation-only plan may use `docs/plans/<slug>-plan.md`. Convert a flat
 implementation plan to folder layout before execution.
@@ -67,6 +69,8 @@ implementation plan to folder layout before execution.
 ## Rules
 
 - Never replace matching active work.
+- Flip each source row from `ready` to `in-plan` with `ref: <slug>`, in the same
+  commit that creates the plan directory. See `shared/backlog-contract.md`.
 - Do not call `task_guide`, register a project, or submit jobs while authoring.
 - Do not hard-code a default profile, target, model, or provider.
 - Do not create empty directories or `.gitkeep` files.

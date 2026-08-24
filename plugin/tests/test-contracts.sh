@@ -91,6 +91,13 @@ for verb in 'add <text>' 'triage'; do
     grep -q "${verb}" commands/backlog.md
 done
 
+grep -q '^backlog_ids:' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'backlog_ids' skills/writing-plans/SKILL.md
+grep -q 'ready` to `in-plan`' skills/writing-plans/SKILL.md
+grep -q 'CLOSEOUT.md' skills/writing-plans/SKILL.md
+grep -q 'B-NNN` backlog id' skills/brainstorming/SKILL.md
+grep -q 'Never write to the backlog' skills/brainstorming/SKILL.md
+
 for skill in skills/*/SKILL.md; do
     grep -qi 'owns' "$skill"
     if [[ "$skill" != "skills/coordinating-multi-model-work/SKILL.md" ]]; then
