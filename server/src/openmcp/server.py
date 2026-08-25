@@ -145,7 +145,7 @@ async def job_submit(project_id: str, workflow: str, prompt: str, ctx: Context, 
     return await _runtime(ctx).submit(project_id, workflow, prompt, context_key=context_key, profile=profile)
 
 
-@mcp.tool(description="Wait for job completion or timeout.", structured_output=True)
+@mcp.tool(description="Wait for a job to complete in a background task, or until timeout.", structured_output=True)
 @_logged_request("job_wait")
 async def job_wait(job_id: str, ctx: Context, timeout_s: int = _MCP_WAIT_TIMEOUT_S) -> JobView:
     if timeout_s < 0:
