@@ -2,6 +2,6 @@
 
 | id | title | source | pri | status | ref |
 |----|-------|--------|-----|--------|-----|
-| B-001 | Pass --new-project to the agy adapter so project context files load | user 08-28 | | inbox | |
+| B-001 | Pass --new-project to the agy adapter so project context files load | user 08-28 | P1 | in-plan | agy-new-project |
 
 <!-- next id: B-002 -->
