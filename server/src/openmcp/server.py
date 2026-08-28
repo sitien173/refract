@@ -24,7 +24,7 @@ from openmcp.backends.codex import execute as codex_execute
 from openmcp.backends.pi import execute as pi_execute
 from openmcp.config import load_config, load_task_guide
 from openmcp.logging_setup import configure as configure_logging, get_logger, log_context
-from openmcp.models import ActionResult, DaemonStatusResult, JobView, ProjectView, SubmissionResult, TERMINAL_STATES, TaskGuideResult
+from openmcp.models import ActionResult, ContextInstructionsResult, DaemonStatusResult, JobView, ProjectView, SubmissionResult, TERMINAL_STATES, TaskGuideResult
 from openmcp.runtime import Runtime
 from openmcp.workflows import BUILTIN_WORKFLOWS
 
@@ -178,6 +178,12 @@ async def job_retry(job_id: str, ctx: Context) -> SubmissionResult:
     return await _runtime(ctx).retry(job_id)
 
 
+@mcp.tool(description="Set, replace, or clear a project context instruction for one workflow.", structured_output=True)
+@_logged_request("context_init")
+async def context_init(project_id: str, workflow: str, instruction: str, ctx: Context) -> ContextInstructionsResult:
+    return _runtime(ctx).set_context_instruction(project_id, workflow, instruction)
+
+
 def _json(value: Any) -> str:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
@@ -243,6 +249,11 @@ async def project_profiles_resource(project_id: str, ctx: Context) -> str:
     return _json({"default": catalog.default_profile, "available": sorted(catalog.profiles)})
 
 
+@mcp.resource("openmcp://projects/{project_id}/context_instructions", mime_type="application/json")
+async def context_instructions_resource(project_id: str, ctx: Context) -> str:
+    return _json(_runtime(ctx).context_instructions(project_id))
+
+
 @mcp.resource("openmcp://workflows/{project_id}", mime_type="application/json")
 async def workflows_resource(project_id: str, ctx: Context) -> str:
     if _runtime(ctx).database.project(project_id) is None:
@@ -250,4 +261,4 @@ async def workflows_resource(project_id: str, ctx: Context) -> str:
     return _json(BUILTIN_WORKFLOWS)
 
 
-__all__ = ["create_application", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "publish_job_resource", "run", "status", "subscription_bus", "task_guide"]
+__all__ = ["context_init", "context_instructions_resource", "create_application", "job_cancel", "job_retry", "job_submit", "job_wait", "mcp", "project_register", "publish_job_resource", "run", "status", "subscription_bus", "task_guide"]

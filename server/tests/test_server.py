@@ -9,8 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from openmcp.models import JobResult, JobView, ProjectView, SubmissionResult, TargetView
-from openmcp.server import job_wait, mcp, profiles_resource, projects_resource, publish_job_resource, subscription_bus, targets_resource, task_guide, workflows_resource
+from openmcp.models import ContextInstructionsResult, JobResult, JobView, ProjectView, SubmissionResult, TargetView
+from openmcp.runtime import OrchestrationError, Runtime
+from openmcp.server import context_init, context_instructions_resource, job_wait, mcp, profiles_resource, projects_resource, publish_job_resource, subscription_bus, targets_resource, task_guide, workflows_resource
+from tests.orchestration_helpers import config, repository
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -128,6 +130,7 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert {"doctor", "reload"}.isdisjoint(tools)
     assert "job_integrate" not in tools
     assert set(tools["job_submit"].input_schema["properties"]) == {"project_id", "workflow", "prompt", "context_key", "profile"}
+    assert set(tools["context_init"].input_schema["properties"]) == {"project_id", "workflow", "instruction"}
     assert set(tools["task_guide"].input_schema["properties"]) == {"project_id"}
     assert set(tools["job_wait"].input_schema["properties"]) == {"job_id", "timeout_s"}
     assert tools["job_wait"].input_schema["properties"]["timeout_s"]["default"] == 30
@@ -372,3 +375,153 @@ async def test_application_lifespan_clears_state_when_runtime_close_fails(monkey
         async with application.router.lifespan_context(application):
             pass
     assert server._DAEMON_CONFIG is None
+
+
+@pytest.mark.asyncio
+async def test_context_init_returns_instructions_model(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        result = await context_init(project.id, "implement", "follow the plan", ctx)
+        assert isinstance(result, ContextInstructionsResult)
+        assert result.project_id == project.id
+        assert result.instructions == {"implement": "follow the plan"}
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_context_init_round_trips_through_resource(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        await context_init(project.id, "implement", "follow the plan", ctx)
+        assert json.loads(await context_instructions_resource(project.id, ctx)) == {
+            "project_id": project.id,
+            "instructions": {"implement": "follow the plan"},
+        }
+        await context_init(project.id, "implement", "revised guidance", ctx)
+        assert json.loads(await context_instructions_resource(project.id, ctx)) == {
+            "project_id": project.id,
+            "instructions": {"implement": "revised guidance"},
+        }
+        result = await context_init(project.id, "implement", "", ctx)
+        assert result.instructions == {}
+        assert json.loads(await context_instructions_resource(project.id, ctx)) == {
+            "project_id": project.id,
+            "instructions": {},
+        }
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_context_init_stores_per_workflow_instructions(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        await context_init(project.id, "implement", "build it", ctx)
+        await context_init(project.id, "review", "check it", ctx)
+        assert json.loads(await context_instructions_resource(project.id, ctx)) == {
+            "project_id": project.id,
+            "instructions": {"implement": "build it", "review": "check it"},
+        }
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_context_init_rejects_unknown_project_before_workflow(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        runtime.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        with pytest.raises(OrchestrationError, match="Unknown project"):
+            await context_init("missing-project", "not-a-workflow", "ignored", ctx)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_context_init_rejects_unknown_workflow(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        with pytest.raises(OrchestrationError, match="Unknown workflow"):
+            await context_init(project.id, "not-a-workflow", "ignored", ctx)
+        assert json.loads(await context_instructions_resource(project.id, ctx)) == {
+            "project_id": project.id,
+            "instructions": {},
+        }
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_context_instructions_resource_rejects_unknown_project(tmp_path) -> None:
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        with pytest.raises(ValueError, match="Unknown project"):
+            await context_instructions_resource("missing-project", ctx)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_context_init_does_not_touch_job_execution(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        await context_init(project.id, "implement", "follow the plan", ctx)
+        await context_init(project.id, "review", "check it", ctx)
+        assert runtime.database.queued_jobs() == []
+        assert runtime.database.jobs(project.id) == []
+        assert runtime.scheduler.queued_jobs == 0
+        assert runtime.scheduler.active_jobs == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_context_init_survives_daemon_restart(tmp_path) -> None:
+    root = repository(tmp_path)
+    home = tmp_path / "home"
+    first = Runtime(config(home))
+    await first.start()
+    try:
+        project = first.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=first))
+        await context_init(project.id, "implement", "persistent guidance", ctx)
+        project_id = project.id
+    finally:
+        await first.close()
+
+    second = Runtime(config(home))
+    await second.start()
+    try:
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=second))
+        assert json.loads(await context_instructions_resource(project_id, ctx)) == {
+            "project_id": project_id,
+            "instructions": {"implement": "persistent guidance"},
+        }
+    finally:
+        await second.close()

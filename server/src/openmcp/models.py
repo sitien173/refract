@@ -80,6 +80,11 @@ class TaskGuideResult(BaseModel):
     guide: dict[str, Any]
 
 
+class ContextInstructionsResult(BaseModel):
+    project_id: str
+    instructions: dict[str, str]
+
+
 class DaemonStatusResult(BaseModel):
     status: Literal["running", "stopping"]
     workers: int
@@ -93,6 +98,7 @@ class ResourcePayload(BaseModel):
 
 __all__ = [
     "ActionResult",
+    "ContextInstructionsResult",
     "ContextStreamView",
     "DaemonStatusResult",
     "JobResult",

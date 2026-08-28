@@ -13,7 +13,7 @@ from openmcp.models import ContextStreamView, JobResult, JobView, ProjectView
 
 
 log = get_logger("database")
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 
 def utc_now() -> str:
@@ -46,7 +46,7 @@ class Database:
             if self._is_v6_schema(columns):
                 self._create_support_tables()
                 if self._connection.execute("PRAGMA user_version").fetchone()[0] != _SCHEMA_VERSION:
-                    self._connection.execute("PRAGMA user_version=6")
+                    self._connection.execute("PRAGMA user_version=7")
                     self._connection.commit()
             elif {"prompt", "result_text", "target_id", "attempts"} <= columns:
                 self._migrate_v5_to_v6()
@@ -80,6 +80,7 @@ class Database:
             "jobs": "PRAGMA table_info(jobs)",
             "projects": "PRAGMA table_info(projects)",
             "context_sessions": "PRAGMA table_info(context_sessions)",
+            "context_instructions": "PRAGMA table_info(context_instructions)",
         }
         try:
             statement = statements[table]
@@ -118,7 +119,7 @@ class Database:
             """
         )
         self._create_support_tables()
-        self._connection.execute("PRAGMA user_version=6")
+        self._connection.execute("PRAGMA user_version=7")
         self._connection.commit()
 
     def _create_support_tables(self) -> None:
@@ -157,6 +158,13 @@ class Database:
                 consecutive_failures INTEGER NOT NULL DEFAULT 0,
                 circuit_open_until TEXT NOT NULL DEFAULT '',
                 last_success_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS context_instructions (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                workflow TEXT NOT NULL,
+                instruction TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(project_id, workflow)
             );
             CREATE INDEX IF NOT EXISTS jobs_state_idx ON jobs(state, created_at);
             CREATE INDEX IF NOT EXISTS events_job_idx ON events(job_id, id);
@@ -268,7 +276,7 @@ class Database:
             self._connection.execute("ALTER TABLE projects_v6 RENAME TO projects")
             self._connection.execute("ALTER TABLE jobs_v6 RENAME TO jobs")
             self._connection.execute("CREATE INDEX jobs_state_idx ON jobs(state, created_at)")
-            self._connection.execute("PRAGMA user_version=6")
+            self._connection.execute("PRAGMA user_version=7")
             if self._connection.execute("PRAGMA foreign_key_check").fetchall():
                 raise sqlite3.IntegrityError("Foreign-key violations during v5 migration")
             integrity = self._connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -384,7 +392,7 @@ class Database:
             self._connection.execute("ALTER TABLE projects_v6 RENAME TO projects")
             self._connection.execute("ALTER TABLE jobs_v6 RENAME TO jobs")
             self._connection.execute("CREATE INDEX jobs_state_idx ON jobs(state, created_at)")
-            self._connection.execute("PRAGMA user_version=6")
+            self._connection.execute("PRAGMA user_version=7")
             if self._connection.execute("PRAGMA foreign_key_check").fetchall():
                 raise sqlite3.IntegrityError("Foreign-key violations during legacy migration")
             integrity = self._connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -568,6 +576,36 @@ class Database:
             self._connection.execute("""INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until) VALUES (?, ?, ?)
                 ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures, circuit_open_until=excluded.circuit_open_until""", (target_id, failures, circuit_open_until))
         return failures
+
+    def set_context_instruction(self, project_id: str, workflow: str, instruction: str) -> None:
+        with self._connection:
+            if instruction:
+                self._connection.execute(
+                    """INSERT INTO context_instructions(project_id, workflow, instruction, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(project_id, workflow) DO UPDATE SET
+                    instruction=excluded.instruction, updated_at=excluded.updated_at""",
+                    (project_id, workflow, instruction, utc_now()),
+                )
+            else:
+                self._connection.execute(
+                    "DELETE FROM context_instructions WHERE project_id=? AND workflow=?",
+                    (project_id, workflow),
+                )
+
+    def context_instruction(self, project_id: str, workflow: str) -> str:
+        row = self._connection.execute(
+            "SELECT instruction FROM context_instructions WHERE project_id=? AND workflow=?",
+            (project_id, workflow),
+        ).fetchone()
+        return row["instruction"] if row else ""
+
+    def context_instructions(self, project_id: str) -> dict[str, str]:
+        rows = self._connection.execute(
+            "SELECT workflow, instruction FROM context_instructions WHERE project_id=? ORDER BY workflow",
+            (project_id,),
+        ).fetchall()
+        return {row["workflow"]: row["instruction"] for row in rows}
 
 
 __all__ = ["Database", "utc_now"]

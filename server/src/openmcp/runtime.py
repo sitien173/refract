@@ -14,6 +14,7 @@ from openmcp.execution import JobNotifier, JobRunner, TargetExecutor
 from openmcp.logging_setup import get_logger
 from openmcp.models import (
     ActionResult,
+    ContextInstructionsResult,
     DaemonStatusResult,
     JobView,
     ProjectView,
@@ -169,6 +170,29 @@ class Runtime:
 
     def status(self) -> DaemonStatusResult:
         return DaemonStatusResult(status="stopping" if self._closing else "running", workers=self.scheduler.workers, active_jobs=self.scheduler.active_jobs, queued_jobs=self.scheduler.queued_jobs)
+
+    def set_context_instruction(self, project_id: str, workflow: str, instruction: str) -> ContextInstructionsResult:
+        project = self.database.project(project_id)
+        if project is None:
+            raise OrchestrationError(f"Unknown project: {project_id}")
+        try:
+            resolved_workflow = get_workflow(workflow)
+        except ValueError as exc:
+            raise OrchestrationError(str(exc)) from exc
+        self.database.set_context_instruction(project.id, resolved_workflow, instruction)
+        return ContextInstructionsResult(
+            project_id=project.id,
+            instructions=self.database.context_instructions(project.id),
+        )
+
+    def context_instructions(self, project_id: str) -> ContextInstructionsResult:
+        project = self.database.project(project_id)
+        if project is None:
+            raise OrchestrationError(f"Unknown project: {project_id}")
+        return ContextInstructionsResult(
+            project_id=project.id,
+            instructions=self.database.context_instructions(project.id),
+        )
 
     @property
     def catalog(self) -> DaemonConfig:

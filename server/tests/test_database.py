@@ -55,25 +55,49 @@ def create_v5_database(path, *, invalid_foreign_key: bool = False) -> None:
     connection.close()
 
 
+def create_v6_database(path) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        PRAGMA foreign_keys=ON;
+        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
+        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
+        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
+        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
+    """)
+    connection.execute("PRAGMA user_version=6")
+    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", ("project", "project", "/project", "2026-01-01"))
+    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", "project", "consult", "balanced", "prompt", "{}", "consult", "succeeded", "result text", "target", 2, "", "2026-01-01", "2026-01-02"))
+    connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", ("job", "2026-01-01", "job.queued", "{}"))
+    connection.execute("INSERT INTO context_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ("project", "consult", "consult", "target", "target", "", "session", "2026-01-01"))
+    connection.execute("INSERT INTO context_turns(project_id, context_key, role, target_id, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", ("project", "consult", "consult", "target", "prompt", "response", "2026-01-01"))
+    connection.execute("INSERT INTO target_health VALUES (?, ?, ?, ?)", ("target", 1, "", "2026-01-01"))
+    connection.commit()
+    connection.close()
+
+
 def table_columns(database: Database, table: str) -> set[str]:
     return database._columns(table)
 
 
-def test_fresh_database_uses_v6_schema(tmp_path) -> None:
+def test_fresh_database_uses_v7_schema(tmp_path) -> None:
     database = Database(tmp_path / "openmcp.db")
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 7
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
     assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "created_at", "updated_at"}
+    assert table_columns(database, "context_instructions") == {"project_id", "workflow", "instruction", "updated_at"}
     assert "stages" not in tables and "artifacts" not in tables
     database.close()
 
 
-def test_v5_migrates_to_v6_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v6_migrates_to_v7_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
-    create_v5_database(path)
+    create_v6_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 7
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
     assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
@@ -83,16 +107,36 @@ def test_v5_migrates_to_v6_preserving_rows_and_support_data(tmp_path) -> None:
     assert database._connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0] == 1
     assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
     assert database._connection.execute("SELECT COUNT(*) FROM target_health").fetchone()[0] == 1
+    assert database._connection.execute("SELECT COUNT(*) FROM context_instructions").fetchone()[0] == 0
     assert not {"projects_v6", "jobs_v6"} & {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     database.close()
 
 
-def test_reopening_v6_is_a_noop(tmp_path) -> None:
+def test_v5_migrates_to_v7_preserving_rows_and_support_data(tmp_path) -> None:
+    path = tmp_path / "openmcp.db"
+    create_v5_database(path)
+    database = Database(path)
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "created_at", "updated_at"}
+    assert database.project("project") and database.project("project").root == "/project"
+    job = database.job("job")
+    assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
+    assert database.events("job")[0]["kind"] == "job.queued"
+    assert database._connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0] == 1
+    assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
+    assert database._connection.execute("SELECT COUNT(*) FROM target_health").fetchone()[0] == 1
+    assert database._connection.execute("SELECT COUNT(*) FROM context_instructions").fetchone()[0] == 0
+    assert not {"projects_v6", "jobs_v6"} & {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    database.close()
+
+
+def test_reopening_v7_is_a_noop(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     first = Database(path)
     first.close()
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 7
     second.close()
 
 
@@ -188,3 +232,68 @@ def test_context_includes_sessionless_turns_with_fixed_query_count(tmp_path) -> 
     assert streams[1].sessions == {"sentinel": "review-session"}
     assert len([statement for statement in statements if statement.startswith("SELECT")]) == 2
     database.close()
+
+
+def test_context_instructions_round_trip_replace_and_clear(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+    try:
+        database.set_context_instruction(project.id, "implement", "follow the plan")
+        assert database.context_instruction(project.id, "implement") == "follow the plan"
+        assert database.context_instructions(project.id) == {"implement": "follow the plan"}
+        database.set_context_instruction(project.id, "implement", "revised guidance")
+        assert database.context_instruction(project.id, "implement") == "revised guidance"
+        database.set_context_instruction(project.id, "implement", "")
+        assert database.context_instruction(project.id, "implement") == ""
+        assert database.context_instructions(project.id) == {}
+        assert database._connection.execute("SELECT COUNT(*) FROM context_instructions").fetchone()[0] == 0
+    finally:
+        database.close()
+
+
+def test_context_instructions_are_keyed_per_workflow(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+    try:
+        database.set_context_instruction(project.id, "implement", "build it")
+        database.set_context_instruction(project.id, "review", "check it")
+        assert database.context_instructions(project.id) == {"implement": "build it", "review": "check it"}
+        assert database.context_instruction(project.id, "implement") == "build it"
+        assert database.context_instruction(project.id, "review") == "check it"
+    finally:
+        database.close()
+
+
+def test_deleting_a_project_removes_its_context_instruction_rows(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+    try:
+        database.set_context_instruction(project.id, "implement", "build it")
+        assert database._connection.execute("SELECT COUNT(*) FROM context_instructions").fetchone()[0] == 1
+        with database._connection:
+            database._connection.execute("DELETE FROM projects WHERE id=?", (project.id,))
+        assert database._connection.execute("SELECT COUNT(*) FROM context_instructions").fetchone()[0] == 0
+    finally:
+        database.close()
+
+
+def test_context_instructions_table_cascades_on_project_delete(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+    try:
+        database.set_context_instruction(project.id, "implement", "build it")
+        foreign_keys = database._connection.execute("PRAGMA foreign_key_list(context_instructions)").fetchall()
+        assert [row["table"] for row in foreign_keys] == ["projects"]
+        assert all(row["on_delete"] == "CASCADE" for row in foreign_keys)
+    finally:
+        database.close()
+
+
+def test_setting_instruction_for_unknown_project_raises(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            database.set_context_instruction("missing", "implement", "build it")
+        assert database.context_instructions("missing") == {}
+    finally:
+        database.close()
