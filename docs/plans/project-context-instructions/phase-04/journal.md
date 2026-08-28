@@ -11,49 +11,56 @@
 - Implementation Job: f466b417-dbd8-4b28-9780-dc81bed96040; fix a759bcda-fe25-4645-a520-523c65417c1b
 - Review Job: n/a
 - Started: 2026-08-28T18:51:17+07:00
-- Finished: 2026-08-28T20:02:41+07:00
+- Finished: 2026-08-28T20:40:17+07:00
 
 ## Implementation Response
 
-## Fix — Review cycle 2: inode-bound replacement and quarantine cleanup (HIGH)
+## Fix — FINAL remediation: Git index lock + secret quarantine trash
 
-Finding 1: replacement now binds to the exact prevalidated inode
-(`_refuse_existing_target` returns `(st_dev, st_ino)`; `_open_managed_for_replacement`
-fails closed on identity change) and rechecks Git tracking after opening that
-inode, before mutation. A race-swapped tracked marker file is never modified.
+Replaced the uncloseable same-uid pathname design:
 
-Finding 2: cleanup and sweep now atomically quarantine the candidate to a
-unique same-directory path, validate marker, regular single-link identity, and
-original-path Git tracking at the quarantine path, and delete only the
-quarantined managed inode. Non-managed or tracked content is restored without
-overwriting another path; when restoration is impossible the quarantined bytes
-are preserved and a failure is reported rather than deleting data.
+1. `_IndexLock` acquires the actual per-worktree Git `index.lock` with
+   `O_CREAT|O_EXCL` (resolved via `git rev-parse --git-path index.lock`)
+   before the final tracked check and any relocation or fresh write. Bounded
+   retries; a foreign lock is never removed; release unlinks only when the
+   path identity matches the held descriptor. `git add` fails while held;
+   tracked check plus materialization are mutually exclusive with Git index
+   mutations.
+2. `_Quarantine` uses `secrets.token_hex` names in a 0700 trash directory
+   (Git common storage, excluded worktree fallback). Destinations reserved
+   with `O_CREAT|O_EXCL`; `os.rename` overwrites only the reservation.
+   Payloads are never deleted. Managed files leave the target absent with
+   bytes preserved; foreign/tracked swaps are restored with no-overwrite link
+   or preserved-and-logged on race loss.
+3. Cleanup and sweep leave target paths absent without pathname payload
+   deletion; no predictable names; no pruning.
+4. Direct tests cover lock blocking, foreign-lock preservation, release on
+   exits, quarantine-name preservation, swapped-byte recoverability, and
+   target-path disappearance for managed cleanup.
 
-6 new tests added (tracked marker swap, same-inode tracking recheck, cleanup
-foreign/tracked swaps, sweep foreign swap, restore-preserve-on-replacement).
-`uv run pytest tests/test_context_files.py tests/test_execution.py` -> 87
-passed; `uv run pytest` -> 257 passed, 4 failed (pre-existing `job_wait` set),
+`uv run pytest tests/test_context_files.py tests/test_execution.py` -> 92
+passed; `uv run pytest` -> 262 passed, 4 failed (pre-existing `job_wait` set),
 3 deselected.
 
-# EXTERNAL RESPONSE (revised)
+# EXTERNAL RESPONSE (final)
 ## META
 - Phase / Started / Finished / Plan dir
-- 4 / 2026-08-28T18:51:17+07:00 / 2026-08-28T20:02:41+07:00 / docs/plans/project-context-instructions/phase-04
+- 4 / 2026-08-28T18:51:17+07:00 / 2026-08-28T20:40:17+07:00 / docs/plans/project-context-instructions/phase-04
 ## SUMMARY
-Materialized codex instructions as Git-invisible composed `AGENTS.override.md` files per attempt with synchronous marker-scoped cleanup, startup sweeping, and fail-closed refusal of tracked/foreign/symlink/hardlink/directory targets, with inode-bound replacement and quarantine-based cleanup.
+Materialized codex instructions as Git-invisible composed `AGENTS.override.md` files per attempt with synchronous marker-scoped cleanup, startup sweeping, and fail-closed refusal of tracked/foreign/symlink/hardlink/directory targets, with per-worktree Git index locking and secret-quarantine trash.
 ## FILES MODIFIED
 | Action | Path | Change |
-| Create | src/openmcp/context_files.py | Managed marker, scrubbed Git calls, tracked check, anchored exclude-block writer via `$GIT_COMMON_DIR/info/exclude`, materialize/cleanup/sweep helpers; fixes: project root preserved for composition, identical refusal in Git and non-Git projects, inode-bound replacement (`O_NOFOLLOW` + exact inode identity + post-open tracking recheck), quarantine-based cleanup/sweep (atomic move, validate at quarantine, restore or preserve) |
+| Create | src/openmcp/context_files.py | Managed marker, scrubbed Git calls, tracked check, anchored exclude-block writer via `$GIT_COMMON_DIR/info/exclude`, materialize/cleanup/sweep helpers; final remediation: per-worktree Git `index.lock` acquisition (`O_CREAT|O_EXCL`, bounded retries, identity-checked release), secret `token_hex` quarantine trash (0700, Git common storage + excluded fallback), no-overwrite restore, no pathname payload deletion, no pruning |
 | Modify | src/openmcp/execution.py | Per-attempt codex materialization, REQUEST_FATAL on refusal, synchronous cleanup in finally + driver-exception path |
 | Modify | src/openmcp/runtime.py | Startup sweep of marker-bearing leftovers per registered project |
-| Create | tests/test_context_files.py | 38 tests: composition (incl. repo-subdirectory project root), Git-invisibility main+linked worktree, exclusion once, tracked/foreign/symlink/hardlink/dir refusals (Git and non-Git), leftover overwrite, cleanup, sweep, race-swapped foreign/tracked preservation, tracked-marker swap, same-inode tracking recheck, quarantine swap restoration, restore-preserve-on-replacement |
+| Create | tests/test_context_files.py | 43 tests: composition, Git-invisibility main+linked worktree, exclusion once, refusals, leftover overwrite, cleanup/sweep quarantine, index-lock blocking + foreign-lock preservation + release-on-exit, secret quarantine names, swapped-bytes recoverability, target-path disappearance |
 | Modify | tests/test_execution.py | 13 tests: materialize/cleanup on success/failure/timeout/cancellation/driver-exception, REQUEST_FATAL, non-Git warning, startup sweep |
 | Modify | docs/plans/project-context-instructions/phase-04/notes.md | Per-task decision notes + fix blocks with RED→GREEN evidence |
-| Modify | docs/plans/project-context-instructions/phase-04/journal.md | META Finished + fix notes + revised EXTERNAL RESPONSE appended |
+| Modify | docs/plans/project-context-instructions/phase-04/journal.md | META Finished + final remediation notes + EXTERNAL RESPONSE appended |
 ## NOTES
-- phase-04/notes.md (## Task 1, ## Task 2, ## Task 3, ## Fix — Pre-commit defect correction, ## Fix — Review finding: inode-safe replacement (HIGH), ## Fix — Review cycle 2: inode-bound replacement and quarantine cleanup (HIGH))
+- phase-04/notes.md (## Task 1, ## Task 2, ## Task 3, ## Fix — Pre-commit defect correction, ## Fix — Review finding: inode-safe replacement (HIGH), ## Fix — Review cycle 2: inode-bound replacement and quarantine cleanup (HIGH), ## Fix — FINAL remediation: Git index lock + secret quarantine trash (consultation))
 ## SPEC COMPLIANCE
-- Meets Spec? YES — both cycle-2 HIGH findings fixed with inode-bound replacement and quarantine cleanup; 51 new tests green; only the 4 pre-existing `job_wait` timeout failures remain (present on base commit, out of scope).
+- Meets Spec? YES — consultation remediation complete: per-worktree index.lock mutual exclusion, secret quarantine trash with no-overwrite restore, target paths absent for managed cleanup without payload deletion, all direct tests green; only the 4 pre-existing `job_wait` timeout failures remain (present on base commit, out of scope).
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

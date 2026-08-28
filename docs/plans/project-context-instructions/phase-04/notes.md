@@ -312,3 +312,72 @@
     `87 passed`.
   - `uv run pytest -q` -> `257 passed, 4 failed, 3 deselected` (the 4 failures
     are the pre-existing `job_wait` set, identical to the base commit).
+
+## Fix — FINAL remediation: Git index lock + secret quarantine trash (consultation)
+
+### Decisions made
+- Replaced the uncloseable same-uid pathname design with two enforceable
+  properties per the consultation result.
+
+1. **Git index lock** (`_IndexLock`): the actual per-worktree Git `index.lock`
+   (resolved through `git rev-parse --git-path index.lock`, absolute Git dir
+   per worktree) is acquired with `O_CREAT|O_EXCL` before the final tracked
+   check and any existing-file relocation or fresh write. This makes the
+   tracked check plus materialization mutually exclusive with Git index
+   mutations: a concurrent `git add` fails while we hold the lock (verified by
+   test), and we never read a half-mutated index. Retries are bounded
+   (`_lock_retries = 50`, 20 ms delay); a foreign lock is never removed;
+   release unlinks only when the path identity matches the held descriptor
+   (`_fd_identity` vs `_file_identity`), so a race that renames a foreign
+   inode over the lock path leaves it untouched (verified by test).
+   `materialize_context_file` holds the lock across the tracked check,
+   re-refusal, exclude write, confirmation, composition, and write.
+2. **Secret quarantine trash** (`_Quarantine`): quarantine names use
+   `secrets.token_hex(16)` inside a 0700 trash directory in Git common
+   storage (`$GIT_COMMON_DIR/openmcp-trash`), with an excluded same-filesystem
+   worktree trash fallback (`.openmcp-trash` added to the managed exclude
+   block). Destinations are reserved with `O_CREAT|O_EXCL`; `os.rename` may
+   overwrite only that reservation. Quarantined payloads are never deleted.
+   Confirmed managed files are moved out of the project path into the trash
+   (target path absent, payload preserved). Foreign/tracked race-swapped
+   content is restored with a no-overwrite `os.link` (or symlink recreation
+   from the recorded target); if restoration loses a race, the bytes stay in
+   quarantine and are logged.
+3. **Cleanup and sweep** leave target paths absent for managed files without
+   pathname deletion of payloads. No predictable quarantine names; no pruning
+   in this phase (leftover quarantine entries are inert and harmless).
+4. **Direct tests added**: `git add` fails while our index lock is held;
+   foreign index lock remains untouched and blocks materialization; lock
+   releases on normal and exceptional exits; release never removes a
+   race-swapped foreign lock path; pre-created quarantine names remain
+   unchanged; swapped foreign and symlink bytes remain recoverable; target
+   path disappears for managed cleanup with the payload preserved in trash.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Quarantine payloads accumulate in the 0700 trash (no pruning this phase);
+  the startup sweep re-quarantines only files present at their target paths,
+  so an already-quarantined payload is never moved twice.
+- `os.link` restore leaves a hardlink in the trash alongside the restored
+  target; this is acceptable (no pruning) and preserves the payload.
+
+### Assumptions
+- `git rev-parse --git-path index.lock` returns a per-worktree lock path that
+  is the same lock Git itself uses (verified: main checkout
+  `.git/index.lock`, linked worktree `.git/worktrees/<name>/index.lock`), so
+  holding it blocks `git add` in that worktree.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED: prior race tests (pathname-quarantine based) broke under the redesign;
+  new direct tests for lock blocking and quarantine preservation were added.
+- GREEN:
+  - `uv run pytest tests/test_context_files.py -q` -> `43 passed`.
+  - `uv run pytest tests/test_context_files.py tests/test_execution.py -q` ->
+    `92 passed`.
+  - `uv run pytest -q` -> `262 passed, 4 failed, 3 deselected` (the 4 failures
+    are the pre-existing `job_wait` set, identical to the base commit).

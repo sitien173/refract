@@ -6,7 +6,7 @@ project guidance, the generated file composes the instruction followed by the
 root ``AGENTS.md`` content verbatim. agy (Phase 5) reuses the same helpers with
 a different target filename.
 
-Safety rules (see PLAN phase 4 consultation constraints):
+Safety rules (see PLAN phase 4 consultation constraints and remediation):
 
 - Never alter a file Git tracks; detect index membership through Git itself,
   even when the working-tree copy has been deleted.
@@ -19,25 +19,32 @@ Safety rules (see PLAN phase 4 consultation constraints):
   calls so a worker's environment cannot redirect them.
 - Only a confirmed non-repository is treated as non-Git; any other Git failure
   fails closed (raises).
-- Cleanup deletes only regular files whose content carries the managed marker.
-- Cleanup and sweep atomically quarantine the candidate to a unique
-  same-directory path, validate marker, regular single-link identity, and
-  original-path Git tracking there, then delete only the quarantined managed
-  inode; non-managed or tracked content is restored without overwriting
-  another path, or preserved and reported when restoration is impossible.
-- Replacement binds to the exact prevalidated inode and rechecks Git tracking
-  after opening that inode, before mutation; any identity change fails closed.
-- Sweep deletes only marker-bearing untracked files, and skips Git entirely
-  when no candidate file exists.
+- The actual per-worktree Git ``index.lock`` is acquired with
+  ``O_CREAT|O_EXCL`` before the final tracked check and any existing-file
+  relocation or fresh write, making the tracked check plus materialization
+  mutually exclusive with Git index mutations. Retries are bounded and a
+  foreign lock is never removed; release only when the path identity matches
+  the lock descriptor.
+- Quarantine uses ``secrets.token_hex`` names inside a 0700 trash directory.
+  Destinations are reserved with ``O_CREAT|O_EXCL`` and ``os.rename`` may
+  overwrite only that reservation. Quarantined payloads are never deleted.
+  Confirmed managed files are moved out of the project path into Git common
+  storage (or an excluded same-filesystem worktree trash fallback). Foreign or
+  tracked race-swapped content is restored with a no-overwrite link; if
+  restoration loses a race, its bytes are preserved in quarantine and logged.
+- Cleanup and sweep leave target paths absent for managed files without
+  pathname deletion of payloads. No predictable quarantine names. No pruning
+  in this phase.
 """
 
 from __future__ import annotations
 
-import itertools
 import os
+import secrets
 import stat
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from openmcp.logging_setup import get_logger
@@ -64,6 +71,8 @@ _GIT_REDIRECT_VARS = (
 )
 
 _exclude_lock = threading.Lock()
+_lock_retries = 50
+_lock_delay_s = 0.02
 
 
 def _scrubbed_env() -> dict[str, str]:
@@ -121,6 +130,18 @@ def _common_dir(root: Path) -> Path:
     if not common.is_absolute():
         common = root / common
     return common.resolve()
+
+
+def _git_path(root: Path, name: str) -> Path:
+    """Resolve an absolute Git path such as ``index.lock`` through Git."""
+    completed = _git(root, "rev-parse", "--git-path", name, check=True)
+    value = completed.stdout.strip()
+    if not value:
+        raise ValueError(f"Git returned no path for {name!r} in {root}")
+    path = Path(value)
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
 
 
 def _relative(root: Path, path: Path) -> str:
@@ -197,6 +218,68 @@ def _compose_codex_content(instruction: str, root: Path) -> bytes:
     if agents.is_file() and not agents.is_symlink():
         parts.append(agents.read_bytes())
     return b"".join(parts)
+
+
+class _IndexLock:
+    """The actual per-worktree Git ``index.lock`` held exclusively.
+
+    Acquired with ``O_CREAT|O_EXCL`` so acquisition is atomic and never
+    clobbers a lock Git or another worker holds. Retries are bounded. A
+    foreign lock (one we did not create) is never removed. The lock is
+    released only when the path identity matches the descriptor we hold, so a
+    race-swapped lock path cannot be removed either.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._path = _git_path(root, "index.lock")
+        self._fd: int | None = None
+
+    def acquire(self) -> None:
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        for attempt in range(_lock_retries):
+            try:
+                fd = os.open(self._path, flags, 0o644)
+                self._fd = fd
+                return
+            except FileExistsError:
+                # A foreign lock exists; wait and retry, never removing it.
+                if attempt + 1 >= _lock_retries:
+                    raise ValueError(
+                        f"Git index lock is held by another process: {self._path}"
+                    )
+                time.sleep(_lock_delay_s)
+            except OSError as exc:
+                raise ValueError(
+                    f"Cannot acquire Git index lock {self._path}: {exc}"
+                ) from exc
+
+    def release(self) -> None:
+        if self._fd is None:
+            return
+        try:
+            identity = _fd_identity(self._fd)
+            path_identity = _file_identity(self._path)
+            if path_identity == identity:
+                os.unlink(self._path)
+        except OSError:
+            log.warning(
+                "Failed to release Git index lock",
+                extra={"event": "context_file.index_lock_release_failed", "path": str(self._path)},
+                exc_info=True,
+            )
+        finally:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+
+    def __enter__(self) -> "_IndexLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.release()
 
 
 def _file_identity(path: Path) -> tuple[int, int] | None:
@@ -395,85 +478,184 @@ def materialize_context_file(
             "Project root is not a git repository; materializing without exclusion",
             extra={"event": "context_file.non_git", "root": str(root)},
         )
-    else:
-        relpath = _relative(repo_root, target)
-        if is_tracked(repo_root, target):
-            raise ValueError(f"Target path is tracked by Git: {target}")
+        expected = _refuse_existing_target(target, project_root)
+        if not instruction and not (project_root / "AGENTS.md").exists():
+            return []
+        content = _compose_codex_content(instruction, project_root)
+        _write_target(
+            target,
+            content,
+            present=expected is not None,
+            expected=expected,
+            repo_root=None,
+        )
+        return [target]
 
-    # Refuse symlinks, directories, hardlinks, and foreign files identically
-    # in Git and non-Git projects before any replacement of the target. This
-    # pathname-level refusal is a fast pre-check that also captures the exact
-    # inode identity of a managed leftover; the authoritative inode-safe
-    # validation happens through the descriptor in _write_target, bound to that
-    # identity and with a Git-tracking recheck, so a race cannot swap in a
-    # foreign or tracked file between here and the write.
-    expected = _refuse_existing_target(target, project_root)
-
-    if repo_root is not None:
-        _ensure_exclude(repo_root, relpath)
-        _confirm_excluded(repo_root, relpath)
-
+    relpath = _relative(repo_root, target)
     if not instruction and not (project_root / "AGENTS.md").exists():
         # Nothing to deliver; do not create a file.
         return []
 
-    content = _compose_codex_content(instruction, project_root)
-    # Existence is re-checked inside the write: if the path now holds a foreign
-    # or tracked file, the descriptor open with O_NOFOLLOW, the exact-inode
-    # identity check, and the Git-tracking recheck refuse it, and the pathname
-    # is never unlinked. If the path is absent, the exclusive create races to
-    # claim it.
-    _write_target(
-        target,
-        content,
-        present=expected is not None,
-        expected=expected,
-        repo_root=repo_root,
-    )
+    # Acquire the actual per-worktree Git index.lock before the final tracked
+    # check and any existing-file relocation or fresh write. This makes the
+    # tracked check plus materialization mutually exclusive with Git index
+    # mutations: a concurrent `git add` cannot stage our path while we hold the
+    # lock, and we cannot read a half-mutated index. A foreign lock is never
+    # removed; retries are bounded.
+    with _IndexLock(repo_root):
+        if is_tracked(repo_root, target):
+            raise ValueError(f"Target path is tracked by Git: {target}")
+        # Refuse under the lock so the final tracked check precedes any
+        # content-based refusal, matching task_guide error ordering.
+        expected = _refuse_existing_target(target, project_root)
+        _ensure_exclude(repo_root, relpath)
+        _confirm_excluded(repo_root, relpath)
+        content = _compose_codex_content(instruction, project_root)
+        _write_target(
+            target,
+            content,
+            present=expected is not None,
+            expected=expected,
+            repo_root=repo_root,
+        )
     return [target]
 
 
-def _quarantine_candidate(target: Path) -> Path | None:
-    """Atomically move ``target`` to a unique same-directory quarantine path.
+class _Quarantine:
+    """Race-safe payload holding inside a 0700 trash directory.
 
-    Returns the quarantine path, or ``None`` when the target does not exist.
-    The move is a same-directory ``os.rename`` (atomic on POSIX), so a
-    concurrent writer cannot interleave between the existence check and the
-    move, and the original path is vacated in one step. The quarantine name is
-    unique per call so two cleanup/sweep operations cannot collide.
+    Quarantine names are ``secrets.token_hex`` values (unpredictable), inside
+    a trash directory created with mode 0700 in Git common storage, with an
+    excluded same-filesystem worktree trash fallback. Destinations are
+    reserved with ``O_CREAT|O_EXCL`` and ``os.rename`` may overwrite only that
+    reservation. Quarantined payloads are never deleted in this phase.
     """
-    if not target.exists():
-        return None
-    directory = target.parent
-    name = target.name
-    for index in itertools.count():
-        candidate = directory / f".{name}.openmcp-quarantine-{os.getpid()}-{index}"
-        try:
-            os.rename(target, candidate)
-            return candidate
-        except FileNotFoundError:
-            return None
-        except OSError:
-            if index >= 100:
-                raise ValueError(
-                    f"Cannot quarantine {target}: quarantine names are exhausted"
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._directory = self._trash_directory()
+
+    def _trash_directory(self) -> Path:
+        repo_root = git_repository_root(self._root)
+        if repo_root is not None:
+            try:
+                common = _common_dir(repo_root)
+                directory = common / "openmcp-trash"
+                directory.mkdir(parents=True, exist_ok=True)
+                os.chmod(directory, 0o700)
+                return directory
+            except Exception:
+                log.warning(
+                    "Falling back to worktree trash directory",
+                    extra={"event": "context_file.trash_fallback", "root": str(self._root)},
+                    exc_info=True,
                 )
-            # The quarantine name already exists; try the next unique name.
-            continue
+        directory = self._root / ".openmcp-trash"
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+        if repo_root is not None:
+            # The fallback trash lives inside the worktree; keep it
+            # Git-invisible through the managed exclude block.
+            try:
+                rel = _relative(repo_root, directory)
+                _ensure_exclude(repo_root, rel)
+            except Exception:
+                log.warning(
+                    "Could not exclude fallback trash directory",
+                    extra={"event": "context_file.trash_exclude_failed", "root": str(self._root)},
+                    exc_info=True,
+                )
+        return directory
+
+    def reserve(self) -> Path:
+        """Atomically reserve a unique quarantine destination."""
+        directory = self._directory
+        for _ in range(100):
+            candidate = directory / f"{secrets.token_hex(16)}.q"
+            try:
+                fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                os.close(fd)
+                return candidate
+            except FileExistsError:
+                continue
+        raise ValueError(f"Cannot reserve quarantine destination in {directory}")
+
+    def move_into(self, source: Path) -> Path:
+        """Atomically move ``source`` into the reserved quarantine destination.
+
+        The destination was reserved with ``O_CREAT|O_EXCL`` by ``reserve()``;
+        ``os.rename`` overwrites only that empty reservation, never a foreign
+        file. The payload is preserved in quarantine; it is never deleted.
+        """
+        destination = self.reserve()
+        try:
+            os.rename(source, destination)
+        except OSError as exc:
+            raise ValueError(f"Cannot quarantine {source}: {exc}") from exc
+        return destination
+
+    def restore(self, destination: Path, target: Path, *, symlink_target: str | None = None) -> bool:
+        """Restore a quarantined payload to ``target`` without overwriting.
+
+        Uses ``os.link`` (no-overwrite) for regular files: if the target path
+        was concurrently claimed, the link fails with ``EEXIST`` and the
+        payload stays in quarantine. For a symlink candidate, the symlink is
+        recreated from its recorded target; if the path was concurrently
+        claimed, the symlink is not created and the payload stays preserved.
+        Returns ``True`` when restored, ``False`` when preserved.
+        """
+        if not (destination.exists() or destination.is_symlink()):
+            return True
+        if symlink_target is not None:
+            try:
+                os.symlink(symlink_target, target)
+                return True
+            except FileExistsError:
+                log.warning(
+                    "Quarantined symlink preserved; target was concurrently claimed",
+                    extra={
+                        "event": "context_file.quarantine_preserved",
+                        "quarantine": str(destination),
+                        "target": str(target),
+                    },
+                )
+                return False
+            except OSError as exc:
+                raise ValueError(
+                    f"Cannot restore quarantined symlink {destination}: {exc}"
+                ) from exc
+        try:
+            os.link(destination, target)
+            return True
+        except FileExistsError:
+            log.warning(
+                "Quarantined payload preserved; target was concurrently claimed",
+                extra={
+                    "event": "context_file.quarantine_preserved",
+                    "quarantine": str(destination),
+                    "target": str(target),
+                },
+            )
+            return False
+        except OSError as exc:
+            raise ValueError(
+                f"Cannot restore quarantined file {destination}: {exc}"
+            ) from exc
 
 
 def _validate_quarantined(
-    root: Path,
-    target: Path,
     quarantine: Path,
+    *,
+    repo_root: Path | None,
+    original: Path,
 ) -> bool:
-    """Validate a quarantined candidate before deleting it.
+    """Validate a quarantined candidate before considering it managed.
 
     Returns ``True`` when the quarantined file is a regular single-link file
     whose content carries the managed marker and whose original path is
-    untracked, so it is safe to delete. Returns ``False`` for anything else;
-    the caller restores it without overwriting another path or preserves the
-    bytes and reports failure.
+    untracked, so it is safe to consider ours. Returns ``False`` for anything
+    else; the caller restores it without overwriting another path or preserves
+    the bytes and logs.
     """
     if quarantine.is_symlink() or not quarantine.is_file():
         return False
@@ -489,89 +671,71 @@ def _validate_quarantined(
         return False
     if not content.startswith(MANAGED_MARKER.encode()):
         return False
-    repo_root = git_repository_root(root)
-    if repo_root is not None and is_tracked(repo_root, target):
-        # The original path became tracked; never delete its inode.
+    if repo_root is not None and is_tracked(repo_root, original):
+        # The original path became tracked; never treat it as ours.
         return False
     return True
 
 
-def _restore_quarantined(target: Path, quarantine: Path) -> None:
-    """Restore ``quarantine`` to ``target`` without overwriting another path.
+def _quarantine_flow(root: Path, target: Path, *, allow_symlink: bool = False) -> list[Path]:
+    """Shared race-safe cleanup/sweep: quarantine, validate, keep or restore.
 
-    If ``target`` is still absent, rename the quarantined file back. If
-    ``target`` now holds another file (a concurrent writer claimed the path),
-    the quarantined bytes are preserved at the quarantine path and a failure
-    is reported, never deleting or overwriting data.
+    Returns the list of removed (now absent) target paths. The candidate is
+    atomically moved to a unique 0700 trash destination, validated there
+    (marker, regular single-link identity, original-path Git tracking). A
+    confirmed managed file is left in quarantine (the target path is absent;
+    no pathname deletion of the payload). Foreign or tracked content is
+    restored with a no-overwrite link (or symlink recreation for symlink
+    candidates); if restoration loses a race, the bytes are preserved in
+    quarantine and logged.
     """
-    if not quarantine.exists():
-        return
-    if target.exists():
-        raise ValueError(
-            f"Cannot restore quarantined file {quarantine}: target {target} "
-            "was replaced concurrently; preserved quarantined bytes"
-        )
-    try:
-        os.rename(quarantine, target)
-    except OSError as exc:
-        raise ValueError(
-            f"Cannot restore quarantined file {quarantine} to {target}: {exc}; "
-            "preserved quarantined bytes"
-        ) from exc
-
-
-def _delete_quarantined(quarantine: Path) -> None:
-    """Delete the quarantined managed inode synchronously."""
-    try:
-        quarantine.unlink()
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise ValueError(f"Failed to remove quarantined file {quarantine}: {exc}") from exc
-
-
-def _quarantine_flow(root: Path, target: Path) -> list[Path]:
-    """Shared race-safe cleanup/sweep: quarantine, validate, delete or restore.
-
-    Returns the list of removed paths. The candidate is atomically moved to a
-    unique same-directory quarantine path, validated there (marker, regular
-    single-link identity, original-path Git tracking), and only the quarantined
-    managed inode is deleted. Non-managed or tracked content is restored to the
-    original path without overwriting another path; when restoration is
-    impossible the quarantined bytes are preserved and a failure is reported
-    rather than deleting data.
-    """
-    quarantine = _quarantine_candidate(target)
-    if quarantine is None:
-        return []
-    if _validate_quarantined(root, target, quarantine):
-        _delete_quarantined(quarantine)
+    quarantine = _Quarantine(root)
+    repo_root = git_repository_root(root)
+    symlink_target: str | None = None
+    destination = quarantine.move_into(target)
+    if destination.is_symlink():
+        # A symlink candidate was moved (rename preserves the stored target).
+        # It is never managed; record its target for no-overwrite restore.
+        try:
+            symlink_target = os.readlink(destination)
+        except OSError:
+            symlink_target = None
+        if not allow_symlink or symlink_target is None:
+            quarantine.restore(destination, target, symlink_target=symlink_target)
+            return []
+    if _validate_quarantined(destination, repo_root=repo_root, original=target):
+        # Managed: target path is now absent; payload stays in quarantine.
         return [target]
-    _restore_quarantined(target, quarantine)
+    restored = quarantine.restore(destination, target, symlink_target=symlink_target)
+    if not restored:
+        # Preserved and logged; target path was concurrently claimed.
+        return []
     return []
 
 
 def cleanup_context_file(root: Path, target: Path) -> list[Path]:
     """Remove the managed file synchronously through a race-safe quarantine.
 
-    Deletes only a regular single-link marker-bearing untracked file. The
-    candidate is atomically quarantined first, validated at the quarantine
-    path, and only the quarantined managed inode is deleted; foreign, symlink,
-    hardlink, directory, and tracked targets are restored untouched. Runs
-    synchronously so a crash between materialize and cleanup is the only
-    leftover path, which the startup sweep covers.
+    The candidate is atomically moved to a unique 0700 trash destination,
+    validated there, and a confirmed managed file is left in quarantine so the
+    target path is absent without any pathname deletion of the payload.
+    Foreign, symlink, hardlink, directory, and tracked content is restored
+    untouched. Runs synchronously so a crash between materialize and cleanup
+    is the only leftover path, which the startup sweep covers.
     """
-    return _quarantine_flow(root, target)
+    if not target.exists():
+        return []
+    return _quarantine_flow(root, target, allow_symlink=True)
 
 
 def sweep_context_files(root: Path, target: Path) -> list[Path]:
     """Remove managed marker-bearing leftovers for a project.
 
     Skips Git entirely when no candidate file exists, so a clean project never
-    pays a Git invocation. When a candidate exists, it is atomically
-    quarantined, validated at the quarantine path (marker, regular single-link
-    identity, original-path Git tracking), and only the quarantined managed
-    inode is deleted. Tracked and foreign content is restored untouched.
+    pays a Git invocation. When a candidate exists, it is atomically moved to
+    a unique 0700 trash destination, validated there, and a confirmed managed
+    file is left in quarantine so the target path is absent. Tracked and
+    foreign content is restored untouched. Symlinks are never swept.
     """
     if not target.exists() or target.is_symlink():
         return []
