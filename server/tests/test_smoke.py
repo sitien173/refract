@@ -225,7 +225,10 @@ async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
         encoding="utf-8",
     )
 
+    captured = {}
+
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        captured["cmd"] = cmd
         log_path = Path(cmd[cmd.index("--log-file") + 1])
         log_path.write_text("PONG", encoding="utf-8")
         yield ""
@@ -241,6 +244,8 @@ async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
     assert out.outcome == "OK"
     assert out.SESSION_ID == "resume-session-id"
     assert out.agent_messages == "PONG"
+    assert "--new-project" not in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--conversation") + 1] == "resume-session-id"
 
 
 @pytest.mark.asyncio
@@ -271,6 +276,8 @@ async def test_agy_prefers_stdout_reply_over_noisy_log_file(monkeypatch, tmp_pat
         "--dangerously-skip-permissions", "--mode", "plan", "--sandbox",
     ]
     assert "--add-dir" not in captured["cmd"]
+    assert captured["cmd"].count("--new-project") == 1
+    assert "--conversation" not in captured["cmd"]
     assert captured["cmd"][-2:] == ["--print", "x"]
     assert out.outcome == "OK"
     assert out.SESSION_ID == session_id

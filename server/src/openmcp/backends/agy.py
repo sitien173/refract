@@ -170,6 +170,8 @@ def _execute_once(params: AgyParams) -> BackendResult:
             ]
             if params.SESSION_ID:
                 cmd.extend(["--conversation", params.SESSION_ID])
+            else:
+                cmd.append("--new-project")
             # Keep OpenMCP-owned transport arguments after target arguments:
             # callers may tune the CLI, but cannot replace the prompt or log.
             cmd.extend(["--print", params.PROMPT])
