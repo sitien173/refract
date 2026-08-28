@@ -73,14 +73,23 @@ class TargetExecutor:
             self._target_active[target_key] += 1
             materialized: list[Path] = []
             try:
-                if target.backend == "codex" and plan.instruction:
-                    try:
-                        materialized = materialize_context_file(cwd, cwd / "AGENTS.override.md", plan.instruction)
-                    except ValueError as exc:
-                        return TargetExecutionResult(
-                            DriverResult("REQUEST_FATAL", session_id, "", str(exc), "invalid_args"),
-                            target.id,
-                        )
+                if plan.instruction:
+                    if target.backend == "codex":
+                        try:
+                            materialized = materialize_context_file(cwd, cwd / "AGENTS.override.md", plan.instruction, kind="codex")
+                        except ValueError as exc:
+                            return TargetExecutionResult(
+                                DriverResult("REQUEST_FATAL", session_id, "", str(exc), "invalid_args"),
+                                target.id,
+                            )
+                    elif target.backend == "agy":
+                        try:
+                            materialized = materialize_context_file(cwd, cwd / "GEMINI.md", plan.instruction, kind="agy")
+                        except ValueError as exc:
+                            return TargetExecutionResult(
+                                DriverResult("REQUEST_FATAL", session_id, "", str(exc), "invalid_args"),
+                                target.id,
+                            )
                 with log_context(target_id=target.id):
                     last = await self.drivers.execute(target=target, prompt=effective_prompt, cwd=cwd, session_id=session_id, timeout_s=plan.selection.timeout_s, cancel_event=cancel_event, instruction=plan.instruction)
             except asyncio.CancelledError:

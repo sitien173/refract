@@ -152,6 +152,123 @@ def test_materialize_nothing_to_deliver_checks_project_root_in_subdirectory(tmp_
     assert not (project / "AGENTS.override.md").exists()
 
 
+def test_materialize_agy_gemini_contains_instruction_only(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "AGENTS.md").write_text("root guidance\n", encoding="utf-8")
+    git(root, "add", "AGENTS.md")
+    git(root, "commit", "-m", "add agents")
+
+    created = materialize_context_file(root, root / "GEMINI.md", "follow the plan", kind="agy")
+
+    assert created == [root / "GEMINI.md"]
+    content = (root / "GEMINI.md").read_bytes()
+    assert MANAGED_MARKER.encode() in content
+    assert b"follow the plan" in content
+    assert b"root guidance" not in content
+    # The sibling AGENTS.md is untouched.
+    assert (root / "AGENTS.md").read_text(encoding="utf-8") == "root guidance\n"
+
+
+def test_materialize_agy_unknown_kind_rejected(tmp_path) -> None:
+    root = repository(tmp_path)
+    with pytest.raises(ValueError, match="kind"):
+        materialize_context_file(root, root / "GEMINI.md", "follow the plan", kind="unknown")
+
+
+def test_materialize_agy_gemini_git_invisible(tmp_path) -> None:
+    root = repository(tmp_path)
+    linked = tmp_path / "linked"
+    git(root, "worktree", "add", "-q", str(linked), "HEAD")
+
+    materialize_context_file(root, root / "GEMINI.md", "follow the plan", kind="agy")
+
+    assert git(root, "status", "--porcelain") == ""
+    assert git(linked, "status", "--porcelain") == ""
+    assert git(root, "check-ignore", "--", "GEMINI.md") == "GEMINI.md"
+
+
+def test_materialize_agy_refuses_tracked_gemini(tmp_path) -> None:
+    root = repository(tmp_path)
+    original = b"tracked gemini\n"
+    (root / "GEMINI.md").write_bytes(original)
+    git(root, "add", "-f", "GEMINI.md")
+    git(root, "commit", "-m", "track gemini")
+
+    with pytest.raises(ValueError, match="tracked"):
+        materialize_context_file(root, root / "GEMINI.md", "follow the plan", kind="agy")
+
+    assert (root / "GEMINI.md").read_bytes() == original
+
+
+def test_materialize_agy_refuses_foreign_gemini(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "GEMINI.md").write_text("foreign\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="foreign"):
+        materialize_context_file(root, root / "GEMINI.md", "follow the plan", kind="agy")
+
+    assert (root / "GEMINI.md").read_text(encoding="utf-8") == "foreign\n"
+
+
+def test_cleanup_agy_gemini_removes_target_and_preserves_payload(tmp_path) -> None:
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "GEMINI.md"
+    materialize_context_file(root, target, "follow the plan", kind="agy")
+    payload = target.read_bytes()
+
+    removed = cleanup_context_file(root, target)
+
+    assert removed == [target]
+    assert not target.exists()
+    common = context_files._common_dir(root)
+    trash = common / "openmcp-trash"
+    quarantined = list(trash.glob("*.q"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_bytes() == payload
+
+
+def test_sweep_agy_gemini_removes_managed_leftover(tmp_path) -> None:
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "GEMINI.md"
+    target.write_text(MANAGED_MARKER + "\nmanaged\n", encoding="utf-8")
+    (root / "keep.txt").write_text("keep\n", encoding="utf-8")
+
+    removed = sweep_context_files(root, target)
+
+    assert removed == [target]
+    assert not target.exists()
+    assert (root / "keep.txt").exists()
+
+
+def test_cleanup_agy_gemini_restores_foreign_race_swap(tmp_path, monkeypatch) -> None:
+    """A foreign GEMINI.md swapped in at the path is quarantined, fails marker
+    validation, and is restored to the original path untouched."""
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "GEMINI.md"
+    target.write_text(MANAGED_MARKER + "\nmanaged\n", encoding="utf-8")
+    foreign = b"foreign gemini content\n"
+
+    original_move = context_files._Quarantine.move_into
+
+    def racing_move(self, path):
+        path.write_bytes(foreign)
+        return original_move(self, path)
+
+    monkeypatch.setattr(context_files._Quarantine, "move_into", racing_move)
+
+    removed = cleanup_context_file(root, target)
+
+    assert removed == []
+    assert target.read_bytes() == foreign
+
+
+
 def test_materialize_is_git_invisible_in_main_and_linked_worktree(tmp_path) -> None:
     root = repository(tmp_path)
     linked = tmp_path / "linked"

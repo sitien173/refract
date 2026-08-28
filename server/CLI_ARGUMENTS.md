@@ -111,12 +111,24 @@ subcommands, not execution options. `agy models` listed Gemini 3.5 Flash,
 Gemini 3.1 Pro, Claude Sonnet/Opus 4.6 Thinking, and GPT-OSS 120B variants on the
 research machine.
 
-OpenMCP owns `--print`, its prompt, `--conversation`, and `--log-file`.
-OpenMCP always enables `--dangerously-skip-permissions` for non-interactive
-execution. Everything else uses the Agy CLI default unless selected by target
-fields or `args`. The target `model` field is translated to `--model`; configure
-`--add-dir` or sandbox behavior explicitly when required. Agy stdout is the
-preferred response channel; the temporary log file is primarily diagnostic.
+OpenMCP owns `--print`, its prompt, `--conversation`, `--log-file`, and
+`--dangerously-skip-permissions` for non-interactive execution. New sessions
+(no stored conversation ID) are created with `--new-project`, so agy registers
+the working directory as a project and loads its project context files from
+the first job. Everything else uses the Agy CLI default unless selected by
+target fields or `args`. The target `model` field is translated to `--model`;
+configure `--add-dir` or sandbox behavior explicitly when required. Agy stdout
+is the preferred response channel; the temporary log file is primarily
+diagnostic.
+
+A stored project context instruction (`context_init`) is delivered as a
+generated root `GEMINI.md` containing the instruction only. agy reads
+`GEMINI.md` and `AGENTS.md` additively, so the repository's own `AGENTS.md`
+keeps loading alongside the instruction and no composition is applied. The
+generated file carries a managed marker, is hidden from Git through
+`$GIT_COMMON_DIR/info/exclude`, and is removed after the attempt including on
+failure, timeout, and cancellation. A tracked or untracked foreign `GEMINI.md`
+fails the job with `REQUEST_FATAL` and is left untouched.
 
 ## Codex (`codex exec`)
 
@@ -159,6 +171,17 @@ enables `--yolo` for non-interactive execution. Everything else uses the Codex
 CLI default unless selected by target fields or `args`. The driver translates
 `backend_profile`, `model`, and `reasoning` to their CLI equivalents; arbitrary
 Codex configuration remains available through repeated `-c` entries in `args`.
+
+Codex has no system-prompt flag, so a stored project context instruction
+(`context_init`) is delivered as a generated root `AGENTS.override.md`
+containing the instruction followed by the repository's own root `AGENTS.md`
+inlined verbatim, because `AGENTS.override.md` shadows `AGENTS.md` within a
+directory rather than adding to it. Without a root `AGENTS.md`, the generated
+file contains the instruction only. The file carries a managed marker, is
+hidden from Git through `$GIT_COMMON_DIR/info/exclude` (in every linked
+worktree), and is removed after the attempt including on failure, timeout, and
+cancellation. A tracked or untracked foreign `AGENTS.override.md` fails the job
+with `REQUEST_FATAL` and is left untouched.
 
 ## Pi (`pi --mode json`)
 

@@ -11,6 +11,7 @@ It exposes AI agent workflows through Model Context Protocol tools.
 - Multi-provider support for Antigravity, Codex, Pi, and Claude Code backends.
 - Real-time job status updates via MCP subscriptions.
 - Isolated and read-only execution modes for sensitive tasks.
+- Per-project, per-workflow context instructions injected into every backend.
 
 ## Architecture
 
@@ -328,13 +329,14 @@ reference.
 
 ## MCP Tool Surface
 
-OpenMCP exposes seven core tools:
+OpenMCP exposes eight core tools:
 
 | Tool | Purpose |
 | --- | --- |
 | `status()` | Returns daemon health and running jobs. |
 | `project_register(path, alias)` | Registers local directory for jobs. |
 | `task_guide(project_id)` | Loads workflow and profile guidance. |
+| `context_init(project_id, workflow, instruction)` | Sets, replaces, or clears a project context instruction for one workflow. |
 | `job_submit(project_id, workflow, prompt, context_key, profile)` | Enqueues work for execution. |
 | `job_wait(job_id, timeout_s)` | Waits for job completion up to 300 seconds. |
 | `job_cancel(job_id)` | Cancels queued or running job. |
@@ -351,6 +353,33 @@ OpenMCP exposes seven core tools:
   "profile": "balanced"
 }
 ```
+
+## Project Context Instructions
+
+`context_init(project_id, workflow, instruction)` stores a durable worker
+instruction for a project and workflow pair, persisted in the OpenMCP database
+(not on disk). An empty `instruction` clears the stored value for that pair.
+The stored instruction is snapshotted into each job's immutable execution
+plan at submission time, so a later `context_init` never changes a queued or
+running job.
+
+The resource `openmcp://projects/{project_id}/context_instructions` returns the
+stored instruction for every workflow of a project.
+
+Each backend receives the instruction through its own additive mechanism,
+never by editing a file Git tracks:
+
+| Backend | Mechanism | Files written |
+| --- | --- | --- |
+| Claude Code | `--append-system-prompt <instruction>` (survives `--safe-mode`) | none |
+| Pi | `--append-system-prompt <instruction>` (survives `--no-context-files`) | none |
+| Codex | `AGENTS.override.md` at the project root: instruction followed by the repository's own root `AGENTS.md` inlined verbatim | 1 (temporary) |
+| Antigravity (agy) | `GEMINI.md` at the project root: instruction only, because agy loads `GEMINI.md` and `AGENTS.md` additively | 1 (temporary) |
+
+Generated files carry a managed marker, are hidden from Git through
+`$GIT_COMMON_DIR/info/exclude`, and are removed after the attempt including on
+failure, timeout, and cancellation. A tracked or untracked foreign file at the
+generated path fails the job with `REQUEST_FATAL` and is left untouched.
 
 ## Real-Time Job Subscriptions
 

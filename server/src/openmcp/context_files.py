@@ -206,17 +206,24 @@ def _confirm_excluded(root: Path, relpath: str) -> None:
         raise ValueError(f"Generated path {relpath} is not Git-ignored in {root}")
 
 
-def _compose_codex_content(instruction: str, root: Path) -> bytes:
-    """Compose the codex file: instruction followed by root ``AGENTS.md``.
+def _compose_content(instruction: str, root: Path, kind: str) -> bytes:
+    """Compose the context file payload for ``target``.
 
-    ``AGENTS.override.md`` shadows ``AGENTS.md`` within a directory, so the
-    repository's own root guidance must be inlined verbatim. Composition uses
-    bytes so a foreign-encoded ``AGENTS.md`` is preserved exactly.
+    For codex, ``AGENTS.override.md`` shadows ``AGENTS.md`` within a
+    directory, so the repository's own root guidance must be inlined verbatim:
+    the payload is the instruction followed by the root ``AGENTS.md`` content.
+    Composition uses bytes so a foreign-encoded ``AGENTS.md`` is preserved
+    exactly.
+
+    For agy, ``GEMINI.md`` and ``AGENTS.md`` load additively, so the payload
+    is the instruction only and no composition is applied; a sibling
+    ``AGENTS.md`` is never inlined or modified.
     """
     parts = [MANAGED_MARKER.encode(), b"\n", instruction.encode("utf-8"), b"\n"]
-    agents = root / "AGENTS.md"
-    if agents.is_file() and not agents.is_symlink():
-        parts.append(agents.read_bytes())
+    if kind == "codex":
+        agents = root / "AGENTS.md"
+        if agents.is_file() and not agents.is_symlink():
+            parts.append(agents.read_bytes())
     return b"".join(parts)
 
 
@@ -456,32 +463,41 @@ def materialize_context_file(
     root: Path,
     target: Path,
     instruction: str,
+    *,
+    kind: str = "codex",
 ) -> list[Path]:
-    """Materialize the composed context file at ``target``.
+    """Materialize the context file at ``target``.
 
     The supplied ``root`` is the project root and is preserved for composition
-    (reading the project's own ``AGENTS.md``) and for the target path. The Git
-    top-level is resolved only for index and exclusion operations, so a
-    project rooted in a repository subdirectory still composes from its own
-    ``AGENTS.md``.
+    (reading the project's own ``AGENTS.md`` for codex) and for the target
+    path. The Git top-level is resolved only for index and exclusion
+    operations, so a project rooted in a repository subdirectory still
+    composes from its own ``AGENTS.md``.
+
+    ``kind`` selects the backend file contract: ``"codex"`` composes the
+    instruction followed by the root ``AGENTS.md`` verbatim into
+    ``AGENTS.override.md``; ``"agy"`` writes ``GEMINI.md`` containing only
+    the instruction, because agy loads ``GEMINI.md`` and ``AGENTS.md``
+    additively and never needs composition.
 
     Refuses tracked, symlink, hardlink, directory, and foreign targets in both
     Git and non-Git projects before any replacement. The file is created fresh
-    (``O_EXCL``) with the managed marker, the instruction, and (for codex) the
-    project's ``AGENTS.md`` inlined verbatim, then hidden from Git through the
-    shared exclude file. Returns the paths created.
+    (``O_EXCL``) with the managed marker and the instruction, then hidden from
+    Git through the shared exclude file. Returns the paths created.
     """
     project_root = root
     repo_root = git_repository_root(root)
+    if kind not in {"codex", "agy"}:
+        raise ValueError(f"Unknown context file kind: {kind}")
     if repo_root is None:
         log.warning(
             "Project root is not a git repository; materializing without exclusion",
             extra={"event": "context_file.non_git", "root": str(root)},
         )
         expected = _refuse_existing_target(target, project_root)
-        if not instruction and not (project_root / "AGENTS.md").exists():
+        if not instruction:
             return []
-        content = _compose_codex_content(instruction, project_root)
+        content = _compose_content(instruction, project_root, kind)
         _write_target(
             target,
             content,
@@ -492,7 +508,7 @@ def materialize_context_file(
         return [target]
 
     relpath = _relative(repo_root, target)
-    if not instruction and not (project_root / "AGENTS.md").exists():
+    if not instruction:
         # Nothing to deliver; do not create a file.
         return []
 
@@ -510,7 +526,7 @@ def materialize_context_file(
         expected = _refuse_existing_target(target, project_root)
         _ensure_exclude(repo_root, relpath)
         _confirm_excluded(repo_root, relpath)
-        content = _compose_codex_content(instruction, project_root)
+        content = _compose_content(instruction, project_root, kind)
         _write_target(
             target,
             content,

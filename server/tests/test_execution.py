@@ -687,6 +687,113 @@ def codex_catalog(tmp_path, root: Path, *, targets: tuple[TargetConfig, ...] | N
     return make_config(tmp_path / "home", targets=resolved_targets)
 
 
+def agy_catalog(tmp_path, root: Path) -> object:
+    from tests.orchestration_helpers import config as make_config
+
+    return make_config(tmp_path / "home", targets=(TargetConfig(id="agy-target", backend="agy"),))
+
+
+class AgyDrivers(FakeDrivers):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def execute(self, *, cwd: Path, **kwargs) -> DriverResult:
+        self.calls += 1
+        return DriverResult("SUCCESS", "", f"response {self.calls}", "", "")
+
+
+@pytest.mark.asyncio
+async def test_agy_attempt_materializes_instruction_only_gemini(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "AGENTS.md").write_text("root guidance\n", encoding="utf-8")
+    git(root, "add", "AGENTS.md")
+    git(root, "commit", "-m", "add agents")
+    captured: dict[str, bytes] = {}
+
+    class CapturingAgyDrivers(FakeDrivers):
+        async def execute(self, *, cwd: Path, **kwargs) -> DriverResult:
+            captured["gemini"] = (cwd / "GEMINI.md").read_bytes()
+            captured["agents"] = (cwd / "AGENTS.md").read_bytes()
+            return DriverResult("SUCCESS", "", "ok", "", "")
+
+    runtime = Runtime(agy_catalog(tmp_path, root))
+    runtime.drivers = CapturingAgyDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "succeeded"
+    finally:
+        await runtime.close()
+
+    assert MANAGED_MARKER.encode() in captured["gemini"]
+    assert b"follow the plan" in captured["gemini"]
+    assert b"root guidance" not in captured["gemini"]
+    assert captured["agents"] == b"root guidance\n"
+    assert not (root / "GEMINI.md").exists()
+    assert git(root, "status", "--porcelain") == ""
+
+
+@pytest.mark.asyncio
+async def test_agy_tracked_gemini_fails_request_fatal(tmp_path) -> None:
+    root = repository(tmp_path)
+    original = b"tracked gemini\n"
+    (root / "GEMINI.md").write_bytes(original)
+    git(root, "add", "-f", "GEMINI.md")
+    git(root, "commit", "-m", "track gemini")
+
+    runtime = Runtime(agy_catalog(tmp_path, root))
+    runtime.drivers = AgyDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "failed"
+        assert (root / "GEMINI.md").read_bytes() == original
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_agy_foreign_gemini_fails_request_fatal(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "GEMINI.md").write_text("foreign\n", encoding="utf-8")
+
+    runtime = Runtime(agy_catalog(tmp_path, root))
+    runtime.drivers = AgyDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "failed"
+        assert (root / "GEMINI.md").read_text(encoding="utf-8") == "foreign\n"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_sweep_removes_agy_gemini_leftover(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "GEMINI.md").write_text(MANAGED_MARKER + "\nmanaged\n", encoding="utf-8")
+    (root / "keep.txt").write_text("keep\n", encoding="utf-8")
+    catalog = agy_catalog(tmp_path, root)
+    database = Database(catalog.database_path)
+    database.upsert_project(project_id="project", alias="project", root=root.as_posix())
+    database.close()
+
+    runtime = Runtime(catalog)
+    await runtime.start()
+    try:
+        assert not (root / "GEMINI.md").exists()
+        assert (root / "keep.txt").exists()
+    finally:
+        await runtime.close()
+
+
 @pytest.mark.asyncio
 async def test_codex_attempt_materializes_and_cleans_up_context_file(tmp_path) -> None:
     root = repository(tmp_path)

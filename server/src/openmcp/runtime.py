@@ -88,14 +88,16 @@ class Runtime:
     def _sweep_project_context_files(self) -> None:
         """Remove managed marker-bearing leftovers for every registered project."""
         for project in self.database.projects():
-            try:
-                sweep_context_files(Path(project.root), Path(project.root) / "AGENTS.override.md")
-            except Exception:
-                log.warning(
-                    "Context file sweep failed",
-                    extra={"event": "context_file.sweep_failed", "project_id": project.id, "root": project.root},
-                    exc_info=True,
-                )
+            root = Path(project.root)
+            for filename in ("AGENTS.override.md", "GEMINI.md"):
+                try:
+                    sweep_context_files(root, root / filename)
+                except Exception:
+                    log.warning(
+                        "Context file sweep failed",
+                        extra={"event": "context_file.sweep_failed", "project_id": project.id, "root": project.root, "filename": filename},
+                        exc_info=True,
+                    )
 
     async def close(self) -> None:
         self._closing = True
