@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from openmcp.models import ContextInstructionsResult, JobResult, JobView, ProjectView, SubmissionResult, TargetView
+from openmcp.planning import parse_execution_plan
 from openmcp.runtime import OrchestrationError, Runtime
 from openmcp.server import context_init, context_instructions_resource, job_wait, mcp, profiles_resource, projects_resource, publish_job_resource, subscription_bus, targets_resource, task_guide, workflows_resource
 from tests.orchestration_helpers import config, repository
@@ -525,3 +526,59 @@ async def test_context_init_survives_daemon_restart(tmp_path) -> None:
         }
     finally:
         await second.close()
+
+
+@pytest.mark.asyncio
+async def test_submitted_job_snapshots_stored_instruction(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        await context_init(project.id, "implement", "follow the plan", ctx)
+
+        submission = await runtime.submit(project.id, "implement", "inspect")
+        record = runtime.database.job_record(submission.job_id)
+        assert record is not None
+        assert parse_execution_plan(json.loads(record["execution_plan_json"])).instruction == "follow the plan"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_submitted_job_without_instruction_snapshots_empty(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+
+        submission = await runtime.submit(project.id, "implement", "inspect")
+        record = runtime.database.job_record(submission.job_id)
+        assert record is not None
+        assert parse_execution_plan(json.loads(record["execution_plan_json"])).instruction == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_context_init_after_submit_does_not_change_queued_plan(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
+        await context_init(project.id, "implement", "before submit", ctx)
+        submission = await runtime.submit(project.id, "implement", "inspect")
+        stored = json.loads(runtime.database.job_record(submission.job_id)["execution_plan_json"])
+
+        await context_init(project.id, "implement", "after submit", ctx)
+
+        updated = json.loads(runtime.database.job_record(submission.job_id)["execution_plan_json"])
+        assert parse_execution_plan(stored).instruction == "before submit"
+        assert parse_execution_plan(updated).instruction == "before submit"
+        assert runtime.database.context_instruction(project.id, "implement") == "after submit"
+    finally:
+        await runtime.close()

@@ -117,7 +117,8 @@ class Runtime:
             resolved_prompt = validate_request(workflow, prompt)
             catalog = load_project_config(Path(project.root), self._reload_catalog())
             selected_profile = profile.strip() or catalog.default_profile
-            plan = resolve_execution_plan(workflow, catalog, selected_profile)
+            instruction = self.database.context_instruction(project.id, workflow)
+            plan = resolve_execution_plan(workflow, catalog, selected_profile, instruction)
         except ValueError as exc:
             raise OrchestrationError(str(exc)) from exc
         job_id = str(uuid.uuid4())
