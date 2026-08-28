@@ -72,7 +72,7 @@ class TargetExecutor:
             self._target_active[target_key] += 1
             try:
                 with log_context(target_id=target.id):
-                    last = await self.drivers.execute(target=target, prompt=effective_prompt, cwd=cwd, session_id=session_id, timeout_s=plan.selection.timeout_s, cancel_event=cancel_event)
+                    last = await self.drivers.execute(target=target, prompt=effective_prompt, cwd=cwd, session_id=session_id, timeout_s=plan.selection.timeout_s, cancel_event=cancel_event, instruction=plan.instruction)
             finally:
                 self._target_active[target_key] -= 1
                 semaphore.release()

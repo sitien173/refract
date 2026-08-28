@@ -4,13 +4,15 @@ import asyncio
 import inspect
 import json
 import subprocess
+import threading
 from dataclasses import replace
 
 import pytest
 
-from openmcp.config import TargetSelection
+from openmcp.backends import BackendResult
+from openmcp.config import TargetConfig, TargetSelection
 from openmcp.database import Database
-from openmcp.drivers import DriverResult
+from openmcp.drivers import DriverRegistry, DriverResult, _target_args
 from openmcp.planning import execution_plan_data, resolve_execution_plan
 from openmcp.runtime import OrchestrationError, Runtime
 from openmcp.workflows import get_workflow
@@ -478,3 +480,188 @@ async def test_plain_directory_execution_spawns_no_git(monkeypatch, tmp_path) ->
         assert job.state == "succeeded"
     finally:
         await runtime.close()
+
+
+@pytest.mark.parametrize("backend", ["claude", "pi"])
+@pytest.mark.asyncio
+async def test_driver_appends_system_prompt_for_instructed_backend(monkeypatch, tmp_path, backend) -> None:
+    import openmcp.drivers as drivers_module
+
+    captured = {}
+
+    async def fake_execute(params):
+        captured["args"] = params.args
+        return BackendResult(outcome="OK", SESSION_ID="session", agent_messages="reviewed", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, f"{backend}_execute", fake_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(id=f"{backend}-target", backend=backend, args=("--verbose",)),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+        instruction="follow the plan",
+    )
+
+    assert captured["args"][-2:] == ("--append-system-prompt", "follow the plan")
+    assert captured["args"][0] == "--verbose"
+
+
+@pytest.mark.parametrize("backend", ["claude", "pi"])
+@pytest.mark.asyncio
+async def test_driver_appends_system_prompt_for_isolated_backend(monkeypatch, tmp_path, backend) -> None:
+    import openmcp.drivers as drivers_module
+
+    captured = {}
+
+    async def fake_execute(params):
+        captured["args"] = params.args
+        return BackendResult(outcome="OK", SESSION_ID="session", agent_messages="reviewed", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, f"{backend}_execute", fake_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(id=f"{backend}-isolated", backend=backend, isolated=True),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+        instruction="follow the plan",
+    )
+
+    assert "--append-system-prompt" in captured["args"]
+    assert captured["args"][-2:] == ("--append-system-prompt", "follow the plan")
+    if backend == "claude":
+        assert "--safe-mode" in captured["args"]
+    else:
+        assert "--no-context-files" in captured["args"]
+
+
+@pytest.mark.parametrize("backend", ["agy", "codex"])
+@pytest.mark.asyncio
+async def test_driver_ignores_instruction_for_other_backends(monkeypatch, tmp_path, backend) -> None:
+    import openmcp.drivers as drivers_module
+
+    captured = {}
+
+    async def fake_execute(params):
+        captured["args"] = params.args
+        return BackendResult(outcome="OK", SESSION_ID="session", agent_messages="reviewed", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, f"{backend}_execute", fake_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(id=f"{backend}-target", backend=backend),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+        instruction="follow the plan",
+    )
+
+    assert "--append-system-prompt" not in captured["args"]
+
+
+@pytest.mark.parametrize(
+    "backend",
+    ["claude", "pi", "agy", "codex"],
+)
+@pytest.mark.asyncio
+async def test_driver_empty_instruction_preserves_argv(monkeypatch, tmp_path, backend) -> None:
+    import openmcp.drivers as drivers_module
+
+    plain_captured = {}
+    instructed_captured = {}
+
+    async def plain_execute(params):
+        plain_captured["args"] = params.args
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
+
+    async def instructed_execute(params):
+        instructed_captured["args"] = params.args
+        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
+
+    monkeypatch.setattr(drivers_module, f"{backend}_execute", plain_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(id=f"{backend}-plain", backend=backend),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+    )
+    monkeypatch.setattr(drivers_module, f"{backend}_execute", instructed_execute)
+    await drivers_module.DriverRegistry().execute(
+        target=TargetConfig(id=f"{backend}-plain", backend=backend),
+        prompt="review",
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=0,
+        cancel_event=threading.Event(),
+        instruction="",
+    )
+
+    assert instructed_captured["args"] == plain_captured["args"]
+
+
+@pytest.mark.asyncio
+async def test_target_args_appends_instruction_after_operator_args(monkeypatch) -> None:
+    target = TargetConfig(id="pi-target", backend="pi", args=("--verbose",))
+    assert _target_args(target, instruction="follow the plan") == (
+        "--verbose",
+        "--approve",
+        "--append-system-prompt",
+        "follow the plan",
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_attempts_recompile_argv_per_backend(tmp_path) -> None:
+    root = repository(tmp_path)
+    selection = TargetSelection(("claude-target", "pi-target"), 2)
+    catalog = replace(
+        config(tmp_path / "home"),
+        targets=(
+            TargetConfig(id="claude-target", backend="claude"),
+            TargetConfig(id="pi-target", backend="pi"),
+        ),
+        profiles={
+            "balanced": {
+                "implement": selection,
+                "review": selection,
+                "consult": selection,
+            }
+        },
+    )
+    compiled: list[tuple[str, tuple[str, ...]]] = []
+
+    class RetryingDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, *, target: TargetConfig, **kwargs) -> DriverResult:
+            self.calls += 1
+            compiled.append((target.id, kwargs.get("instruction", "")))
+            return DriverResult("RETRYABLE", "", "", "retry", "backend_failure")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = RetryingDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "retry")).job_id, 10)
+        assert job.state == "failed"
+        assert job.attempts == 2
+        assert compiled == [
+            ("claude-target", "follow the plan"),
+            ("pi-target", "follow the plan"),
+        ]
+    finally:
+        await runtime.close()
+
+
+async def context_init_instruction(runtime, project_id: str, workflow: str, instruction: str) -> None:
+    runtime.database.set_context_instruction(project_id, workflow, instruction)

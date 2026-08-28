@@ -190,6 +190,13 @@ overridden. For `isolated = true`, the driver instead adds `--no-approve`,
 `--system-prompt`, `--model`, and `--thinking` respectively. OpenMCP places
 `--mode json` after target arguments so output parsing cannot be replaced.
 
+A stored project context instruction (`context_init`) is appended as
+`--append-system-prompt <instruction>` after all target arguments, so a target
+cannot displace it. The flag is repeatable and additive: it survives
+`--no-context-files`, so an isolated pi target still receives the instruction.
+An empty instruction adds no flag. The instruction is never logged in full;
+logs record argument counts only.
+
 ## Claude Code (`claude -p`)
 
 Available execution options:
@@ -238,6 +245,13 @@ Target field translation:
 | `read_only = true` | `--tools Read,Grep,Glob` |
 | `model` | `--model <value>` |
 | `reasoning` | `--effort <value>` |
+
+A stored project context instruction (`context_init`) is appended as
+`--append-system-prompt <instruction>` after all target arguments, so a target
+cannot displace it. The flag is repeatable and additive: it survives
+`--safe-mode`, so an isolated claude target still receives the instruction.
+An empty instruction adds no flag. The instruction is never logged in full;
+logs record argument counts only.
 
 `--safe-mode` disables CLAUDE.md, skills, plugins, hooks, MCP servers, custom
 commands, custom agents, output styles, workflows, custom themes, and
