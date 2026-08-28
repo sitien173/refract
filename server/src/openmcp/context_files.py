@@ -30,7 +30,6 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import Sequence
 
 from openmcp.logging_setup import get_logger
 
@@ -215,6 +214,86 @@ def _refuse_existing_target(target: Path, root: Path) -> None:
         raise ValueError(f"Target path is a foreign file: {target}")
 
 
+def _open_managed_for_replacement(target: Path) -> int:
+    """Open an existing managed leftover for in-place replacement.
+
+    Opens with ``O_NOFOLLOW`` so a symlink swapped in after validation cannot
+    redirect the write, and validates the marker plus single-link metadata
+    through the same descriptor before returning it. Raises ``ValueError`` for
+    any foreign, symlink, directory, or hardlinked target. The returned
+    descriptor is the authoritative handle for truncation and writing; the
+    pathname is never used again for mutation, so a concurrent rename to a
+    foreign or tracked file cannot be deleted or overwritten.
+    """
+    flags = os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(target, flags)
+    except OSError as exc:
+        if isinstance(exc, FileNotFoundError):
+            raise ValueError(f"Target path disappeared: {target}") from exc
+        raise ValueError(f"Target path cannot be opened: {target}") from exc
+    try:
+        stat = os.fstat(fd)
+        if os.path.islink(target):
+            raise ValueError(f"Target path is a symlink: {target}")
+        if stat.st_nlink > 1:
+            raise ValueError(f"Target path is a hardlink: {target}")
+        try:
+            content = os.read(fd, len(MANAGED_MARKER.encode()) + 1)
+        except OSError as exc:
+            raise ValueError(f"Target path is not readable: {target}") from exc
+        if not content.startswith(MANAGED_MARKER.encode()):
+            raise ValueError(f"Target path is a foreign file: {target}")
+        os.lseek(fd, 0, os.SEEK_SET)
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _replace_managed_file(target: Path, content: bytes) -> None:
+    """Atomically replace an existing managed leftover through its descriptor.
+
+    The existing regular single-link file is opened with ``O_NOFOLLOW``,
+    validated through that same descriptor (marker, inode link count), then
+    truncated and rewritten. The pathname is never unlinked based on earlier
+    validation, so a replacement race that swaps the path to a foreign or
+    tracked file cannot delete or modify it.
+    """
+    fd = _open_managed_for_replacement(target)
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, content)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_target(target: Path, content: bytes, *, present: bool) -> None:
+    """Write ``content`` to ``target`` inode-safely.
+
+    If ``present``, the existing managed leftover is replaced through its
+    descriptor (``O_NOFOLLOW``, marker validated through the same fd); if
+    absent, the file is created exclusively with ``O_EXCL``. ``present`` is
+    captured from the authoritative existence check inside ``_open_managed_for_replacement``
+    or from a fresh ``O_EXCL`` create, so a race cannot turn a refusal into a
+    destructive unlink or an overwrite of a foreign file.
+    """
+    if present:
+        _replace_managed_file(target, content)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with target.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileExistsError as exc:
+        raise ValueError(f"Target path already exists: {target}") from exc
+
+
 def materialize_context_file(
     root: Path,
     target: Path,
@@ -247,7 +326,10 @@ def materialize_context_file(
             raise ValueError(f"Target path is tracked by Git: {target}")
 
     # Refuse symlinks, directories, hardlinks, and foreign files identically
-    # in Git and non-Git projects before any replacement of the target.
+    # in Git and non-Git projects before any replacement of the target. This
+    # pathname-level refusal is a fast pre-check; the authoritative inode-safe
+    # validation happens through the descriptor in _write_target so a race
+    # cannot swap in a foreign file between here and the write.
     _refuse_existing_target(target, project_root)
 
     if repo_root is not None:
@@ -259,19 +341,11 @@ def materialize_context_file(
         return []
 
     content = _compose_codex_content(instruction, project_root)
-    if target.exists() and not target.is_symlink() and not target.is_dir():
-        # A leftover file carrying the managed marker is overwritten rather
-        # than refused; remove it first so the exclusive create succeeds.
-        try:
-            target.unlink()
-        except OSError as exc:
-            raise ValueError(f"Failed to replace leftover file {target}: {exc}") from exc
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with target.open("xb") as handle:
-            handle.write(content)
-    except FileExistsError as exc:
-        raise ValueError(f"Target path already exists: {target}") from exc
+    # Existence is re-checked inside the write: if the path now holds a foreign
+    # or tracked file, the descriptor open with O_NOFOLLOW and marker check
+    # refuses it, and the pathname is never unlinked. If the path is absent,
+    # the exclusive create races to claim it.
+    _write_target(target, content, present=target.exists())
     return [target]
 
 

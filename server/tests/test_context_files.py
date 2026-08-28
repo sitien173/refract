@@ -8,6 +8,7 @@ import pytest
 
 from openmcp.context_files import (
     MANAGED_MARKER,
+    _open_managed_for_replacement,
     cleanup_context_file,
     git_repository_root,
     is_tracked,
@@ -387,3 +388,65 @@ def test_sweep_skips_git_when_no_candidate_exists(tmp_path, monkeypatch) -> None
     sweep_context_files(root, root / "AGENTS.override.md")
 
     assert calls == []
+
+
+def test_replacement_race_swapped_foreign_path_is_neither_modified_nor_deleted(tmp_path, monkeypatch) -> None:
+    """A foreign file swapped in after validation is refused through the
+    descriptor and is neither truncated nor unlinked.
+
+    The race is simulated by swapping the target pathname to a foreign file
+    immediately before the inode-safe descriptor open. Because replacement
+    opens with O_NOFOLLOW, re-validates the marker through the descriptor, and
+    never unlinks the pathname, the foreign file survives byte-identical.
+    """
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "AGENTS.override.md"
+    # Start with a managed leftover so the pre-check passes.
+    target.write_text(MANAGED_MARKER + "\nstale\n", encoding="utf-8")
+    foreign = b"foreign content that must survive\n"
+
+    original_open = context_files._open_managed_for_replacement
+
+    def racing_open(path, *args, **kwargs):
+        # Simulate the attacker swapping the path to a foreign file between the
+        # pre-check and the descriptor open.
+        target.write_bytes(foreign)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(context_files, "_open_managed_for_replacement", racing_open)
+
+    with pytest.raises(ValueError, match="foreign"):
+        materialize_context_file(root, target, "follow the plan")
+
+    assert target.read_bytes() == foreign
+    assert target.exists()
+
+
+def test_replacement_race_swapped_tracked_path_is_neither_modified_nor_deleted(tmp_path, monkeypatch) -> None:
+    """A tracked file swapped in after validation is refused and survives."""
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "AGENTS.override.md"
+    target.write_text(MANAGED_MARKER + "\nstale\n", encoding="utf-8")
+
+    original_open = context_files._open_managed_for_replacement
+
+    def racing_open(path, *args, **kwargs):
+        # Swap in a file that is also tracked by Git.
+        tracked = b"tracked content\n"
+        target.write_bytes(tracked)
+        git(root, "add", "-f", "AGENTS.override.md")
+        git(root, "commit", "-m", "track override")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(context_files, "_open_managed_for_replacement", racing_open)
+
+    with pytest.raises(ValueError, match="foreign"):
+        materialize_context_file(root, target, "follow the plan")
+
+    assert target.read_bytes() == b"tracked content\n"
+    assert target.exists()
+    assert git(root, "status", "--porcelain") == ""

@@ -200,3 +200,57 @@
   -> `79 passed`; `uv run pytest -q` -> `249 passed, 4 failed, 3 deselected`
   (the 4 failures are the pre-existing `job_wait` set, identical to the base
   commit).
+
+## Fix — Review finding: inode-safe replacement (HIGH)
+
+### Decisions made
+- Removed the pathname-based leftover overwrite (`target.unlink()` before
+  `open("xb")`) that let a replacement race delete a foreign or tracked file
+  swapped in after validation.
+- Added `_open_managed_for_replacement(target)`: opens the existing regular
+  single-link file with `O_RDWR | O_NOFOLLOW` (when the platform supports it),
+  then validates through that same descriptor — `os.fstat` single-link check,
+  `os.read` marker prefix check — before returning the fd. `O_NOFOLLOW`
+  rejects a swapped-in symlink with `ELOOP`, which is surfaced as `ValueError`.
+- Added `_replace_managed_file(target, content)`: truncates (`os.ftruncate`),
+  writes, and `os.fsync`s through the validated descriptor, then closes it.
+  The pathname is never unlinked or re-opened for mutation after the
+  descriptor validation, so a concurrent rename to a foreign or tracked file
+  cannot be deleted or modified.
+- Added `_write_target(target, content, *, present)`: dispatches to
+  `_replace_managed_file` when `present` (existing managed leftover) or to an
+  exclusive `open("xb")` create (with `fsync`) when absent. `present` is
+  re-evaluated at write time so the two branches race correctly: an absent
+  path claims it with `O_EXCL`; a present path is validated and rewritten
+  through the descriptor.
+- `materialize_context_file` now calls `_write_target` instead of the
+  unlink-then-create sequence, and its comment documents that the pathname
+  pre-check (`_refuse_existing_target`) is a fast check while the descriptor
+  validation in `_write_target` is authoritative.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- `O_NOFOLLOW` is not available on all platforms (e.g., some Windows builds);
+  on those platforms the post-open `os.path.islink` re-check still refuses a
+  symlink that was swapped in before the open. The marker check through the
+  descriptor remains the authoritative guard everywhere.
+
+### Assumptions
+- A single-link regular file whose content starts with the marker is
+  sufficient proof the inode is ours to rewrite, matching the previous
+  pathname-based validation but now bound to the descriptor.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED: added `test_replacement_race_swapped_foreign_path_is_neither_modified_nor_deleted`
+  and `test_replacement_race_swapped_tracked_path_is_neither_modified_nor_deleted`;
+  the tracked variant initially failed because the swap committed a file while
+  the managed exclude block was already in effect (fixed with `git add -f`).
+- GREEN: `uv run pytest tests/test_context_files.py tests/test_execution.py -q`
+  -> `81 passed`; `uv run pytest -q` -> `251 passed, 4 failed, 3 deselected`
+  (the 4 failures are the pre-existing `job_wait` set, identical to the base
+  commit).
