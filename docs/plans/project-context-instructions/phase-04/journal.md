@@ -11,42 +11,49 @@
 - Implementation Job: f466b417-dbd8-4b28-9780-dc81bed96040; fix a759bcda-fe25-4645-a520-523c65417c1b
 - Review Job: n/a
 - Started: 2026-08-28T18:51:17+07:00
-- Finished: 2026-08-28T19:45:10+07:00
+- Finished: 2026-08-28T20:02:41+07:00
 
 ## Implementation Response
 
-## Fix — Review finding: inode-safe replacement (HIGH)
+## Fix — Review cycle 2: inode-bound replacement and quarantine cleanup (HIGH)
 
-Replaced the pathname-based leftover overwrite with an inode-safe replacement:
-`_open_managed_for_replacement` opens the existing regular single-link file
-with `O_RDWR | O_NOFOLLOW`, validates the marker and link count through that
-same descriptor, then `_replace_managed_file` truncates and writes through the
-descriptor. The pathname is never unlinked or re-opened for mutation after
-validation, so a replacement race swapping in a foreign or tracked file cannot
-delete or modify it. Absent targets still use exclusive `O_EXCL` creation.
-Two race regression tests added. `uv run pytest tests/test_context_files.py
-tests/test_execution.py` -> 81 passed; `uv run pytest` -> 251 passed, 4 failed
-(pre-existing `job_wait` set), 3 deselected.
+Finding 1: replacement now binds to the exact prevalidated inode
+(`_refuse_existing_target` returns `(st_dev, st_ino)`; `_open_managed_for_replacement`
+fails closed on identity change) and rechecks Git tracking after opening that
+inode, before mutation. A race-swapped tracked marker file is never modified.
+
+Finding 2: cleanup and sweep now atomically quarantine the candidate to a
+unique same-directory path, validate marker, regular single-link identity, and
+original-path Git tracking at the quarantine path, and delete only the
+quarantined managed inode. Non-managed or tracked content is restored without
+overwriting another path; when restoration is impossible the quarantined bytes
+are preserved and a failure is reported rather than deleting data.
+
+6 new tests added (tracked marker swap, same-inode tracking recheck, cleanup
+foreign/tracked swaps, sweep foreign swap, restore-preserve-on-replacement).
+`uv run pytest tests/test_context_files.py tests/test_execution.py` -> 87
+passed; `uv run pytest` -> 257 passed, 4 failed (pre-existing `job_wait` set),
+3 deselected.
 
 # EXTERNAL RESPONSE (revised)
 ## META
 - Phase / Started / Finished / Plan dir
-- 4 / 2026-08-28T18:51:17+07:00 / 2026-08-28T19:45:10+07:00 / docs/plans/project-context-instructions/phase-04
+- 4 / 2026-08-28T18:51:17+07:00 / 2026-08-28T20:02:41+07:00 / docs/plans/project-context-instructions/phase-04
 ## SUMMARY
-Materialized codex instructions as Git-invisible composed `AGENTS.override.md` files per attempt with synchronous marker-scoped cleanup, startup sweeping, and fail-closed refusal of tracked/foreign/symlink/hardlink/directory targets, with inode-safe replacement.
+Materialized codex instructions as Git-invisible composed `AGENTS.override.md` files per attempt with synchronous marker-scoped cleanup, startup sweeping, and fail-closed refusal of tracked/foreign/symlink/hardlink/directory targets, with inode-bound replacement and quarantine-based cleanup.
 ## FILES MODIFIED
 | Action | Path | Change |
-| Create | src/openmcp/context_files.py | Managed marker, scrubbed Git calls, tracked check, anchored exclude-block writer via `$GIT_COMMON_DIR/info/exclude`, materialize/cleanup/sweep helpers; fixes: project root preserved for composition, identical refusal in Git and non-Git projects, inode-safe replacement via `O_NOFOLLOW` descriptor (no pathname unlink) |
+| Create | src/openmcp/context_files.py | Managed marker, scrubbed Git calls, tracked check, anchored exclude-block writer via `$GIT_COMMON_DIR/info/exclude`, materialize/cleanup/sweep helpers; fixes: project root preserved for composition, identical refusal in Git and non-Git projects, inode-bound replacement (`O_NOFOLLOW` + exact inode identity + post-open tracking recheck), quarantine-based cleanup/sweep (atomic move, validate at quarantine, restore or preserve) |
 | Modify | src/openmcp/execution.py | Per-attempt codex materialization, REQUEST_FATAL on refusal, synchronous cleanup in finally + driver-exception path |
 | Modify | src/openmcp/runtime.py | Startup sweep of marker-bearing leftovers per registered project |
-| Create | tests/test_context_files.py | 32 tests: composition (incl. repo-subdirectory project root), Git-invisibility main+linked worktree, exclusion once, tracked/foreign/symlink/hardlink/dir refusals (Git and non-Git), leftover overwrite, cleanup, sweep, race-swapped foreign/tracked preservation |
+| Create | tests/test_context_files.py | 38 tests: composition (incl. repo-subdirectory project root), Git-invisibility main+linked worktree, exclusion once, tracked/foreign/symlink/hardlink/dir refusals (Git and non-Git), leftover overwrite, cleanup, sweep, race-swapped foreign/tracked preservation, tracked-marker swap, same-inode tracking recheck, quarantine swap restoration, restore-preserve-on-replacement |
 | Modify | tests/test_execution.py | 13 tests: materialize/cleanup on success/failure/timeout/cancellation/driver-exception, REQUEST_FATAL, non-Git warning, startup sweep |
 | Modify | docs/plans/project-context-instructions/phase-04/notes.md | Per-task decision notes + fix blocks with RED→GREEN evidence |
 | Modify | docs/plans/project-context-instructions/phase-04/journal.md | META Finished + fix notes + revised EXTERNAL RESPONSE appended |
 ## NOTES
-- phase-04/notes.md (## Task 1, ## Task 2, ## Task 3, ## Fix — Pre-commit defect correction, ## Fix — Review finding: inode-safe replacement (HIGH))
+- phase-04/notes.md (## Task 1, ## Task 2, ## Task 3, ## Fix — Pre-commit defect correction, ## Fix — Review finding: inode-safe replacement (HIGH), ## Fix — Review cycle 2: inode-bound replacement and quarantine cleanup (HIGH))
 ## SPEC COMPLIANCE
-- Meets Spec? YES — review finding fixed with inode-safe replacement and race regression tests; 45 new tests green; only the 4 pre-existing `job_wait` timeout failures remain (present on base commit, out of scope).
+- Meets Spec? YES — both cycle-2 HIGH findings fixed with inode-bound replacement and quarantine cleanup; 51 new tests green; only the 4 pre-existing `job_wait` timeout failures remain (present on base commit, out of scope).
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

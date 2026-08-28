@@ -450,3 +450,182 @@ def test_replacement_race_swapped_tracked_path_is_neither_modified_nor_deleted(t
     assert target.read_bytes() == b"tracked content\n"
     assert target.exists()
     assert git(root, "status", "--porcelain") == ""
+
+
+def test_replacement_race_swapped_tracked_marker_file_fails_closed(tmp_path, monkeypatch) -> None:
+    """A tracked marker-bearing file swapped in after the index check is
+    refused: the exact-inode identity check fails closed before mutation, and
+    the tracked file survives."""
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "AGENTS.override.md"
+    # Pre-validated managed leftover.
+    target.write_text(MANAGED_MARKER + "\nstale\n", encoding="utf-8")
+    tracked = MANAGED_MARKER.encode() + b"\ntracked content\n"
+
+    original_open = context_files._open_managed_for_replacement
+
+    def racing_open(path, expected, *args, **kwargs):
+        # Swap the path to a DIFFERENT inode that carries the marker and is
+        # also tracked by Git. The old inode is replaced in the index.
+        target.write_bytes(tracked)
+        git(root, "add", "-f", "AGENTS.override.md")
+        git(root, "commit", "-m", "track override")
+        return original_open(path, expected, *args, **kwargs)
+
+    monkeypatch.setattr(context_files, "_open_managed_for_replacement", racing_open)
+
+    with pytest.raises(ValueError, match="identity|tracked"):
+        materialize_context_file(root, target, "follow the plan")
+
+    assert target.read_bytes() == tracked
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_replacement_rechecks_tracking_on_same_inode_before_mutation(tmp_path, monkeypatch) -> None:
+    """If the prevalidated managed inode's path becomes Git-tracked while the
+    descriptor is open (same inode, marker intact), the tracking recheck fails
+    closed before any truncation, and the inode survives byte-identical."""
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "AGENTS.override.md"
+    original = MANAGED_MARKER.encode() + b"\nmanaged\n"
+    target.write_bytes(original)
+    original_identity = (target.stat().st_dev, target.stat().st_ino)
+
+    original_replace = context_files._replace_managed_file
+
+    def racing_replace(path, content, expected, repo_root):
+        # Same inode: rewrite in place, then stage it so the tracking recheck
+        # inside _replace_managed_file (after open, before truncate) fails.
+        target.write_bytes(original)
+        git(root, "add", "-f", "AGENTS.override.md")
+        return original_replace(path, content, expected, repo_root)
+
+    monkeypatch.setattr(context_files, "_replace_managed_file", racing_replace)
+
+    with pytest.raises(ValueError, match="tracked"):
+        materialize_context_file(root, target, "follow the plan")
+
+    # The inode identity is unchanged and the content is untouched.
+    assert (target.stat().st_dev, target.stat().st_ino) == original_identity
+    assert target.read_bytes() == original
+
+
+def test_cleanup_race_swapped_foreign_path_is_restored(tmp_path, monkeypatch) -> None:
+    """A foreign file swapped in at the path is quarantined, fails marker
+    validation, and is restored to the original path untouched."""
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "AGENTS.override.md"
+    target.write_text(MANAGED_MARKER + "\nmanaged\n", encoding="utf-8")
+    foreign = b"foreign content that must survive\n"
+
+    original_quarantine = context_files._quarantine_candidate
+
+    def racing_quarantine(path):
+        # Swap the path to a foreign file immediately before quarantine.
+        path.write_bytes(foreign)
+        return original_quarantine(path)
+
+    monkeypatch.setattr(context_files, "_quarantine_candidate", racing_quarantine)
+
+    removed = cleanup_context_file(root, target)
+
+    assert removed == []
+    assert target.read_bytes() == foreign
+    assert not list(root.glob("*.openmcp-quarantine-*"))
+
+
+def test_cleanup_race_swapped_tracked_path_is_restored(tmp_path, monkeypatch) -> None:
+    """A tracked file swapped in at the path is quarantined, fails tracking
+    validation, and is restored to the original path untouched."""
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "AGENTS.override.md"
+    target.write_text(MANAGED_MARKER + "\nmanaged\n", encoding="utf-8")
+    tracked = b"tracked content\n"
+
+    original_quarantine = context_files._quarantine_candidate
+
+    def racing_quarantine(path):
+        # Swap in a tracked file before quarantine.
+        path.write_bytes(tracked)
+        git(root, "add", "-f", "AGENTS.override.md")
+        git(root, "commit", "-m", "track override")
+        return original_quarantine(path)
+
+    monkeypatch.setattr(context_files, "_quarantine_candidate", racing_quarantine)
+
+    removed = cleanup_context_file(root, target)
+
+    assert removed == []
+    assert target.read_bytes() == tracked
+    assert git(root, "status", "--porcelain") == ""
+    assert not list(root.glob("*.openmcp-quarantine-*"))
+
+
+def test_sweep_race_swapped_foreign_path_is_restored(tmp_path, monkeypatch) -> None:
+    """The sweep applies the same quarantine safety to a foreign swap."""
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "AGENTS.override.md"
+    target.write_text(MANAGED_MARKER + "\nmanaged\n", encoding="utf-8")
+    foreign = b"foreign content that must survive\n"
+
+    original_quarantine = context_files._quarantine_candidate
+
+    def racing_quarantine(path):
+        path.write_bytes(foreign)
+        return original_quarantine(path)
+
+    monkeypatch.setattr(context_files, "_quarantine_candidate", racing_quarantine)
+
+    removed = sweep_context_files(root, target)
+
+    assert removed == []
+    assert target.read_bytes() == foreign
+    assert not list(root.glob("*.openmcp-quarantine-*"))
+
+
+def test_cleanup_restore_preserves_quarantined_bytes_when_target_replaced(tmp_path, monkeypatch) -> None:
+    """If the original path is concurrently claimed while a non-managed
+    candidate is quarantined, restoration refuses to overwrite it and preserves
+    the quarantined bytes, reporting failure rather than deleting data."""
+    import openmcp.context_files as context_files
+
+    root = repository(tmp_path)
+    target = root / "AGENTS.override.md"
+    target.write_text(MANAGED_MARKER + "\nmanaged\n", encoding="utf-8")
+    foreign = b"foreign\n"
+    replacement = b"concurrent writer\n"
+
+    original_quarantine = context_files._quarantine_candidate
+    original_restore = context_files._restore_quarantined
+
+    def racing_quarantine(path):
+        path.write_bytes(foreign)
+        return original_quarantine(path)
+
+    def racing_restore(target_path, quarantine_path):
+        # A concurrent writer claims the original path before restore.
+        target_path.write_bytes(replacement)
+        return original_restore(target_path, quarantine_path)
+
+    monkeypatch.setattr(context_files, "_quarantine_candidate", racing_quarantine)
+    monkeypatch.setattr(context_files, "_restore_quarantined", racing_restore)
+
+    with pytest.raises(ValueError, match="preserved"):
+        cleanup_context_file(root, target)
+
+    # The concurrent writer's file is untouched and the quarantined bytes are
+    # preserved at the quarantine path, not deleted.
+    assert target.read_bytes() == replacement
+    quarantined = list(root.glob("*.openmcp-quarantine-*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_bytes() == foreign

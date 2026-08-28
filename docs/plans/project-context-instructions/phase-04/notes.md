@@ -254,3 +254,61 @@
   -> `81 passed`; `uv run pytest -q` -> `251 passed, 4 failed, 3 deselected`
   (the 4 failures are the pre-existing `job_wait` set, identical to the base
   commit).
+
+## Fix — Review cycle 2: inode-bound replacement and quarantine cleanup (HIGH)
+
+### Decisions made
+- Finding 1 (existing-file replacement can accept a race-swapped tracked marker
+  file): replacement is now bound to the exact prevalidated inode.
+  `_refuse_existing_target` returns `(st_dev, st_ino)` of the validated managed
+  leftover; `_open_managed_for_replacement(target, expected)` opens with
+  `O_NOFOLLOW` and fails closed unless `_fd_identity(fd) == expected`.
+  `_replace_managed_file` then rechecks Git tracking of the original path
+  (`_recheck_tracked_after_open`) before any truncation or write. A tracked
+  marker file swapped in after the earlier index check is refused either by the
+  identity check (different inode) or the tracking recheck (same inode now
+  staged), and is never modified.
+- Finding 2 (cleanup reads by pathname then unlinks by pathname): cleanup and
+  sweep now use a shared quarantine flow. `_quarantine_candidate` atomically
+  `os.rename`s the candidate to a unique same-directory quarantine path
+  (`.NAME.openmcp-quarantine-PID-INDEX`, bounded retry on collisions).
+  `_validate_quarantined` checks at the quarantine path that the file is a
+  regular single-link file (`stat.S_ISREG`, `st_nlink == 1`) carrying the
+  managed marker and that the original path is untracked. Only the quarantined
+  managed inode is deleted. Non-managed or tracked content is restored to the
+  original path without overwriting another path; when restoration is
+  impossible (the original path was concurrently claimed) the quarantined bytes
+  are preserved at the quarantine path and a `ValueError` reports the failure
+  rather than deleting data.
+- The startup sweep reuses the same `_quarantine_flow`, so it gets identical
+  race safety.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- `_quarantine_candidate` uses `os.rename` (atomic on POSIX); on Windows the
+  move is not guaranteed atomic but remains a same-directory rename, and the
+  post-move validation still protects against path swaps.
+- The quarantine name includes the PID and an index, so parallel jobs in one
+  project cannot collide; the bounded retry (100) prevents infinite spin on
+  persistent `OSError`.
+
+### Assumptions
+- `(st_dev, st_ino)` is a stable inode identity on the filesystems OpenMCP
+  targets; this matches the existing hardlink-hazard refusal which already
+  relies on `st_nlink`.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED: new regression tests were added for tracked marker swaps and
+  cleanup/sweep path swaps and passed only after the fix; the prior
+  pathname-based cleanup would have deleted or modified swapped content.
+- GREEN:
+  - `uv run pytest tests/test_context_files.py -q` -> `38 passed`.
+  - `uv run pytest tests/test_context_files.py tests/test_execution.py -q` ->
+    `87 passed`.
+  - `uv run pytest -q` -> `257 passed, 4 failed, 3 deselected` (the 4 failures
+    are the pre-existing `job_wait` set, identical to the base commit).
