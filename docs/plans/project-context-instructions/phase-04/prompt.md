@@ -19,6 +19,18 @@ A generated root `AGENTS.override.md` must contain the instruction followed by r
 - `src/openmcp/runtime.py`
 - `tests/test_execution.py`
 
+## Consultation Constraints
+- Compose from the target file's sibling `AGENTS.md`, using bytes.
+- Detect tracked paths through Git index membership, even when deleted.
+- Refuse symlinks, hardlink hazards, directories, and foreign files. Create exclusively.
+- Scrub repository-affecting `GIT_*` variables from internal Git calls.
+- Treat only confirmed non-repositories as non-Git. Fail closed otherwise.
+- Verify exclusion with `git check-ignore`; anchor patterns to repository paths.
+- Serialize shared exclude updates and preserve unrelated content.
+- Cleanup synchronously. Delete only regular marker-bearing files.
+- Sweep only marker-bearing untracked files. Skip Git when no candidate exists.
+- Keep materialization per attempt and cleanup unable to mask outcomes.
+
 ## Done When
 - Generated codex files preserve root guidance and stay Git-invisible.
 - Cleanup covers success, failure, timeout, cancellation, and driver exceptions.
