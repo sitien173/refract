@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from openmcp.config import DaemonConfig, load_config, load_project_config
+from openmcp.context_files import sweep_context_files
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry
 from openmcp.execution import JobNotifier, JobRunner, TargetExecutor
@@ -80,8 +81,21 @@ class Runtime:
         interrupted = self.database.interrupt_active_jobs()
         for job in interrupted:
             await self._notify_job_resource(job_resource_uri(job["id"]))
+        self._sweep_project_context_files()
         await self.scheduler.start(self.database.queued_jobs())
         log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
+
+    def _sweep_project_context_files(self) -> None:
+        """Remove managed marker-bearing leftovers for every registered project."""
+        for project in self.database.projects():
+            try:
+                sweep_context_files(Path(project.root), Path(project.root) / "AGENTS.override.md")
+            except Exception:
+                log.warning(
+                    "Context file sweep failed",
+                    extra={"event": "context_file.sweep_failed", "project_id": project.id, "root": project.root},
+                    exc_info=True,
+                )
 
     async def close(self) -> None:
         self._closing = True

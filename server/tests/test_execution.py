@@ -11,6 +11,7 @@ import pytest
 
 from openmcp.backends import BackendResult
 from openmcp.config import TargetConfig, TargetSelection
+from openmcp.context_files import MANAGED_MARKER, materialize_context_file
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry, DriverResult, _target_args
 from openmcp.planning import execution_plan_data, resolve_execution_plan
@@ -665,3 +666,314 @@ async def test_retry_attempts_recompile_argv_per_backend(tmp_path) -> None:
 
 async def context_init_instruction(runtime, project_id: str, workflow: str, instruction: str) -> None:
     runtime.database.set_context_instruction(project_id, workflow, instruction)
+
+
+class CodexDrivers(FakeDrivers):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+        self.last_cwd: Path | None = None
+
+    async def execute(self, *, cwd: Path, **kwargs) -> DriverResult:
+        self.calls += 1
+        self.last_cwd = cwd
+        return DriverResult("SUCCESS", "", f"response {self.calls}", "", "")
+
+
+def codex_catalog(tmp_path, root: Path, *, targets: tuple[TargetConfig, ...] | None = None) -> object:
+    resolved_targets = targets or (TargetConfig(id="codex-target", backend="codex"),)
+    from tests.orchestration_helpers import config as make_config
+
+    return make_config(tmp_path / "home", targets=resolved_targets)
+
+
+@pytest.mark.asyncio
+async def test_codex_attempt_materializes_and_cleans_up_context_file(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "AGENTS.md").write_text("root guidance\n", encoding="utf-8")
+    git(root, "add", "AGENTS.md")
+    git(root, "commit", "-m", "add agents")
+    drivers = CodexDrivers()
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "succeeded"
+        assert drivers.calls == 1
+        assert not (root / "AGENTS.override.md").exists()
+        assert git(root, "status", "--porcelain") == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_composed_file_preserves_root_guidance_during_attempt(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "AGENTS.md").write_text("root guidance\n", encoding="utf-8")
+    git(root, "add", "AGENTS.md")
+    git(root, "commit", "-m", "add agents")
+    captured: dict[str, bytes] = {}
+
+    class CapturingCodexDrivers(FakeDrivers):
+        async def execute(self, *, cwd: Path, **kwargs) -> DriverResult:
+            captured["content"] = (cwd / "AGENTS.override.md").read_bytes()
+            return DriverResult("SUCCESS", "", "ok", "", "")
+
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = CapturingCodexDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+    finally:
+        await runtime.close()
+
+    assert MANAGED_MARKER.encode() in captured["content"]
+    assert b"follow the plan" in captured["content"]
+    assert b"root guidance" in captured["content"]
+    assert not (root / "AGENTS.override.md").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "error_code"),
+    [
+        ("RETRYABLE", "backend_failure"),
+        ("TARGET_FATAL", "fatal_backend"),
+    ],
+)
+async def test_codex_cleanup_after_failed_attempt(tmp_path, outcome, error_code) -> None:
+    root = repository(tmp_path)
+
+    class FailingCodexDrivers(FakeDrivers):
+        async def execute(self, *, cwd: Path, **kwargs) -> DriverResult:
+            assert (cwd / "AGENTS.override.md").exists()
+            return DriverResult(outcome, "", "", "failed", error_code)
+
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = FailingCodexDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state in {"failed", "cancelled"}
+        assert not (root / "AGENTS.override.md").exists()
+        assert git(root, "status", "--porcelain") == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_cleanup_after_driver_exception(tmp_path) -> None:
+    root = repository(tmp_path)
+
+    class ExplodingCodexDrivers(FakeDrivers):
+        async def execute(self, *, cwd: Path, **kwargs) -> DriverResult:
+            assert (cwd / "AGENTS.override.md").exists()
+            raise RuntimeError("driver exploded")
+
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = ExplodingCodexDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "failed"
+        assert not (root / "AGENTS.override.md").exists()
+        assert git(root, "status", "--porcelain") == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_cleanup_after_cancellation(tmp_path) -> None:
+    root = repository(tmp_path)
+
+    class CancellingCodexDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def execute(self, *, cwd: Path, cancel_event, **kwargs) -> DriverResult:
+            self.started.set()
+            while not cancel_event.is_set():
+                await asyncio.sleep(0.01)
+            return DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+
+    drivers = CancellingCodexDrivers()
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        submitted = await runtime.submit(project.id, "implement", "block")
+        await drivers.started.wait()
+        await runtime.cancel(submitted.job_id)
+        assert (await runtime.wait(submitted.job_id, 1)).state == "cancelled"
+        assert not (root / "AGENTS.override.md").exists()
+        assert git(root, "status", "--porcelain") == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_cleanup_after_timeout(tmp_path) -> None:
+    root = repository(tmp_path)
+
+    class TimingOutCodexDrivers(FakeDrivers):
+        async def execute(self, *, cwd: Path, **kwargs) -> DriverResult:
+            assert (cwd / "AGENTS.override.md").exists()
+            return DriverResult("TARGET_FATAL", "", "", "timed out", "timeout")
+
+    selection = TargetSelection(("codex-target",), 1)
+    from openmcp.config import DaemonConfig
+
+    catalog = codex_catalog(tmp_path, root)
+    catalog = DaemonConfig(
+        home=catalog.home,
+        max_jobs=catalog.max_jobs,
+        default_profile="balanced",
+        targets=catalog.targets,
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection, "other": selection}},
+        profile_declarations=catalog.profile_declarations,
+    )
+    runtime = Runtime(catalog)
+    runtime.drivers = TimingOutCodexDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "failed"
+        assert not (root / "AGENTS.override.md").exists()
+        assert git(root, "status", "--porcelain") == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_tracked_target_path_fails_request_fatal(tmp_path) -> None:
+    root = repository(tmp_path)
+    original = b"tracked content\n"
+    (root / "AGENTS.override.md").write_bytes(original)
+    git(root, "add", "AGENTS.override.md")
+    git(root, "commit", "-m", "track override")
+
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = CodexDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "failed"
+        assert (root / "AGENTS.override.md").read_bytes() == original
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_untracked_foreign_target_path_fails_request_fatal(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "AGENTS.override.md").write_text("foreign content\n", encoding="utf-8")
+
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = CodexDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "failed"
+        assert (root / "AGENTS.override.md").read_text(encoding="utf-8") == "foreign content\n"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_leftover_marker_file_is_overwritten(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "AGENTS.override.md").write_text(MANAGED_MARKER + "\nstale\n", encoding="utf-8")
+
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = CodexDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "succeeded"
+        assert not (root / "AGENTS.override.md").exists()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_non_git_project_materializes_and_logs_warning(tmp_path, caplog) -> None:
+    root = tmp_path / "plain-project"
+    root.mkdir()
+
+    catalog = codex_catalog(tmp_path, root)
+    runtime = Runtime(catalog)
+    runtime.drivers = CodexDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        await context_init_instruction(runtime, project.id, "implement", "follow the plan")
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "inspect")).job_id, 10)
+        assert job.state == "succeeded"
+        assert not (root / "AGENTS.override.md").exists()
+    finally:
+        await runtime.close()
+    assert any("not a git repository" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_startup_sweep_removes_managed_leftovers(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "AGENTS.override.md").write_text(MANAGED_MARKER + "\nmanaged\n", encoding="utf-8")
+    (root / "keep.txt").write_text("keep\n", encoding="utf-8")
+    catalog = codex_catalog(tmp_path, root)
+    database = Database(catalog.database_path)
+    database.upsert_project(project_id="project", alias="project", root=root.as_posix())
+    database.close()
+    runtime = Runtime(catalog)
+    await runtime.start()
+    try:
+        assert not (root / "AGENTS.override.md").exists()
+        assert (root / "keep.txt").exists()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_sweep_leaves_tracked_foreign_alone(tmp_path) -> None:
+    root = repository(tmp_path)
+    (root / "AGENTS.override.md").write_text(MANAGED_MARKER + "\ntracked\n", encoding="utf-8")
+    git(root, "add", "AGENTS.override.md")
+    git(root, "commit", "-m", "track override")
+    catalog = codex_catalog(tmp_path, root)
+    database = Database(catalog.database_path)
+    database.upsert_project(project_id="project", alias="project", root=root.as_posix())
+    database.close()
+    runtime = Runtime(catalog)
+    await runtime.start()
+    try:
+        assert (root / "AGENTS.override.md").exists()
+    finally:
+        await runtime.close()
