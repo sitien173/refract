@@ -46,6 +46,17 @@ class JobView(BaseModel):
     result: JobResult = Field(default_factory=JobResult)
 
 
+class JobSummary(BaseModel):
+    id: str
+    workflow: str
+    profile: str
+    state: JobState
+    context_key: str
+    target_id: str = ""
+    attempts: int = 0
+    updated_at: str
+
+
 class TargetView(BaseModel):
     id: str
     model: str
@@ -103,6 +114,7 @@ __all__ = [
     "DaemonStatusResult",
     "JobResult",
     "JobState",
+    "JobSummary",
     "JOB_RESOURCE_URI_TEMPLATE",
     "JobView",
     "job_resource_uri",

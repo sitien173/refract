@@ -24,7 +24,7 @@ from openmcp.backends.codex import execute as codex_execute
 from openmcp.backends.pi import execute as pi_execute
 from openmcp.config import load_config, load_task_guide
 from openmcp.logging_setup import configure as configure_logging, get_logger, log_context
-from openmcp.models import ActionResult, ContextInstructionsResult, DaemonStatusResult, JobView, ProjectView, SubmissionResult, TERMINAL_STATES, TaskGuideResult
+from openmcp.models import ActionResult, ContextInstructionsResult, DaemonStatusResult, JobSummary, JobView, ProjectView, SubmissionResult, TERMINAL_STATES, TaskGuideResult
 from openmcp.runtime import Runtime
 from openmcp.workflows import BUILTIN_WORKFLOWS
 
@@ -189,7 +189,7 @@ def _json(value: Any) -> str:
         value = value.model_dump(mode="json")
     elif isinstance(value, list):
         value = [item.model_dump(mode="json") if hasattr(item, "model_dump") else item for item in value]
-    return json.dumps(value, ensure_ascii=False, indent=2)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 @mcp.resource("openmcp://projects{?scope}", mime_type="application/json")
@@ -197,19 +197,33 @@ async def projects_resource(ctx: Context, scope: str = "") -> str:
     return _json(_runtime(ctx).database.projects())
 
 
-@mcp.resource("openmcp://projects/{project_id}", mime_type="application/json")
-async def project_resource(project_id: str, ctx: Context) -> str:
-    project = _runtime(ctx).database.project(project_id)
-    if project is None:
-        raise ValueError(f"Unknown project: {project_id}")
-    return _json(project)
-
-
 @mcp.resource("openmcp://projects/{project_id}/jobs", mime_type="application/json")
 async def project_jobs_resource(project_id: str, ctx: Context) -> str:
-    if _runtime(ctx).database.project(project_id) is None:
+    runtime = _runtime(ctx)
+    if runtime.database.project(project_id) is None:
         raise ValueError(f"Unknown project: {project_id}")
-    return _json(_runtime(ctx).database.jobs(project_id))
+    jobs = runtime.database.jobs(project_id)
+    active = [job for job in jobs if job.state not in TERMINAL_STATES]
+    terminal = [job for job in jobs if job.state in TERMINAL_STATES]
+    recent = sorted(terminal, key=lambda job: job.updated_at, reverse=True)[:10]
+
+    def summary(job: JobView) -> dict[str, Any]:
+        return JobSummary(
+            id=job.id,
+            workflow=job.workflow,
+            profile=job.profile,
+            state=job.state,
+            context_key=job.context_key,
+            target_id=job.target_id,
+            attempts=job.attempts,
+            updated_at=job.updated_at,
+        ).model_dump(mode="json")
+
+    return _json({
+        "active": [summary(job) for job in active],
+        "recent": [summary(job) for job in recent],
+        "truncated": len(terminal) - len(recent),
+    })
 
 
 @mcp.resource("openmcp://jobs/{job_id}", mime_type="application/json")
@@ -218,29 +232,6 @@ async def job_resource(job_id: str, ctx: Context) -> str:
     if job is None:
         raise ValueError(f"Unknown job: {job_id}")
     return _json(job)
-
-
-@mcp.resource("openmcp://jobs/{job_id}/events", mime_type="application/json")
-async def job_events_resource(job_id: str, ctx: Context) -> str:
-    if _runtime(ctx).database.job(job_id) is None:
-        raise ValueError(f"Unknown job: {job_id}")
-    return _json(_runtime(ctx).database.events(job_id))
-
-
-@mcp.resource("openmcp://contexts/{project_id}/{context_key}", mime_type="application/json")
-async def context_resource(project_id: str, context_key: str, ctx: Context) -> str:
-    return _json(_runtime(ctx).database.context(project_id, context_key))
-
-
-@mcp.resource("openmcp://targets{?scope}", mime_type="application/json")
-async def targets_resource(ctx: Context, scope: str = "") -> str:
-    return _json(_runtime(ctx).targets())
-
-
-@mcp.resource("openmcp://profiles{?scope}", mime_type="application/json")
-async def profiles_resource(ctx: Context, scope: str = "") -> str:
-    runtime = _runtime(ctx)
-    return _json({"default": runtime.catalog.default_profile, "available": sorted(runtime.catalog.profiles)})
 
 
 @mcp.resource("openmcp://projects/{project_id}/profiles", mime_type="application/json")

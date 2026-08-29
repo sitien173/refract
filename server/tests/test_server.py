@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from openmcp.models import ContextInstructionsResult, JobResult, JobView, ProjectView, SubmissionResult, TargetView
+from openmcp.models import ContextInstructionsResult, JobResult, JobSummary, JobView, ProjectView, SubmissionResult, TargetView
 from openmcp.planning import parse_execution_plan
 from openmcp.runtime import OrchestrationError, Runtime
-from openmcp.server import context_init, context_instructions_resource, job_wait, mcp, profiles_resource, projects_resource, publish_job_resource, subscription_bus, targets_resource, task_guide, workflows_resource
+from openmcp.server import _json, context_init, context_instructions_resource, job_resource, job_wait, mcp, project_jobs_resource, projects_resource, publish_job_resource, subscription_bus, task_guide, workflows_resource
 from tests.orchestration_helpers import config, repository
 
 
@@ -134,7 +134,7 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert set(tools["context_init"].input_schema["properties"]) == {"project_id", "workflow", "instruction"}
     assert set(tools["task_guide"].input_schema["properties"]) == {"project_id"}
     assert set(tools["job_wait"].input_schema["properties"]) == {"job_id", "timeout_s"}
-    assert tools["job_wait"].input_schema["properties"]["timeout_s"]["default"] == 30
+    assert tools["job_wait"].input_schema["properties"]["timeout_s"]["default"] == 300
     assert set(tools["job_retry"].input_schema["properties"]) == {"job_id"}
     assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts", "base_commit"}.isdisjoint(JobView.model_fields)
     assert "commit" not in JobResult.model_fields
@@ -173,7 +173,23 @@ async def test_job_resource_updates_use_subscription_bus() -> None:
 @pytest.mark.asyncio
 async def test_runtime_resources_use_v2_templates_and_context() -> None:
     templates = {template.uri_template for template in await mcp.list_resource_templates()}
-    assert {"openmcp://projects{?scope}", "openmcp://targets{?scope}", "openmcp://profiles{?scope}"} <= templates
+    surviving = {
+        "openmcp://projects{?scope}",
+        "openmcp://projects/{project_id}/jobs",
+        "openmcp://projects/{project_id}/profiles",
+        "openmcp://projects/{project_id}/context_instructions",
+        "openmcp://jobs/{job_id}",
+        "openmcp://workflows/{project_id}",
+    }
+    removed = {
+        "openmcp://projects/{project_id}",
+        "openmcp://jobs/{job_id}/events",
+        "openmcp://contexts/{project_id}/{context_key}",
+        "openmcp://targets{?scope}",
+        "openmcp://profiles{?scope}",
+    }
+    assert templates == surviving
+    assert templates.isdisjoint(removed)
     assert await mcp.list_resources() == []
 
     class Database:
@@ -181,15 +197,112 @@ async def test_runtime_resources_use_v2_templates_and_context() -> None:
         def projects():
             return [{"id": "project-1"}]
 
-    runtime = SimpleNamespace(
-        database=Database(),
-        targets=lambda: [{"id": "target-1"}],
-        catalog=SimpleNamespace(default_profile="balanced", profiles={"balanced"}),
-    )
+    runtime = SimpleNamespace(database=Database())
     ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
     assert json.loads(await projects_resource(ctx)) == [{"id": "project-1"}]
-    assert json.loads(await targets_resource(ctx)) == [{"id": "target-1"}]
-    assert json.loads(await profiles_resource(ctx)) == {"default": "balanced", "available": ["balanced"]}
+
+
+def test_job_summary_is_slim() -> None:
+    assert set(JobSummary.model_fields) == {
+        "id",
+        "workflow",
+        "profile",
+        "state",
+        "context_key",
+        "target_id",
+        "attempts",
+        "updated_at",
+    }
+    assert "result" not in JobSummary.model_fields
+
+
+@pytest.mark.asyncio
+async def test_project_jobs_resource_keeps_all_active_and_bounds_recent() -> None:
+    active = [
+        JobView(
+            id=f"active-{index}",
+            project_id="project-1",
+            workflow="implement",
+            profile="balanced",
+            state="running",
+            context_key="implement",
+            target_id="target-1",
+            attempts=1,
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at=f"2026-01-01T00:{index:02d}:00+00:00",
+            result=JobResult(text="must not be returned"),
+        )
+        for index in range(12)
+    ]
+    terminal = [
+        JobView(
+            id=f"terminal-{index}",
+            project_id="project-1",
+            workflow="review",
+            profile="balanced",
+            state="succeeded",
+            context_key="review",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at=f"2026-01-02T00:{index:02d}:00+00:00",
+            result=JobResult(text="must not be returned"),
+        )
+        for index in range(12)
+    ]
+    jobs = active + terminal
+
+    class Database:
+        @staticmethod
+        def project(project_id: str):
+            return object() if project_id == "project-1" else None
+
+        @staticmethod
+        def jobs(project_id: str):
+            assert project_id == "project-1"
+            return jobs
+
+    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=SimpleNamespace(database=Database())))
+    payload = json.loads(await project_jobs_resource("project-1", ctx))
+
+    assert set(payload) == {"active", "recent", "truncated"}
+    assert [job["id"] for job in payload["active"]] == [job.id for job in active]
+    assert [job["id"] for job in payload["recent"]] == [f"terminal-{index}" for index in range(11, 1, -1)]
+    assert payload["truncated"] == 2
+    assert all("result" not in job for job in payload["active"] + payload["recent"])
+
+
+@pytest.mark.asyncio
+async def test_project_jobs_resource_returns_zero_truncated_when_no_terminal_jobs() -> None:
+    active = _job_view("running")
+
+    class Database:
+        @staticmethod
+        def project(project_id: str):
+            return object()
+
+        @staticmethod
+        def jobs(project_id: str):
+            return [active]
+
+    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=SimpleNamespace(database=Database())))
+    assert json.loads(await project_jobs_resource("project-1", ctx))["truncated"] == 0
+
+
+def test_json_emits_compact_output() -> None:
+    assert _json({"active": [], "recent": [], "truncated": 0}) == '{"active":[],"recent":[],"truncated":0}'
+
+
+@pytest.mark.asyncio
+async def test_job_resource_retains_full_result_text() -> None:
+    job = _job_view("succeeded")
+    job.result = JobResult(text="full worker result")
+
+    class Database:
+        @staticmethod
+        def job(job_id: str):
+            return job
+
+    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=SimpleNamespace(database=Database())))
+    assert json.loads(await job_resource(job.id, ctx))["result"]["text"] == "full worker result"
 
 
 def _job_view(state: str) -> JobView:
@@ -208,7 +321,7 @@ def _job_view(state: str) -> JobView:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("timeout_s", "expected_timeout_s"),
-    [(None, 30), (0, 30), (5, 5), (30, 30), (45, 30)],
+    [(None, 300), (0, 300), (5, 5), (30, 30), (45, 45)],
 )
 async def test_job_wait_bounds_public_timeout(timeout_s: int | None, expected_timeout_s: int) -> None:
     initial = _job_view("running")
