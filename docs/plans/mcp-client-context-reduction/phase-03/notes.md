@@ -5,7 +5,7 @@
 ## Task 1
 
 ### Decisions made
-- pending
+- Set both plugin manifest versions to 10.2.0.
 
 ### Spec deviations
 - none
@@ -20,12 +20,12 @@
 - none
 
 ### Test evidence
-- pending
+- Both parsed manifest versions report 10.2.0.
 
 ## Task 2
 
 ### Decisions made
-- pending
+- Set every shared contract marker to 10.2.0.
 
 ### Spec deviations
 - none
@@ -40,4 +40,5 @@
 - none
 
 ### Test evidence
-- pending
+- All six shared markers report 10.2.0.
+- `/home/ngosi/projects/superpowers-ccg/tests/run.sh` passed.
