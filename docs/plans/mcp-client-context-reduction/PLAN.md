@@ -45,8 +45,8 @@ six resource templates instead of eleven.
    `__all__` entries. Leave `database.jobs()`, `database.events()`,
    `database.context()`, and `runtime.targets()` unchanged.
 2. Add `JobSummary` to `models.py` with `id`, `workflow`, `profile`, `state`,
-   `context_key`, `target_id`, `attempts`, `updated_at`, and export it. It must
-   carry no `result` field.
+   `context_key`, `attempts`, `updated_at`, and export it. It must carry neither
+   `result` nor `target_id`; execution identity stays internal.
 3. Reshape `project_jobs_resource` to return `{"active": [...], "recent": [...],
    "truncated": N}`. `active` is every job whose state is not in
    `TERMINAL_STATES`, uncapped. `recent` is the 10 most recent terminal jobs by
@@ -57,9 +57,9 @@ six resource templates instead of eleven.
    `test_runtime_resources_use_v2_templates_and_context` to assert the six
    surviving templates are present and the five removed ones absent. Add
    coverage for the uncapped `active` list, the 10-item `recent` cap and its
-   ordering, `truncated` including the zero case, `JobSummary` exposing no
-   `result`, `openmcp://jobs/{job_id}` still returning full `result.text`, and
-   `_json` emitting no indentation.
+   ordering, `truncated` including the zero case, `JobSummary` exposing neither
+   `result` nor `target_id`, `openmcp://jobs/{job_id}` still returning full
+   `result.text`, and `_json` emitting no indentation.
 
 **Acceptance Criteria:**
 - `mcp.list_resource_templates()` returns exactly six templates: `projects`,

@@ -103,16 +103,17 @@ does not block it.
 ## Section B — Jobs payload (`src/openmcp/models.py`, `server.py`)
 
 Add `JobSummary` with `id`, `workflow`, `profile`, `state`, `context_key`,
-`target_id`, `attempts`, and `updated_at`. No `result`, no `created_at`, no
-`project_id`; the caller supplied the project.
+`attempts`, and `updated_at`. No `target_id`, `result`, `created_at`, or
+`project_id`; execution identity stays internal and the caller supplied the
+project.
 
 `project_jobs_resource` returns:
 
 ```json
 {
   "active": [{"id": "...", "workflow": "implement", "state": "running",
-              "profile": "...", "context_key": "...", "target_id": "...",
-              "attempts": 1, "updated_at": "..."}],
+              "profile": "...", "context_key": "...", "attempts": 1,
+              "updated_at": "..."}],
   "recent": [{"id": "...", "workflow": "review", "state": "succeeded", "...": "..."}],
   "truncated": 364
 }
