@@ -12,9 +12,10 @@ review, and handover. This skill owns only the folder-plan phase procedure.
 
 1. Read `PLAN.md`, `.handover.md`, and validated `read_first` paths. Select one
    phase and confirm its scope, checks, and commit message.
-2. When `project_id` exists, reconcile handover with
-   `openmcp://projects/<project_id>/jobs` before editing. If a job is active,
-   return to the canonical resume flow.
+2. When `project_id` exists, reconcile handover with the `active` entries from
+   `openmcp://projects/<project_id>/jobs` before editing. Read a specific job
+   resource only when its result is needed. If a job is active, return to the
+   canonical resume flow.
 3. For an active phase, reuse saved guidance. Do not re-run `task_guide` for an
    active phase. For a new phase, run canonical setup and guidance.
 4. Create `phase-<NN>/prompt.md`, `notes.md`, and `journal.md` from the bundled

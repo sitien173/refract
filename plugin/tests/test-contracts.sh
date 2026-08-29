@@ -105,9 +105,9 @@ grep -q 'shared/closeout-template.md' hooks/superpowers-ccg-session-start.sh
 grep -q '^## Closeout$' skills/executing-plans/SKILL.md
 grep -q 'chore(plan): close <slug>' skills/executing-plans/SKILL.md
 grep -q 'never by matching titles' skills/executing-plans/SKILL.md
-grep -q 'Accepted debt must never be lost' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Blocking findings are never filed' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Filing a row never creates its own commit' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Accepted debt must never be lost' skills/coordinating-multi-model-work/references/review.md
+grep -q 'Blocking findings are never filed' skills/coordinating-multi-model-work/references/review.md
+grep -q 'Filing a row never creates its own commit' skills/coordinating-multi-model-work/references/review.md
 
 for skill in skills/*/SKILL.md; do
     grep -qi 'owns' "$skill"
@@ -117,6 +117,7 @@ for skill in skills/*/SKILL.md; do
 done
 test "$(wc -l < skills/coordinating-multi-model-work/SKILL.md)" -le 265
 test "$(wc -l < skills/coordinating-multi-model-work/references/tool-contract.md)" -le 90
+test "$(wc -l < skills/coordinating-multi-model-work/references/review.md)" -le 100
 test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 100
 
 if grep -R -E 'job_submit|job_wait|job_retry|job_cancel|project_register|openmcp://' \

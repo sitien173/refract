@@ -13,6 +13,7 @@ Default endpoint: `http://127.0.0.1:8765/mcp`.
 | `job_wait` | `job_id` | `timeout_s` | Wait for completion or timeout. |
 | `job_cancel` | `job_id` | — | Cancel queued or running work. |
 | `job_retry` | `job_id` | — | Retry a failed, cancelled, or interrupted whole job. |
+| `context_init` | `project_id`, `workflow`, `instruction` | — | Set, replace, or clear one workflow instruction. |
 
 Tool names may be client-namespaced; match their OpenMCP suffixes.
 
@@ -34,15 +35,17 @@ and optional profiles, never targets or providers.
 ## Resources
 
 - `openmcp://projects`
-- `openmcp://projects/{project_id}`
 - `openmcp://projects/{project_id}/jobs`
-- `openmcp://jobs/{job_id}`
-- `openmcp://jobs/{job_id}/events`
-- `openmcp://contexts/{project_id}/{context_key}`
-- `openmcp://targets`
-- `openmcp://profiles`
 - `openmcp://projects/{project_id}/profiles`
+- `openmcp://projects/{project_id}/context_instructions`
+- `openmcp://jobs/{job_id}`
 - `openmcp://workflows/{project_id}`
+
+The project jobs resource returns `active`, `recent`, and `truncated`. `active`
+contains every non-terminal job without a cap. `recent` contains the ten most
+recent terminal jobs by `updated_at`. `truncated` counts omitted terminal jobs.
+List summaries omit results and execution identities. Read a specific job
+resource only when its full result is needed.
 
 ## Execution Semantics
 
@@ -53,8 +56,7 @@ and optional profiles, never targets or providers.
   concurrently up to `max_jobs`. This FIFO is the only serialization; add no job
   locking of your own.
 - OpenMCP never commits, resets, or restores. Filesystem changes from every
-  terminal state (success, failure, cancellation, interruption) remain on disk
-  for you to inspect and reconcile.
+  terminal state remain on disk for you to inspect and reconcile.
 - Prevent mutation with a read-only target, not a workflow name.
 - A worker session is resumed by `project_id` + `context_key` + `workflow` +
   target key, keyed primarily on `context_key`. Reusing one `context_key` across

@@ -50,20 +50,13 @@ workflows and profiles.
 
 ## Session Resume Key
 
-OpenMCP resumes a worker session by the combination of `project_id`,
-`context_key`, `workflow`, and target key. `context_key` is the primary key.
+Sessions use `project_id`, `context_key`, `workflow`, and target key, primarily
+`context_key`. Use the plan slug for every phase and job; never derive another
+key. Each workflow keeps its own resumed session.
 
-Use one stable `context_key` for the whole plan: the plan id (`<plan-slug>`).
-Submit every routed job across every phase with that same key. The differing
-`workflow` keeps each session distinct while phases continue the same worker
-session. Never derive a per-phase or per-job key.
-
-The session persists per workflow, so keep prompts thin on resume. The first
-`implement` and first `review` job on the plan carry the full contract for their
-role. Every later job of that same workflow on the same key resumes the live
-session and already knows its role and output format: send only the new delta
-(tasks, findings, or scope) plus the phase prompt path to read. Do not resend the
-worker contract, ERP format, response template, or role description.
+The first `implement` and `review` jobs carry their full role contracts. Later
+jobs on the same workflow and key send only the delta and phase prompt path. Do
+not resend contracts, response formats, or role descriptions.
 
 ## Git Ownership
 
@@ -82,13 +75,19 @@ resets, or restores; assume it did none of these.
 
 1. Call `status`; require `status="running"`. If unavailable, report and stop.
 2. Resolve the Git root and read `openmcp://projects`.
-3. Register an absent Git root with `project_register`; save its `project_id`.
-4. Read `openmcp://projects/<project_id>/jobs` and reconcile active phase jobs
-   before changing files.
+3. Register an absent root with `project_register`; save its `project_id`.
+4. Reconcile `active` from `openmcp://projects/<project_id>/jobs`. Fetch a job
+   resource only for a specific result.
 
-OpenMCP job records are authoritative for job state, but Git state lives only in
-your working tree. If a job is queued or running, wait without local edits; if
-handover, jobs, and the working tree disagree, stop rather than guessing.
+Job records own state; Git state lives only in the working tree. Wait on active
+jobs without local edits. Stop when handover, jobs, and Git disagree.
+
+## Project Context Instructions
+
+`context_init` stores one database instruction per `(project_id, workflow)` pair.
+Empty input clears it. It persists across jobs and sessions. Harness context adds
+it to workers, never through prompts or by shadowing repository context files.
+Read `openmcp://projects/<project_id>/context_instructions`.
 
 ## Task Guidance
 
@@ -145,32 +144,9 @@ For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch wit
 
 ## Gate 3: Review
 
-### Specification and verification
-
-After implementation is terminal and you have committed the validated changes:
-
-1. Require no active project job and a clean root at your implementation commit.
-2. Inspect that implementation commit and `phase_base..HEAD` for the phase.
-3. Check declared paths and acceptance criteria.
-4. Apply `verifying-before-completion` to run every declared command fresh.
-5. Recheck the same HEAD and clean state.
-
-Any scope, requirement, or evidence failure blocks quality review.
-
-### Independent quality review
-
-Review only what this phase changed; never request a full-codebase scan. Submit a
-prompt-only `review` scoped to the phase delta with:
-
-- the exact diff to review: `phase_base..HEAD` and the paths in FILES MODIFIED,
-- the plan acceptance criteria and reviewer checklist as the rubric,
-- the selected review profile and the plan `context_key` (`<plan-slug>`).
-
-State the paths and range in the prompt and instruct the reviewer to judge only
-whether those changes are correct, secure, and meet the plan. Pre-existing code
-outside the delta is out of scope and is not a finding.
-
-Require:
+After implementation commits, load [references/review.md](references/review.md).
+Specification failure blocks quality review. Correctness and security force
+`FAIL`. Review through a read-only target; never commit a review.
 
 ```text
 # CODE QUALITY REVIEW
@@ -178,47 +154,6 @@ Require:
 - Findings: <severity, path, line, actionable fix>
 - Scope checked: <paths>
 ```
-
-Correctness and security findings force `FAIL`. Run review against a read-only
-target so it cannot mutate files; make no commit for a review.
-
-### Review–fix loop
-
-When review returns blocking findings, iterate until it passes or you stop for
-the user:
-
-1. Collect the blocking findings — every correctness and security finding, plus
-   any the user requires — into one fix batch.
-2. Submit one `FIX:` `implement` job on the plan `context_key`, listing only the
-   findings, the allowed paths, and the checks to rerun. The worker resumes its
-   session, so send no contract or ERP restatement.
-3. Validate and commit the fix yourself with a `fix:` message.
-4. Re-review only the fix delta: submit a `review` scoped to the paths the fix
-   touched and the findings it must clear, not the whole phase again. Re-run only
-   the checks the fix affected.
-5. Exit when review returns no blocking findings.
-
-Bound this to two automatic fix cycles. If blocking findings remain after the
-second cycle, stop and hand the open findings back to the user instead of looping
-further.
-
-### Finalize
-
-After both reviews pass and no job is active:
-
-1. Append evidence to `journal.md`.
-2. On `PASS_WITH_DEBT`, file one `inbox` backlog row per debt entry, source
-   `<slug>/ph-NN debt`, priority `P1` when the debt carries correctness or
-   security risk and `P2` otherwise. Accepted debt must never be lost.
-   Blocking findings are never filed; they are fixed inside the phase.
-   See `shared/backlog-contract.md`.
-3. Update `.handover.md`, recording the HEAD you captured before the initial
-   implementation as `phase_base`.
-4. Commit coordination state and any debt rows as
-   `chore(plan): record phase <N>`. Filing a row never creates its own commit.
-5. Confirm the root is clean.
-
-Emit:
 
 ```text
 # REVIEW
