@@ -5,7 +5,9 @@
 ## Task 1
 
 ### Decisions made
-- pending
+- Reduced the documented resource surface to six templates.
+- Added `context_init` as the eighth tool.
+- Documented bounded jobs reconciliation and identity omission.
 
 ### Spec deviations
 - none
@@ -14,21 +16,23 @@
 - none
 
 ### Assumptions
-- none
+- The OpenMCP daemon restarts before clients consume templates.
 
 ### Follow-ups for human
 - none
 
 ### Test evidence
-- pending
+- Tool table contains 8 rows.
+- Resource list contains 6 entries.
 
 ## Task 2
 
 ### Decisions made
-- pending
+- Moved Gate 3 procedures into `references/review.md`.
+- Retained both required output blocks and safety rules.
 
 ### Spec deviations
-- none
+- Compressed Session Resume Key wording to meet the byte limit while preserving its contract.
 
 ### Tradeoffs accepted
 - none
@@ -40,12 +44,14 @@
 - none
 
 ### Test evidence
-- pending
+- `SKILL.md` is 7662 bytes and 195 lines.
+- `references/review.md` is 65 lines.
 
 ## Task 3
 
 ### Decisions made
-- pending
+- Documented persistent per-workflow context instructions.
+- Updated executing-plans reconciliation for bounded job lists.
 
 ### Spec deviations
 - none
@@ -60,12 +66,13 @@
 - none
 
 ### Test evidence
-- pending
+- Provider identity contract guard passed.
 
 ## Task 4
 
 ### Decisions made
-- pending
+- Repointed all three debt assertions to `references/review.md`.
+- Added a 100-line cap for the review reference.
 
 ### Spec deviations
 - none
@@ -80,4 +87,4 @@
 - none
 
 ### Test evidence
-- pending
+- `/home/ngosi/projects/superpowers-ccg/tests/run.sh` passed.
