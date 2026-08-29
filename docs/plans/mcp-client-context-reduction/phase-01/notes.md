@@ -106,3 +106,25 @@
 ### Test evidence
 - RED -> GREEN: the focused public timeout tests initially failed on the four stale expectations; after updating them, `uv run pytest tests/test_server.py::test_mcp_exposes_direct_job_contract tests/test_server.py::test_job_wait_bounds_public_timeout` passed (6 passed).
 - Declared checks: `uv sync --all-extras --frozen`, `uv run pytest` (283 passed, 3 deselected), and `uv build` all passed.
+
+## Security Reconciliation
+
+### Decisions made
+- Removed `target_id` from `JobSummary` and jobs-list serialization because configured target IDs expose provider identity; the full database `JobView` and single-job resource remain unchanged.
+
+### Spec deviations
+- The explicit Phase 1 plan/design listed `target_id` in `JobSummary` and its example payload; this fix intentionally deviates from that field to satisfy the provider-identity boundary.
+
+### Tradeoffs accepted
+- Jobs-list consumers lose target assignment detail and must use the bounded, provider-neutral summary; full job rows remain available to internal database/runtime paths.
+
+### Assumptions
+- Target IDs are provider identity and must not cross the jobs-list resource boundary.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: the security-focused tests first failed because `JobSummary` and serialized list items still exposed `target_id`; after removing the field and serialization argument, the focused model/resource tests passed (2 passed).
+- 370-job measurement: busiest project returned 2,136 UTF-8 bytes (`under_4kb=True`).
+- Declared checks: `uv sync --all-extras --frozen`, `uv run pytest` (283 passed, 3 deselected), and `uv build` all passed.

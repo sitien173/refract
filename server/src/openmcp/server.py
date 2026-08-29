@@ -214,7 +214,6 @@ async def project_jobs_resource(project_id: str, ctx: Context) -> str:
             profile=job.profile,
             state=job.state,
             context_key=job.context_key,
-            target_id=job.target_id,
             attempts=job.attempts,
             updated_at=job.updated_at,
         ).model_dump(mode="json")

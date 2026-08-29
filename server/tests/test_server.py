@@ -209,7 +209,6 @@ def test_job_summary_is_slim() -> None:
         "profile",
         "state",
         "context_key",
-        "target_id",
         "attempts",
         "updated_at",
     }
@@ -268,6 +267,7 @@ async def test_project_jobs_resource_keeps_all_active_and_bounds_recent() -> Non
     assert [job["id"] for job in payload["recent"]] == [f"terminal-{index}" for index in range(11, 1, -1)]
     assert payload["truncated"] == 2
     assert all("result" not in job for job in payload["active"] + payload["recent"])
+    assert all("target_id" not in job for job in payload["active"] + payload["recent"])
 
 
 @pytest.mark.asyncio

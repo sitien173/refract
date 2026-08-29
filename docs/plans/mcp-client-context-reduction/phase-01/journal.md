@@ -8,10 +8,10 @@
 - Implementation Profile: implement
 - Consultation Profile: n/a
 - Review Profile: review
-- Implementation Jobs: c524e777-94f5-4d4a-85b3-6984f1c1b032, 3fab0a3a-c013-4025-8a5d-5d8c63380aec
-- Review Job: pending
+- Implementation Jobs: c524e777-94f5-4d4a-85b3-6984f1c1b032, 3fab0a3a-c013-4025-8a5d-5d8c63380aec, 51ca6863-30ef-4f61-b94d-fe3f7cae07c2
+- Review Job: a11c1f62-92d9-460b-a441-facf2b023cb9
 - Started: 2026-08-29
-- Finished: 2026-08-29T17:12:51+07:00
+- Finished: 2026-08-29T17:30:17+07:00
 
 ## Implementation Response
 
@@ -53,6 +53,28 @@ Reconciled the four stale `job_wait` timeout expectations with the deliberate 30
 - phase-01/notes.md  (## Validation Reconciliation)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — `uv sync --all-extras --frozen`, `uv run pytest` (283 passed, 3 deselected), and `uv build` all pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 1 security reconciliation / 2026-08-29 / 2026-08-29T17:30:17+07:00 / docs/plans/mcp-client-context-reduction
+## SUMMARY
+Removed provider-exposing `target_id` from jobs-list summaries and completed all declared checks plus the 370-job measurement.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | src/openmcp/models.py | Removed `target_id` from `JobSummary`. |
+| Modify | src/openmcp/server.py | Removed `target_id` from jobs-list summary serialization. |
+| Modify | tests/test_server.py | Updated summary expectations and asserted target identity is absent from list items. |
+| Modify | docs/plans/mcp-client-context-reduction/phase-01/notes.md | Recorded the explicit-plan deviation and security rationale. |
+| Modify | docs/plans/mcp-client-context-reduction/phase-01/journal.md | Recorded this continuation response. |
+## NOTES
+- phase-01/notes.md  (## Security Reconciliation)
+## SPEC COMPLIANCE
+- Meets Spec? WITH_DEBT — Security boundary is satisfied, but the implementation intentionally deviates from the explicit plan field list by omitting `target_id`.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

@@ -52,7 +52,6 @@ class JobSummary(BaseModel):
     profile: str
     state: JobState
     context_key: str
-    target_id: str = ""
     attempts: int = 0
     updated_at: str
 
