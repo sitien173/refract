@@ -310,11 +310,14 @@ def _restore_exchanged_state(
     temporary: Path,
     path: Path,
     published_revision: str,
+    max_retries: int | None = None,
 ) -> bool:
     """Restore *temporary* to *path* only when *path* still matches *published_revision*.
 
     Returns True if the exchanged-out state was safely restored to *path*.
     Returns False if a newer edit was detected at *path*, leaving the newer edit in place.
+    Fails closed and leaves *temporary* intact if compensation cannot safely
+    restore the newer edit to *path*.
     """
     try:
         current = read_config_source(path)
@@ -333,8 +336,14 @@ def _restore_exchanged_state(
 
     try:
         swapped_back = read_config_source(temporary)
-    except OSError:
-        return False
+    except OSError as exc:
+        raise ConfigurationMutationError(
+            "Failed to verify exchanged state after publication restore. "
+            "Configuration state is retained in temporary file.",
+            code="configuration_commit_failed",
+            source_path=path.as_posix(),
+            recovery="Inspect the configuration file and retained temporary file.",
+        ) from exc
 
     if swapped_back.revision == published_revision:
         return True
@@ -342,20 +351,51 @@ def _restore_exchanged_state(
     # An atomic replacement occurred after validation, trapping the newer edit in temporary.
     # Compensate by restoring the newer edit to path, handling any further replacements during compensation.
     expected_trapped = original_temp_rev
-    for _ in range(20):
+    retries = 0
+    while True:
+        if max_retries is not None and retries >= max_retries:
+            raise ConfigurationMutationError(
+                "Compensation retry limit exhausted while restoring external configuration. "
+                "Configuration state is retained in temporary file.",
+                code="configuration_commit_failed",
+                source_path=path.as_posix(),
+                recovery="Inspect the configuration file and retained temporary file.",
+            )
+        retries += 1
         try:
             to_put_rev = read_config_source(temporary).revision
-        except OSError:
-            break
+        except Exception as exc:
+            raise ConfigurationMutationError(
+                "Failed to read trapped configuration state during compensation. "
+                "Configuration state is retained in temporary file.",
+                code="configuration_commit_failed",
+                source_path=path.as_posix(),
+                recovery="Inspect the configuration file and retained temporary file.",
+            ) from exc
+
         try:
             _atomic_exchange(temporary, path)
             _fsync_directory(path.parent)
-        except Exception:
-            break
+        except Exception as exc:
+            raise ConfigurationMutationError(
+                "Failed to atomically exchange configuration during compensation. "
+                "Configuration state is retained in temporary file.",
+                code="configuration_commit_failed",
+                source_path=path.as_posix(),
+                recovery="Inspect the configuration file and retained temporary file.",
+            ) from exc
+
         try:
             trapped = read_config_source(temporary)
-        except OSError:
-            break
+        except Exception as exc:
+            raise ConfigurationMutationError(
+                "Failed to verify trapped configuration state during compensation. "
+                "Configuration state is retained in temporary file.",
+                code="configuration_commit_failed",
+                source_path=path.as_posix(),
+                recovery="Inspect the configuration file and retained temporary file.",
+            ) from exc
+
         if trapped.revision == expected_trapped:
             break
         expected_trapped = to_put_rev
@@ -409,6 +449,7 @@ def commit_bytes(
     directory.mkdir(parents=True, exist_ok=True)
     temporary = _write_temporary(directory, candidate, f".{path.name}.")
     candidate_revision = hashlib.sha256(candidate).hexdigest()
+    retain_temporary = False
     try:
         if mode is not None:
             mode.apply(temporary)
@@ -434,11 +475,15 @@ def commit_bytes(
         _fsync_directory(directory)
         exchanged = read_config_source(temporary)
         if expected_revision is not None and exchanged.revision != expected_revision:
-            restored = _restore_exchanged_state(
-                temporary=temporary,
-                path=path,
-                published_revision=candidate_revision,
-            )
+            try:
+                restored = _restore_exchanged_state(
+                    temporary=temporary,
+                    path=path,
+                    published_revision=candidate_revision,
+                )
+            except ConfigurationMutationError:
+                retain_temporary = True
+                raise
             if restored:
                 raise ConfigurationMutationError(
                     _CONFLICT_MESSAGE,
@@ -456,10 +501,11 @@ def commit_bytes(
                 recovery="Inspect the configuration file and reload the daemon.",
             )
     except Exception as exc:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if not retain_temporary:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
         if isinstance(exc, ConfigurationMutationError):
             raise
         raise ConfigurationMutationError(
@@ -470,10 +516,11 @@ def commit_bytes(
             recovery="No change is active; the file on disk is unchanged.",
         ) from exc
     finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if not retain_temporary:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
     return read_config_source(path)
 
 
@@ -562,6 +609,7 @@ def restore_bytes(
         )
     directory = path.parent
     temporary = _write_temporary(directory, original.data, f".{path.name}.")
+    retain_temporary = False
     try:
         if mode is not None:
             mode.apply(temporary)
@@ -590,11 +638,15 @@ def restore_bytes(
         _fsync_directory(directory)
         exchanged = read_config_source(temporary)
         if expected_revision is not None and exchanged.revision != expected_revision:
-            _restore_exchanged_state(
-                temporary=temporary,
-                path=path,
-                published_revision=original.revision,
-            )
+            try:
+                _restore_exchanged_state(
+                    temporary=temporary,
+                    path=path,
+                    published_revision=original.revision,
+                )
+            except ConfigurationMutationError:
+                retain_temporary = True
+                raise
             log.error(
                 "Configuration rollback skipped: the source changed after commit",
                 extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
@@ -607,10 +659,11 @@ def restore_bytes(
                 recovery="Inspect the configuration file and reload the daemon.",
             )
     except Exception as exc:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if not retain_temporary:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
         if isinstance(exc, ConfigurationMutationError):
             raise
         raise ConfigurationMutationError(
@@ -621,10 +674,11 @@ def restore_bytes(
             recovery="No change is active; the file on disk is unchanged.",
         ) from exc
     finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if not retain_temporary:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1182,17 +1236,23 @@ class ConfigurationMutationService:
         directory = path.parent
         tombstone = _write_temporary(directory, b"", f".{path.name}.del.")
         delete_target: Path | None = None
+        retain_tombstone = False
+        retain_delete_target = False
         try:
             _atomic_exchange(tombstone, path)
             _fsync_directory(directory)
             exchanged = read_config_source(tombstone)
             empty_revision = hashlib.sha256(b"").hexdigest()
             if exchanged.revision != candidate_revision:
-                _restore_exchanged_state(
-                    temporary=tombstone,
-                    path=path,
-                    published_revision=empty_revision,
-                )
+                try:
+                    _restore_exchanged_state(
+                        temporary=tombstone,
+                        path=path,
+                        published_revision=empty_revision,
+                    )
+                except ConfigurationMutationError:
+                    retain_tombstone = True
+                    raise
                 log.error(
                     "Configuration rollback skipped: the source changed after commit",
                     extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
@@ -1214,11 +1274,15 @@ class ConfigurationMutationService:
                         os.replace(delete_target, path)
                         _fsync_directory(directory)
                     else:
-                        _restore_exchanged_state(
-                            temporary=delete_target,
-                            path=path,
-                            published_revision=empty_revision,
-                        )
+                        try:
+                            _restore_exchanged_state(
+                                temporary=delete_target,
+                                path=path,
+                                published_revision=empty_revision,
+                            )
+                        except ConfigurationMutationError:
+                            retain_delete_target = True
+                            raise
                     log.error(
                         "Configuration rollback skipped: the source changed after commit",
                         extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
@@ -1244,15 +1308,16 @@ class ConfigurationMutationService:
             )
             raise
         finally:
-            if delete_target is not None:
+            if delete_target is not None and not retain_delete_target:
                 try:
                     delete_target.unlink(missing_ok=True)
                 except OSError:
                     pass
-            try:
-                tombstone.unlink(missing_ok=True)
-            except OSError:
-                pass
+            if not retain_tombstone:
+                try:
+                    tombstone.unlink(missing_ok=True)
+                except OSError:
+                    pass
         self._republish_original(path, project_root)
 
     @staticmethod

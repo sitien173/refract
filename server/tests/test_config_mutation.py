@@ -1578,3 +1578,122 @@ def test_restore_exchanged_state_safe_against_replacement_during_compensation(tm
         assert leftovers == []
     finally:
         runtime.database.close()
+
+
+def test_restore_exchanged_state_safe_against_more_than_20_compensation_replacements(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        exchange_count = 0
+        total_replacements = 25
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            if Path(dst) == source:
+                exchange_count += 1
+                if exchange_count <= total_replacements:
+                    replacement = source.parent / f"ext{exchange_count}.tmp"
+                    replacement.write_bytes(source.read_bytes() + f"\n# edit {exchange_count}\n".encode())
+                    os.replace(replacement, source)
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_conflict"
+        assert f"\n# edit {total_replacements}\n".encode() in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_restore_exchanged_state_compensation_exchange_failure_retains_external_state(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        exchange_count = 0
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            if Path(dst) == source:
+                exchange_count += 1
+                if exchange_count == 1:
+                    replacement1 = source.parent / "ext1.tmp"
+                    replacement1.write_bytes(source.read_bytes() + b"\n# edit 1\n")
+                    os.replace(replacement1, source)
+                elif exchange_count == 2:
+                    replacement2 = source.parent / "ext2.tmp"
+                    replacement2.write_bytes(source.read_bytes() + b"\n# trapped external edit\n")
+                    os.replace(replacement2, source)
+                elif exchange_count == 3:
+                    raise OSError("Injected exchange error during compensation")
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert len(leftovers) >= 1
+        assert any(b"# trapped external edit\n" in p.read_bytes() for p in leftovers)
+    finally:
+        runtime.database.close()
+
+
+def test_restore_exchanged_state_retry_bound_exhaustion_retains_external_state(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        exchange_count = 0
+
+        real_restore = openmcp.config_mutation._restore_exchanged_state
+
+        def bounded_restore(*args, **kwargs):
+            kwargs["max_retries"] = 2
+            return real_restore(*args, **kwargs)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_restore_exchanged_state", bounded_restore)
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            if Path(dst) == source:
+                exchange_count += 1
+                replacement = source.parent / f"ext{exchange_count}.tmp"
+                replacement.write_bytes(source.read_bytes() + f"\n# edit {exchange_count}\n".encode())
+                os.replace(replacement, source)
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert len(leftovers) >= 1
+        assert any(b"# edit" in p.read_bytes() for p in leftovers)
+    finally:
+        runtime.database.close()

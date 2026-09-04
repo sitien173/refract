@@ -19,18 +19,18 @@
 ## META
 - Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T11:50:00Z / Plan docs/plans/dashboard-target-profile-crud
 ## SUMMARY
-Implemented Linux atomic exchange with fail-closed fallback across commit, rollback restore, and rollback deletion, with compensation and post-tombstone race safety.
+Implemented Linux atomic exchange with fail-closed fallback across commit, rollback restore, and rollback deletion, with unbounded compensation and state-retaining failure protection.
 ## FILES MODIFIED
 | Action | Path | Change |
 |---|---|---|
-| Modify | src/openmcp/config_mutation.py | Implement Linux renameat2 atomic exchange with fail-closed fallback, post-exchange verification, compensation race safety, and safe rollback deletion. |
-| Modify | tests/test_config_mutation.py | Add tests for external atomic replacements, compensation races, post-tombstone replacement, and fail-closed behavior. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record atomic exchange decisions, tradeoffs, and RED-GREEN evidence. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with Linux atomic exchange resolution and review fixes. |
+| Modify | src/openmcp/config_mutation.py | Implement unbounded compensation loop and fail-closed state retention for trapped external replacements across commit and rollback operations. |
+| Modify | tests/test_config_mutation.py | Add tests for >20 compensation replacements, compensation exchange failure retaining external state, and retry bound exhaustion. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record decisions, tradeoffs, and RED-GREEN evidence for compensation bounds and state retention. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with third review fixes. |
 ## NOTES
-- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes, ## Second Review Fixes)
+- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes, ## Second Review Fixes, ## Third Review Fixes)
 ## SPEC COMPLIANCE
-- Meets Spec? YES: Linux atomic exchange detects external atomic replacements at publication, restores only unchanged state, fails closed on unsupported platforms, and passes all checks.
+- Meets Spec? YES: Linux atomic exchange detects external atomic replacements at publication, restores only unchanged state, retains trapped external state on failure, fails closed on unsupported platforms, and passes all checks.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

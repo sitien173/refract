@@ -227,3 +227,32 @@
   - `test_rollback_restore_fails_closed_when_primitive_unavailable`: RED to GREEN. Fail closed verified.
   - `test_rollback_creation_fails_closed_when_primitive_unavailable`: RED to GREEN. Fail closed verified.
   - `test_project_validation_cleanup_failure_not_ignored`: RED to GREEN. Disk cleanup error raised.
+
+## Third Review Fixes
+
+### Decisions made
+- Remove unsafe 20-retry bound in `_restore_exchanged_state` compensation loop.
+- Support configurable `max_retries` parameter defaulting to unbounded.
+- Fail closed with `ConfigurationMutationError` on compensation exchange or read failure.
+- Retain temporary files holding trapped external replacements on compensation failure.
+- Track `retain_temporary` across `commit_bytes`, `restore_bytes`, and `_rollback_failed_creation`.
+- Skip unlinking retained temporary files in caller finally blocks.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Unbounded compensation loop continues while active concurrent replacements occur.
+- Trapped external edits remain in directory temporary files if compensation fails.
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED to GREEN:
+  - `test_restore_exchanged_state_safe_against_more_than_20_compensation_replacements`: RED (bounded loop stopped after 20 iterations) to GREEN (handled all 25 replacements safely).
+  - `test_restore_exchanged_state_compensation_exchange_failure_retains_external_state`: RED (unlinked temporary and destroyed edit) to GREEN (fails closed, retains temporary holding replacement).
+  - `test_restore_exchanged_state_retry_bound_exhaustion_retains_external_state`: RED (unlinked temporary on loop exhaustion) to GREEN (fails closed, retains temporary holding replacement).
