@@ -57,7 +57,7 @@ describe('dashboard API boundary', () => {
     })
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(200, { csrf_token: 'first-token' }))
-      .mockResolvedValueOnce(response(403, { error: 'Forbidden' }))
+      .mockResolvedValueOnce(response(403, { error: 'Forbidden', code: 'forbidden' }))
       .mockResolvedValueOnce(response(200, { csrf_token: 'second-token' }))
       .mockResolvedValueOnce(response(200, { instruction: 'updated' }))
     vi.stubGlobal('fetch', fetchMock)

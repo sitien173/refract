@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import TabbedPanel from '../components/TabbedPanel'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+import ContextInstructions from './ContextInstructions'
 
 export default function ProjectDetail({ projectId, onNavigate }) {
   const {
@@ -211,41 +212,6 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     },
   ]
 
-  const contextInstructions = projectData?.context_instructions || {}
-  const contextWorkflows = ['consult', 'implement', 'review', 'research', 'plan', 'debug']
-  const contextRows = contextWorkflows.map((wf) => ({
-    id: wf,
-    workflow: wf,
-    instruction: contextInstructions[wf] || '',
-  }))
-
-  const contextColumns = [
-    {
-      key: 'workflow',
-      header: 'Workflow',
-      width: '180px',
-      render: (row) => <strong>{row.workflow}</strong>,
-    },
-    {
-      key: 'instruction',
-      header: 'Instruction',
-      width: '500px',
-      render: (row) =>
-        row.instruction ? (
-          <span className="context-preview">{row.instruction}</span>
-        ) : (
-          <span className="context-empty">No custom instruction</span>
-        ),
-    },
-    {
-      key: 'status',
-      header: 'Status',
-      width: '140px',
-      render: (row) => (
-        <span className="caption">{row.instruction ? 'Configured' : 'Default'}</span>
-      ),
-    },
-  ]
 
   const tabs = [
     { id: 'effective', label: 'Effective configuration' },
@@ -409,19 +375,7 @@ export default function ProjectDetail({ projectId, onNavigate }) {
 
             {activeTab === 'context' && (
               <div className="tab-section">
-                <div className="tab-section-header">
-                  <p className="caption">
-                    Context instructions provide persistent guidance to agents on future jobs.
-                  </p>
-                </div>
-                <DataGrid
-                  columns={contextColumns}
-                  rows={contextRows}
-                  rowKey={(r) => r.id}
-                  emptyMessage="No context instructions configured."
-                  ariaLabel="Context instructions table"
-                  isLoading={isProjectLoading}
-                />
+                <ContextInstructions projectId={projectId} onNavigate={handleNavigate} />
               </div>
             )}
 

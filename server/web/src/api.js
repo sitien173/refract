@@ -29,14 +29,25 @@ async function request(path, options = {}) {
   return payload
 }
 
+let bootstrapPromise = null
+
 export async function getBootstrap() {
-  const payload = await request('/dashboard/api/bootstrap')
-  csrfToken = payload.csrf_token || ''
-  return payload
+  if (!bootstrapPromise) {
+    bootstrapPromise = request('/dashboard/api/bootstrap')
+      .then((payload) => {
+        csrfToken = payload.csrf_token || ''
+        return payload
+      })
+      .finally(() => {
+        bootstrapPromise = null
+      })
+  }
+  return bootstrapPromise
 }
 
 export function clearCsrfToken() {
   csrfToken = ''
+  bootstrapPromise = null
 }
 
 export async function getOverview() {
@@ -84,10 +95,14 @@ export async function getTaskGuide(projectId) {
   return request(`/dashboard/api/task-guide${query}`)
 }
 
+export async function getContextInstructions(projectId) {
+  return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions`)
+}
+
 export async function updateContextInstruction(projectId, workflow, instruction, expectedCurrent) {
   if (!csrfToken) await getBootstrap()
   const path = `/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions/${encodeURIComponent(workflow)}`
-  const body = JSON.stringify({ instruction, expected_current: expectedCurrent })
+  const body = JSON.stringify({ instruction, expected_current: expectedCurrent ?? '' })
   let response
   for (let attempt = 0; attempt < 2; attempt += 1) {
     response = await fetch(path, {
@@ -100,7 +115,32 @@ export async function updateContextInstruction(projectId, workflow, instruction,
       body,
     })
     const payload = await readPayload(response)
-    if (response.status !== 403 || attempt === 1) {
+    if (response.status !== 403 || payload.code !== 'forbidden' || attempt === 1) {
+      if (!response.ok) throw new DashboardApiError(payload.error || 'Dashboard request failed', response.status, payload)
+      return payload
+    }
+    await getBootstrap()
+  }
+  throw new DashboardApiError('Dashboard request failed', 403, {})
+}
+
+export async function deleteContextInstruction(projectId, workflow, expectedCurrent) {
+  if (!csrfToken) await getBootstrap()
+  const path = `/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions/${encodeURIComponent(workflow)}`
+  const body = JSON.stringify({ expected_current: expectedCurrent ?? '' })
+  let response
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    response = await fetch(path, {
+      method: 'DELETE',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-OpenMCP-CSRF': csrfToken,
+      },
+      body,
+    })
+    const payload = await readPayload(response)
+    if (response.status !== 403 || payload.code !== 'forbidden' || attempt === 1) {
       if (!response.ok) throw new DashboardApiError(payload.error || 'Dashboard request failed', response.status, payload)
       return payload
     }

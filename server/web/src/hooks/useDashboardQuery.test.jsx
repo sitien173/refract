@@ -32,6 +32,23 @@ describe('useDashboardQuery', () => {
     expect(query).toHaveBeenCalledTimes(2)
   })
 
+  it('supersedes an in-flight poll when manually refreshed', async () => {
+    const first = deferred()
+    const second = deferred()
+    const query = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    const { result } = renderHook(() => useDashboardQuery(query))
+
+    act(() => { result.current.refresh() })
+    expect(query).toHaveBeenCalledTimes(2)
+    second.resolve('manual-result')
+    await waitFor(() => expect(result.current.data).toBe('manual-result'))
+    first.resolve('poll-result')
+    await act(async () => { await first.promise })
+    expect(result.current.data).toBe('manual-result')
+  })
+
   it('keeps polling results ordered and does not overlap requests', async () => {
     vi.useFakeTimers()
     try {

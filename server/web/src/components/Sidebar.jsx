@@ -3,6 +3,7 @@ const navigation = [
   { id: 'projects', label: 'Projects' },
   { id: 'targets', label: 'Targets' },
   { id: 'profiles', label: 'Profiles' },
+  { id: 'jobs', label: 'Jobs' },
 ]
 
 export default function Sidebar({ route, onNavigate }) {

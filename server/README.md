@@ -401,6 +401,24 @@ from openmcp.server import run
 result = await run("codex", "Summarize repository.", "/absolute/project/path")
 ```
 
+## Admin Configuration Dashboard
+
+OpenMCP provides a local administration dashboard served at `/dashboard/`.
+
+### Access and Scope
+
+The dashboard operates strictly on the local loopback interface (`127.0.0.1` or `localhost`). It is intended solely for local operator observability and safe context management:
+
+- **Loopback scope:** Dashboard bootstrap and mutation endpoints require a loopback client and Host, a matching same-origin Origin, and a CSRF header. Read-only views expose no mutation surface.
+- **No remote administration support:** OpenMCP does not support remote administration, public network access, or credentials authentication. Remote management is excluded by design.
+
+### Configuration Boundaries
+
+The dashboard maintains strict separation between editable and read-only configuration surfaces:
+
+- **Editable context instructions:** Durable workflow context instructions can be added, edited, or cleared through the dashboard. All updates require confirmation, transmit expected current values to resolve conflicts, and apply to future jobs only. CSRF tokens remain header-only and are never rendered.
+- **Read-only file-managed configuration:** All file-managed settings (including `config.toml`, targets, profiles, task routes, and daemon options) remain read-only in the dashboard. Operators modify these files on disk; the dashboard cannot write to configuration files.
+
 ## Development and Testing
 
 ```bash

@@ -79,7 +79,9 @@ export function useDashboardQuery(queryFn, { pollInterval = 0, enabled = true, d
 
   const refresh = useCallback(() => {
     clearPollTimer()
-    return execute(true)
+    // A user refresh is an explicit request for newer data and supersedes an
+    // in-flight poll; stale completion is ignored by requestIdRef.
+    return execute(true, true)
   }, [execute])
 
   return { data, error, isLoading, isRefreshing, refresh }

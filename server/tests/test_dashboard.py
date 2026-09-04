@@ -329,3 +329,32 @@ async def test_context_mutation_returns_conflict_with_current_value(active_runti
 
     assert status == 409
     assert json.loads(response_body)["current"] == ""
+
+
+def test_builtin_workflows_contract() -> None:
+    from openmcp.workflows import BUILTIN_WORKFLOWS
+
+    assert BUILTIN_WORKFLOWS == ("consult", "implement", "other", "review")
+
+
+@pytest.mark.asyncio
+async def test_context_instructions_endpoint_envelope(active_runtime) -> None:
+    project = active_runtime.database.project("project")
+    for workflow in ("consult", "implement", "other", "review"):
+        active_runtime.database.set_context_instruction(project.id, workflow, f"{workflow} instruction")
+    app = create_application()
+    status, _, body = await request(app, "/dashboard/api/projects/project/context-instructions")
+    assert status == 200
+    payload = json.loads(body)
+    assert set(payload) == {"project_id", "instructions"}
+    assert payload["project_id"] == project.id
+    assert set(payload["instructions"]) == {"consult", "implement", "other", "review"}
+
+
+def test_readme_documents_dashboard_boundaries() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "/dashboard/" in readme
+    assert "loopback" in readme.lower()
+    assert "context instruction" in readme.lower()
+    assert "read-only" in readme.lower()
+    assert "remote administration" in readme.lower()
