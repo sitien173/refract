@@ -59,6 +59,20 @@ Phase 3 established the Vite React shell, client routing, dashboard API boundary
 - `uv run pytest tests/test_dashboard.py`
 - `git diff --check`
 
+## Consultation Findings
+- Treat `effective` as each profile's workflow row set. Use `sources[workflow]` and `workflow in declared` only for server-provided attribution. Never concatenate `declared` and `inherited` rows.
+- When `parent.value` is null, show `No parent` and suppress its source chip.
+- Hydrate project summary rows with capped concurrency. Do not poll every project's jobs endpoint on the overview cadence.
+- Carry configuration validity across catalog-derived screens. When invalid, preserve values and label them as last-known-good with the revision.
+- Classify runtime settings through one explicit live/restart-required mapping. Show unknown keys under `Unclassified`. Render `logging.file === false` as `Console only`.
+- Use token-based table heights, fixed table layout, explicit column widths, ellipsis with full-value titles, sticky `th` elements, and keyboard-reachable horizontal scroll regions.
+- Preserve native table semantics. Use real links within interactive rows. Intercept only unmodified primary clicks.
+- Add `popstate` handling, project-id route segments, and query-string filters without adding a router dependency.
+- Query refresh failures must preserve current data. Avoid overlapping or out-of-order poll results and clean up timers.
+- Map API source `project` to visible label `Repository`. Handle unknown source values neutrally.
+- Distinguish healthy, circuit-open, and unhealthy targets. Status markers must have shape-distinct state classes, not color alone.
+- Add tests for duplicate-free effective workflows, null parents, stale refresh data, route history and filters, last-known-good labelling, settings classification, table stability, source fallbacks, target states, and exact API response contracts.
+
 ## Rules
 Follow the supplied worker contract. Stay within scope. Maintain this phase's `notes.md` and `journal.md`. Reuse the existing API boundary and FlowForge tokens. Do not add a router dependency. Do not add CORS or credentials behavior. Keep one production Starlette process. Do not introduce new visual primitives when existing FlowForge patterns suffice.
 
