@@ -250,14 +250,25 @@ export default function ProjectDetail({ projectId, onNavigate }) {
   async function handleReloadRequired() {
     try {
       const overridesResp = await getProjectProfileOverrides(projectId)
+      let currentOverride = null
+      if (editorState.mode === 'edit' && editorState.profile?.id && Array.isArray(overridesResp.overrides)) {
+        currentOverride = overridesResp.overrides.find((ov) => ov.id === editorState.profile.id)
+      }
       setEditorState((prev) => ({
         ...prev,
         revision: overridesResp.revision ?? '',
+        profile: currentOverride || prev.profile,
         availableTargets: overridesResp.available_targets || prev.availableTargets,
       }))
       setAnnouncement('Project configuration reloaded.')
+      return {
+        ...overridesResp,
+        override: currentOverride,
+        profile: currentOverride,
+      }
     } catch (err) {
       setAnnouncement(`Failed to reload configuration: ${err.message || 'error'}`)
+      return null
     }
   }
 

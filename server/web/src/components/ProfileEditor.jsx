@@ -65,8 +65,11 @@ export default function ProfileEditor({
     }
   }
 
+  const prevIsOpenRef = useRef(false)
+
   useEffect(() => {
     if (!isOpen) {
+      prevIsOpenRef.current = false
       isDirtyRef.current = false
       setIsDirty(false)
       setError(null)
@@ -76,9 +79,11 @@ export default function ProfileEditor({
       return
     }
 
-    setCurrentRevision(revision)
+    const wasOpen = prevIsOpenRef.current
+    prevIsOpenRef.current = true
 
-    if (!isDirtyRef.current) {
+    if (!wasOpen || !isDirtyRef.current) {
+      setCurrentRevision(revision)
       setFormData(getInitialFormData(profile, availableTargets))
       setError(null)
       setValidationErrors({})
@@ -247,6 +252,7 @@ export default function ProfileEditor({
 
   async function handleSubmit(e) {
     if (e) e.preventDefault()
+    if (conflictData) return
     setError(null)
     setValidationErrors({})
     setConflictData(null)
@@ -347,6 +353,43 @@ export default function ProfileEditor({
     }
   }
 
+  async function handleReloadConfiguration() {
+    setSaveStatus('reloading')
+    setError(null)
+    try {
+      let payload = null
+      if (onReloadRequired) {
+        payload = await onReloadRequired()
+      }
+      let reloadedProfile = payload?.profile || payload?.override
+      if (!reloadedProfile && mode === 'create') {
+        if (Array.isArray(payload?.profiles)) {
+          reloadedProfile = payload.profiles.find((p) => p.id === formData.id)
+        } else if (Array.isArray(payload?.overrides)) {
+          reloadedProfile = payload.overrides.find((p) => p.id === formData.id)
+        }
+      }
+      if (reloadedProfile) {
+        setFormData(getInitialFormData(reloadedProfile, availableTargets))
+      }
+      if (payload?.revision) {
+        setCurrentRevision(payload.revision)
+      } else if (conflictData?.current && reloadedProfile) {
+        setCurrentRevision(conflictData.current)
+      }
+      isDirtyRef.current = false
+      setIsDirty(false)
+      setConflictData(null)
+      setSaveStatus('')
+      if (onAnnounce) {
+        onAnnounce('Current configuration reloaded from server. Draft replaced.')
+      }
+    } catch (err) {
+      setSaveStatus('')
+      setError(err?.message || 'Failed to reload configuration.')
+    }
+  }
+
   const isProject = scope === 'project'
   const dialogTitle = isProject
     ? (mode === 'create' ? 'Create profile override' : `Edit profile override: ${formData.id}`)
@@ -398,7 +441,7 @@ export default function ProfileEditor({
               <button
                 type="button"
                 className="button button-secondary button-sm"
-                onClick={() => onReloadRequired?.()}
+                onClick={handleReloadConfiguration}
               >
                 Reload current configuration
               </button>
@@ -637,7 +680,7 @@ export default function ProfileEditor({
             <button
               type="submit"
               className="button button-primary"
-              disabled={isSubmitting}
+              disabled={isSubmitting || Boolean(conflictData)}
             >
               {isSubmitting
                 ? 'Saving…'

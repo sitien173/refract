@@ -468,4 +468,140 @@ describe('ProjectDetail screen', () => {
     // Input holds dirty draft
     expect(idInput.value).toBe('dirty-draft-id')
   })
+
+  it('does not advance revision on conflict and prevents stale draft overwrite after reload', async () => {
+    vi.mocked(api.updateProjectProfileOverride).mockClear()
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getProjectProfileOverride).mockResolvedValue({
+      revision: 'rev-proj-001',
+      source_path: '/path/to/.openmcp/config.toml',
+      override: {
+        id: 'custom-profile',
+        extends: 'base-profile',
+        declared: {
+          implement: { targets: ['worker-1', 'worker-2'], max_attempts: 2, timeout_s: 120 },
+        },
+        inherited: {},
+        effective: {
+          implement: { targets: ['worker-1', 'worker-2'], max_attempts: 2, timeout_s: 120 },
+        },
+        sources: { implement: 'project' },
+      },
+    })
+    vi.mocked(api.updateProjectProfileOverride).mockRejectedValueOnce(
+      new api.DashboardApiError('Conflict', 409, {
+        code: 'conflict',
+        message: 'Conflict occurred',
+        current: 'rev-proj-002',
+      })
+    )
+
+    render(<ProjectDetail projectId="proj-demo" />)
+
+    const profileTab = await screen.findByRole('tab', { name: /Profile resolution/i })
+    fireEvent.click(profileTab)
+
+    const editBtn = screen.getByRole('button', { name: /Edit override: custom-profile/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit profile override: custom-profile/i })
+    expect(dialog).toBeInTheDocument()
+
+    const timeoutInput = within(dialog).getByLabelText(/implement timeout in seconds/i)
+    expect(timeoutInput.value).toBe('120')
+
+    // Dirty the draft
+    fireEvent.change(timeoutInput, { target: { value: '999' } })
+
+    const submitBtn = within(dialog).getByRole('button', { name: /^Save override$/i })
+    fireEvent.click(submitBtn)
+
+    expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(submitBtn).toBeDisabled()
+
+    // Submitting stale draft during conflict is blocked
+    const form = dialog.querySelector('form')
+    fireEvent.submit(form)
+    expect(api.updateProjectProfileOverride).toHaveBeenCalledTimes(1)
+
+    // Simulate external reload
+    vi.mocked(api.getProjectProfileOverrides).mockResolvedValueOnce({
+      revision: 'rev-proj-002',
+      source_path: '/path/to/.openmcp/config.toml',
+      global_default_profile: 'default',
+      project_default_profile: 'custom-profile',
+      available_targets: ['worker-1', 'worker-2', 'worker-external-v2'],
+      overrides: [
+        {
+          id: 'custom-profile',
+          extends: '',
+          declared: {
+            implement: { targets: ['worker-external-v2'], max_attempts: 3, timeout_s: 180 },
+          },
+          inherited: {
+            consult: { targets: ['opus-consult'], max_attempts: 1, timeout_s: 60 },
+          },
+          effective: {
+            consult: { targets: ['opus-consult'], max_attempts: 1, timeout_s: 60 },
+            implement: { targets: ['worker-external-v2'], max_attempts: 3, timeout_s: 180 },
+          },
+          sources: {
+            consult: 'global',
+            implement: 'project',
+          },
+        },
+      ],
+    })
+
+    const reloadBtn = within(dialog).getByRole('button', { name: /Reload current configuration/i })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).queryByText(/Configuration conflict detected/i)).not.toBeInTheDocument()
+    })
+
+    // Stale draft replaced by reloaded server data
+    expect(within(dialog).getByLabelText(/implement timeout in seconds/i).value).toBe('180')
+    expect(submitBtn).not.toBeDisabled()
+
+    vi.mocked(api.updateProjectProfileOverride).mockResolvedValueOnce({
+      revision: 'rev-proj-003',
+      source_path: '/path/to/.openmcp/config.toml',
+      override: { id: 'custom-profile' },
+    })
+
+    fireEvent.click(submitBtn)
+
+    await vi.waitFor(() => {
+      expect(api.updateProjectProfileOverride).toHaveBeenCalledTimes(2)
+      expect(api.updateProjectProfileOverride).toHaveBeenLastCalledWith(
+        'proj-demo',
+        'custom-profile',
+        expect.objectContaining({
+          id: 'custom-profile',
+          workflows: expect.objectContaining({
+            implement: expect.objectContaining({
+              targets: ['worker-external-v2'],
+              timeout_s: 180,
+            }),
+          }),
+        }),
+        'rev-proj-002'
+      )
+    })
+    expect(api.updateProjectProfileOverride).not.toHaveBeenLastCalledWith(
+      'proj-demo',
+      'custom-profile',
+      expect.objectContaining({
+        workflows: expect.objectContaining({
+          implement: expect.objectContaining({
+            timeout_s: 999,
+          }),
+        }),
+      }),
+      expect.anything()
+    )
+  })
 })

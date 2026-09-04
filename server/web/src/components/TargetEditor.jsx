@@ -38,10 +38,12 @@ export default function TargetEditor({
   const [error, setError] = useState(null)
   const [conflictData, setConflictData] = useState(null)
   const initialFocusRef = useRef(null)
+  const prevIsOpenRef = useRef(false)
 
   // Initialize or update form only when not dirty or when opening
   useEffect(() => {
     if (!isOpen) {
+      prevIsOpenRef.current = false
       isDirtyRef.current = false
       setIsDirty(false)
       setSaveStatus('')
@@ -50,8 +52,11 @@ export default function TargetEditor({
       return
     }
 
-    // If form is already dirty, do NOT overwrite the draft from external props/polling
-    if (isDirtyRef.current) {
+    const wasOpen = prevIsOpenRef.current
+    prevIsOpenRef.current = true
+
+    // If form is already dirty and was already open, do NOT overwrite the draft from external props/polling
+    if (wasOpen && isDirtyRef.current) {
       return
     }
 
@@ -130,6 +135,7 @@ export default function TargetEditor({
 
   async function handleSubmit(e) {
     if (e) e.preventDefault()
+    if (conflictData) return
     setError(null)
     setConflictData(null)
     setSaveStatus('saving')
@@ -188,15 +194,47 @@ export default function TargetEditor({
     }
   }
 
-  function handleReloadConfiguration() {
-    if (conflictData?.current) {
-      setCurrentRevision(conflictData.current)
-    }
-    setConflictData(null)
+  async function handleReloadConfiguration() {
+    setSaveStatus('reloading')
     setError(null)
-    onReloadRequired?.()
-    if (onAnnounce) {
-      onAnnounce('Current configuration reloaded. Retaining dirty draft.')
+    try {
+      let payload = null
+      if (onReloadRequired) {
+        payload = await onReloadRequired()
+      }
+      let reloadedTarget = payload?.target
+      if (!reloadedTarget && mode === 'create' && Array.isArray(payload?.targets)) {
+        reloadedTarget = payload.targets.find((t) => t.id === formData.id)
+      }
+      if (reloadedTarget) {
+        setFormData({
+          id: reloadedTarget.id || '',
+          backend: reloadedTarget.backend || 'codex',
+          model: reloadedTarget.model || '',
+          backend_profile: reloadedTarget.backend_profile || '',
+          reasoning: reloadedTarget.reasoning || '',
+          system_prompt: reloadedTarget.system_prompt || '',
+          isolated: Boolean(reloadedTarget.isolated),
+          read_only: Boolean(reloadedTarget.read_only),
+          max_concurrency: reloadedTarget.max_concurrency || 1,
+          args: Array.isArray(reloadedTarget.args) ? [...reloadedTarget.args] : [],
+        })
+      }
+      if (payload?.revision) {
+        setCurrentRevision(payload.revision)
+      } else if (conflictData?.current && reloadedTarget) {
+        setCurrentRevision(conflictData.current)
+      }
+      isDirtyRef.current = false
+      setIsDirty(false)
+      setConflictData(null)
+      setSaveStatus('')
+      if (onAnnounce) {
+        onAnnounce('Current configuration reloaded from server. Draft replaced.')
+      }
+    } catch (err) {
+      setSaveStatus('')
+      setError(err?.message || 'Failed to reload configuration.')
     }
   }
 
@@ -475,7 +513,7 @@ export default function TargetEditor({
             <button
               type="submit"
               className="button button-primary"
-              disabled={isSubmitting || !formData.id.trim()}
+              disabled={isSubmitting || Boolean(conflictData) || !formData.id.trim()}
             >
               {isSubmitting ? (saveStatus === 'reloading' ? 'Reloading…' : 'Saving…') : mode === 'create' ? 'Create target' : 'Save target'}
             </button>

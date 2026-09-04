@@ -257,30 +257,36 @@ export default function Targets() {
     }
   }
 
-  function handleReloadRequired() {
+  async function handleReloadRequired() {
     refresh()
     refreshConfigurationHealth()
     if (editorState.isOpen) {
       if (editorState.mode === 'edit' && editorState.target?.id) {
-        getConfigurationTarget(editorState.target.id)
-          .then((payload) => {
-            setEditorState((prev) => ({
-              ...prev,
-              revision: payload.revision || '',
-            }))
-          })
-          .catch(() => {})
+        try {
+          const payload = await getConfigurationTarget(editorState.target.id)
+          setEditorState((prev) => ({
+            ...prev,
+            revision: payload.revision || '',
+            target: payload.target || prev.target,
+          }))
+          return payload
+        } catch {
+          return null
+        }
       } else {
-        getConfigurationTargets()
-          .then((payload) => {
-            setEditorState((prev) => ({
-              ...prev,
-              revision: payload.revision || '',
-            }))
-          })
-          .catch(() => {})
+        try {
+          const payload = await getConfigurationTargets()
+          setEditorState((prev) => ({
+            ...prev,
+            revision: payload.revision || '',
+          }))
+          return payload
+        } catch {
+          return null
+        }
       }
     }
+    return null
   }
 
   return (

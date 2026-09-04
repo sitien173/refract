@@ -299,7 +299,9 @@ describe('Targets screen', () => {
     const reloadBtn = screen.getByRole('button', { name: /Reload current configuration/i })
     fireEvent.click(reloadBtn)
 
-    expect(screen.queryByText('Configuration conflict')).not.toBeInTheDocument()
+    await vi.waitFor(() => {
+      expect(screen.queryByText('Configuration conflict')).not.toBeInTheDocument()
+    })
     expect(within(dialog).getByLabelText(/^Model$/i).value).toBe('conflict-model')
   })
 
@@ -365,4 +367,110 @@ describe('Targets screen', () => {
     expect(screen.getByText('Project (proj-1)')).toBeInTheDocument()
     expect(screen.getByText('custom')).toBeInTheDocument()
   }, 15000)
+
+  it('does not advance revision on conflict and prevents stale draft overwrite after reload', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValue({
+      revision: 'rev-targets-001',
+      target: mockTargets[0],
+    })
+
+    vi.mocked(api.updateConfigurationTarget).mockRejectedValueOnce(
+      new api.DashboardApiError('Conflict', 409, {
+        code: 'configuration_conflict',
+        unchanged: 'Configuration changed on server.',
+        recovery: 'Reload current configuration and retry.',
+        current: 'rev-targets-002',
+      })
+    )
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('target-healthy').closest('tr'))
+    const editBtn = await screen.findByRole('button', { name: /^Edit target$/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit target: target-healthy/i })
+    await vi.waitFor(() => {
+      expect(within(dialog).getByLabelText(/^Model$/i).value).toBe('claude-3-7-sonnet')
+    })
+
+    const concurrencyInput = within(dialog).getByRole('spinbutton', { name: /Max concurrency/i })
+    fireEvent.change(concurrencyInput, { target: { value: '4' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /^Save target$/i })
+    fireEvent.click(saveBtn)
+
+    expect(await within(dialog).findByText('Configuration conflict')).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    // Submitting stale draft during conflict is blocked
+    const form = dialog.querySelector('form')
+    fireEvent.submit(form)
+    expect(api.updateConfigurationTarget).toHaveBeenCalledTimes(1)
+
+    vi.mocked(api.getConfigurationTarget).mockResolvedValueOnce({
+      revision: 'rev-targets-002',
+      target: {
+        id: 'target-healthy',
+        backend: 'codex',
+        model: 'model-external-updated-v2',
+        backend_profile: '',
+        reasoning: '',
+        system_prompt: '',
+        isolated: false,
+        read_only: false,
+        max_concurrency: 1,
+        args: [],
+      },
+    })
+
+    const reloadBtn = within(dialog).getByRole('button', { name: /Reload current configuration/i })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).queryByText('Configuration conflict')).not.toBeInTheDocument()
+    })
+
+    expect(within(dialog).getByLabelText(/^Model$/i).value).toBe('model-external-updated-v2')
+    expect(saveBtn).not.toBeDisabled()
+
+    vi.mocked(api.updateConfigurationTarget).mockResolvedValueOnce({
+      revision: 'rev-targets-003',
+      target: {
+        id: 'target-healthy',
+        backend: 'codex',
+        model: 'model-external-updated-v2',
+        backend_profile: '',
+        reasoning: '',
+        system_prompt: '',
+        isolated: false,
+        read_only: false,
+        max_concurrency: 1,
+        args: [],
+      },
+    })
+
+    fireEvent.click(saveBtn)
+
+    await vi.waitFor(() => {
+      expect(api.updateConfigurationTarget).toHaveBeenCalledTimes(2)
+      expect(api.updateConfigurationTarget).toHaveBeenLastCalledWith(
+        'target-healthy',
+        expect.objectContaining({
+          model: 'model-external-updated-v2',
+          max_concurrency: 1,
+        }),
+        'rev-targets-002'
+      )
+    })
+    expect(api.updateConfigurationTarget).not.toHaveBeenLastCalledWith(
+      'target-healthy',
+      expect.objectContaining({
+        max_concurrency: 4,
+      }),
+      expect.anything()
+    )
+  })
 })

@@ -414,4 +414,113 @@ describe('Profiles screen', () => {
     expect(screen.getByText('Project (proj-1)')).toBeInTheDocument()
     expect(screen.getByText('Parent profile (extends)')).toBeInTheDocument()
   }, 15000)
+
+  it('does not advance revision on conflict and prevents stale draft overwrite after reload', async () => {
+    vi.mocked(api.updateConfigurationProfile).mockRejectedValueOnce(
+      new api.DashboardApiError('Configuration conflict', 409, {
+        code: 'configuration_conflict',
+        unchanged: 'Configuration file changed on the server.',
+        recovery: 'Reload current configuration and retry.',
+        current: 'rev-prof-002',
+      })
+    )
+
+    render(<Profiles />)
+    expect(await screen.findByText('fast-dev')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('fast-dev').closest('tr'))
+    const editBtn = await screen.findByRole('button', { name: /^Edit profile$/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit profile: fast-dev/i })
+    const extendsSelect = within(dialog).getByLabelText(/Inherits from/i)
+    expect(extendsSelect.value).toBe('default')
+
+    // Modify extends to make form dirty
+    fireEvent.change(extendsSelect, { target: { value: '' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /^Save profile$/i })
+    fireEvent.click(saveBtn)
+
+    expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    // Submitting stale draft during conflict is blocked
+    const form = dialog.querySelector('form')
+    fireEvent.submit(form)
+    expect(api.updateConfigurationProfile).toHaveBeenCalledTimes(1)
+
+    // Simulate external update fetched on reload
+    vi.mocked(api.getConfigurationProfile).mockResolvedValueOnce({
+      revision: 'rev-prof-002',
+      source_path: '/etc/openmcp/config.toml',
+      default_profile: 'default',
+      available_targets: ['target-a', 'target-b', 'target-c'],
+      profile: {
+        id: 'fast-dev',
+        extends: 'default',
+        declared: {
+          consult: { targets: ['target-c'], max_attempts: 3, timeout_s: 45 },
+        },
+        inherited: {
+          implement: { targets: ['target-a', 'target-b'], max_attempts: 2, timeout_s: 60 },
+          review: { targets: ['target-c'], max_attempts: 1, timeout_s: 0 },
+          other: { targets: ['target-a'], max_attempts: 1, timeout_s: 0 },
+        },
+        effective: {
+          consult: { targets: ['target-c'], max_attempts: 3, timeout_s: 45 },
+          implement: { targets: ['target-a', 'target-b'], max_attempts: 2, timeout_s: 60 },
+          review: { targets: ['target-c'], max_attempts: 1, timeout_s: 0 },
+          other: { targets: ['target-a'], max_attempts: 1, timeout_s: 0 },
+        },
+        sources: { consult: 'fast-dev', implement: 'default', review: 'default', other: 'default' },
+      },
+    })
+
+    const reloadBtn = within(dialog).getByRole('button', { name: /Reload current configuration/i })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).queryByText(/Configuration conflict detected/i)).not.toBeInTheDocument()
+    })
+
+    // Stale draft was replaced with reloaded server data
+    expect(within(dialog).getByLabelText(/Inherits from/i).value).toBe('default')
+    expect(saveBtn).not.toBeDisabled()
+
+    vi.mocked(api.updateConfigurationProfile).mockResolvedValueOnce({
+      revision: 'rev-prof-003',
+      profile: {
+        id: 'fast-dev',
+        extends: 'default',
+      },
+    })
+
+    fireEvent.click(saveBtn)
+
+    await vi.waitFor(() => {
+      expect(api.updateConfigurationProfile).toHaveBeenCalledTimes(2)
+      expect(api.updateConfigurationProfile).toHaveBeenLastCalledWith(
+        'fast-dev',
+        expect.objectContaining({
+          id: 'fast-dev',
+          extends: 'default',
+          workflows: expect.objectContaining({
+            consult: expect.objectContaining({
+              targets: ['target-c'],
+              timeout_s: 45,
+            }),
+          }),
+        }),
+        'rev-prof-002'
+      )
+    })
+    expect(api.updateConfigurationProfile).not.toHaveBeenLastCalledWith(
+      'fast-dev',
+      expect.objectContaining({
+        extends: null,
+      }),
+      expect.anything()
+    )
+  })
 })

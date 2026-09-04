@@ -207,30 +207,36 @@ export default function Profiles() {
     }
   }
 
-  function handleReloadRequired() {
+  async function handleReloadRequired() {
     refresh()
     refreshConfigurationHealth()
     if (editorState.isOpen) {
       if (editorState.mode === 'edit' && editorState.profile?.id) {
-        getConfigurationProfile(editorState.profile.id)
-          .then((payload) => {
-            setEditorState((prev) => ({
-              ...prev,
-              revision: payload.revision || '',
-            }))
-          })
-          .catch(() => {})
+        try {
+          const payload = await getConfigurationProfile(editorState.profile.id)
+          setEditorState((prev) => ({
+            ...prev,
+            revision: payload.revision || '',
+            profile: payload.profile || prev.profile,
+          }))
+          return payload
+        } catch {
+          return null
+        }
       } else {
-        getConfigurationProfiles()
-          .then((payload) => {
-            setEditorState((prev) => ({
-              ...prev,
-              revision: payload.revision || '',
-            }))
-          })
-          .catch(() => {})
+        try {
+          const payload = await getConfigurationProfiles()
+          setEditorState((prev) => ({
+            ...prev,
+            revision: payload.revision || '',
+          }))
+          return payload
+        } catch {
+          return null
+        }
       }
     }
+    return null
   }
 
   const hasDeleteReferences = Array.isArray(deleteDialogState.references) && deleteDialogState.references.length > 0
