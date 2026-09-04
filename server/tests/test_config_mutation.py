@@ -2209,3 +2209,208 @@ extends = "target_x"
         assert refs_z[0].workflow == "other"
     finally:
         runtime.database.close()
+
+
+def test_phase3_profile_editor_models() -> None:
+    from pydantic import ValidationError
+    from openmcp.models import (
+        ProfileEditorData,
+        ProfileEditorResponse,
+        ProfileReference,
+        ProjectOverrideDeleteResponse,
+        WorkflowPolicyData,
+    )
+
+    policy = WorkflowPolicyData(targets=["primary"])
+    assert policy.targets == ["primary"]
+    assert policy.max_attempts == 1
+    assert policy.timeout_s == 0
+
+    with pytest.raises(ValidationError):
+        WorkflowPolicyData(targets=["primary"], unknown_field="invalid")
+
+    profile_data = ProfileEditorData(
+        id="balanced",
+        extends="  ",
+        workflows={
+            "consult": None,
+            "implement": WorkflowPolicyData(targets=["primary", "fallback"], max_attempts=2, timeout_s=900),
+        },
+    )
+    assert profile_data.id == "balanced"
+    assert profile_data.extends is None
+    assert profile_data.workflows["consult"] is None
+    assert profile_data.workflows["implement"].max_attempts == 2
+
+    with pytest.raises(ValidationError):
+        ProfileEditorData(id="balanced", extra="disallowed")
+
+    resp = ProfileEditorResponse(
+        id="balanced",
+        declared={"consult": None, "implement": policy},
+        inherited={"consult": policy, "implement": None},
+        effective={"consult": policy, "implement": policy},
+        sources={"consult": "global", "implement": "declared"},
+    )
+    assert resp.declared["consult"] is None
+    assert resp.inherited["consult"].targets == ["primary"]
+
+    ref = ProfileReference(scope="project", project_id="p1", profile_id="child", relationship="extends")
+    assert ref.relationship == "extends"
+
+    del_resp = ProjectOverrideDeleteResponse(
+        revision="rev1",
+        source_path="/path/to/config.toml",
+        deleted="balanced",
+        fallback=resp,
+    )
+    assert del_resp.deleted == "balanced"
+    assert del_resp.fallback.id == "balanced"
+
+
+def test_global_profile_crud_and_references(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+
+        # 1. Read profiles
+        source_read, profiles, default_prof, targets = service.read_profiles()
+        assert not source_read.absent
+        assert default_prof == "balanced"
+        assert len(profiles) >= 1
+        assert any(p.id == "balanced" for p in profiles)
+        assert "primary" in targets
+
+        # 2. Try to delete balanced (which is global default_profile) -> blocked with code='referenced'
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.delete_profile("balanced", expected_revision=source_read.revision)
+        assert raised.value.code == "referenced"
+        assert any(r["relationship"] == "default_profile" for r in raised.value.references)
+
+        # 3. Create new profile 'custom' with shorthand workflow
+        from openmcp.models import ProfileEditorData, WorkflowPolicyData
+        new_prof = ProfileEditorData(
+            id="custom",
+            extends=None,
+            workflows={
+                "implement": WorkflowPolicyData(targets=["primary"]),
+                "review": None,
+            },
+        )
+        result, created = service.create_profile(new_prof, expected_revision=source_read.revision)
+        assert created.id == "custom"
+        assert created.declared["implement"].targets == ["primary"]
+        assert created.declared["review"] is None
+        # Shorthand check in TOML on disk: should be implement = "primary"
+        doc = service.read_document(load_source(source))
+        assert doc["profiles"]["custom"]["implement"] == "primary"
+
+        # 4. Create child extending custom -> blocks deleting custom
+        child_prof = ProfileEditorData(
+            id="child",
+            extends="custom",
+            workflows={
+                "review": WorkflowPolicyData(targets=["primary"]),
+            },
+        )
+        result2, created_child = service.create_profile(child_prof, expected_revision=result.revision)
+        assert created_child.extends == "custom"
+        assert created_child.inherited["implement"].targets == ["primary"]
+
+        # Attempt delete custom -> blocked by extends
+        with pytest.raises(ConfigurationMutationError) as raised2:
+            service.delete_profile("custom", expected_revision=result2.revision)
+        assert raised2.value.code == "referenced"
+        assert any(r["relationship"] == "extends" and r["profile_id"] == "child" for r in raised2.value.references)
+
+        # 5. Update custom with timeout_s -> requires expansion to inline table
+        update_data = ProfileEditorData(
+            id="custom",
+            extends=None,
+            workflows={
+                "implement": WorkflowPolicyData(targets=["primary"], timeout_s=120),
+            },
+        )
+        # First delete child so we can test clean deletion later
+        result3, _ = service.delete_profile("child", expected_revision=result2.revision)
+        result4, updated = service.update_profile("custom", update_data, expected_revision=result3.revision)
+        assert updated.declared["implement"].timeout_s == 120
+        doc2 = service.read_document(load_source(source))
+        val = doc2["profiles"]["custom"]["implement"]
+        assert isinstance(val, (dict, tomlkit.items.InlineTable))
+        assert val["timeout_s"] == 120
+
+        # 6. Delete custom now succeeds
+        result5, deleted_id = service.delete_profile("custom", expected_revision=result4.revision)
+        assert deleted_id == "custom"
+    finally:
+        runtime.database.close()
+
+
+def test_project_override_crud_and_missing_file_creation(tmp_path) -> None:
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        service = runtime.mutations
+        proj_cfg_path = project_root / ".openmcp" / "config.toml"
+        assert not proj_cfg_path.exists()
+
+        # 1. Read overrides when absent
+        source_read, overrides, g_def, p_def, targets = service.read_project_overrides(project_root)
+        assert source_read.absent
+        assert overrides == []
+        assert g_def == "balanced"
+        assert p_def == "balanced"
+
+        # 2. Create override when file absent -> creates minimal file
+        from openmcp.models import ProfileEditorData, WorkflowPolicyData
+        override_data = ProfileEditorData(
+            id="balanced",
+            extends=None,
+            workflows={
+                "implement": WorkflowPolicyData(targets=["primary"]),
+            },
+        )
+        result, created = service.create_project_override(
+            project_root, override_data, expected_revision=""
+        )
+        assert created.id == "balanced"
+        assert created.declared["implement"].targets == ["primary"]
+        assert proj_cfg_path.exists()
+
+        # Confirm minimal file creation (no unrelated sections)
+        raw_text = proj_cfg_path.read_text(encoding="utf-8")
+        assert "daemon" not in raw_text
+        assert "project" not in raw_text
+        assert "[profiles.balanced]" in raw_text
+
+        # 3. Read again -> present
+        source_read2, overrides2, _, _, _ = service.read_project_overrides(project_root)
+        assert not source_read2.absent
+        assert len(overrides2) == 1
+        assert overrides2[0].id == "balanced"
+
+        # 4. Update override
+        update_data = ProfileEditorData(
+            id="balanced",
+            extends=None,
+            workflows={
+                "implement": WorkflowPolicyData(targets=["primary"], timeout_s=300),
+            },
+        )
+        result2, updated = service.update_project_override(
+            project_root, "balanced", update_data, expected_revision=result.revision
+        )
+        assert updated.declared["implement"].timeout_s == 300
+
+        # 5. Delete override -> returns resulting global fallback
+        result3, deleted_id, fallback = service.delete_project_override(
+            project_root, "balanced", expected_revision=result2.revision
+        )
+        assert deleted_id == "balanced"
+        assert fallback is not None
+        assert fallback.id == "balanced"
+        assert fallback.declared["implement"] is None  # undeclared in project scope now
+        assert fallback.effective["implement"] is not None  # effective from global
+    finally:
+        runtime.database.close()

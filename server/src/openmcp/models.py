@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 JobState = Literal[
@@ -239,6 +239,110 @@ class TargetDeleteResponse(BaseModel):
     deleted: str
 
 
+class WorkflowPolicyData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    targets: list[str]
+    max_attempts: int | None = None
+    timeout_s: int = 0
+
+    @model_validator(mode="after")
+    def _validate_defaults(self) -> WorkflowPolicyData:
+        if self.max_attempts is None or self.max_attempts <= 0:
+            self.max_attempts = max(len(self.targets), 1) if self.targets else 1
+        return self
+
+
+class ProfileEditorData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    extends: str | None = None
+    workflows: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_workflows(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = dict(data)
+            workflows = dict(data.get("workflows") or {})
+            for wf in ("consult", "implement", "review", "other"):
+                if wf in data and wf not in workflows:
+                    workflows[wf] = data.pop(wf)
+            if workflows:
+                data["workflows"] = workflows
+        return data
+
+    @field_validator("extends", mode="before")
+    @classmethod
+    def _normalize_extends(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            return value if value else None
+        return value
+
+
+class ProfileEditorResponse(BaseModel):
+    id: str
+    extends: str | None = None
+    workflows: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
+    declared: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
+    inherited: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
+    effective: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
+    sources: dict[str, str] = Field(default_factory=dict)
+
+
+class ProfileReference(BaseModel):
+    scope: Literal["global", "project"]
+    project_id: str | None = None
+    profile_id: str | None = None
+    relationship: Literal["default_profile", "extends"]
+
+
+class ProfileListResponse(BaseModel):
+    revision: str
+    source_path: str
+    default_profile: str
+    available_targets: list[str]
+    profiles: list[ProfileEditorResponse]
+
+
+class ProfileResponse(BaseModel):
+    revision: str
+    source_path: str
+    default_profile: str
+    available_targets: list[str]
+    profile: ProfileEditorResponse
+
+
+class ProfileDeleteResponse(BaseModel):
+    revision: str
+    source_path: str
+    deleted: str
+
+
+class ProjectOverrideListResponse(BaseModel):
+    revision: str
+    source_path: str
+    global_default_profile: str
+    project_default_profile: str
+    available_targets: list[str]
+    overrides: list[ProfileEditorResponse]
+
+
+class ProjectOverrideResponse(BaseModel):
+    revision: str
+    source_path: str
+    override: ProfileEditorResponse
+
+
+class ProjectOverrideDeleteResponse(BaseModel):
+    revision: str
+    source_path: str
+    deleted: str
+    fallback: ProfileEditorResponse | None = None
+
+
 class DashboardBootstrap(BaseModel):
     csrf_token: str
 
@@ -294,8 +398,15 @@ __all__ = [
     "JobState",
     "JobSummary",
     "JOB_RESOURCE_URI_TEMPLATE",
-    "JobView",
-    "job_resource_uri",
+    "ProfileDeleteResponse",
+    "ProfileEditorData",
+    "ProfileEditorResponse",
+    "ProfileListResponse",
+    "ProfileReference",
+    "ProfileResponse",
+    "ProjectOverrideDeleteResponse",
+    "ProjectOverrideListResponse",
+    "ProjectOverrideResponse",
     "ProjectView",
     "ResourcePayload",
     "SubmissionResult",
@@ -307,4 +418,5 @@ __all__ = [
     "TargetResponse",
     "TargetView",
     "TaskGuideResult",
+    "WorkflowPolicyData",
 ]

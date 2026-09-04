@@ -414,10 +414,13 @@ The dashboard operates strictly on the local loopback interface (`127.0.0.1` or 
 
 ### Configuration Boundaries
 
-The dashboard maintains strict separation between editable and read-only configuration surfaces:
+The dashboard supports controlled editing of configurations:
 
-- **Editable context instructions:** Durable workflow context instructions can be added, edited, or cleared through the dashboard. All updates require confirmation, transmit expected current values to resolve conflicts, and apply to future jobs only. CSRF tokens remain header-only and are never rendered.
-- **Read-only file-managed configuration:** All file-managed settings (including `config.toml`, targets, profiles, task routes, and daemon options) remain read-only in the dashboard. Operators modify these files on disk; the dashboard cannot write to configuration files.
+- **Editable targets, profiles, and overrides:** Operators can create, edit, and delete targets. Operators can create, edit, and delete global profiles. Operators can manage project-level profile overrides. Changes activate immediately for future jobs without daemon restart. Existing jobs preserve their historical execution plans.
+- **Loopback security and revisions:** Mutations require loopback origin and CSRF header tokens. Mutations send `If-Match` revisions to prevent lost updates.
+- **Integrity checks and deletion restrictions:** Deletion is blocked when other configurations reference the item. Integrity checks scan global profiles and registered projects. Deletion checks cannot inspect unregistered external workspaces.
+- **Editable context instructions:** Durable workflow context instructions remain editable. Updates require confirmation and apply to future jobs.
+- **External daemon settings:** Core daemon options remain managed on disk.
 
 ## Development and Testing
 

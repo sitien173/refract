@@ -323,6 +323,9 @@ a:hover { text-decoration: underline; }
 .profile-selector-group { display: flex; flex-direction: column; gap: var(--space-xxs); }
 .profile-parent-info { display: flex; flex-direction: column; gap: var(--space-xxs); }
 .parent-badge-row { display: flex; align-items: center; gap: var(--space-xs); }
+.profile-resolution-actions { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
+.fallback-preview-panel { background: var(--color-surface-muted); border: 1px solid var(--color-border-subdued); border-radius: var(--radius-sm); padding: var(--space-md); }
+.fallback-preview-content { display: flex; flex-direction: column; gap: var(--space-xs); }
 
 /* Settings screen */
 .settings-summary-panel { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md); padding: var(--space-lg); }
@@ -481,11 +484,52 @@ a:hover { text-decoration: underline; }
 .plan-target-meta { display: flex; flex-direction: column; gap: 2px; font-size: var(--type-text-xs-size); color: var(--color-text-subdued); }
 .result-output-area { display: flex; flex-direction: column; gap: var(--space-xs); }
 .back-link-btn { background: transparent; border: 0; padding: 0; color: var(--color-action-interactive); cursor: pointer; font-size: var(--type-text-sm-size); }
-.back-link-btn:hover { text-decoration: underline; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
+/* Target Editor & Mutation Dialog */
+.target-editor-form { display: flex; flex-direction: column; gap: var(--space-md); }
+.target-editor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-sm); }
+.target-editor-checkboxes { display: flex; flex-direction: column; gap: var(--space-xs); padding: var(--space-xs) 0; }
+.target-args-list { display: flex; flex-direction: column; gap: var(--space-xs); margin-top: var(--space-xs); }
+.target-arg-row { display: flex; align-items: center; gap: var(--space-xs); }
+.target-arg-input { flex: 1; }
+.target-arg-actions { display: flex; align-items: center; gap: 4px; }
+.save-status-banner { display: flex; align-items: center; padding: var(--space-xs) var(--space-sm); background: var(--color-decorative-blue); color: var(--color-icon-blue); border-radius: var(--radius-xs); font-size: var(--type-text-xs-size); font-weight: 500; }
+.mutation-dialog-referenced { display: flex; flex-direction: column; gap: var(--space-md); }
+.mutation-dialog-confirm { display: flex; flex-direction: column; gap: var(--space-md); }
+.mutation-references-list { overflow-x: auto; border: 1px solid var(--color-border-subdued); border-radius: var(--radius-xs); }
+.inspector-actions-group { display: flex; align-items: center; gap: var(--space-xs); margin-top: var(--space-md); padding-top: var(--space-md); border-top: 1px solid var(--color-border-subdued); }
+
+/* Profile Layout & Editor */
+.profiles-layout { display: grid; grid-template-columns: 1fr 340px; gap: var(--space-lg); align-items: start; }
+.profiles-table-area { min-width: 0; display: flex; flex-direction: column; gap: var(--space-md); }
+.profile-editor-form { display: flex; flex-direction: column; gap: var(--space-md); }
+.profile-editor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-sm); }
+.profile-workflows-section { display: flex; flex-direction: column; gap: var(--space-sm); margin-top: var(--space-xs); }
+.profile-section-title { font-size: var(--type-text-sm-size); font-weight: 600; margin: 0; color: var(--color-text-display); }
+.profile-section-desc { font-size: var(--type-text-xs-size); color: var(--color-text-subdued); margin: 0; }
+.profile-workflows-list { display: flex; flex-direction: column; gap: var(--space-sm); }
+.profile-workflow-card { border: 1px solid var(--color-border-subdued); border-radius: var(--radius-xs); padding: var(--space-sm); background: var(--color-surface-subtle); display: flex; flex-direction: column; gap: var(--space-xs); }
+.workflow-card-declared { border-left: 3px solid var(--color-action-interactive); }
+.workflow-card-inherited { border-left: 3px solid var(--color-border-subdued); }
+.profile-workflow-card-header { display: flex; justify-content: space-between; align-items: center; }
+.workflow-card-title-group { display: flex; align-items: center; gap: var(--space-sm); }
+.source-chip-declared { background: var(--color-decorative-blue); color: var(--color-text-display); }
+.source-chip-inherited { background: var(--color-surface-muted); color: var(--color-text-subdued); }
+.profile-workflow-controls { display: flex; flex-direction: column; gap: var(--space-xs); margin-top: var(--space-xs); }
+.profile-targets-ordered-list { display: flex; flex-direction: column; gap: var(--space-xs); }
+.profile-target-row { display: flex; align-items: center; gap: var(--space-xs); }
+.target-order-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--radius-full); background: var(--color-surface-muted); font-size: var(--type-text-xs-size); font-weight: 600; color: var(--color-text-subdued); flex-shrink: 0; }
+.profile-target-select { flex: 1; }
+.target-order-actions { display: flex; align-items: center; gap: 4px; }
+.profile-workflow-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm); }
+.profile-workflow-inherited-preview { padding: var(--space-xs) 0; font-size: var(--type-text-xs-size); color: var(--color-text-subdued); }
+.inherited-policy-details { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
+.inherited-targets-label { font-weight: 500; color: var(--color-text-default); }
+.inherited-meta { color: var(--color-text-subdued); }
+
 @media (max-width: 960px) {
-  .project-detail-layout, .targets-layout {
+  .project-detail-layout, .targets-layout, .profiles-layout {
     grid-template-columns: 1fr;
   }
   .job-detail-grid {

@@ -172,3 +172,51 @@ def test_config_mutation_service_exposes_shared_lock(tmp_path) -> None:
             runtime.publish_configuration()
     finally:
         runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_project_override_runtime_activation_and_plan_preservation(tmp_path) -> None:
+    from openmcp.models import ProfileEditorData, WorkflowPolicyData
+
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "config.toml"
+    _config(path)
+    runtime = Runtime(load_config(path))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "project")
+
+    # Submit job 1 under initial configuration
+    sub1 = await runtime.submit(project.id, "consult", "initial question")
+    record1_before = runtime.database.job_record(sub1.job_id)
+    assert record1_before is not None
+    plan1_before = record1_before["execution_plan_json"]
+
+    # Create project profile override without daemon restart
+    _, new_override = runtime.mutations.create_project_override(
+        project_root,
+        ProfileEditorData(
+            id="balanced",
+            extends="balanced",
+            workflows={"consult": WorkflowPolicyData(targets=["primary"], max_attempts=3, timeout_s=99)},
+        ),
+        expected_revision="",
+    )
+
+    # Runtime activation: project catalog immediately reflects the override
+    proj_catalog = runtime.catalog_for_project_cached(project.id)
+    assert proj_catalog.profiles["balanced"]["consult"].max_attempts == 3
+    assert proj_catalog.profiles["balanced"]["consult"].timeout_s == 99
+
+    # Submit job 2 under updated override
+    sub2 = await runtime.submit(project.id, "consult", "follow-up question")
+    job2 = runtime.database.job(sub2.job_id)
+    assert job2 is not None
+
+    # Existing job 1 retains its original execution plan
+    record1_after = runtime.database.job_record(sub1.job_id)
+    assert record1_after is not None
+    assert record1_after["execution_plan_json"] == plan1_before
+
+    await runtime.close()

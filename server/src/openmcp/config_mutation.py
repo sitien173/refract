@@ -41,7 +41,15 @@ from openmcp.config_inspection import (
     read_config_source,
 )
 from openmcp.logging_setup import get_logger
-from openmcp.models import TargetEditorData, TargetReference
+from openmcp.models import (
+    ProfileEditorData,
+    ProfileEditorResponse,
+    ProfileReference,
+    TargetEditorData,
+    TargetReference,
+    WorkflowPolicyData,
+)
+from openmcp.workflows import BUILTIN_WORKFLOWS
 
 log = get_logger("config_mutation")
 
@@ -807,6 +815,121 @@ def target_to_editor_data(target: Any) -> TargetEditorData:
     )
 
 
+def _build_profile_editor_response(
+    catalog: DaemonConfig,
+    profile_id: str,
+    *,
+    project_declaration: Any | None = None,
+    scope: str = "global",
+) -> ProfileEditorResponse:
+    global_declarations = catalog.profile_declarations
+    if scope == "project":
+        declaration = (
+            project_declaration
+            if project_declaration is not None
+            else catalog.project_profile_declarations.get(profile_id)
+        )
+    else:
+        declaration = global_declarations.get(profile_id)
+    extends = declaration.extends if declaration is not None else None
+    declared_workflows = declaration.workflows if declaration is not None else {}
+    effective_workflows = catalog.profiles.get(profile_id, {})
+
+    declared: dict[str, WorkflowPolicyData | None] = {}
+    effective: dict[str, WorkflowPolicyData | None] = {}
+    inherited: dict[str, WorkflowPolicyData | None] = {}
+    sources: dict[str, str] = {}
+
+    for w in BUILTIN_WORKFLOWS:
+        if w in declared_workflows:
+            sel = declared_workflows[w]
+            declared[w] = WorkflowPolicyData(
+                targets=list(sel.targets),
+                max_attempts=sel.max_attempts,
+                timeout_s=sel.timeout_s,
+            )
+        else:
+            declared[w] = None
+
+        if w in effective_workflows:
+            eff_sel = effective_workflows[w]
+            effective[w] = WorkflowPolicyData(
+                targets=list(eff_sel.targets),
+                max_attempts=eff_sel.max_attempts,
+                timeout_s=eff_sel.timeout_s,
+            )
+        else:
+            effective[w] = None
+
+        if w in effective_workflows and w not in declared_workflows:
+            eff_sel = effective_workflows[w]
+            inherited[w] = WorkflowPolicyData(
+                targets=list(eff_sel.targets),
+                max_attempts=eff_sel.max_attempts,
+                timeout_s=eff_sel.timeout_s,
+            )
+        else:
+            inherited[w] = None
+
+        if w in declared_workflows:
+            sources[w] = "project" if scope == "project" else "declared"
+        elif w in effective_workflows:
+            if scope == "project":
+                sources[w] = "global"
+            else:
+                curr = extends
+                src = "inherited"
+                seen = {profile_id}
+                while curr and curr not in seen:
+                    seen.add(curr)
+                    parent_decl = global_declarations.get(curr)
+                    if parent_decl and w in parent_decl.workflows:
+                        src = curr
+                        break
+                    curr = parent_decl.extends if parent_decl else None
+                sources[w] = src
+
+    return ProfileEditorResponse(
+        id=profile_id,
+        extends=extends,
+        workflows=dict(declared),
+        declared=declared,
+        inherited=inherited,
+        effective=effective,
+        sources=sources,
+    )
+
+
+def _apply_workflow_policy(
+    service: ConfigurationMutationService,
+    profile_table: Table,
+    workflow: str,
+    policy: WorkflowPolicyData,
+) -> None:
+    targets = list(policy.targets)
+    requires_expansion = policy.timeout_s > 0 or policy.max_attempts != len(targets)
+    kind = service.workflow_kind(profile_table, workflow)
+    if requires_expansion:
+        service.set_workflow_policy(
+            profile_table,
+            workflow,
+            targets=targets,
+            max_attempts=policy.max_attempts or len(targets),
+            timeout_s=policy.timeout_s,
+        )
+    elif kind in ("inline", "table"):
+        service.set_workflow_policy(
+            profile_table,
+            workflow,
+            targets=targets,
+            max_attempts=policy.max_attempts or len(targets),
+            timeout_s=policy.timeout_s,
+        )
+    else:
+        service.set_workflow_shorthand(profile_table, workflow, targets)
+
+
+
 class ConfigurationMutationService:
     """Synchronized, atomic configuration-file mutation with publication.
 
@@ -1436,6 +1559,680 @@ class ConfigurationMutationService:
         policy["max_attempts"] = max_attempts
         policy["timeout_s"] = timeout_s
         profile[workflow] = policy
+
+    def read_profiles(
+        self,
+    ) -> tuple[SourceRead, list[ProfileEditorResponse], str, list[str]]:
+        """Return all global profiles for the protected editor."""
+        with self._lock:
+            source_path = self._resolve_source(None)
+            if not source_path.exists():
+                return SourceRead(path=source_path, revision="", absent=True), [], "", []
+            source = _regular_source(source_path)
+            source_read = SourceRead(path=source_path, revision=source.revision, absent=False)
+            catalog = self.resolve_global_catalog(source.data)
+            available_targets = sorted(t.id for t in catalog.targets)
+            default_profile = catalog.default_profile
+            all_ids = sorted(set(catalog.profile_declarations.keys()) | set(catalog.profiles.keys()))
+            profiles: list[ProfileEditorResponse] = []
+            for profile_id in all_ids:
+                profiles.append(_build_profile_editor_response(catalog, profile_id))
+            return source_read, profiles, default_profile, available_targets
+
+    def get_profile(
+        self, profile_id: str
+    ) -> tuple[SourceRead, ProfileEditorResponse, str, list[str]]:
+        """Return one global profile for the protected editor."""
+        with self._lock:
+            source_path = self._resolve_source(None)
+            if not source_path.exists():
+                raise ConfigurationMutationError(
+                    f"Unknown profile: {profile_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the profile before inspecting it.",
+                )
+            source = _regular_source(source_path)
+            source_read = SourceRead(path=source_path, revision=source.revision, absent=False)
+            catalog = self.resolve_global_catalog(source.data)
+            if (
+                profile_id not in catalog.profile_declarations
+                and profile_id not in catalog.profiles
+            ):
+                raise ConfigurationMutationError(
+                    f"Unknown profile: {profile_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the profile before inspecting it.",
+                )
+            available_targets = sorted(t.id for t in catalog.targets)
+            default_profile = catalog.default_profile
+            resp = _build_profile_editor_response(catalog, profile_id)
+            return source_read, resp, default_profile, available_targets
+
+    def find_profile_references(
+        self,
+        profile_id: str,
+        document: tomlkit.TOMLDocument | None = None,
+    ) -> list[ProfileReference]:
+        """Find every reference that blocks profile deletion."""
+        references: list[ProfileReference] = []
+        if document is None:
+            source_path = self._resolve_source(None)
+            if source_path.exists():
+                try:
+                    source = _regular_source(source_path)
+                    document = self.read_document(source)
+                except Exception:
+                    document = None
+
+        if document is not None:
+            daemon = document.get("daemon")
+            if isinstance(daemon, (dict, Table)):
+                if daemon.get("default_profile") == profile_id:
+                    references.append(
+                        ProfileReference(
+                            scope="global",
+                            project_id=None,
+                            profile_id=None,
+                            relationship="default_profile",
+                        )
+                    )
+            profiles = document.get("profiles")
+            if isinstance(profiles, (dict, Table)):
+                for pid, profile_item in sorted(profiles.items()):
+                    if pid == profile_id:
+                        continue
+                    if isinstance(profile_item, (dict, Table)):
+                        if profile_item.get("extends") == profile_id:
+                            references.append(
+                                ProfileReference(
+                                    scope="global",
+                                    project_id=None,
+                                    profile_id=str(pid),
+                                    relationship="extends",
+                                )
+                            )
+
+        runtime = self._runtime
+        database = getattr(runtime, "database", None)
+        if database is not None:
+            try:
+                projects = database.projects()
+            except sqlite3.ProgrammingError:
+                db_path = getattr(getattr(runtime, "config", None), "database_path", None)
+                if db_path is not None and Path(db_path).exists():
+                    conn = sqlite3.connect(db_path)
+                    try:
+                        conn.row_factory = sqlite3.Row
+                        rows = conn.execute("SELECT * FROM projects ORDER BY alias").fetchall()
+                        projects = [database._project_view(row) for row in rows]
+                    finally:
+                        conn.close()
+                else:
+                    projects = []
+            for project in sorted(projects, key=lambda p: p.id):
+                proj_cfg_path = Path(project.root) / ".openmcp" / "config.toml"
+                if proj_cfg_path.is_file():
+                    try:
+                        raw_proj = tomllib.loads(proj_cfg_path.read_text(encoding="utf-8"))
+                        proj_meta = raw_proj.get("project", {})
+                        if isinstance(proj_meta, dict) and proj_meta.get("default_profile") == profile_id:
+                            references.append(
+                                ProfileReference(
+                                    scope="project",
+                                    project_id=project.id,
+                                    profile_id=None,
+                                    relationship="default_profile",
+                                )
+                            )
+                        proj_profiles = raw_proj.get("profiles", {})
+                        if isinstance(proj_profiles, dict):
+                            for pid, profile_item in sorted(proj_profiles.items()):
+                                if isinstance(profile_item, dict):
+                                    ext = profile_item.get("extends")
+                                    if ext == profile_id or (ext is None and pid == profile_id):
+                                        references.append(
+                                            ProfileReference(
+                                                scope="project",
+                                                project_id=project.id,
+                                                profile_id=str(pid),
+                                                relationship="extends",
+                                            )
+                                        )
+                    except Exception:
+                        pass
+        return references
+
+    def create_profile(
+        self,
+        data: ProfileEditorData,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, ProfileEditorResponse]:
+        with self._lock:
+            source_path = self._resolve_source(None)
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            if not data.id or not data.id.strip():
+                raise ConfigurationMutationError(
+                    "Profile identifier cannot be empty.",
+                    code="configuration_invalid",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Specify a non-empty profile identifier.",
+                )
+            profile_id = data.id.strip()
+            source = _regular_source(source_path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=source_path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            document = self.read_document(source)
+            if self.find_profile(document, profile_id) is not None:
+                raise ConfigurationMutationError(
+                    f"Profile {profile_id!r} already exists.",
+                    code="configuration_invalid",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Choose a unique profile identifier.",
+                )
+            profile_table = self.profile_table(document, profile_id)
+            if data.extends:
+                self.set_profile_value(profile_table, "extends", data.extends)
+            for workflow, policy in data.workflows.items():
+                if policy is not None:
+                    _apply_workflow_policy(self, profile_table, workflow, policy)
+            result = self.commit_document(
+                document,
+                expected_revision=expected_revision,
+                validate_registered_projects=True,
+            )
+            resp = _build_profile_editor_response(result.config, profile_id)
+            return result, resp
+
+    def update_profile(
+        self,
+        profile_id: str,
+        data: ProfileEditorData,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, ProfileEditorResponse]:
+        with self._lock:
+            source_path = self._resolve_source(None)
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            if data.id != profile_id:
+                raise ConfigurationMutationError(
+                    "Profile identifier cannot be changed.",
+                    code="configuration_invalid",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Keep the existing profile identifier when updating a profile.",
+                )
+            source = _regular_source(source_path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=source_path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            document = self.read_document(source)
+            profile_table = self.find_profile(document, profile_id)
+            if profile_table is None:
+                raise ConfigurationMutationError(
+                    f"Unknown profile: {profile_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the profile before editing it.",
+                )
+            if data.extends:
+                self.set_profile_value(profile_table, "extends", data.extends)
+            else:
+                self.remove_profile_key(profile_table, "extends")
+            for workflow, policy in data.workflows.items():
+                if policy is None:
+                    self.remove_profile_key(profile_table, workflow)
+                else:
+                    _apply_workflow_policy(self, profile_table, workflow, policy)
+            result = self.commit_document(
+                document,
+                expected_revision=expected_revision,
+                validate_registered_projects=True,
+            )
+            resp = _build_profile_editor_response(result.config, profile_id)
+            return result, resp
+
+    def delete_profile(
+        self,
+        profile_id: str,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, str]:
+        with self._lock:
+            source_path = self._resolve_source(None)
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the deletion.",
+                )
+            source = _regular_source(source_path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=source_path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the deletion.",
+                )
+            document = self.read_document(source)
+            profile_table = self.find_profile(document, profile_id)
+            if profile_table is None:
+                raise ConfigurationMutationError(
+                    f"Unknown profile: {profile_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Verify the profile identifier and retry.",
+                )
+            references = self.find_profile_references(profile_id, document=document)
+            if references:
+                raise ConfigurationMutationError(
+                    f"Profile {profile_id!r} is referenced by configuration defaults or extends.",
+                    code="referenced",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Remove default and extends references before deleting the profile.",
+                    references=[ref.model_dump() for ref in references],
+                )
+            profiles = self._profiles_table(document)
+            if profiles is not None and profile_id in profiles:
+                del profiles[profile_id]
+            result = self.commit_document(
+                document,
+                expected_revision=expected_revision,
+                validate_registered_projects=True,
+            )
+            return result, profile_id
+
+    def read_project_overrides(
+        self, project_root: Path
+    ) -> tuple[SourceRead, list[ProfileEditorResponse], str, str, list[str]]:
+        """Return all project profile overrides for the protected editor."""
+        with self._lock:
+            source_path = Path(project_root) / ".openmcp" / "config.toml"
+            global_catalog = getattr(self._runtime, "catalog", None)
+            global_default = global_catalog.default_profile if global_catalog else ""
+            available_targets = (
+                sorted(t.id for t in global_catalog.targets) if global_catalog else []
+            )
+            if not source_path.exists():
+                return (
+                    SourceRead(path=source_path, revision="", absent=True),
+                    [],
+                    global_default,
+                    global_default,
+                    available_targets,
+                )
+            source = _regular_source(source_path)
+            source_read = SourceRead(
+                path=source_path, revision=source.revision, absent=False
+            )
+            proj_catalog = self.resolve_project_catalog(project_root, source.data)
+            project_default = proj_catalog.default_profile
+            overrides: list[ProfileEditorResponse] = []
+            for profile_id in sorted(proj_catalog.project_profile_declarations.keys()):
+                decl = proj_catalog.project_profile_declarations[profile_id]
+                overrides.append(
+                    _build_profile_editor_response(
+                        proj_catalog,
+                        profile_id,
+                        project_declaration=decl,
+                        scope="project",
+                    )
+                )
+            return (
+                source_read,
+                overrides,
+                global_default,
+                project_default,
+                available_targets,
+            )
+
+    def get_project_override(
+        self, project_root: Path, profile_id: str
+    ) -> tuple[SourceRead, ProfileEditorResponse, str, str, list[str]]:
+        """Return one project profile override for the protected editor."""
+        with self._lock:
+            source_path = Path(project_root) / ".openmcp" / "config.toml"
+            if not source_path.exists():
+                raise ConfigurationMutationError(
+                    f"Unknown project profile override: {profile_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the project override before inspecting it.",
+                )
+            source = _regular_source(source_path)
+            source_read = SourceRead(
+                path=source_path, revision=source.revision, absent=False
+            )
+            proj_catalog = self.resolve_project_catalog(project_root, source.data)
+            if profile_id not in proj_catalog.project_profile_declarations:
+                raise ConfigurationMutationError(
+                    f"Unknown project profile override: {profile_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the project override before inspecting it.",
+                )
+            global_catalog = getattr(self._runtime, "catalog", None)
+            global_default = global_catalog.default_profile if global_catalog else ""
+            available_targets = (
+                sorted(t.id for t in global_catalog.targets) if global_catalog else []
+            )
+            project_default = proj_catalog.default_profile
+            decl = proj_catalog.project_profile_declarations[profile_id]
+            resp = _build_profile_editor_response(
+                proj_catalog, profile_id, project_declaration=decl, scope="project"
+            )
+            return (
+                source_read,
+                resp,
+                global_default,
+                project_default,
+                available_targets,
+            )
+
+    def create_project_override(
+        self,
+        project_root: Path,
+        data: ProfileEditorData,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, ProfileEditorResponse]:
+        with self._lock:
+            path = Path(project_root) / ".openmcp" / "config.toml"
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            if not data.id or not data.id.strip():
+                raise ConfigurationMutationError(
+                    "Profile identifier cannot be empty.",
+                    code="configuration_invalid",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Specify a non-empty profile identifier.",
+                )
+            profile_id = data.id.strip()
+            if not path.exists():
+                if expected_revision != "":
+                    raise ConfigurationMutationError(
+                        _CONFLICT_MESSAGE,
+                        code="configuration_conflict",
+                        source_path=path.as_posix(),
+                        current_revision="",
+                        unchanged=_UNCHANGED_MESSAGE,
+                        recovery="Reload the current configuration and retry the edit.",
+                    )
+                document = tomlkit.document()
+                profiles = tomlkit.table()
+                document["profiles"] = profiles
+                profile_table = tomlkit.table()
+                profiles[profile_id] = profile_table
+                if data.extends:
+                    self.set_profile_value(profile_table, "extends", data.extends)
+                for workflow, policy in data.workflows.items():
+                    if policy is not None:
+                        _apply_workflow_policy(self, profile_table, workflow, policy)
+                result = self.create_project_document(document, project_root=project_root)
+                decl = result.config.project_profile_declarations.get(profile_id)
+                resp = _build_profile_editor_response(
+                    result.config, profile_id, project_declaration=decl, scope="project"
+                )
+                return result, resp
+
+            source = _regular_source(path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            document = self.read_document(source)
+            if self.find_profile(document, profile_id) is not None:
+                raise ConfigurationMutationError(
+                    f"Project override {profile_id!r} already exists.",
+                    code="configuration_invalid",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Choose a unique profile identifier.",
+                )
+            profile_table = self.profile_table(document, profile_id)
+            if data.extends:
+                self.set_profile_value(profile_table, "extends", data.extends)
+            for workflow, policy in data.workflows.items():
+                if policy is not None:
+                    _apply_workflow_policy(self, profile_table, workflow, policy)
+            result = self.commit_document(
+                document,
+                project_root=project_root,
+                expected_revision=expected_revision,
+            )
+            decl = result.config.project_profile_declarations.get(profile_id)
+            resp = _build_profile_editor_response(
+                result.config, profile_id, project_declaration=decl, scope="project"
+            )
+            return result, resp
+
+    def update_project_override(
+        self,
+        project_root: Path,
+        profile_id: str,
+        data: ProfileEditorData,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, ProfileEditorResponse]:
+        with self._lock:
+            path = Path(project_root) / ".openmcp" / "config.toml"
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            if data.id != profile_id:
+                raise ConfigurationMutationError(
+                    "Profile identifier cannot be changed.",
+                    code="configuration_invalid",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Keep the existing profile identifier when updating an override.",
+                )
+            if not path.exists():
+                raise ConfigurationMutationError(
+                    f"Unknown project profile override: {profile_id}",
+                    code="not_found",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the project override before editing it.",
+                )
+            source = _regular_source(path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            document = self.read_document(source)
+            profile_table = self.find_profile(document, profile_id)
+            if profile_table is None:
+                raise ConfigurationMutationError(
+                    f"Unknown project profile override: {profile_id}",
+                    code="not_found",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the project override before editing it.",
+                )
+            if data.extends:
+                self.set_profile_value(profile_table, "extends", data.extends)
+            else:
+                self.remove_profile_key(profile_table, "extends")
+            for workflow, policy in data.workflows.items():
+                if policy is None:
+                    self.remove_profile_key(profile_table, workflow)
+                else:
+                    _apply_workflow_policy(self, profile_table, workflow, policy)
+            result = self.commit_document(
+                document,
+                project_root=project_root,
+                expected_revision=expected_revision,
+            )
+            decl = result.config.project_profile_declarations.get(profile_id)
+            resp = _build_profile_editor_response(
+                result.config, profile_id, project_declaration=decl, scope="project"
+            )
+            return result, resp
+
+    def delete_project_override(
+        self,
+        project_root: Path,
+        profile_id: str,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, str, ProfileEditorResponse | None]:
+        with self._lock:
+            path = Path(project_root) / ".openmcp" / "config.toml"
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the deletion.",
+                )
+            if not path.exists():
+                raise ConfigurationMutationError(
+                    f"Unknown project profile override: {profile_id}",
+                    code="not_found",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Verify the profile identifier and retry.",
+                )
+            source = _regular_source(path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the deletion.",
+                )
+            document = self.read_document(source)
+            profile_table = self.find_profile(document, profile_id)
+            if profile_table is None:
+                raise ConfigurationMutationError(
+                    f"Unknown project profile override: {profile_id}",
+                    code="not_found",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Verify the profile identifier and retry.",
+                )
+            profiles = self._profiles_table(document)
+            if profiles is not None:
+                for pid, pitem in profiles.items():
+                    if pid != profile_id and isinstance(pitem, (dict, Table)):
+                        if pitem.get("extends") == profile_id:
+                            raise ConfigurationMutationError(
+                                f"Project override {profile_id!r} is extended by {pid!r}.",
+                                code="referenced",
+                                source_path=path.as_posix(),
+                                unchanged=_UNCHANGED_MESSAGE,
+                                recovery="Remove dependent project profile references before deleting this override.",
+                                references=[
+                                    ProfileReference(
+                                        scope="project",
+                                        project_id=None,
+                                        profile_id=str(pid),
+                                        relationship="extends",
+                                    ).model_dump()
+                                ],
+                            )
+            project_sec = document.get("project")
+            if isinstance(project_sec, (dict, Table)) and project_sec.get("default_profile") == profile_id:
+                raise ConfigurationMutationError(
+                    f"Project override {profile_id!r} is the project default profile.",
+                    code="referenced",
+                    source_path=path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Change project default_profile before deleting this override.",
+                    references=[
+                        ProfileReference(
+                            scope="project",
+                            project_id=None,
+                            profile_id=None,
+                            relationship="default_profile",
+                        ).model_dump()
+                    ],
+                )
+            if profiles is not None and profile_id in profiles:
+                del profiles[profile_id]
+                if len(profiles) == 0:
+                    del document["profiles"]
+            result = self.commit_document(
+                document,
+                project_root=project_root,
+                expected_revision=expected_revision,
+            )
+            fallback = None
+            if profile_id in result.config.profiles:
+                fallback = _build_profile_editor_response(
+                    result.config, profile_id, scope="project"
+                )
+            return result, profile_id, fallback
+
+
 
     # ------------------------------------------------------------------
     # Transactions.

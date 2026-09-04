@@ -6,9 +6,9 @@ Build a FlowForge-branded administration dashboard for OpenMCP operators. The
 dashboard explains effective configuration, profile resolution, target health,
 configuration validity, and job behavior.
 
-The initial dashboard is primarily read-only. Context instructions are the only
-editable configuration because OpenMCP already stores and mutates them through
-the runtime and SQLite.
+Target configurations, global profiles, and project overrides are editable.
+Context instructions are also editable through the dashboard.
+Daemon network and scheduler options remain managed on disk.
 
 ## Users
 
@@ -28,7 +28,8 @@ The initial dashboard provides:
 - Context instruction editing.
 - Job configuration revision visibility.
 
-Global and project configuration files remain externally managed.
+Core daemon options remain externally managed on disk.
+Target, profile, and override declarations support dashboard mutations.
 
 ## Information Architecture
 
@@ -478,12 +479,14 @@ navigation.
 - Global and project sources remain distinguishable.
 - Every new job identifies its configuration revision.
 - Context instructions remain safely editable.
-- File-managed configuration remains read-only.
+- Target and profile mutations activate immediately.
+- Registered project reference checks guard deletions.
+- Unregistered external projects cannot be scanned.
 - In-flight jobs remain isolated from changes.
 
 ## Non-goals
 
-- Editing TOML through the dashboard.
+- Editing raw TOML directly.
 - Editing task-guidance files.
 - Approval workflows.
 - Configuration rollback.

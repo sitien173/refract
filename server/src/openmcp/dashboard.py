@@ -26,6 +26,14 @@ from openmcp.models import (
     DashboardError,
     DashboardJob,
     DashboardOverview,
+    ProfileDeleteResponse,
+    ProfileEditorData,
+    ProfileEditorResponse,
+    ProfileListResponse,
+    ProfileResponse,
+    ProjectOverrideDeleteResponse,
+    ProjectOverrideListResponse,
+    ProjectOverrideResponse,
     TargetDeleteResponse,
     TargetEditorData,
     TargetListResponse,
@@ -46,6 +54,18 @@ class DashboardState:
 
 
 def _jsonable(value: Any) -> Any:
+    if isinstance(
+        value,
+        (
+            ProfileEditorResponse,
+            ProfileListResponse,
+            ProfileResponse,
+            ProjectOverrideListResponse,
+            ProjectOverrideResponse,
+            ProjectOverrideDeleteResponse,
+        ),
+    ):
+        return value.model_dump(mode="json")
     if hasattr(value, "model_dump"):
         return _jsonable(value.model_dump(mode="json", exclude_none=True))
     if isinstance(value, dict):
@@ -689,6 +709,479 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except ConfigurationMutationError as exc:
             return _handle_mutation_error(exc)
 
+    async def config_profiles_get(request: Request) -> Response:
+        if not _authorized_editor_read(request):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        try:
+            source_read, profiles_data, default_profile, available_targets = (
+                runtime.mutations.read_profiles()
+            )
+            response = _json_response(
+                ProfileListResponse(
+                    revision=source_read.revision,
+                    source_path=source_read.path.as_posix(),
+                    default_profile=default_profile,
+                    available_targets=available_targets,
+                    profiles=profiles_data,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{source_read.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def config_profile_get(request: Request) -> Response:
+        if not _authorized_editor_read(request):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        profile_id = request.path_params["profile_id"]
+        try:
+            source_read, profile_data, default_profile, available_targets = (
+                runtime.mutations.get_profile(profile_id)
+            )
+            response = _json_response(
+                ProfileResponse(
+                    revision=source_read.revision,
+                    source_path=source_read.path.as_posix(),
+                    default_profile=default_profile,
+                    available_targets=available_targets,
+                    profile=profile_data,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{source_read.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def config_profile_create(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        source_path = (
+            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
+        )
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the edit.",
+                source_path=source_path,
+            )
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error(
+                "Invalid JSON body",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a valid JSON request body and retry.",
+                source_path=source_path,
+            )
+        if not isinstance(payload, dict):
+            return _error(
+                "Request body must be a JSON object",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a JSON object payload and retry.",
+                source_path=source_path,
+            )
+        try:
+            data = ProfileEditorData.model_validate(payload)
+        except (ValidationError, ValueError) as exc:
+            return _error(
+                sanitize_config_error(exc),
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Correct the profile fields and retry.",
+                source_path=source_path,
+            )
+        try:
+            result, created = runtime.mutations.create_profile(
+                data, expected_revision=expected_revision
+            )
+            response = _json_response(
+                ProfileResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    default_profile=result.config.default_profile,
+                    available_targets=sorted(t.id for t in result.config.targets),
+                    profile=created,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def config_profile_update(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        source_path = (
+            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
+        )
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the edit.",
+                source_path=source_path,
+            )
+        profile_id = request.path_params["profile_id"]
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error(
+                "Invalid JSON body",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a valid JSON request body and retry.",
+                source_path=source_path,
+            )
+        if not isinstance(payload, dict):
+            return _error(
+                "Request body must be a JSON object",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a JSON object payload and retry.",
+                source_path=source_path,
+            )
+        try:
+            data = ProfileEditorData.model_validate(payload)
+        except (ValidationError, ValueError) as exc:
+            return _error(
+                sanitize_config_error(exc),
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Correct the profile fields and retry.",
+                source_path=source_path,
+            )
+        try:
+            result, updated = runtime.mutations.update_profile(
+                profile_id, data, expected_revision=expected_revision
+            )
+            response = _json_response(
+                ProfileResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    default_profile=result.config.default_profile,
+                    available_targets=sorted(t.id for t in result.config.targets),
+                    profile=updated,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def config_profile_delete(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        source_path = (
+            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
+        )
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the deletion.",
+                source_path=source_path,
+            )
+        profile_id = request.path_params["profile_id"]
+        try:
+            result, deleted_id = runtime.mutations.delete_profile(
+                profile_id, expected_revision=expected_revision
+            )
+            response = _json_response(
+                ProfileDeleteResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    deleted=deleted_id,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def project_profile_overrides_get(request: Request) -> Response:
+        if not _authorized_editor_read(request):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        project_view = runtime.database.project(request.path_params["project_id"])
+        if project_view is None:
+            return _error("Unknown project", 404, code="not_found")
+        try:
+            source_read, overrides, g_def, p_def, targets = (
+                runtime.mutations.read_project_overrides(Path(project_view.root))
+            )
+            response = _json_response(
+                ProjectOverrideListResponse(
+                    revision=source_read.revision,
+                    source_path=source_read.path.as_posix(),
+                    global_default_profile=g_def,
+                    project_default_profile=p_def,
+                    available_targets=targets,
+                    overrides=overrides,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{source_read.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def project_profile_override_get(request: Request) -> Response:
+        if not _authorized_editor_read(request):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        project_view = runtime.database.project(request.path_params["project_id"])
+        if project_view is None:
+            return _error("Unknown project", 404, code="not_found")
+        profile_id = request.path_params["profile_id"]
+        try:
+            source_read, override, _, _, _ = (
+                runtime.mutations.get_project_override(Path(project_view.root), profile_id)
+            )
+            response = _json_response(
+                ProjectOverrideResponse(
+                    revision=source_read.revision,
+                    source_path=source_read.path.as_posix(),
+                    override=override,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{source_read.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def project_profile_override_create(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        project_view = runtime.database.project(request.path_params["project_id"])
+        if project_view is None:
+            return _error("Unknown project", 404, code="not_found")
+        proj_root = Path(project_view.root)
+        source_path = (proj_root / ".openmcp" / "config.toml").as_posix()
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the edit.",
+                source_path=source_path,
+            )
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error(
+                "Invalid JSON body",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a valid JSON request body and retry.",
+                source_path=source_path,
+            )
+        if not isinstance(payload, dict):
+            return _error(
+                "Request body must be a JSON object",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a JSON object payload and retry.",
+                source_path=source_path,
+            )
+        try:
+            data = ProfileEditorData.model_validate(payload)
+        except (ValidationError, ValueError) as exc:
+            return _error(
+                sanitize_config_error(exc),
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Correct the profile fields and retry.",
+                source_path=source_path,
+            )
+        try:
+            result, created = runtime.mutations.create_project_override(
+                proj_root, data, expected_revision=expected_revision
+            )
+            response = _json_response(
+                ProjectOverrideResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    override=created,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def project_profile_override_update(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        project_view = runtime.database.project(request.path_params["project_id"])
+        if project_view is None:
+            return _error("Unknown project", 404, code="not_found")
+        proj_root = Path(project_view.root)
+        source_path = (proj_root / ".openmcp" / "config.toml").as_posix()
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the edit.",
+                source_path=source_path,
+            )
+        profile_id = request.path_params["profile_id"]
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error(
+                "Invalid JSON body",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a valid JSON request body and retry.",
+                source_path=source_path,
+            )
+        if not isinstance(payload, dict):
+            return _error(
+                "Request body must be a JSON object",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a JSON object payload and retry.",
+                source_path=source_path,
+            )
+        try:
+            data = ProfileEditorData.model_validate(payload)
+        except (ValidationError, ValueError) as exc:
+            return _error(
+                sanitize_config_error(exc),
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Correct the profile fields and retry.",
+                source_path=source_path,
+            )
+        try:
+            result, updated = runtime.mutations.update_project_override(
+                proj_root, profile_id, data, expected_revision=expected_revision
+            )
+            response = _json_response(
+                ProjectOverrideResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    override=updated,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def project_profile_override_delete(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        project_view = runtime.database.project(request.path_params["project_id"])
+        if project_view is None:
+            return _error("Unknown project", 404, code="not_found")
+        proj_root = Path(project_view.root)
+        source_path = (proj_root / ".openmcp" / "config.toml").as_posix()
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the deletion.",
+                source_path=source_path,
+            )
+        profile_id = request.path_params["profile_id"]
+        try:
+            result, deleted_id, fallback = runtime.mutations.delete_project_override(
+                proj_root, profile_id, expected_revision=expected_revision
+            )
+            response = _json_response(
+                ProjectOverrideDeleteResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    deleted=deleted_id,
+                    fallback=fallback,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+
     async def targets(request: Request) -> Response:
         try:
             return _json_response(_runtime(state).targets())
@@ -931,6 +1424,21 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         Route("/dashboard/api/configuration/targets/{target_id}", config_target_get, methods=["GET"]),
         Route("/dashboard/api/configuration/targets/{target_id}", config_target_update, methods=["PUT"]),
         Route("/dashboard/api/configuration/targets/{target_id}", config_target_delete, methods=["DELETE"]),
+        Route("/dashboard/api/configuration/profiles", config_profiles_get, methods=["GET"]),
+        Route("/dashboard/api/configuration/profiles", config_profile_create, methods=["POST"]),
+        Route("/dashboard/api/configuration/profiles/{profile_id}", config_profile_get, methods=["GET"]),
+        Route("/dashboard/api/configuration/profiles/{profile_id}", config_profile_update, methods=["PUT"]),
+        Route("/dashboard/api/configuration/profiles/{profile_id}", config_profile_delete, methods=["DELETE"]),
+        Route("/dashboard/api/projects/{project_id}/profile-overrides", project_profile_overrides_get, methods=["GET"]),
+        Route("/dashboard/api/projects/{project_id}/profile-overrides", project_profile_override_create, methods=["POST"]),
+        Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_get, methods=["GET"]),
+        Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_update, methods=["PUT"]),
+        Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_delete, methods=["DELETE"]),
+        Route("/dashboard/api/projects/{project_id}/configuration/profiles", project_profile_overrides_get, methods=["GET"]),
+        Route("/dashboard/api/projects/{project_id}/configuration/profiles", project_profile_override_create, methods=["POST"]),
+        Route("/dashboard/api/projects/{project_id}/configuration/profiles/{profile_id}", project_profile_override_get, methods=["GET"]),
+        Route("/dashboard/api/projects/{project_id}/configuration/profiles/{profile_id}", project_profile_override_update, methods=["PUT"]),
+        Route("/dashboard/api/projects/{project_id}/configuration/profiles/{profile_id}", project_profile_override_delete, methods=["DELETE"]),
         Route("/dashboard/api/targets", targets, methods=["GET"]),
         Route("/dashboard/api/profiles", profiles, methods=["GET"]),
         Route("/dashboard/api/projects", projects, methods=["GET"]),

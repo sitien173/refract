@@ -1,11 +1,20 @@
 import { useEffect, useState } from 'react'
-import { getConfiguration, getTargets } from '../api'
+import {
+  getConfiguration,
+  getTargets,
+  getConfigurationTargets,
+  getConfigurationTarget,
+  deleteConfigurationTarget,
+  DashboardApiError,
+} from '../api'
 import Alert from '../components/Alert'
 import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
+import ConfigurationMutationDialog from '../components/ConfigurationMutationDialog'
 import DataGrid from '../components/DataGrid'
 import Inspector, { InspectorRow } from '../components/Inspector'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
+import TargetEditor from '../components/TargetEditor'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
 
 function isCircuitOpenUntil(value, now = Date.now()) {
@@ -31,6 +40,22 @@ export default function Targets() {
   const [statusFilter, setStatusFilter] = useState(readStatusFilterFromUrl)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedTarget, setSelectedTarget] = useState(null)
+  const [editorState, setEditorState] = useState({
+    isOpen: false,
+    mode: 'create',
+    target: null,
+    revision: '',
+  })
+  const [deleteDialogState, setDeleteDialogState] = useState({
+    isOpen: false,
+    targetId: '',
+    revision: '',
+    references: null,
+    error: null,
+    isSubmitting: false,
+  })
+  const [editorError, setEditorError] = useState(null)
+  const [announcement, setAnnouncement] = useState('')
 
   useEffect(() => {
     function onPopState() {
@@ -140,27 +165,160 @@ export default function Targets() {
   const healthyCount = rawList.filter((t) => t.healthy && !isCircuitOpenUntil(t.circuit_open_until)).length
   const selectedCircuitOpen = selectedTarget && isCircuitOpenUntil(selectedTarget.circuit_open_until)
 
+  async function handleOpenCreate() {
+    setEditorError(null)
+    try {
+      const payload = await getConfigurationTargets()
+      setEditorState({
+        isOpen: true,
+        mode: 'create',
+        target: null,
+        revision: payload.revision || '',
+      })
+    } catch (err) {
+      setEditorError(err.message || 'Failed to load target configuration.')
+    }
+  }
+
+  async function handleOpenEdit(targetId) {
+    setEditorError(null)
+    try {
+      const payload = await getConfigurationTarget(targetId)
+      setEditorState({
+        isOpen: true,
+        mode: 'edit',
+        target: payload.target || null,
+        revision: payload.revision || '',
+      })
+    } catch (err) {
+      setEditorError(err.message || 'Failed to load target details.')
+    }
+  }
+
+  async function handleOpenDelete(targetId) {
+    setEditorError(null)
+    try {
+      const payload = await getConfigurationTargets()
+      setDeleteDialogState({
+        isOpen: true,
+        targetId,
+        revision: payload.revision || '',
+        references: null,
+        error: null,
+        isSubmitting: false,
+      })
+    } catch (err) {
+      setEditorError(err.message || 'Failed to prepare target deletion.')
+    }
+  }
+
+  async function handleConfirmDelete() {
+    setDeleteDialogState((prev) => ({ ...prev, isSubmitting: true, error: null }))
+    try {
+      await deleteConfigurationTarget(deleteDialogState.targetId, deleteDialogState.revision)
+      setAnnouncement(`Target "${deleteDialogState.targetId}" deleted.`)
+      const deletedId = deleteDialogState.targetId
+      setDeleteDialogState({
+        isOpen: false,
+        targetId: '',
+        revision: '',
+        references: null,
+        error: null,
+        isSubmitting: false,
+      })
+      if (selectedTarget?.id === deletedId) {
+        setSelectedTarget(null)
+      }
+      refresh()
+      refreshConfigurationHealth()
+    } catch (err) {
+      if ((err instanceof DashboardApiError || err?.status === 409) && err?.payload?.code === 'referenced') {
+        setDeleteDialogState((prev) => ({
+          ...prev,
+          isSubmitting: false,
+          references: err.payload?.references || [],
+        }))
+      } else {
+        setDeleteDialogState((prev) => ({
+          ...prev,
+          isSubmitting: false,
+          error: err.payload?.error || err.message || 'Failed to delete target.',
+        }))
+      }
+    }
+  }
+
+  function handleTargetSaved(result) {
+    setEditorState((prev) => ({ ...prev, isOpen: false }))
+    refresh()
+    refreshConfigurationHealth()
+    if (result.target && selectedTarget?.id === result.target.id) {
+      setSelectedTarget((prev) => ({ ...prev, ...result.target }))
+    }
+  }
+
+  function handleReloadRequired() {
+    refresh()
+    refreshConfigurationHealth()
+    if (editorState.isOpen) {
+      if (editorState.mode === 'edit' && editorState.target?.id) {
+        getConfigurationTarget(editorState.target.id)
+          .then((payload) => {
+            setEditorState((prev) => ({
+              ...prev,
+              revision: payload.revision || '',
+            }))
+          })
+          .catch(() => {})
+      } else {
+        getConfigurationTargets()
+          .then((payload) => {
+            setEditorState((prev) => ({
+              ...prev,
+              revision: payload.revision || '',
+            }))
+          })
+          .catch(() => {})
+      }
+    }
+  }
+
   return (
     <div className="page">
       <PageHeader
         title="Targets"
         description="Configured execution targets and runtime availability."
         actions={
-          <button
-            type="button"
-            className="button button-ghost button-sm"
-            onClick={() => {
-              refresh()
-              refreshConfigurationHealth()
-            }}
-            disabled={isRefreshing}
-          >
-            {isRefreshing ? 'Refreshing…' : 'Refresh'}
-          </button>
+          <div className="header-actions-group">
+            <button
+              type="button"
+              className="button button-primary button-sm"
+              onClick={handleOpenCreate}
+            >
+              Create target
+            </button>
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={() => {
+                refresh()
+                refreshConfigurationHealth()
+              }}
+              disabled={isRefreshing}
+            >
+              {isRefreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
         }
       />
 
       <ConfigurationHealthBanner health={configurationHealth} />
+
+      {editorError && (
+        <Alert tone="error" title="Editor error">
+          {editorError}
+        </Alert>
+      )}
 
       {error && !targets && (
         <Alert tone="error" title="Unable to load targets">
@@ -287,10 +445,54 @@ export default function Targets() {
                   value={selectedTarget.circuit_open_until}
                 />
               )}
+
+              <div className="inspector-actions-group">
+                <button
+                  type="button"
+                  className="button button-secondary button-sm"
+                  onClick={() => handleOpenEdit(selectedTarget.id)}
+                >
+                  Edit target
+                </button>
+                <button
+                  type="button"
+                  className="button button-destructive-outline button-sm"
+                  onClick={() => handleOpenDelete(selectedTarget.id)}
+                >
+                  Delete target
+                </button>
+              </div>
             </Inspector>
           </div>
         )}
       </div>
+
+      <TargetEditor
+        isOpen={editorState.isOpen}
+        mode={editorState.mode}
+        target={editorState.target}
+        revision={editorState.revision}
+        onClose={() => setEditorState((prev) => ({ ...prev, isOpen: false }))}
+        onSaved={handleTargetSaved}
+        onAnnounce={setAnnouncement}
+        onReloadRequired={handleReloadRequired}
+      />
+
+      <ConfigurationMutationDialog
+        isOpen={deleteDialogState.isOpen}
+        targetId={deleteDialogState.targetId}
+        references={deleteDialogState.references}
+        error={deleteDialogState.error}
+        isSubmitting={deleteDialogState.isSubmitting}
+        onClose={() => setDeleteDialogState((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={handleConfirmDelete}
+      />
+
+      {announcement && (
+        <div className="sr-only" role="status" aria-live="polite">
+          {announcement}
+        </div>
+      )}
     </div>
   )
 }

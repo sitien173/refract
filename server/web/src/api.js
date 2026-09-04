@@ -99,24 +99,36 @@ export async function getContextInstructions(projectId) {
   return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions`)
 }
 
-export async function updateContextInstruction(projectId, workflow, instruction, expectedCurrent) {
+export async function mutateWithCsrf(path, { method = 'POST', body, expectedRevision } = {}) {
   if (!csrfToken) await getBootstrap()
-  const path = `/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions/${encodeURIComponent(workflow)}`
-  const body = JSON.stringify({ instruction, expected_current: expectedCurrent ?? '' })
+  const headers = {
+    Accept: 'application/json',
+    'X-OpenMCP-CSRF': csrfToken,
+  }
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+  }
+  if (expectedRevision !== undefined && expectedRevision !== null) {
+    const rev = String(expectedRevision).trim()
+    headers['If-Match'] = rev.startsWith('"') && rev.endsWith('"') ? rev : `"${rev}"`
+  }
+  const payloadBody = body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
+
   let response
   for (let attempt = 0; attempt < 2; attempt += 1) {
     response = await fetch(path, {
-      method: 'PUT',
+      method,
       headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
+        ...headers,
         'X-OpenMCP-CSRF': csrfToken,
       },
-      body,
+      body: payloadBody,
     })
     const payload = await readPayload(response)
     if (response.status !== 403 || payload.code !== 'forbidden' || attempt === 1) {
-      if (!response.ok) throw new DashboardApiError(payload.error || 'Dashboard request failed', response.status, payload)
+      if (!response.ok) {
+        throw new DashboardApiError(payload.error || 'Dashboard request failed', response.status, payload)
+      }
       return payload
     }
     await getBootstrap()
@@ -124,27 +136,111 @@ export async function updateContextInstruction(projectId, workflow, instruction,
   throw new DashboardApiError('Dashboard request failed', 403, {})
 }
 
-export async function deleteContextInstruction(projectId, workflow, expectedCurrent) {
-  if (!csrfToken) await getBootstrap()
+export async function getConfigurationTargets() {
+  return request('/dashboard/api/configuration/targets')
+}
+
+export async function getConfigurationTarget(targetId) {
+  return request(`/dashboard/api/configuration/targets/${encodeURIComponent(targetId)}`)
+}
+
+export async function createConfigurationTarget(targetData, expectedRevision) {
+  return mutateWithCsrf('/dashboard/api/configuration/targets', {
+    method: 'POST',
+    body: targetData,
+    expectedRevision,
+  })
+}
+
+export async function updateConfigurationTarget(targetId, targetData, expectedRevision) {
+  return mutateWithCsrf(`/dashboard/api/configuration/targets/${encodeURIComponent(targetId)}`, {
+    method: 'PUT',
+    body: targetData,
+    expectedRevision,
+  })
+}
+
+export async function deleteConfigurationTarget(targetId, expectedRevision) {
+  return mutateWithCsrf(`/dashboard/api/configuration/targets/${encodeURIComponent(targetId)}`, {
+    method: 'DELETE',
+    expectedRevision,
+  })
+}
+
+export async function updateContextInstruction(projectId, workflow, instruction, expectedCurrent) {
   const path = `/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions/${encodeURIComponent(workflow)}`
-  const body = JSON.stringify({ expected_current: expectedCurrent ?? '' })
-  let response
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    response = await fetch(path, {
-      method: 'DELETE',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-OpenMCP-CSRF': csrfToken,
-      },
-      body,
-    })
-    const payload = await readPayload(response)
-    if (response.status !== 403 || payload.code !== 'forbidden' || attempt === 1) {
-      if (!response.ok) throw new DashboardApiError(payload.error || 'Dashboard request failed', response.status, payload)
-      return payload
-    }
-    await getBootstrap()
-  }
-  throw new DashboardApiError('Dashboard request failed', 403, {})
+  return mutateWithCsrf(path, {
+    method: 'PUT',
+    body: { instruction, expected_current: expectedCurrent ?? '' },
+  })
+}
+
+export async function deleteContextInstruction(projectId, workflow, expectedCurrent) {
+  const path = `/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions/${encodeURIComponent(workflow)}`
+  return mutateWithCsrf(path, {
+    method: 'DELETE',
+    body: { expected_current: expectedCurrent ?? '' },
+  })
+}
+
+export async function getConfigurationProfiles() {
+  return request('/dashboard/api/configuration/profiles')
+}
+
+export async function getConfigurationProfile(profileId) {
+  return request(`/dashboard/api/configuration/profiles/${encodeURIComponent(profileId)}`)
+}
+
+export async function createConfigurationProfile(profileData, expectedRevision) {
+  return mutateWithCsrf('/dashboard/api/configuration/profiles', {
+    method: 'POST',
+    body: profileData,
+    expectedRevision,
+  })
+}
+
+export async function updateConfigurationProfile(profileId, profileData, expectedRevision) {
+  return mutateWithCsrf(`/dashboard/api/configuration/profiles/${encodeURIComponent(profileId)}`, {
+    method: 'PUT',
+    body: profileData,
+    expectedRevision,
+  })
+}
+
+export async function deleteConfigurationProfile(profileId, expectedRevision) {
+  return mutateWithCsrf(`/dashboard/api/configuration/profiles/${encodeURIComponent(profileId)}`, {
+    method: 'DELETE',
+    expectedRevision,
+  })
+}
+
+export async function getProjectProfileOverrides(projectId) {
+  return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides`)
+}
+
+export async function getProjectProfileOverride(projectId, profileId) {
+  return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides/${encodeURIComponent(profileId)}`)
+}
+
+export async function createProjectProfileOverride(projectId, overrideData, expectedRevision) {
+  return mutateWithCsrf(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides`, {
+    method: 'POST',
+    body: overrideData,
+    expectedRevision,
+  })
+}
+
+export async function updateProjectProfileOverride(projectId, profileId, overrideData, expectedRevision) {
+  return mutateWithCsrf(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides/${encodeURIComponent(profileId)}`, {
+    method: 'PUT',
+    body: overrideData,
+    expectedRevision,
+  })
+}
+
+export async function deleteProjectProfileOverride(projectId, profileId, expectedRevision) {
+  return mutateWithCsrf(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides/${encodeURIComponent(profileId)}`, {
+    method: 'DELETE',
+    expectedRevision,
+  })
 }

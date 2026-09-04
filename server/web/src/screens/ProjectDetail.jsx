@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react'
-import { getConfiguration, getProject, getProjectJobs, getTaskGuide } from '../api'
+import {
+  getConfiguration,
+  getProject,
+  getProjectJobs,
+  getTaskGuide,
+  getProjectProfileOverrides,
+  getProjectProfileOverride,
+  deleteProjectProfileOverride,
+  getConfigurationProfile,
+  DashboardApiError,
+} from '../api'
 import Alert from '../components/Alert'
 import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
 import DataGrid from '../components/DataGrid'
@@ -7,6 +17,8 @@ import Inspector, { InspectorRow, SourceChip } from '../components/Inspector'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import TabbedPanel from '../components/TabbedPanel'
+import ProfileEditor from '../components/ProfileEditor'
+import Modal from '../components/Modal'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
 import ContextInstructions from './ContextInstructions'
 
@@ -18,6 +30,15 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     refresh: refreshProject,
   } = useDashboardQuery(() => getProject(projectId), {
     deps: [projectId],
+    pollInterval: 5000,
+  })
+
+  const {
+    data: projectOverridesData,
+    refresh: refreshOverrides,
+  } = useDashboardQuery(() => getProjectProfileOverrides(projectId), {
+    deps: [projectId],
+    pollInterval: 5000,
   })
 
   const { data: taskGuideData } = useDashboardQuery(() => getTaskGuide(projectId), {
@@ -34,6 +55,25 @@ export default function ProjectDetail({ projectId, onNavigate }) {
   const [selectedWorkflowItem, setSelectedWorkflowItem] = useState(null)
   const [selectedJob, setSelectedJob] = useState(null)
   const [selectedProfileId, setSelectedProfileId] = useState('')
+  const [announcement, setAnnouncement] = useState('')
+  const [editorState, setEditorState] = useState({
+    isOpen: false,
+    mode: 'create',
+    profile: null,
+    revision: '',
+    availableTargets: [],
+    availableProfiles: [],
+  })
+  const [removeDialogState, setRemoveDialogState] = useState({
+    isOpen: false,
+    profileId: '',
+    revision: '',
+    fallback: null,
+    references: null,
+    error: null,
+    isSubmitting: false,
+    isConfirmed: false,
+  })
 
   const project = projectData?.project || { id: projectId, alias: projectId, root: '' }
   const configData = projectData?.configuration || {}
@@ -41,7 +81,7 @@ export default function ProjectDetail({ projectId, onNavigate }) {
   const defaultProfileId =
     configData.project_default_profile || configData.global_default_profile || (profiles[0]?.id ?? 'default')
 
-  const currentProfileId = selectedProfileId || defaultProfileId
+  const currentProfileId = (profiles.some((p) => p.id === selectedProfileId) ? selectedProfileId : '') || defaultProfileId
   const activeProfile = profiles.find((p) => p.id === currentProfileId) || profiles[0] || {
     id: currentProfileId,
     parent: { value: null, source: 'global' },
@@ -49,6 +89,176 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     inherited: {},
     effective: {},
     sources: {},
+  }
+
+  const overrides = projectOverridesData?.overrides || []
+  const currentOverride = overrides.find((o) => o.id === currentProfileId)
+  const isOverridden = Boolean(currentOverride) || activeProfile.parent.source === 'project' || Object.values(activeProfile.sources || {}).some((s) => s === 'project')
+
+  async function handleOpenCreateOverride(prefillProfileId = '') {
+    let rev = projectOverridesData?.revision ?? ''
+    let targets = projectOverridesData?.available_targets || []
+    let profs = profiles.map((p) => p.id)
+
+    try {
+      const overridesResp = await getProjectProfileOverrides(projectId)
+      rev = overridesResp.revision ?? ''
+      if (overridesResp.available_targets?.length) {
+        targets = overridesResp.available_targets
+      }
+    } catch {
+      // Keep fallback values
+    }
+
+    let initialProfile = null
+    if (prefillProfileId) {
+      initialProfile = {
+        id: prefillProfileId,
+        extends: prefillProfileId,
+        declared: {},
+        inherited: activeProfile?.effective || {},
+        effective: activeProfile?.effective || {},
+        sources: {},
+      }
+    }
+
+    setEditorState({
+      isOpen: true,
+      mode: 'create',
+      profile: initialProfile,
+      revision: rev,
+      availableTargets: targets,
+      availableProfiles: profs,
+    })
+  }
+
+  async function handleOpenEditOverride(profileId) {
+    try {
+      let rev = projectOverridesData?.revision ?? ''
+      let targets = projectOverridesData?.available_targets || []
+      let profs = profiles.map((p) => p.id)
+
+      const [overrideResp, overridesListResp] = await Promise.all([
+        getProjectProfileOverride(projectId, profileId),
+        getProjectProfileOverrides(projectId).catch(() => null),
+      ])
+
+      if (overridesListResp) {
+        rev = overridesListResp.revision ?? rev
+        if (overridesListResp.available_targets?.length) {
+          targets = overridesListResp.available_targets
+        }
+      }
+
+      setEditorState({
+        isOpen: true,
+        mode: 'edit',
+        profile: overrideResp.override || null,
+        revision: overrideResp.revision ?? rev,
+        availableTargets: targets,
+        availableProfiles: profs,
+      })
+    } catch (err) {
+      setAnnouncement(`Failed to load profile override: ${err.message || 'error'}`)
+    }
+  }
+
+  async function handleOpenRemoveOverride(profileId) {
+    try {
+      let fallbackProfile = null
+      try {
+        const globalProfileResp = await getConfigurationProfile(profileId)
+        fallbackProfile = globalProfileResp.profile || null
+      } catch {
+        fallbackProfile = null
+      }
+
+      let rev = projectOverridesData?.revision ?? ''
+      try {
+        const overridesResp = await getProjectProfileOverrides(projectId)
+        rev = overridesResp.revision ?? rev
+      } catch {
+        // Fall back to existing revision
+      }
+
+      setRemoveDialogState({
+        isOpen: true,
+        profileId,
+        revision: rev,
+        fallback: fallbackProfile,
+        references: null,
+        error: null,
+        isSubmitting: false,
+        isConfirmed: false,
+      })
+    } catch (err) {
+      setAnnouncement(`Failed to prepare override removal: ${err.message || 'error'}`)
+    }
+  }
+
+  async function handleConfirmRemoveOverride() {
+    setRemoveDialogState((prev) => ({ ...prev, isSubmitting: true, error: null }))
+    try {
+      await deleteProjectProfileOverride(
+        projectId,
+        removeDialogState.profileId,
+        removeDialogState.revision
+      )
+      const removedId = removeDialogState.profileId
+      setAnnouncement(`Profile override "${removedId}" removed.`)
+      setRemoveDialogState({
+        isOpen: false,
+        profileId: '',
+        revision: '',
+        fallback: null,
+        references: null,
+        error: null,
+        isSubmitting: false,
+        isConfirmed: false,
+      })
+      refreshProject()
+      refreshOverrides()
+      refreshConfigurationHealth()
+    } catch (err) {
+      if ((err instanceof DashboardApiError || err?.status === 409) && err?.payload?.code === 'referenced') {
+        setRemoveDialogState((prev) => ({
+          ...prev,
+          isSubmitting: false,
+          references: err.payload?.references || [],
+        }))
+      } else {
+        setRemoveDialogState((prev) => ({
+          ...prev,
+          isSubmitting: false,
+          error: err.payload?.error || err.message || 'Failed to remove override.',
+        }))
+      }
+    }
+  }
+
+  function handleOverrideSaved(result) {
+    const savedId = result.override?.id || result.profile?.id
+    if (savedId) {
+      setSelectedProfileId(savedId)
+    }
+    refreshProject()
+    refreshOverrides()
+    refreshConfigurationHealth()
+    setAnnouncement(`Profile override "${savedId || 'configuration'}" saved and active.`)
+  }
+
+  async function handleReloadRequired() {
+    try {
+      const overridesResp = await getProjectProfileOverrides(projectId)
+      setEditorState((prev) => ({
+        ...prev,
+        revision: overridesResp.revision ?? '',
+        availableTargets: overridesResp.available_targets || prev.availableTargets,
+      }))
+      setAnnouncement('Project configuration reloaded.')
+    } catch (err) {
+      setAnnouncement(`Failed to reload configuration: ${err.message || 'error'}`)
+    }
   }
 
   function handleNavigate(path) {
@@ -248,6 +458,7 @@ export default function ProjectDetail({ projectId, onNavigate }) {
             className="button button-ghost button-sm"
             onClick={() => {
               refreshProject()
+              refreshOverrides()
               refreshJobs()
               refreshConfigurationHealth()
             }}
@@ -257,6 +468,10 @@ export default function ProjectDetail({ projectId, onNavigate }) {
           </button>
         }
       />
+
+      <div className="sr-only" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </div>
 
       <ConfigurationHealthBanner health={configurationHealth} />
 
@@ -340,6 +555,55 @@ export default function ProjectDetail({ projectId, onNavigate }) {
                       <strong>{parentValue}</strong>
                       {hasParent && <SourceChip source={activeProfile.parent.source} />}
                     </div>
+                  </div>
+
+                  <div className="profile-parent-info">
+                    <span className="eyebrow">Scope</span>
+                    <div>
+                      <span className={`source-chip ${isOverridden ? 'source-chip-declared' : 'source-chip-inherited'}`}>
+                        {isOverridden ? 'Project override' : 'Global profile'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="profile-resolution-actions">
+                    <button
+                      type="button"
+                      className="button button-primary button-sm"
+                      onClick={() => handleOpenCreateOverride()}
+                      aria-label="Create override"
+                    >
+                      Create override
+                    </button>
+                    {isOverridden ? (
+                      <>
+                        <button
+                          type="button"
+                          className="button button-secondary button-sm"
+                          onClick={() => handleOpenEditOverride(currentProfileId)}
+                          aria-label={`Edit override: ${currentProfileId}`}
+                        >
+                          Edit override
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-destructive-outline button-sm"
+                          onClick={() => handleOpenRemoveOverride(currentProfileId)}
+                          aria-label={`Remove override: ${currentProfileId}`}
+                        >
+                          Remove override
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="button button-secondary button-sm"
+                        onClick={() => handleOpenCreateOverride(currentProfileId)}
+                        aria-label={`Override profile: ${currentProfileId}`}
+                      >
+                        Override this profile
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -448,6 +712,176 @@ export default function ProjectDetail({ projectId, onNavigate }) {
           </div>
         )}
       </div>
+
+      <ProfileEditor
+        isOpen={editorState.isOpen}
+        mode={editorState.mode}
+        scope="project"
+        projectId={projectId}
+        profile={editorState.profile}
+        revision={editorState.revision}
+        availableTargets={editorState.availableTargets}
+        availableProfiles={editorState.availableProfiles}
+        onClose={() => setEditorState((prev) => ({ ...prev, isOpen: false }))}
+        onSaved={handleOverrideSaved}
+        onAnnounce={(msg) => setAnnouncement(msg)}
+        onReloadRequired={handleReloadRequired}
+      />
+
+      <Modal
+        isOpen={removeDialogState.isOpen}
+        onClose={() => setRemoveDialogState((prev) => ({ ...prev, isOpen: false }))}
+        title={`Remove override: ${removeDialogState.profileId}`}
+        role="dialog"
+        ariaLabel={`Remove override: ${removeDialogState.profileId}`}
+      >
+        {removeDialogState.references && removeDialogState.references.length > 0 ? (
+          <div className="mutation-dialog-referenced">
+            <Alert tone="warning" title="Profile override is currently referenced">
+              Project override <strong>{removeDialogState.profileId}</strong> cannot be removed because it is referenced by:
+            </Alert>
+            <div className="mutation-references-list" style={{ marginTop: 'var(--space-md)' }}>
+              <table className="data-table" style={{ width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>Scope</th>
+                    <th>Profile</th>
+                    <th>Relationship</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {removeDialogState.references.map((ref, idx) => (
+                    <tr key={idx}>
+                      <td>
+                        <span className="source-chip source-repository">Project</span>
+                      </td>
+                      <td>
+                        <strong>{ref.profile_id || '(project default)'}</strong>
+                      </td>
+                      <td>
+                        <code>{ref.relationship || ref.workflow || 'reference'}</code>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="caption" style={{ marginTop: 'var(--space-md)' }}>
+              Update or remove these references in the project configuration before removing this override.
+            </p>
+            <div className="modal-actions" style={{ justifyContent: 'flex-end', marginTop: 'var(--space-lg)' }}>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setRemoveDialogState((prev) => ({ ...prev, isOpen: false }))}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (removeDialogState.isConfirmed && !removeDialogState.isSubmitting) {
+                handleConfirmRemoveOverride()
+              }
+            }}
+            className="mutation-dialog-confirm"
+          >
+            {removeDialogState.error && (
+              <div style={{ marginBottom: 'var(--space-md)' }}>
+                <Alert tone="error" title="Action failed">
+                  {removeDialogState.error}
+                </Alert>
+              </div>
+            )}
+
+            <p style={{ margin: '0 0 var(--space-md) 0' }}>
+              Are you sure you want to remove the project override for profile{' '}
+              <strong>{removeDialogState.profileId}</strong>?
+            </p>
+
+            <div className="fallback-preview-panel" style={{ marginBottom: 'var(--space-md)' }}>
+              <span className="eyebrow" style={{ display: 'block', marginBottom: 'var(--space-xs)' }}>
+                Resulting global fallback policy
+              </span>
+              {removeDialogState.fallback ? (
+                <div className="fallback-preview-content">
+                  <p className="caption" style={{ margin: '0 0 var(--space-xs) 0' }}>
+                    Parent profile: <strong>{removeDialogState.fallback.extends || '(None - base profile)'}</strong>
+                  </p>
+                  <table className="data-table" style={{ width: '100%', fontSize: 'var(--type-text-xs-size)' }}>
+                    <thead>
+                      <tr>
+                        <th>Workflow</th>
+                        <th>Fallback targets</th>
+                        <th>Attempts</th>
+                        <th>Timeout</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {['consult', 'implement', 'review', 'other'].map((wf) => {
+                        const pol = removeDialogState.fallback.effective?.[wf]
+                        return (
+                          <tr key={wf}>
+                            <td><strong>{wf}</strong></td>
+                            <td><code>{pol?.targets ? pol.targets.join(', ') : '—'}</code></td>
+                            <td>{pol?.max_attempts ?? 1}</td>
+                            <td>{pol?.timeout_s ?? 60}s</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <Alert tone="neutral" title="No global profile fallback">
+                  Profile <strong>{removeDialogState.profileId}</strong> does not exist in global configuration.
+                  Removing this override will completely remove the profile from this project.
+                </Alert>
+              )}
+            </div>
+
+            <div className="confirmation-group" style={{ marginBottom: 'var(--space-md)' }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={removeDialogState.isConfirmed}
+                  onChange={(e) =>
+                    setRemoveDialogState((prev) => ({ ...prev, isConfirmed: e.target.checked }))
+                  }
+                  disabled={removeDialogState.isSubmitting}
+                  aria-label={`I confirm removing override for profile ${removeDialogState.profileId}`}
+                />
+                <span>
+                  I confirm removing override for profile <strong>{removeDialogState.profileId}</strong>.
+                </span>
+              </label>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setRemoveDialogState((prev) => ({ ...prev, isOpen: false }))}
+                disabled={removeDialogState.isSubmitting}
+              >
+                Cancel
+              </button>
+              <div className="modal-actions-right">
+                <button
+                  type="submit"
+                  className="button button-destructive-outline"
+                  disabled={!removeDialogState.isConfirmed || removeDialogState.isSubmitting}
+                >
+                  {removeDialogState.isSubmitting ? 'Removing override…' : 'Remove override'}
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
+      </Modal>
     </div>
   )
 }
