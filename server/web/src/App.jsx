@@ -1,92 +1,112 @@
 import { useEffect, useState } from 'react'
-import { getOverview } from './api'
-import Alert from './components/Alert'
 import AppShell from './components/AppShell'
-import StatusBadge from './components/StatusBadge'
+import PageHeader from './components/PageHeader'
+import ConfigHealth from './screens/ConfigHealth'
+import Overview from './screens/Overview'
+import Profiles from './screens/Profiles'
+import ProjectDetail from './screens/ProjectDetail'
+import Projects from './screens/Projects'
+import RuntimeSettings from './screens/RuntimeSettings'
+import Targets from './screens/Targets'
 
-function routeFromLocation() {
-  const parts = window.location.pathname.replace(/^\/dashboard\/?/, '').split('/').filter(Boolean)
-  return parts[0] || 'overview'
-}
+function parseLocation() {
+  const pathname = window.location.pathname
+  const clean = pathname.replace(/^\/dashboard\/?/, '')
+  const parts = clean.split('/').filter(Boolean)
 
-function PageHeader({ title, description }) {
-  return (
-    <div className="page-header">
-      <div>
-        <h2>{title}</h2>
-        <p>{description}</p>
-      </div>
-    </div>
-  )
-}
+  if (parts.length === 0 || parts[0] === 'overview') {
+    return { name: 'overview', projectId: '' }
+  }
+  if (parts[0] === 'projects') {
+    if (parts.length > 1 && parts[1]) {
+      return { name: 'project-detail', projectId: decodeURIComponent(parts[1]) }
+    }
+    return { name: 'projects', projectId: '' }
+  }
+  if (parts[0] === 'targets') {
+    return { name: 'targets', projectId: '' }
+  }
+  if (parts[0] === 'profiles') {
+    return { name: 'profiles', projectId: '' }
+  }
+  if (parts[0] === 'settings') {
+    return { name: 'settings', projectId: '' }
+  }
+  if (parts[0] === 'configuration' || parts[0] === 'config') {
+    return { name: 'configuration', projectId: '' }
+  }
 
-function Overview({ overview, error }) {
-  if (error) return <div className="page"><Alert tone="error" title="Dashboard unavailable">{error}</Alert></div>
-  if (!overview) return <div className="page"><p className="loading">Loading dashboard…</p></div>
-  const daemon = overview.daemon || {}
-  const configuration = overview.configuration || {}
-  return (
-    <div className="page">
-      <PageHeader title="Overview" description="A live view of the local OpenMCP daemon." />
-      <div className="status-grid">
-        <section className="metric-panel">
-          <span className="eyebrow">Daemon</span>
-          <StatusBadge status={daemon.status} label={`Daemon ${daemon.status}`} />
-          <strong>{daemon.active_jobs || 0}</strong>
-          <span>active jobs</span>
-        </section>
-        <section className="metric-panel">
-          <span className="eyebrow">Configuration</span>
-          <StatusBadge status={configuration.valid ? 'healthy' : 'invalid'} label={configuration.valid ? 'Configuration healthy' : 'Configuration invalid'} />
-          <strong>{overview.projects || 0}</strong>
-          <span>registered projects</span>
-        </section>
-        <section className="metric-panel">
-          <span className="eyebrow">Queue</span>
-          <strong>{daemon.queued_jobs || 0}</strong>
-          <span>queued jobs</span>
-        </section>
-      </div>
-      {!configuration.valid && <Alert tone="error" title="Configuration needs attention">New job submissions are blocked until the configuration is valid.</Alert>}
-      <section className="panel panel-copy">
-        <div><span className="eyebrow">Current revision</span><code>{configuration.revision || 'Configuration revision unavailable'}</code></div>
-        <div><span className="eyebrow">Targets needing attention</span><strong>{overview.unhealthy_targets || 0}</strong></div>
-      </section>
-    </div>
-  )
-}
-
-function SimplePage({ title, description, children }) {
-  return <div className="page"><PageHeader title={title} description={description} />{children || <section className="panel empty-panel">Data is available through the dashboard API.</section>}</div>
+  return { name: 'not-found', projectId: '' }
 }
 
 export default function App() {
-  const [route, setRoute] = useState(routeFromLocation)
-  const [overview, setOverview] = useState(null)
-  const [error, setError] = useState('')
+  const [route, setRoute] = useState(parseLocation)
 
   useEffect(() => {
-    let mounted = true
-    getOverview().then((value) => {
-      if (mounted) setOverview(value)
-    }).catch((reason) => {
-      if (mounted) setError(reason.message || 'Unable to load dashboard data.')
-    })
-    return () => { mounted = false }
+    function handlePopState() {
+      setRoute(parseLocation())
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
-  function navigate(nextRoute) {
-    window.history.pushState({}, '', `/dashboard/${nextRoute === 'overview' ? '' : nextRoute}`)
-    setRoute(nextRoute)
+  function navigate(destination) {
+    let targetPath = destination
+    if (!destination.startsWith('/')) {
+      if (destination === 'overview') targetPath = '/dashboard/'
+      else targetPath = `/dashboard/${destination}`
+    }
+    window.history.pushState({}, '', targetPath)
+    setRoute(parseLocation())
   }
 
-  let content
-  if (route === 'overview') content = <Overview overview={overview} error={error} />
-  else if (route === 'projects') content = <SimplePage title="Projects" description="Registered project workspaces and their effective configuration." />
-  else if (route === 'targets') content = <SimplePage title="Targets" description="Configured execution targets and health." />
-  else if (route === 'profiles') content = <SimplePage title="Profiles" description="Global workflow profiles and routing policy." />
-  else if (route === 'configuration') content = <SimplePage title="Configuration health" description="Source revisions and load evidence." />
-  else content = <SimplePage title="Not found" description="That dashboard view does not exist." />
+  let content = null
+  let title = 'Overview'
+  const activeNav = route.name === 'project-detail' ? 'projects' : route.name
 
-  return <AppShell route={route} title={route === 'overview' ? 'Overview' : route[0].toUpperCase() + route.slice(1)} onNavigate={navigate}>{content}</AppShell>
+  if (route.name === 'overview') {
+    title = 'Overview'
+    content = <Overview onNavigate={navigate} />
+  } else if (route.name === 'projects') {
+    title = 'Projects'
+    content = <Projects onNavigate={navigate} />
+  } else if (route.name === 'project-detail') {
+    title = 'Project workspace'
+    content = <ProjectDetail projectId={route.projectId} onNavigate={navigate} />
+  } else if (route.name === 'targets') {
+    title = 'Targets'
+    content = <Targets />
+  } else if (route.name === 'profiles') {
+    title = 'Profiles'
+    content = <Profiles />
+  } else if (route.name === 'settings') {
+    title = 'Runtime settings'
+    content = <RuntimeSettings />
+  } else if (route.name === 'configuration') {
+    title = 'Configuration health'
+    content = <ConfigHealth />
+  } else {
+    title = 'Not found'
+    content = (
+      <div className="page">
+        <PageHeader title="Not found" description="That dashboard view does not exist." />
+        <section className="panel empty-panel">
+          <p>The requested page was not found.</p>
+          <button
+            type="button"
+            className="button button-secondary button-sm"
+            onClick={() => navigate('overview')}
+          >
+            Return to Overview
+          </button>
+        </section>
+      </div>
+    )
+  }
+
+  return (
+    <AppShell route={activeNav} title={title} onNavigate={navigate}>
+      {content}
+    </AppShell>
+  )
 }

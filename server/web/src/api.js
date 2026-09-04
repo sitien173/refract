@@ -51,6 +51,18 @@ export async function getTargets() {
   return request('/dashboard/api/targets')
 }
 
+export async function getSettings() {
+  return request('/dashboard/api/settings')
+}
+
+export async function getProfiles() {
+  return request('/dashboard/api/profiles')
+}
+
+export async function getStatus() {
+  return request('/dashboard/api/status')
+}
+
 export async function getConfiguration() {
   return request('/dashboard/api/configuration')
 }
@@ -65,6 +77,11 @@ export async function getProjectJobs(projectId) {
 
 export async function getJob(jobId) {
   return request(`/dashboard/api/jobs/${encodeURIComponent(jobId)}`)
+}
+
+export async function getTaskGuide(projectId) {
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+  return request(`/dashboard/api/task-guide${query}`)
 }
 
 export async function updateContextInstruction(projectId, workflow, instruction, expectedCurrent) {
