@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 
 from openmcp.config import DaemonConfig, load_config, load_project_config
-from openmcp.config_inspection import bound_error, utc_now
+from openmcp.config_inspection import bound_error, sanitize_config_error, utc_now
 from openmcp.context_files import sweep_context_files
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry
@@ -134,12 +134,15 @@ class Runtime:
         try:
             workflow = get_workflow(workflow_name)
             resolved_prompt = validate_request(workflow, prompt)
+        except ValueError as exc:
+            raise OrchestrationError(str(exc)) from exc
+        try:
             catalog = load_project_config(Path(project.root), self._reload_catalog())
             selected_profile = profile.strip() or catalog.default_profile
             instruction = self.database.context_instruction(project.id, workflow)
             plan = resolve_execution_plan(workflow, catalog, selected_profile, instruction)
         except ValueError as exc:
-            raise OrchestrationError(str(exc)) from exc
+            raise OrchestrationError(sanitize_config_error(exc)) from exc
         job_id = str(uuid.uuid4())
         self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow, config_revision=catalog.config_revision)
         await self._notify_job_resource(job_resource_uri(job_id))
@@ -247,7 +250,7 @@ class Runtime:
         try:
             return load_project_config(Path(project.root), self._reload_catalog())
         except ValueError as exc:
-            raise OrchestrationError(str(exc)) from exc
+            raise OrchestrationError(sanitize_config_error(exc)) from exc
 
     def targets(self) -> list[TargetView]:
         return self.target_executor.views(self._catalog.targets)
@@ -269,7 +272,7 @@ class Runtime:
                     "modification_time": modification,
                     "revision": revision,
                     "valid": False,
-                    "latest_error": bound_error(exc),
+                    "latest_error": bound_error(sanitize_config_error(exc)),
                 }
             )
             raise

@@ -12,6 +12,7 @@ from typing import Any
 from openmcp.config_inspection import (
     ConfigurationLoadError,
     read_config_source,
+    sanitize_config_error,
 )
 from openmcp.workflows import get_workflow
 
@@ -533,7 +534,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         ) from exc
     except ValueError as exc:
         raise ConfigurationLoadError(
-            str(exc),
+            sanitize_config_error(exc),
             path=config_path,
             revision=source.revision,
             modification_time=source.modification_time,
@@ -545,7 +546,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         raise
     except ValueError as exc:
         raise ConfigurationLoadError(
-            str(exc),
+            sanitize_config_error(exc),
             path=config_path,
             revision=source.revision,
             modification_time=source.modification_time,
@@ -621,6 +622,18 @@ def _load_config_values(
 
 
 def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
+    try:
+        return _load_project_config_values(project_root, base)
+    except ConfigurationLoadError:
+        raise
+    except ValueError as exc:
+        path = project_root / ".openmcp" / "config.toml"
+        raise ConfigurationLoadError(
+            sanitize_config_error(exc), path=path
+        ) from exc
+
+
+def _load_project_config_values(project_root: Path, base: DaemonConfig) -> DaemonConfig:
     path = project_root / ".openmcp" / "config.toml"
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))

@@ -84,3 +84,24 @@
 
 ### Test evidence
 - RED -> GREEN: Existing schema assertions initially reported the expected v8 mismatch; updated migration coverage passed with preserved rows/support data, and the full suite completed at 290 passed, 3 deselected.
+
+## Review Fix — High confidentiality defect
+
+### Decisions made
+- Configuration-load errors now use an allow-list sanitizer that preserves safe section and structural diagnostics plus TOML line/column evidence, while removing arbitrary values.
+- Runtime health applies the storage bound after sanitization; project configuration errors are sanitized before direct exposure as well.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Detailed validator values are replaced by stable structural messages; profile and workflow identifiers remain only where they are structural diagnostics.
+
+### Assumptions
+- File paths and section names are operational metadata and may remain visible; secrets are configuration values and are never retained in health errors.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: A regression test with `SUPER_SECRET_CONFIGURATION_VALUE` initially found the secret in the raised error; after central sanitization, focused tests passed with 67 passed, the full suite passed with 291 passed and 3 deselected, `uv build` succeeded, and `git diff --check` passed.

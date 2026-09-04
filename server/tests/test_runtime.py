@@ -51,6 +51,27 @@ async def test_failed_reload_preserves_catalog_health_and_blocks_submission(tmp_
 
 
 @pytest.mark.asyncio
+async def test_configuration_error_does_not_expose_secret(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "config.toml"
+    _config(path)
+    runtime = Runtime(load_config(path))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "project")
+    secret = "SUPER_SECRET_CONFIGURATION_VALUE"
+    path.write_text(path.read_text(encoding="utf-8").rstrip() + f'\n[logging]\nlevel = "{secret}"\n', encoding="utf-8")
+
+    with pytest.raises(OrchestrationError) as raised:
+        await runtime.submit(project.id, "consult", "question")
+
+    assert secret not in str(raised.value)
+    assert secret not in runtime.configuration_health().latest_error
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_new_job_records_global_revision(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()

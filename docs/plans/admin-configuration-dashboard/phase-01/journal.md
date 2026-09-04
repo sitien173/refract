@@ -44,6 +44,29 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 1 review fix / Started 2026-09-04T12:13:01+07:00 / Finished 2026-09-04T12:23:05+07:00 / Plan docs/plans/admin-configuration-dashboard
+## SUMMARY
+Sanitized exposed and stored configuration-load errors with structural diagnostics preserved and added secret-value regression coverage.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | src/openmcp/config.py | Sanitize global and project configuration-load exceptions before exposure. |
+| Modify | src/openmcp/config_inspection.py | Add allow-list error sanitization while preserving safe TOML location evidence. |
+| Modify | src/openmcp/runtime.py | Store only sanitized, bounded configuration-load errors in health snapshots. |
+| Modify | tests/test_runtime.py | Add regression coverage proving a secret value is absent from raised and stored errors. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-01/notes.md | Record the confidentiality fix and verification evidence. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-01/journal.md | Record the review-fix response. |
+## NOTES
+- phase-01/notes.md (## Review Fix — High confidentiality defect)
+## SPEC COMPLIANCE
+- Meets Spec? YES — configuration values, prompts, arguments, and secrets are excluded from exposed and stored configuration-load errors.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 <!-- Coordinator appends the independent review response here. -->
