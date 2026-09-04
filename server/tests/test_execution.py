@@ -1084,3 +1084,64 @@ async def test_startup_sweep_leaves_tracked_foreign_alone(tmp_path) -> None:
         assert (root / "AGENTS.override.md").exists()
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_new_submissions_use_refreshed_catalog_while_existing_plan_stable(tmp_path) -> None:
+    """A published target change affects only new submissions.
+
+    Existing submitted execution-plan snapshots retain their original target
+    configuration even after the runtime catalog is refreshed.
+    """
+    root = repository(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+model = "old-model"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    from openmcp.config import load_config
+    runtime = Runtime(load_config(path))
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submitted = await runtime.submit(project.id, "implement", "first task")
+        plan_before = json.loads(runtime.database.job_record(submitted.job_id)["execution_plan_json"])
+        assert plan_before["targets"][0]["model"] == "old-model"
+
+        # Publish a refreshed catalog that changes the target model.
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                'model = "old-model"', 'model = "new-model"'
+            ),
+            encoding="utf-8",
+        )
+        runtime.publish_configuration()
+        assert runtime.catalog.targets[0].model == "new-model"
+
+        # A new submission resolves against the refreshed catalog.
+        fresh = await runtime.submit(project.id, "implement", "second task")
+        plan_after = json.loads(runtime.database.job_record(fresh.job_id)["execution_plan_json"])
+        assert plan_after["targets"][0]["model"] == "new-model"
+
+        # The earlier submission's plan is unchanged.
+        plan_still = json.loads(runtime.database.job_record(submitted.job_id)["execution_plan_json"])
+        assert plan_still["targets"][0]["model"] == "old-model"
+        assert runtime.database.job_record(submitted.job_id)["config_revision"] != \
+            runtime.database.job_record(fresh.job_id)["config_revision"]
+    finally:
+        await runtime.close()

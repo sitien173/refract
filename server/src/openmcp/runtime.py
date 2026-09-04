@@ -9,6 +9,7 @@ from pathlib import Path
 
 from openmcp.config import DaemonConfig, load_config, load_project_config
 from openmcp.config_inspection import bound_error, sanitize_config_error, utc_now
+from openmcp.config_mutation import ConfigurationMutationService
 from openmcp.context_files import sweep_context_files
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry
@@ -59,6 +60,7 @@ class Runtime:
             notifier=self._notify_job_resource,
         )
         self.scheduler = ProjectScheduler(config.max_jobs, self.runner.run)
+        self.mutations = ConfigurationMutationService(self)
         log.debug("Runtime initialized", extra={"event": "runtime.initialized", "database": config.database_path.as_posix(), "max_jobs": config.max_jobs})
 
     async def _notify_job_resource(self, resource_uri: str) -> None:
@@ -137,10 +139,11 @@ class Runtime:
         except ValueError as exc:
             raise OrchestrationError(str(exc)) from exc
         try:
-            catalog = load_project_config(Path(project.root), self._reload_catalog())
-            selected_profile = profile.strip() or catalog.default_profile
-            instruction = self.database.context_instruction(project.id, workflow)
-            plan = resolve_execution_plan(workflow, catalog, selected_profile, instruction)
+            with self.mutations.lock:
+                catalog = load_project_config(Path(project.root), self._reload_catalog_locked())
+                selected_profile = profile.strip() or catalog.default_profile
+                instruction = self.database.context_instruction(project.id, workflow)
+                plan = resolve_execution_plan(workflow, catalog, selected_profile, instruction)
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
         job_id = str(uuid.uuid4())
@@ -240,6 +243,32 @@ class Runtime:
     def catalog(self) -> DaemonConfig:
         return self._catalog
 
+    def reload_configuration(self) -> None:
+        """Reload the global catalog from disk inside the mutation lock.
+
+        Job planning and configuration reloads must use the same
+        synchronization boundary as configuration mutations so callers never
+        observe disk-new with runtime-old state.
+        """
+        with self.mutations.lock:
+            self._reload_catalog_locked()
+
+    def publish_configuration(self) -> None:
+        """Reload and publish the global runtime catalog from disk.
+
+        A successful global mutation refreshes the runtime catalog, executor
+        configuration, configuration health, and project resolution state.
+        Reloading from the committed file keeps disk and memory consistent and
+        reuses the exact byte buffer that was hashed for the revision.
+        """
+        with self.mutations.lock:
+            self._publish_configuration_locked()
+
+    def _publish_configuration_locked(self) -> None:
+        """Publish a reloaded catalog; the caller holds the mutation lock."""
+        catalog = self._reload_catalog_locked()
+        self.target_executor.refresh_configuration(catalog)
+
     @property
     def config_health(self) -> ConfigHealth:
         return self._config_health.model_copy()
@@ -267,7 +296,8 @@ class Runtime:
         if project is None:
             raise OrchestrationError(f"Unknown project: {project_id}")
         try:
-            return load_project_config(Path(project.root), self._reload_catalog())
+            with self.mutations.lock:
+                return load_project_config(Path(project.root), self._reload_catalog_locked())
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
 
@@ -280,6 +310,21 @@ class Runtime:
             return load_project_config(Path(project.root), self._catalog)
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
+
+    def publish_project_configuration(self, project_root: Path) -> None:
+        """Invalidate and re-resolve one registered project's resolved catalog.
+
+        Project resolution is derived from the live global catalog at read
+        time, so no separate cache exists to invalidate; the method exists to
+        (a) participate in the mutation synchronization boundary and (b) fail
+        the transaction when the project file no longer resolves against the
+        current runtime catalog.
+        """
+        with self.mutations.lock:
+            self._publish_project_configuration_locked(project_root)
+
+    def _publish_project_configuration_locked(self, project_root: Path) -> None:
+        load_project_config(Path(project_root), self._catalog)
 
     def targets(self) -> list[TargetView]:
         views = self.target_executor.views(self._catalog.targets)
@@ -296,6 +341,15 @@ class Runtime:
         ]
 
     def _reload_catalog(self) -> DaemonConfig:
+        """Reload the global configuration source inside the mutation lock.
+
+        External callers (for example dashboard reads) use this helper so they
+        share the mutation synchronization boundary; it is re-entrant.
+        """
+        with self.mutations.lock:
+            return self._reload_catalog_locked()
+
+    def _reload_catalog_locked(self) -> DaemonConfig:
         if self.config.config_path is None:
             return self._catalog
         try:

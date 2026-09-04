@@ -38,6 +38,15 @@ class TargetExecutor:
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
 
+    def refresh_configuration(self, config: DaemonConfig) -> None:
+        """Adopt a published catalog without disturbing running jobs.
+
+        Capacity semaphores and active counters are keyed by the execution
+        identity of the submitted plan snapshot, so running and queued jobs
+        retain their original capacity and health state while new submissions
+        resolve against the refreshed catalog.
+        """
+        self.config = config
     async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: threading.Event) -> TargetExecutionResult:
         attempted: set[str] = set()
         last_target_id = ""

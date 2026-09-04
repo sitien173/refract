@@ -129,3 +129,46 @@ def test_initial_health_is_seeded(tmp_path) -> None:
     assert health.revision == hashlib.sha256(path.read_bytes()).hexdigest()
     assert health.last_known_good_revision == health.revision
     runtime.database.close()
+
+
+# ---------------------------------------------------------------------------
+# Configuration publication boundary (dashboard target-profile CRUD phase 1).
+# ---------------------------------------------------------------------------
+
+
+def test_publish_configuration_refreshes_catalog_and_executor(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "config.toml"
+    _config(path)
+    runtime = Runtime(load_config(path))
+    try:
+        previous = runtime.catalog
+        path.write_text(
+            path.read_text(encoding="utf-8") + "\n# refreshed\n",
+            encoding="utf-8",
+        )
+        runtime.publish_configuration()
+        assert runtime.catalog is not previous
+        assert runtime.target_executor.config is runtime.catalog
+        health = runtime.configuration_health()
+        assert health.valid
+        assert health.revision == hashlib.sha256(path.read_bytes()).hexdigest()
+    finally:
+        runtime.database.close()
+
+
+def test_config_mutation_service_exposes_shared_lock(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "config.toml"
+    _config(path)
+    runtime = Runtime(load_config(path))
+    try:
+        assert runtime.mutations.lock is not None
+        # The lock is re-entrant so reloads inside a commit do not deadlock.
+        with runtime.mutations.lock:
+            runtime.reload_configuration()
+            runtime.publish_configuration()
+    finally:
+        runtime.database.close()
