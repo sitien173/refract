@@ -16,6 +16,8 @@ existing ``openmcp.config`` loading semantics, so no second schema exists.
 from __future__ import annotations
 
 import os
+import shutil
+import sqlite3
 import stat as stat_module
 import tempfile
 import threading
@@ -94,9 +96,10 @@ class MutationResult:
 
 
 class _FileMode:
-    """Best-effort mode capture that never blocks a documented transaction."""
+    """Captured mode application that fails before replacement if preservation fails."""
 
     def __init__(self, path: Path) -> None:
+        self._source_path = path
         self._value: int | None = None
         try:
             self._value = stat_module.S_IMODE(path.stat().st_mode)
@@ -111,12 +114,19 @@ class _FileMode:
             return
         try:
             os.chmod(path, self._value)
-        except OSError:
-            log.warning(
+        except OSError as exc:
+            log.error(
                 "Failed to preserve configuration file mode",
                 extra={"event": "config_mutation.mode_apply_failed", "path": str(path)},
                 exc_info=True,
             )
+            raise ConfigurationMutationError(
+                "Failed to preserve configuration file mode.",
+                code="configuration_commit_failed",
+                source_path=self._source_path.as_posix(),
+                unchanged=_UNCHANGED_MESSAGE,
+                recovery="No change is active; the file on disk is unchanged.",
+            ) from exc
 
 
 def load_source(path: Path) -> ConfigSource:
@@ -276,13 +286,33 @@ def commit_bytes(
     try:
         if mode is not None:
             mode.apply(temporary)
+        if expected_revision is not None:
+            current = _regular_source(path)
+            if current.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=path.as_posix(),
+                    current_revision=current.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+        elif path.is_symlink() or not path.is_file():
+            raise ConfigurationMutationError(
+                "Configuration source must be a regular file.",
+                code="configuration_conflict",
+                source_path=path.as_posix(),
+                unchanged=_UNCHANGED_MESSAGE,
+            )
         os.replace(temporary, path)
         _fsync_directory(directory)
-    except OSError as exc:
+    except Exception as exc:
         try:
             temporary.unlink(missing_ok=True)
         except OSError:
             pass
+        if isinstance(exc, ConfigurationMutationError):
+            raise
         raise ConfigurationMutationError(
             "Configuration source replacement failed.",
             code="configuration_commit_failed",
@@ -325,15 +355,15 @@ def create_bytes(
                 recovery="Reload the current configuration and retry the edit.",
             ) from exc
         _fsync_directory(directory)
-    except OSError as exc:
-        if not isinstance(exc, ConfigurationMutationError):
-            raise ConfigurationMutationError(
-                "Configuration source creation failed.",
-                code="configuration_commit_failed",
-                source_path=path.as_posix(),
-                unchanged=_UNCHANGED_MESSAGE,
-            ) from exc
-        raise
+    except Exception as exc:
+        if isinstance(exc, ConfigurationMutationError):
+            raise
+        raise ConfigurationMutationError(
+            "Configuration source creation failed.",
+            code="configuration_commit_failed",
+            source_path=path.as_posix(),
+            unchanged=_UNCHANGED_MESSAGE,
+        ) from exc
     finally:
         try:
             temporary.unlink(missing_ok=True)
@@ -342,26 +372,75 @@ def create_bytes(
     return read_config_source(path)
 
 
-def _replace_unchecked(path: Path, candidate: bytes, mode: _FileMode | None = None) -> None:
-    """Atomically replace *path* without a revision recheck.
+def restore_bytes(
+    path: Path,
+    original: ConfigSource,
+    mode: _FileMode | None = None,
+    *,
+    expected_revision: str | None = None,
+) -> None:
+    """Atomically restore the exact original bytes of *path*.
 
-    Callers use this only after proving the current file equals the bytes they
-    intend to overwrite (for example, a rollback that confirmed the failed
-    candidate is still current). The no-revision variant never overwrites a
-    later external edit because the caller holds that proof.
+    When *expected_revision* is provided, the current source must match it both
+    before temporary creation and immediately before replacement. Restoration
+    reuses the same atomic temporary write path as a normal commit.
     """
+    if expected_revision is not None:
+        current = _regular_source(path)
+        if current.revision != expected_revision:
+            log.error(
+                "Configuration rollback skipped: the source changed after commit",
+                extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
+            )
+            raise ConfigurationMutationError(
+                "Configuration publication failed and the file changed again "
+                "before rollback. Configuration state is uncertain.",
+                code="configuration_commit_failed",
+                source_path=path.as_posix(),
+                recovery="Inspect the configuration file and reload the daemon.",
+            )
+    elif path.is_symlink() or not path.is_file():
+        raise ConfigurationMutationError(
+            "Configuration source must be a regular file.",
+            code="configuration_conflict",
+            source_path=path.as_posix(),
+            unchanged=_UNCHANGED_MESSAGE,
+        )
     directory = path.parent
-    temporary = _write_temporary(directory, candidate, f".{path.name}.")
+    temporary = _write_temporary(directory, original.data, f".{path.name}.")
     try:
         if mode is not None:
             mode.apply(temporary)
+        if expected_revision is not None:
+            current = _regular_source(path)
+            if current.revision != expected_revision:
+                log.error(
+                    "Configuration rollback skipped: the source changed after commit",
+                    extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
+                )
+                raise ConfigurationMutationError(
+                    "Configuration publication failed and the file changed again "
+                    "before rollback. Configuration state is uncertain.",
+                    code="configuration_commit_failed",
+                    source_path=path.as_posix(),
+                    recovery="Inspect the configuration file and reload the daemon.",
+                )
+        elif path.is_symlink() or not path.is_file():
+            raise ConfigurationMutationError(
+                "Configuration source must be a regular file.",
+                code="configuration_conflict",
+                source_path=path.as_posix(),
+                unchanged=_UNCHANGED_MESSAGE,
+            )
         os.replace(temporary, path)
         _fsync_directory(directory)
-    except OSError as exc:
+    except Exception as exc:
         try:
             temporary.unlink(missing_ok=True)
         except OSError:
             pass
+        if isinstance(exc, ConfigurationMutationError):
+            raise
         raise ConfigurationMutationError(
             "Configuration source replacement failed.",
             code="configuration_commit_failed",
@@ -369,20 +448,6 @@ def _replace_unchecked(path: Path, candidate: bytes, mode: _FileMode | None = No
             unchanged=_UNCHANGED_MESSAGE,
             recovery="No change is active; the file on disk is unchanged.",
         ) from exc
-
-
-def restore_bytes(
-    path: Path,
-    original: ConfigSource,
-    mode: _FileMode | None = None,
-) -> None:
-    """Atomically restore the exact original bytes of *path*.
-
-    The caller must confirm the current source still matches the candidate
-    revision before restoring. Restoration reuses the same atomic temporary
-    write path as a normal commit.
-    """
-    _replace_unchecked(path, original.data, mode=mode)
 
 
 # ---------------------------------------------------------------------------
@@ -545,13 +610,7 @@ class ConfigurationMutationService:
                     recovery="Correct the project configuration file and retry.",
                 ) from exc
         finally:
-            for leftover in temporary_root.rglob("*"):
-                if leftover.is_file():
-                    leftover.unlink(missing_ok=True)
-            try:
-                temporary_root.rmdir()
-            except OSError:
-                pass
+            shutil.rmtree(temporary_root, ignore_errors=True)
 
     @staticmethod
     def _validation_copy(source_path: Path, candidate: bytes) -> Path:
@@ -776,8 +835,7 @@ class ConfigurationMutationService:
             candidate = self.candidate_bytes(document)
             if project_root is None:
                 validated = self.resolve_global_catalog(candidate)
-                if validate_registered_projects:
-                    self._validate_registered_projects(validated)
+                self._validate_registered_projects(validated)
             else:
                 validated = self.resolve_project_catalog(project_root, candidate)
 
@@ -866,7 +924,22 @@ class ConfigurationMutationService:
 
     def _validate_registered_projects(self, candidate: DaemonConfig) -> None:
         runtime = self._runtime
-        projects = runtime.database.projects()
+        database = getattr(runtime, "database", None)
+        if database is None:
+            return
+        try:
+            projects = database.projects()
+        except sqlite3.ProgrammingError:
+            db_path = getattr(getattr(runtime, "config", None), "database_path", None)
+            if db_path is None or not Path(db_path).exists():
+                return
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT * FROM projects ORDER BY alias").fetchall()
+                projects = [database._project_view(row) for row in rows]
+            finally:
+                conn.close()
         for project in projects:
             try:
                 load_project_config(Path(project.root), candidate)
@@ -894,7 +967,12 @@ class ConfigurationMutationService:
         if current is None:
             return
         try:
-            restore_bytes(path, original, mode=mode)
+            restore_bytes(
+                path,
+                original,
+                mode=mode,
+                expected_revision=candidate_revision,
+            )
         except Exception:
             log.exception(
                 "Configuration rollback file restore failed",
@@ -915,6 +993,7 @@ class ConfigurationMutationService:
         if current is None:
             return
         try:
+            self._confirm_current(path, candidate_revision)
             path.unlink(missing_ok=True)
             _fsync_directory(path.parent)
         except Exception:

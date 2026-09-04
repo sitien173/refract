@@ -17,25 +17,20 @@
 
 # EXTERNAL RESPONSE
 ## META
-- Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T10:45:55Z / Plan docs/plans/dashboard-target-profile-crud
+- Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T10:59:00Z / Plan docs/plans/dashboard-target-profile-crud
 ## SUMMARY
-Built the tested transaction boundary for safe TOML configuration writes: SHA-256 source revisions, tomlkit document mutation primitives, synchronized atomic commit with runtime publication, and proven rollback.
+Fixed review blockers: eliminated TOCTOU windows on commit and rollback, enforced registered project validation, prevented replacement on mode failure, and fixed temp directory cleanup.
 ## FILES MODIFIED
 | Action | Path | Change |
 |---|---|---|
-| Create | src/openmcp/config_mutation.py | Add synchronized atomic configuration-mutation service with revisions, tomlkit primitives, validation, publication, and rollback. |
-| Modify | src/openmcp/runtime.py | Add mutation service instance, shared lock boundary on planning/reload paths, and publish_configuration / publish_project_configuration helpers. |
-| Modify | src/openmcp/execution.py | Add refresh_configuration to adopt published catalogs without disturbing running jobs. |
-| Create | tests/test_config_mutation.py | Add preservation, concurrency, path-safety, atomicity, validation, publication, and rollback tests. |
-| Modify | tests/test_runtime.py | Add publication refresh and shared-lock boundary tests. |
-| Modify | tests/test_execution.py | Add new-submissions-refreshed / existing-plan-stable test. |
-| Create | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record per-task decisions, deviations, tradeoffs, and RED-GREEN evidence. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Record the implementation response. |
-| Modify | docs/plans/dashboard-target-profile-crud/.handover.md | Record phase base. |
+| Modify | src/openmcp/config_mutation.py | Recheck revisions immediately before replace or delete, enforce project overlay validation, prevent replacement on mode failure, and use rmtree cleanup. |
+| Modify | tests/test_config_mutation.py | Add regression tests for TOCTOU races, mode failure, temp cleanup, and registered project overlay validation. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record review blocker decisions, tradeoffs, and RED-GREEN evidence. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with review blocker fixes. |
 ## NOTES
-- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4)
+- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes)
 ## SPEC COMPLIANCE
-- Meets Spec? YES: revisions hash exact bytes, stale revisions fail without writes, validation reuses existing semantics, unrelated TOML regions stay byte-equivalent, shorthand/legacy keys preserved, unsafe paths rejected, temp writes stay in-source, modes preserved, publication refreshes catalog/executor/health, rollback restores exact bytes when provable, and submitted execution plans stay stable.
+- Meets Spec? YES: all TOCTOU windows closed with pre-replace and pre-delete rechecks, registered project overlays validated on every global commit, mode preservation failures abort replacement, temp dirs cleaned, and all test suites pass.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

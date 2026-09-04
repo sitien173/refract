@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import tempfile
 import threading
 from pathlib import Path
 
 import pytest
 import tomlkit
+
+import openmcp.config_mutation
 
 from openmcp.config import load_config
 from openmcp.config_mutation import (
@@ -907,5 +910,211 @@ def test_concurrent_commits_are_serialized_by_the_service_lock(tmp_path) -> None
         assert not (errors and errors[0].code == "configuration_commit_failed")
         # The runtime catalog matches the committed file.
         assert runtime.catalog.config_revision == _revision(source)
+    finally:
+        runtime.database.close()
+
+
+def test_commit_rejects_external_edit_injected_after_temp_write(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_write_temp = openmcp.config_mutation._write_temporary
+        raced = False
+
+        def racing_write_temp(directory, candidate, prefix):
+            temp = real_write_temp(directory, candidate, prefix)
+            nonlocal raced
+            if not raced and prefix.startswith(f".{source.name}."):
+                raced = True
+                source.write_bytes(source.read_bytes() + b"\n# race after temp\n")
+            return temp
+
+        monkeypatch.setattr("openmcp.config_mutation._write_temporary", racing_write_temp)
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+        assert raised.value.code == "configuration_conflict"
+        assert b"# race after temp\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_rollback_refuses_to_overwrite_edit_injected_after_temp_write(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "boom")
+
+        real_write_temp = openmcp.config_mutation._write_temporary
+        raced = False
+
+        def failing_publish():
+            raise RuntimeError("publication exploded")
+
+        monkeypatch.setattr(runtime, "_publish_configuration_locked", failing_publish)
+
+        def racing_write_temp(directory, candidate, prefix):
+            temp = real_write_temp(directory, candidate, prefix)
+            nonlocal raced
+            if raced:
+                source.write_bytes(source.read_bytes() + b"\n# race after rollback temp\n")
+            else:
+                raced = True
+            return temp
+
+        monkeypatch.setattr("openmcp.config_mutation._write_temporary", racing_write_temp)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        assert b"# race after rollback temp\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_rollback_creation_refuses_deletion_on_external_edit(tmp_path, monkeypatch) -> None:
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        service = runtime.mutations
+        document = _empty_project_document()
+        config_path = project_root / ".openmcp" / "config.toml"
+
+        def failing_publish(path):
+            raise RuntimeError("publication exploded")
+
+        monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
+
+        real_confirm = service._confirm_current
+        confirmed = False
+
+        def racing_confirm(path, candidate_revision):
+            nonlocal confirmed
+            result = real_confirm(path, candidate_revision)
+            if not confirmed:
+                confirmed = True
+                path.write_bytes(path.read_bytes() + b"\n# race before delete\n")
+            return result
+
+        monkeypatch.setattr(service, "_confirm_current", racing_confirm)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.create_project_document(document, project_root=project_root)
+
+        assert raised.value.code == "configuration_commit_failed"
+        assert config_path.exists()
+        assert b"# race before delete\n" in config_path.read_bytes()
+    finally:
+        runtime.database.close()
+
+
+def test_commit_fails_if_mode_preservation_fails(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    os.chmod(source, 0o640)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "new-model")
+
+        real_chmod = os.chmod
+
+        def failing_chmod(path, mode):
+            if Path(path).name.startswith(f".{source.name}."):
+                raise OSError("Permission denied")
+            return real_chmod(path, mode)
+
+        monkeypatch.setattr(os, "chmod", failing_chmod)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        assert b"new-model" not in source.read_bytes()
+        assert stat.S_IMODE(source.stat().st_mode) == 0o640
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_project_validation_temp_directory_cleaned_up(tmp_path, monkeypatch) -> None:
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        service = runtime.mutations
+        candidate = b"[profiles.quality]\nconsult = \"primary\"\n"
+        created_dirs: list[Path] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def tracking_mkdtemp(*args, **kwargs):
+            res = real_mkdtemp(*args, **kwargs)
+            created_dirs.append(Path(res))
+            return res
+
+        monkeypatch.setattr("tempfile.mkdtemp", tracking_mkdtemp)
+
+        service.resolve_project_catalog(project_root, candidate)
+        assert len(created_dirs) == 1
+        assert not created_dirs[0].exists()
+
+        with pytest.raises(ConfigurationMutationError):
+            service.resolve_project_catalog(project_root, b"invalid toml :::")
+        assert len(created_dirs) == 2
+        assert not created_dirs[1].exists()
+    finally:
+        runtime.database.close()
+
+
+def test_global_commit_always_validates_registered_projects(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        project_root = tmp_path / "project"
+        (project_root / ".openmcp").mkdir(parents=True)
+        (project_root / ".openmcp" / "config.toml").write_text(
+            """[project]
+default_profile = "fast"
+
+[profiles.fast]
+implement = "special"
+review = "special"
+consult = "special"
+""",
+            encoding="utf-8",
+        )
+        runtime.register_project(str(project_root), "special-project")
+
+        service = runtime.mutations
+        # First add target "special" to make project valid
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        table = service.target_table()
+        table["id"] = "special"
+        table["backend"] = "codex"
+        document["targets"].append(table)
+        service.commit_document(document, expected_revision=expected)
+
+        # Now remove "special" WITHOUT passing validate_registered_projects.
+        # Global config is still valid on its own, but project config is invalidated.
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        document["targets"].remove(service.find_target(document, "special"))
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+        assert raised.value.code == "configuration_invalid"
+        assert b'id = "special"' in source.read_bytes()
     finally:
         runtime.database.close()

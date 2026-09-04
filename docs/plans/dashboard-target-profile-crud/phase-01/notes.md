@@ -152,3 +152,35 @@
   carries the old model and a distinct `config_revision`.
 - Full suite: 349 passed, 3 deselected in 7.22s.
 - `git diff --check` clean.
+
+## Review Fixes
+
+### Decisions made
+- `_FileMode.apply` raises `ConfigurationMutationError` with code `configuration_commit_failed` when `os.chmod` fails, preventing replacement.
+- `commit_bytes` and `restore_bytes` re-read `path` and verify expected revision immediately before `os.replace`, preventing TOCTOU external edits injected after temporary file creation.
+- `restore_bytes` accepts `expected_revision` to ensure rollback never clobbers external edits occurring after publication failure.
+- `_rollback_failed_creation` rechecks `_confirm_current` immediately before `path.unlink()` so external edits after rollback proof are never deleted.
+- Global `commit_document` unconditionally validates all registered project overlays against candidate global configuration.
+- `_validate_registered_projects` provides a thread-safe connection fallback when called from worker threads.
+- `resolve_project_catalog` uses `shutil.rmtree(temporary_root, ignore_errors=True)` to ensure complete removal of temporary directories.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- SQLite thread isolation requires opening a per-thread read connection during cross-thread candidate overlay validation.
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN:
+  - `test_commit_rejects_external_edit_injected_after_temp_write`: RED (overwrote external edit injected after temp write) -> GREEN (raises `configuration_conflict`, retains edit).
+  - `test_rollback_refuses_to_overwrite_edit_injected_after_temp_write`: RED (overwrote external edit during rollback restore) -> GREEN (raises `configuration_commit_failed`, retains edit).
+  - `test_rollback_creation_refuses_deletion_on_external_edit`: RED (deleted externally edited file) -> GREEN (raises `configuration_commit_failed`, preserves file).
+  - `test_commit_fails_if_mode_preservation_fails`: RED (DID NOT RAISE, replaced file despite chmod failure) -> GREEN (raises `configuration_commit_failed`, aborts replacement).
+  - `test_project_validation_temp_directory_cleaned_up`: RED (leaked temporary directory in `/tmp`) -> GREEN (directory removed).
+  - `test_global_commit_always_validates_registered_projects`: RED (DID NOT RAISE, allowed invalidating registered project) -> GREEN (raises `configuration_invalid`).
