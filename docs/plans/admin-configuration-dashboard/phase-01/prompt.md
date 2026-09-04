@@ -39,6 +39,18 @@ OpenMCP currently loads global configuration through `src/openmcp/config.py`, re
 - `uv build`
 - `git diff --check`
 
+## Consultation Findings
+- Gate migrations by `PRAGMA user_version`; exact legacy column-set checks must not delete newly added columns on reopen.
+- Add `config_revision TEXT NOT NULL DEFAULT ''` inside an explicit transaction with the `user_version` update. Avoid `executescript` inside that transaction.
+- Read configuration bytes once. Hash those exact bytes, then decode and parse the same buffer. Normalize decode failures into the existing configuration-error contract.
+- Missing sources use an empty revision. Store full lowercase SHA-256 values. Treat modification time as display evidence only.
+- Failed reloads preserve the last-known-good catalog but still block new submissions. Do not silently route through stale configuration.
+- Seed initial global configuration health. Keep project configuration failures separate from global health.
+- Keep daemon status and configuration health structurally separate.
+- The revision identifies the global configuration source only. The immutable execution-plan snapshot remains authoritative for project overrides.
+- Bound stored error text. Store no traceback or configuration values.
+- Test reopen preservation, migration rollback, exact CRLF byte hashing, failed reload preservation with blocked submission, and retry immutability after source changes.
+
 ## Rules
 Follow the supplied worker contract. Stay within scope. Maintain this phase's
 `notes.md` and `journal.md`. Do not add configuration writes, approvals,
