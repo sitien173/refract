@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openmcp.config import load_config
 from openmcp.planning import execution_plan_data, resolve_execution_plan
 from openmcp.runtime import Runtime
 from openmcp.server import create_application
@@ -49,7 +50,41 @@ async def request(app, path, *, method="GET", headers=(), body=b"", client_host=
 
 @pytest.fixture
 def active_runtime(tmp_path):
-    runtime = Runtime(config(tmp_path / "home"))
+    home = tmp_path / "home"
+    home.mkdir(parents=True)
+    cfg_file = home / "config.toml"
+    cfg_file.write_text(
+        """# operator comment
+[daemon]
+default_profile = "balanced"
+max_jobs = 2
+
+[[targets]]
+id = "primary"
+backend = "codex"
+profile = "legacy-profile"
+model = "gpt-4"
+reasoning = "deep"
+system_prompt = "act safe"
+isolated = false
+read_only = false
+args = ["--flag"]
+max_concurrency = 2
+
+[[targets]]
+id = "fallback"
+backend = "pi"
+isolated = true
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+other = "primary"
+""",
+        encoding="utf-8",
+    )
+    runtime = Runtime(load_config(cfg_file))
     runtime.register_project(str(tmp_path), "project")
     from openmcp import server
     server._DASHBOARD_STATE.runtime = runtime
@@ -358,3 +393,356 @@ def test_readme_documents_dashboard_boundaries() -> None:
     assert "context instruction" in readme.lower()
     assert "read-only" in readme.lower()
     assert "remote administration" in readme.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Target configuration CRUD API tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_runtime_targets_endpoint_remains_unchanged(active_runtime) -> None:
+    app = create_application()
+    status, headers, body = await request(app, "/dashboard/api/targets")
+    assert status == 200
+    payload = json.loads(body)
+    assert isinstance(payload, list)
+    assert len(payload) >= 1
+    for target in payload:
+        assert set(target.keys()) <= {
+            "id", "model", "backend", "isolated", "read_only",
+            "max_concurrency", "active", "healthy", "circuit_open_until",
+        }
+        assert "system_prompt" not in target
+        assert "args" not in target
+
+
+@pytest.mark.asyncio
+async def test_configuration_targets_read_loopback_only_and_no_store(active_runtime) -> None:
+    app = create_application()
+    status, headers, body = await request(
+        app,
+        "/dashboard/api/configuration/targets",
+        headers=(("Host", "127.0.0.1"),),
+    )
+    assert status == 200
+    assert headers[b"cache-control"] == b"no-store"
+    assert b"etag" in headers
+    assert headers[b"etag"].startswith(b'"') and headers[b"etag"].endswith(b'"')
+    payload = json.loads(body)
+    assert "revision" in payload
+    assert "source_path" in payload
+    assert "targets" in payload
+    primary = next(t for t in payload["targets"] if t["id"] == "primary")
+    assert primary["backend"] == "codex"
+    assert primary["backend_profile"] == "legacy-profile"
+    assert primary["system_prompt"] == "act safe"
+    assert primary["args"] == ["--flag"]
+
+    remote_status, _, remote_body = await request(
+        app,
+        "/dashboard/api/configuration/targets",
+        headers=(("Host", "127.0.0.1"),),
+        client_host="192.0.2.1",
+    )
+    assert remote_status == 403
+    assert json.loads(remote_body)["code"] == "forbidden"
+
+    host_status, _, host_body = await request(
+        app,
+        "/dashboard/api/configuration/targets",
+        headers=(("Host", "attacker.com"),),
+    )
+    assert host_status == 403
+    assert json.loads(host_body)["code"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_configuration_target_get_by_id_and_not_found(active_runtime) -> None:
+    app = create_application()
+    status, headers, body = await request(
+        app,
+        "/dashboard/api/configuration/targets/primary",
+        headers=(("Host", "127.0.0.1"),),
+    )
+    assert status == 200
+    assert headers[b"cache-control"] == b"no-store"
+    assert b"etag" in headers
+    payload = json.loads(body)
+    assert payload["target"]["id"] == "primary"
+    assert payload["target"]["backend"] == "codex"
+    assert payload["target"]["system_prompt"] == "act safe"
+
+    missing_status, _, missing_body = await request(
+        app,
+        "/dashboard/api/configuration/targets/nonexistent",
+        headers=(("Host", "127.0.0.1"),),
+    )
+    assert missing_status == 404
+    assert json.loads(missing_body)["code"] == "not_found"
+
+    remote_status, _, _ = await request(
+        app,
+        "/dashboard/api/configuration/targets/primary",
+        headers=(("Host", "127.0.0.1"),),
+        client_host="192.0.2.1",
+    )
+    assert remote_status == 403
+
+
+@pytest.mark.asyncio
+async def test_configuration_target_mutations_require_security_headers(active_runtime) -> None:
+    app = create_application()
+    endpoints = [
+        ("POST", "/dashboard/api/configuration/targets", json.dumps({"id": "t1", "backend": "codex"}).encode()),
+        ("PUT", "/dashboard/api/configuration/targets/primary", json.dumps({"id": "primary", "backend": "codex"}).encode()),
+        ("DELETE", "/dashboard/api/configuration/targets/primary", b""),
+    ]
+    for method, path, body in endpoints:
+        st, _, bd = await request(
+            app, path, method=method, body=body,
+            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-OpenMCP-CSRF", "test-token"), ("If-Match", '"123"')),
+            client_host="192.0.2.1",
+        )
+        assert st == 403
+        assert json.loads(bd)["code"] == "forbidden"
+
+        st, _, bd = await request(
+            app, path, method=method, body=body,
+            headers=(("Host", "127.0.0.1"), ("Origin", "http://evil.com"), ("X-OpenMCP-CSRF", "test-token"), ("If-Match", '"123"')),
+        )
+        assert st == 403
+        assert json.loads(bd)["code"] == "forbidden"
+
+        st, _, bd = await request(
+            app, path, method=method, body=body,
+            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("If-Match", '"123"')),
+        )
+        assert st == 403
+        assert json.loads(bd)["code"] == "forbidden"
+
+        st, _, bd = await request(
+            app, path, method=method, body=body,
+            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-OpenMCP-CSRF", "test-token")),
+        )
+        assert st == 428
+        assert json.loads(bd)["code"] == "revision_required"
+
+
+@pytest.mark.asyncio
+async def test_configuration_target_create_route(active_runtime) -> None:
+    app = create_application()
+    _, _, list_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
+    rev = json.loads(list_body)["revision"]
+
+    headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{rev}"'),
+    )
+
+    data = {
+        "id": "tertiary",
+        "backend": "codex",
+        "backend_profile": "balanced",
+        "args": ["--arg1"],
+        "max_concurrency": 2,
+    }
+    status, res_headers, body = await request(
+        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(data).encode(), headers=headers
+    )
+    assert status == 200
+    assert res_headers[b"cache-control"] == b"no-store"
+    assert b"etag" in res_headers
+    payload = json.loads(body)
+    assert payload["target"]["id"] == "tertiary"
+    assert payload["target"]["backend_profile"] == "balanced"
+    new_rev = payload["revision"]
+
+    dup_headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{new_rev}"'),
+    )
+    dup_status, _, dup_body = await request(
+        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(data).encode(), headers=dup_headers
+    )
+    assert dup_status == 422
+    assert json.loads(dup_body)["code"] == "configuration_invalid"
+
+    bad_data = {
+        "id": "extra_field_t",
+        "backend": "codex",
+        "unknown_extra": "rejected",
+    }
+    bad_status, _, bad_body = await request(
+        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(bad_data).encode(), headers=dup_headers
+    )
+    assert bad_status == 422
+    assert json.loads(bad_body)["code"] == "configuration_invalid"
+
+    stale_headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", '"stale-revision"'),
+    )
+    fresh_data = {"id": "fresh", "backend": "codex"}
+    stale_status, _, stale_body = await request(
+        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(fresh_data).encode(), headers=stale_headers
+    )
+    assert stale_status == 409
+    stale_payload = json.loads(stale_body)
+    assert stale_payload["code"] == "configuration_conflict"
+    assert stale_payload["current"] == new_rev
+
+
+@pytest.mark.asyncio
+async def test_configuration_target_update_route(active_runtime) -> None:
+    app = create_application()
+    _, _, list_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
+    rev = json.loads(list_body)["revision"]
+
+    headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{rev}"'),
+    )
+
+    update_data = {
+        "id": "primary",
+        "backend": "codex",
+        "model": "gpt-4o",
+        "backend_profile": "balanced",
+        "args": ["--updated"],
+        "max_concurrency": 5,
+    }
+    status, res_headers, body = await request(
+        app, "/dashboard/api/configuration/targets/primary", method="PUT", body=json.dumps(update_data).encode(), headers=headers
+    )
+    assert status == 200
+    assert res_headers[b"cache-control"] == b"no-store"
+    payload = json.loads(body)
+    assert payload["target"]["model"] == "gpt-4o"
+    assert payload["target"]["max_concurrency"] == 5
+    new_rev = payload["revision"]
+
+    rename_headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{new_rev}"'),
+    )
+    rename_data = dict(update_data, id="renamed")
+    ren_status, _, ren_body = await request(
+        app, "/dashboard/api/configuration/targets/primary", method="PUT", body=json.dumps(rename_data).encode(), headers=rename_headers
+    )
+    assert ren_status == 422
+    assert json.loads(ren_body)["code"] == "configuration_invalid"
+
+    missing_data = {"id": "missing", "backend": "codex"}
+    mis_status, _, mis_body = await request(
+        app, "/dashboard/api/configuration/targets/missing", method="PUT", body=json.dumps(missing_data).encode(), headers=rename_headers
+    )
+    assert mis_status == 404
+    assert json.loads(mis_body)["code"] == "not_found"
+
+    stale_headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{rev}"'),
+    )
+    stale_status, _, stale_body = await request(
+        app, "/dashboard/api/configuration/targets/primary", method="PUT", body=json.dumps(update_data).encode(), headers=stale_headers
+    )
+    assert stale_status == 409
+    assert json.loads(stale_body)["code"] == "configuration_conflict"
+
+
+@pytest.mark.asyncio
+async def test_configuration_target_delete_route(active_runtime) -> None:
+    app = create_application()
+    _, _, list_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
+    rev = json.loads(list_body)["revision"]
+
+    headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{rev}"'),
+    )
+    create_status, _, create_body = await request(
+        app, "/dashboard/api/configuration/targets", method="POST",
+        body=json.dumps({"id": "to_delete", "backend": "pi"}).encode(),
+        headers=headers,
+    )
+    assert create_status == 200
+    rev2 = json.loads(create_body)["revision"]
+
+    del_headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{rev2}"'),
+    )
+    del_status, del_headers_res, del_body = await request(
+        app, "/dashboard/api/configuration/targets/to_delete", method="DELETE", headers=del_headers
+    )
+    assert del_status == 200
+    assert del_headers_res[b"cache-control"] == b"no-store"
+    assert json.loads(del_body)["deleted"] == "to_delete"
+    rev3 = json.loads(del_body)["revision"]
+
+    ref_headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{rev3}"'),
+    )
+    ref_status, _, ref_body = await request(
+        app, "/dashboard/api/configuration/targets/primary", method="DELETE", headers=ref_headers
+    )
+    assert ref_status == 409
+    ref_payload = json.loads(ref_body)
+    assert ref_payload["code"] == "referenced"
+    assert "references" in ref_payload
+    assert len(ref_payload["references"]) > 0
+
+    mis_status, _, mis_body = await request(
+        app, "/dashboard/api/configuration/targets/missing", method="DELETE", headers=ref_headers
+    )
+    assert mis_status == 404
+    assert json.loads(mis_body)["code"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_configuration_target_error_redaction(active_runtime) -> None:
+    app = create_application()
+    _, _, list_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
+    rev = json.loads(list_body)["revision"]
+
+    headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{rev}"'),
+    )
+
+    bad_data = {
+        "id": "secret_target",
+        "backend": "codex",
+        "system_prompt": "SUPER_SECRET_OPERATOR_PROMPT_XYZ",
+        "args": ["--"],
+    }
+    status, _, body = await request(
+        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(bad_data).encode(), headers=headers
+    )
+    assert status == 422
+    payload = json.loads(body)
+    assert payload["code"] == "configuration_invalid"
+    assert "SUPER_SECRET_OPERATOR_PROMPT_XYZ" not in body.decode("utf-8")
+    assert payload["error"] == "Invalid configuration"

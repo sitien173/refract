@@ -33,13 +33,14 @@ from typing import Any
 import tomlkit
 from tomlkit.items import Array, InlineTable, String, StringType, Table, Trivia
 
-from openmcp.config import DaemonConfig, load_config, load_project_config
+from openmcp.config import DaemonConfig, TargetConfig, load_config, load_project_config
 from openmcp.config_inspection import (
     ConfigSource,
     ConfigurationLoadError,
     read_config_source,
 )
 from openmcp.logging_setup import get_logger
+from openmcp.models import TargetEditorData, TargetReference
 
 log = get_logger("config_mutation")
 
@@ -65,6 +66,7 @@ class ConfigurationMutationError(ValueError):
         current_revision: str = "",
         unchanged: str = _UNCHANGED_MESSAGE,
         recovery: str = "",
+        references: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(message)
         if code is not None:
@@ -73,6 +75,7 @@ class ConfigurationMutationError(ValueError):
         self.current_revision = current_revision
         self.unchanged = unchanged
         self.recovery = recovery
+        self.references = references
 
 
 @dataclass(frozen=True, slots=True)
@@ -767,6 +770,42 @@ def _target_list(value: object) -> list[str]:
     return []
 
 
+def target_to_editor_data(target: Any) -> TargetEditorData:
+    """Convert a TargetConfig or TOML target table into a strict editor data model."""
+    if isinstance(target, TargetConfig):
+        return TargetEditorData(
+            id=target.id,
+            backend=target.backend,
+            model=target.model,
+            backend_profile=target.backend_profile,
+            reasoning=target.reasoning,
+            system_prompt=target.system_prompt,
+            isolated=target.isolated,
+            read_only=target.read_only,
+            args=list(target.args),
+            max_concurrency=target.max_concurrency,
+        )
+    raw_args = target.get("args", [])
+    args = [str(x) for x in raw_args] if isinstance(raw_args, (list, Array)) else []
+    backend_profile = ""
+    if "backend_profile" in target:
+        backend_profile = str(target["backend_profile"])
+    elif "profile" in target:
+        backend_profile = str(target["profile"])
+    return TargetEditorData(
+        id=str(target.get("id", "")),
+        backend=str(target.get("backend", "")),
+        model=str(target.get("model", "")),
+        backend_profile=backend_profile,
+        reasoning=str(target.get("reasoning", "")),
+        system_prompt=str(target.get("system_prompt", "")),
+        isolated=bool(target.get("isolated", False)),
+        read_only=bool(target.get("read_only", False)),
+        args=args,
+        max_concurrency=int(target.get("max_concurrency", 1)),
+    )
+
+
 class ConfigurationMutationService:
     """Synchronized, atomic configuration-file mutation with publication.
 
@@ -944,6 +983,314 @@ class ConfigurationMutationService:
             args = tomlkit.array()
             target["args"] = args
         args[index] = _string_item(value)
+
+    def read_targets(self) -> tuple[SourceRead, list[TargetEditorData]]:
+        """Return all global targets for the protected editor."""
+        with self._lock:
+            source_path = self._resolve_source(None)
+            source_read = self.source_read(None)
+            if source_read.absent:
+                return source_read, []
+            source = _regular_source(source_path)
+            document = self.read_document(source)
+            targets_raw = document.get("targets", [])
+            targets: list[TargetEditorData] = []
+            if isinstance(targets_raw, (list, Array)):
+                for item in targets_raw:
+                    if isinstance(item, (dict, Table)):
+                        targets.append(target_to_editor_data(item))
+            return source_read, targets
+
+    def get_target(self, target_id: str) -> tuple[SourceRead, TargetEditorData]:
+        """Return one global target by identifier."""
+        with self._lock:
+            source_path = self._resolve_source(None)
+            source_read = self.source_read(None)
+            if source_read.absent:
+                raise ConfigurationMutationError(
+                    f"Unknown target: {target_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the target before inspecting it.",
+                )
+            source = _regular_source(source_path)
+            document = self.read_document(source)
+            target = self.find_target(document, target_id)
+            if target is None:
+                raise ConfigurationMutationError(
+                    f"Unknown target: {target_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the target before inspecting it.",
+                )
+            return source_read, target_to_editor_data(target)
+
+    def find_target_references(self, target_id: str) -> list[TargetReference]:
+        """Find every global and registered project profile workflow referencing target_id."""
+        references: list[TargetReference] = []
+        runtime = self._runtime
+        catalog = getattr(runtime, "catalog", None)
+        if catalog is not None:
+            for profile_id, declaration in sorted(catalog.profile_declarations.items()):
+                for workflow, selection in sorted(declaration.workflows.items()):
+                    if target_id in selection.targets:
+                        references.append(
+                            TargetReference(
+                                scope="global",
+                                project_id=None,
+                                profile_id=profile_id,
+                                workflow=workflow,
+                            )
+                        )
+        database = getattr(runtime, "database", None)
+        if database is not None:
+            try:
+                projects = database.projects()
+            except sqlite3.ProgrammingError:
+                db_path = getattr(getattr(runtime, "config", None), "database_path", None)
+                if db_path is not None and Path(db_path).exists():
+                    conn = sqlite3.connect(db_path)
+                    try:
+                        conn.row_factory = sqlite3.Row
+                        rows = conn.execute("SELECT * FROM projects ORDER BY alias").fetchall()
+                        projects = [database._project_view(row) for row in rows]
+                    finally:
+                        conn.close()
+                else:
+                    projects = []
+            for project in sorted(projects, key=lambda p: p.id):
+                proj_catalog = None
+                if hasattr(runtime, "catalog_for_project_cached"):
+                    try:
+                        proj_catalog = runtime.catalog_for_project_cached(project.id)
+                    except Exception:
+                        pass
+                if proj_catalog is None:
+                    try:
+                        proj_catalog = load_project_config(Path(project.root), catalog)
+                    except Exception:
+                        pass
+                if proj_catalog is not None:
+                    for profile_id, declaration in sorted(
+                        proj_catalog.project_profile_declarations.items()
+                    ):
+                        for workflow, selection in sorted(declaration.workflows.items()):
+                            if target_id in selection.targets:
+                                references.append(
+                                    TargetReference(
+                                        scope="project",
+                                        project_id=project.id,
+                                        profile_id=profile_id,
+                                        workflow=workflow,
+                                    )
+                                )
+        return references
+
+    def create_target(
+        self,
+        data: TargetEditorData,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, TargetEditorData]:
+        with self._lock:
+            source_path = self._resolve_source(None)
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            if not data.id or not data.id.strip():
+                raise ConfigurationMutationError(
+                    "Target identifier cannot be empty.",
+                    code="configuration_invalid",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Specify a non-empty target identifier.",
+                )
+            target_id = data.id.strip()
+            source = _regular_source(source_path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=source_path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            document = self.read_document(source)
+            if self.find_target(document, target_id) is not None:
+                raise ConfigurationMutationError(
+                    f"Target {target_id!r} already exists.",
+                    code="configuration_invalid",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Choose a unique target identifier.",
+                )
+            targets = document.get("targets")
+            if targets is None:
+                targets = tomlkit.aot()
+                document["targets"] = targets
+            table = self.target_table()
+            table["id"] = target_id
+            table["backend"] = data.backend
+            if data.model:
+                table["model"] = data.model
+            if data.backend_profile:
+                table["backend_profile"] = data.backend_profile
+            if data.reasoning:
+                table["reasoning"] = data.reasoning
+            if data.system_prompt:
+                table["system_prompt"] = data.system_prompt
+            if data.isolated:
+                table["isolated"] = True
+            if data.read_only:
+                table["read_only"] = True
+            if data.args:
+                table["args"] = _string_array(list(data.args))
+            if data.max_concurrency != 1:
+                table["max_concurrency"] = data.max_concurrency
+            targets.append(table)
+            result = self.commit_document(
+                document,
+                expected_revision=expected_revision,
+                validate_registered_projects=True,
+            )
+            created_target = self.find_target(document, target_id)
+            return result, target_to_editor_data(created_target or table)
+
+    def update_target(
+        self,
+        target_id: str,
+        data: TargetEditorData,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, TargetEditorData]:
+        with self._lock:
+            source_path = self._resolve_source(None)
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            if data.id != target_id:
+                raise ConfigurationMutationError(
+                    "Target identifier cannot be changed.",
+                    code="configuration_invalid",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Keep the existing target identifier when updating a target.",
+                )
+            source = _regular_source(source_path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=source_path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
+            document = self.read_document(source)
+            target = self.find_target(document, target_id)
+            if target is None:
+                raise ConfigurationMutationError(
+                    f"Unknown target: {target_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Create the target before editing it.",
+                )
+            self.set_target_value(target, "backend", data.backend)
+            if data.model or "model" in target:
+                self.set_target_value(target, "model", data.model)
+            if "profile" in target:
+                self.set_target_value(target, "profile", data.backend_profile)
+            elif "backend_profile" in target or data.backend_profile:
+                self.set_target_value(target, "backend_profile", data.backend_profile)
+            if data.reasoning or "reasoning" in target:
+                self.set_target_value(target, "reasoning", data.reasoning)
+            if data.system_prompt or "system_prompt" in target:
+                self.set_target_value(target, "system_prompt", data.system_prompt)
+            if data.isolated or "isolated" in target:
+                self.set_target_value(target, "isolated", data.isolated)
+            if data.read_only or "read_only" in target:
+                self.set_target_value(target, "read_only", data.read_only)
+            if data.args or "args" in target:
+                self.set_target_value(target, "args", list(data.args))
+            if data.max_concurrency != 1 or "max_concurrency" in target:
+                self.set_target_value(target, "max_concurrency", data.max_concurrency)
+            result = self.commit_document(
+                document,
+                expected_revision=expected_revision,
+                validate_registered_projects=True,
+            )
+            updated_target = self.find_target(document, target_id)
+            return result, target_to_editor_data(updated_target or target)
+
+    def delete_target(
+        self,
+        target_id: str,
+        *,
+        expected_revision: str,
+    ) -> tuple[MutationResult, str]:
+        with self._lock:
+            source_path = self._resolve_source(None)
+            if expected_revision is None:
+                raise ConfigurationMutationError(
+                    "An expected source revision is required before any file change.",
+                    code="revision_required",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the deletion.",
+                )
+            source = _regular_source(source_path)
+            if source.revision != expected_revision:
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=source_path.as_posix(),
+                    current_revision=source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the deletion.",
+                )
+            document = self.read_document(source)
+            target = self.find_target(document, target_id)
+            if target is None:
+                raise ConfigurationMutationError(
+                    f"Unknown target: {target_id}",
+                    code="not_found",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Verify the target identifier and retry.",
+                )
+            references = self.find_target_references(target_id)
+            if references:
+                raise ConfigurationMutationError(
+                    f"Target {target_id!r} is referenced by existing profile declarations.",
+                    code="referenced",
+                    source_path=source_path.as_posix(),
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Remove the profile workflow references before deleting the target.",
+                    references=[ref.model_dump() for ref in references],
+                )
+            targets = document.get("targets")
+            if targets is not None:
+                targets.remove(target)
+            result = self.commit_document(
+                document,
+                expected_revision=expected_revision,
+                validate_registered_projects=True,
+            )
+            return result, target_id
 
     # --- profile primitives --------------------------------------------------
 
@@ -1407,4 +1754,5 @@ __all__ = [
     "commit_bytes",
     "create_bytes",
     "restore_bytes",
+    "target_to_editor_data",
 ]

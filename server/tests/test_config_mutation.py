@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
 import tempfile
@@ -21,7 +22,9 @@ from openmcp.config_mutation import (
     commit_bytes,
     create_bytes,
     load_source,
+    target_to_editor_data,
 )
+from openmcp.models import TargetEditorData, TargetReference
 from openmcp.runtime import Runtime
 from tests.orchestration_helpers import config as make_config
 
@@ -1817,5 +1820,262 @@ def test_restore_exchanged_state_production_retry_budget_exhaustion_retains_exte
         leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
         assert len(leftovers) >= 1
         assert any(b"# edit" in p.read_bytes() for p in leftovers)
+    finally:
+        runtime.database.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Target configuration CRUD and reference checks
+# ---------------------------------------------------------------------------
+
+
+def test_read_targets_and_get_target_expose_all_fields(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    text = source.read_text(encoding="utf-8")
+    text = text.replace(
+        'max_concurrency = 2',
+        'max_concurrency = 2\nmodel = "gpt-4"\nreasoning = "deep"\nsystem_prompt = "act safe"\nisolated = true\nread_only = true\nargs = ["--verbose"]',
+    )
+    source.write_text(text, encoding="utf-8")
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        source_read, targets = service.read_targets()
+        assert source_read.revision == _revision(source)
+        assert len(targets) == 2
+        primary = next(t for t in targets if t.id == "primary")
+        assert primary.backend == "codex"
+        assert primary.model == "gpt-4"
+        assert primary.backend_profile == "legacy-profile"
+        assert primary.reasoning == "deep"
+        assert primary.system_prompt == "act safe"
+        assert primary.isolated is True
+        assert primary.read_only is True
+        assert primary.args == ["--verbose"]
+        assert primary.max_concurrency == 2
+
+        _, retrieved = service.get_target("primary")
+        assert retrieved == primary
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.get_target("nonexistent")
+        assert raised.value.code == "not_found"
+    finally:
+        runtime.database.close()
+
+
+def test_create_target_emits_backend_profile_only_and_preserves_unrelated(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        data = TargetEditorData(
+            id="tertiary",
+            backend="codex",
+            backend_profile="balanced",
+            args=["--flag"],
+            max_concurrency=3,
+        )
+        result, created = service.create_target(data, expected_revision=expected)
+        assert created.id == "tertiary"
+        assert created.backend_profile == "balanced"
+        assert result.changed is True
+
+        new_text = source.read_text(encoding="utf-8")
+        assert '# operator comment' in new_text
+        assert 'profile = "legacy-profile"' in new_text
+        assert 'backend_profile = "balanced"' in new_text
+        tertiary_block = new_text.split('id = "tertiary"')[1]
+        assert '\nprofile = ' not in tertiary_block
+
+        assert "tertiary" in [t.id for t in runtime.catalog.targets]
+    finally:
+        runtime.database.close()
+
+
+def test_create_target_rejects_duplicate_or_empty_id(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+
+        with pytest.raises(ConfigurationMutationError) as raised_dup:
+            service.create_target(
+                TargetEditorData(id="primary", backend="codex"),
+                expected_revision=expected,
+            )
+        assert raised_dup.value.code == "configuration_invalid"
+
+        with pytest.raises(ConfigurationMutationError) as raised_empty:
+            service.create_target(
+                TargetEditorData(id="   ", backend="codex"),
+                expected_revision=expected,
+            )
+        assert raised_empty.value.code == "configuration_invalid"
+    finally:
+        runtime.database.close()
+
+
+def test_create_target_rejects_invalid_candidate(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.create_target(
+                TargetEditorData(id="bad", backend="codex", args=["--"]),
+                expected_revision=expected,
+            )
+        assert raised.value.code == "configuration_invalid"
+        assert b'id = "bad"' not in source.read_bytes()
+    finally:
+        runtime.database.close()
+
+
+def test_update_target_preserves_legacy_profile_key(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        data = TargetEditorData(
+            id="primary",
+            backend="codex",
+            backend_profile="updated-profile",
+            model="new-model",
+            max_concurrency=4,
+        )
+        result, updated = service.update_target("primary", data, expected_revision=expected)
+        assert updated.backend_profile == "updated-profile"
+        assert updated.model == "new-model"
+
+        file_text = source.read_text(encoding="utf-8")
+        assert 'profile = "updated-profile"' in file_text
+        assert 'backend_profile' not in file_text
+        assert 'model = "new-model"' in file_text
+    finally:
+        runtime.database.close()
+
+
+def test_update_target_rejects_rename_and_unknown_target(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+
+        with pytest.raises(ConfigurationMutationError) as raised_rename:
+            service.update_target(
+                "primary",
+                TargetEditorData(id="renamed", backend="codex"),
+                expected_revision=expected,
+            )
+        assert raised_rename.value.code == "configuration_invalid"
+
+        with pytest.raises(ConfigurationMutationError) as raised_missing:
+            service.update_target(
+                "missing",
+                TargetEditorData(id="missing", backend="codex"),
+                expected_revision=expected,
+            )
+        assert raised_missing.value.code == "not_found"
+    finally:
+        runtime.database.close()
+
+
+def test_update_target_concurrency_conflict(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        stale_revision = "0" * 64
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.update_target(
+                "primary",
+                TargetEditorData(id="primary", backend="codex"),
+                expected_revision=stale_revision,
+            )
+        assert raised.value.code == "configuration_conflict"
+        assert raised.value.current_revision == _revision(source)
+    finally:
+        runtime.database.close()
+
+
+def test_delete_target_unreferenced_succeeds(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        data = TargetEditorData(id="standalone", backend="pi")
+        res, _ = service.create_target(data, expected_revision=expected)
+
+        del_res, deleted_id = service.delete_target("standalone", expected_revision=res.revision)
+        assert deleted_id == "standalone"
+        assert b"standalone" not in source.read_bytes()
+        assert "standalone" not in [t.id for t in runtime.catalog.targets]
+    finally:
+        runtime.database.close()
+
+
+def test_delete_target_blocked_by_global_and_project_declarations_ignores_jobs(tmp_path) -> None:
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        service = runtime.mutations
+        source = service._resolve_source(None)
+
+        proj_config = project_root / ".openmcp" / "config.toml"
+        proj_config.parent.mkdir(parents=True, exist_ok=True)
+        proj_config.write_text(
+            """[profiles.quality]
+consult = "primary"
+review = "primary"
+""",
+            encoding="utf-8",
+        )
+
+        project = runtime.database.projects()[0]
+        runtime.database.create_job(
+            job_id="test-job-1",
+            project_id=project.id,
+            workflow="consult",
+            profile="quality",
+            prompt="test prompt",
+            execution_plan_json=json.dumps({"targets": ["primary"]}),
+            context_key="test-key",
+            config_revision=service.source_read().revision,
+        )
+
+        expected = service.source_read().revision
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.delete_target("primary", expected_revision=expected)
+
+        assert raised.value.code == "referenced"
+        refs = raised.value.references
+        assert refs is not None
+        assert len(refs) > 0
+
+        global_refs = [r for r in refs if r["scope"] == "global"]
+        assert any(r["profile_id"] == "balanced" and r["workflow"] == "consult" for r in global_refs)
+
+        project_refs = [r for r in refs if r["scope"] == "project"]
+        assert any(r["project_id"] == project.id and r["profile_id"] == "quality" and r["workflow"] == "consult" for r in project_refs)
+
+        assert all("job_id" not in r for r in refs)
+    finally:
+        runtime.database.close()
+
+
+def test_reference_scanning_uses_declarations_not_effective_values(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        refs = service.find_target_references("fallback")
+        assert refs == []
     finally:
         runtime.database.close()

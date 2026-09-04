@@ -15,14 +15,21 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from pydantic import ValidationError
+
 from openmcp.config import DaemonConfig, ProfileDeclaration, TargetSelection, load_task_guide
 from openmcp.config_inspection import sanitize_config_error
+from openmcp.config_mutation import ConfigurationMutationError
 from openmcp.models import (
     DashboardBootstrap,
     DashboardContextInstruction,
     DashboardError,
     DashboardJob,
     DashboardOverview,
+    TargetDeleteResponse,
+    TargetEditorData,
+    TargetListResponse,
+    TargetResponse,
 )
 from openmcp.planning import parse_execution_plan
 
@@ -61,6 +68,7 @@ def _error(
     recovery: str = "",
     source_path: str = "",
     current: str | None = None,
+    references: list[dict[str, Any]] | None = None,
 ) -> Response:
     return _json_response(
         DashboardError(
@@ -70,6 +78,7 @@ def _error(
             recovery=recovery,
             source_path=source_path,
             current=current,
+            references=references,
         ),
         status_code,
     )
@@ -329,13 +338,51 @@ def _origin_matches_host(request: Request) -> bool:
     )
 
 
-def _forbidden() -> Response:
+def _forbidden(
+    unchanged: str = "No configuration was changed.",
+    recovery: str = "Use a loopback browser with a matching same-origin CSRF token.",
+) -> Response:
     return _error(
         "Forbidden",
         403,
         code="forbidden",
-        unchanged="No context instruction was changed.",
-        recovery="Use a loopback browser with a matching same-origin CSRF token.",
+        unchanged=unchanged,
+        recovery=recovery,
+    )
+
+
+def _authorized_editor_read(request: Request) -> bool:
+    return _is_loopback_client(request) and _is_loopback_host(_host_name(request))
+
+
+def _parse_if_match(request: Request) -> str | None:
+    raw = request.headers.get("if-match", "").strip()
+    if not raw:
+        return None
+    if raw.startswith('"') and raw.endswith('"') and len(raw) >= 2:
+        return raw[1:-1]
+    return raw
+
+
+def _handle_mutation_error(exc: ConfigurationMutationError) -> Response:
+    status_code = 422
+    if exc.code == "revision_required":
+        status_code = 428
+    elif exc.code == "not_found":
+        status_code = 404
+    elif exc.code in {"configuration_conflict", "referenced"}:
+        status_code = 409
+    elif exc.code == "configuration_commit_failed":
+        status_code = 500
+    return _error(
+        sanitize_config_error(str(exc)),
+        status_code,
+        code=exc.code,
+        unchanged=exc.unchanged,
+        recovery=exc.recovery,
+        source_path=exc.source_path,
+        current=exc.current_revision or None,
+        references=exc.references,
     )
 
 
@@ -421,6 +468,226 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
             )
         except RuntimeError:
             return _runtime_error()
+
+    async def config_targets_get(request: Request) -> Response:
+        if not _authorized_editor_read(request):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        try:
+            source_read, targets_data = runtime.mutations.read_targets()
+            response = _json_response(
+                TargetListResponse(
+                    revision=source_read.revision,
+                    source_path=source_read.path.as_posix(),
+                    targets=targets_data,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{source_read.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def config_target_get(request: Request) -> Response:
+        if not _authorized_editor_read(request):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        target_id = request.path_params["target_id"]
+        try:
+            source_read, target_data = runtime.mutations.get_target(target_id)
+            response = _json_response(
+                TargetResponse(
+                    revision=source_read.revision,
+                    source_path=source_read.path.as_posix(),
+                    target=target_data,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{source_read.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def config_target_create(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        source_path = (
+            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
+        )
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the edit.",
+                source_path=source_path,
+            )
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error(
+                "Invalid JSON body",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a valid JSON request body and retry.",
+                source_path=source_path,
+            )
+        if not isinstance(payload, dict):
+            return _error(
+                "Request body must be a JSON object",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a JSON object payload and retry.",
+                source_path=source_path,
+            )
+        try:
+            data = TargetEditorData.model_validate(payload)
+        except (ValidationError, ValueError) as exc:
+            return _error(
+                sanitize_config_error(exc),
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Correct the target fields and retry.",
+                source_path=source_path,
+            )
+        try:
+            result, created = runtime.mutations.create_target(
+                data, expected_revision=expected_revision
+            )
+            response = _json_response(
+                TargetResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    target=created,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def config_target_update(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        source_path = (
+            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
+        )
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the edit.",
+                source_path=source_path,
+            )
+        target_id = request.path_params["target_id"]
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error(
+                "Invalid JSON body",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a valid JSON request body and retry.",
+                source_path=source_path,
+            )
+        if not isinstance(payload, dict):
+            return _error(
+                "Request body must be a JSON object",
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a JSON object payload and retry.",
+                source_path=source_path,
+            )
+        try:
+            data = TargetEditorData.model_validate(payload)
+        except (ValidationError, ValueError) as exc:
+            return _error(
+                sanitize_config_error(exc),
+                422,
+                code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Correct the target fields and retry.",
+                source_path=source_path,
+            )
+        try:
+            result, updated = runtime.mutations.update_target(
+                target_id, data, expected_revision=expected_revision
+            )
+            response = _json_response(
+                TargetResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    target=updated,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
+
+    async def config_target_delete(request: Request) -> Response:
+        if not _authorized_mutation(request, state):
+            return _forbidden()
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        source_path = (
+            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
+        )
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428,
+                code="revision_required",
+                unchanged="No configuration file was changed.",
+                recovery="Reload the current configuration and retry the deletion.",
+                source_path=source_path,
+            )
+        target_id = request.path_params["target_id"]
+        try:
+            result, deleted_id = runtime.mutations.delete_target(
+                target_id, expected_revision=expected_revision
+            )
+            response = _json_response(
+                TargetDeleteResponse(
+                    revision=result.revision,
+                    source_path=result.source_path.as_posix(),
+                    deleted=deleted_id,
+                )
+            )
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
 
     async def targets(request: Request) -> Response:
         try:
@@ -659,6 +926,11 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         Route("/dashboard/api/config", configuration, methods=["GET"]),
         Route("/dashboard/api/config/health", configuration, methods=["GET"]),
         Route("/dashboard/api/settings", settings, methods=["GET"]),
+        Route("/dashboard/api/configuration/targets", config_targets_get, methods=["GET"]),
+        Route("/dashboard/api/configuration/targets", config_target_create, methods=["POST"]),
+        Route("/dashboard/api/configuration/targets/{target_id}", config_target_get, methods=["GET"]),
+        Route("/dashboard/api/configuration/targets/{target_id}", config_target_update, methods=["PUT"]),
+        Route("/dashboard/api/configuration/targets/{target_id}", config_target_delete, methods=["DELETE"]),
         Route("/dashboard/api/targets", targets, methods=["GET"]),
         Route("/dashboard/api/profiles", profiles, methods=["GET"]),
         Route("/dashboard/api/projects", projects, methods=["GET"]),

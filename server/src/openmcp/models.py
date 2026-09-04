@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 JobState = Literal[
@@ -183,6 +183,60 @@ class DashboardError(BaseModel):
     recovery: str = ""
     source_path: str = ""
     current: str | None = None
+    references: list[dict[str, Any]] | None = None
+
+
+class TargetReference(BaseModel):
+    scope: Literal["global", "project"]
+    project_id: str | None = None
+    profile_id: str
+    workflow: str
+
+
+class TargetEditorData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    backend: str = ""
+    model: str = ""
+    backend_profile: str = ""
+    reasoning: str = ""
+    system_prompt: str = ""
+    isolated: bool = False
+    read_only: bool = False
+    args: list[str] = Field(default_factory=list)
+    max_concurrency: int = 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_profile(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "backend_profile" in data and "profile" in data:
+                raise ValueError(
+                    "Use 'backend_profile', not both 'backend_profile' and legacy 'profile'"
+                )
+            if "backend_profile" not in data and "profile" in data:
+                data = dict(data)
+                data["backend_profile"] = data.pop("profile")
+        return data
+
+
+class TargetListResponse(BaseModel):
+    revision: str
+    source_path: str
+    targets: list[TargetEditorData]
+
+
+class TargetResponse(BaseModel):
+    revision: str
+    source_path: str
+    target: TargetEditorData
+
+
+class TargetDeleteResponse(BaseModel):
+    revision: str
+    source_path: str
+    deleted: str
 
 
 class DashboardBootstrap(BaseModel):
@@ -246,6 +300,11 @@ __all__ = [
     "ResourcePayload",
     "SubmissionResult",
     "TERMINAL_STATES",
+    "TargetDeleteResponse",
+    "TargetEditorData",
+    "TargetListResponse",
+    "TargetReference",
+    "TargetResponse",
     "TargetView",
     "TaskGuideResult",
 ]
