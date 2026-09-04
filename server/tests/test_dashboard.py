@@ -185,6 +185,8 @@ async def test_dashboard_project_self_extension_reports_global_inheritance(activ
     profile = next(item for item in json.loads(body)["profiles"] if item["id"] == "balanced")
     assert status == 200
     assert profile["parent"] == {"value": "balanced", "source": "project"}
+    assert set(profile["inherited"]) == {"implement", "review", "other"}
+    assert profile["inherited"]["implement"]["targets"] == ["primary"]
     assert profile["sources"]["implement"] == "global"
     assert profile["sources"]["consult"] == "project"
 

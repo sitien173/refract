@@ -105,3 +105,24 @@
 
 ### Test evidence
 - RED -> GREEN: DELETE regression initially returned 409 for a body carrying the expected value because the body was discarded; identical project override attribution initially reported global; after fixes, focused Phase 2 tests passed with 65 tests, full pytest passed with 305 passed and 3 deselected, and `git diff --check` passed.
+
+## Review Fix — Cycle 2 self-extension inheritance classification
+
+### Decisions made
+- A project declaration is authoritative provenance even when its values equal the global declaration.
+- For same-named self-extension, effective workflows absent from the project declaration are classified as inherited while their source remains global.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- The inherited section intentionally includes globally declared workflows when the project explicitly extends the same-named global profile.
+
+### Assumptions
+- The project declaration map retained on `DaemonConfig` is authoritative for source and inheritance classification.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Self-extension assertions initially found an empty inherited section; after classification adjustment, focused Phase 2 tests passed with 68 tests, full pytest passed with 308 passed and 3 deselected, and `tgrep`/`git diff --check` passed.

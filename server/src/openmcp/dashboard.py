@@ -156,7 +156,8 @@ def _profile_config_data(global_catalog: DaemonConfig, project_catalog: DaemonCo
         inherited = {
             workflow: _selection_data(selection)
             for workflow, selection in effective.items()
-            if workflow not in global_workflows | project_workflows
+            if workflow not in project_workflows
+            and (project_declaration is not None or workflow not in global_workflows)
         }
         def workflow_source(
             current_profile: str,

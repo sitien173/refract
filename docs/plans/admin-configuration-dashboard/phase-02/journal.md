@@ -64,6 +64,27 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 2 review fix cycle 2 / Started 2026-09-04T13:02:11+07:00 / Finished 2026-09-04T13:05:14+07:00 / Plan docs/plans/admin-configuration-dashboard
+## SUMMARY
+Corrected self-extension profile reporting so globally inherited workflows appear under inherited with global source attribution.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | src/openmcp/dashboard.py | Classify workflows absent from project self-extension declarations as inherited while retaining global provenance. |
+| Modify | tests/test_dashboard.py | Assert inherited global workflows and their source attribution. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-02/notes.md | Record cycle-2 review-fix decisions and evidence. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-02/journal.md | Record the cycle-2 response. |
+## NOTES
+- phase-02/notes.md (## Review Fix — Cycle 2 self-extension inheritance classification)
+## SPEC COMPLIANCE
+- Meets Spec? YES — self-extension inherited workflows are now classified correctly and retain global source attribution.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 <!-- Coordinator appends the independent review response here. -->
