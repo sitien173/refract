@@ -72,6 +72,34 @@ async def test_configuration_error_does_not_expose_secret(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_kind", ["profile", "workflow"])
+async def test_configuration_identifiers_do_not_leak_from_errors(tmp_path, invalid_kind) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "config.toml"
+    _config(path)
+    runtime = Runtime(load_config(path))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "project")
+    content = path.read_text(encoding="utf-8")
+    if invalid_kind == "profile":
+        content += '[profiles."SECRET_PROFILE"]\n'
+    else:
+        content = content.replace(
+            'consult = "primary"', 'SECRET_WORKFLOW = "primary"'
+        )
+    path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(OrchestrationError) as raised:
+        await runtime.submit(project.id, "consult", "question")
+
+    assert "SECRET_" not in str(raised.value)
+    assert "SECRET_" not in runtime.configuration_health().latest_error
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_new_job_records_global_revision(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()

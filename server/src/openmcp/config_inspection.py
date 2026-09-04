@@ -41,10 +41,6 @@ def bound_error(error: object) -> str:
     return value
 
 
-def _safe_identifier(value: str) -> bool:
-    return bool(re.fullmatch(r"[A-Za-z0-9_.:/-]+", value))
-
-
 def sanitize_config_error(error: object) -> str:
     """Keep structural diagnostics while removing configuration values.
 
@@ -60,12 +56,17 @@ def sanitize_config_error(error: object) -> str:
             "Invalid TOML syntax "
             f"(at line {location.group(1)}, column {location.group(2)})"
         )
-    if text.startswith("Missing config file:") or text.startswith(
-        "Unable to read config file:"
-    ):
-        return text
-    if text.startswith("Invalid config file:") and "invalid UTF-8" in text:
-        return text
+    missing = re.fullmatch(r"Missing config file: (.+)", raw_text)
+    if missing:
+        return f"Missing config file: {missing.group(1)}"
+    unreadable = re.fullmatch(r"Unable to read config file: (.+)", raw_text)
+    if unreadable:
+        return f"Unable to read config file: {unreadable.group(1)}"
+    invalid_encoding = re.fullmatch(
+        r"Invalid config file: (.+): invalid UTF-8", raw_text
+    )
+    if invalid_encoding:
+        return f"Invalid config file: {invalid_encoding.group(1)}: invalid UTF-8"
     if text.startswith("Unsupported config sections"):
         return "Unsupported config sections"
     if text.startswith("Unsupported daemon settings"):
@@ -90,25 +91,21 @@ def sanitize_config_error(error: object) -> str:
         "Logging retention settings must be integers",
         "Target identifiers must be unique",
         "Invalid target declaration",
+        "Unknown workflow",
+        "Profile inheritance cycle",
+        "Profile extends unknown parent",
     }:
         return text
     if text.startswith("Unknown [daemon].default_profile"):
         return "Unknown [daemon].default_profile"
     if text.startswith("Unknown project profile"):
         return "Unknown project profile"
-    workflow = re.fullmatch(r"Unknown workflow '([^']+)'.*", raw_text)
-    if workflow and _safe_identifier(workflow.group(1)):
-        return f"Unknown workflow '{workflow.group(1)}'"
-    cycle = raw_text.removeprefix("Profile inheritance cycle: ")
-    if cycle != raw_text and all(
-        _safe_identifier(item) for item in cycle.split(" -> ")
-    ):
-        return f"Profile inheritance cycle: {cycle}"
-    parent = re.fullmatch(
-        r"Profile '([^']+)' extends unknown parent '([^']+)'", raw_text
-    )
-    if parent and all(_safe_identifier(item) for item in parent.groups()):
-        return raw_text
+    if raw_text.startswith("Unknown workflow "):
+        return "Unknown workflow"
+    if raw_text.startswith("Profile inheritance cycle:"):
+        return "Profile inheritance cycle"
+    if raw_text.startswith("Profile ") and "extends unknown parent" in raw_text:
+        return "Profile extends unknown parent"
     if text.startswith("Profile "):
         if "declare extends or a workflow" in text:
             return "Profile declaration must declare extends or a workflow"

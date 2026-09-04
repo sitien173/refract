@@ -67,6 +67,29 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 1 review fix cycle 2 / Started 2026-09-04T12:23:05+07:00 / Finished 2026-09-04T12:29:22+07:00 / Plan docs/plans/admin-configuration-dashboard
+## SUMMARY
+Removed all configuration-derived identifier passthrough from load-error sanitization and added secret profile/workflow regression coverage.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | src/openmcp/config_inspection.py | Return generic diagnostics without workflow, profile, cycle, or parent identifiers; retain only trusted paths and parser locations. |
+| Modify | tests/test_config_inspection.py | Add sanitizer tests for secret identifiers and parser evidence. |
+| Modify | tests/test_runtime.py | Add secret profile and workflow identifier runtime regressions. |
+| Modify | tests/test_config.py | Update structural-error expectations to the new generic diagnostics. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-01/notes.md | Record cycle-2 decisions and verification evidence. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-01/journal.md | Record the cycle-2 review response. |
+## NOTES
+- phase-01/notes.md (## Review Fix — Cycle 2 identifier leakage)
+## SPEC COMPLIANCE
+- Meets Spec? YES — sanitizer audit removes configuration-derived passthrough except trusted source paths and parser line/column evidence.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 <!-- Coordinator appends the independent review response here. -->

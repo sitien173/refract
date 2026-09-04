@@ -105,3 +105,24 @@
 
 ### Test evidence
 - RED -> GREEN: A regression test with `SUPER_SECRET_CONFIGURATION_VALUE` initially found the secret in the raised error; after central sanitization, focused tests passed with 67 passed, the full suite passed with 291 passed and 3 deselected, `uv build` succeeded, and `git diff --check` passed.
+
+## Review Fix — Cycle 2 identifier leakage
+
+### Decisions made
+- Removed all passthrough of workflow names, profile names, inheritance paths, and parent references from sanitized diagnostics.
+- Sanitizer output now permits only fixed structural messages, trusted source paths, and parser line/column numbers.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Detailed profile and workflow diagnostics are intentionally generalized to prevent secret configuration keys from being exposed.
+
+### Assumptions
+- Fixed schema labels in generic diagnostics are not configuration-derived values.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Identifier sanitizer tests initially observed workflow, cycle, and parent passthrough; after removal, focused tests passed with 59 tests, runtime regressions covered secret profile/workflow identifiers, full pytest passed with 291 passed and 3 deselected, `uv build` succeeded, and `git diff --check` passed.
