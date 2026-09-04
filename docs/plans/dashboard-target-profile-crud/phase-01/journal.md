@@ -17,20 +17,20 @@
 
 # EXTERNAL RESPONSE
 ## META
-- Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T10:59:00Z / Plan docs/plans/dashboard-target-profile-crud
+- Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T11:15:00Z / Plan docs/plans/dashboard-target-profile-crud
 ## SUMMARY
-Fixed review blockers: eliminated TOCTOU windows on commit and rollback, enforced registered project validation, prevented replacement on mode failure, and fixed temp directory cleanup.
+Coupled identity protection to publication and deletion and propagated project validation cleanup failures.
 ## FILES MODIFIED
 | Action | Path | Change |
 |---|---|---|
-| Modify | src/openmcp/config_mutation.py | Recheck revisions immediately before replace or delete, enforce project overlay validation, prevent replacement on mode failure, and use rmtree cleanup. |
-| Modify | tests/test_config_mutation.py | Add regression tests for TOCTOU races, mode failure, temp cleanup, and registered project overlay validation. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record review blocker decisions, tradeoffs, and RED-GREEN evidence. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with review blocker fixes. |
+| Modify | src/openmcp/config_mutation.py | Couple identity checks to replace and unlink via hardlink displacement and re-raise validation rmtree cleanup failures. |
+| Modify | tests/test_config_mutation.py | Add tests for pre-replace, pre-restore, and pre-unlink gap edits and validation cleanup failures. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record second review blocker decisions, tradeoffs, and RED-GREEN evidence. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with second review fixes. |
 ## NOTES
-- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes)
+- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes, ## Second Review Fixes)
 ## SPEC COMPLIANCE
-- Meets Spec? YES: all TOCTOU windows closed with pre-replace and pre-delete rechecks, registered project overlays validated on every global commit, mode preservation failures abort replacement, temp dirs cleaned, and all test suites pass.
+- Meets Spec? YES: identity protection coupled to replace and unlink via hardlink displacement, validation temp cleanup failures re-raised, and all suites pass.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

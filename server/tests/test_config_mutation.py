@@ -1118,3 +1118,132 @@ consult = "special"
         assert b'id = "special"' in source.read_bytes()
     finally:
         runtime.database.close()
+
+
+def test_commit_rejects_external_edit_injected_in_pre_replace_gap(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_replace = os.replace
+        raced = False
+
+        def racing_replace(src, dst):
+            nonlocal raced
+            if not raced and Path(dst) == source:
+                raced = True
+                source.write_bytes(source.read_bytes() + b"\n# gap edit before replace\n")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", racing_replace)
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+        assert raised.value.code == "configuration_conflict"
+        assert b"# gap edit before replace\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_rollback_refuses_to_overwrite_edit_injected_in_pre_restore_gap(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "boom")
+
+        def failing_publish():
+            raise RuntimeError("publication exploded")
+
+        monkeypatch.setattr(runtime, "_publish_configuration_locked", failing_publish)
+
+        commit_done = False
+        real_commit = commit_bytes
+
+        def tracking_commit(*args, **kwargs):
+            nonlocal commit_done
+            res = real_commit(*args, **kwargs)
+            commit_done = True
+            return res
+
+        monkeypatch.setattr("openmcp.config_mutation.commit_bytes", tracking_commit)
+
+        real_replace = os.replace
+        raced = False
+
+        def restore_racing_replace(src, dst):
+            nonlocal raced
+            if commit_done and not raced and Path(dst) == source:
+                raced = True
+                source.write_bytes(source.read_bytes() + b"\n# gap edit before restore replace\n")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", restore_racing_replace)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        assert b"# gap edit before restore replace\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_rollback_creation_refuses_deletion_on_edit_injected_in_pre_unlink_gap(tmp_path, monkeypatch) -> None:
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        service = runtime.mutations
+        document = _empty_project_document()
+        config_path = project_root / ".openmcp" / "config.toml"
+
+        def failing_publish(path):
+            raise RuntimeError("publication exploded")
+
+        monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
+
+        real_unlink = Path.unlink
+        raced = False
+
+        def racing_unlink(p, *args, **kwargs):
+            nonlocal raced
+            if not raced and p == config_path:
+                raced = True
+                config_path.write_bytes(config_path.read_bytes() + b"\n# gap edit before unlink\n")
+            return real_unlink(p, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", racing_unlink)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.create_project_document(document, project_root=project_root)
+
+        assert raised.value.code == "configuration_commit_failed"
+        assert config_path.exists()
+        assert b"# gap edit before unlink\n" in config_path.read_bytes()
+    finally:
+        runtime.database.close()
+
+
+def test_project_validation_cleanup_failure_not_ignored(tmp_path, monkeypatch) -> None:
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        service = runtime.mutations
+        candidate = b"[profiles.quality]\nconsult = \"primary\"\n"
+
+        def failing_rmtree(path, *args, **kwargs):
+            raise OSError("disk cleanup error")
+
+        monkeypatch.setattr(openmcp.config_mutation.shutil, "rmtree", failing_rmtree)
+
+        with pytest.raises(OSError, match="disk cleanup error"):
+            service.resolve_project_catalog(project_root, candidate)
+    finally:
+        runtime.database.close()

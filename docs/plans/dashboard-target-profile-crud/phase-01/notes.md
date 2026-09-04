@@ -184,3 +184,33 @@
   - `test_commit_fails_if_mode_preservation_fails`: RED (DID NOT RAISE, replaced file despite chmod failure) -> GREEN (raises `configuration_commit_failed`, aborts replacement).
   - `test_project_validation_temp_directory_cleaned_up`: RED (leaked temporary directory in `/tmp`) -> GREEN (directory removed).
   - `test_global_commit_always_validates_registered_projects`: RED (DID NOT RAISE, allowed invalidating registered project) -> GREEN (raises `configuration_invalid`).
+
+## Second Review Fixes
+
+### Decisions made
+- Link displaced backup to path before `os.replace`.
+- Link displaced backup to path before `path.unlink`.
+- Check displaced backup revision after replace or delete.
+- Restore displaced backup immediately on revision mismatch.
+- Raise `configuration_conflict` on commit gap edit.
+- Raise `configuration_commit_failed` on rollback gap edit.
+- Re-raise `shutil.rmtree` errors in `resolve_project_catalog`.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Displacement requires same-filesystem hard link support.
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED to GREEN:
+  - `test_commit_rejects_external_edit_injected_in_pre_replace_gap`: RED to GREEN. Conflict raised. Edit preserved.
+  - `test_rollback_refuses_to_overwrite_edit_injected_in_pre_restore_gap`: RED to GREEN. Rollback failed raised. Edit preserved.
+  - `test_rollback_creation_refuses_deletion_on_edit_injected_in_pre_unlink_gap`: RED to GREEN. Rollback failed raised. File preserved.
+  - `test_project_validation_cleanup_failure_not_ignored`: RED to GREEN. Disk cleanup error raised.

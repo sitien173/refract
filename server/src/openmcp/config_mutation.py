@@ -21,6 +21,7 @@ import sqlite3
 import stat as stat_module
 import tempfile
 import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -283,6 +284,7 @@ def commit_bytes(
     directory = path.parent
     directory.mkdir(parents=True, exist_ok=True)
     temporary = _write_temporary(directory, candidate, f".{path.name}.")
+    displaced_backup: Path | None = None
     try:
         if mode is not None:
             mode.apply(temporary)
@@ -304,8 +306,29 @@ def commit_bytes(
                 source_path=path.as_posix(),
                 unchanged=_UNCHANGED_MESSAGE,
             )
+        if path.exists() and expected_revision is not None:
+            displaced_backup = (
+                directory / f".{path.name}.displaced.{uuid.uuid4().hex}.tmp"
+            )
+            try:
+                os.link(path, displaced_backup)
+            except OSError:
+                displaced_backup = None
         os.replace(temporary, path)
         _fsync_directory(directory)
+        if displaced_backup is not None and expected_revision is not None:
+            displaced_source = read_config_source(displaced_backup)
+            if displaced_source.revision != expected_revision:
+                os.replace(displaced_backup, path)
+                _fsync_directory(directory)
+                raise ConfigurationMutationError(
+                    _CONFLICT_MESSAGE,
+                    code="configuration_conflict",
+                    source_path=path.as_posix(),
+                    current_revision=displaced_source.revision,
+                    unchanged=_UNCHANGED_MESSAGE,
+                    recovery="Reload the current configuration and retry the edit.",
+                )
     except Exception as exc:
         try:
             temporary.unlink(missing_ok=True)
@@ -320,6 +343,12 @@ def commit_bytes(
             unchanged=_UNCHANGED_MESSAGE,
             recovery="No change is active; the file on disk is unchanged.",
         ) from exc
+    finally:
+        if displaced_backup is not None:
+            try:
+                displaced_backup.unlink(missing_ok=True)
+            except OSError:
+                pass
     return read_config_source(path)
 
 
@@ -408,6 +437,7 @@ def restore_bytes(
         )
     directory = path.parent
     temporary = _write_temporary(directory, original.data, f".{path.name}.")
+    displaced_backup: Path | None = None
     try:
         if mode is not None:
             mode.apply(temporary)
@@ -432,8 +462,32 @@ def restore_bytes(
                 source_path=path.as_posix(),
                 unchanged=_UNCHANGED_MESSAGE,
             )
+        if path.exists() and expected_revision is not None:
+            displaced_backup = (
+                directory / f".{path.name}.displaced.{uuid.uuid4().hex}.tmp"
+            )
+            try:
+                os.link(path, displaced_backup)
+            except OSError:
+                displaced_backup = None
         os.replace(temporary, path)
         _fsync_directory(directory)
+        if displaced_backup is not None and expected_revision is not None:
+            displaced_source = read_config_source(displaced_backup)
+            if displaced_source.revision != expected_revision:
+                os.replace(displaced_backup, path)
+                _fsync_directory(directory)
+                log.error(
+                    "Configuration rollback skipped: the source changed after commit",
+                    extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
+                )
+                raise ConfigurationMutationError(
+                    "Configuration publication failed and the file changed again "
+                    "before rollback. Configuration state is uncertain.",
+                    code="configuration_commit_failed",
+                    source_path=path.as_posix(),
+                    recovery="Inspect the configuration file and reload the daemon.",
+                )
     except Exception as exc:
         try:
             temporary.unlink(missing_ok=True)
@@ -448,6 +502,12 @@ def restore_bytes(
             unchanged=_UNCHANGED_MESSAGE,
             recovery="No change is active; the file on disk is unchanged.",
         ) from exc
+    finally:
+        if displaced_backup is not None:
+            try:
+                displaced_backup.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -610,7 +670,17 @@ class ConfigurationMutationService:
                     recovery="Correct the project configuration file and retry.",
                 ) from exc
         finally:
-            shutil.rmtree(temporary_root, ignore_errors=True)
+            try:
+                shutil.rmtree(temporary_root)
+            except Exception:
+                log.exception(
+                    "Project validation temporary cleanup failed",
+                    extra={
+                        "event": "config_mutation.validation_cleanup_failed",
+                        "path": str(temporary_root),
+                    },
+                )
+                raise
 
     @staticmethod
     def _validation_copy(source_path: Path, candidate: bytes) -> Path:
@@ -992,16 +1062,47 @@ class ConfigurationMutationService:
         current = self._confirm_current(path, candidate_revision)
         if current is None:
             return
+        directory = path.parent
+        displaced_backup: Path | None = None
         try:
-            self._confirm_current(path, candidate_revision)
+            if path.exists():
+                displaced_backup = (
+                    directory / f".{path.name}.displaced.{uuid.uuid4().hex}.tmp"
+                )
+                try:
+                    os.link(path, displaced_backup)
+                except OSError:
+                    displaced_backup = None
             path.unlink(missing_ok=True)
-            _fsync_directory(path.parent)
+            _fsync_directory(directory)
+            if displaced_backup is not None:
+                displaced_source = read_config_source(displaced_backup)
+                if displaced_source.revision != candidate_revision:
+                    os.replace(displaced_backup, path)
+                    _fsync_directory(directory)
+                    log.error(
+                        "Configuration rollback skipped: the source changed after commit",
+                        extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
+                    )
+                    raise ConfigurationMutationError(
+                        "Configuration publication failed and the file changed again "
+                        "before rollback. Configuration state is uncertain.",
+                        code="configuration_commit_failed",
+                        source_path=path.as_posix(),
+                        recovery="Inspect the configuration file and reload the daemon.",
+                    )
         except Exception:
             log.exception(
                 "Configuration rollback removal failed",
                 extra={"event": "config_mutation.rollback_removal_failed", "path": str(path)},
             )
             raise
+        finally:
+            if displaced_backup is not None:
+                try:
+                    displaced_backup.unlink(missing_ok=True)
+                except OSError:
+                    pass
         self._republish_original(path, project_root)
 
     @staticmethod
