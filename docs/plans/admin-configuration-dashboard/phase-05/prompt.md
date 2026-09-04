@@ -59,6 +59,20 @@ Phases 1 through 4 added revision-stamped jobs, safe dashboard APIs, the package
 - `python -c "import glob,zipfile; p=glob.glob('dist/openmcp-*.whl')[-1]; n=zipfile.ZipFile(p).namelist(); assert any(x.endswith('dashboard_static/index.html') for x in n)"`
 - `git diff --check`
 
+## Consultation Findings
+- Read instructions from `context_instructions.instructions`. Use exactly the built-in workflows `consult`, `implement`, `other`, and `review`, unioned with returned instruction keys. Add a backend contract check preventing drift.
+- On 409, preserve the draft. Show `unchanged`, `recovery`, and `current`. Retry using `current` as the new expected value without another GET.
+- Apply successful mutation responses immediately. Manual refresh must supersede any in-flight poll.
+- Add a DELETE client path. Every DELETE body includes `expected_current`. Share concurrent CSRF bootstrap work and retry forbidden mutations only for the structured retryable code.
+- Keep CSRF values module-private and header-only. Never render raw error payloads.
+- Reuse query polling. Stop when every displayed job is terminal. Handle hidden tabs, unmounts, and terminal transitions without queued ticks.
+- Scope Jobs to a selected project. Add jobs and job-detail routes with query persistence and popstate support.
+- Build an accessible portal modal with role, naming, initial focus, focus trap, Escape close, safe scrim handling, and focus restoration. Use the FlowForge 660px minimum-width token.
+- Keep a persistent polite live region. Use assertive alerts for errors and conflicts.
+- Explicitly render only allow-listed execution-plan keys. Empty revisions and plans get specific unavailable states. Never render hidden arguments or system prompts.
+- Use outlined red destructive styling. Never use filled red or primary green for clear actions.
+- Add focused tests for nested instruction envelopes, workflow set, expected values, DELETE, confirmation, conflicts, focus, CSRF containment, single bootstrap, terminal polling, redaction, revision states, and documentation boundaries.
+
 ## Rules
 Follow the supplied worker contract. Stay within scope. Maintain this phase's `notes.md` and `journal.md`. Reuse the existing FlowForge components, API client, and server-redacted job shape. Do not expose or reconstruct hidden job input. Do not add remote administration, CORS, credentials behavior, or another production process. Keep destructive actions visually secondary.
 
