@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -270,6 +271,50 @@ async def test_delete_context_instruction_requires_expected_current(active_runti
     assert stale == 409
     assert deleted == 200
     assert json.loads(deleted_body)["instruction"] == ""
+
+
+@pytest.mark.asyncio
+def make_static(root: Path) -> None:
+    (root / "assets").mkdir(parents=True)
+    (root / "index.html").write_text("<!doctype html><title>OpenMCP</title>", encoding="utf-8")
+    (root / "assets" / "app.js").write_text("console.log('ok')", encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_spa_routes_and_api_guard_are_ordered(monkeypatch, tmp_path) -> None:
+    from openmcp import dashboard
+
+    make_static(tmp_path)
+    monkeypatch.setattr(dashboard, "_STATIC_DIR", tmp_path)
+    app = create_application()
+
+    index, headers, body = await request(app, "/dashboard")
+    deep, _, deep_body = await request(app, "/dashboard/projects/project-1")
+    typo, typo_headers, typo_body = await request(app, "/dashboard/api/not-a-route")
+    missing_asset, _, _ = await request(app, "/dashboard/assets/missing.js")
+
+    assert index == deep == 200
+    assert body == deep_body
+    assert headers[b"cache-control"] == b"no-store"
+    assert typo == 404
+    assert typo_headers[b"content-type"].startswith(b"application/json")
+    assert b"<!doctype html>" not in typo_body
+    assert missing_asset == 404
+
+
+@pytest.mark.asyncio
+async def test_missing_frontend_build_does_not_break_application(monkeypatch, tmp_path) -> None:
+    from openmcp import dashboard
+
+    monkeypatch.setattr(dashboard, "_STATIC_DIR", tmp_path / "missing-dashboard")
+    app = create_application()
+
+    status, _, body = await request(app, "/dashboard/")
+    asset_status, _, _ = await request(app, "/dashboard/assets/app.js")
+
+    assert status == 503
+    assert b"Dashboard assets are unavailable" in body
+    assert asset_status == 404
 
 
 @pytest.mark.asyncio

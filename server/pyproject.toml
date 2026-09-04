@@ -28,8 +28,12 @@ dev = [
 [project.scripts]
 openmcp = "openmcp.cli:main"
 
+[tool.hatch.build.targets.sdist]
+artifacts = ["src/openmcp/dashboard_static/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/openmcp"]
+artifacts = ["src/openmcp/dashboard_static/**"]
 
 [tool.uv]
 package = true

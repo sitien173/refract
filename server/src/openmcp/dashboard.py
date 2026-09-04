@@ -11,8 +11,9 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from openmcp.config import DaemonConfig, ProfileDeclaration, TargetSelection, load_task_guide
 from openmcp.config_inspection import sanitize_config_error
@@ -24,6 +25,9 @@ from openmcp.models import (
     DashboardOverview,
 )
 from openmcp.planning import parse_execution_plan
+
+
+_STATIC_DIR = Path(__file__).parent / "dashboard_static"
 
 
 @dataclass
@@ -543,6 +547,32 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except RuntimeError:
             return _runtime_error()
 
+    async def api_not_found(request: Request) -> Response:
+        return _error(
+            "Dashboard API route not found",
+            404,
+            code="not_found",
+            unchanged="No dashboard data was changed.",
+            recovery="Check the dashboard API path and try again.",
+        )
+
+    async def dashboard_index(request: Request) -> Response:
+        index_file = _STATIC_DIR / "index.html"
+        if not index_file.is_file():
+            return _error(
+                "Dashboard assets are unavailable",
+                503,
+                code="dashboard_unavailable",
+                unchanged="The MCP transport and dashboard API remain available.",
+                recovery="Build the frontend assets and restart the daemon.",
+            )
+        response = FileResponse(index_file, media_type="text/html")
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    async def dashboard_deep_link(request: Request) -> Response:
+        return await dashboard_index(request)
+
     async def update_context_instruction(request: Request) -> Response:
         if not _authorized_mutation(request, state):
             return _forbidden()
@@ -607,6 +637,20 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
                 return _error("Unknown project", 404, code="not_found")
             return _error(message, 400, code="invalid_request")
 
+    async def missing_asset(request: Request) -> Response:
+        return Response(status_code=404)
+
+    asset_directory = _STATIC_DIR / "assets"
+    asset_route = (
+        Mount(
+            "/dashboard/assets",
+            app=StaticFiles(directory=str(asset_directory)),
+            name="dashboard_assets",
+        )
+        if asset_directory.is_dir()
+        else Route("/dashboard/assets/{path:path}", missing_asset, methods=["GET"])
+    )
+
     return [
         Route("/dashboard/api/bootstrap", bootstrap, methods=["GET"]),
         Route("/dashboard/api/overview", overview, methods=["GET"]),
@@ -633,6 +677,12 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
             update_context_instruction,
             methods=["PUT", "POST", "DELETE"],
         ),
+        Route("/dashboard/api", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
+        Route("/dashboard/api/{path:path}", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
+        asset_route,
+        Route("/dashboard", dashboard_index, methods=["GET"]),
+        Route("/dashboard/", dashboard_index, methods=["GET"]),
+        Route("/dashboard/{path:path}", dashboard_deep_link, methods=["GET"]),
     ]
 
 
