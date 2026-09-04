@@ -25,6 +25,7 @@ import stat as stat_module
 import sys
 import tempfile
 import threading
+import tomllib
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -988,10 +989,10 @@ class ConfigurationMutationService:
         """Return all global targets for the protected editor."""
         with self._lock:
             source_path = self._resolve_source(None)
-            source_read = self.source_read(None)
-            if source_read.absent:
-                return source_read, []
+            if not source_path.exists():
+                return SourceRead(path=source_path, revision="", absent=True), []
             source = _regular_source(source_path)
+            source_read = SourceRead(path=source_path, revision=source.revision, absent=False)
             document = self.read_document(source)
             targets_raw = document.get("targets", [])
             targets: list[TargetEditorData] = []
@@ -1005,8 +1006,7 @@ class ConfigurationMutationService:
         """Return one global target by identifier."""
         with self._lock:
             source_path = self._resolve_source(None)
-            source_read = self.source_read(None)
-            if source_read.absent:
+            if not source_path.exists():
                 raise ConfigurationMutationError(
                     f"Unknown target: {target_id}",
                     code="not_found",
@@ -1015,6 +1015,7 @@ class ConfigurationMutationService:
                     recovery="Create the target before inspecting it.",
                 )
             source = _regular_source(source_path)
+            source_read = SourceRead(path=source_path, revision=source.revision, absent=False)
             document = self.read_document(source)
             target = self.find_target(document, target_id)
             if target is None:
@@ -1027,23 +1028,39 @@ class ConfigurationMutationService:
                 )
             return source_read, target_to_editor_data(target)
 
-    def find_target_references(self, target_id: str) -> list[TargetReference]:
+    def find_target_references(
+        self,
+        target_id: str,
+        document: tomlkit.TOMLDocument | None = None,
+    ) -> list[TargetReference]:
         """Find every global and registered project profile workflow referencing target_id."""
         references: list[TargetReference] = []
+        if document is None:
+            source_path = self._resolve_source(None)
+            if source_path.exists():
+                try:
+                    source = _regular_source(source_path)
+                    document = self.read_document(source)
+                except Exception:
+                    document = None
+        if document is not None:
+            profiles = document.get("profiles")
+            if isinstance(profiles, (dict, Table)):
+                for profile_id, profile_item in sorted(profiles.items()):
+                    if isinstance(profile_item, (dict, Table)):
+                        for workflow, policy in sorted(profile_item.items()):
+                            if workflow == "extends":
+                                continue
+                            if target_id in _target_list(policy):
+                                references.append(
+                                    TargetReference(
+                                        scope="global",
+                                        project_id=None,
+                                        profile_id=str(profile_id),
+                                        workflow=str(workflow),
+                                    )
+                                )
         runtime = self._runtime
-        catalog = getattr(runtime, "catalog", None)
-        if catalog is not None:
-            for profile_id, declaration in sorted(catalog.profile_declarations.items()):
-                for workflow, selection in sorted(declaration.workflows.items()):
-                    if target_id in selection.targets:
-                        references.append(
-                            TargetReference(
-                                scope="global",
-                                project_id=None,
-                                profile_id=profile_id,
-                                workflow=workflow,
-                            )
-                        )
         database = getattr(runtime, "database", None)
         if database is not None:
             try:
@@ -1061,31 +1078,47 @@ class ConfigurationMutationService:
                 else:
                     projects = []
             for project in sorted(projects, key=lambda p: p.id):
-                proj_catalog = None
-                if hasattr(runtime, "catalog_for_project_cached"):
+                proj_cfg_path = Path(project.root) / ".openmcp" / "config.toml"
+                if proj_cfg_path.is_file():
+                    try:
+                        raw_proj = tomllib.loads(proj_cfg_path.read_text(encoding="utf-8"))
+                        proj_profiles = raw_proj.get("profiles", {})
+                        if isinstance(proj_profiles, dict):
+                            for profile_id, profile_item in sorted(proj_profiles.items()):
+                                if isinstance(profile_item, dict):
+                                    for workflow, policy in sorted(profile_item.items()):
+                                        if workflow == "extends":
+                                            continue
+                                        if target_id in _target_list(policy):
+                                            references.append(
+                                                TargetReference(
+                                                    scope="project",
+                                                    project_id=project.id,
+                                                    profile_id=str(profile_id),
+                                                    workflow=str(workflow),
+                                                )
+                                            )
+                    except Exception:
+                        pass
+                elif hasattr(runtime, "catalog_for_project_cached"):
                     try:
                         proj_catalog = runtime.catalog_for_project_cached(project.id)
                     except Exception:
-                        pass
-                if proj_catalog is None:
-                    try:
-                        proj_catalog = load_project_config(Path(project.root), catalog)
-                    except Exception:
-                        pass
-                if proj_catalog is not None:
-                    for profile_id, declaration in sorted(
-                        proj_catalog.project_profile_declarations.items()
-                    ):
-                        for workflow, selection in sorted(declaration.workflows.items()):
-                            if target_id in selection.targets:
-                                references.append(
-                                    TargetReference(
-                                        scope="project",
-                                        project_id=project.id,
-                                        profile_id=profile_id,
-                                        workflow=workflow,
+                        proj_catalog = None
+                    if proj_catalog is not None:
+                        for profile_id, declaration in sorted(
+                            proj_catalog.project_profile_declarations.items()
+                        ):
+                            for workflow, selection in sorted(declaration.workflows.items()):
+                                if target_id in selection.targets:
+                                    references.append(
+                                        TargetReference(
+                                            scope="project",
+                                            project_id=project.id,
+                                            profile_id=profile_id,
+                                            workflow=workflow,
+                                        )
                                     )
-                                )
         return references
 
     def create_target(
@@ -1272,7 +1305,7 @@ class ConfigurationMutationService:
                     unchanged=_UNCHANGED_MESSAGE,
                     recovery="Verify the target identifier and retry.",
                 )
-            references = self.find_target_references(target_id)
+            references = self.find_target_references(target_id, document=document)
             if references:
                 raise ConfigurationMutationError(
                     f"Target {target_id!r} is referenced by existing profile declarations.",

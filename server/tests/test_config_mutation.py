@@ -2079,3 +2079,133 @@ def test_reference_scanning_uses_declarations_not_effective_values(tmp_path) -> 
         assert refs == []
     finally:
         runtime.database.close()
+
+
+def test_read_targets_and_get_target_single_source_read(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        import openmcp.config_mutation as cm
+
+        read_count = 0
+        original_regular_source = cm._regular_source
+
+        def counting_regular_source(path):
+            nonlocal read_count
+            read_count += 1
+            return original_regular_source(path)
+
+        monkeypatch.setattr(cm, "_regular_source", counting_regular_source)
+
+        read_count = 0
+        source_read, targets = service.read_targets()
+        assert read_count == 1
+        assert not source_read.absent
+        assert source_read.revision == _revision(source)
+        assert len(targets) == 2
+
+        read_count = 0
+        source_read, target = service.get_target("primary")
+        assert read_count == 1
+        assert not source_read.absent
+        assert source_read.revision == _revision(source)
+        assert target.id == "primary"
+    finally:
+        runtime.database.close()
+
+
+def test_delete_target_scans_current_parsed_global_declarations(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        assert not any(
+            "fallback" in selection.targets
+            for decl in runtime.catalog.profile_declarations.values()
+            for selection in decl.workflows.values()
+        )
+
+        updated_text = source.read_text(encoding="utf-8") + 'other = "fallback"\n'
+        source.write_text(updated_text, encoding="utf-8")
+        current_rev = _revision(source)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.delete_target("fallback", expected_revision=current_rev)
+
+        assert raised.value.code == "referenced"
+        refs = raised.value.references
+        assert refs is not None
+        assert any(
+            r["scope"] == "global"
+            and r["profile_id"] == "balanced"
+            and r["workflow"] == "other"
+            for r in refs
+        )
+    finally:
+        runtime.database.close()
+
+
+def test_delete_target_unreferenced_in_current_document_succeeds_even_if_stale_catalog_had_reference(
+    tmp_path,
+) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        assert any(
+            "primary" in selection.targets
+            for decl in runtime.catalog.profile_declarations.values()
+            for selection in decl.workflows.values()
+        )
+
+        new_text = """[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[[targets]]
+id = "fallback"
+backend = "pi"
+
+[profiles.balanced]
+implement = "fallback"
+review = "fallback"
+consult = "fallback"
+"""
+        source.write_text(new_text, encoding="utf-8")
+        current_rev = _revision(source)
+
+        result, deleted_id = service.delete_target("primary", expected_revision=current_rev)
+        assert deleted_id == "primary"
+        assert result.changed
+        _, remaining = service.read_targets()
+        assert [t.id for t in remaining] == ["fallback"]
+    finally:
+        runtime.database.close()
+
+
+def test_find_target_references_with_explicit_document(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        doc = tomlkit.parse("""
+[profiles.alpha]
+fast = "target_x"
+quality = ["target_y", "target_x"]
+other = { targets = ["target_z"] }
+extends = "target_x"
+""")
+        refs_x = service.find_target_references("target_x", document=doc)
+        assert len(refs_x) == 2
+        assert {r.workflow for r in refs_x} == {"fast", "quality"}
+        assert all(r.scope == "global" and r.profile_id == "alpha" for r in refs_x)
+
+        refs_z = service.find_target_references("target_z", document=doc)
+        assert len(refs_z) == 1
+        assert refs_z[0].workflow == "other"
+    finally:
+        runtime.database.close()

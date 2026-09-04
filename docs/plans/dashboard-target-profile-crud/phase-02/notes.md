@@ -28,7 +28,8 @@
 
 ### Decisions made
 - Implemented `read_targets`, `get_target`, `find_target_references`, `create_target`, `update_target`, and `delete_target` on `ConfigurationMutationService`.
-- Reference scanning scans `catalog.profile_declarations` and registered projects' `project_profile_declarations` exclusively based on declarations; existing, queued, or historical jobs do not block deletion.
+- Both `read_targets` and `get_target` derive editor content and revision from a single source read (`_regular_source`), eliminating double-read discrepancies.
+- Reference scanning scans current parsed global profile declarations directly from `document` (parsing disk source if not provided) and registered projects' `.openmcp/config.toml` declarations; existing, queued, or historical jobs do not block deletion.
 - Target updates forbid target identifier renames (`data.id == target_id`).
 - Existing legacy `profile` key is preserved on update; newly created targets emit `backend_profile` only.
 - Referenced deletions raise `ConfigurationMutationError(code="referenced", references=...)` containing structured references.
@@ -46,7 +47,13 @@
 - none
 
 ### Test evidence
-- RED -> GREEN: Initial test run failed before fixing field substring match in `test_create_target_emits_backend_profile_only_and_preserves_unrelated` and `create_job` arguments in `test_delete_target_blocked_by_global_and_project_declarations_ignores_jobs`. After fixes, all 68 unit tests in `tests/test_config_mutation.py` pass.
+- RED -> GREEN:
+  - Initial test run failed before fixing field substring match in `test_create_target_emits_backend_profile_only_and_preserves_unrelated` and `create_job` arguments in `test_delete_target_blocked_by_global_and_project_declarations_ignores_jobs`.
+  - Review fix added `test_read_targets_and_get_target_single_source_read` confirming exactly 1 source read per inspection.
+  - Review fix added `test_delete_target_scans_current_parsed_global_declarations` proving newly added global references block deletion even when missing from in-memory catalog.
+  - Review fix added `test_delete_target_unreferenced_in_current_document_succeeds_even_if_stale_catalog_had_reference` proving deleted references allow target deletion even when in-memory catalog had stale references.
+  - Review fix added `test_find_target_references_with_explicit_document` proving declaration parsing on custom documents.
+  - All 72 unit tests in `tests/test_config_mutation.py` pass.
 
 ## Task 3
 
@@ -94,6 +101,6 @@
 
 ### Test evidence
 - RED -> GREEN:
-  - `uv run pytest tests/test_config_mutation.py tests/test_dashboard.py -q`: 92 passed.
+  - `uv run pytest tests/test_config_mutation.py tests/test_dashboard.py -q`: 96 passed.
   - `uv run pytest tests/test_server.py tests/test_runtime.py -q`: 42 passed.
-  - `uv run pytest -q`: 392 passed.
+  - `uv run pytest -q`: 396 passed.

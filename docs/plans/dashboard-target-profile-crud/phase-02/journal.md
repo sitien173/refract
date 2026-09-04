@@ -19,7 +19,7 @@
 ## META
 - Phase 2 / Started 2026-09-04T12:00:00Z / Finished 2026-09-04T12:40:00Z / Plan docs/plans/dashboard-target-profile-crud
 ## SUMMARY
-Implemented protected global target configuration CRUD with loopback reads, CSRF/ETag/If-Match mutations, and reference scanning.
+Implemented protected global target configuration CRUD with single-read editor inspections, parsed global declaration reference scanning, loopback reads, CSRF/ETag/If-Match mutations, and full test coverage.
 ## FILES MODIFIED
 | Action | Path | Change |
 |---|---|---|
