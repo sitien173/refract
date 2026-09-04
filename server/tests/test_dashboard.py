@@ -145,6 +145,51 @@ async def test_dashboard_project_source_attribution_shows_project_override(activ
 
 
 @pytest.mark.asyncio
+async def test_dashboard_identical_project_override_reports_project_source(active_runtime, tmp_path) -> None:
+    project_root = tmp_path / "identical-project"
+    project_root.mkdir()
+    project = active_runtime.register_project(str(project_root), "identical-project")
+    (project_root / ".openmcp").mkdir()
+    (project_root / ".openmcp" / "config.toml").write_text(
+        """[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+other = "primary"
+""",
+        encoding="utf-8",
+    )
+    app = create_application()
+
+    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}/profiles")
+
+    profile = next(item for item in json.loads(body)["profiles"] if item["id"] == "balanced")
+    assert status == 200
+    assert profile["sources"]["consult"] == "project"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_project_self_extension_reports_global_inheritance(active_runtime, tmp_path) -> None:
+    project_root = tmp_path / "self-project"
+    project_root.mkdir()
+    project = active_runtime.register_project(str(project_root), "self-project")
+    (project_root / ".openmcp").mkdir()
+    (project_root / ".openmcp" / "config.toml").write_text(
+        '[profiles.balanced]\nextends = "balanced"\nconsult = "primary"\n',
+        encoding="utf-8",
+    )
+    app = create_application()
+
+    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}/profiles")
+
+    profile = next(item for item in json.loads(body)["profiles"] if item["id"] == "balanced")
+    assert status == 200
+    assert profile["parent"] == {"value": "balanced", "source": "project"}
+    assert profile["sources"]["implement"] == "global"
+    assert profile["sources"]["consult"] == "project"
+
+
+@pytest.mark.asyncio
 async def test_dashboard_job_detail_redacts_execution_plan(active_runtime) -> None:
     runtime = active_runtime
     project = runtime.database.project("project")
@@ -188,6 +233,41 @@ async def test_context_mutation_requires_loopback_csrf_and_origin(active_runtime
     assert remote == missing_csrf == wrong_origin == 403
     assert valid == 200
     assert json.loads(valid_body)["instruction"] == "follow the plan"
+
+
+@pytest.mark.asyncio
+async def test_delete_context_instruction_requires_expected_current(active_runtime) -> None:
+    app = create_application()
+    path = "/dashboard/api/projects/project/context-instructions/consult"
+    headers = (("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-OpenMCP-CSRF", "test-token"))
+    await request(
+        app,
+        path,
+        method="PUT",
+        headers=headers,
+        body=json.dumps({"instruction": "existing", "expected_current": ""}).encode(),
+    )
+
+    missing, _, _ = await request(app, path, method="DELETE", headers=headers, body=b"{}")
+    stale, _, _ = await request(
+        app,
+        path,
+        method="DELETE",
+        headers=headers,
+        body=json.dumps({"expected_current": "stale"}).encode(),
+    )
+    deleted, _, deleted_body = await request(
+        app,
+        path,
+        method="DELETE",
+        headers=headers,
+        body=json.dumps({"expected_current": "existing"}).encode(),
+    )
+
+    assert missing == 400
+    assert stale == 409
+    assert deleted == 200
+    assert json.loads(deleted_body)["instruction"] == ""
 
 
 @pytest.mark.asyncio

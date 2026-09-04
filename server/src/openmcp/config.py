@@ -73,6 +73,9 @@ class DaemonConfig:
     targets: tuple[TargetConfig, ...] = field(default_factory=tuple)
     profiles: dict[str, dict[str, TargetSelection]] = field(default_factory=dict)
     profile_declarations: dict[str, ProfileDeclaration] = field(default_factory=dict)
+    # Project declarations are retained separately so dashboard attribution
+    # does not infer provenance from value equality.
+    project_profile_declarations: dict[str, ProfileDeclaration] = field(default_factory=dict)
     config_path: Path | None = None
     config_revision: str = ""
     config_modification_time: str = ""
@@ -656,6 +659,7 @@ def _load_project_config_values(project_root: Path, base: DaemonConfig) -> Daemo
     if "profiles" not in raw:
         profiles = {profile_id: dict(mapping) for profile_id, mapping in base.profiles.items()}
         profile_declarations = dict(base.profile_declarations)
+        project_declarations = {}
     else:
         project_declarations = _profile_declarations(raw["profiles"], base.targets)
         project_profiles = _resolve_profile_maps(
@@ -675,6 +679,7 @@ def _load_project_config_values(project_root: Path, base: DaemonConfig) -> Daemo
         default_profile=default_profile,
         profiles=profiles,
         profile_declarations=profile_declarations,
+        project_profile_declarations=project_declarations,
     )
 
 

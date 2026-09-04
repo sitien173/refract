@@ -84,3 +84,24 @@
 
 ### Test evidence
 - RED -> GREEN: Authorization, bootstrap no-store, successful mutation, and HTTP 409 stale-value tests passed; focused Phase 2 suite passed with 65 tests.
+
+## Review Fix — Cycle 1 blocking findings
+
+### Decisions made
+- DELETE context mutations now parse a JSON body and require an explicit expected-current field; clearing is represented by an empty instruction.
+- `DaemonConfig` retains authoritative raw project profile declarations separately from merged declarations, allowing identical overrides and self-extension provenance to remain visible.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- DELETE without an expected-current value returns a stable 400 rather than assuming an empty current value.
+
+### Assumptions
+- Project declaration provenance remains attached to the project-resolved catalog and is safe to expose as dashboard configuration metadata.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: DELETE regression initially returned 409 for a body carrying the expected value because the body was discarded; identical project override attribution initially reported global; after fixes, focused Phase 2 tests passed with 65 tests, full pytest passed with 305 passed and 3 deselected, and `git diff --check` passed.

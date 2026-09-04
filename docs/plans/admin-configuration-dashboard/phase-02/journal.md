@@ -42,6 +42,28 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 2 review fix cycle 1 / Started 2026-09-04T12:53:51+07:00 / Finished 2026-09-04T13:02:11+07:00 / Plan docs/plans/admin-configuration-dashboard
+## SUMMARY
+Fixed DELETE expected-value handling and preserved authoritative project declaration provenance for accurate source attribution.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | src/openmcp/config.py | Retain raw project profile declarations separately from merged declarations. |
+| Modify | src/openmcp/dashboard.py | Require and parse DELETE expected-current bodies and use authoritative project provenance. |
+| Modify | tests/test_dashboard.py | Add DELETE, identical-override, and self-extension coverage. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-02/notes.md | Record review-fix decisions and evidence. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-02/journal.md | Record the review-fix response. |
+## NOTES
+- phase-02/notes.md (## Review Fix — Cycle 1 blocking findings)
+## SPEC COMPLIANCE
+- Meets Spec? YES — DELETE clears require expected-current values and project source attribution is authoritative for identical overrides and self-extension.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 <!-- Coordinator appends the independent review response here. -->

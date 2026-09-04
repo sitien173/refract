@@ -110,6 +110,7 @@ def _declaration_data(declaration: ProfileDeclaration | None) -> dict[str, Any] 
 def _profile_config_data(global_catalog: DaemonConfig, project_catalog: DaemonConfig) -> dict[str, Any]:
     global_declarations = global_catalog.profile_declarations
     merged_declarations = project_catalog.profile_declarations
+    project_declarations = project_catalog.project_profile_declarations
     profile_ids = sorted(
         set(global_catalog.profiles)
         | set(project_catalog.profiles)
@@ -120,12 +121,7 @@ def _profile_config_data(global_catalog: DaemonConfig, project_catalog: DaemonCo
     for profile_id in profile_ids:
         global_declaration = global_declarations.get(profile_id)
         merged_declaration = merged_declarations.get(profile_id)
-        project_declaration = (
-            merged_declaration
-            if profile_id not in global_declarations
-            or merged_declaration != global_declaration
-            else None
-        )
+        project_declaration = project_declarations.get(profile_id)
         global_workflows = (
             set(global_declaration.workflows) if global_declaration else set()
         )
@@ -171,17 +167,7 @@ def _profile_config_data(global_catalog: DaemonConfig, project_catalog: DaemonCo
             if current_profile in seen:
                 return "global"
             seen.add(current_profile)
-            current_project = (
-                merged_declarations.get(current_profile)
-                if current_profile in project_catalog.profile_declarations
-                and current_profile not in global_declarations
-                or (
-                    current_profile in global_declarations
-                    and merged_declarations.get(current_profile)
-                    != global_declarations.get(current_profile)
-                )
-                else None
-            )
+            current_project = project_declarations.get(current_profile)
             current_global = global_declarations.get(current_profile)
             if current_project and workflow in current_project.workflows:
                 return "project"
@@ -563,14 +549,21 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
             runtime = _runtime(state)
         except RuntimeError:
             return _runtime_error()
-        if request.method == "DELETE":
-            payload: Any = {}
-        else:
-            try:
-                payload = await request.json()
-            except Exception:
-                return _error("Invalid JSON body", 400, code="invalid_request")
-        if not isinstance(payload, dict) or not isinstance(payload.get("instruction", ""), str):
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error("Invalid JSON body", 400, code="invalid_request")
+        if not isinstance(payload, dict):
+            return _error("Request body must be an object", 400, code="invalid_request")
+        if request.method == "DELETE" and not any(
+            key in payload for key in ("expected_current", "expected_current_value", "expected")
+        ):
+            return _error(
+                "Expected current value is required",
+                400,
+                code="invalid_request",
+            )
+        if not isinstance(payload.get("instruction", ""), str):
             return _error("Instruction must be a string", 400, code="invalid_request")
         expected = payload.get(
             "expected_current",
