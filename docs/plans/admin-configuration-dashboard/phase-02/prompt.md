@@ -41,6 +41,25 @@ Phase 1 added global configuration health, revision identity, and per-job revisi
 - `tgrep -n "dashboard/api|X-OpenMCP-CSRF" src/openmcp tests -g '*.py'`
 - `git diff --check`
 
+## Consultation Findings
+- Register concrete dashboard routes before the final `Mount("/", app=mcp_application)`. Never add a root catch-all.
+- Publish the active `Runtime` through application state owned by OpenMCP. Fail closed with 503 before startup, after shutdown, and after startup failure.
+- Dashboard routes require their own Host and Origin protection because MCP transport middleware does not cover outer routes.
+- Validate loopback from `request.client.host` using `ipaddress`. Ignore all forwarded headers. Require a loopback Host value for mutations and bootstrap.
+- Generate `secrets.token_urlsafe(32)` during each lifespan. Bootstrap it through a loopback-protected, no-store response. Add no CORS headers.
+- Mutations require a present, matching Origin and use `secrets.compare_digest` for `X-OpenMCP-CSRF`. Return one generic forbidden envelope.
+- Compare and replace context instructions atomically without any suspension point. Treat absent and empty as equivalent. Return HTTP 409 with the current value.
+- Preserve both global and project-merged catalogs for source attribution. Handle project self-extension against the global snapshot explicitly.
+- Dashboard reads use cached runtime state and must not trigger global reloads. Project failures stay separate from global health.
+- Redact execution plans through an explicit allow-list model. Omit prompts, argument values, backend profiles, reasoning settings, and future unknown fields.
+- Every database-using endpoint must be `async def` because SQLite connections are thread-bound.
+- Use one stable error envelope. Sanitize configuration-originated messages.
+- Use the existing raw-ASGI testing pattern rather than adding `httpx`.
+
+## Additional Allowed Files
+- `src/openmcp/database.py`
+- `tests/test_database.py`
+
 ## Rules
 Follow the supplied worker contract. Stay within scope. Maintain this phase's
 `notes.md` and `journal.md`. Do not add configuration-file writes or MCP
