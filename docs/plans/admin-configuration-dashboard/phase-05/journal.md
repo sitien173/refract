@@ -92,6 +92,32 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 5 review fix / Started 2026-09-04T15:50:51+07:00 / Finished 2026-09-04T15:54:30+07:00 / Plan docs/plans/admin-configuration-dashboard
+## SUMMARY
+Resolved both Phase 5 review findings.
+Verified shared CSRF bootstrap across concurrent mutations.
+Covered modal focus trapping and unmount cleanup.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | web/src/api.test.js | Add concurrent mutation single bootstrap test. |
+| Modify | web/src/screens/ContextInstructions.test.jsx | Exercise modal focus trap and restoration. |
+| Modify | web/src/screens/Jobs.test.jsx | Add unmount polling cleanup test. |
+| Create | web/src/components/Modal.test.jsx | Add focused modal accessibility tests. |
+| Create | web/src/hooks/usePolling.test.jsx | Add focused hook lifecycle tests. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-05/notes.md | Record review fix test evidence. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-05/journal.md | Record review fix external response. |
+## NOTES
+- phase-05/notes.md: Task 1, Task 2, Task 3, Task 4, Reconciliation, Review Fix
+## SPEC COMPLIANCE
+- Meets Spec? YES: all review findings resolved cleanly.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 <!-- Coordinator appends the independent review response here. -->

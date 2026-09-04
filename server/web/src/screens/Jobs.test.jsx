@@ -90,6 +90,31 @@ describe('Jobs screen and JobDetail screen', () => {
     expect(api.getProjectJobs).toHaveBeenCalledTimes(initialCalls)
   })
 
+  it('cleans up polling timer and stops requests after unmount', async () => {
+    vi.mocked(api.getProjectJobs).mockResolvedValue([
+      {
+        id: 'job-running-1',
+        workflow: 'implement',
+        profile: 'balanced',
+        state: 'running',
+        target_id: 'worker-1',
+        config_revision: 'rev1',
+        created_at: '2026-09-04 14:00:00',
+      },
+    ])
+
+    const { unmount } = render(<Jobs projectId="proj-1" />)
+    expect(await screen.findByText('job-running-1')).toBeInTheDocument()
+
+    vi.useFakeTimers()
+    const initialCalls = api.getProjectJobs.mock.calls.length
+
+    unmount()
+
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(api.getProjectJobs).toHaveBeenCalledTimes(initialCalls)
+  })
+
   it('JobDetail renders allowlisted execution plan fields and unavailable fallbacks without leaking secrets', async () => {
     vi.mocked(api.getJob).mockResolvedValue({
       id: 'job-detail-1',

@@ -189,7 +189,7 @@ describe('ContextInstructions screen', () => {
     })
   })
 
-  it('manages modal focus, trap, and Escape key dismissal', async () => {
+  it('manages modal initial focus, forward and reverse tab trapping, and focus restoration', async () => {
     vi.mocked(api.getContextInstructions).mockResolvedValue({
       project_id: 'proj-1',
       instructions: {},
@@ -213,11 +213,38 @@ describe('ContextInstructions screen', () => {
     const dialog = await screen.findByRole('dialog')
     expect(dialog).toBeInTheDocument()
 
-    // Press Escape to close modal
+    // 1. Initial focus moves to the editor textarea via initialFocusRef
+    const textarea = screen.getByLabelText(/Instruction content/i)
+    await waitFor(() => {
+      expect(document.activeElement).toBe(textarea)
+    })
+
+    // Enable the save button so it is the last focusable element in the dialog
+    const confirmCheckbox = screen.getByLabelText(/I confirm this change applies only to future jobs/i)
+    fireEvent.click(confirmCheckbox)
+
+    const closeBtn = screen.getByRole('button', { name: /Close dialog/i })
+    const saveBtn = screen.getByRole('button', { name: /Save instruction/i })
+    expect(saveBtn).not.toBeDisabled()
+
+    // 2. Forward Tab trapping: Tab from last focusable wraps to first focusable
+    saveBtn.focus()
+    expect(document.activeElement).toBe(saveBtn)
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: false })
+    expect(document.activeElement).toBe(closeBtn)
+
+    // 3. Reverse Tab trapping: Shift+Tab from first focusable wraps to last focusable
+    closeBtn.focus()
+    expect(document.activeElement).toBe(closeBtn)
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(saveBtn)
+
+    // 4. Focus restoration: Dismissing via Escape restores focus to the invoking button
     fireEvent.keyDown(document, { key: 'Escape' })
 
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
+    expect(document.activeElement).toBe(addBtn)
   })
 })

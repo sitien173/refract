@@ -128,3 +128,30 @@
 
 ### Test evidence
 - RED -> GREEN: Added backend contract assertions and documentation boundary checks; frontend suite passed with 46 tests, focused Python suite passed with 36 tests, full pytest passed with 313 passed and 3 deselected, offline npm installation passed, Vite production rebuild passed, `uv build` and wheel asset checks passed, and `git diff --check` passed.
+
+## Review Fix — Phase 5 findings
+
+### Decisions made
+- Added concurrent mutation regression to api.test.js.
+- Confirmed concurrent mutations share single CSRF bootstrap.
+- Exercised modal initial focus, tab trapping, and restoration.
+- Added polling cleanup after unmount test.
+- Added focused component tests in Modal.test.jsx.
+- Added focused hook tests in usePolling.test.jsx.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added test suites for review findings.
+- Total 15 test files and 56 tests passed.
+- git diff check passed with zero whitespace errors.
