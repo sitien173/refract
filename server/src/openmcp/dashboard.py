@@ -679,6 +679,7 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         ),
         Route("/dashboard/api", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         Route("/dashboard/api/{path:path}", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
+        Route("/dashboard/assets", missing_asset, methods=["GET"]),
         asset_route,
         Route("/dashboard", dashboard_index, methods=["GET"]),
         Route("/dashboard/", dashboard_index, methods=["GET"]),

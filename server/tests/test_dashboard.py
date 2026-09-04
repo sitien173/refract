@@ -273,7 +273,6 @@ async def test_delete_context_instruction_requires_expected_current(active_runti
     assert json.loads(deleted_body)["instruction"] == ""
 
 
-@pytest.mark.asyncio
 def make_static(root: Path) -> None:
     (root / "assets").mkdir(parents=True)
     (root / "index.html").write_text("<!doctype html><title>OpenMCP</title>", encoding="utf-8")
@@ -292,6 +291,7 @@ async def test_spa_routes_and_api_guard_are_ordered(monkeypatch, tmp_path) -> No
     deep, _, deep_body = await request(app, "/dashboard/projects/project-1")
     typo, typo_headers, typo_body = await request(app, "/dashboard/api/not-a-route")
     missing_asset, _, _ = await request(app, "/dashboard/assets/missing.js")
+    missing_namespace, _, namespace_body = await request(app, "/dashboard/assets")
 
     assert index == deep == 200
     assert body == deep_body
@@ -299,7 +299,8 @@ async def test_spa_routes_and_api_guard_are_ordered(monkeypatch, tmp_path) -> No
     assert typo == 404
     assert typo_headers[b"content-type"].startswith(b"application/json")
     assert b"<!doctype html>" not in typo_body
-    assert missing_asset == 404
+    assert missing_asset == missing_namespace == 404
+    assert b"<!doctype html>" not in namespace_body
 
 
 @pytest.mark.asyncio

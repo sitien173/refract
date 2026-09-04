@@ -106,3 +106,23 @@
 
 ### Test evidence
 - RED -> GREEN: The new CSS coverage first failed because the Vite `?raw` import was empty and then because a transformed module URL was not a file URL; filesystem-backed style assertions resolved this, and Vitest passed with 5 tests including the exact CSRF retry assertions.
+
+## Review Fix — Asset namespace fallback
+
+### Decisions made
+- Added an exact `/dashboard/assets` 404 route before the `/dashboard/{path:path}` SPA deep-link fallback.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- The exact namespace returns a plain 404 response, matching missing individual assets and preventing accidental SPA HTML delivery.
+
+### Assumptions
+- `/dashboard/assets/` remains handled by the conditional static-assets route or missing-asset route.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Regression coverage now checks `/dashboard/assets` without a trailing path alongside missing files; affected Python dashboard/smoke tests passed with 64 tests and `git diff --check` passed.

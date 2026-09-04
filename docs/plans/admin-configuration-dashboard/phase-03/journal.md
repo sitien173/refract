@@ -147,7 +147,26 @@ None
 ## NEXT
 TASK_COMPLETE
 
-## Quality Review
+# EXTERNAL RESPONSE
+## META
+- Phase 3 review fix / Started 2026-09-04T14:01:20+07:00 / Finished 2026-09-04T14:15:18+07:00 / Plan docs/plans/admin-configuration-dashboard
+## SUMMARY
+Fixed the asset namespace fallback so `/dashboard/assets` without a trailing path returns 404 instead of SPA HTML.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | src/openmcp/dashboard.py | Add an exact `/dashboard/assets` 404 route before the deep-link fallback. |
+| Modify | tests/test_dashboard.py | Add regression coverage for the bare asset namespace. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-03/notes.md | Record the review-fix decision and evidence. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-03/journal.md | Record the review-fix response. |
+## NOTES
+- phase-03/notes.md (## Review Fix — Asset namespace fallback)
+## SPEC COMPLIANCE
+- Meets Spec? YES — bare and nested missing asset requests now return 404 without SPA HTML.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
 
 <!-- Coordinator appends the independent review response here. -->
 
