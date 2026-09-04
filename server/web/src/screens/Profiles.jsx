@@ -1,11 +1,13 @@
-import { getProfiles } from '../api'
+import { getConfiguration, getProfiles } from '../api'
 import Alert from '../components/Alert'
+import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
 import DataGrid from '../components/DataGrid'
 import PageHeader from '../components/PageHeader'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
 
 export default function Profiles() {
   const { data, error, isLoading, refresh } = useDashboardQuery(getProfiles)
+  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
 
   const defaultProfile = data?.default || 'default'
   const available = data?.available || []
@@ -50,7 +52,10 @@ export default function Profiles() {
           <button
             type="button"
             className="button button-ghost button-sm"
-            onClick={() => refresh()}
+            onClick={() => {
+              refresh()
+              refreshConfigurationHealth()
+            }}
             disabled={isLoading}
           >
             {isLoading ? 'Loading…' : 'Refresh'}
@@ -63,6 +68,8 @@ export default function Profiles() {
           {error.message || 'Failed to fetch global profiles.'}
         </Alert>
       )}
+      <ConfigurationHealthBanner health={configurationHealth} />
+
       {error && data && (
         <Alert tone="warning" title="Showing previously loaded profiles">
           Background refresh failed. The profile table remains unchanged; retry when the daemon is available.

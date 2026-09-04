@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react'
-import { getTargets } from '../api'
+import { getConfiguration, getTargets } from '../api'
 import Alert from '../components/Alert'
+import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
 import DataGrid from '../components/DataGrid'
 import Inspector, { InspectorRow } from '../components/Inspector'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+
+function isCircuitOpenUntil(value, now = Date.now()) {
+  if (!value) return false
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) && timestamp > now
+}
 
 function readStatusFilterFromUrl() {
   const params = new URLSearchParams(window.location.search)
@@ -19,6 +26,7 @@ export default function Targets() {
   const { data: targets, error, isLoading, isRefreshing, refresh } = useDashboardQuery(getTargets, {
     pollInterval: 5000,
   })
+  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
 
   const [statusFilter, setStatusFilter] = useState(readStatusFilterFromUrl)
   const [searchTerm, setSearchTerm] = useState('')
@@ -46,7 +54,7 @@ export default function Targets() {
   const rawList = Array.isArray(targets) ? targets : []
 
   const filteredTargets = rawList.filter((target) => {
-    const isCircuitOpen = Boolean(target.circuit_open_until)
+    const isCircuitOpen = isCircuitOpenUntil(target.circuit_open_until)
     const isHealthy = Boolean(target.healthy) && !isCircuitOpen
 
     if (statusFilter === 'attention') {
@@ -116,7 +124,7 @@ export default function Targets() {
       render: (row) => {
         let status = 'healthy'
         let label = 'Healthy'
-        if (row.circuit_open_until) {
+        if (isCircuitOpenUntil(row.circuit_open_until)) {
           status = 'circuit-open'
           label = 'Circuit open'
         } else if (!row.healthy) {
@@ -128,8 +136,9 @@ export default function Targets() {
     },
   ]
 
-  const attentionCount = rawList.filter((t) => !t.healthy || Boolean(t.circuit_open_until)).length
-  const healthyCount = rawList.filter((t) => t.healthy && !t.circuit_open_until).length
+  const attentionCount = rawList.filter((t) => !t.healthy || isCircuitOpenUntil(t.circuit_open_until)).length
+  const healthyCount = rawList.filter((t) => t.healthy && !isCircuitOpenUntil(t.circuit_open_until)).length
+  const selectedCircuitOpen = selectedTarget && isCircuitOpenUntil(selectedTarget.circuit_open_until)
 
   return (
     <div className="page">
@@ -140,13 +149,18 @@ export default function Targets() {
           <button
             type="button"
             className="button button-ghost button-sm"
-            onClick={() => refresh()}
+            onClick={() => {
+              refresh()
+              refreshConfigurationHealth()
+            }}
             disabled={isRefreshing}
           >
             {isRefreshing ? 'Refreshing…' : 'Refresh'}
           </button>
         }
       />
+
+      <ConfigurationHealthBanner health={configurationHealth} />
 
       {error && !targets && (
         <Alert tone="error" title="Unable to load targets">
@@ -252,14 +266,14 @@ export default function Targets() {
               <InspectorRow label="Status">
                 <StatusBadge
                   status={
-                    selectedTarget.circuit_open_until
+                    selectedCircuitOpen
                       ? 'circuit-open'
                       : selectedTarget.healthy
                         ? 'healthy'
                         : 'unhealthy'
                   }
                   label={
-                    selectedTarget.circuit_open_until
+                    selectedCircuitOpen
                       ? 'Circuit open'
                       : selectedTarget.healthy
                         ? 'Healthy'
@@ -267,7 +281,7 @@ export default function Targets() {
                   }
                 />
               </InspectorRow>
-              {selectedTarget.circuit_open_until && (
+              {selectedCircuitOpen && (
                 <InspectorRow
                   label="Circuit open until"
                   value={selectedTarget.circuit_open_until}

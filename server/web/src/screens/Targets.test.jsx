@@ -5,6 +5,7 @@ import Targets from './Targets'
 
 vi.mock('../api', () => ({
   getTargets: vi.fn(),
+  getConfiguration: vi.fn().mockResolvedValue({ valid: true }),
 }))
 
 describe('Targets screen', () => {
@@ -32,7 +33,7 @@ describe('Targets screen', () => {
       max_concurrency: 2,
       active: 0,
       healthy: true,
-      circuit_open_until: '2026-09-04T13:00:00Z',
+      circuit_open_until: '2099-09-04T13:00:00Z',
     },
     {
       id: 'target-down',
@@ -59,6 +60,20 @@ describe('Targets screen', () => {
     expect(screen.getAllByText('Healthy').length).toBeGreaterThan(0)
     expect(screen.getByText('Circuit open')).toBeInTheDocument()
     expect(screen.getByText('Unhealthy')).toBeInTheDocument()
+  })
+
+  it('treats an expired circuit timestamp as healthy', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue([{
+      ...mockTargets[0],
+      id: 'target-expired-circuit',
+      circuit_open_until: '2020-01-01T00:00:00Z',
+    }])
+
+    render(<Targets />)
+
+    expect(await screen.findByText('target-expired-circuit')).toBeInTheDocument()
+    expect(screen.getAllByText('Healthy').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Circuit open')).not.toBeInTheDocument()
   })
 
   it('filters targets by status button and search query', async () => {

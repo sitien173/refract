@@ -11,7 +11,7 @@
 - Implementation Job: n/a
 - Review Job: n/a
 - Started: 2026-09-04T14:18:44+07:00
-- Finished: 2026-09-04T14:40:31+07:00
+- Finished: 2026-09-04T15:00:58+07:00
 
 ## Implementation Response
 
@@ -55,6 +55,41 @@ Completed configuration observability screens with dense FlowForge tables, serve
 - phase-04/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — all observability screens, resilient query states, table accessibility, source attribution, and production asset checks passed.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 4 review fix batch / Started 2026-09-04T14:40:31+07:00 / Finished 2026-09-04T15:00:58+07:00 / Plan docs/plans/admin-configuration-dashboard
+## SUMMARY
+Fixed dependency-query supersession, expired circuit handling, keyboard tab navigation, and configuration-health propagation across catalog-derived screens.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | web/src/hooks/useDashboardQuery.js | Start new dependency queries even when prior promises remain in flight and ignore stale completions. |
+| Create | web/src/hooks/useDashboardQuery.test.jsx | Add deferred route-change and polling-order regression coverage. |
+| Modify | web/src/screens/Targets.jsx | Treat circuit timestamps as open only when future-dated. |
+| Modify | web/src/screens/Targets.test.jsx | Add expired-timestamp coverage. |
+| Modify | web/src/components/TabbedPanel.jsx | Add ArrowLeft, ArrowRight, Home, End activation with focus management. |
+| Create | web/src/components/TabbedPanel.test.jsx | Add keyboard navigation coverage. |
+| Create | web/src/components/ConfigurationHealthBanner.jsx | Add persistent invalid-state and last-known-good revision banner. |
+| Modify | web/src/screens/Projects.jsx | Carry configuration health and stale cached-data messaging. |
+| Modify | web/src/screens/Targets.jsx | Carry configuration health into target views. |
+| Modify | web/src/screens/Profiles.jsx | Carry configuration health and stale cached-data messaging. |
+| Modify | web/src/screens/ProjectDetail.jsx | Carry configuration health, cached recovery, and inherited classification. |
+| Modify | web/src/screens/ConfigHealth.jsx | Preserve stale health evidence during refresh failures. |
+| Modify | web/src/screens/RuntimeSettings.jsx | Preserve stale settings during refresh failures. |
+| Modify | web/src/styles/app.css | Preserve fixed-width dense tables for narrow-layout scrolling. |
+| Modify | src/openmcp/dashboard_static/index.html | Rebuild packaged SPA entry point. |
+| Modify | src/openmcp/dashboard_static/assets/ | Rebuild packaged hashed production assets. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-04/notes.md | Record review-fix decisions and verification evidence. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-04/journal.md | Record the review-fix response. |
+## NOTES
+- phase-04/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4)
+## SPEC COMPLIANCE
+- Meets Spec? YES — all requested Phase 4 review fixes and verification checks passed.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

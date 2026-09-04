@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { getProject, getProjectJobs, getTaskGuide } from '../api'
+import { getConfiguration, getProject, getProjectJobs, getTaskGuide } from '../api'
 import Alert from '../components/Alert'
+import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
 import DataGrid from '../components/DataGrid'
 import Inspector, { InspectorRow, SourceChip } from '../components/Inspector'
 import PageHeader from '../components/PageHeader'
@@ -26,6 +27,7 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     deps: [projectId],
     pollInterval: 5000,
   })
+  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
 
   const [activeTab, setActiveTab] = useState('effective')
   const [selectedWorkflowItem, setSelectedWorkflowItem] = useState(null)
@@ -281,6 +283,7 @@ export default function ProjectDetail({ projectId, onNavigate }) {
             onClick={() => {
               refreshProject()
               refreshJobs()
+              refreshConfigurationHealth()
             }}
             disabled={isProjectLoading}
           >
@@ -288,6 +291,8 @@ export default function ProjectDetail({ projectId, onNavigate }) {
           </button>
         }
       />
+
+      <ConfigurationHealthBanner health={configurationHealth} />
 
       {projectError && !projectData && (
         <Alert tone="error" title="Configuration error">

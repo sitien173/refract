@@ -7,6 +7,7 @@ vi.mock('../api', () => ({
   getProject: vi.fn(),
   getProjectJobs: vi.fn(),
   getTaskGuide: vi.fn(),
+  getConfiguration: vi.fn().mockResolvedValue({ valid: true }),
 }))
 
 describe('ProjectDetail screen', () => {

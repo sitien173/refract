@@ -22,9 +22,12 @@ export function useDashboardQuery(queryFn, { pollInterval = 0, enabled = true, d
     }
   }
 
-  const execute = useCallback(async (isManualOrPoll = false) => {
+  const execute = useCallback(async (isManualOrPoll = false, supersede = false) => {
     if (!enabled) return
-    if (isRunningRef.current) return
+    // A dependency change represents a new query identity and must not be
+    // blocked by the previous promise still being in flight. Manual refreshes
+    // and timers retain the no-overlap guard.
+    if (isRunningRef.current && !supersede) return
     isRunningRef.current = true
 
     const currentRequestId = ++requestIdRef.current
@@ -59,15 +62,13 @@ export function useDashboardQuery(queryFn, { pollInterval = 0, enabled = true, d
             execute(true)
           }, pollInterval)
         }
-      } else {
-        isRunningRef.current = false
       }
     }
   }, [enabled, pollInterval])
 
   useEffect(() => {
     isMountedRef.current = true
-    execute(false)
+    execute(false, true)
 
     return () => {
       isMountedRef.current = false

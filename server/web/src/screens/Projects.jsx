@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { getProject, getProjectJobs, getProjects } from '../api'
+import { getConfiguration, getProject, getProjectJobs, getProjects } from '../api'
 import Alert from '../components/Alert'
+import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
 import DataGrid from '../components/DataGrid'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
@@ -23,6 +24,7 @@ async function mapConcurrent(items, limit, fn) {
 
 export default function Projects({ onNavigate }) {
   const { data: rawProjects, error, isLoading, refresh } = useDashboardQuery(getProjects)
+  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
   const [hydratedProjects, setHydratedProjects] = useState([])
   const [isHydrating, setIsHydrating] = useState(false)
   const [filterText, setFilterText] = useState('')
@@ -165,7 +167,10 @@ export default function Projects({ onNavigate }) {
             <button
               type="button"
               className="button button-ghost button-sm"
-              onClick={() => refresh()}
+              onClick={() => {
+                refresh()
+                refreshConfigurationHealth()
+              }}
               disabled={isLoading}
             >
               {isLoading ? 'Loading…' : 'Refresh'}
@@ -179,6 +184,8 @@ export default function Projects({ onNavigate }) {
           {error.message || 'Failed to fetch registered projects.'}
         </Alert>
       )}
+      <ConfigurationHealthBanner health={configurationHealth} />
+
       {error && rawProjects && (
         <Alert tone="warning" title="Showing previously loaded projects">
           Background refresh failed. The project table remains unchanged; retry when the daemon is available.
