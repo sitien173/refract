@@ -1120,7 +1120,7 @@ consult = "special"
         runtime.database.close()
 
 
-def test_commit_rejects_external_edit_injected_in_pre_replace_gap(tmp_path, monkeypatch) -> None:
+def test_commit_rejects_external_atomic_replacement_at_publication(tmp_path, monkeypatch) -> None:
     source = _global_source(tmp_path)
     runtime = Runtime(load_config(source))
     try:
@@ -1129,28 +1129,95 @@ def test_commit_rejects_external_edit_injected_in_pre_replace_gap(tmp_path, monk
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_replace = os.replace
+        real_exchange = openmcp.config_mutation._atomic_exchange
         raced = False
 
-        def racing_replace(src, dst):
+        def racing_exchange(src, dst):
             nonlocal raced
             if not raced and Path(dst) == source:
                 raced = True
-                source.write_bytes(source.read_bytes() + b"\n# gap edit before replace\n")
-            return real_replace(src, dst)
+                replacement = source.parent / "ext_replacement.tmp"
+                replacement.write_bytes(source.read_bytes() + b"\n# atomic replacement\n")
+                os.replace(replacement, source)
+            return real_exchange(src, dst)
 
-        monkeypatch.setattr(os, "replace", racing_replace)
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
         assert raised.value.code == "configuration_conflict"
-        assert b"# gap edit before replace\n" in source.read_bytes()
+        assert b"# atomic replacement\n" in source.read_bytes()
         leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
         assert leftovers == []
     finally:
         runtime.database.close()
 
 
-def test_rollback_refuses_to_overwrite_edit_injected_in_pre_restore_gap(tmp_path, monkeypatch) -> None:
+def test_commit_rejects_external_edit_injected_before_atomic_exchange(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        raced = False
+
+        def racing_exchange(src, dst):
+            nonlocal raced
+            if not raced and Path(dst) == source:
+                raced = True
+                source.write_bytes(source.read_bytes() + b"\n# gap edit before exchange\n")
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+        assert raised.value.code == "configuration_conflict"
+        assert b"# gap edit before exchange\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_commit_restoration_does_not_overwrite_newer_edit(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        exchange_count = 0
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            exchange_count += 1
+            if exchange_count == 1 and Path(dst) == source:
+                replacement = source.parent / "ext1.tmp"
+                replacement.write_bytes(source.read_bytes() + b"\n# first edit\n")
+                os.replace(replacement, source)
+                ret = real_exchange(src, dst)
+                source.write_bytes(source.read_bytes() + b"\n# newer edit 2\n")
+                return ret
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+        assert raised.value.code == "configuration_conflict"
+        assert b"# newer edit 2\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_rollback_refuses_to_overwrite_external_atomic_replacement(tmp_path, monkeypatch) -> None:
     source = _global_source(tmp_path)
     runtime = Runtime(load_config(source))
     try:
@@ -1175,30 +1242,86 @@ def test_rollback_refuses_to_overwrite_edit_injected_in_pre_restore_gap(tmp_path
 
         monkeypatch.setattr("openmcp.config_mutation.commit_bytes", tracking_commit)
 
-        real_replace = os.replace
+        real_exchange = openmcp.config_mutation._atomic_exchange
         raced = False
 
-        def restore_racing_replace(src, dst):
+        def restore_racing_exchange(src, dst):
             nonlocal raced
             if commit_done and not raced and Path(dst) == source:
                 raced = True
-                source.write_bytes(source.read_bytes() + b"\n# gap edit before restore replace\n")
-            return real_replace(src, dst)
+                replacement = source.parent / "ext_rollback_replacement.tmp"
+                replacement.write_bytes(source.read_bytes() + b"\n# atomic replacement during publish\n")
+                os.replace(replacement, source)
+            return real_exchange(src, dst)
 
-        monkeypatch.setattr(os, "replace", restore_racing_replace)
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", restore_racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
 
         assert raised.value.code == "configuration_commit_failed"
-        assert b"# gap edit before restore replace\n" in source.read_bytes()
+        assert b"# atomic replacement during publish\n" in source.read_bytes()
         leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
         assert leftovers == []
     finally:
         runtime.database.close()
 
 
-def test_rollback_creation_refuses_deletion_on_edit_injected_in_pre_unlink_gap(tmp_path, monkeypatch) -> None:
+def test_rollback_restore_does_not_overwrite_newer_edit(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "boom")
+
+        def failing_publish():
+            raise RuntimeError("publication exploded")
+
+        monkeypatch.setattr(runtime, "_publish_configuration_locked", failing_publish)
+
+        commit_done = False
+        real_commit = commit_bytes
+
+        def tracking_commit(*args, **kwargs):
+            nonlocal commit_done
+            res = real_commit(*args, **kwargs)
+            commit_done = True
+            return res
+
+        monkeypatch.setattr("openmcp.config_mutation.commit_bytes", tracking_commit)
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        exchange_count = 0
+
+        def restore_racing_exchange(src, dst):
+            nonlocal exchange_count
+            if commit_done and Path(dst) == source:
+                exchange_count += 1
+                if exchange_count == 1:
+                    replacement = source.parent / "ext_rollback.tmp"
+                    replacement.write_bytes(source.read_bytes() + b"\n# rollback replacement\n")
+                    os.replace(replacement, source)
+                    ret = real_exchange(src, dst)
+                    source.write_bytes(source.read_bytes() + b"\n# rollback newer edit\n")
+                    return ret
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", restore_racing_exchange)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        assert b"# rollback newer edit\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_rollback_creation_refuses_deletion_on_external_atomic_replacement(tmp_path, monkeypatch) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:
         service = runtime.mutations
@@ -1210,24 +1333,100 @@ def test_rollback_creation_refuses_deletion_on_edit_injected_in_pre_unlink_gap(t
 
         monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
 
-        real_unlink = Path.unlink
+        real_exchange = openmcp.config_mutation._atomic_exchange
         raced = False
 
-        def racing_unlink(p, *args, **kwargs):
+        def racing_exchange(src, dst):
             nonlocal raced
-            if not raced and p == config_path:
+            if not raced and Path(dst) == config_path:
                 raced = True
-                config_path.write_bytes(config_path.read_bytes() + b"\n# gap edit before unlink\n")
-            return real_unlink(p, *args, **kwargs)
+                replacement = config_path.parent / "ext_creation_replacement.tmp"
+                replacement.write_bytes(config_path.read_bytes() + b"\n# atomic replacement during creation publish\n")
+                os.replace(replacement, config_path)
+            return real_exchange(src, dst)
 
-        monkeypatch.setattr(Path, "unlink", racing_unlink)
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.create_project_document(document, project_root=project_root)
 
         assert raised.value.code == "configuration_commit_failed"
         assert config_path.exists()
-        assert b"# gap edit before unlink\n" in config_path.read_bytes()
+        assert b"# atomic replacement during creation publish\n" in config_path.read_bytes()
+        leftovers = [p for p in config_path.parent.iterdir() if p.name != config_path.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_atomic_exchange_fails_closed_when_primitive_unavailable(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        monkeypatch.setattr(openmcp.config_mutation, "_renameat2", None)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+        assert raised.value.code == "configuration_commit_failed"
+        assert "not supported on this platform" in str(raised.value)
+        assert service.source_read().revision == expected
+    finally:
+        runtime.database.close()
+
+
+def test_rollback_restore_fails_closed_when_primitive_unavailable(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        original_source = load_source(source)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_renameat2", None)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            openmcp.config_mutation.restore_bytes(
+                source,
+                original_source,
+                expected_revision=expected,
+            )
+        assert raised.value.code == "configuration_commit_failed"
+        assert "not supported on this platform" in str(raised.value)
+    finally:
+        runtime.database.close()
+
+
+def test_rollback_creation_fails_closed_when_primitive_unavailable(tmp_path, monkeypatch) -> None:
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        service = runtime.mutations
+        document = _empty_project_document()
+        config_path = project_root / ".openmcp" / "config.toml"
+
+        def failing_publish(path):
+            raise RuntimeError("publication exploded")
+
+        monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
+
+        real_create = openmcp.config_mutation.create_bytes
+
+        def tracking_create(*args, **kwargs):
+            res = real_create(*args, **kwargs)
+            monkeypatch.setattr(openmcp.config_mutation, "_renameat2", None)
+            return res
+
+        monkeypatch.setattr(openmcp.config_mutation, "create_bytes", tracking_create)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.create_project_document(document, project_root=project_root)
+
+        assert raised.value.code == "configuration_commit_failed"
+        assert config_path.exists()
     finally:
         runtime.database.close()
 

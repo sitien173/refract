@@ -15,10 +15,14 @@ existing ``openmcp.config`` loading semantics, so no second schema exists.
 
 from __future__ import annotations
 
+import ctypes
+import errno
+import hashlib
 import os
 import shutil
 import sqlite3
 import stat as stat_module
+import sys
 import tempfile
 import threading
 import uuid
@@ -240,6 +244,104 @@ def _write_temporary(directory: Path, candidate: bytes, prefix: str) -> Path:
     return temporary
 
 
+_AT_FDCWD = -100
+_RENAME_EXCHANGE = 2
+
+
+def _load_renameat2() -> Any:
+    if sys.platform != "linux":
+        return None
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if hasattr(libc, "renameat2"):
+            func = libc.renameat2
+            func.argtypes = [
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+            ]
+            func.restype = ctypes.c_int
+            return func
+    except Exception:
+        pass
+    return None
+
+
+_renameat2 = _load_renameat2()
+
+
+def _atomic_exchange(src: Path, dst: Path) -> None:
+    """Atomically exchange two paths on Linux using renameat2(RENAME_EXCHANGE).
+
+    Fails closed when the platform or filesystem does not support atomic exchange.
+    """
+    if _renameat2 is None:
+        raise ConfigurationMutationError(
+            "Atomic configuration exchange is not supported on this platform.",
+            code="configuration_commit_failed",
+            source_path=dst.as_posix(),
+            unchanged=_UNCHANGED_MESSAGE,
+        )
+    src_bytes = os.fsencode(src)
+    dst_bytes = os.fsencode(dst)
+    ret = _renameat2(
+        ctypes.c_int(_AT_FDCWD),
+        src_bytes,
+        ctypes.c_int(_AT_FDCWD),
+        dst_bytes,
+        ctypes.c_uint(_RENAME_EXCHANGE),
+    )
+    if ret != 0:
+        err = ctypes.get_errno()
+        if err in (errno.ENOSYS, errno.EINVAL, errno.ENOTSUP):
+            raise ConfigurationMutationError(
+                f"Atomic configuration exchange is not supported: {os.strerror(err)}",
+                code="configuration_commit_failed",
+                source_path=dst.as_posix(),
+                unchanged=_UNCHANGED_MESSAGE,
+            )
+        raise OSError(err, os.strerror(err), dst.as_posix())
+
+
+def _restore_exchanged_state(
+    *,
+    temporary: Path,
+    path: Path,
+    published_revision: str,
+) -> bool:
+    """Restore *temporary* to *path* only when *path* still matches *published_revision*.
+
+    Returns True if the exchanged-out state was safely restored to *path*.
+    Returns False if a newer edit was detected at *path*, leaving the newer edit in place.
+    """
+    try:
+        current = read_config_source(path)
+    except OSError:
+        return False
+    if current.revision != published_revision:
+        return False
+
+    _atomic_exchange(temporary, path)
+    _fsync_directory(path.parent)
+
+    try:
+        swapped_back = read_config_source(temporary)
+    except OSError:
+        return False
+
+    if swapped_back.revision != published_revision:
+        try:
+            _atomic_exchange(temporary, path)
+            _fsync_directory(path.parent)
+        except Exception:
+            pass
+        return False
+
+    return True
+
+
 def commit_bytes(
     path: Path,
     candidate: bytes,
@@ -247,14 +349,15 @@ def commit_bytes(
     expected_revision: str | None,
     mode: _FileMode | None = None,
 ) -> ConfigSource:
-    """Atomically replace *path* when it still matches *expected_revision*.
+    """Atomically exchange *path* with candidate bytes when matching *expected_revision*.
 
-    Writes land in the source directory so ``os.replace`` is atomic. The file
-    mode is preserved when a mode was captured. Returns the source metadata for
-    the exact new bytes. Raises ``ConfigurationMutationError`` with
-    ``configuration_conflict`` when the on-disk revision no longer matches
-    ``expected_revision``, or ``configuration_commit_failed`` when the
-    replacement fails.
+    Writes land in the source directory so the atomic exchange operates on the
+    same filesystem. The file mode is preserved when a mode was captured.
+    Returns the source metadata for the exact new bytes. Raises
+    ``ConfigurationMutationError`` with ``configuration_conflict`` when the
+    on-disk revision no longer matches ``expected_revision``, or
+    ``configuration_commit_failed`` when exchange fails or the platform is
+    unsupported.
     """
     if expected_revision is not None:
         current = _regular_source(path)
@@ -284,7 +387,7 @@ def commit_bytes(
     directory = path.parent
     directory.mkdir(parents=True, exist_ok=True)
     temporary = _write_temporary(directory, candidate, f".{path.name}.")
-    displaced_backup: Path | None = None
+    candidate_revision = hashlib.sha256(candidate).hexdigest()
     try:
         if mode is not None:
             mode.apply(temporary)
@@ -306,29 +409,31 @@ def commit_bytes(
                 source_path=path.as_posix(),
                 unchanged=_UNCHANGED_MESSAGE,
             )
-        if path.exists() and expected_revision is not None:
-            displaced_backup = (
-                directory / f".{path.name}.displaced.{uuid.uuid4().hex}.tmp"
-            )
-            try:
-                os.link(path, displaced_backup)
-            except OSError:
-                displaced_backup = None
-        os.replace(temporary, path)
+        _atomic_exchange(temporary, path)
         _fsync_directory(directory)
-        if displaced_backup is not None and expected_revision is not None:
-            displaced_source = read_config_source(displaced_backup)
-            if displaced_source.revision != expected_revision:
-                os.replace(displaced_backup, path)
-                _fsync_directory(directory)
+        exchanged = read_config_source(temporary)
+        if expected_revision is not None and exchanged.revision != expected_revision:
+            restored = _restore_exchanged_state(
+                temporary=temporary,
+                path=path,
+                published_revision=candidate_revision,
+            )
+            if restored:
                 raise ConfigurationMutationError(
                     _CONFLICT_MESSAGE,
                     code="configuration_conflict",
                     source_path=path.as_posix(),
-                    current_revision=displaced_source.revision,
+                    current_revision=exchanged.revision,
                     unchanged=_UNCHANGED_MESSAGE,
                     recovery="Reload the current configuration and retry the edit.",
                 )
+            raise ConfigurationMutationError(
+                "Configuration changed during publication and state is uncertain.",
+                code="configuration_conflict",
+                source_path=path.as_posix(),
+                unchanged=_UNCHANGED_MESSAGE,
+                recovery="Inspect the configuration file and reload the daemon.",
+            )
     except Exception as exc:
         try:
             temporary.unlink(missing_ok=True)
@@ -344,11 +449,10 @@ def commit_bytes(
             recovery="No change is active; the file on disk is unchanged.",
         ) from exc
     finally:
-        if displaced_backup is not None:
-            try:
-                displaced_backup.unlink(missing_ok=True)
-            except OSError:
-                pass
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
     return read_config_source(path)
 
 
@@ -437,7 +541,6 @@ def restore_bytes(
         )
     directory = path.parent
     temporary = _write_temporary(directory, original.data, f".{path.name}.")
-    displaced_backup: Path | None = None
     try:
         if mode is not None:
             mode.apply(temporary)
@@ -462,32 +565,26 @@ def restore_bytes(
                 source_path=path.as_posix(),
                 unchanged=_UNCHANGED_MESSAGE,
             )
-        if path.exists() and expected_revision is not None:
-            displaced_backup = (
-                directory / f".{path.name}.displaced.{uuid.uuid4().hex}.tmp"
-            )
-            try:
-                os.link(path, displaced_backup)
-            except OSError:
-                displaced_backup = None
-        os.replace(temporary, path)
+        _atomic_exchange(temporary, path)
         _fsync_directory(directory)
-        if displaced_backup is not None and expected_revision is not None:
-            displaced_source = read_config_source(displaced_backup)
-            if displaced_source.revision != expected_revision:
-                os.replace(displaced_backup, path)
-                _fsync_directory(directory)
-                log.error(
-                    "Configuration rollback skipped: the source changed after commit",
-                    extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
-                )
-                raise ConfigurationMutationError(
-                    "Configuration publication failed and the file changed again "
-                    "before rollback. Configuration state is uncertain.",
-                    code="configuration_commit_failed",
-                    source_path=path.as_posix(),
-                    recovery="Inspect the configuration file and reload the daemon.",
-                )
+        exchanged = read_config_source(temporary)
+        if expected_revision is not None and exchanged.revision != expected_revision:
+            _restore_exchanged_state(
+                temporary=temporary,
+                path=path,
+                published_revision=original.revision,
+            )
+            log.error(
+                "Configuration rollback skipped: the source changed after commit",
+                extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
+            )
+            raise ConfigurationMutationError(
+                "Configuration publication failed and the file changed again "
+                "before rollback. Configuration state is uncertain.",
+                code="configuration_commit_failed",
+                source_path=path.as_posix(),
+                recovery="Inspect the configuration file and reload the daemon.",
+            )
     except Exception as exc:
         try:
             temporary.unlink(missing_ok=True)
@@ -503,11 +600,10 @@ def restore_bytes(
             recovery="No change is active; the file on disk is unchanged.",
         ) from exc
     finally:
-        if displaced_backup is not None:
-            try:
-                displaced_backup.unlink(missing_ok=True)
-            except OSError:
-                pass
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -1063,34 +1159,31 @@ class ConfigurationMutationService:
         if current is None:
             return
         directory = path.parent
-        displaced_backup: Path | None = None
+        tombstone = _write_temporary(directory, b"", f".{path.name}.del.")
         try:
-            if path.exists():
-                displaced_backup = (
-                    directory / f".{path.name}.displaced.{uuid.uuid4().hex}.tmp"
+            _atomic_exchange(tombstone, path)
+            _fsync_directory(directory)
+            exchanged = read_config_source(tombstone)
+            empty_revision = hashlib.sha256(b"").hexdigest()
+            if exchanged.revision != candidate_revision:
+                _restore_exchanged_state(
+                    temporary=tombstone,
+                    path=path,
+                    published_revision=empty_revision,
                 )
-                try:
-                    os.link(path, displaced_backup)
-                except OSError:
-                    displaced_backup = None
+                log.error(
+                    "Configuration rollback skipped: the source changed after commit",
+                    extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
+                )
+                raise ConfigurationMutationError(
+                    "Configuration publication failed and the file changed again "
+                    "before rollback. Configuration state is uncertain.",
+                    code="configuration_commit_failed",
+                    source_path=path.as_posix(),
+                    recovery="Inspect the configuration file and reload the daemon.",
+                )
             path.unlink(missing_ok=True)
             _fsync_directory(directory)
-            if displaced_backup is not None:
-                displaced_source = read_config_source(displaced_backup)
-                if displaced_source.revision != candidate_revision:
-                    os.replace(displaced_backup, path)
-                    _fsync_directory(directory)
-                    log.error(
-                        "Configuration rollback skipped: the source changed after commit",
-                        extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
-                    )
-                    raise ConfigurationMutationError(
-                        "Configuration publication failed and the file changed again "
-                        "before rollback. Configuration state is uncertain.",
-                        code="configuration_commit_failed",
-                        source_path=path.as_posix(),
-                        recovery="Inspect the configuration file and reload the daemon.",
-                    )
         except Exception:
             log.exception(
                 "Configuration rollback removal failed",
@@ -1098,11 +1191,10 @@ class ConfigurationMutationService:
             )
             raise
         finally:
-            if displaced_backup is not None:
-                try:
-                    displaced_backup.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            try:
+                tombstone.unlink(missing_ok=True)
+            except OSError:
+                pass
         self._republish_original(path, project_root)
 
     @staticmethod

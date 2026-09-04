@@ -188,19 +188,21 @@
 ## Second Review Fixes
 
 ### Decisions made
-- Link displaced backup to path before `os.replace`.
-- Link displaced backup to path before `path.unlink`.
-- Check displaced backup revision after replace or delete.
-- Restore displaced backup immediately on revision mismatch.
-- Raise `configuration_conflict` on commit gap edit.
-- Raise `configuration_commit_failed` on rollback gap edit.
+- Use `renameat2` with `RENAME_EXCHANGE` for atomic exchange.
+- Swap temporary candidate and target path atomically on commit.
+- Inspect exchanged file revision immediately after atomic exchange.
+- Restore exchanged state only when target remains unchanged.
+- Swap temporary tombstone and target on rollback deletion.
+- Fail closed when atomic exchange primitive is unavailable.
+- Fail closed when platform is not Linux.
 - Re-raise `shutil.rmtree` errors in `resolve_project_catalog`.
 
 ### Spec deviations
 - none
 
 ### Tradeoffs accepted
-- Displacement requires same-filesystem hard link support.
+- Atomic exchange requires Linux kernel `renameat2` support.
+- Non-Linux platforms fail closed for safe mutations.
 
 ### Assumptions
 - none
@@ -210,7 +212,13 @@
 
 ### Test evidence
 - RED to GREEN:
-  - `test_commit_rejects_external_edit_injected_in_pre_replace_gap`: RED to GREEN. Conflict raised. Edit preserved.
-  - `test_rollback_refuses_to_overwrite_edit_injected_in_pre_restore_gap`: RED to GREEN. Rollback failed raised. Edit preserved.
-  - `test_rollback_creation_refuses_deletion_on_edit_injected_in_pre_unlink_gap`: RED to GREEN. Rollback failed raised. File preserved.
+  - `test_commit_rejects_external_atomic_replacement_at_publication`: RED to GREEN. Conflict raised. Replacement preserved.
+  - `test_commit_rejects_external_edit_injected_before_atomic_exchange`: RED to GREEN. Conflict raised. Edit preserved.
+  - `test_commit_restoration_does_not_overwrite_newer_edit`: RED to GREEN. Conflict raised. Newer edit preserved.
+  - `test_rollback_refuses_to_overwrite_external_atomic_replacement`: RED to GREEN. Rollback failed raised. Replacement preserved.
+  - `test_rollback_restore_does_not_overwrite_newer_edit`: RED to GREEN. Rollback failed raised. Newer edit preserved.
+  - `test_rollback_creation_refuses_deletion_on_external_atomic_replacement`: RED to GREEN. Rollback failed raised. Replacement preserved.
+  - `test_atomic_exchange_fails_closed_when_primitive_unavailable`: RED to GREEN. Fail closed verified.
+  - `test_rollback_restore_fails_closed_when_primitive_unavailable`: RED to GREEN. Fail closed verified.
+  - `test_rollback_creation_fails_closed_when_primitive_unavailable`: RED to GREEN. Fail closed verified.
   - `test_project_validation_cleanup_failure_not_ignored`: RED to GREEN. Disk cleanup error raised.

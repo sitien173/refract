@@ -17,20 +17,20 @@
 
 # EXTERNAL RESPONSE
 ## META
-- Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T11:15:00Z / Plan docs/plans/dashboard-target-profile-crud
+- Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T11:50:00Z / Plan docs/plans/dashboard-target-profile-crud
 ## SUMMARY
-Coupled identity protection to publication and deletion and propagated project validation cleanup failures.
+Implemented Linux atomic exchange with fail-closed fallback across commit, rollback restore, and rollback deletion.
 ## FILES MODIFIED
 | Action | Path | Change |
 |---|---|---|
-| Modify | src/openmcp/config_mutation.py | Couple identity checks to replace and unlink via hardlink displacement and re-raise validation rmtree cleanup failures. |
-| Modify | tests/test_config_mutation.py | Add tests for pre-replace, pre-restore, and pre-unlink gap edits and validation cleanup failures. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record second review blocker decisions, tradeoffs, and RED-GREEN evidence. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with second review fixes. |
+| Modify | src/openmcp/config_mutation.py | Implement Linux renameat2 atomic exchange with fail-closed fallback, post-exchange verification, and safe restoration. |
+| Modify | tests/test_config_mutation.py | Add tests for external atomic replacements, gap edits, newer edits, and fail-closed behavior across all operations. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record atomic exchange decisions, tradeoffs, and RED-GREEN evidence. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with Linux atomic exchange resolution. |
 ## NOTES
 - phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes, ## Second Review Fixes)
 ## SPEC COMPLIANCE
-- Meets Spec? YES: identity protection coupled to replace and unlink via hardlink displacement, validation temp cleanup failures re-raised, and all suites pass.
+- Meets Spec? YES: Linux atomic exchange detects external atomic replacements at publication, restores only unchanged state, fails closed on unsupported platforms, and passes all checks.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT
