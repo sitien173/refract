@@ -1446,3 +1446,135 @@ def test_project_validation_cleanup_failure_not_ignored(tmp_path, monkeypatch) -
             service.resolve_project_catalog(project_root, candidate)
     finally:
         runtime.database.close()
+
+
+def test_rollback_creation_refuses_deletion_on_replacement_after_tombstone_exchange(tmp_path, monkeypatch) -> None:
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        service = runtime.mutations
+        document = _empty_project_document()
+        config_path = project_root / ".openmcp" / "config.toml"
+
+        def failing_publish(path):
+            raise RuntimeError("publication exploded")
+
+        monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
+
+        real_replace = os.replace
+        tombstone_exchanged = False
+        raced = False
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+
+        def tracking_exchange(src, dst):
+            nonlocal tombstone_exchanged
+            res = real_exchange(src, dst)
+            if Path(dst) == config_path:
+                tombstone_exchanged = True
+            return res
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", tracking_exchange)
+
+        def racing_replace(src, dst):
+            nonlocal raced
+            if tombstone_exchanged and not raced and Path(src) == config_path:
+                raced = True
+                replacement = config_path.parent / "ext_late_replacement.tmp"
+                replacement.write_bytes(b"# external replacement after tombstone exchange\n")
+                real_replace(replacement, config_path)
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", racing_replace)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.create_project_document(document, project_root=project_root)
+
+        assert raised.value.code == "configuration_commit_failed"
+        assert config_path.exists()
+        assert b"# external replacement after tombstone exchange\n" in config_path.read_bytes()
+        leftovers = [p for p in config_path.parent.iterdir() if p.name != config_path.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_restore_exchanged_state_safe_against_replacement_after_validation(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        exchange_count = 0
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            if Path(dst) == source:
+                exchange_count += 1
+                if exchange_count == 1:
+                    replacement = source.parent / "ext1.tmp"
+                    replacement.write_bytes(source.read_bytes() + b"\n# first edit\n")
+                    os.replace(replacement, source)
+                elif exchange_count == 2:
+                    replacement2 = source.parent / "ext2.tmp"
+                    replacement2.write_bytes(source.read_bytes() + b"\n# newer edit after validation\n")
+                    os.replace(replacement2, source)
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_conflict"
+        assert b"# newer edit after validation\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()
+
+
+def test_restore_exchanged_state_safe_against_replacement_during_compensation(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        exchange_count = 0
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            if Path(dst) == source:
+                exchange_count += 1
+                if exchange_count == 1:
+                    replacement1 = source.parent / "ext1.tmp"
+                    replacement1.write_bytes(source.read_bytes() + b"\n# edit 1\n")
+                    os.replace(replacement1, source)
+                elif exchange_count == 2:
+                    replacement2 = source.parent / "ext2.tmp"
+                    replacement2.write_bytes(source.read_bytes() + b"\n# edit 2\n")
+                    os.replace(replacement2, source)
+                elif exchange_count == 3:
+                    replacement3 = source.parent / "ext3.tmp"
+                    replacement3.write_bytes(source.read_bytes() + b"\n# edit 3 during compensation\n")
+                    os.replace(replacement3, source)
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_conflict"
+        assert b"# edit 3 during compensation\n" in source.read_bytes()
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert leftovers == []
+    finally:
+        runtime.database.close()

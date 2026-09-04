@@ -19,14 +19,14 @@
 ## META
 - Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T11:50:00Z / Plan docs/plans/dashboard-target-profile-crud
 ## SUMMARY
-Implemented Linux atomic exchange with fail-closed fallback across commit, rollback restore, and rollback deletion.
+Implemented Linux atomic exchange with fail-closed fallback across commit, rollback restore, and rollback deletion, with compensation and post-tombstone race safety.
 ## FILES MODIFIED
 | Action | Path | Change |
 |---|---|---|
-| Modify | src/openmcp/config_mutation.py | Implement Linux renameat2 atomic exchange with fail-closed fallback, post-exchange verification, and safe restoration. |
-| Modify | tests/test_config_mutation.py | Add tests for external atomic replacements, gap edits, newer edits, and fail-closed behavior across all operations. |
+| Modify | src/openmcp/config_mutation.py | Implement Linux renameat2 atomic exchange with fail-closed fallback, post-exchange verification, compensation race safety, and safe rollback deletion. |
+| Modify | tests/test_config_mutation.py | Add tests for external atomic replacements, compensation races, post-tombstone replacement, and fail-closed behavior. |
 | Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record atomic exchange decisions, tradeoffs, and RED-GREEN evidence. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with Linux atomic exchange resolution. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with Linux atomic exchange resolution and review fixes. |
 ## NOTES
 - phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes, ## Second Review Fixes)
 ## SPEC COMPLIANCE

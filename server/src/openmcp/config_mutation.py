@@ -323,6 +323,11 @@ def _restore_exchanged_state(
     if current.revision != published_revision:
         return False
 
+    try:
+        original_temp_rev = read_config_source(temporary).revision
+    except OSError:
+        return False
+
     _atomic_exchange(temporary, path)
     _fsync_directory(path.parent)
 
@@ -331,15 +336,31 @@ def _restore_exchanged_state(
     except OSError:
         return False
 
-    if swapped_back.revision != published_revision:
+    if swapped_back.revision == published_revision:
+        return True
+
+    # An atomic replacement occurred after validation, trapping the newer edit in temporary.
+    # Compensate by restoring the newer edit to path, handling any further replacements during compensation.
+    expected_trapped = original_temp_rev
+    for _ in range(20):
+        try:
+            to_put_rev = read_config_source(temporary).revision
+        except OSError:
+            break
         try:
             _atomic_exchange(temporary, path)
             _fsync_directory(path.parent)
         except Exception:
-            pass
-        return False
+            break
+        try:
+            trapped = read_config_source(temporary)
+        except OSError:
+            break
+        if trapped.revision == expected_trapped:
+            break
+        expected_trapped = to_put_rev
 
-    return True
+    return False
 
 
 def commit_bytes(
@@ -1160,6 +1181,7 @@ class ConfigurationMutationService:
             return
         directory = path.parent
         tombstone = _write_temporary(directory, b"", f".{path.name}.del.")
+        delete_target: Path | None = None
         try:
             _atomic_exchange(tombstone, path)
             _fsync_directory(directory)
@@ -1182,8 +1204,39 @@ class ConfigurationMutationService:
                     source_path=path.as_posix(),
                     recovery="Inspect the configuration file and reload the daemon.",
                 )
-            path.unlink(missing_ok=True)
-            _fsync_directory(directory)
+            delete_target = directory / f".{path.name}.del.{uuid.uuid4().hex}.tmp"
+            try:
+                os.replace(path, delete_target)
+                _fsync_directory(directory)
+                removed = read_config_source(delete_target)
+                if removed.revision != empty_revision:
+                    if not path.exists():
+                        os.replace(delete_target, path)
+                        _fsync_directory(directory)
+                    else:
+                        _restore_exchanged_state(
+                            temporary=delete_target,
+                            path=path,
+                            published_revision=empty_revision,
+                        )
+                    log.error(
+                        "Configuration rollback skipped: the source changed after commit",
+                        extra={"event": "config_mutation.rollback_skipped", "path": str(path)},
+                    )
+                    raise ConfigurationMutationError(
+                        "Configuration publication failed and the file changed again "
+                        "before rollback. Configuration state is uncertain.",
+                        code="configuration_commit_failed",
+                        source_path=path.as_posix(),
+                        recovery="Inspect the configuration file and reload the daemon.",
+                    )
+                delete_target.unlink(missing_ok=True)
+                _fsync_directory(directory)
+            except OSError as exc:
+                if not path.exists():
+                    pass
+                else:
+                    raise
         except Exception:
             log.exception(
                 "Configuration rollback removal failed",
@@ -1191,6 +1244,11 @@ class ConfigurationMutationService:
             )
             raise
         finally:
+            if delete_target is not None:
+                try:
+                    delete_target.unlink(missing_ok=True)
+                except OSError:
+                    pass
             try:
                 tombstone.unlink(missing_ok=True)
             except OSError:

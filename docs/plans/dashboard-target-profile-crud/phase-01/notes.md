@@ -192,7 +192,9 @@
 - Swap temporary candidate and target path atomically on commit.
 - Inspect exchanged file revision immediately after atomic exchange.
 - Restore exchanged state only when target remains unchanged.
-- Swap temporary tombstone and target on rollback deletion.
+- Use compare-and-swap loop in `_restore_exchanged_state` compensation.
+- Displace tombstone to deletion temporary to verify removal.
+- Restore deletion temporary if target was externally replaced.
 - Fail closed when atomic exchange primitive is unavailable.
 - Fail closed when platform is not Linux.
 - Re-raise `shutil.rmtree` errors in `resolve_project_catalog`.
@@ -218,6 +220,9 @@
   - `test_rollback_refuses_to_overwrite_external_atomic_replacement`: RED to GREEN. Rollback failed raised. Replacement preserved.
   - `test_rollback_restore_does_not_overwrite_newer_edit`: RED to GREEN. Rollback failed raised. Newer edit preserved.
   - `test_rollback_creation_refuses_deletion_on_external_atomic_replacement`: RED to GREEN. Rollback failed raised. Replacement preserved.
+  - `test_rollback_creation_refuses_deletion_on_replacement_after_tombstone_exchange`: RED to GREEN. Rollback failed raised. Replacement preserved.
+  - `test_restore_exchanged_state_safe_against_replacement_after_validation`: RED to GREEN. Conflict raised. Newer edit preserved.
+  - `test_restore_exchanged_state_safe_against_replacement_during_compensation`: RED to GREEN. Conflict raised. Newer edit preserved.
   - `test_atomic_exchange_fails_closed_when_primitive_unavailable`: RED to GREEN. Fail closed verified.
   - `test_rollback_restore_fails_closed_when_primitive_unavailable`: RED to GREEN. Fail closed verified.
   - `test_rollback_creation_fails_closed_when_primitive_unavailable`: RED to GREEN. Fail closed verified.
