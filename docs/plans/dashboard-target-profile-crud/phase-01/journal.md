@@ -52,6 +52,11 @@ TASK_COMPLETE
 
 Review job: 59259b3b-4e37-44f7-ba66-69427013332e.
 
+Latest review job: bca8fd48-c782-4e3a-a9fe-9dbfd3d3866e.
+
+- Blocking finding: Read failures before compensation can delete a trapped newest external configuration. The unbounded production retry loop can also hold the mutation lock indefinitely under continuous external replacements.
+- Required decision: Approve another fix cycle for a bounded production retry that raises a retained-state error, plus read-failure propagation that retains the displaced state.
+
 ## Review Result
 
 - Spec Status: FAIL
