@@ -256,3 +256,30 @@
   - `test_restore_exchanged_state_safe_against_more_than_20_compensation_replacements`: RED (bounded loop stopped after 20 iterations) to GREEN (handled all 25 replacements safely).
   - `test_restore_exchanged_state_compensation_exchange_failure_retains_external_state`: RED (unlinked temporary and destroyed edit) to GREEN (fails closed, retains temporary holding replacement).
   - `test_restore_exchanged_state_retry_bound_exhaustion_retains_external_state`: RED (unlinked temporary on loop exhaustion) to GREEN (fails closed, retains temporary holding replacement).
+
+## Fourth Review Fixes
+
+### Decisions made
+- Propagate read failures on `path` and `temporary` before compensation as `ConfigurationMutationError`.
+- Retain temporary file holding displaced configuration on pre-compensation read failures.
+- Set finite production retry budget (`_DEFAULT_COMPENSATION_RETRIES = 50`) for continuous replacements.
+- Raise `ConfigurationMutationError` on retry budget exhaustion while retaining latest displaced state.
+- Retain temporary files if post-exchange reading fails in callers.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Finite retry budget bounds compensation iterations at 50, failing closed and preserving displaced state if continuous replacements do not settle.
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED to GREEN:
+  - `test_restore_exchanged_state_path_read_failure_before_compensation_retains_external_state`: RED (returned False and deleted displaced edit) to GREEN (raises `configuration_commit_failed`, retains temporary holding displaced edit).
+  - `test_restore_exchanged_state_temporary_read_failure_before_compensation_retains_external_state`: RED (returned False and deleted displaced edit) to GREEN (raises `configuration_commit_failed`, retains temporary holding displaced edit).
+  - `test_restore_exchanged_state_production_retry_budget_exhaustion_retains_external_state`: RED to GREEN (exhausts production budget of 50, raises `configuration_commit_failed`, retains temporary holding displaced edit).

@@ -305,31 +305,47 @@ def _atomic_exchange(src: Path, dst: Path) -> None:
         raise OSError(err, os.strerror(err), dst.as_posix())
 
 
+_DEFAULT_COMPENSATION_RETRIES = 50
+
+
 def _restore_exchanged_state(
     *,
     temporary: Path,
     path: Path,
     published_revision: str,
-    max_retries: int | None = None,
+    max_retries: int = _DEFAULT_COMPENSATION_RETRIES,
 ) -> bool:
     """Restore *temporary* to *path* only when *path* still matches *published_revision*.
 
     Returns True if the exchanged-out state was safely restored to *path*.
     Returns False if a newer edit was detected at *path*, leaving the newer edit in place.
     Fails closed and leaves *temporary* intact if compensation cannot safely
-    restore the newer edit to *path*.
+    restore the newer edit to *path* or if read verification fails before compensation.
     """
     try:
         current = read_config_source(path)
-    except OSError:
-        return False
+    except Exception as exc:
+        raise ConfigurationMutationError(
+            "Failed to read current configuration before restore. "
+            "Configuration state is retained in temporary file.",
+            code="configuration_commit_failed",
+            source_path=path.as_posix(),
+            recovery="Inspect the configuration file and retained temporary file.",
+        ) from exc
+
     if current.revision != published_revision:
         return False
 
     try:
         original_temp_rev = read_config_source(temporary).revision
-    except OSError:
-        return False
+    except Exception as exc:
+        raise ConfigurationMutationError(
+            "Failed to read displaced configuration before restore. "
+            "Configuration state is retained in temporary file.",
+            code="configuration_commit_failed",
+            source_path=path.as_posix(),
+            recovery="Inspect the configuration file and retained temporary file.",
+        ) from exc
 
     _atomic_exchange(temporary, path)
     _fsync_directory(path.parent)
@@ -353,7 +369,7 @@ def _restore_exchanged_state(
     expected_trapped = original_temp_rev
     retries = 0
     while True:
-        if max_retries is not None and retries >= max_retries:
+        if retries >= max_retries:
             raise ConfigurationMutationError(
                 "Compensation retry limit exhausted while restoring external configuration. "
                 "Configuration state is retained in temporary file.",
@@ -473,7 +489,11 @@ def commit_bytes(
             )
         _atomic_exchange(temporary, path)
         _fsync_directory(directory)
-        exchanged = read_config_source(temporary)
+        try:
+            exchanged = read_config_source(temporary)
+        except Exception:
+            retain_temporary = True
+            raise
         if expected_revision is not None and exchanged.revision != expected_revision:
             try:
                 restored = _restore_exchanged_state(
@@ -636,7 +656,11 @@ def restore_bytes(
             )
         _atomic_exchange(temporary, path)
         _fsync_directory(directory)
-        exchanged = read_config_source(temporary)
+        try:
+            exchanged = read_config_source(temporary)
+        except Exception:
+            retain_temporary = True
+            raise
         if expected_revision is not None and exchanged.revision != expected_revision:
             try:
                 _restore_exchanged_state(
@@ -1241,7 +1265,11 @@ class ConfigurationMutationService:
         try:
             _atomic_exchange(tombstone, path)
             _fsync_directory(directory)
-            exchanged = read_config_source(tombstone)
+            try:
+                exchanged = read_config_source(tombstone)
+            except Exception:
+                retain_tombstone = True
+                raise
             empty_revision = hashlib.sha256(b"").hexdigest()
             if exchanged.revision != candidate_revision:
                 try:
@@ -1268,7 +1296,11 @@ class ConfigurationMutationService:
             try:
                 os.replace(path, delete_target)
                 _fsync_directory(directory)
-                removed = read_config_source(delete_target)
+                try:
+                    removed = read_config_source(delete_target)
+                except Exception:
+                    retain_delete_target = True
+                    raise
                 if removed.revision != empty_revision:
                     if not path.exists():
                         os.replace(delete_target, path)

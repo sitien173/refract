@@ -19,16 +19,16 @@
 ## META
 - Phase 1 / Started 2026-09-04T00:00:00Z / Finished 2026-09-04T11:50:00Z / Plan docs/plans/dashboard-target-profile-crud
 ## SUMMARY
-Implemented Linux atomic exchange with fail-closed fallback across commit, rollback restore, and rollback deletion, with unbounded compensation and state-retaining failure protection.
+Implemented Linux atomic exchange with pre-compensation read error propagation, finite production retry budget, and state-retaining failure protection.
 ## FILES MODIFIED
 | Action | Path | Change |
 |---|---|---|
-| Modify | src/openmcp/config_mutation.py | Implement unbounded compensation loop and fail-closed state retention for trapped external replacements across commit and rollback operations. |
-| Modify | tests/test_config_mutation.py | Add tests for >20 compensation replacements, compensation exchange failure retaining external state, and retry bound exhaustion. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record decisions, tradeoffs, and RED-GREEN evidence for compensation bounds and state retention. |
-| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with third review fixes. |
+| Modify | src/openmcp/config_mutation.py | Propagate pre-compensation read failures as retained-state errors and enforce a finite production retry budget. |
+| Modify | tests/test_config_mutation.py | Add regression tests for pre-compensation read failures and production retry budget exhaustion. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/notes.md | Record decisions, tradeoffs, and RED-GREEN evidence for pre-compensation read errors and retry budget. |
+| Modify | docs/plans/dashboard-target-profile-crud/phase-01/journal.md | Update implementation response with fourth review fixes. |
 ## NOTES
-- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes, ## Second Review Fixes, ## Third Review Fixes)
+- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fixes, ## Second Review Fixes, ## Third Review Fixes, ## Fourth Review Fixes)
 ## SPEC COMPLIANCE
 - Meets Spec? YES: Linux atomic exchange detects external atomic replacements at publication, restores only unchanged state, retains trapped external state on failure, fails closed on unsupported platforms, and passes all checks.
 ## CLARIFICATIONS NEEDED

@@ -1697,3 +1697,125 @@ def test_restore_exchanged_state_retry_bound_exhaustion_retains_external_state(t
         assert any(b"# edit" in p.read_bytes() for p in leftovers)
     finally:
         runtime.database.close()
+
+
+def test_restore_exchanged_state_path_read_failure_before_compensation_retains_external_state(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_read = openmcp.config_mutation.read_config_source
+        exchange_count = 0
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            if Path(dst) == source:
+                exchange_count += 1
+                if exchange_count == 1:
+                    replacement = source.parent / "ext1.tmp"
+                    replacement.write_bytes(source.read_bytes() + b"\n# displaced external edit\n")
+                    os.replace(replacement, source)
+            return real_exchange(src, dst)
+
+        def failing_read(path_arg):
+            if Path(path_arg) == source and exchange_count == 1:
+                raise OSError("Disk read error on path before compensation")
+            return real_read(path_arg)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(openmcp.config_mutation, "read_config_source", failing_read)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert len(leftovers) >= 1
+        assert any(b"# displaced external edit\n" in p.read_bytes() for p in leftovers)
+    finally:
+        runtime.database.close()
+
+
+def test_restore_exchanged_state_temporary_read_failure_before_compensation_retains_external_state(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_read = openmcp.config_mutation.read_config_source
+        exchange_count = 0
+        read_count = 0
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            if Path(dst) == source:
+                exchange_count += 1
+                if exchange_count == 1:
+                    replacement = source.parent / "ext1.tmp"
+                    replacement.write_bytes(source.read_bytes() + b"\n# displaced external edit\n")
+                    os.replace(replacement, source)
+            return real_exchange(src, dst)
+
+        def failing_read(path_arg):
+            nonlocal read_count
+            if exchange_count == 1 and Path(path_arg) != source:
+                read_count += 1
+                if read_count == 2:
+                    raise OSError("Disk read error on temporary before compensation")
+            return real_read(path_arg)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(openmcp.config_mutation, "read_config_source", failing_read)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert len(leftovers) >= 1
+        assert any(b"# displaced external edit\n" in p.read_bytes() for p in leftovers)
+    finally:
+        runtime.database.close()
+
+
+def test_restore_exchanged_state_production_retry_budget_exhaustion_retains_external_state(tmp_path, monkeypatch) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        service.set_target_value(service.find_target(document, "primary"), "model", "x")
+
+        real_exchange = openmcp.config_mutation._atomic_exchange
+        exchange_count = 0
+
+        def racing_exchange(src, dst):
+            nonlocal exchange_count
+            if Path(dst) == source:
+                exchange_count += 1
+                replacement = source.parent / f"ext{exchange_count}.tmp"
+                replacement.write_bytes(source.read_bytes() + f"\n# edit {exchange_count}\n".encode())
+                os.replace(replacement, source)
+            return real_exchange(src, dst)
+
+        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision=expected)
+
+        assert raised.value.code == "configuration_commit_failed"
+        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        assert len(leftovers) >= 1
+        assert any(b"# edit" in p.read_bytes() for p in leftovers)
+    finally:
+        runtime.database.close()
