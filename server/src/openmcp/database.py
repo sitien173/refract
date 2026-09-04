@@ -613,6 +613,43 @@ class Database:
                 ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures, circuit_open_until=excluded.circuit_open_until""", (target_id, failures, circuit_open_until))
         return failures
 
+    def compare_and_set_context_instruction(
+        self,
+        project_id: str,
+        workflow: str,
+        expected_current: str,
+        instruction: str,
+    ) -> tuple[bool, str]:
+        """Replace an instruction only if its current value still matches."""
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._connection.execute(
+                "SELECT instruction FROM context_instructions WHERE project_id=? AND workflow=?",
+                (project_id, workflow),
+            ).fetchone()
+            current = row["instruction"] if row else ""
+            if (current or "") != (expected_current or ""):
+                self._connection.rollback()
+                return False, current or ""
+            if instruction:
+                self._connection.execute(
+                    """INSERT INTO context_instructions(project_id, workflow, instruction, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(project_id, workflow) DO UPDATE SET
+                    instruction=excluded.instruction, updated_at=excluded.updated_at""",
+                    (project_id, workflow, instruction, utc_now()),
+                )
+            else:
+                self._connection.execute(
+                    "DELETE FROM context_instructions WHERE project_id=? AND workflow=?",
+                    (project_id, workflow),
+                )
+            self._connection.commit()
+            return True, instruction
+        except Exception:
+            self._connection.rollback()
+            raise
+
     def set_context_instruction(self, project_id: str, workflow: str, instruction: str) -> None:
         with self._connection:
             if instruction:

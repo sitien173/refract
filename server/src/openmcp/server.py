@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import time
 from contextlib import asynccontextmanager
 from functools import wraps
@@ -16,6 +17,8 @@ from mcp.server.subscriptions import InMemorySubscriptionBus
 from mcp.shared.subscriptions import ResourceUpdated
 from starlette.applications import Starlette
 from starlette.routing import Mount
+
+from openmcp.dashboard import DashboardState, register_dashboard_routes
 
 from openmcp.backend_runner import run as _run_backend
 from openmcp.backends.agy import execute as agy_execute
@@ -33,6 +36,8 @@ log = get_logger("server")
 _DAEMON_CONFIG = None
 _MCP_WAIT_TIMEOUT_S = 300
 subscription_bus = InMemorySubscriptionBus()
+_DASHBOARD_STATE = DashboardState()
+_ACTIVE_RUNTIME = None
 
 
 async def publish_job_resource(resource_uri: str) -> None:
@@ -41,15 +46,22 @@ async def publish_job_resource(resource_uri: str) -> None:
 
 @asynccontextmanager
 async def _lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
-    global _DAEMON_CONFIG
-    config = _DAEMON_CONFIG or load_config()
+    global _DAEMON_CONFIG, _ACTIVE_RUNTIME
+    _DASHBOARD_STATE.runtime = None
+    _DASHBOARD_STATE.csrf_token = secrets.token_urlsafe(32)
     runtime: Runtime | None = None
     try:
+        config = _DAEMON_CONFIG or load_config()
         configure_logging(config.logging)
         runtime = Runtime(config, notifier=publish_job_resource)
         await runtime.start()
+        _ACTIVE_RUNTIME = runtime
+        _DASHBOARD_STATE.runtime = runtime
         yield runtime
     finally:
+        _ACTIVE_RUNTIME = None
+        _DASHBOARD_STATE.runtime = None
+        _DASHBOARD_STATE.csrf_token = ""
         try:
             if runtime is not None:
                 await runtime.close()
@@ -70,6 +82,11 @@ def _runtime(ctx: Context) -> Runtime:
 
 
 def create_application(host: str | None = None) -> Starlette:
+    # Retain compatibility for embedders that publish a runtime before
+    # constructing the application; normal daemon operation populates this in
+    # the lifespan below.
+    if _DASHBOARD_STATE.runtime is None and _ACTIVE_RUNTIME is not None:
+        _DASHBOARD_STATE.runtime = _ACTIVE_RUNTIME
     config_host = getattr(_DAEMON_CONFIG, "host", "127.0.0.1")
     mcp_application = mcp.streamable_http_app(
         streamable_http_path="/mcp",
@@ -84,7 +101,14 @@ def create_application(host: str | None = None) -> Starlette:
         async with session_manager.run():
             yield
 
-    return Starlette(routes=[Mount("/", app=mcp_application)], lifespan=lifespan)
+    application = Starlette(
+        routes=[*register_dashboard_routes(_DASHBOARD_STATE), Mount("/", app=mcp_application)],
+        lifespan=lifespan,
+    )
+    # Keep the state owned by OpenMCP, rather than accepting runtime or token
+    # values from request data or forwarded headers.
+    application.state.openmcp_dashboard = _DASHBOARD_STATE
+    return application
 
 
 _P = ParamSpec("_P")

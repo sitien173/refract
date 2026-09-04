@@ -128,6 +128,9 @@ class JobSummary(BaseModel):
 class TargetView(BaseModel):
     id: str
     model: str
+    backend: str = ""
+    isolated: bool = False
+    read_only: bool = False
     max_concurrency: int
     active: int
     healthy: bool
@@ -171,6 +174,50 @@ class DaemonStatusResult(BaseModel):
     queued_jobs: int
 
 
+class DashboardError(BaseModel):
+    """Stable, non-sensitive dashboard error envelope."""
+
+    error: str
+    code: str = ""
+    unchanged: str = ""
+    recovery: str = ""
+    source_path: str = ""
+    current: str | None = None
+
+
+class DashboardBootstrap(BaseModel):
+    csrf_token: str
+
+
+class DashboardOverview(BaseModel):
+    daemon: DaemonStatusResult
+    configuration: ConfigHealth
+    projects: int
+    unhealthy_targets: int
+
+
+class DashboardJob(BaseModel):
+    id: str
+    project_id: str
+    workflow: str
+    profile: str
+    state: JobState
+    context_key: str
+    config_revision: str = ""
+    target_id: str = ""
+    attempts: int = 0
+    created_at: str
+    updated_at: str
+    result: JobResult = Field(default_factory=JobResult)
+    execution_plan: dict[str, Any] = Field(default_factory=dict)
+
+
+class DashboardContextInstruction(BaseModel):
+    project_id: str
+    workflow: str
+    instruction: str = ""
+
+
 class ResourcePayload(BaseModel):
     data: Any
 
@@ -178,6 +225,11 @@ class ResourcePayload(BaseModel):
 __all__ = [
     "ActionResult",
     "ConfigHealth",
+    "DashboardBootstrap",
+    "DashboardContextInstruction",
+    "DashboardError",
+    "DashboardJob",
+    "DashboardOverview",
     "ConfigHealthSnapshot",
     "ConfigRevision",
     "ConfigurationHealth",

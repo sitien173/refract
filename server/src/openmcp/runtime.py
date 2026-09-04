@@ -217,6 +217,25 @@ class Runtime:
             instructions=self.database.context_instructions(project.id),
         )
 
+    def compare_and_set_context_instruction(
+        self,
+        project_id: str,
+        workflow: str,
+        expected_current: str,
+        instruction: str,
+    ) -> tuple[bool, str, str]:
+        project = self.database.project(project_id)
+        if project is None:
+            raise OrchestrationError(f"Unknown project: {project_id}")
+        try:
+            resolved_workflow = get_workflow(workflow)
+        except ValueError as exc:
+            raise OrchestrationError(str(exc)) from exc
+        updated, current = self.database.compare_and_set_context_instruction(
+            project.id, resolved_workflow, expected_current, instruction
+        )
+        return updated, current, resolved_workflow
+
     @property
     def catalog(self) -> DaemonConfig:
         return self._catalog
@@ -252,8 +271,29 @@ class Runtime:
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
 
+    def catalog_for_project_cached(self, project_id: str) -> DaemonConfig:
+        """Resolve project configuration without attempting a global reload."""
+        project = self.database.project(project_id)
+        if project is None:
+            raise OrchestrationError(f"Unknown project: {project_id}")
+        try:
+            return load_project_config(Path(project.root), self._catalog)
+        except ValueError as exc:
+            raise OrchestrationError(sanitize_config_error(exc)) from exc
+
     def targets(self) -> list[TargetView]:
-        return self.target_executor.views(self._catalog.targets)
+        views = self.target_executor.views(self._catalog.targets)
+        target_by_id = {target.id: target for target in self._catalog.targets}
+        return [
+            view.model_copy(
+                update={
+                    "backend": target_by_id[view.id].backend,
+                    "isolated": target_by_id[view.id].isolated,
+                    "read_only": target_by_id[view.id].read_only,
+                }
+            )
+            for view in views
+        ]
 
     def _reload_catalog(self) -> DaemonConfig:
         if self.config.config_path is None:
