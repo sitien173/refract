@@ -11,6 +11,7 @@ vi.mock('../api', () => ({
 describe('Targets screen', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/dashboard/targets')
+    vi.mocked(api.getConfiguration).mockResolvedValue({ valid: true })
   })
   const mockTargets = [
     {
@@ -104,5 +105,21 @@ describe('Targets screen', () => {
 
     expect(screen.getByRole('complementary', { name: /Inspector: Target: target-healthy/i })).toBeInTheDocument()
     expect(screen.getByText('4 concurrent jobs')).toBeInTheDocument()
+  })
+
+  it('renders invalid configuration health banner and last-known-good revision while targets remain visible', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfiguration).mockResolvedValue({
+      valid: false,
+      last_known_good_revision: 'rev-targets-lkg-002',
+    })
+
+    render(<Targets />)
+
+    expect(await screen.findByText('Configuration invalid — showing last-known-good values')).toBeInTheDocument()
+    expect(screen.getByText('rev-targets-lkg-002')).toBeInTheDocument()
+    expect(screen.getByText('target-healthy')).toBeInTheDocument()
+    expect(screen.getByText('target-circuit')).toBeInTheDocument()
+    expect(screen.getByText('target-down')).toBeInTheDocument()
   })
 })

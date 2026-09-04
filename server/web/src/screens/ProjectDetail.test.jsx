@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import ProjectDetail from './ProjectDetail'
 
@@ -11,6 +11,9 @@ vi.mock('../api', () => ({
 }))
 
 describe('ProjectDetail screen', () => {
+  beforeEach(() => {
+    vi.mocked(api.getConfiguration).mockResolvedValue({ valid: true })
+  })
   const mockProjectData = {
     project: {
       id: 'proj-demo',
@@ -166,5 +169,24 @@ describe('ProjectDetail screen', () => {
     expect(await screen.findByText('Configuration error')).toBeInTheDocument()
     expect(screen.getByText('Invalid project configuration TOML')).toBeInTheDocument()
     expect(screen.getByText('/path/to/.openmcp/config.toml')).toBeInTheDocument()
+  })
+
+  it('renders invalid configuration health banner and last-known-good revision while project details remain visible', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getConfiguration).mockResolvedValue({
+      valid: false,
+      last_known_good_revision: 'rev-detail-lkg-004',
+    })
+
+    render(<ProjectDetail projectId="proj-demo" />)
+
+    expect(await screen.findByText('Configuration invalid — showing last-known-good values')).toBeInTheDocument()
+    expect(screen.getByText('rev-detail-lkg-004')).toBeInTheDocument()
+    expect(screen.getByText('Demo Workspace')).toBeInTheDocument()
+    expect(screen.getByText('/home/user/workspace/demo')).toBeInTheDocument()
+    expect(screen.getByText('consult')).toBeInTheDocument()
+    expect(screen.getByText('implement')).toBeInTheDocument()
   })
 })

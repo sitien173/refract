@@ -167,3 +167,30 @@
 
 ### Test evidence
 - RED -> GREEN: Frontend suite passed with 18 tests; Python dashboard tests passed with 13 tests; full pytest passed with 310 passed and 3 deselected; production rebuild and wheel asset assertions passed.
+
+## Review Fix: Invalid configuration health in catalog screens
+
+### Decisions made
+- Added regression tests for invalid configuration health.
+- Tested Projects, Targets, Profiles, and ProjectDetail.
+- Asserted banner and revision render correctly.
+- Confirmed cached catalog data remains visible.
+- Preserved existing production component implementations.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Mocked getConfiguration responses per screen test suite.
+
+### Assumptions
+- Invalid configuration supplies last-known-good revision.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added test coverage for four screens.
+- All 9 frontend test files passed.
+- Production build succeeded.
+- git diff check passed cleanly.

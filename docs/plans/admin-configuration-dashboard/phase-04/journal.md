@@ -11,7 +11,7 @@
 - Implementation Job: n/a
 - Review Job: n/a
 - Started: 2026-09-04T14:18:44+07:00
-- Finished: 2026-09-04T15:00:58+07:00
+- Finished: 2026-09-04T15:08:30+07:00
 
 ## Implementation Response
 
@@ -90,6 +90,30 @@ Fixed dependency-query supersession, expired circuit handling, keyboard tab navi
 - phase-04/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — all requested Phase 4 review fixes and verification checks passed.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 4 final review fix / Started 2026-09-04T15:04:08+07:00 / Finished 2026-09-04T15:08:30+07:00 / Plan docs/plans/admin-configuration-dashboard
+## SUMMARY
+Added focused regression coverage for invalid configuration health.
+Tested Projects, Targets, Profiles, and ProjectDetail screens.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Create | web/src/screens/Projects.test.jsx | Add unit and invalid configuration health regression test coverage for Projects screen. |
+| Create | web/src/screens/Profiles.test.jsx | Add unit and invalid configuration health regression test coverage for Profiles screen. |
+| Modify | web/src/screens/Targets.test.jsx | Add invalid configuration health regression test coverage for Targets screen. |
+| Modify | web/src/screens/ProjectDetail.test.jsx | Add invalid configuration health regression test coverage for ProjectDetail screen. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-04/notes.md | Record review-fix decisions and verification evidence. |
+| Modify | docs/plans/admin-configuration-dashboard/phase-04/journal.md | Record the review-fix response. |
+## NOTES
+- phase-04/notes.md (## Review Fix: Invalid configuration health in catalog screens)
+## SPEC COMPLIANCE
+- Meets Spec? YES. All four screens verify invalid configuration rendering. Cached catalog data remains visible.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT
