@@ -523,4 +523,86 @@ describe('Profiles screen', () => {
       expect.anything()
     )
   })
+
+  it('preserves conflict block and prevents save when profile reload returns missing entity, missing revision, or fails', async () => {
+    vi.mocked(api.updateConfigurationProfile).mockRejectedValueOnce(
+      new api.DashboardApiError('Configuration conflict', 409, {
+        code: 'configuration_conflict',
+        unchanged: 'Configuration file changed on the server.',
+        recovery: 'Reload current configuration and retry.',
+        current: 'rev-prof-002',
+      })
+    )
+
+    render(<Profiles />)
+    expect(await screen.findByText('fast-dev')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('fast-dev').closest('tr'))
+    const editBtn = await screen.findByRole('button', { name: /^Edit profile$/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit profile: fast-dev/i })
+    const extendsSelect = within(dialog).getByLabelText(/Inherits from/i)
+    expect(extendsSelect.value).toBe('default')
+
+    // Modify extends to make form dirty
+    fireEvent.change(extendsSelect, { target: { value: '' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /^Save profile$/i })
+    fireEvent.click(saveBtn)
+
+    expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    const form = dialog.querySelector('form')
+    const reloadBtn = within(dialog).getByRole('button', { name: /Reload current configuration/i })
+
+    // 1. Reload returns missing entity (e.g. deleted profile)
+    vi.mocked(api.getConfigurationProfile).mockResolvedValueOnce({
+      revision: 'rev-prof-002',
+      profile: null,
+    })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).getAllByText(/Profile no longer exists or could not be reloaded/i).length).toBeGreaterThan(0)
+    })
+    expect(within(dialog).getByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateConfigurationProfile).toHaveBeenCalledTimes(1)
+
+    // 2. Reload returns missing revision
+    vi.mocked(api.getConfigurationProfile).mockResolvedValueOnce({
+      revision: '',
+      profile: mockProfilesConfig.profiles[1],
+    })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).getAllByText(/Reload response missing configuration revision/i).length).toBeGreaterThan(0)
+    })
+    expect(within(dialog).getByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateConfigurationProfile).toHaveBeenCalledTimes(1)
+
+    // 3. Reload fails when API throws error
+    vi.mocked(api.getConfigurationProfile).mockRejectedValueOnce(new Error('Server communication failure'))
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).getAllByText(/Profile no longer exists or could not be reloaded/i).length).toBeGreaterThan(0)
+    })
+    expect(within(dialog).getByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateConfigurationProfile).toHaveBeenCalledTimes(1)
+  })
 })

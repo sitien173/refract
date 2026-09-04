@@ -369,14 +369,37 @@ export default function ProfileEditor({
           reloadedProfile = payload.overrides.find((p) => p.id === formData.id)
         }
       }
+
+      const nextRevision = payload?.revision
+      if (mode === 'edit') {
+        if (!reloadedProfile || !nextRevision) {
+          setSaveStatus('')
+          const entityLabel = scope === 'project' ? 'Profile override' : 'Profile'
+          const msg = !reloadedProfile
+            ? `${entityLabel} no longer exists or could not be reloaded.`
+            : 'Reload response missing configuration revision.'
+          setError(msg)
+          if (onAnnounce) {
+            onAnnounce(msg)
+          }
+          return
+        }
+      } else if (mode === 'create') {
+        if (!nextRevision) {
+          setSaveStatus('')
+          const msg = 'Reload response missing configuration revision.'
+          setError(msg)
+          if (onAnnounce) {
+            onAnnounce(msg)
+          }
+          return
+        }
+      }
+
       if (reloadedProfile) {
         setFormData(getInitialFormData(reloadedProfile, availableTargets))
       }
-      if (payload?.revision) {
-        setCurrentRevision(payload.revision)
-      } else if (conflictData?.current && reloadedProfile) {
-        setCurrentRevision(conflictData.current)
-      }
+      setCurrentRevision(nextRevision)
       isDirtyRef.current = false
       setIsDirty(false)
       setConflictData(null)
@@ -387,6 +410,9 @@ export default function ProfileEditor({
     } catch (err) {
       setSaveStatus('')
       setError(err?.message || 'Failed to reload configuration.')
+      if (onAnnounce) {
+        onAnnounce(`Failed to reload configuration: ${err?.message || 'error'}`)
+      }
     }
   }
 

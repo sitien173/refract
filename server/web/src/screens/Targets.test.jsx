@@ -473,4 +473,87 @@ describe('Targets screen', () => {
       expect.anything()
     )
   })
+
+  it('preserves conflict block and prevents save when reload returns missing entity, missing revision, or fails', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValue({
+      revision: 'rev-targets-001',
+      target: mockTargets[0],
+    })
+
+    vi.mocked(api.updateConfigurationTarget).mockRejectedValueOnce(
+      new api.DashboardApiError('Conflict', 409, {
+        code: 'configuration_conflict',
+        unchanged: 'Configuration changed on server.',
+        recovery: 'Reload current configuration and retry.',
+        current: 'rev-targets-002',
+      })
+    )
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('target-healthy').closest('tr'))
+    const editBtn = await screen.findByRole('button', { name: /^Edit target$/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit target: target-healthy/i })
+    await vi.waitFor(() => {
+      expect(within(dialog).getByLabelText(/^Model$/i).value).toBe('claude-3-7-sonnet')
+    })
+
+    const concurrencyInput = within(dialog).getByRole('spinbutton', { name: /Max concurrency/i })
+    fireEvent.change(concurrencyInput, { target: { value: '5' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /^Save target$/i })
+    fireEvent.click(saveBtn)
+
+    expect(await within(dialog).findByText('Configuration conflict')).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    const form = dialog.querySelector('form')
+    const reloadBtn = within(dialog).getByRole('button', { name: /Reload current configuration/i })
+
+    // 1. Reload returns missing entity (e.g. entity deleted)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValueOnce({
+      revision: 'rev-targets-002',
+      target: null,
+    })
+    fireEvent.click(reloadBtn)
+
+    expect(await within(dialog).findByText(/Target no longer exists or could not be reloaded/i)).toBeInTheDocument()
+    expect(within(dialog).getByText('Configuration conflict')).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateConfigurationTarget).toHaveBeenCalledTimes(1)
+
+    // 2. Reload returns missing revision
+    vi.mocked(api.getConfigurationTarget).mockResolvedValueOnce({
+      revision: '',
+      target: mockTargets[0],
+    })
+    fireEvent.click(reloadBtn)
+
+    expect(await within(dialog).findByText(/Reload response missing configuration revision/i)).toBeInTheDocument()
+    expect(within(dialog).getByText('Configuration conflict')).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateConfigurationTarget).toHaveBeenCalledTimes(1)
+
+    // 3. Reload fails when API throws error
+    vi.mocked(api.getConfigurationTarget).mockRejectedValueOnce(new Error('Network error on reload'))
+    fireEvent.click(reloadBtn)
+
+    expect(await within(dialog).findByText(/Target no longer exists or could not be reloaded/i)).toBeInTheDocument()
+    expect(within(dialog).getByText('Configuration conflict')).toBeInTheDocument()
+    expect(saveBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateConfigurationTarget).toHaveBeenCalledTimes(1)
+  })
 })

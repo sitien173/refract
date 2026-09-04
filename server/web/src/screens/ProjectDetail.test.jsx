@@ -604,4 +604,114 @@ describe('ProjectDetail screen', () => {
       expect.anything()
     )
   })
+
+  it('preserves conflict block and prevents save when project override reload returns missing entity, missing revision, or fails', async () => {
+    vi.mocked(api.updateProjectProfileOverride).mockClear()
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getProjectProfileOverride).mockResolvedValue({
+      revision: 'rev-proj-001',
+      source_path: '/path/to/.openmcp/config.toml',
+      override: {
+        id: 'custom-profile',
+        extends: 'base-profile',
+        declared: {
+          implement: { targets: ['worker-1', 'worker-2'], max_attempts: 2, timeout_s: 120 },
+        },
+        inherited: {},
+        effective: {
+          implement: { targets: ['worker-1', 'worker-2'], max_attempts: 2, timeout_s: 120 },
+        },
+        sources: { implement: 'project' },
+      },
+    })
+    vi.mocked(api.updateProjectProfileOverride).mockRejectedValueOnce(
+      new api.DashboardApiError('Conflict', 409, {
+        code: 'conflict',
+        message: 'Conflict occurred',
+        current: 'rev-proj-002',
+      })
+    )
+
+    render(<ProjectDetail projectId="proj-demo" />)
+
+    const profileTab = await screen.findByRole('tab', { name: /Profile resolution/i })
+    fireEvent.click(profileTab)
+
+    const editBtn = screen.getByRole('button', { name: /Edit override: custom-profile/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit profile override: custom-profile/i })
+    expect(dialog).toBeInTheDocument()
+
+    const timeoutInput = within(dialog).getByLabelText(/implement timeout in seconds/i)
+    fireEvent.change(timeoutInput, { target: { value: '999' } })
+
+    const submitBtn = within(dialog).getByRole('button', { name: /^Save override$/i })
+    fireEvent.click(submitBtn)
+
+    expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(submitBtn).toBeDisabled()
+
+    const form = dialog.querySelector('form')
+    const reloadBtn = within(dialog).getByRole('button', { name: /Reload current configuration/i })
+
+    // 1. Reload returns missing entity (e.g. override was deleted on server)
+    vi.mocked(api.getProjectProfileOverrides).mockResolvedValueOnce({
+      revision: 'rev-proj-002',
+      source_path: '/path/to/.openmcp/config.toml',
+      overrides: [],
+    })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).getAllByText(/Profile override no longer exists or could not be reloaded/i).length).toBeGreaterThan(0)
+    })
+    expect(within(dialog).getByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(submitBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateProjectProfileOverride).toHaveBeenCalledTimes(1)
+
+    // 2. Reload returns missing revision
+    vi.mocked(api.getProjectProfileOverrides).mockResolvedValueOnce({
+      revision: '',
+      overrides: [
+        {
+          id: 'custom-profile',
+          extends: 'base-profile',
+          declared: {
+            implement: { targets: ['worker-1'], max_attempts: 1, timeout_s: 60 },
+          },
+        },
+      ],
+    })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).getAllByText(/Reload response missing configuration revision/i).length).toBeGreaterThan(0)
+    })
+    expect(within(dialog).getByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(submitBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateProjectProfileOverride).toHaveBeenCalledTimes(1)
+
+    // 3. Reload fails when API throws error
+    vi.mocked(api.getProjectProfileOverrides).mockRejectedValueOnce(new Error('Network error on reload'))
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).getAllByText(/Profile override no longer exists or could not be reloaded/i).length).toBeGreaterThan(0)
+    })
+    expect(within(dialog).getByText(/Configuration conflict detected/i)).toBeInTheDocument()
+    expect(submitBtn).toBeDisabled()
+
+    // Submit remains blocked
+    fireEvent.submit(form)
+    expect(api.updateProjectProfileOverride).toHaveBeenCalledTimes(1)
+  })
 })
