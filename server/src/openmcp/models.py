@@ -32,11 +32,80 @@ class JobResult(BaseModel):
     error: str = ""
 
 
+class ConfigRevision(BaseModel):
+    """Identity and display metadata for one global configuration source."""
+
+    content_hash: str = ""
+    source_path: str = ""
+    modification_time: str = ""
+    loaded_at: str = ""
+    valid: bool = False
+
+    @property
+    def revision(self) -> str:
+        return self.content_hash
+
+    @property
+    def hash(self) -> str:
+        return self.content_hash
+
+    @property
+    def path(self) -> str:
+        return self.source_path
+
+    @property
+    def mtime(self) -> str:
+        return self.modification_time
+
+
+class ConfigHealth(BaseModel):
+    """Latest global configuration load evidence."""
+
+    attempted_at: str = ""
+    successful_at: str = ""
+    source_path: str = ""
+    modification_time: str = ""
+    revision: str = ""
+    valid: bool = False
+    latest_error: str = ""
+    last_known_good_revision: str = ""
+
+    @property
+    def path(self) -> str:
+        return self.source_path
+
+    @property
+    def last_attempted_at(self) -> str:
+        return self.attempted_at
+
+    @property
+    def last_successful_at(self) -> str:
+        return self.successful_at
+
+    @property
+    def current_revision(self) -> str:
+        return self.revision
+
+    @property
+    def last_error(self) -> str:
+        return self.latest_error
+
+    @property
+    def mtime(self) -> str:
+        return self.modification_time
+
+
+# The longer names are useful to callers that do not use the dashboard shorthand.
+ConfigurationHealth = ConfigHealth
+ConfigHealthSnapshot = ConfigHealth
+
+
 class JobView(BaseModel):
     id: str
     project_id: str
     workflow: str
     profile: str
+    config_revision: str = ""
     state: JobState
     context_key: str
     target_id: str = ""
@@ -108,6 +177,10 @@ class ResourcePayload(BaseModel):
 
 __all__ = [
     "ActionResult",
+    "ConfigHealth",
+    "ConfigHealthSnapshot",
+    "ConfigRevision",
+    "ConfigurationHealth",
     "ContextInstructionsResult",
     "ContextStreamView",
     "DaemonStatusResult",

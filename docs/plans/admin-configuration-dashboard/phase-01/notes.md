@@ -1,3 +1,86 @@
 <!-- ccg-shared-version: 10.2.0 -->
 
 # Phase 1 — Decision Notes
+
+## Task 1
+
+### Decisions made
+- Configuration source metadata is attached to the loaded `DaemonConfig`; health snapshots are public Pydantic models.
+- The full lowercase SHA-256 digest is computed from the one byte buffer used for UTF-8 decoding and TOML parsing.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Modification time is retained as ISO display evidence and is never used as revision identity.
+
+### Assumptions
+- A catalog constructed directly by tests or embedding callers is an initially valid catalog even when it has no source path.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Initial inspection tests failed during collection because `config_inspection` did not exist; after implementing source reading, hashing, and normalized decode errors, 3 focused tests passed.
+
+## Task 2
+
+### Decisions made
+- Runtime health keeps the last successful timestamp and revision when a reload fails, while recording the failed attempt separately.
+- Configuration errors are bounded before health exposure and do not include complete invalid target declarations.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Health is runtime state rather than persisted database state; the catalog remains the authoritative last-known-good object for the daemon lifetime.
+
+### Assumptions
+- A reload failure is surfaced to the caller, so stale configuration is never used for a new submission.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Failed-reload and initial-health tests passed after adding health seeding and failure recording; focused configuration/runtime suite passed.
+
+## Task 3
+
+### Decisions made
+- The global revision is stamped at job creation, while the serialized immutable execution plan remains authoritative for project overrides and retries.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Direct database callers retain a default empty revision for compatibility.
+
+### Assumptions
+- Existing retry transitions do not need to re-resolve configuration because they already retain their plan snapshot.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: New runtime submission and database retry tests passed, including revision preservation and unchanged execution-plan JSON.
+
+## Task 4
+
+### Decisions made
+- Database schema version 8 adds `config_revision TEXT NOT NULL DEFAULT ''`.
+- Version gates replace exact legacy column-set detection for reopen behavior; the new column migration uses `BEGIN IMMEDIATE` and an explicit commit/rollback.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Older v5/v6/legacy migrations complete their existing normalization first, then apply the small v8 column migration.
+
+### Assumptions
+- Databases with a current version are trusted to have the current schema, as in prior migrations.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Existing schema assertions initially reported the expected v8 mismatch; updated migration coverage passed with preserved rows/support data, and the full suite completed at 290 passed, 3 deselected.

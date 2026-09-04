@@ -82,27 +82,28 @@ def table_columns(database: Database, table: str) -> set[str]:
     return database._columns(table)
 
 
-def test_fresh_database_uses_v7_schema(tmp_path) -> None:
+def test_fresh_database_uses_v8_schema(tmp_path) -> None:
     database = Database(tmp_path / "openmcp.db")
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 8
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "created_at", "updated_at"}
     assert table_columns(database, "context_instructions") == {"project_id", "workflow", "instruction", "updated_at"}
     assert "stages" not in tables and "artifacts" not in tables
     database.close()
 
 
-def test_v6_migrates_to_v7_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v6_migrates_to_v8_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v6_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 8
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
+    assert job.config_revision == ""
     assert database.events("job")[0]["kind"] == "job.queued"
     assert database._connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0] == 1
     assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
@@ -112,13 +113,13 @@ def test_v6_migrates_to_v7_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_v5_migrates_to_v7_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v5_migrates_to_v8_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v5_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 8
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
@@ -131,12 +132,12 @@ def test_v5_migrates_to_v7_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_reopening_v7_is_a_noop(tmp_path) -> None:
+def test_reopening_v8_is_a_noop(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     first = Database(path)
     first.close()
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 8
     second.close()
 
 
@@ -165,6 +166,28 @@ def test_legacy_jobs_collapse_to_historical_results(tmp_path) -> None:
     assert conflict and conflict.state == "failed" and conflict.result.error == "conflict"
     assert database.events("completed")[0]["kind"] == "legacy.event"
     assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
+    database.close()
+
+
+def test_job_revision_survives_retry_without_plan_changes(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+    database.create_job(
+        job_id="job",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="question",
+        execution_plan_json='{"targets":["primary"]}',
+        context_key="consult",
+        config_revision="a" * 64,
+    )
+    with database._connection:
+        database._connection.execute("UPDATE jobs SET state='failed' WHERE id='job'")
+    database.reset_retry("job")
+    record = database.job_record("job")
+    assert record and record["config_revision"] == "a" * 64
+    assert record["execution_plan_json"] == '{"targets":["primary"]}'
     database.close()
 
 

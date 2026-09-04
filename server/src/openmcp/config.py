@@ -9,6 +9,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from openmcp.config_inspection import (
+    ConfigurationLoadError,
+    read_config_source,
+)
 from openmcp.workflows import get_workflow
 
 
@@ -69,11 +73,19 @@ class DaemonConfig:
     profiles: dict[str, dict[str, TargetSelection]] = field(default_factory=dict)
     profile_declarations: dict[str, ProfileDeclaration] = field(default_factory=dict)
     config_path: Path | None = None
+    config_revision: str = ""
+    config_modification_time: str = ""
+    config_loaded_at: str = ""
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     @property
     def database_path(self) -> Path:
         return self.home / "openmcp.db"
+
+    @property
+    def revision(self) -> str:
+        """The global source revision used by this catalog."""
+        return self.config_revision
 
 
 
@@ -382,7 +394,9 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
         target_id = raw_target_id.strip() if isinstance(raw_target_id, str) else ""
         backend = raw_backend.strip() if isinstance(raw_backend, str) else ""
         if not target_id or backend not in {"agy", "codex", "pi", "claude"}:
-            raise ValueError(f"Invalid target: {item!r}")
+            # Do not echo the complete declaration: it may contain prompts or
+            # other operator-supplied sensitive values.
+            raise ValueError("Invalid target declaration")
         args = item.get("args", [])
         if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
             raise ValueError(f"Target {target_id!r} args must be a list of strings")
@@ -497,9 +511,51 @@ def load_config(path: Path | None = None) -> DaemonConfig:
     home = openmcp_home()
     config_path = path or home / "config.toml"
     try:
-        raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        source = read_config_source(config_path)
     except FileNotFoundError as exc:
-        raise ValueError(f"Missing config file: {config_path}") from exc
+        raise ConfigurationLoadError(
+            f"Missing config file: {config_path}", path=config_path
+        ) from exc
+    except OSError as exc:
+        raise ConfigurationLoadError(
+            f"Unable to read config file: {config_path}", path=config_path
+        ) from exc
+    try:
+        # Decode and parse the same buffer that was hashed above.
+        raw = tomllib.loads(source.data.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ConfigurationLoadError(
+            f"Invalid config file: {config_path}: invalid UTF-8",
+            path=config_path,
+            revision=source.revision,
+            modification_time=source.modification_time,
+            attempted_at=source.loaded_at,
+        ) from exc
+    except ValueError as exc:
+        raise ConfigurationLoadError(
+            str(exc),
+            path=config_path,
+            revision=source.revision,
+            modification_time=source.modification_time,
+            attempted_at=source.loaded_at,
+        ) from exc
+    try:
+        return _load_config_values(config_path, home, raw, source)
+    except ConfigurationLoadError:
+        raise
+    except ValueError as exc:
+        raise ConfigurationLoadError(
+            str(exc),
+            path=config_path,
+            revision=source.revision,
+            modification_time=source.modification_time,
+            attempted_at=source.loaded_at,
+        ) from exc
+
+
+def _load_config_values(
+    config_path: Path, home: Path, raw: dict[str, Any], source: Any
+) -> DaemonConfig:
     unsupported = set(raw) - {
         "daemon",
         "logging",
@@ -544,6 +600,9 @@ def load_config(path: Path | None = None) -> DaemonConfig:
     return DaemonConfig(
         home=home,
         config_path=config_path,
+        config_revision=source.revision,
+        config_modification_time=source.modification_time,
+        config_loaded_at=source.loaded_at,
         host=host.strip(),
         port=port,
         max_jobs=_positive_int(daemon.get("max_jobs"), 4, "[daemon].max_jobs"),

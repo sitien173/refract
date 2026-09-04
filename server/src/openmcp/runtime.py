@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from openmcp.config import DaemonConfig, load_config, load_project_config
+from openmcp.config_inspection import bound_error, utc_now
 from openmcp.context_files import sweep_context_files
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry
@@ -15,6 +16,7 @@ from openmcp.execution import JobNotifier, JobRunner, TargetExecutor
 from openmcp.logging_setup import get_logger
 from openmcp.models import (
     ActionResult,
+    ConfigHealth,
     ContextInstructionsResult,
     DaemonStatusResult,
     JobView,
@@ -46,6 +48,7 @@ class Runtime:
         self.config.home.mkdir(parents=True, exist_ok=True)
         self.database = Database(config.database_path)
         self._catalog = config
+        self._config_health = self._seed_config_health(config)
         self._closing = False
         self.notifier = notifier or _noop_notifier
         self.target_executor = TargetExecutor(config, self.database, DriverRegistry())
@@ -138,7 +141,7 @@ class Runtime:
         except ValueError as exc:
             raise OrchestrationError(str(exc)) from exc
         job_id = str(uuid.uuid4())
-        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow)
+        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow, config_revision=catalog.config_revision)
         await self._notify_job_resource(job_resource_uri(job_id))
         self.scheduler.enqueue(job_id, project.id)
         log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})
@@ -215,6 +218,28 @@ class Runtime:
     def catalog(self) -> DaemonConfig:
         return self._catalog
 
+    @property
+    def config_health(self) -> ConfigHealth:
+        return self._config_health.model_copy()
+
+    def configuration_health(self) -> ConfigHealth:
+        """Return global configuration health, separately from daemon status."""
+        return self.config_health
+
+    @staticmethod
+    def _seed_config_health(config: DaemonConfig) -> ConfigHealth:
+        loaded_at = config.config_loaded_at or utc_now()
+        source_path = config.config_path.as_posix() if config.config_path else ""
+        return ConfigHealth(
+            attempted_at=loaded_at,
+            successful_at=loaded_at,
+            source_path=source_path,
+            modification_time=config.config_modification_time,
+            revision=config.config_revision,
+            valid=True,
+            last_known_good_revision=config.config_revision,
+        )
+
     def catalog_for_project(self, project_id: str) -> DaemonConfig:
         project = self.database.project(project_id)
         if project is None:
@@ -230,7 +255,37 @@ class Runtime:
     def _reload_catalog(self) -> DaemonConfig:
         if self.config.config_path is None:
             return self._catalog
-        self._catalog = load_config(self.config.config_path)
+        try:
+            catalog = load_config(self.config.config_path)
+        except ValueError as exc:
+            attempted_at = getattr(exc, "attempted_at", utc_now())
+            source_path = getattr(exc, "path", self.config.config_path)
+            revision = getattr(exc, "revision", "")
+            modification = getattr(exc, "modification_time", "")
+            self._config_health = self._config_health.model_copy(
+                update={
+                    "attempted_at": attempted_at,
+                    "source_path": Path(source_path).as_posix(),
+                    "modification_time": modification,
+                    "revision": revision,
+                    "valid": False,
+                    "latest_error": bound_error(exc),
+                }
+            )
+            raise
+        previous = self._config_health
+        self._catalog = catalog
+        self._config_health = ConfigHealth(
+            attempted_at=catalog.config_loaded_at or utc_now(),
+            successful_at=catalog.config_loaded_at or utc_now(),
+            source_path=catalog.config_path.as_posix() if catalog.config_path else "",
+            modification_time=catalog.config_modification_time,
+            revision=catalog.config_revision,
+            valid=True,
+            latest_error="",
+            last_known_good_revision=catalog.config_revision
+            or previous.last_known_good_revision,
+        )
         return self._catalog
 
 

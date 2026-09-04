@@ -13,7 +13,7 @@ from openmcp.models import ContextStreamView, JobResult, JobView, ProjectView
 
 
 log = get_logger("database")
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 
 def utc_now() -> str:
@@ -42,30 +42,50 @@ class Database:
         if "jobs" not in tables:
             self._create_schema()
         else:
+            version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
             columns = self._columns("jobs")
-            if self._is_v6_schema(columns):
-                self._create_support_tables()
-                if self._connection.execute("PRAGMA user_version").fetchone()[0] != _SCHEMA_VERSION:
-                    self._connection.execute("PRAGMA user_version=7")
-                    self._connection.commit()
-            elif {"prompt", "result_text", "target_id", "attempts"} <= columns:
-                self._migrate_v5_to_v6()
-                self._create_support_tables()
-            else:
+            if version == 0:
                 self._migrate_legacy_jobs()
                 self._create_support_tables()
+                self._migrate_v7_to_v8()
+            elif version == 5:
+                self._migrate_v5_to_v6()
+                self._create_support_tables()
+                self._migrate_v7_to_v8()
+            elif version == 6:
+                self._create_support_tables()
+                self._connection.execute("PRAGMA user_version=7")
                 self._connection.commit()
+                self._migrate_v7_to_v8()
+            elif version == 7 and "config_revision" not in columns:
+                self._migrate_v7_to_v8()
+            else:
+                # Schema version, rather than an exact column-set guess, gates
+                # migrations. This keeps a reopened database from treating a
+                # newly added column as legacy and dropping it.
+                self._create_support_tables()
+                if version < _SCHEMA_VERSION:
+                    self._connection.execute(
+                        f"PRAGMA user_version={_SCHEMA_VERSION}"
+                    )
+                    self._connection.commit()
         log.debug(
             "Database schema is current",
             extra={"event": "database.migrated", "schema_version": _SCHEMA_VERSION},
         )
 
-    def _is_v6_schema(self, job_columns: set[str]) -> bool:
-        return job_columns == {
-            "id", "project_id", "workflow", "profile", "prompt",
-            "execution_plan_json", "context_key", "state", "result_text",
-            "target_id", "attempts", "error", "created_at", "updated_at",
-        } and self._columns("projects") == {"id", "alias", "root", "created_at"}
+    def _migrate_v7_to_v8(self) -> None:
+        """Add revision identity without rewriting historical job rows."""
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute(
+                "ALTER TABLE jobs ADD COLUMN config_revision TEXT NOT NULL DEFAULT ''"
+            )
+            self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
 
     def _tables(self) -> set[str]:
         return {
@@ -113,13 +133,14 @@ class Database:
                 target_id TEXT NOT NULL DEFAULT '',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 error TEXT NOT NULL DEFAULT '',
+                config_revision TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             """
         )
         self._create_support_tables()
-        self._connection.execute("PRAGMA user_version=7")
+        self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
         self._connection.commit()
 
     def _create_support_tables(self) -> None:
@@ -447,14 +468,29 @@ class Database:
     def _project_view(row: sqlite3.Row) -> ProjectView:
         return ProjectView(id=row["id"], alias=row["alias"], root=row["root"], created_at=row["created_at"])
 
-    def create_job(self, *, job_id: str, project_id: str, workflow: str, profile: str, prompt: str, execution_plan_json: str, context_key: str) -> None:
+    def create_job(
+        self,
+        *,
+        job_id: str,
+        project_id: str,
+        workflow: str,
+        profile: str,
+        prompt: str,
+        execution_plan_json: str,
+        context_key: str,
+        config_revision: str = "",
+    ) -> None:
         now = utc_now()
         with self._connection:
             self._connection.execute(
                 """INSERT INTO jobs(id, project_id, workflow, profile, prompt,
-                   execution_plan_json, context_key, state, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)""",
-                (job_id, project_id, workflow, profile, prompt, execution_plan_json, context_key, now, now),
+                   execution_plan_json, context_key, state, config_revision,
+                   created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)""",
+                (
+                    job_id, project_id, workflow, profile, prompt,
+                    execution_plan_json, context_key, config_revision, now, now,
+                ),
             )
         self.event(job_id, "job.queued", {"workflow": workflow, "profile": profile})
 
@@ -525,7 +561,7 @@ class Database:
 
     @staticmethod
     def _job_view(row: sqlite3.Row) -> JobView:
-        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], state=row["state"], context_key=row["context_key"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], error=row["error"]))
+        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], config_revision=row["config_revision"], state=row["state"], context_key=row["context_key"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], error=row["error"]))
 
     def session(self, project_id: str, context_key: str, role: str, target_key: str, lane: str = "") -> str:
         row = self._connection.execute("SELECT session_id FROM context_sessions WHERE project_id=? AND context_key=? AND role=? AND target_key=? AND lane=?", (project_id, context_key, role, target_key, lane)).fetchone()
