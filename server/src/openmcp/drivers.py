@@ -34,7 +34,7 @@ class DriverResult:
     error_code: str
 
 
-def _target_args(target: TargetConfig, instruction: str = "") -> tuple[str, ...]:
+def _target_args(target: TargetConfig) -> tuple[str, ...]:
     """Translate target policy into backend argv.
 
     Backends only own transport arguments. Provider-specific execution policy
@@ -87,8 +87,6 @@ def _target_args(target: TargetConfig, instruction: str = "") -> tuple[str, ...]
             args.extend(["--model", target.model])
         if target.reasoning:
             args.extend(["--thinking", target.reasoning])
-        if instruction:
-            args.extend(["--append-system-prompt", instruction])
         return tuple(args)
 
     if target.backend == "claude":
@@ -102,8 +100,6 @@ def _target_args(target: TargetConfig, instruction: str = "") -> tuple[str, ...]
             args.extend(["--model", target.model])
         if target.reasoning:
             args.extend(["--effort", target.reasoning])
-        if instruction:
-            args.extend(["--append-system-prompt", instruction])
     return tuple(args)
 
 
@@ -141,10 +137,9 @@ class DriverRegistry:
         session_id: str,
         timeout_s: int,
         cancel_event: threading.Event,
-        instruction: str = "",
     ) -> DriverResult:
         try:
-            args = _target_args(target, instruction)
+            args = _target_args(target)
         except ValueError as exc:
             return DriverResult(
                 outcome="TARGET_FATAL",

@@ -22,7 +22,6 @@ from openmcp.config_inspection import sanitize_config_error
 from openmcp.config_mutation import ConfigurationMutationError
 from openmcp.models import (
     DashboardBootstrap,
-    DashboardContextInstruction,
     DashboardError,
     DashboardJob,
     DashboardOverview,
@@ -1217,7 +1216,6 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
                 {
                     "project": project_view,
                     "configuration": _profile_config_data(runtime.catalog, catalog),
-                    "context_instructions": runtime.context_instructions(project_view.id),
                 }
             )
         except RuntimeError:
@@ -1256,16 +1254,6 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
             return _runtime_error()
         except ValueError as exc:
             return _error(str(exc), 422, code="task_guide_invalid")
-
-    async def context_instructions(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            project_id = request.path_params["project_id"]
-            if runtime.database.project(project_id) is None:
-                return _error("Unknown project", 404, code="not_found")
-            return _json_response(runtime.context_instructions(project_id))
-        except RuntimeError:
-            return _runtime_error()
 
     async def project_jobs(request: Request) -> Response:
         try:
@@ -1333,70 +1321,6 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
     async def dashboard_deep_link(request: Request) -> Response:
         return await dashboard_index(request)
 
-    async def update_context_instruction(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        try:
-            payload = await request.json()
-        except Exception:
-            return _error("Invalid JSON body", 400, code="invalid_request")
-        if not isinstance(payload, dict):
-            return _error("Request body must be an object", 400, code="invalid_request")
-        if request.method == "DELETE" and not any(
-            key in payload for key in ("expected_current", "expected_current_value", "expected")
-        ):
-            return _error(
-                "Expected current value is required",
-                400,
-                code="invalid_request",
-            )
-        if not isinstance(payload.get("instruction", ""), str):
-            return _error("Instruction must be a string", 400, code="invalid_request")
-        expected = payload.get(
-            "expected_current",
-            payload.get("expected_current_value", payload.get("expected", "")),
-        )
-        if not isinstance(expected, str):
-            return _error("Expected current value must be a string", 400, code="invalid_request")
-        workflow = request.path_params.get("workflow", "") or payload.get("workflow", "")
-        if not isinstance(workflow, str) or not workflow:
-            return _error("Workflow must be a string", 400, code="invalid_request")
-        try:
-            updated, current, workflow = runtime.compare_and_set_context_instruction(
-                request.path_params["project_id"],
-                workflow,
-                expected,
-                payload.get("instruction", ""),
-            )
-            project_view = runtime.database.project(request.path_params["project_id"])
-            if not updated:
-                return _error(
-                    "Context instruction changed",
-                    409,
-                    code="context_conflict",
-                    unchanged="The newer context instruction remains unchanged.",
-                    recovery="Refresh the current instruction and retry.",
-                    current=current,
-                )
-            return _json_response(
-                DashboardContextInstruction(
-                    project_id=project_view.id,
-                    workflow=workflow,
-                    instruction=current,
-                )
-            )
-        except RuntimeError:
-            return _runtime_error()
-        except ValueError as exc:
-            message = str(exc)
-            if message.startswith("Unknown project"):
-                return _error("Unknown project", 404, code="not_found")
-            return _error(message, 400, code="invalid_request")
-
     async def missing_asset(request: Request) -> Response:
         return Response(status_code=404)
 
@@ -1447,16 +1371,9 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         Route("/dashboard/api/projects/{project_id}/profiles", project_profiles, methods=["GET"]),
         Route("/dashboard/api/task-guide", task_guide, methods=["GET"]),
         Route("/dashboard/api/projects/{project_id}/task-guide", task_guide, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/context-instructions", context_instructions, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/context-instructions", update_context_instruction, methods=["PUT", "POST", "DELETE"]),
         Route("/dashboard/api/projects/{project_id}/jobs", project_jobs, methods=["GET"]),
         Route("/dashboard/api/jobs/{job_id}", job, methods=["GET"]),
         Route("/dashboard/api/jobs/{job_id}/events", job_events, methods=["GET"]),
-        Route(
-            "/dashboard/api/projects/{project_id}/context-instructions/{workflow}",
-            update_context_instruction,
-            methods=["PUT", "POST", "DELETE"],
-        ),
         Route("/dashboard/api", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         Route("/dashboard/api/{path:path}", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         Route("/dashboard/assets", missing_asset, methods=["GET"]),

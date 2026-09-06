@@ -48,7 +48,7 @@ describe('dashboard shell', () => {
 
 describe('dashboard API boundary', () => {
   it('bootstraps CSRF and retries exactly once after a forbidden mutation', async () => {
-    const { clearCsrfToken, updateContextInstruction } = await vi.importActual('./api')
+    const { clearCsrfToken, updateConfigurationTarget } = await vi.importActual('./api')
     clearCsrfToken()
     const response = (status, payload) => ({
       ok: status >= 200 && status < 300,
@@ -59,10 +59,10 @@ describe('dashboard API boundary', () => {
       .mockResolvedValueOnce(response(200, { csrf_token: 'first-token' }))
       .mockResolvedValueOnce(response(403, { error: 'Forbidden', code: 'forbidden' }))
       .mockResolvedValueOnce(response(200, { csrf_token: 'second-token' }))
-      .mockResolvedValueOnce(response(200, { instruction: 'updated' }))
+      .mockResolvedValueOnce(response(200, { id: 'updated' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(updateContextInstruction('project', 'consult', 'updated', '')).resolves.toEqual({ instruction: 'updated' })
+    await expect(updateConfigurationTarget('target', { backend: 'codex' }, 'rev')).resolves.toEqual({ id: 'updated' })
 
     expect(fetchMock).toHaveBeenCalledTimes(4)
     expect(fetchMock.mock.calls[1][1].headers['X-OpenMCP-CSRF']).toBe('first-token')

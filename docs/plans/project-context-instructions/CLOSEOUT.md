@@ -2,6 +2,24 @@
 
 # Closeout: project-context-instructions
 
+## Reverted
+
+This feature was removed on user request. The removal is a forward change, not a
+`git revert`: 71 commits of later work built on the plan's surface, so reverting
+`7097a18..261d3c8` would have left dependent code calling deleted functions.
+
+Removed: the `context_init` MCP tool, the
+`openmcp://projects/{project_id}/context_instructions` resource, the
+`context_instructions` table (schema v8 to v9 drops it), the `ExecutionPlan`
+instruction field, `context_files.py` and its backend delivery through
+`--append-system-prompt`, `AGENTS.override.md`, and `GEMINI.md`, the dashboard
+context-instruction routes, and the React screens.
+
+Job rows written before the removal keep an `"instruction"` key in
+`execution_plan_json`; `parse_execution_plan` ignores it.
+
+The record below describes the feature as originally shipped.
+
 ## Shipped
 
 - Backlog rows closed: B-002

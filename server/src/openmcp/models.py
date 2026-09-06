@@ -162,11 +162,6 @@ class TaskGuideResult(BaseModel):
     guide: dict[str, Any]
 
 
-class ContextInstructionsResult(BaseModel):
-    project_id: str
-    instructions: dict[str, str]
-
-
 class DaemonStatusResult(BaseModel):
     status: Literal["running", "stopping"]
     workers: int
@@ -370,12 +365,6 @@ class DashboardJob(BaseModel):
     execution_plan: dict[str, Any] = Field(default_factory=dict)
 
 
-class DashboardContextInstruction(BaseModel):
-    project_id: str
-    workflow: str
-    instruction: str = ""
-
-
 class ResourcePayload(BaseModel):
     data: Any
 
@@ -384,14 +373,12 @@ __all__ = [
     "ActionResult",
     "ConfigHealth",
     "DashboardBootstrap",
-    "DashboardContextInstruction",
     "DashboardError",
     "DashboardJob",
     "DashboardOverview",
     "ConfigHealthSnapshot",
     "ConfigRevision",
     "ConfigurationHealth",
-    "ContextInstructionsResult",
     "ContextStreamView",
     "DaemonStatusResult",
     "JobResult",

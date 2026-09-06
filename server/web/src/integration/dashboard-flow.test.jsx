@@ -26,9 +26,6 @@ vi.mock('../api', () => ({
   getProjectJobs: vi.fn(),
   getJob: vi.fn(),
   getTaskGuide: vi.fn(),
-  getContextInstructions: vi.fn(),
-  updateContextInstruction: vi.fn(),
-  deleteContextInstruction: vi.fn(),
   getProjectProfileOverrides: vi.fn(),
   getProjectProfileOverride: vi.fn(),
   createProjectProfileOverride: vi.fn(),
@@ -76,13 +73,6 @@ describe('Dashboard integrated user flows', () => {
             sources: { consult: 'global' },
           },
         ],
-      },
-    })
-
-    vi.mocked(api.getContextInstructions).mockResolvedValue({
-      project_id: 'proj-alpha',
-      instructions: {
-        consult: 'Initial consult instruction',
       },
     })
 
@@ -233,94 +223,6 @@ describe('Dashboard integrated user flows', () => {
         },
       ],
     })
-  })
-
-  it('completes the full context instruction editing and clearing flow with security constraints', async () => {
-    vi.mocked(api.updateContextInstruction).mockResolvedValue({
-      project_id: 'proj-alpha',
-      workflow: 'consult',
-      instruction: 'New comprehensive consult instruction',
-    })
-
-    vi.mocked(api.deleteContextInstruction).mockResolvedValue({
-      project_id: 'proj-alpha',
-      workflow: 'consult',
-      instruction: '',
-    })
-
-    const { container } = render(<App />)
-
-    // Initial Overview shows daemon status
-    expect(await screen.findByText('Daemon running')).toBeInTheDocument()
-
-    // Navigate to Projects via sidebar
-    const projectsNav = screen.getByRole('button', { name: /^Projects$/i })
-    fireEvent.click(projectsNav)
-
-    expect(await screen.findByText('Alpha Service')).toBeInTheDocument()
-
-    // Navigate to Project Detail
-    const projectLink = screen.getByText('Alpha Service')
-    fireEvent.click(projectLink)
-
-    expect(await screen.findByRole('tab', { name: /Context instructions/i })).toBeInTheDocument()
-
-    // Switch to Context tab
-    const contextTab = screen.getByRole('tab', { name: /Context instructions/i })
-    fireEvent.click(contextTab)
-
-    expect(await screen.findByText('Initial consult instruction')).toBeInTheDocument()
-
-    // Open Edit modal
-    const editBtn = screen.getByRole('button', { name: /Edit consult context instruction/i })
-    fireEvent.click(editBtn)
-
-    const dialog = screen.getByRole('dialog', { name: /Edit context instruction: consult/i })
-    expect(dialog).toBeInTheDocument()
-
-    const textarea = screen.getByLabelText(/Instruction content/i)
-    fireEvent.change(textarea, { target: { value: 'New comprehensive consult instruction' } })
-
-    const confirmCheck = screen.getByLabelText(/I confirm this change applies only to future jobs/i)
-    fireEvent.click(confirmCheck)
-
-    const saveBtn = screen.getByRole('button', { name: /Save instruction/i })
-    fireEvent.click(saveBtn)
-
-    await waitFor(() => {
-      expect(api.updateContextInstruction).toHaveBeenCalledWith(
-        'proj-alpha',
-        'consult',
-        'New comprehensive consult instruction',
-        'Initial consult instruction'
-      )
-    })
-
-    expect(await screen.findByText('New comprehensive consult instruction')).toBeInTheDocument()
-
-    // Clear instruction flow
-    const clearBtn = screen.getByRole('button', { name: /Clear consult context instruction/i })
-    fireEvent.click(clearBtn)
-
-    const clearDialog = screen.getByRole('dialog', { name: /Clear context instruction: consult/i })
-    expect(clearDialog).toBeInTheDocument()
-
-    const confirmClearCheck = screen.getByLabelText(/I confirm this clear action affects future jobs only/i)
-    fireEvent.click(confirmClearCheck)
-
-    const confirmClearBtn = screen.getByRole('button', { name: /Confirm clear/i })
-    fireEvent.click(confirmClearBtn)
-
-    await waitFor(() => {
-      expect(api.deleteContextInstruction).toHaveBeenCalledWith(
-        'proj-alpha',
-        'consult',
-        'New comprehensive consult instruction'
-      )
-    })
-
-    // Assert CSRF token is nowhere in the rendered DOM
-    expect(container.innerHTML).not.toContain('secret-csrf-token')
   })
 
   it('navigates to Jobs, inspects job execution plan, and enforces redaction', async () => {

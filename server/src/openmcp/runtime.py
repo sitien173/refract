@@ -10,7 +10,6 @@ from pathlib import Path
 from openmcp.config import DaemonConfig, load_config, load_project_config
 from openmcp.config_inspection import bound_error, sanitize_config_error, utc_now
 from openmcp.config_mutation import ConfigurationMutationService
-from openmcp.context_files import sweep_context_files
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry
 from openmcp.execution import JobNotifier, JobRunner, TargetExecutor
@@ -18,7 +17,6 @@ from openmcp.logging_setup import get_logger
 from openmcp.models import (
     ActionResult,
     ConfigHealth,
-    ContextInstructionsResult,
     DaemonStatusResult,
     JobView,
     ProjectView,
@@ -86,23 +84,8 @@ class Runtime:
         interrupted = self.database.interrupt_active_jobs()
         for job in interrupted:
             await self._notify_job_resource(job_resource_uri(job["id"]))
-        self._sweep_project_context_files()
         await self.scheduler.start(self.database.queued_jobs())
         log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
-
-    def _sweep_project_context_files(self) -> None:
-        """Remove managed marker-bearing leftovers for every registered project."""
-        for project in self.database.projects():
-            root = Path(project.root)
-            for filename in ("AGENTS.override.md", "GEMINI.md"):
-                try:
-                    sweep_context_files(root, root / filename)
-                except Exception:
-                    log.warning(
-                        "Context file sweep failed",
-                        extra={"event": "context_file.sweep_failed", "project_id": project.id, "root": project.root, "filename": filename},
-                        exc_info=True,
-                    )
 
     async def close(self) -> None:
         self._closing = True
@@ -142,8 +125,7 @@ class Runtime:
             with self.mutations.lock:
                 catalog = load_project_config(Path(project.root), self._reload_catalog_locked())
                 selected_profile = profile.strip() or catalog.default_profile
-                instruction = self.database.context_instruction(project.id, workflow)
-                plan = resolve_execution_plan(workflow, catalog, selected_profile, instruction)
+                plan = resolve_execution_plan(workflow, catalog, selected_profile)
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
         job_id = str(uuid.uuid4())
@@ -196,48 +178,6 @@ class Runtime:
 
     def status(self) -> DaemonStatusResult:
         return DaemonStatusResult(status="stopping" if self._closing else "running", workers=self.scheduler.workers, active_jobs=self.scheduler.active_jobs, queued_jobs=self.scheduler.queued_jobs)
-
-    def set_context_instruction(self, project_id: str, workflow: str, instruction: str) -> ContextInstructionsResult:
-        project = self.database.project(project_id)
-        if project is None:
-            raise OrchestrationError(f"Unknown project: {project_id}")
-        try:
-            resolved_workflow = get_workflow(workflow)
-        except ValueError as exc:
-            raise OrchestrationError(str(exc)) from exc
-        self.database.set_context_instruction(project.id, resolved_workflow, instruction)
-        return ContextInstructionsResult(
-            project_id=project.id,
-            instructions=self.database.context_instructions(project.id),
-        )
-
-    def context_instructions(self, project_id: str) -> ContextInstructionsResult:
-        project = self.database.project(project_id)
-        if project is None:
-            raise OrchestrationError(f"Unknown project: {project_id}")
-        return ContextInstructionsResult(
-            project_id=project.id,
-            instructions=self.database.context_instructions(project.id),
-        )
-
-    def compare_and_set_context_instruction(
-        self,
-        project_id: str,
-        workflow: str,
-        expected_current: str,
-        instruction: str,
-    ) -> tuple[bool, str, str]:
-        project = self.database.project(project_id)
-        if project is None:
-            raise OrchestrationError(f"Unknown project: {project_id}")
-        try:
-            resolved_workflow = get_workflow(workflow)
-        except ValueError as exc:
-            raise OrchestrationError(str(exc)) from exc
-        updated, current = self.database.compare_and_set_context_instruction(
-            project.id, resolved_workflow, expected_current, instruction
-        )
-        return updated, current, resolved_workflow
 
     @property
     def catalog(self) -> DaemonConfig:

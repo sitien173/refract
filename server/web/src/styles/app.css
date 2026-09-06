@@ -421,8 +421,6 @@ a:hover { text-decoration: underline; }
 }
 
 /* Context Instructions */
-.context-instructions-view { display: flex; flex-direction: column; gap: var(--space-md); }
-.context-instructions-notice { padding: var(--space-xs) 0; }
 .context-instruction-editor { display: flex; flex-direction: column; gap: var(--space-md); }
 .editor-form { display: flex; flex-direction: column; gap: var(--space-md); }
 .form-group { display: flex; flex-direction: column; gap: var(--space-xs); }

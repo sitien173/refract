@@ -124,9 +124,6 @@ describe('ProjectDetail screen', () => {
         },
       ],
     },
-    context_instructions: {
-      consult: 'Always provide concise analysis',
-    },
   }
 
   it('renders effective workflows without duplication and maps source names', async () => {

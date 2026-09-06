@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openmcp.config import DaemonConfig, TargetConfig
-from openmcp.context_files import cleanup_context_file, materialize_context_file
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry, DriverResult
 from openmcp.logging_setup import get_logger, log_context
@@ -80,37 +79,10 @@ class TargetExecutor:
             started_at = time.monotonic()
             log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt + 1, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
             self._target_active[target_key] += 1
-            materialized: list[Path] = []
             try:
-                if plan.instruction:
-                    if target.backend == "codex":
-                        try:
-                            materialized = materialize_context_file(cwd, cwd / "AGENTS.override.md", plan.instruction, kind="codex")
-                        except ValueError as exc:
-                            return TargetExecutionResult(
-                                DriverResult("REQUEST_FATAL", session_id, "", str(exc), "invalid_args"),
-                                target.id,
-                            )
-                    elif target.backend == "agy":
-                        try:
-                            materialized = materialize_context_file(cwd, cwd / "GEMINI.md", plan.instruction, kind="agy")
-                        except ValueError as exc:
-                            return TargetExecutionResult(
-                                DriverResult("REQUEST_FATAL", session_id, "", str(exc), "invalid_args"),
-                                target.id,
-                            )
                 with log_context(target_id=target.id):
-                    last = await self.drivers.execute(target=target, prompt=effective_prompt, cwd=cwd, session_id=session_id, timeout_s=plan.selection.timeout_s, cancel_event=cancel_event, instruction=plan.instruction)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                # Cleanup must still run for driver exceptions; the caller
-                # records the job failure. Cleanup errors must not mask the
-                # driver outcome.
-                self._cleanup_materialized(materialized, cwd)
-                raise
+                    last = await self.drivers.execute(target=target, prompt=effective_prompt, cwd=cwd, session_id=session_id, timeout_s=plan.selection.timeout_s, cancel_event=cancel_event)
             finally:
-                self._cleanup_materialized(materialized, cwd)
                 self._target_active[target_key] -= 1
                 semaphore.release()
             self.database.event(job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": attempt + 1, "outcome": last.outcome, "error_code": last.error_code})
@@ -129,19 +101,6 @@ class TargetExecutor:
                 if await asyncio.to_thread(cancel_event.wait, delay):
                     break
         return TargetExecutionResult(last, last_target_id)
-
-    @staticmethod
-    def _cleanup_materialized(materialized: list[Path], cwd: Path) -> None:
-        """Remove managed context files, never masking the driver outcome."""
-        for path in materialized:
-            try:
-                cleanup_context_file(cwd, path)
-            except Exception:
-                log.warning(
-                    "Context file cleanup failed",
-                    extra={"event": "context_file.cleanup_failed", "path": str(path)},
-                    exc_info=True,
-                )
 
     @staticmethod
     async def _acquire_target(semaphore: asyncio.Semaphore, cancel_event: threading.Event) -> bool:

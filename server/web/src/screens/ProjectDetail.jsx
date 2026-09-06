@@ -20,7 +20,6 @@ import TabbedPanel from '../components/TabbedPanel'
 import ProfileEditor from '../components/ProfileEditor'
 import Modal from '../components/Modal'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
-import ContextInstructions from './ContextInstructions'
 
 export default function ProjectDetail({ projectId, onNavigate }) {
   const {
@@ -438,7 +437,6 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     { id: 'effective', label: 'Effective configuration' },
     { id: 'profiles', label: 'Profile resolution', count: profiles.length },
     { id: 'guidance', label: 'Task guidance' },
-    { id: 'context', label: 'Context instructions' },
     { id: 'jobs', label: 'Jobs', count: Array.isArray(jobsData) ? jobsData.length : undefined },
   ]
 
@@ -645,12 +643,6 @@ export default function ProjectDetail({ projectId, onNavigate }) {
                     )}
                   </div>
                 </section>
-              </div>
-            )}
-
-            {activeTab === 'context' && (
-              <div className="tab-section">
-                <ContextInstructions projectId={projectId} onNavigate={handleNavigate} />
               </div>
             )}
 

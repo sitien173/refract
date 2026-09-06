@@ -121,15 +121,6 @@ configure `--add-dir` or sandbox behavior explicitly when required. Agy stdout
 is the preferred response channel; the temporary log file is primarily
 diagnostic.
 
-A stored project context instruction (`context_init`) is delivered as a
-generated root `GEMINI.md` containing the instruction only. agy reads
-`GEMINI.md` and `AGENTS.md` additively, so the repository's own `AGENTS.md`
-keeps loading alongside the instruction and no composition is applied. The
-generated file carries a managed marker, is hidden from Git through
-`$GIT_COMMON_DIR/info/exclude`, and is removed after the attempt including on
-failure, timeout, and cancellation. A tracked or untracked foreign `GEMINI.md`
-fails the job with `REQUEST_FATAL` and is left untouched.
-
 ## Codex (`codex exec`)
 
 Available `exec` options:
@@ -172,17 +163,6 @@ CLI default unless selected by target fields or `args`. The driver translates
 `backend_profile`, `model`, and `reasoning` to their CLI equivalents; arbitrary
 Codex configuration remains available through repeated `-c` entries in `args`.
 
-Codex has no system-prompt flag, so a stored project context instruction
-(`context_init`) is delivered as a generated root `AGENTS.override.md`
-containing the instruction followed by the repository's own root `AGENTS.md`
-inlined verbatim, because `AGENTS.override.md` shadows `AGENTS.md` within a
-directory rather than adding to it. Without a root `AGENTS.md`, the generated
-file contains the instruction only. The file carries a managed marker, is
-hidden from Git through `$GIT_COMMON_DIR/info/exclude` (in every linked
-worktree), and is removed after the attempt including on failure, timeout, and
-cancellation. A tracked or untracked foreign `AGENTS.override.md` fails the job
-with `REQUEST_FATAL` and is left untouched.
-
 ## Pi (`pi --mode json`)
 
 Available execution options:
@@ -212,13 +192,6 @@ overridden. For `isolated = true`, the driver instead adds `--no-approve`,
 `--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become
 `--system-prompt`, `--model`, and `--thinking` respectively. OpenMCP places
 `--mode json` after target arguments so output parsing cannot be replaced.
-
-A stored project context instruction (`context_init`) is appended as
-`--append-system-prompt <instruction>` after all target arguments, so a target
-cannot displace it. The flag is repeatable and additive: it survives
-`--no-context-files`, so an isolated pi target still receives the instruction.
-An empty instruction adds no flag. The instruction is never logged in full;
-logs record argument counts only.
 
 ## Claude Code (`claude -p`)
 
@@ -268,13 +241,6 @@ Target field translation:
 | `read_only = true` | `--tools Read,Grep,Glob` |
 | `model` | `--model <value>` |
 | `reasoning` | `--effort <value>` |
-
-A stored project context instruction (`context_init`) is appended as
-`--append-system-prompt <instruction>` after all target arguments, so a target
-cannot displace it. The flag is repeatable and additive: it survives
-`--safe-mode`, so an isolated claude target still receives the instruction.
-An empty instruction adds no flag. The instruction is never logged in full;
-logs record argument counts only.
 
 `--safe-mode` disables CLAUDE.md, skills, plugins, hooks, MCP servers, custom
 commands, custom agents, output styles, workflows, custom themes, and

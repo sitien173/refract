@@ -13,7 +13,7 @@ from openmcp.models import ContextStreamView, JobResult, JobView, ProjectView
 
 
 log = get_logger("database")
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 
 
 def utc_now() -> str:
@@ -64,11 +64,7 @@ class Database:
                 # migrations. This keeps a reopened database from treating a
                 # newly added column as legacy and dropping it.
                 self._create_support_tables()
-                if version < _SCHEMA_VERSION:
-                    self._connection.execute(
-                        f"PRAGMA user_version={_SCHEMA_VERSION}"
-                    )
-                    self._connection.commit()
+            self._migrate_v8_to_v9()
         log.debug(
             "Database schema is current",
             extra={"event": "database.migrated", "schema_version": _SCHEMA_VERSION},
@@ -81,6 +77,20 @@ class Database:
             self._connection.execute(
                 "ALTER TABLE jobs ADD COLUMN config_revision TEXT NOT NULL DEFAULT ''"
             )
+            self._connection.execute("PRAGMA user_version=8")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def _migrate_v8_to_v9(self) -> None:
+        """Drop stored context instructions after the feature was removed."""
+        version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if version >= _SCHEMA_VERSION:
+            return
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute("DROP TABLE IF EXISTS context_instructions")
             self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             self._connection.commit()
         except Exception:
@@ -100,7 +110,6 @@ class Database:
             "jobs": "PRAGMA table_info(jobs)",
             "projects": "PRAGMA table_info(projects)",
             "context_sessions": "PRAGMA table_info(context_sessions)",
-            "context_instructions": "PRAGMA table_info(context_instructions)",
         }
         try:
             statement = statements[table]
@@ -179,13 +188,6 @@ class Database:
                 consecutive_failures INTEGER NOT NULL DEFAULT 0,
                 circuit_open_until TEXT NOT NULL DEFAULT '',
                 last_success_at TEXT NOT NULL DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS context_instructions (
-                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                workflow TEXT NOT NULL,
-                instruction TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY(project_id, workflow)
             );
             CREATE INDEX IF NOT EXISTS jobs_state_idx ON jobs(state, created_at);
             CREATE INDEX IF NOT EXISTS events_job_idx ON events(job_id, id);
@@ -612,73 +614,6 @@ class Database:
             self._connection.execute("""INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until) VALUES (?, ?, ?)
                 ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures, circuit_open_until=excluded.circuit_open_until""", (target_id, failures, circuit_open_until))
         return failures
-
-    def compare_and_set_context_instruction(
-        self,
-        project_id: str,
-        workflow: str,
-        expected_current: str,
-        instruction: str,
-    ) -> tuple[bool, str]:
-        """Replace an instruction only if its current value still matches."""
-        self._connection.execute("BEGIN IMMEDIATE")
-        try:
-            row = self._connection.execute(
-                "SELECT instruction FROM context_instructions WHERE project_id=? AND workflow=?",
-                (project_id, workflow),
-            ).fetchone()
-            current = row["instruction"] if row else ""
-            if (current or "") != (expected_current or ""):
-                self._connection.rollback()
-                return False, current or ""
-            if instruction:
-                self._connection.execute(
-                    """INSERT INTO context_instructions(project_id, workflow, instruction, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(project_id, workflow) DO UPDATE SET
-                    instruction=excluded.instruction, updated_at=excluded.updated_at""",
-                    (project_id, workflow, instruction, utc_now()),
-                )
-            else:
-                self._connection.execute(
-                    "DELETE FROM context_instructions WHERE project_id=? AND workflow=?",
-                    (project_id, workflow),
-                )
-            self._connection.commit()
-            return True, instruction
-        except Exception:
-            self._connection.rollback()
-            raise
-
-    def set_context_instruction(self, project_id: str, workflow: str, instruction: str) -> None:
-        with self._connection:
-            if instruction:
-                self._connection.execute(
-                    """INSERT INTO context_instructions(project_id, workflow, instruction, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(project_id, workflow) DO UPDATE SET
-                    instruction=excluded.instruction, updated_at=excluded.updated_at""",
-                    (project_id, workflow, instruction, utc_now()),
-                )
-            else:
-                self._connection.execute(
-                    "DELETE FROM context_instructions WHERE project_id=? AND workflow=?",
-                    (project_id, workflow),
-                )
-
-    def context_instruction(self, project_id: str, workflow: str) -> str:
-        row = self._connection.execute(
-            "SELECT instruction FROM context_instructions WHERE project_id=? AND workflow=?",
-            (project_id, workflow),
-        ).fetchone()
-        return row["instruction"] if row else ""
-
-    def context_instructions(self, project_id: str) -> dict[str, str]:
-        rows = self._connection.execute(
-            "SELECT workflow, instruction FROM context_instructions WHERE project_id=? ORDER BY workflow",
-            (project_id,),
-        ).fetchall()
-        return {row["workflow"]: row["instruction"] for row in rows}
 
 
 __all__ = ["Database", "utc_now"]

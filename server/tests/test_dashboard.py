@@ -236,7 +236,7 @@ async def test_dashboard_project_self_extension_reports_global_inheritance(activ
 async def test_dashboard_job_detail_redacts_execution_plan(active_runtime) -> None:
     runtime = active_runtime
     project = runtime.database.project("project")
-    plan = resolve_execution_plan("consult", runtime.catalog, "balanced", "secret instruction")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     runtime.database.create_job(
         job_id="job",
         project_id=project.id,
@@ -255,62 +255,10 @@ async def test_dashboard_job_detail_redacts_execution_plan(active_runtime) -> No
     assert "prompt" not in payload
     assert "execution_plan" in payload
     serialized = json.dumps(payload)
-    assert "secret instruction" not in serialized
     assert "system_prompt" not in serialized
     assert "backend_profile" not in serialized
     assert '"args"' not in serialized
     assert payload["execution_plan"]["selection"]["targets"] == ["primary"]
-
-
-@pytest.mark.asyncio
-async def test_context_mutation_requires_loopback_csrf_and_origin(active_runtime) -> None:
-    app = create_application()
-    path = "/dashboard/api/projects/project/context-instructions/consult"
-    body = json.dumps({"instruction": "follow the plan", "expected_current": ""}).encode()
-
-    remote, _, _ = await request(app, path, method="PUT", body=body, client_host="192.0.2.1", headers=(("Host", "192.0.2.1"),))
-    missing_csrf, _, _ = await request(app, path, method="PUT", body=body, headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1")))
-    wrong_origin, _, _ = await request(app, path, method="PUT", body=body, headers=(("Host", "127.0.0.1"), ("Origin", "http://evil.example"), ("X-OpenMCP-CSRF", "test-token")))
-    valid, _, valid_body = await request(app, path, method="PUT", body=body, headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-OpenMCP-CSRF", "test-token")))
-
-    assert remote == missing_csrf == wrong_origin == 403
-    assert valid == 200
-    assert json.loads(valid_body)["instruction"] == "follow the plan"
-
-
-@pytest.mark.asyncio
-async def test_delete_context_instruction_requires_expected_current(active_runtime) -> None:
-    app = create_application()
-    path = "/dashboard/api/projects/project/context-instructions/consult"
-    headers = (("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-OpenMCP-CSRF", "test-token"))
-    await request(
-        app,
-        path,
-        method="PUT",
-        headers=headers,
-        body=json.dumps({"instruction": "existing", "expected_current": ""}).encode(),
-    )
-
-    missing, _, _ = await request(app, path, method="DELETE", headers=headers, body=b"{}")
-    stale, _, _ = await request(
-        app,
-        path,
-        method="DELETE",
-        headers=headers,
-        body=json.dumps({"expected_current": "stale"}).encode(),
-    )
-    deleted, _, deleted_body = await request(
-        app,
-        path,
-        method="DELETE",
-        headers=headers,
-        body=json.dumps({"expected_current": "existing"}).encode(),
-    )
-
-    assert missing == 400
-    assert stale == 409
-    assert deleted == 200
-    assert json.loads(deleted_body)["instruction"] == ""
 
 
 def make_static(root: Path) -> None:
@@ -358,44 +306,16 @@ async def test_missing_frontend_build_does_not_break_application(monkeypatch, tm
     assert asset_status == 404
 
 
-@pytest.mark.asyncio
-async def test_context_mutation_returns_conflict_with_current_value(active_runtime) -> None:
-    app = create_application()
-    path = "/dashboard/api/projects/project/context-instructions/consult"
-    headers = (("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-OpenMCP-CSRF", "test-token"))
-    body = json.dumps({"instruction": "new", "expected_current": "stale"}).encode()
-
-    status, _, response_body = await request(app, path, method="PUT", body=body, headers=headers)
-
-    assert status == 409
-    assert json.loads(response_body)["current"] == ""
-
-
 def test_builtin_workflows_contract() -> None:
     from openmcp.workflows import BUILTIN_WORKFLOWS
 
     assert BUILTIN_WORKFLOWS == ("consult", "implement", "other", "review")
 
 
-@pytest.mark.asyncio
-async def test_context_instructions_endpoint_envelope(active_runtime) -> None:
-    project = active_runtime.database.project("project")
-    for workflow in ("consult", "implement", "other", "review"):
-        active_runtime.database.set_context_instruction(project.id, workflow, f"{workflow} instruction")
-    app = create_application()
-    status, _, body = await request(app, "/dashboard/api/projects/project/context-instructions")
-    assert status == 200
-    payload = json.loads(body)
-    assert set(payload) == {"project_id", "instructions"}
-    assert payload["project_id"] == project.id
-    assert set(payload["instructions"]) == {"consult", "implement", "other", "review"}
-
-
 def test_readme_documents_dashboard_boundaries() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
     assert "/dashboard/" in readme
     assert "loopback" in readme.lower()
-    assert "context instruction" in readme.lower()
     assert "read-only" in readme.lower()
     assert "remote administration" in readme.lower()
 

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import AppShell from './components/AppShell'
 import PageHeader from './components/PageHeader'
 import ConfigHealth from './screens/ConfigHealth'
-import ContextInstructions from './screens/ContextInstructions'
 import JobDetail from './screens/JobDetail'
 import Jobs from './screens/Jobs'
 import Overview from './screens/Overview'
@@ -37,9 +36,6 @@ function parseLocation() {
       return { name: 'job-detail', projectId: '', jobId: decodeURIComponent(parts[1]) }
     }
     return { name: 'jobs', projectId: '', jobId: '' }
-  }
-  if (parts[0] === 'context-instructions' || parts[0] === 'context') {
-    return { name: 'context-instructions', projectId: '', jobId: '' }
   }
   if (parts[0] === 'settings') {
     return { name: 'settings', projectId: '', jobId: '' }
@@ -102,9 +98,6 @@ export default function App() {
   } else if (route.name === 'job-detail') {
     title = 'Job details'
     content = <JobDetail jobId={route.jobId} onNavigate={navigate} />
-  } else if (route.name === 'context-instructions') {
-    title = 'Context instructions'
-    content = <ContextInstructions onNavigate={navigate} />
   } else if (route.name === 'settings') {
     title = 'Runtime settings'
     content = <RuntimeSettings />

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from openmcp.config import load_config
-from openmcp.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan, target_execution_key
+from openmcp.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
 from openmcp.workflows import get_workflow
 from tests.orchestration_helpers import config
 
@@ -17,47 +17,6 @@ def test_plan_snapshots_one_workflow_selection(tmp_path) -> None:
     assert data["selection"] == {"targets": ["primary"], "max_attempts": 1, "timeout_s": 0}
     assert "capabilities" not in data["targets"][0]
     assert parse_execution_plan(data) == plan
-
-
-def test_plan_instruction_round_trips(tmp_path) -> None:
-    catalog = config(tmp_path / "home")
-    plan = resolve_execution_plan(
-        get_workflow("implement"), catalog, "balanced", instruction="follow the plan"
-    )
-    data = execution_plan_data(plan)
-    assert data["instruction"] == "follow the plan"
-    assert parse_execution_plan(data) == plan
-
-
-def test_legacy_plan_without_instruction_defaults_to_empty(tmp_path) -> None:
-    catalog = config(tmp_path / "home")
-    data = execution_plan_data(
-        resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    )
-    data.pop("instruction")
-
-    assert parse_execution_plan(data).instruction == ""
-
-
-@pytest.mark.parametrize("value", [1, None, ["x"], {"a": "b"}])
-def test_plan_rejects_non_string_instruction(tmp_path, value) -> None:
-    data = execution_plan_data(
-        resolve_execution_plan(get_workflow("review"), config(tmp_path / "home"), "balanced")
-    )
-    data["instruction"] = value
-
-    with pytest.raises(ValueError, match="instruction"):
-        parse_execution_plan(data)
-
-
-def test_target_execution_key_ignores_plan_instruction(tmp_path) -> None:
-    catalog = config(tmp_path / "home")
-    plain = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    instructed = resolve_execution_plan(
-        get_workflow("implement"), catalog, "balanced", instruction="follow the plan"
-    )
-
-    assert target_execution_key(plain.targets[0]) == target_execution_key(instructed.targets[0])
 
 
 def test_other_plan_snapshot_round_trips(tmp_path) -> None:

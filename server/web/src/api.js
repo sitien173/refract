@@ -95,10 +95,6 @@ export async function getTaskGuide(projectId) {
   return request(`/dashboard/api/task-guide${query}`)
 }
 
-export async function getContextInstructions(projectId) {
-  return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions`)
-}
-
 export async function mutateWithCsrf(path, { method = 'POST', body, expectedRevision } = {}) {
   if (!csrfToken) await getBootstrap()
   const headers = {
@@ -164,22 +160,6 @@ export async function deleteConfigurationTarget(targetId, expectedRevision) {
   return mutateWithCsrf(`/dashboard/api/configuration/targets/${encodeURIComponent(targetId)}`, {
     method: 'DELETE',
     expectedRevision,
-  })
-}
-
-export async function updateContextInstruction(projectId, workflow, instruction, expectedCurrent) {
-  const path = `/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions/${encodeURIComponent(workflow)}`
-  return mutateWithCsrf(path, {
-    method: 'PUT',
-    body: { instruction, expected_current: expectedCurrent ?? '' },
-  })
-}
-
-export async function deleteContextInstruction(projectId, workflow, expectedCurrent) {
-  const path = `/dashboard/api/projects/${encodeURIComponent(projectId)}/context-instructions/${encodeURIComponent(workflow)}`
-  return mutateWithCsrf(path, {
-    method: 'DELETE',
-    body: { expected_current: expectedCurrent ?? '' },
   })
 }
 

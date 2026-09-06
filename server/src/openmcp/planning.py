@@ -119,7 +119,6 @@ class ExecutionPlan:
     workflow: str
     selection: TargetSelection
     targets: tuple[TargetConfig, ...]
-    instruction: str = ""
 
     def target(self, target_id: str) -> TargetConfig:
         return next(target for target in self.targets if target.id == target_id)
@@ -131,7 +130,6 @@ def execution_plan_data(plan: ExecutionPlan) -> dict[str, Any]:
         "workflow": plan.workflow,
         "selection": _selection_data(plan.selection),
         "targets": [_target_data(target) for target in plan.targets],
-        "instruction": plan.instruction,
     }
 
 
@@ -145,17 +143,13 @@ def parse_execution_plan(data: Any) -> ExecutionPlan:
     targets = _parse_targets(data.get("targets"))
     if set(selection.targets) - {target.id for target in targets}:
         raise ValueError("Execution plan references unknown targets")
-    instruction = data.get("instruction", "")
-    if not isinstance(instruction, str):
-        raise ValueError("Execution plan instruction must be a string")
-    return ExecutionPlan(str(data.get("profile", "")), workflow, selection, targets, instruction)
+    return ExecutionPlan(str(data.get("profile", "")), workflow, selection, targets)
 
 
 def resolve_execution_plan(
     workflow: str,
     config: DaemonConfig,
     profile: str,
-    instruction: str = "",
 ) -> ExecutionPlan:
     mapping = config.profiles.get(profile)
     if mapping is None:
@@ -169,7 +163,6 @@ def resolve_execution_plan(
         workflow,
         selection,
         tuple(target_by_id[value] for value in selection.targets),
-        instruction,
     )
 
 

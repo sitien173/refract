@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { clearCsrfToken, deleteContextInstruction, updateContextInstruction } from './api'
+import { clearCsrfToken, deleteConfigurationTarget, updateConfigurationTarget } from './api'
 
 function response(status, payload) {
   return {
@@ -10,18 +10,6 @@ function response(status, payload) {
 }
 
 describe('dashboard API mutation retry boundary', () => {
-  it('always sends an expected current value in DELETE bodies', async () => {
-    clearCsrfToken()
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(response(200, { csrf_token: 'token' }))
-      .mockResolvedValueOnce(response(200, { instruction: '' }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await deleteContextInstruction('project', 'consult')
-
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ expected_current: '' })
-  })
-
   it('does not retry an unstructured forbidden response', async () => {
     clearCsrfToken()
     const fetchMock = vi.fn()
@@ -29,7 +17,7 @@ describe('dashboard API mutation retry boundary', () => {
       .mockResolvedValueOnce(response(403, { error: 'Forbidden' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(updateContextInstruction('project', 'consult', 'draft', '')).rejects.toMatchObject({ status: 403 })
+    await expect(updateConfigurationTarget('target', { backend: 'codex' }, 'rev')).rejects.toMatchObject({ status: 403 })
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
@@ -42,17 +30,17 @@ describe('dashboard API mutation retry boundary', () => {
         await new Promise((resolve) => setTimeout(resolve, 10))
         return response(200, { csrf_token: 'shared-csrf-token' })
       }
-      return response(200, { instruction: 'ok' })
+      return response(200, { id: 'ok' })
     })
     vi.stubGlobal('fetch', fetchMock)
 
     const [res1, res2] = await Promise.all([
-      updateContextInstruction('proj-1', 'consult', 'instruction 1', 'old 1'),
-      deleteContextInstruction('proj-1', 'implement', 'old 2'),
+      updateConfigurationTarget('target-1', { backend: 'codex' }, 'rev 1'),
+      deleteConfigurationTarget('target-2', 'rev 2'),
     ])
 
-    expect(res1).toEqual({ instruction: 'ok' })
-    expect(res2).toEqual({ instruction: 'ok' })
+    expect(res1).toEqual({ id: 'ok' })
+    expect(res2).toEqual({ id: 'ok' })
     expect(bootstrapCalls).toBe(1)
     expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(fetchMock.mock.calls[0][0]).toBe('/dashboard/api/bootstrap')
