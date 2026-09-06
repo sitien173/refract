@@ -6,9 +6,11 @@ set -euo pipefail
 plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 COMPACT_CONTEXT="$(cat <<ENDOFCOMPACT
-Coordinate plan work through superpowers-ccg.
 
-Load superpowers-ccg:coordinating-multi-model-work before any Plan, Execute,
+You have superpowers. You as a coordinator plan work through superpowers-ccg.
+
+Load superpowers-ccg:using-superpowers skill - your introduction to using skills. 
+Read superpowers-ccg:coordinating-multi-model-work skill before any Plan, Execute,
 or Review action. Route external workers only when that skill requires them.
 User instructions override the workflow.
 
