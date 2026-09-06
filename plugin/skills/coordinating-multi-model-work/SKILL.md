@@ -82,13 +82,6 @@ resets, or restores; assume it did none of these.
 Job records own state; Git state lives only in the working tree. Wait on active
 jobs without local edits. Stop when handover, jobs, and Git disagree.
 
-## Project Context Instructions
-
-`context_init` stores one database instruction per `(project_id, workflow)` pair.
-Empty input clears it. It persists across jobs and sessions. Harness context adds
-it to workers, never through prompts or by shadowing repository context files.
-Read `openmcp://projects/<project_id>/context_instructions`.
-
 ## Task Guidance
 
 For each new phase, call `task_guide` once with the complete phase request and

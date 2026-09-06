@@ -13,7 +13,6 @@ Default endpoint: `http://127.0.0.1:8765/mcp`.
 | `job_wait` | `job_id` | `timeout_s` | Wait for completion or timeout. |
 | `job_cancel` | `job_id` | — | Cancel queued or running work. |
 | `job_retry` | `job_id` | — | Retry a failed, cancelled, or interrupted whole job. |
-| `context_init` | `project_id`, `workflow`, `instruction` | — | Set, replace, or clear one workflow instruction. |
 
 Tool names may be client-namespaced; match their OpenMCP suffixes.
 
@@ -37,7 +36,6 @@ and optional profiles, never targets or providers.
 - `openmcp://projects`
 - `openmcp://projects/{project_id}/jobs`
 - `openmcp://projects/{project_id}/profiles`
-- `openmcp://projects/{project_id}/context_instructions`
 - `openmcp://jobs/{job_id}`
 - `openmcp://workflows/{project_id}`
 
