@@ -76,6 +76,11 @@ id = "fallback"
 backend = "pi"
 isolated = true
 
+[[targets]]
+id = "cc/opus-consult-reasoning"
+backend = "claude"
+model = "claude-opus-5"
+
 [profiles.balanced]
 implement = "primary"
 review = "primary"
@@ -473,6 +478,14 @@ async def test_configuration_target_get_by_id_and_not_found(active_runtime) -> N
     assert payload["target"]["backend"] == "codex"
     assert payload["target"]["system_prompt"] == "act safe"
 
+    slash_status, _, slash_body = await request(
+        app,
+        "/dashboard/api/configuration/targets/cc/opus-consult-reasoning",
+        headers=(("Host", "127.0.0.1"),),
+    )
+    assert slash_status == 200
+    assert json.loads(slash_body)["target"]["id"] == "cc/opus-consult-reasoning"
+
     missing_status, _, missing_body = await request(
         app,
         "/dashboard/api/configuration/targets/nonexistent",
@@ -488,6 +501,49 @@ async def test_configuration_target_get_by_id_and_not_found(active_runtime) -> N
         client_host="192.0.2.1",
     )
     assert remote_status == 403
+
+
+@pytest.mark.asyncio
+async def test_configuration_target_update_and_delete_accept_slash_id(active_runtime) -> None:
+    app = create_application()
+    _, _, list_body = await request(
+        app,
+        "/dashboard/api/configuration/targets",
+        headers=(("Host", "127.0.0.1"),),
+    )
+    revision = json.loads(list_body)["revision"]
+    headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{revision}"'),
+    )
+    target_id = "cc/opus-consult-reasoning"
+    path = f"/dashboard/api/configuration/targets/{target_id}"
+    update_body = json.dumps(
+        {"id": target_id, "backend": "claude", "model": "claude-opus-5", "reasoning": "max"}
+    ).encode()
+
+    update_status, _, update_response = await request(
+        app,
+        path,
+        method="PUT",
+        body=update_body,
+        headers=headers,
+    )
+    assert update_status == 200
+    update_payload = json.loads(update_response)
+    assert update_payload["target"]["reasoning"] == "max"
+
+    delete_headers = (*headers[:-1], ("If-Match", f'"{update_payload["revision"]}"'))
+    delete_status, _, delete_response = await request(
+        app,
+        path,
+        method="DELETE",
+        headers=delete_headers,
+    )
+    assert delete_status == 200
+    assert json.loads(delete_response)["deleted"] == target_id
 
 
 @pytest.mark.asyncio
