@@ -9,7 +9,7 @@
 - Consultation Profile: consult
 - Review Profile: review
 - Implementation Job: ddc23cce-9e27-403f-8537-27cb8da2601b
-- Review Job: pending
+- Review Job: 717311f8-d8e6-47a4-9fd7-7a75b3f2ca8a
 - Started: 2026-09-08T15:26:54+07:00
 - Finished: 2026-09-08T15:34:30+07:00
 
@@ -49,9 +49,11 @@ TASK_COMPLETE
 
 ## Quality Review
 
+Initial review returned PASS_WITH_DEBT. It identified incomplete ARIA menu semantics and inconsistent partial controlled visibility. Both findings were fixed with focused regression coverage.
+
 ## Review Result
 
-- Spec Status: PENDING
+- Spec Status: PENDING_REVIEW
 - Debt: none
 
 ## Final Commit

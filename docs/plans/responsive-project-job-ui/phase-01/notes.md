@@ -95,6 +95,24 @@
 - RED -> GREEN: Added 4 tests in DataGrid.test.jsx covering pointer/keyboard activation, modifier suppression, custom accessors, and recovery actions. All 18 tests pass cleanly.
 - Root cause (bugfix only): n/a
 
+## Task 5
 
+### Decisions made
+- Used native checkbox-group semantics instead of an incomplete ARIA menu pattern.
+- Merged partial controlled visibility maps with column defaults.
 
+### Spec deviations
+- none
 
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Native checkbox keyboard behavior satisfies the visibility control requirements.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Two regression tests failed for menu semantics and partial controlled visibility. All 19 tests passed after the focused fix.
+- Root cause (bugfix only): Visibility consumers used inconsistent fallback rules, and the popup declared unsupported menu semantics.

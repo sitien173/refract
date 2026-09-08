@@ -248,6 +248,26 @@ describe('DataGrid - Task 2: Stable controlled and uncontrolled table state', ()
     expect(screen.getByRole('columnheader', { name: /Score/i })).toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: /Category/i })).not.toBeInTheDocument()
   })
+
+  it('applies column defaults to omitted controlled visibility keys', () => {
+    const controlledColumns = [
+      { key: 'id', header: 'ID', priority: 'primary' },
+      { key: 'notes', header: 'Notes', priority: 'optional' },
+    ]
+
+    render(
+      <DataGrid
+        columns={controlledColumns}
+        rows={[{ id: '1', notes: 'Hidden note' }]}
+        columnVisibility={{ id: true }}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Columns/i }))
+
+    expect(screen.getByRole('checkbox', { name: /Notes/i })).not.toBeChecked()
+    expect(screen.queryByRole('columnheader', { name: /Notes/i })).not.toBeInTheDocument()
+  })
 })
 
 describe('DataGrid - Task 3: Accessible controls, reset behavior, and row spanning', () => {
@@ -269,9 +289,12 @@ describe('DataGrid - Task 3: Accessible controls, reset behavior, and row spanni
     const columnsBtn = screen.getByRole('button', { name: /Columns/i })
     expect(columnsBtn).toHaveAttribute('aria-expanded', 'false')
 
-    // Open menu
+    // Open the native checkbox group popover
     fireEvent.click(columnsBtn)
     expect(columnsBtn).toHaveAttribute('aria-expanded', 'true')
+    expect(columnsBtn).not.toHaveAttribute('aria-haspopup', 'menu')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(screen.getByRole('group', { name: /Visible columns/i })).toBeInTheDocument()
 
     // Optional column 'Notes' is unchecked by default
     const notesCheckbox = screen.getByRole('checkbox', { name: /Notes/i })

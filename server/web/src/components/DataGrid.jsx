@@ -69,7 +69,14 @@ export default function DataGrid({
   const [internalVisibility, setInternalVisibility] = useState(() =>
     getInitialVisibility(columns, defaultColumnVisibility)
   )
-  const activeVisibility = isVisibilityControlled ? columnVisibility : internalVisibility
+  const controlledVisibility = useMemo(
+    () => ({
+      ...getInitialVisibility(columns, defaultColumnVisibility),
+      ...(columnVisibility || {}),
+    }),
+    [columns, defaultColumnVisibility, columnVisibility]
+  )
+  const activeVisibility = isVisibilityControlled ? controlledVisibility : internalVisibility
 
   // Controlled vs uncontrolled sorting
   const isSortControlled = sort !== undefined || sortConfig !== undefined
@@ -265,14 +272,13 @@ export default function DataGrid({
                 <button
                   type="button"
                   className="button button-secondary button-xs data-grid-columns-btn"
-                  aria-haspopup="menu"
                   aria-expanded={isMenuOpen}
                   onClick={() => setIsMenuOpen((prev) => !prev)}
                 >
                   Columns
                 </button>
                 {isMenuOpen && (
-                  <div className="data-grid-menu" role="menu">
+                  <div className="data-grid-menu" role="group" aria-label="Visible columns">
                     {columns.map((col) => {
                       const isPrimary = (col.priority || 'primary') === 'primary'
                       const isChecked = activeVisibility[col.key] !== false
