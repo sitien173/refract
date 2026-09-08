@@ -21,7 +21,11 @@ function parseLocation() {
   }
   if (parts[0] === 'projects') {
     if (parts.length > 1 && parts[1]) {
-      return { name: 'project-detail', projectId: decodeURIComponent(parts[1]), jobId: '' }
+      const projId = decodeURIComponent(parts[1])
+      if (parts.length > 3 && parts[2] === 'jobs' && parts[3]) {
+        return { name: 'project-detail', projectId: projId, jobId: decodeURIComponent(parts[3]) }
+      }
+      return { name: 'project-detail', projectId: projId, jobId: '' }
     }
     return { name: 'projects', projectId: '', jobId: '' }
   }
@@ -71,10 +75,8 @@ export default function App() {
   let content = null
   let title = 'Overview'
   const activeNav =
-    route.name === 'project-detail'
+    route.name === 'project-detail' || route.name === 'job-detail' || route.name === 'jobs'
       ? 'projects'
-      : route.name === 'job-detail'
-      ? 'jobs'
       : route.name
 
   if (route.name === 'overview') {
@@ -85,7 +87,7 @@ export default function App() {
     content = <Projects onNavigate={navigate} />
   } else if (route.name === 'project-detail') {
     title = 'Project workspace'
-    content = <ProjectDetail projectId={route.projectId} onNavigate={navigate} />
+    content = <ProjectDetail projectId={route.projectId} jobId={route.jobId} onNavigate={navigate} />
   } else if (route.name === 'targets') {
     title = 'Targets'
     content = <Targets />

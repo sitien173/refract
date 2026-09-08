@@ -24,6 +24,7 @@ vi.mock('../api', () => {
     updateProjectProfileOverride: vi.fn(),
     deleteProjectProfileOverride: vi.fn(),
     getConfigurationProfile: vi.fn(),
+    getJob: vi.fn(),
     DashboardApiError: MockDashboardApiError,
   }
 })
@@ -823,5 +824,143 @@ describe('ProjectDetail screen', () => {
     // Submit remains blocked
     fireEvent.submit(form)
     expect(api.updateProjectProfileOverride).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders project-scoped full job details only upon selection and does not fetch until selected', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([
+      {
+        id: 'job-p1',
+        workflow: 'implement',
+        profile: 'balanced',
+        state: 'running',
+        target_id: 'worker-1',
+        config_revision: 'rev-overall-001',
+        created_at: '2026-09-04 15:00:00',
+      },
+    ])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getJob).mockResolvedValue({
+      id: 'job-p1',
+      project_id: 'proj-demo',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'running',
+      target_id: 'worker-1',
+      config_revision: 'rev-overall-001',
+      attempts: 1,
+      created_at: '2026-09-04 15:00:00',
+      updated_at: '2026-09-04 15:01:00',
+      execution_plan: {
+        profile: 'balanced',
+        workflow: 'implement',
+        selection: { targets: ['worker-1'], max_attempts: 1, timeout_s: 60 },
+        targets: [{ id: 'worker-1', backend: 'pi', model: 'gpt-5.6' }],
+        secret_field: 'should-never-appear',
+      },
+      result: { output: 'Running smoothly' },
+    })
+
+    render(<ProjectDetail projectId="proj-demo" />)
+    expect(await screen.findByText('Demo Workspace')).toBeInTheDocument()
+
+    // getJob should NOT have been called before selecting job
+    expect(api.getJob).not.toHaveBeenCalled()
+
+    // Switch to Jobs tab
+    const jobsTab = screen.getByRole('tab', { name: /Jobs/i })
+    fireEvent.click(jobsTab)
+
+    expect(await screen.findByText('job-p1')).toBeInTheDocument()
+    expect(api.getJob).not.toHaveBeenCalled()
+
+    // Click job link
+    const jobLink = screen.getByText('job-p1')
+    fireEvent.click(jobLink)
+
+    // Now getJob should have been called
+    expect(await screen.findByText('Job job-p1')).toBeInTheDocument()
+    expect(screen.getByText('Running smoothly')).toBeInTheDocument()
+    expect(screen.getByText('gpt-5.6')).toBeInTheDocument()
+    expect(screen.queryByText('should-never-appear')).not.toBeInTheDocument()
+    expect(api.getJob).toHaveBeenCalledWith('job-p1')
+
+    // Click Back to jobs list and verify focus returns to originating link
+    const backBtn = screen.getByRole('button', { name: /Back to jobs list/i })
+    fireEvent.click(backBtn)
+
+    expect(await screen.findByText('job-p1')).toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByText('job-p1'))
+  })
+
+  it('renders not-found when selected job belongs to another project', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getJob).mockResolvedValue({
+      id: 'job-other',
+      project_id: 'proj-other',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'succeeded',
+      target_id: 'worker-1',
+    })
+
+    render(<ProjectDetail projectId="proj-demo" jobId="job-other" />)
+
+    expect(await screen.findByText('Unable to load job')).toBeInTheDocument()
+    expect(screen.getByText('Job not found in this project.')).toBeInTheDocument()
+  })
+
+  it('filters Jobs table by search, state, and workflow', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([
+      {
+        id: 'job-alpha',
+        workflow: 'consult',
+        profile: 'balanced',
+        state: 'running',
+        target_id: 'worker-1',
+        created_at: '2026-09-04 15:00:00',
+      },
+      {
+        id: 'job-beta',
+        workflow: 'implement',
+        profile: 'balanced',
+        state: 'succeeded',
+        target_id: 'worker-2',
+        created_at: '2026-09-04 15:05:00',
+      },
+    ])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+
+    render(<ProjectDetail projectId="proj-demo" />)
+    const jobsTab = await screen.findByRole('tab', { name: /Jobs/i })
+    fireEvent.click(jobsTab)
+
+    expect(await screen.findByText('job-alpha')).toBeInTheDocument()
+    expect(screen.getByText('job-beta')).toBeInTheDocument()
+
+    // Filter by search
+    const searchInput = screen.getByLabelText(/Search jobs/i)
+    fireEvent.change(searchInput, { target: { value: 'alpha' } })
+
+    expect(screen.getByText('job-alpha')).toBeInTheDocument()
+    expect(screen.queryByText('job-beta')).not.toBeInTheDocument()
+
+    fireEvent.change(searchInput, { target: { value: '' } })
+    expect(screen.getByText('job-beta')).toBeInTheDocument()
+
+    // Filter by state
+    const stateSelect = screen.getByLabelText(/Filter by job state/i)
+    fireEvent.change(stateSelect, { target: { value: 'succeeded' } })
+
+    expect(screen.queryByText('job-alpha')).not.toBeInTheDocument()
+    expect(screen.getByText('job-beta')).toBeInTheDocument()
+
+    // Clear filters
+    fireEvent.click(screen.getByRole('button', { name: /Clear filters/i }))
+    expect(screen.getByText('job-alpha')).toBeInTheDocument()
+    expect(screen.getByText('job-beta')).toBeInTheDocument()
   })
 })

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   getConfiguration,
+  getJob,
   getProject,
   getProjectJobs,
   getTaskGuide,
@@ -14,12 +15,16 @@ import Alert from '../components/Alert'
 import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
 import DataGrid from '../components/DataGrid'
 import Inspector, { InspectorRow, SourceChip } from '../components/Inspector'
+import JobDetails from '../components/JobDetails'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import TabbedPanel from '../components/TabbedPanel'
 import ProfileEditor from '../components/ProfileEditor'
 import Modal from '../components/Modal'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+import { usePolling } from '../hooks/usePolling'
+
+const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted'])
 
 export function getEffectiveTargetsSortValue(row) {
   if (!row) return ''
@@ -29,7 +34,7 @@ export function getEffectiveTargetsSortValue(row) {
   return String(row.rawTargets ?? '')
 }
 
-export default function ProjectDetail({ projectId, onNavigate }) {
+export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate }) {
   const {
     data: projectData,
     error: projectError,
@@ -52,17 +57,183 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     deps: [projectId],
   })
 
-  const { data: jobsData, error: jobsError, refresh: refreshJobs } = useDashboardQuery(() => getProjectJobs(projectId), {
-    deps: [projectId],
-    pollInterval: 5000,
-  })
+  const { data: jobsData, error: jobsError, refresh: refreshJobs } = useDashboardQuery(
+    () => getProjectJobs(projectId),
+    { deps: [projectId] }
+  )
   const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
 
-  const [activeTab, setActiveTab] = useState('effective')
+  const [activeTab, setActiveTab] = useState(propJobId ? 'jobs' : 'effective')
   const [selectedWorkflowItem, setSelectedWorkflowItem] = useState(null)
-  const [selectedJob, setSelectedJob] = useState(null)
   const [selectedProfileId, setSelectedProfileId] = useState('')
   const [announcement, setAnnouncement] = useState('')
+  const [selectedJobId, setSelectedJobId] = useState(propJobId || '')
+  const [fullJob, setFullJob] = useState(null)
+  const [isJobLoading, setIsJobLoading] = useState(false)
+  const [jobFetchError, setJobFetchError] = useState(null)
+  const [jobRefreshError, setJobRefreshError] = useState(null)
+  const [jobSearchTerm, setJobSearchTerm] = useState('')
+  const [jobStateFilter, setJobStateFilter] = useState('all')
+  const [jobWorkflowFilter, setJobWorkflowFilter] = useState('all')
+
+  const lastFocusedJobIdRef = useRef(null)
+  const jobHeadingRef = useRef(null)
+
+  useEffect(() => {
+    if (propJobId) {
+      setSelectedJobId(propJobId)
+      setActiveTab('jobs')
+    } else {
+      setSelectedJobId('')
+    }
+  }, [propJobId])
+
+  // Fetch full details only after selecting a job
+  useEffect(() => {
+    if (!selectedJobId) {
+      setFullJob(null)
+      setJobFetchError(null)
+      setJobRefreshError(null)
+      return
+    }
+
+    let cancelled = false
+    setIsJobLoading(true)
+    setJobFetchError(null)
+    setJobRefreshError(null)
+
+    getJob(selectedJobId)
+      .then((res) => {
+        if (cancelled) return
+        if (!res || res.project_id !== projectId) {
+          setJobFetchError(new Error('Job not found in this project.'))
+          setFullJob(null)
+        } else {
+          setFullJob(res)
+          setJobFetchError(null)
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setJobFetchError(err)
+        setFullJob(null)
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsJobLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedJobId, projectId])
+
+  // Poll selected active job every 5 seconds until terminal
+  const isJobTerminal = fullJob ? TERMINAL_STATES.has(fullJob.state) : true
+  usePolling(
+    async () => {
+      if (!selectedJobId || isJobTerminal) return
+      try {
+        const updated = await getJob(selectedJobId)
+        if (updated.project_id !== projectId) {
+          setJobFetchError(new Error('Job not found in this project.'))
+          setFullJob(null)
+          return
+        }
+        setFullJob(updated)
+        setJobRefreshError(null)
+      } catch (err) {
+        setJobRefreshError(err.message || 'Background refresh failed.')
+      }
+    },
+    5000,
+    {
+      enabled: Boolean(selectedJobId && !isJobTerminal),
+      isTerminal: isJobTerminal,
+      deps: [selectedJobId, isJobTerminal, projectId],
+    }
+  )
+
+  // Poll project jobs list while at least one listed job is non-terminal
+  const allJobsTerminal =
+    Array.isArray(jobsData) && jobsData.length > 0 && jobsData.every((j) => TERMINAL_STATES.has(j.state))
+  usePolling(refreshJobs, 5000, {
+    enabled: Boolean(projectId && activeTab === 'jobs' && !selectedJobId && !allJobsTerminal),
+    isTerminal: allJobsTerminal,
+    deps: [projectId, activeTab, selectedJobId, allJobsTerminal],
+  })
+
+  // Focus detail heading after navigation into details
+  useEffect(() => {
+    if (selectedJobId && (fullJob || jobFetchError)) {
+      jobHeadingRef.current?.focus()
+    }
+  }, [selectedJobId, Boolean(fullJob), Boolean(jobFetchError)])
+
+  // Return focus to originating job link when returning to jobs list
+  useEffect(() => {
+    if (!selectedJobId && lastFocusedJobIdRef.current) {
+      const targetId = lastFocusedJobIdRef.current
+      lastFocusedJobIdRef.current = null
+      setTimeout(() => {
+        const link = document.getElementById(`job-link-${targetId}`)
+        if (link) {
+          link.focus()
+        }
+      }, 0)
+    }
+  }, [selectedJobId])
+
+  function handleSelectJob(jobId) {
+    lastFocusedJobIdRef.current = jobId
+    const path = `/dashboard/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}`
+    if (onNavigate) {
+      onNavigate(path)
+    } else {
+      window.history.pushState({}, '', path)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }
+    setSelectedJobId(jobId)
+  }
+
+  function handleBackToJobs() {
+    const path = `/dashboard/projects/${encodeURIComponent(projectId)}`
+    if (onNavigate) {
+      onNavigate(path)
+    } else {
+      window.history.pushState({}, '', path)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }
+    setSelectedJobId('')
+    setFullJob(null)
+    setJobFetchError(null)
+    setJobRefreshError(null)
+  }
+
+  const handleRefreshSelectedJob = async () => {
+    if (!selectedJobId) return
+    setIsJobLoading(true)
+    try {
+      const updated = await getJob(selectedJobId)
+      if (updated.project_id !== projectId) {
+        setJobFetchError(new Error('Job not found in this project.'))
+        setFullJob(null)
+      } else {
+        setFullJob(updated)
+        setJobRefreshError(null)
+        setJobFetchError(null)
+      }
+    } catch (err) {
+      if (fullJob) {
+        setJobRefreshError(err.message || 'Background refresh failed.')
+      } else {
+        setJobFetchError(err)
+      }
+    } finally {
+      setIsJobLoading(false)
+    }
+  }
   const [editorState, setEditorState] = useState({
     isOpen: false,
     mode: 'create',
@@ -450,7 +621,20 @@ export default function ProjectDetail({ projectId, onNavigate }) {
       sortAccessor: (row) => row.id,
       width: '180px',
       minWidth: '140px',
-      render: (row) => <code className="cell-code">{row.id}</code>,
+      render: (row) => (
+        <a
+          id={`job-link-${row.id}`}
+          href={`/dashboard/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(row.id)}`}
+          className="table-link cell-code"
+          onClick={(e) => {
+            if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+            e.preventDefault()
+            handleSelectJob(row.id)
+          }}
+        >
+          {row.id}
+        </a>
+      ),
     },
     {
       key: 'workflow',
@@ -734,20 +918,101 @@ export default function ProjectDetail({ projectId, onNavigate }) {
 
             {activeTab === 'jobs' && (
               <div className="tab-section">
-                {jobsError && jobsData && (
-                  <Alert tone="warning" title="Showing previously loaded jobs">
-                    Background refresh failed. The jobs table remains unchanged; retry when the daemon is available.
-                  </Alert>
+                {selectedJobId ? (
+                  <JobDetails
+                    job={fullJob}
+                    isLoading={isJobLoading}
+                    error={jobFetchError}
+                    refreshError={jobRefreshError}
+                    onRefresh={handleRefreshSelectedJob}
+                    onBack={handleBackToJobs}
+                    headingRef={jobHeadingRef}
+                  />
+                ) : (
+                  <>
+                    <div className="jobs-toolbar" aria-label="Jobs filters">
+                      <input
+                        type="search"
+                        className="search-input"
+                        placeholder="Search jobs by ID, workflow, profile, or target…"
+                        value={jobSearchTerm}
+                        onChange={(e) => setJobSearchTerm(e.target.value)}
+                        aria-label="Search jobs"
+                      />
+                      <select
+                        className="profile-select"
+                        value={jobStateFilter}
+                        onChange={(e) => setJobStateFilter(e.target.value)}
+                        aria-label="Filter by job state"
+                      >
+                        <option value="all">All states</option>
+                        <option value="running">running</option>
+                        <option value="pending">pending</option>
+                        <option value="queued">queued</option>
+                        <option value="succeeded">succeeded</option>
+                        <option value="failed">failed</option>
+                        <option value="cancelled">cancelled</option>
+                        <option value="interrupted">interrupted</option>
+                      </select>
+                      <select
+                        className="profile-select"
+                        value={jobWorkflowFilter}
+                        onChange={(e) => setJobWorkflowFilter(e.target.value)}
+                        aria-label="Filter by workflow"
+                      >
+                        <option value="all">All workflows</option>
+                        <option value="consult">consult</option>
+                        <option value="implement">implement</option>
+                        <option value="review">review</option>
+                        <option value="other">other</option>
+                      </select>
+                      {(jobSearchTerm || jobStateFilter !== 'all' || jobWorkflowFilter !== 'all') && (
+                        <button
+                          type="button"
+                          className="button button-ghost button-sm"
+                          onClick={() => {
+                            setJobSearchTerm('')
+                            setJobStateFilter('all')
+                            setJobWorkflowFilter('all')
+                          }}
+                          aria-label="Clear filters"
+                        >
+                          Clear filters
+                        </button>
+                      )}
+                    </div>
+
+                    {jobsError && jobsData && (
+                      <Alert tone="warning" title="Showing previously loaded jobs">
+                        Background refresh failed. The jobs table remains unchanged; retry when the daemon is available.
+                      </Alert>
+                    )}
+
+                    <DataGrid
+                      columns={jobsColumns}
+                      rows={
+                        (jobsData || []).filter((j) => {
+                          if (jobStateFilter !== 'all' && j.state !== jobStateFilter) return false
+                          if (jobWorkflowFilter !== 'all' && j.workflow !== jobWorkflowFilter) return false
+                          if (jobSearchTerm.trim()) {
+                            const q = jobSearchTerm.toLowerCase().trim()
+                            const matchId = j.id?.toLowerCase().includes(q)
+                            const matchWf = j.workflow?.toLowerCase().includes(q)
+                            const matchProf = j.profile?.toLowerCase().includes(q)
+                            const matchTarget = j.target_id?.toLowerCase().includes(q)
+                            if (!matchId && !matchWf && !matchProf && !matchTarget) return false
+                          }
+                          return true
+                        })
+                      }
+                      rowKey={(r) => r.id}
+                      onRowClick={(row) => handleSelectJob(row.id)}
+                      emptyMessage="No jobs submitted for this project workspace yet."
+                      ariaLabel="Project jobs table"
+                      isLoading={!jobsData}
+                    />
+                  </>
                 )}
-                <DataGrid
-                  columns={jobsColumns}
-                  rows={jobsData || []}
-                  rowKey={(r) => r.id}
-                  onRowClick={(row) => setSelectedJob(row)}
-                  emptyMessage="No jobs submitted for this project workspace yet."
-                  ariaLabel="Project jobs table"
-                  isLoading={!jobsData}
-                />
               </div>
             )}
           </TabbedPanel>
@@ -770,33 +1035,6 @@ export default function ProjectDetail({ projectId, onNavigate }) {
               <InspectorRow label="Source origin">
                 <SourceChip source={selectedWorkflowItem.source} />
               </InspectorRow>
-            </Inspector>
-          </div>
-        )}
-
-        {selectedJob && (
-          <div className="project-detail-inspector">
-            <Inspector
-              title={`Job ${selectedJob.id}`}
-              description={`Workflow: ${selectedJob.workflow} (${selectedJob.profile})`}
-              onClose={() => setSelectedJob(null)}
-            >
-              <InspectorRow label="Job ID" value={selectedJob.id} />
-              <InspectorRow label="State">
-                <StatusBadge status={selectedJob.state} label={selectedJob.state} />
-              </InspectorRow>
-              <InspectorRow label="Workflow" value={selectedJob.workflow} />
-              <InspectorRow label="Profile" value={selectedJob.profile} />
-              <InspectorRow label="Target" value={selectedJob.target_id || 'Unassigned'} />
-              <InspectorRow
-                label="Config revision"
-                value={selectedJob.config_revision || 'Unavailable'}
-              />
-              <InspectorRow label="Attempts" value={selectedJob.attempts} />
-              <InspectorRow label="Created at" value={selectedJob.created_at} />
-              {selectedJob.result?.error && (
-                <InspectorRow label="Error" value={selectedJob.result.error} />
-              )}
             </Inspector>
           </div>
         )}

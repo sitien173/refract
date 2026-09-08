@@ -225,18 +225,35 @@ describe('Dashboard integrated user flows', () => {
     })
   })
 
-  it('navigates to Jobs, inspects job execution plan, and enforces redaction', async () => {
+  it('navigates to project Jobs, inspects job execution plan, and enforces redaction', async () => {
     const { container } = render(<App />)
 
-    // Navigate to Jobs via sidebar
-    const jobsNav = await screen.findByRole('button', { name: /^Jobs$/i })
-    fireEvent.click(jobsNav)
+    // Navigate to Projects via sidebar
+    const projectsNav = await screen.findByRole('button', { name: /^Projects$/i })
+    fireEvent.click(projectsNav)
+
+    expect(await screen.findByText('Alpha Service')).toBeInTheDocument()
+
+    // Click project link
+    const projectLink = screen.getByText('Alpha Service')
+    fireEvent.click(projectLink)
+
+    // Click Jobs tab in ProjectDetail
+    const jobsTab = await screen.findByRole('tab', { name: /^Jobs$/i })
+    fireEvent.click(jobsTab)
 
     expect(await screen.findByText('job-999')).toBeInTheDocument()
+
+    // Config revision is optional; enable via Columns dropdown
+    fireEvent.click(screen.getByRole('button', { name: /Columns/i }))
+    const configCheckbox = screen.getByRole('checkbox', { name: /Config revision/i })
+    fireEvent.click(configCheckbox)
+
     expect(screen.getByText('rev-overall-')).toBeInTheDocument()
 
-    // Click Job ID link to navigate to JobDetail
+    // Click Job ID link to navigate to project-scoped JobDetail
     const jobLink = screen.getByText('job-999')
+    expect(jobLink.closest('a')).toHaveAttribute('href', '/dashboard/projects/proj-alpha/jobs/job-999')
     fireEvent.click(jobLink)
 
     expect(await screen.findByText('Job job-999')).toBeInTheDocument()
@@ -244,11 +261,25 @@ describe('Dashboard integrated user flows', () => {
     expect(screen.getByText('gpt-5.6')).toBeInTheDocument()
     expect(screen.getByText('Implementation completed without errors.')).toBeInTheDocument()
 
-    // Back to jobs button
+    // Back button returns to project jobs
     const backBtn = screen.getByRole('button', { name: /Back to jobs list/i })
     fireEvent.click(backBtn)
 
     expect(await screen.findByText('job-999')).toBeInTheDocument()
+  })
+
+  it('bridges legacy job detail route to project-scoped job detail', async () => {
+    window.history.pushState({}, '', '/dashboard/jobs/job-999')
+    render(<App />)
+
+    expect(await screen.findByText('Job job-999')).toBeInTheDocument()
+    expect(screen.getByText('rev-overall-001')).toBeInTheDocument()
+    expect(screen.getByText('gpt-5.6')).toBeInTheDocument()
+
+    const backBtn = screen.getByRole('button', { name: /Back to jobs list/i })
+    fireEvent.click(backBtn)
+
+    expect(await screen.findByText('Alpha Service')).toBeInTheDocument()
   })
 
   it('manages targets through creation, inspection, and deletion workflows', async () => {

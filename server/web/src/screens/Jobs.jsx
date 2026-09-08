@@ -82,7 +82,9 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
   }
 
   function navigateToJob(jobId) {
-    const path = `/dashboard/jobs/${encodeURIComponent(jobId)}`
+    const path = activeProjectId
+      ? `/dashboard/projects/${encodeURIComponent(activeProjectId)}/jobs/${encodeURIComponent(jobId)}`
+      : `/dashboard/jobs/${encodeURIComponent(jobId)}`
     if (onNavigate) {
       onNavigate(path)
     } else {
@@ -100,19 +102,25 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
       sortAccessor: (row) => row.id,
       width: '180px',
       minWidth: '140px',
-      render: (row) => (
-        <a
-          href={`/dashboard/jobs/${encodeURIComponent(row.id)}`}
-          className="table-link cell-code"
-          onClick={(e) => {
-            if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-            e.preventDefault()
-            navigateToJob(row.id)
-          }}
-        >
-          {row.id}
-        </a>
-      ),
+      render: (row) => {
+        const href = activeProjectId
+          ? `/dashboard/projects/${encodeURIComponent(activeProjectId)}/jobs/${encodeURIComponent(row.id)}`
+          : `/dashboard/jobs/${encodeURIComponent(row.id)}`
+        return (
+          <a
+            id={`job-link-${row.id}`}
+            href={href}
+            className="table-link cell-code"
+            onClick={(e) => {
+              if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+              e.preventDefault()
+              navigateToJob(row.id)
+            }}
+          >
+            {row.id}
+          </a>
+        )
+      },
     },
     {
       key: 'workflow',
