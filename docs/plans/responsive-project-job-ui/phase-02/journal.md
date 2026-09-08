@@ -9,7 +9,7 @@
 - Consultation Profile: n/a
 - Review Profile: review
 - Implementation Job: f03f06d7-d3cb-4c7e-8c88-512ec04596d8
-- Review Job: pending
+- Review Job: 5760b570-d014-4fab-8347-cea617ca4fa9
 - Started: 2026-09-08T15:45:55+07:00
 - Finished: 2026-09-08T16:10:45+07:00
 
@@ -48,12 +48,16 @@ TASK_COMPLETE
 
 ## Quality Review
 
+Initial review returned PASS_WITH_DEBT for display-formatted target sorting. Fix review `5760b570-d014-4fab-8347-cea617ca4fa9` confirmed raw target sorting and returned PASS.
+
 ## Review Result
 
-- Spec Status: PENDING
+- Spec Status: PASS
+- Quality Status: PASS
 - Debt: none
 
 ## Final Commit
 
-- Implementation: pending
+- Implementation: 6311a3dc8bc7a9f34a2394066bc62e85124088c1
+- Fix: 0abdbe317b8ec9b33e9218c20f5ed105de5a2f0c
 - State record: this journal update's commit
