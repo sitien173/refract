@@ -78,6 +78,19 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
 
   const lastFocusedJobIdRef = useRef(null)
   const jobHeadingRef = useRef(null)
+  const activeRouteRef = useRef({ projectId, selectedJobId: propJobId || '' })
+  activeRouteRef.current = { projectId, selectedJobId }
+
+  // Clear selected/full job state when projectId changes
+  useEffect(() => {
+    setSelectedJobId(propJobId || '')
+    setFullJob(null)
+    setJobFetchError(null)
+    setJobRefreshError(null)
+    if (propJobId) {
+      setActiveTab('jobs')
+    }
+  }, [projectId])
 
   useEffect(() => {
     if (propJobId) {
@@ -102,10 +115,19 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
     setJobFetchError(null)
     setJobRefreshError(null)
 
+    const expectedProjectId = projectId
+    const expectedJobId = selectedJobId
+
     getJob(selectedJobId)
       .then((res) => {
-        if (cancelled) return
-        if (!res || res.project_id !== projectId) {
+        if (
+          cancelled ||
+          activeRouteRef.current.projectId !== expectedProjectId ||
+          activeRouteRef.current.selectedJobId !== expectedJobId
+        ) {
+          return
+        }
+        if (!res || res.project_id !== expectedProjectId) {
           setJobFetchError(new Error('Job not found in this project.'))
           setFullJob(null)
         } else {
@@ -114,12 +136,22 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
         }
       })
       .catch((err) => {
-        if (cancelled) return
+        if (
+          cancelled ||
+          activeRouteRef.current.projectId !== expectedProjectId ||
+          activeRouteRef.current.selectedJobId !== expectedJobId
+        ) {
+          return
+        }
         setJobFetchError(err)
         setFullJob(null)
       })
       .finally(() => {
-        if (!cancelled) {
+        if (
+          !cancelled &&
+          activeRouteRef.current.projectId === expectedProjectId &&
+          activeRouteRef.current.selectedJobId === expectedJobId
+        ) {
           setIsJobLoading(false)
         }
       })
@@ -134,9 +166,17 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
   usePolling(
     async () => {
       if (!selectedJobId || isJobTerminal) return
+      const expectedProjectId = projectId
+      const expectedJobId = selectedJobId
       try {
         const updated = await getJob(selectedJobId)
-        if (updated.project_id !== projectId) {
+        if (
+          activeRouteRef.current.projectId !== expectedProjectId ||
+          activeRouteRef.current.selectedJobId !== expectedJobId
+        ) {
+          return
+        }
+        if (updated.project_id !== expectedProjectId) {
           setJobFetchError(new Error('Job not found in this project.'))
           setFullJob(null)
           return
@@ -144,6 +184,12 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
         setFullJob(updated)
         setJobRefreshError(null)
       } catch (err) {
+        if (
+          activeRouteRef.current.projectId !== expectedProjectId ||
+          activeRouteRef.current.selectedJobId !== expectedJobId
+        ) {
+          return
+        }
         setJobRefreshError(err.message || 'Background refresh failed.')
       }
     },
@@ -213,10 +259,18 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
 
   const handleRefreshSelectedJob = async () => {
     if (!selectedJobId) return
+    const expectedProjectId = projectId
+    const expectedJobId = selectedJobId
     setIsJobLoading(true)
     try {
       const updated = await getJob(selectedJobId)
-      if (updated.project_id !== projectId) {
+      if (
+        activeRouteRef.current.projectId !== expectedProjectId ||
+        activeRouteRef.current.selectedJobId !== expectedJobId
+      ) {
+        return
+      }
+      if (updated.project_id !== expectedProjectId) {
         setJobFetchError(new Error('Job not found in this project.'))
         setFullJob(null)
       } else {
@@ -225,13 +279,24 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
         setJobFetchError(null)
       }
     } catch (err) {
+      if (
+        activeRouteRef.current.projectId !== expectedProjectId ||
+        activeRouteRef.current.selectedJobId !== expectedJobId
+      ) {
+        return
+      }
       if (fullJob) {
         setJobRefreshError(err.message || 'Background refresh failed.')
       } else {
         setJobFetchError(err)
       }
     } finally {
-      setIsJobLoading(false)
+      if (
+        activeRouteRef.current.projectId === expectedProjectId &&
+        activeRouteRef.current.selectedJobId === expectedJobId
+      ) {
+        setIsJobLoading(false)
+      }
     }
   }
   const [editorState, setEditorState] = useState({

@@ -963,4 +963,109 @@ describe('ProjectDetail screen', () => {
     expect(screen.getByText('job-alpha')).toBeInTheDocument()
     expect(screen.getByText('job-beta')).toBeInTheDocument()
   })
+
+  it('clears selected and full job state when projectId changes', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getJob).mockResolvedValue({
+      id: 'job-p1',
+      project_id: 'proj-demo',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'succeeded',
+      target_id: 'worker-1',
+    })
+
+    const { rerender } = render(<ProjectDetail projectId="proj-demo" jobId="job-p1" />)
+
+    expect(await screen.findByText('Job job-p1')).toBeInTheDocument()
+
+    // Now projectId changes to another project without jobId
+    rerender(<ProjectDetail projectId="proj-other" />)
+
+    // Job details should be cleared and not rendered
+    expect(screen.queryByText('Job job-p1')).not.toBeInTheDocument()
+  })
+
+  it('invalidates in-flight selected-job requests and discards response if route changes before resolution', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+
+    let resolveJobFetch
+    const delayedJobPromise = new Promise((resolve) => {
+      resolveJobFetch = resolve
+    })
+    vi.mocked(api.getJob).mockReturnValueOnce(delayedJobPromise)
+
+    const { rerender } = render(<ProjectDetail projectId="proj-demo" jobId="job-slow" />)
+
+    // Route changes before job-slow resolves
+    rerender(<ProjectDetail projectId="proj-other" jobId="" />)
+
+    // Now resolve the delayed request
+    resolveJobFetch({
+      id: 'job-slow',
+      project_id: 'proj-demo',
+      workflow: 'consult',
+      profile: 'balanced',
+      state: 'running',
+    })
+
+    // Advance any microtasks
+    await Promise.resolve()
+
+    // Assert that stale job-slow details are NOT rendered
+    expect(screen.queryByText('Job job-slow')).not.toBeInTheDocument()
+  })
+
+  it('discards in-flight job polling update when user navigates away before poll resolves', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+
+    // Initial job fetch succeeds immediately
+    vi.mocked(api.getJob).mockResolvedValueOnce({
+      id: 'job-poll-1',
+      project_id: 'proj-demo',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'running',
+      target_id: 'worker-1',
+    })
+
+    let resolvePollUpdate
+    const pollPromise = new Promise((resolve) => {
+      resolvePollUpdate = resolve
+    })
+    // Second call is from polling/refresh
+    vi.mocked(api.getJob).mockReturnValueOnce(pollPromise)
+
+    const { rerender } = render(<ProjectDetail projectId="proj-demo" jobId="job-poll-1" />)
+
+    expect(await screen.findByText('Job job-poll-1')).toBeInTheDocument()
+
+    // Trigger manual refresh or background poll
+    const refreshBtn = screen.getByRole('button', { name: /Refresh job details/i })
+    fireEvent.click(refreshBtn)
+
+    // While in-flight poll is pending, user navigates to another project
+    rerender(<ProjectDetail projectId="proj-another" jobId="" />)
+
+    // Now in-flight poll resolves with stale data
+    resolvePollUpdate({
+      id: 'job-poll-1',
+      project_id: 'proj-demo',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'succeeded',
+      target_id: 'worker-1',
+    })
+
+    await Promise.resolve()
+
+    // Stale details should not overwrite current screen state
+    expect(screen.queryByText('Job job-poll-1')).not.toBeInTheDocument()
+  })
 })

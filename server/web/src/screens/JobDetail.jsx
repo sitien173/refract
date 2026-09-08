@@ -30,7 +30,7 @@ export default function JobDetail({ jobId, onNavigate }) {
     if (job?.project_id && jobId) {
       const canonical = `/dashboard/projects/${encodeURIComponent(job.project_id)}/jobs/${encodeURIComponent(jobId)}`
       if (onNavigate) {
-        onNavigate(canonical)
+        onNavigate(canonical, { replace: true })
       } else {
         window.history.replaceState({}, '', canonical)
         window.dispatchEvent(new PopStateEvent('popstate'))

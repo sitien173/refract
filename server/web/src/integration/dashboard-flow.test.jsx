@@ -268,7 +268,10 @@ describe('Dashboard integrated user flows', () => {
     expect(await screen.findByText('job-999')).toBeInTheDocument()
   })
 
-  it('bridges legacy job detail route to project-scoped job detail', async () => {
+  it('bridges legacy job detail route to project-scoped job detail with replaceState to prevent back loops', async () => {
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+
     window.history.pushState({}, '', '/dashboard/jobs/job-999')
     render(<App />)
 
@@ -276,10 +279,25 @@ describe('Dashboard integrated user flows', () => {
     expect(screen.getByText('rev-overall-001')).toBeInTheDocument()
     expect(screen.getByText('gpt-5.6')).toBeInTheDocument()
 
+    // Verifies legacy resolution replaced history entry rather than pushing a duplicate
+    expect(replaceSpy).toHaveBeenCalledWith(
+      {},
+      '',
+      '/dashboard/projects/proj-alpha/jobs/job-999'
+    )
+    expect(pushSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      '/dashboard/projects/proj-alpha/jobs/job-999'
+    )
+
     const backBtn = screen.getByRole('button', { name: /Back to jobs list/i })
     fireEvent.click(backBtn)
 
     expect(await screen.findByText('Alpha Service')).toBeInTheDocument()
+
+    replaceSpy.mockRestore()
+    pushSpy.mockRestore()
   })
 
   it('manages targets through creation, inspection, and deletion workflows', async () => {

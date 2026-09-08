@@ -101,3 +101,28 @@
 - RED -> GREEN: Ran `npm --prefix web test -- src/components/JobDetails.test.jsx src/App.test.jsx src/screens/ProjectDetail.test.jsx src/screens/Jobs.test.jsx src/integration/dashboard-flow.test.jsx` (5 suites, 45 tests passing), full suite `npm --prefix web test` (16 suites, 113 tests passing), and `npm --prefix web run build`.
 - Root cause (bugfix only): n/a
 
+## Task 5
+
+### Decisions made
+- Replaced browser history entry via `replace: true` (and `history.replaceState`) during legacy `/dashboard/jobs/:jobId` resolution into `/dashboard/projects/:projectId/jobs/:jobId`, preventing circular Back button loops.
+- Added `activeRouteRef` in `ProjectDetail.jsx` tracking `{ projectId, selectedJobId }` to verify current route context before committing async job fetch or polling state updates.
+- Invalidated in-flight job requests on unmount or when `projectId` or `selectedJobId` change, discarding stale responses and preventing stale state overwrites.
+- Cleared `selectedJobId`, `fullJob`, `jobFetchError`, and `jobRefreshError` whenever `projectId` changes.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Replacing history entry ensures browser Back navigates directly to the previous user destination instead of triggering repeated legacy resolution.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added regression tests in `dashboard-flow.test.jsx` checking `replaceState` on legacy resolution, and in `ProjectDetail.test.jsx` verifying job state clearing on `projectId` change, discarded in-flight fetches on route change, and discarded in-flight polling updates on navigation away. Ran focused suite (5 suites, 48 tests passing), full suite (16 suites, 116 tests passing), and `npm --prefix web run build`.
+- Root cause (bugfix only): Legacy `/dashboard/jobs/:jobId` resolution previously pushed a new history entry instead of replacing it, causing Back loops; and `ProjectDetail.jsx` did not check route context identity before committing in-flight job responses.
+
+

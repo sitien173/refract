@@ -62,13 +62,17 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
-  function navigate(destination) {
+  function navigate(destination, options = {}) {
     let targetPath = destination
     if (!destination.startsWith('/')) {
       if (destination === 'overview') targetPath = '/dashboard/'
       else targetPath = `/dashboard/${destination}`
     }
-    window.history.pushState({}, '', targetPath)
+    if (options.replace) {
+      window.history.replaceState({}, '', targetPath)
+    } else {
+      window.history.pushState({}, '', targetPath)
+    }
     setRoute(parseLocation())
   }
 
