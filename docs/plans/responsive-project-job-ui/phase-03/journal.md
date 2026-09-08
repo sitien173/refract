@@ -9,7 +9,7 @@
 - Consultation Profile: n/a
 - Review Profile: review
 - Implementation Job: ba3abc57-48a0-4697-88ff-afbce9e771a7
-- Review Job: pending
+- Review Job: 6956f7b6-5711-468e-a325-dc7425b7785d
 - Started: 2026-09-08T16:17:05+07:00
 - Finished: 2026-09-08T16:35:29+07:00
 
@@ -56,13 +56,17 @@ TASK_COMPLETE
 
 ## Quality Review
 
+Initial review returned FAIL for legacy history looping and stale in-flight job updates. Fix review `6956f7b6-5711-468e-a325-dc7425b7785d` confirmed both fixes and returned PASS.
+
 ## Review Result
 
-- Spec Status: PENDING
+- Spec Status: PASS
+- Quality Status: PASS
 - Debt: none
 
 ## Final Commit
 
-- Implementation: pending
+- Implementation: b99df66922f24cd6e6c3944acdd1cf30b528943b
+- Fix: 888a083f4fbf2b6801e3ab9734dde8fe5f1c015f
 - State record: this journal update's commit
 
