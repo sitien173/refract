@@ -21,6 +21,14 @@ import ProfileEditor from '../components/ProfileEditor'
 import Modal from '../components/Modal'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
 
+export function getEffectiveTargetsSortValue(row) {
+  if (!row) return ''
+  if (Array.isArray(row.rawTargets)) {
+    return row.rawTargets.join(', ')
+  }
+  return String(row.rawTargets ?? '')
+}
+
 export default function ProjectDetail({ projectId, onNavigate }) {
   const {
     data: projectData,
@@ -327,7 +335,7 @@ export default function ProjectDetail({ projectId, onNavigate }) {
       header: 'Effective targets',
       priority: 'primary',
       sortable: true,
-      sortAccessor: (row) => row.targets,
+      sortAccessor: getEffectiveTargetsSortValue,
       width: '240px',
       minWidth: '160px',
       wrap: true,
@@ -395,7 +403,7 @@ export default function ProjectDetail({ projectId, onNavigate }) {
       header: 'Effective targets',
       priority: 'primary',
       sortable: true,
-      sortAccessor: (row) => row.targets,
+      sortAccessor: getEffectiveTargetsSortValue,
       width: '240px',
       minWidth: '160px',
       wrap: true,

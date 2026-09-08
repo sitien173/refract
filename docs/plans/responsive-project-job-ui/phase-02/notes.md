@@ -102,3 +102,25 @@
 ### Test evidence
 - RED -> GREEN: Ran `npm --prefix web test -- src/screens/Projects.test.jsx src/screens/Targets.test.jsx src/screens/Profiles.test.jsx src/screens/Jobs.test.jsx src/screens/ProjectDetail.test.jsx` (5 files, 48 tests passing) and `npm --prefix web run build` (vite build succeeds).
 - Root cause (bugfix only): n/a
+
+## Task 5
+
+### Decisions made
+- Derived deterministic sortable values from `row.rawTargets` in both `effectiveColumns` and `profileResolutionColumns` using `getEffectiveTargetsSortValue`.
+- Maintained cell rendering from `row.targets` so presentation formatting remains intact while raw data drives table sorting.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Joining `row.rawTargets` in original array order preserves deterministic priority ordering when sorting.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added unit test for `getEffectiveTargetsSortValue` and component integration test in `ProjectDetail.test.jsx` verifying `rawTargets` dictates sort order independently of rendered targets text. All 17 tests in `ProjectDetail.test.jsx` and all 50 tests across the Phase 2 focused suite pass.
+- Root cause (bugfix only): `Effective targets` sort accessors in `ProjectDetail.jsx` previously accessed `row.targets` directly instead of deriving from `row.rawTargets`.

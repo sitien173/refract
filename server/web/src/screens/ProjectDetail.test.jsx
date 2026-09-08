@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
-import ProjectDetail from './ProjectDetail'
+import ProjectDetail, { getEffectiveTargetsSortValue } from './ProjectDetail'
 
 vi.mock('../api', () => {
   class MockDashboardApiError extends Error {
@@ -174,6 +174,92 @@ describe('ProjectDetail screen', () => {
     const rows = screen.getAllByRole('row').slice(1)
     expect(rows[0]).toHaveTextContent('implement')
     expect(rows[1]).toHaveTextContent('consult')
+  })
+
+  it('derives deterministic sortable value from rawTargets rather than rendered targets presentation', () => {
+    expect(
+      getEffectiveTargetsSortValue({
+        rawTargets: ['worker-b', 'worker-a'],
+        targets: 'Custom Rendered Presentation',
+      })
+    ).toBe('worker-b, worker-a')
+
+    expect(
+      getEffectiveTargetsSortValue({
+        rawTargets: [],
+        targets: 'Rendered Targets',
+      })
+    ).toBe('')
+
+    expect(
+      getEffectiveTargetsSortValue({
+        rawTargets: null,
+        targets: 'Rendered Targets',
+      })
+    ).toBe('')
+
+    expect(
+      getEffectiveTargetsSortValue({
+        targets: 'Rendered Targets',
+      })
+    ).toBe('')
+
+    expect(getEffectiveTargetsSortValue(null)).toBe('')
+  })
+
+  it('sorts Effective targets column using rawTargets while continuing to render targets', async () => {
+    const customProjectData = {
+      ...mockProjectData,
+      configuration: {
+        ...mockProjectData.configuration,
+        profiles: [
+          {
+            id: 'custom-profile',
+            parent: { value: 'base-profile', source: 'project' },
+            declared: {},
+            inherited: {},
+            effective: {
+              beta_workflow: { targets: ['target-1-alpha'], max_attempts: 1, timeout_s: 60 },
+              alpha_workflow: { targets: ['target-2-zebra'], max_attempts: 1, timeout_s: 60 },
+            },
+            sources: {
+              beta_workflow: 'project',
+              alpha_workflow: 'project',
+            },
+          },
+        ],
+      },
+    }
+
+    vi.mocked(api.getProject).mockResolvedValue(customProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+
+    render(<ProjectDetail projectId="proj-demo" />)
+    expect(await screen.findByText('Demo Workspace')).toBeInTheDocument()
+
+    const targetsHeader = screen.getByRole('columnheader', { name: /Effective targets/i })
+    expect(targetsHeader.className).toMatch(/col-priority-primary/)
+
+    const sortTargetsBtn = screen.getByRole('button', { name: /Sort by Effective targets/i })
+
+    // Ascending: target-1-alpha (beta_workflow) should come before target-2-zebra (alpha_workflow)
+    fireEvent.click(sortTargetsBtn)
+    expect(targetsHeader).toHaveAttribute('aria-sort', 'ascending')
+    let rows = screen.getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('beta_workflow')
+    expect(rows[0]).toHaveTextContent('target-1-alpha')
+    expect(rows[1]).toHaveTextContent('alpha_workflow')
+    expect(rows[1]).toHaveTextContent('target-2-zebra')
+
+    // Descending: target-2-zebra (alpha_workflow) should come before target-1-alpha (beta_workflow)
+    fireEvent.click(sortTargetsBtn)
+    expect(targetsHeader).toHaveAttribute('aria-sort', 'descending')
+    rows = screen.getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('alpha_workflow')
+    expect(rows[0]).toHaveTextContent('target-2-zebra')
+    expect(rows[1]).toHaveTextContent('beta_workflow')
+    expect(rows[1]).toHaveTextContent('target-1-alpha')
   })
 
   it('suppresses source chip when parent profile is null in profile resolution tab', async () => {
