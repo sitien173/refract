@@ -149,6 +149,33 @@ describe('ProjectDetail screen', () => {
     expect(consultWorkflowHeadings.length).toBe(1)
   })
 
+  it('exposes sortable headers and responsive priority classes on effective configuration table', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+
+    render(<ProjectDetail projectId="proj-demo" />)
+    expect(await screen.findByText('Demo Workspace')).toBeInTheDocument()
+
+    const workflowHeader = screen.getByRole('columnheader', { name: /Workflow/i })
+    expect(workflowHeader.className).toMatch(/col-priority-primary/)
+
+    const profileHeader = screen.getByRole('columnheader', { name: /Declared profile/i })
+    expect(profileHeader.className).toMatch(/col-priority-secondary/)
+
+    const attemptsHeader = screen.getByRole('columnheader', { name: /Attempts/i })
+    expect(attemptsHeader.className).toMatch(/col-priority-tertiary/)
+
+    // Sort by Workflow descending
+    const sortBtn = screen.getByRole('button', { name: /Sort by Workflow/i })
+    fireEvent.click(sortBtn) // asc: consult, implement
+    fireEvent.click(sortBtn) // desc: implement, consult
+    expect(workflowHeader).toHaveAttribute('aria-sort', 'descending')
+    const rows = screen.getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('implement')
+    expect(rows[1]).toHaveTextContent('consult')
+  })
+
   it('suppresses source chip when parent profile is null in profile resolution tab', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue([])

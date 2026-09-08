@@ -103,7 +103,11 @@ export default function Projects({ onNavigate }) {
     {
       key: 'alias',
       header: 'Alias',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.alias || row.id,
       width: '180px',
+      minWidth: '140px',
       render: (row) => (
         <a
           href={`/dashboard/projects/${encodeURIComponent(row.id)}`}
@@ -121,25 +125,42 @@ export default function Projects({ onNavigate }) {
     {
       key: 'root',
       header: 'Workspace root',
+      priority: 'tertiary',
+      sortable: true,
+      sortAccessor: (row) => row.root || '',
       width: '320px',
+      minWidth: '200px',
+      wrap: true,
       render: (row) => <code className="cell-code">{row.root}</code>,
     },
     {
       key: 'profile',
       header: 'Profile',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.profile || '',
       width: '160px',
+      minWidth: '120px',
       render: (row) => <span className="profile-tag">{row.profile || (isHydrating ? '…' : 'default')}</span>,
     },
     {
       key: 'activity',
       header: 'Activity',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.activity || '',
       width: '140px',
+      minWidth: '110px',
       render: (row) => <span>{row.activity || (isHydrating ? '…' : 'Idle')}</span>,
     },
     {
       key: 'health',
       header: 'Health',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.health || 'healthy',
       width: '180px',
+      minWidth: '140px',
       render: (row) => (
         <StatusBadge
           status={row.health || (isHydrating ? 'unknown' : 'healthy')}

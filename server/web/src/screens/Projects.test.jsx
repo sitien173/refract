@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import Projects from './Projects'
@@ -56,5 +56,25 @@ describe('Projects screen', () => {
     expect(screen.getByText('Alpha Workspace')).toBeInTheDocument()
     expect(screen.getByText('/workspace/alpha')).toBeInTheDocument()
     expect(screen.getByText('Beta Workspace')).toBeInTheDocument()
+  })
+
+  it('exposes sortable headers and responsive priority classes on projects table', async () => {
+    render(<Projects />)
+    expect(await screen.findByText('Alpha Workspace')).toBeInTheDocument()
+
+    const aliasHeader = screen.getByRole('columnheader', { name: /Alias/i })
+    expect(aliasHeader.className).toMatch(/col-priority-primary/)
+
+    const rootHeader = screen.getByRole('columnheader', { name: /Workspace root/i })
+    expect(rootHeader.className).toMatch(/col-priority-tertiary/)
+
+    // Sort descending by Alias
+    const sortBtn = screen.getByRole('button', { name: /Sort by Alias/i })
+    fireEvent.click(sortBtn) // asc: Alpha, Beta
+    fireEvent.click(sortBtn) // desc: Beta, Alpha
+    expect(aliasHeader).toHaveAttribute('aria-sort', 'descending')
+    const rows = screen.getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('Beta Workspace')
+    expect(rows[1]).toHaveTextContent('Alpha Workspace')
   })
 })

@@ -54,13 +54,21 @@ export default function Profiles() {
     {
       key: 'name',
       header: 'Profile identifier',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.name,
       width: '240px',
+      minWidth: '160px',
       render: (row) => <strong>{row.name}</strong>,
     },
     {
       key: 'isDefault',
       header: 'Default fallback',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => (row.isDefault ? 1 : 0),
       width: '180px',
+      minWidth: '130px',
       render: (row) => (
         <span className={`profile-tag ${row.isDefault ? 'profile-tag-default' : ''}`}>
           {row.isDefault ? 'Global default' : 'Profile'}
@@ -70,7 +78,10 @@ export default function Profiles() {
     {
       key: 'scope',
       header: 'Scope',
-      width: '200px',
+      priority: 'secondary',
+      sortable: false,
+      width: '180px',
+      minWidth: '130px',
       render: () => <span>Global catalog</span>,
     },
   ]
@@ -400,38 +411,40 @@ export default function Profiles() {
             </Alert>
 
             <div className="mutation-references-list" style={{ marginTop: 'var(--space-md)' }}>
-              <table className="data-table" style={{ width: '100%' }}>
-                <thead>
-                  <tr>
-                    <th>Scope</th>
-                    <th>Reference</th>
-                    <th>Relationship</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {deleteDialogState.references.map((ref, idx) => (
-                    <tr key={idx}>
-                      <td>
-                        <span className={`source-chip ${ref.scope === 'project' ? 'source-repository' : 'source-global'}`}>
-                          {ref.scope === 'project' ? (ref.project_id ? `Project (${ref.project_id})` : 'Project') : 'Global'}
-                        </span>
-                      </td>
-                      <td>
-                        <strong>{ref.profile_id || '(daemon configuration)'}</strong>
-                      </td>
-                      <td>
-                        <code>
-                          {ref.relationship === 'default_profile'
-                            ? 'Default profile'
-                            : ref.relationship === 'extends'
-                              ? 'Parent profile (extends)'
-                              : ref.relationship || 'reference'}
-                        </code>
-                      </td>
+              <div className="data-grid-container" tabIndex={0} role="region" aria-label="Blocking references for profile">
+                <table className="data-grid-table data-table" style={{ width: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Scope</th>
+                      <th scope="col">Reference</th>
+                      <th scope="col">Relationship</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {deleteDialogState.references.map((ref, idx) => (
+                      <tr key={idx}>
+                        <td>
+                          <span className={`source-chip ${ref.scope === 'project' ? 'source-repository' : 'source-global'}`}>
+                            {ref.scope === 'project' ? (ref.project_id ? `Project (${ref.project_id})` : 'Project') : 'Global'}
+                          </span>
+                        </td>
+                        <td>
+                          <strong>{ref.profile_id || '(daemon configuration)'}</strong>
+                        </td>
+                        <td>
+                          <code>
+                            {ref.relationship === 'default_profile'
+                              ? 'Default profile'
+                              : ref.relationship === 'extends'
+                                ? 'Parent profile (extends)'
+                                : ref.relationship || 'reference'}
+                          </code>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <p className="caption" style={{ marginTop: 'var(--space-md)' }}>

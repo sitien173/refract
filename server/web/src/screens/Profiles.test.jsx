@@ -102,6 +102,26 @@ describe('Profiles screen', () => {
     expect(screen.getByText('fast-dev')).toBeInTheDocument()
   })
 
+  it('exposes sortable headers and responsive priority classes on profiles table', async () => {
+    render(<Profiles />)
+    expect(await screen.findByText('default')).toBeInTheDocument()
+
+    const nameHeader = screen.getByRole('columnheader', { name: /Profile identifier/i })
+    expect(nameHeader.className).toMatch(/col-priority-primary/)
+
+    const scopeHeader = screen.getByRole('columnheader', { name: /Scope/i })
+    expect(scopeHeader.className).toMatch(/col-priority-secondary/)
+
+    // Sort by Profile identifier descending
+    const sortBtn = screen.getByRole('button', { name: /Sort by Profile identifier/i })
+    fireEvent.click(sortBtn) // asc: default, fast-dev, strict-review
+    fireEvent.click(sortBtn) // desc: strict-review, fast-dev, default
+    expect(nameHeader).toHaveAttribute('aria-sort', 'descending')
+    const rows = screen.getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('strict-review')
+    expect(rows[2]).toHaveTextContent('default')
+  })
+
   it('renders invalid configuration health banner and last-known-good revision while cached profiles remain visible', async () => {
     vi.mocked(api.getConfiguration).mockResolvedValue({
       valid: false,
@@ -286,7 +306,7 @@ describe('Profiles screen', () => {
     fireEvent.click(reviewToggle)
 
     // Remove the target
-    const removeBtn = within(dialog).getByRole('button', { name: /Remove review target 1/i })
+    const removeBtn = await within(dialog).findByRole('button', { name: /Remove review target 1/i })
     fireEvent.click(removeBtn)
 
     // Submit

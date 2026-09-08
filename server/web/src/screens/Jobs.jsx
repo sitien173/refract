@@ -95,7 +95,11 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
     {
       key: 'id',
       header: 'Job ID',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.id,
       width: '180px',
+      minWidth: '140px',
       render: (row) => (
         <a
           href={`/dashboard/jobs/${encodeURIComponent(row.id)}`}
@@ -113,31 +117,51 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
     {
       key: 'workflow',
       header: 'Workflow',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.workflow,
       width: '140px',
+      minWidth: '110px',
       render: (row) => <strong>{row.workflow}</strong>,
     },
     {
       key: 'profile',
       header: 'Profile',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.profile || '',
       width: '140px',
+      minWidth: '110px',
       render: (row) => <span className="profile-tag">{row.profile}</span>,
     },
     {
       key: 'state',
       header: 'State',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.state,
       width: '140px',
+      minWidth: '100px',
       render: (row) => <StatusBadge status={row.state} label={row.state} />,
     },
     {
       key: 'target_id',
       header: 'Target',
-      width: '180px',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.target_id || '',
+      width: '160px',
+      minWidth: '120px',
       render: (row) => <span>{row.target_id || '—'}</span>,
     },
     {
       key: 'config_revision',
       header: 'Config revision',
+      priority: 'optional',
+      sortable: true,
+      sortAccessor: (row) => row.config_revision || '',
       width: '180px',
+      minWidth: '130px',
       render: (row) => (
         <code className="cell-code">
           {row.config_revision ? row.config_revision.slice(0, 12) : 'Unavailable'}
@@ -147,7 +171,11 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
     {
       key: 'created_at',
       header: 'Created at',
+      priority: 'tertiary',
+      sortable: true,
+      sortAccessor: (row) => row.created_at || '',
       width: '180px',
+      minWidth: '140px',
       render: (row) => <span className="caption">{row.created_at}</span>,
     },
   ]

@@ -40,32 +40,34 @@ export default function ConfigurationMutationDialog({
           </Alert>
 
           <div className="mutation-references-list" style={{ marginTop: 'var(--space-md)' }}>
-            <table className="data-table" style={{ width: '100%' }}>
-              <thead>
-                <tr>
-                  <th>Scope</th>
-                  <th>Profile</th>
-                  <th>Workflow</th>
-                </tr>
-              </thead>
-              <tbody>
-                {references.map((ref, idx) => (
-                  <tr key={idx}>
-                    <td>
-                      <span className={`source-chip ${ref.scope === 'project' ? 'source-repository' : 'source-global'}`}>
-                        {ref.scope === 'project' ? (ref.project_id ? `Project (${ref.project_id})` : 'Project') : 'Global'}
-                      </span>
-                    </td>
-                    <td>
-                      <strong>{ref.profile_id || '(daemon default)'}</strong>
-                    </td>
-                    <td>
-                      <code>{ref.workflow || ref.relationship || 'reference'}</code>
-                    </td>
+            <div className="data-grid-container" tabIndex={0} role="region" aria-label="Referencing profile workflows">
+              <table className="data-grid-table data-table" style={{ width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th scope="col">Scope</th>
+                    <th scope="col">Profile</th>
+                    <th scope="col">Workflow</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {references.map((ref, idx) => (
+                    <tr key={idx}>
+                      <td>
+                        <span className={`source-chip ${ref.scope === 'project' ? 'source-repository' : 'source-global'}`}>
+                          {ref.scope === 'project' ? (ref.project_id ? `Project (${ref.project_id})` : 'Project') : 'Global'}
+                        </span>
+                      </td>
+                      <td>
+                        <strong>{ref.profile_id || '(daemon default)'}</strong>
+                      </td>
+                      <td>
+                        <code>{ref.workflow || ref.relationship || 'reference'}</code>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <p className="caption" style={{ marginTop: 'var(--space-md)' }}>

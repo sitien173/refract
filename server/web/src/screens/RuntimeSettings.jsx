@@ -171,19 +171,32 @@ export default function RuntimeSettings() {
     {
       key: 'setting',
       header: 'Setting',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.setting,
       width: '240px',
+      minWidth: '160px',
       render: (row) => <strong>{row.setting}</strong>,
     },
     {
       key: 'value',
       header: 'Configured value',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => String(row.value ?? ''),
       width: '280px',
+      minWidth: '140px',
+      wrap: true,
       render: (row) => <code className="cell-code">{String(row.value)}</code>,
     },
     {
       key: 'behavior',
       header: 'Reload behavior',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.behavior || '',
       width: '160px',
+      minWidth: '120px',
       render: (row) => {
         const isLive = row.behavior === 'Live'
         const isRestart = row.behavior === 'Restart required'
@@ -201,7 +214,12 @@ export default function RuntimeSettings() {
     {
       key: 'details',
       header: 'Details',
+      priority: 'tertiary',
+      sortable: true,
+      sortAccessor: (row) => row.details || '',
       width: '320px',
+      minWidth: '180px',
+      wrap: true,
       render: (row) => <span className="caption">{row.details}</span>,
     },
   ]

@@ -49,10 +49,28 @@ describe('Jobs screen and JobDetail screen', () => {
 
     expect(await screen.findByText('job-101')).toBeInTheDocument()
     expect(screen.getByText('job-102')).toBeInTheDocument()
-    expect(screen.getByText('abc123def456')).toBeInTheDocument()
-    expect(screen.getByText('Unavailable')).toBeInTheDocument()
     expect(screen.getByText('running')).toBeInTheDocument()
     expect(screen.getByText('succeeded')).toBeInTheDocument()
+
+    // Config revision is optional and hidden by default
+    expect(screen.queryByText('abc123def456')).not.toBeInTheDocument()
+
+    // Toggle Config revision through Columns control
+    fireEvent.click(screen.getByRole('button', { name: /Columns/i }))
+    const configCheckbox = screen.getByRole('checkbox', { name: /Config revision/i })
+    expect(configCheckbox).not.toBeChecked()
+    fireEvent.click(configCheckbox)
+
+    expect(screen.getByText('abc123def456')).toBeInTheDocument()
+    expect(screen.getByText('Unavailable')).toBeInTheDocument()
+
+    // Test sorting by Job ID descending
+    const idSortBtn = screen.getByRole('button', { name: /Sort by Job ID/i })
+    fireEvent.click(idSortBtn) // asc
+    fireEvent.click(idSortBtn) // desc
+    const rows = screen.getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('job-102')
+    expect(rows[1]).toHaveTextContent('job-101')
   })
 
   it('stops polling after an empty project result', async () => {

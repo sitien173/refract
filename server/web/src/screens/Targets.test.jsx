@@ -88,6 +88,35 @@ describe('Targets screen', () => {
     expect(screen.queryByText('Circuit open')).not.toBeInTheDocument()
   })
 
+  it('exposes sortable headers and responsive priority classes on targets table', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    const idHeader = screen.getByRole('columnheader', { name: /Identifier/i })
+    expect(idHeader.className).toMatch(/col-priority-primary/)
+
+    const backendHeader = screen.getByRole('columnheader', { name: /Backend/i })
+    expect(backendHeader.className).toMatch(/col-priority-secondary/)
+
+    const concurrencyHeader = screen.getByRole('columnheader', { name: /Concurrency/i })
+    expect(concurrencyHeader.className).toMatch(/col-priority-tertiary/)
+
+    // Optional columns like Isolation are hidden by default
+    expect(screen.queryByRole('columnheader', { name: /Isolation/i })).not.toBeInTheDocument()
+
+    // Sort by Identifier descending
+    const sortBtn = screen.getByRole('button', { name: /Sort by Identifier/i })
+    fireEvent.click(sortBtn) // asc
+    fireEvent.click(sortBtn) // desc
+    expect(idHeader).toHaveAttribute('aria-sort', 'descending')
+    const rows = screen.getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('target-healthy')
+    expect(rows[1]).toHaveTextContent('target-down')
+    expect(rows[2]).toHaveTextContent('target-circuit')
+  })
+
   it('filters targets by status button and search query', async () => {
     vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
 
@@ -227,6 +256,9 @@ describe('Targets screen', () => {
     expect(idInput).toBeDisabled()
 
     const modelInput = within(dialog).getByLabelText(/^Model$/i)
+    await vi.waitFor(() => {
+      expect(modelInput).toHaveValue('claude-3-7-sonnet')
+    })
     fireEvent.change(modelInput, { target: { value: 'claude-3-5-sonnet' } })
 
     const saveBtn = within(dialog).getByRole('button', { name: /Save target/i })

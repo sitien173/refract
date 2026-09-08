@@ -305,37 +305,62 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     {
       key: 'workflow',
       header: 'Workflow',
-      width: '180px',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.workflow,
+      width: '160px',
+      minWidth: '120px',
       render: (row) => <strong>{row.workflow}</strong>,
     },
     {
       key: 'profile',
       header: 'Declared profile',
-      width: '180px',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.profile,
+      width: '160px',
+      minWidth: '120px',
       render: (row) => <span className="profile-tag">{row.profile}</span>,
     },
     {
       key: 'targets',
       header: 'Effective targets',
-      width: '260px',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.targets,
+      width: '240px',
+      minWidth: '160px',
+      wrap: true,
       render: (row) => <code className="cell-code">{row.targets}</code>,
     },
     {
       key: 'source',
       header: 'Source',
-      width: '160px',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => (typeof row.source === 'string' ? row.source : row.source?.scope || ''),
+      width: '140px',
+      minWidth: '110px',
       render: (row) => <SourceChip source={row.source} />,
     },
     {
       key: 'maxAttempts',
       header: 'Attempts',
+      priority: 'tertiary',
+      sortable: true,
+      sortAccessor: (row) => row.maxAttempts ?? 0,
       width: '100px',
+      minWidth: '80px',
       render: (row) => <span>{row.maxAttempts}</span>,
     },
     {
       key: 'timeoutS',
       header: 'Timeout',
+      priority: 'tertiary',
+      sortable: true,
+      sortAccessor: (row) => row.timeoutS ?? 0,
       width: '100px',
+      minWidth: '80px',
       render: (row) => <span>{row.timeoutS}s</span>,
     },
   ]
@@ -344,13 +369,21 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     {
       key: 'workflow',
       header: 'Workflow',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.workflow,
       width: '160px',
+      minWidth: '120px',
       render: (row) => <strong>{row.workflow}</strong>,
     },
     {
       key: 'provenance',
       header: 'Provenance',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.provenance,
       width: '140px',
+      minWidth: '110px',
       render: (row) => (
         <span className={`provenance-tag ${row.provenance === 'Declared' ? 'provenance-declared' : 'provenance-inherited'}`}>
           {row.provenance}
@@ -360,25 +393,42 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     {
       key: 'targets',
       header: 'Effective targets',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.targets,
       width: '240px',
+      minWidth: '160px',
+      wrap: true,
       render: (row) => <code className="cell-code">{row.targets}</code>,
     },
     {
       key: 'maxAttempts',
       header: 'Attempts',
+      priority: 'tertiary',
+      sortable: true,
+      sortAccessor: (row) => row.maxAttempts ?? 0,
       width: '100px',
+      minWidth: '80px',
       render: (row) => <span>{row.maxAttempts}</span>,
     },
     {
       key: 'timeoutS',
       header: 'Timeout',
+      priority: 'tertiary',
+      sortable: true,
+      sortAccessor: (row) => row.timeoutS ?? 0,
       width: '100px',
+      minWidth: '80px',
       render: (row) => <span>{row.timeoutS}s</span>,
     },
     {
       key: 'source',
       header: 'Source',
-      width: '160px',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => (typeof row.source === 'string' ? row.source : row.source?.scope || ''),
+      width: '140px',
+      minWidth: '110px',
       render: (row) => <SourceChip source={row.source} />,
     },
   ]
@@ -387,37 +437,61 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     {
       key: 'id',
       header: 'Job ID',
-      width: '200px',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.id,
+      width: '180px',
+      minWidth: '140px',
       render: (row) => <code className="cell-code">{row.id}</code>,
     },
     {
       key: 'workflow',
       header: 'Workflow',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.workflow,
       width: '140px',
+      minWidth: '110px',
       render: (row) => <span>{row.workflow}</span>,
     },
     {
       key: 'profile',
       header: 'Profile',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.profile || '',
       width: '140px',
+      minWidth: '110px',
       render: (row) => <span className="profile-tag">{row.profile}</span>,
     },
     {
       key: 'state',
       header: 'State',
+      priority: 'primary',
+      sortable: true,
+      sortAccessor: (row) => row.state,
       width: '140px',
+      minWidth: '100px',
       render: (row) => <StatusBadge status={row.state} label={row.state} />,
     },
     {
       key: 'target_id',
       header: 'Target',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.target_id || '',
       width: '160px',
+      minWidth: '120px',
       render: (row) => <span>{row.target_id || '—'}</span>,
     },
     {
       key: 'config_revision',
       header: 'Config revision',
+      priority: 'optional',
+      sortable: true,
+      sortAccessor: (row) => row.config_revision || '',
       width: '180px',
+      minWidth: '130px',
       render: (row) => (
         <code className="cell-code">
           {row.config_revision ? row.config_revision.slice(0, 12) : 'Unavailable'}
@@ -427,7 +501,11 @@ export default function ProjectDetail({ projectId, onNavigate }) {
     {
       key: 'created_at',
       header: 'Created at',
+      priority: 'tertiary',
+      sortable: true,
+      sortAccessor: (row) => row.created_at || '',
       width: '180px',
+      minWidth: '140px',
       render: (row) => <span className="caption">{row.created_at}</span>,
     },
   ]
@@ -744,30 +822,32 @@ export default function ProjectDetail({ projectId, onNavigate }) {
               Project override <strong>{removeDialogState.profileId}</strong> cannot be removed because it is referenced by:
             </Alert>
             <div className="mutation-references-list" style={{ marginTop: 'var(--space-md)' }}>
-              <table className="data-table" style={{ width: '100%' }}>
-                <thead>
-                  <tr>
-                    <th>Scope</th>
-                    <th>Profile</th>
-                    <th>Relationship</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {removeDialogState.references.map((ref, idx) => (
-                    <tr key={idx}>
-                      <td>
-                        <span className="source-chip source-repository">Project</span>
-                      </td>
-                      <td>
-                        <strong>{ref.profile_id || '(project default)'}</strong>
-                      </td>
-                      <td>
-                        <code>{ref.relationship || ref.workflow || 'reference'}</code>
-                      </td>
+              <div className="data-grid-container" tabIndex={0} role="region" aria-label="Blocking references for override">
+                <table className="data-grid-table data-table" style={{ width: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Scope</th>
+                      <th scope="col">Profile</th>
+                      <th scope="col">Relationship</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {removeDialogState.references.map((ref, idx) => (
+                      <tr key={idx}>
+                        <td>
+                          <span className="source-chip source-repository">Project</span>
+                        </td>
+                        <td>
+                          <strong>{ref.profile_id || '(project default)'}</strong>
+                        </td>
+                        <td>
+                          <code>{ref.relationship || ref.workflow || 'reference'}</code>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
             <p className="caption" style={{ marginTop: 'var(--space-md)' }}>
               Update or remove these references in the project configuration before removing this override.
@@ -814,29 +894,31 @@ export default function ProjectDetail({ projectId, onNavigate }) {
                   <p className="caption" style={{ margin: '0 0 var(--space-xs) 0' }}>
                     Parent profile: <strong>{removeDialogState.fallback.extends || '(None - base profile)'}</strong>
                   </p>
-                  <table className="data-table" style={{ width: '100%', fontSize: 'var(--type-text-xs-size)' }}>
-                    <thead>
-                      <tr>
-                        <th>Workflow</th>
-                        <th>Fallback targets</th>
-                        <th>Attempts</th>
-                        <th>Timeout</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {['consult', 'implement', 'review', 'other'].map((wf) => {
-                        const pol = removeDialogState.fallback.effective?.[wf]
-                        return (
-                          <tr key={wf}>
-                            <td><strong>{wf}</strong></td>
-                            <td><code>{pol?.targets ? pol.targets.join(', ') : '—'}</code></td>
-                            <td>{pol?.max_attempts ?? 1}</td>
-                            <td>{pol?.timeout_s ?? 60}s</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                  <div className="data-grid-container" tabIndex={0} role="region" aria-label="Resulting global fallback policy">
+                    <table className="data-grid-table data-table" style={{ width: '100%', fontSize: 'var(--type-text-xs-size)' }}>
+                      <thead>
+                        <tr>
+                          <th scope="col">Workflow</th>
+                          <th scope="col">Fallback targets</th>
+                          <th scope="col">Attempts</th>
+                          <th scope="col">Timeout</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {['consult', 'implement', 'review', 'other'].map((wf) => {
+                          const pol = removeDialogState.fallback.effective?.[wf]
+                          return (
+                            <tr key={wf}>
+                              <td><strong>{wf}</strong></td>
+                              <td><code>{pol?.targets ? pol.targets.join(', ') : '—'}</code></td>
+                              <td>{pol?.max_attempts ?? 1}</td>
+                              <td>{pol?.timeout_s ?? 60}s</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               ) : (
                 <Alert tone="neutral" title="No global profile fallback">
