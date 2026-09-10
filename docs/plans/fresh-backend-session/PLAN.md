@@ -60,8 +60,8 @@ sessions.
 - Documentation matches the MCP schema exactly.
 
 **Verification Checks:**
-- `python -m pytest tests/test_database.py tests/test_execution.py tests/test_server.py`
-- `python -m pytest`
+- `uv run pytest tests/test_database.py tests/test_execution.py tests/test_server.py`
+- `uv run pytest`
 - `tgrep -n "fresh_session" src/openmcp tests README.md`
 
 **Commit:** `feat(runtime): support fresh backend sessions`
