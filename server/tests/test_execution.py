@@ -964,3 +964,101 @@ async def test_fresh_session_flag_survives_daemon_restart(tmp_path) -> None:
         assert drivers.prompts == ["fresh restart prompt"]
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_fresh_job_preserves_old_sessions_when_backend_reports_success(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class RaceCancellingDrivers(FakeDrivers):
+        async def execute(self, *, cancel_event, **kwargs) -> DriverResult:
+            # Simulate cancellation arriving right as backend produces SUCCESS
+            cancel_event.set()
+            return DriverResult("SUCCESS", "unwanted-fresh-session", "success text", "", "")
+
+    drivers = RaceCancellingDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="stream",
+            role="implement",
+            target_id=catalog.targets[0].id,
+            target_key=tkey,
+            session_id="old-session",
+            prompt="turn 1",
+            response="response 1",
+        )
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
+
+        submitted = await runtime.submit(
+            project.id,
+            "implement",
+            "cancelled prompt",
+            context_key="stream",
+            fresh_session=True,
+        )
+        job = await runtime.wait(submitted.job_id, 10)
+        assert job.state in {"cancelled", "interrupted"}
+
+        # Preserves old context sessions on cancellation race
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fresh_job_persistence_failure_rolls_back_and_preserves_old_sessions(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class SuccessDrivers(FakeDrivers):
+        async def execute(self, **kwargs) -> DriverResult:
+            return DriverResult("SUCCESS", "new-session", "success text", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = SuccessDrivers()
+    tkey = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="stream",
+            role="implement",
+            target_id=catalog.targets[0].id,
+            target_key=tkey,
+            session_id="old-session",
+            prompt="turn 1",
+            response="response 1",
+        )
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
+
+        runtime.database._connection.execute("""
+            CREATE TRIGGER fail_fresh_turn BEFORE INSERT ON context_turns
+            BEGIN
+                SELECT RAISE(FAIL, 'turn insert failed');
+            END;
+        """)
+
+        submitted = await runtime.submit(
+            project.id,
+            "implement",
+            "failing persistence prompt",
+            context_key="stream",
+            fresh_session=True,
+        )
+        job = await runtime.wait(submitted.job_id, 10)
+        assert job.state == "failed"
+
+        runtime.database._connection.execute("DROP TRIGGER fail_fresh_turn")
+
+        # Atomic rollback preserves old session on persistence failure
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
+    finally:
+        await runtime.close()

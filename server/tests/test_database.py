@@ -349,3 +349,41 @@ def test_context_includes_sessionless_turns_with_fixed_query_count(tmp_path) -> 
     assert len([statement for statement in statements if statement.startswith("SELECT")]) == 2
     database.close()
 
+
+def test_append_turn_atomic_rollback_preserves_sessions(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+    database.append_turn(
+        project_id=project.id,
+        context_key="stream",
+        role="implement",
+        target_id="primary",
+        target_key="primary",
+        session_id="old-session",
+        prompt="turn 1",
+        response="response 1",
+    )
+    assert database.session(project.id, "stream", "implement", "primary") == "old-session"
+
+    database._connection.execute("""
+        CREATE TRIGGER fail_turn BEFORE INSERT ON context_turns
+        BEGIN
+            SELECT RAISE(FAIL, 'simulated turn failure');
+        END;
+    """)
+    with pytest.raises(sqlite3.IntegrityError, match="simulated turn failure"):
+        database.append_turn(
+            project_id=project.id,
+            context_key="stream",
+            role="implement",
+            target_id="primary",
+            target_key="primary",
+            session_id="new-session",
+            prompt="turn 2",
+            response="response 2",
+            clear_sessions=True,
+        )
+
+    database._connection.execute("DROP TRIGGER fail_turn")
+    assert database.session(project.id, "stream", "implement", "primary") == "old-session"
+    database.close()

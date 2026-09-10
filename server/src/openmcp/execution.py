@@ -27,6 +27,7 @@ log = get_logger("execution")
 class TargetExecutionResult:
     result: DriverResult
     target_id: str
+    target_key: str = ""
 
 
 class TargetExecutor:
@@ -93,12 +94,11 @@ class TargetExecutor:
             log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": attempt + 1, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
             if last.outcome == "SUCCESS":
                 self.database.record_target_success(target_key)
-                if fresh_session:
-                    self.database.clear_context_sessions(project.id, context_key, workflow)
-                self.database.append_turn(project_id=project.id, context_key=context_key, role=workflow, target_id=target.id, target_key=target_key, session_id=last.session_id, prompt=prompt, response=last.text)
-                return TargetExecutionResult(last, target.id)
+                if not fresh_session:
+                    self.database.append_turn(project_id=project.id, context_key=context_key, role=workflow, target_id=target.id, target_key=target_key, session_id=last.session_id, prompt=prompt, response=last.text)
+                return TargetExecutionResult(last, target.id, target_key)
             if last.outcome in {"CANCELLED", "REQUEST_FATAL"}:
-                return TargetExecutionResult(last, target.id)
+                return TargetExecutionResult(last, target.id, target_key)
             self._record_failure(target_key)
             if attempt + 1 < plan.selection.max_attempts:
                 delay = min(8.0, 2.0**attempt) * random.uniform(0.8, 1.2)
@@ -243,6 +243,18 @@ class JobRunner:
             if execution.result.outcome != "SUCCESS" or cancel_event.is_set():
                 final_state = "interrupted" if cancel_event.is_set() and self.is_closing() else "cancelled" if cancel_event.is_set() else "failed"
                 raise RuntimeError(execution.result.error or execution.result.outcome)
+            if bool(record.get("fresh_session", 0)):
+                self.database.append_turn(
+                    project_id=project.id,
+                    context_key=record["context_key"],
+                    role=record["workflow"],
+                    target_id=execution.target_id,
+                    target_key=execution.target_key,
+                    session_id=execution.result.session_id,
+                    prompt=record["prompt"],
+                    response=execution.result.text,
+                    clear_sessions=True,
+                )
             self.database.finish_job(job_id, "succeeded", text=execution.result.text, target_id=execution.target_id)
             await self._notify(job_id)
         except Exception as exc:

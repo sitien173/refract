@@ -590,15 +590,13 @@ class Database:
         row = self._connection.execute("SELECT session_id FROM context_sessions WHERE project_id=? AND context_key=? AND role=? AND target_key=? AND lane=?", (project_id, context_key, role, target_key, lane)).fetchone()
         return row["session_id"] if row else ""
 
-    def clear_context_sessions(self, project_id: str, context_key: str, role: str) -> None:
+    def append_turn(self, *, project_id: str, context_key: str, role: str, target_id: str, target_key: str, lane: str = "", session_id: str, prompt: str, response: str, clear_sessions: bool = False) -> None:
         with self._connection:
-            self._connection.execute(
-                "DELETE FROM context_sessions WHERE project_id=? AND context_key=? AND role=?",
-                (project_id, context_key, role),
-            )
-
-    def append_turn(self, *, project_id: str, context_key: str, role: str, target_id: str, target_key: str, lane: str = "", session_id: str, prompt: str, response: str) -> None:
-        with self._connection:
+            if clear_sessions:
+                self._connection.execute(
+                    "DELETE FROM context_sessions WHERE project_id=? AND context_key=? AND role=?",
+                    (project_id, context_key, role),
+                )
             if session_id:
                 self._connection.execute(
                     """INSERT INTO context_sessions(project_id, context_key, role, target_id, target_key, lane, session_id, updated_at)
