@@ -1062,3 +1062,61 @@ async def test_fresh_job_persistence_failure_rolls_back_and_preserves_old_sessio
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fresh_job_failure_updating_state_to_succeeded_preserves_old_session_and_turn_count(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class SuccessDrivers(FakeDrivers):
+        async def execute(self, **kwargs) -> DriverResult:
+            return DriverResult("SUCCESS", "new-session", "success text", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = SuccessDrivers()
+    tkey = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="stream",
+            role="implement",
+            target_id=catalog.targets[0].id,
+            target_key=tkey,
+            session_id="old-session",
+            prompt="turn 1",
+            response="response 1",
+        )
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
+        initial_turns = len(runtime.database.recent_turns(project.id, "stream", "implement", 100))
+        assert initial_turns == 1
+
+        # Reject only state='succeeded'
+        runtime.database._connection.execute("""
+            CREATE TRIGGER reject_succeeded BEFORE UPDATE OF state ON jobs
+            FOR EACH ROW
+            WHEN NEW.state = 'succeeded'
+            BEGIN
+                SELECT RAISE(FAIL, 'reject succeeded state');
+            END;
+        """)
+
+        submitted = await runtime.submit(
+            project.id,
+            "implement",
+            "failing state update prompt",
+            context_key="stream",
+            fresh_session=True,
+        )
+        job = await runtime.wait(submitted.job_id, 10)
+        assert job.state == "failed"
+
+        runtime.database._connection.execute("DROP TRIGGER reject_succeeded")
+
+        # Preserves old session and previous turn count
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
+        assert len(runtime.database.recent_turns(project.id, "stream", "implement", 100)) == initial_turns
+    finally:
+        await runtime.close()

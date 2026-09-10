@@ -244,7 +244,8 @@ class JobRunner:
                 final_state = "interrupted" if cancel_event.is_set() and self.is_closing() else "cancelled" if cancel_event.is_set() else "failed"
                 raise RuntimeError(execution.result.error or execution.result.outcome)
             if bool(record.get("fresh_session", 0)):
-                self.database.append_turn(
+                self.database.finish_fresh_job_success(
+                    job_id=job_id,
                     project_id=project.id,
                     context_key=record["context_key"],
                     role=record["workflow"],
@@ -253,9 +254,9 @@ class JobRunner:
                     session_id=execution.result.session_id,
                     prompt=record["prompt"],
                     response=execution.result.text,
-                    clear_sessions=True,
                 )
-            self.database.finish_job(job_id, "succeeded", text=execution.result.text, target_id=execution.target_id)
+            else:
+                self.database.finish_job(job_id, "succeeded", text=execution.result.text, target_id=execution.target_id)
             await self._notify(job_id)
         except Exception as exc:
             if not isinstance(exc, RuntimeError):

@@ -552,6 +552,49 @@ class Database:
             )
         self.event(job_id, f"job.{state}", {"error": error} if error else {})
 
+    def finish_fresh_job_success(
+        self,
+        *,
+        job_id: str,
+        project_id: str,
+        context_key: str,
+        role: str,
+        target_id: str,
+        target_key: str,
+        lane: str = "",
+        session_id: str,
+        prompt: str,
+        response: str,
+    ) -> None:
+        now = utc_now()
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM context_sessions WHERE project_id=? AND context_key=? AND role=?",
+                (project_id, context_key, role),
+            )
+            if session_id:
+                self._connection.execute(
+                    """INSERT INTO context_sessions(project_id, context_key, role, target_id, target_key, lane, session_id, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(project_id, context_key, role, target_key, lane) DO UPDATE SET
+                    target_id=excluded.target_id, session_id=excluded.session_id, updated_at=excluded.updated_at""",
+                    (project_id, context_key, role, target_id, target_key, lane, session_id, now),
+                )
+            self._connection.execute(
+                "INSERT INTO context_turns(project_id, context_key, role, target_id, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (project_id, context_key, role, target_id, prompt, response, now),
+            )
+            self._connection.execute(
+                """UPDATE jobs SET state='succeeded', result_text=?,
+                   target_id=CASE WHEN ?='' THEN target_id ELSE ? END, error='', updated_at=?
+                   WHERE id=?""",
+                (response, target_id, target_id, now, job_id),
+            )
+            self._connection.execute(
+                "INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, 'job.succeeded', '{}')",
+                (job_id, now),
+            )
+
     def reset_retry(self, job_id: str) -> None:
         with self._connection:
             self._connection.execute(
