@@ -54,6 +54,12 @@ Sessions use `project_id`, `context_key`, `workflow`, and target key, primarily
 `context_key`. Use the plan slug for every phase and job; never derive another
 key. Each workflow keeps its own resumed session.
 
+Start the first `implement` and `review` job for a plan with
+`fresh_session: true`. It starts a new backend session while retaining the plan
+key and sends the submitted prompt unchanged. On success, that session replaces
+the stored session for its workflow and key. Later jobs then omit `fresh_session`
+and resume it. A retry retains its setting, so a fresh-job retry starts fresh again.
+
 The first `implement` and `review` jobs carry their full role contracts. Later
 jobs on the same workflow and key send only the delta and phase prompt path. Do
 not resend contracts, response formats, or role descriptions.

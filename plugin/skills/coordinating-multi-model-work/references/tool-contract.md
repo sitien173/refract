@@ -9,7 +9,7 @@ Default endpoint: `http://127.0.0.1:8765/mcp`.
 | `status` | — | — | Return scheduler health and queue counts. |
 | `project_register` | `path` | `alias` | Register your project directory. |
 | `task_guide` | `project_id` | — | Return workflow/profile guidance. |
-| `job_submit` | `project_id`, `workflow`, `prompt` | `context_key`, `profile` | Queue one job. |
+| `job_submit` | `project_id`, `workflow`, `prompt` | `context_key`, `profile`, `fresh_session=false` | Queue one job. |
 | `job_wait` | `job_id` | `timeout_s` | Wait for completion or timeout. |
 | `job_cancel` | `job_id` | — | Cancel queued or running work. |
 | `job_retry` | `job_id` | — | Retry a failed, cancelled, or interrupted whole job. |
@@ -56,9 +56,11 @@ resource only when its full result is needed.
 - OpenMCP never commits, resets, or restores. Filesystem changes from every
   terminal state remain on disk for you to inspect and reconcile.
 - Prevent mutation with a read-only target, not a workflow name.
-- A worker session is resumed by `project_id` + `context_key` + `workflow` +
-  target key, keyed primarily on `context_key`. Reusing one `context_key` across
-  jobs continues the same session per workflow.
+- A standard job resumes the session stored for `project_id` + `context_key` +
+  `workflow` + target key. Without one, OpenMCP adds bounded turn history.
+- `fresh_session: true` starts every target attempt without a stored session or
+  history and passes `prompt` verbatim. A successful fresh job replaces the
+  stored session. Retrying it retains the flag and starts fresh again.
 
 ## Jobs
 

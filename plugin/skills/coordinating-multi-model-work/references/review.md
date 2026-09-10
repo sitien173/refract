@@ -14,8 +14,9 @@ Any scope, requirement, or evidence failure blocks quality review.
 
 ## Independent quality review
 
-Review only what this phase changed; never request a full-codebase scan. Submit a
-prompt-only `review` scoped to the phase delta with:
+Review only what this phase changed; never request a full-codebase scan. Submit
+the first `review` job for a plan with `fresh_session: true` and a full reviewer
+contract. Submit later review jobs prompt-only, scoped to the phase delta with:
 
 - the exact diff to review: `phase_base..HEAD` and the paths in FILES MODIFIED,
 - the plan acceptance criteria and reviewer checklist as the rubric,

@@ -3,10 +3,10 @@
 This file owns the Gate 2 worker payload. The coordinating skill owns submission,
 waiting, recovery, and review. The worker edits files directly in the working repository and returns the ERP response. The coordinating skill reads the ERP response and updates the journal. The worker contract defines the stable execution process; the phase prompt defines the tasks, context, and acceptance criteria.
 
-## First submission (new worker session)
+## First submission (fresh worker session)
 
-The first `implement` job on the plan `context_key` teaches the worker its role
-and output format. Include the full pointer set exactly once:
+The first `implement` job on the plan `context_key` starts fresh and teaches the
+worker its role and output format. Include the full pointer set exactly once:
 
 ```text
 job_submit:
@@ -21,6 +21,7 @@ job_submit:
     Journal: <plugin-root>/shared/journal-template.md
     Follow those files and return the ERP response.
   context_key: <slug>
+  fresh_session: true
   profile: <phase implementation profile>
 ```
 
@@ -42,8 +43,9 @@ job_submit:
   profile: <phase implementation profile>
 ```
 
-Omit `profile` when guidance omits it. Every job is prompt-only:
-the worker edits files but never commits. After the job is terminal, the
+Omit `profile` when guidance omits it. Omit `fresh_session` on resumed jobs;
+its false default resumes the worker stream. Every job is prompt-only: the worker
+edits files but never commits. After the job is terminal, the
 coordinating skill validates the filesystem changes and commits them with the
 phase Conventional Commit message.
 
