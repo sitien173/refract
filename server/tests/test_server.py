@@ -127,7 +127,8 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     assert {"doctor", "reload"}.isdisjoint(tools)
     assert "job_integrate" not in tools
-    assert set(tools["job_submit"].input_schema["properties"]) == {"project_id", "workflow", "prompt", "context_key", "profile"}
+    assert set(tools["job_submit"].input_schema["properties"]) == {"project_id", "workflow", "prompt", "context_key", "profile", "fresh_session"}
+    assert tools["job_submit"].input_schema["properties"]["fresh_session"]["default"] is False
     assert set(tools["task_guide"].input_schema["properties"]) == {"project_id"}
     assert set(tools["job_wait"].input_schema["properties"]) == {"job_id", "timeout_s"}
     assert tools["job_wait"].input_schema["properties"]["timeout_s"]["default"] == 300

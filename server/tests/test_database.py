@@ -78,31 +78,72 @@ def create_v6_database(path) -> None:
     connection.close()
 
 
+def create_v8_database(path) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        PRAGMA foreign_keys=ON;
+        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
+        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
+        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE context_instructions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, workflow TEXT NOT NULL, instruction TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, workflow));
+        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
+        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
+        PRAGMA user_version=8;
+    """)
+    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", ("project", "project", "/project", "2026-01-01"))
+    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", "project", "consult", "balanced", "prompt", "{}", "consult", "succeeded", "result text", "target", 2, "", "rev", "2026-01-01", "2026-01-02"))
+    connection.execute("INSERT INTO context_instructions VALUES (?, ?, ?, ?)", ("project", "consult", "instruction", "2026-01-01"))
+    connection.commit()
+    connection.close()
+
+
+def create_v9_database(path) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        PRAGMA foreign_keys=ON;
+        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
+        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
+        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
+        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
+        PRAGMA user_version=9;
+    """)
+    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", ("project", "project", "/project", "2026-01-01"))
+    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", "project", "consult", "balanced", "prompt", "{}", "consult", "succeeded", "result text", "target", 2, "", "rev", "2026-01-01", "2026-01-02"))
+    connection.commit()
+    connection.close()
+
+
 def table_columns(database: Database, table: str) -> set[str]:
     return database._columns(table)
 
 
-def test_fresh_database_uses_v9_schema(tmp_path) -> None:
+def test_fresh_database_uses_v10_schema(tmp_path) -> None:
     database = Database(tmp_path / "openmcp.db")
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
     assert "stages" not in tables and "artifacts" not in tables
     database.close()
 
 
-def test_v6_migrates_to_v9_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v6_migrates_to_v10_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v6_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
     assert job.config_revision == ""
+    assert database.job_record("job")["fresh_session"] == 0
     assert database.events("job")[0]["kind"] == "job.queued"
     assert database._connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0] == 1
     assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
@@ -111,16 +152,17 @@ def test_v6_migrates_to_v9_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_v5_migrates_to_v9_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v5_migrates_to_v10_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v5_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
+    assert database.job_record("job")["fresh_session"] == 0
     assert database.events("job")[0]["kind"] == "job.queued"
     assert database._connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0] == 1
     assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
@@ -129,28 +171,66 @@ def test_v5_migrates_to_v9_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_reopening_v9_is_a_noop(tmp_path) -> None:
+def test_reopening_v10_is_a_noop(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     first = Database(path)
     first.close()
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 10
     second.close()
 
 
-def test_v8_migrates_to_v9_dropping_context_instructions(tmp_path) -> None:
+def test_v9_migrates_to_v10_adding_fresh_session_column(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
-    first = Database(path)
-    first._connection.executescript("""
-        CREATE TABLE context_instructions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, workflow TEXT NOT NULL, instruction TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, workflow));
-        PRAGMA user_version=8;
-    """)
-    first.close()
+    create_v9_database(path)
+    database = Database(path)
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert "fresh_session" in table_columns(database, "jobs")
+    record = database.job_record("job")
+    assert record and record["fresh_session"] == 0
+    database.close()
+
+
+def test_v8_migrates_to_v10_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
+    path = tmp_path / "openmcp.db"
+    create_v8_database(path)
 
     database = Database(path)
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "context_instructions" not in tables
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert "fresh_session" in table_columns(database, "jobs")
+    record = database.job_record("job")
+    assert record and record["fresh_session"] == 0
+    database.close()
+
+
+def test_create_job_persists_fresh_session_flag(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="proj", alias="proj", root="/proj")
+    database.create_job(
+        job_id="standard-job",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="question",
+        execution_plan_json="{}",
+        context_key="consult",
+    )
+    database.create_job(
+        job_id="fresh-job",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="question",
+        execution_plan_json="{}",
+        context_key="consult",
+        fresh_session=True,
+    )
+    standard_record = database.job_record("standard-job")
+    fresh_record = database.job_record("fresh-job")
+    assert standard_record and standard_record["fresh_session"] == 0
+    assert fresh_record and fresh_record["fresh_session"] == 1
     database.close()
 
 

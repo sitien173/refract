@@ -112,7 +112,7 @@ class Runtime:
                 message = "Project registration violates a database constraint"
             raise OrchestrationError(message) from exc
 
-    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "") -> SubmissionResult:
+    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False) -> SubmissionResult:
         project = self.database.project(project_id)
         if project is None:
             raise OrchestrationError(f"Unknown project: {project_id}")
@@ -129,7 +129,7 @@ class Runtime:
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
         job_id = str(uuid.uuid4())
-        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow, config_revision=catalog.config_revision)
+        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow, config_revision=catalog.config_revision, fresh_session=fresh_session)
         await self._notify_job_resource(job_resource_uri(job_id))
         self.scheduler.enqueue(job_id, project.id)
         log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})

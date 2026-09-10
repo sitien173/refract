@@ -13,7 +13,7 @@ from openmcp.models import ContextStreamView, JobResult, JobView, ProjectView
 
 
 log = get_logger("database")
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 
 def utc_now() -> str:
@@ -65,6 +65,7 @@ class Database:
                 # newly added column as legacy and dropping it.
                 self._create_support_tables()
             self._migrate_v8_to_v9()
+            self._migrate_v9_to_v10()
         log.debug(
             "Database schema is current",
             extra={"event": "database.migrated", "schema_version": _SCHEMA_VERSION},
@@ -86,12 +87,29 @@ class Database:
     def _migrate_v8_to_v9(self) -> None:
         """Drop stored context instructions after the feature was removed."""
         version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
-        if version >= _SCHEMA_VERSION:
+        if version >= 9:
             return
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             self._connection.execute("DROP TABLE IF EXISTS context_instructions")
-            self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+            self._connection.execute("PRAGMA user_version=9")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def _migrate_v9_to_v10(self) -> None:
+        """Add fresh_session flag to jobs table."""
+        version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if version >= 10:
+            return
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            if "fresh_session" not in self._columns("jobs"):
+                self._connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN fresh_session INTEGER NOT NULL DEFAULT 0"
+                )
+            self._connection.execute("PRAGMA user_version=10")
             self._connection.commit()
         except Exception:
             self._connection.rollback()
@@ -143,6 +161,7 @@ class Database:
                 attempts INTEGER NOT NULL DEFAULT 0,
                 error TEXT NOT NULL DEFAULT '',
                 config_revision TEXT NOT NULL DEFAULT '',
+                fresh_session INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -481,17 +500,19 @@ class Database:
         execution_plan_json: str,
         context_key: str,
         config_revision: str = "",
+        fresh_session: bool = False,
     ) -> None:
         now = utc_now()
         with self._connection:
             self._connection.execute(
                 """INSERT INTO jobs(id, project_id, workflow, profile, prompt,
                    execution_plan_json, context_key, state, config_revision,
-                   created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)""",
+                   fresh_session, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)""",
                 (
                     job_id, project_id, workflow, profile, prompt,
-                    execution_plan_json, context_key, config_revision, now, now,
+                    execution_plan_json, context_key, config_revision,
+                    1 if fresh_session else 0, now, now,
                 ),
             )
         self.event(job_id, "job.queued", {"workflow": workflow, "profile": profile})
@@ -568,6 +589,13 @@ class Database:
     def session(self, project_id: str, context_key: str, role: str, target_key: str, lane: str = "") -> str:
         row = self._connection.execute("SELECT session_id FROM context_sessions WHERE project_id=? AND context_key=? AND role=? AND target_key=? AND lane=?", (project_id, context_key, role, target_key, lane)).fetchone()
         return row["session_id"] if row else ""
+
+    def clear_context_sessions(self, project_id: str, context_key: str, role: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM context_sessions WHERE project_id=? AND context_key=? AND role=?",
+                (project_id, context_key, role),
+            )
 
     def append_turn(self, *, project_id: str, context_key: str, role: str, target_id: str, target_key: str, lane: str = "", session_id: str, prompt: str, response: str) -> None:
         with self._connection:

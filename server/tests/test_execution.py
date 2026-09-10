@@ -12,7 +12,7 @@ import pytest
 from openmcp.config import TargetConfig, TargetSelection
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
-from openmcp.planning import execution_plan_data, resolve_execution_plan
+from openmcp.planning import execution_plan_data, resolve_execution_plan, target_execution_key
 from openmcp.runtime import OrchestrationError, Runtime
 from openmcp.workflows import get_workflow
 from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, git, repository
@@ -581,5 +581,386 @@ consult = "primary"
         assert plan_still["targets"][0]["model"] == "old-model"
         assert runtime.database.job_record(submitted.job_id)["config_revision"] != \
             runtime.database.job_record(fresh.job_id)["config_revision"]
+    finally:
+        await runtime.close()
+
+
+class RecordingSessionDrivers(FakeDrivers):
+    def __init__(self) -> None:
+        super().__init__()
+        self.recorded_sessions: list[str] = []
+        self.recorded_prompts: list[str] = []
+
+    async def execute(self, *, target: TargetConfig, cwd: Path, session_id: str, prompt: str = "", **kwargs) -> DriverResult:
+        self.recorded_sessions.append(session_id)
+        self.recorded_prompts.append(prompt)
+        assigned = f"new-session-{len(self.recorded_sessions)}"
+        return DriverResult("SUCCESS", assigned, f"response-{len(self.recorded_sessions)}", "", "")
+
+
+@pytest.mark.asyncio
+async def test_fresh_job_bypasses_session_and_history_and_clears_prior_sessions(tmp_path) -> None:
+    root = repository(tmp_path)
+    drivers = RecordingSessionDrivers()
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        # Seed prior turns and sessions
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-session-1",
+            prompt="turn 1",
+            response="response 1",
+        )
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id="secondary",
+            target_key="secondary-key",
+            session_id="old-session-2",
+            prompt="turn 2",
+            response="response 2",
+        )
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="unrelated",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="unrelated-session",
+            prompt="unrelated turn",
+            response="unrelated response",
+        )
+
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-session-1"
+        assert runtime.database.session(project.id, "feature", "implement", "secondary-key") == "old-session-2"
+
+        # Submit fresh job
+        submitted = await runtime.submit(
+            project.id,
+            "implement",
+            "fresh request prompt",
+            context_key="feature",
+            fresh_session=True,
+        )
+        job = await runtime.wait(submitted.job_id, 10)
+        assert job.state == "succeeded"
+
+        # Every fresh attempt supplies empty session ID and exact validated prompt
+        assert drivers.recorded_sessions[0] == ""
+        assert drivers.recorded_prompts[0] == "fresh request prompt"
+
+        # Old sessions for this project, context_key, workflow are cleared
+        assert runtime.database.session(project.id, "feature", "implement", "secondary-key") == ""
+        # The new session is the only resumable session
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "new-session-1"
+        # Unrelated stream is unaffected
+        assert runtime.database.session(project.id, "unrelated", "implement", tkey) == "unrelated-session"
+
+        # Next standard job resumes only the newly returned session
+        standard_sub = await runtime.submit(
+            project.id,
+            "implement",
+            "next standard prompt",
+            context_key="feature",
+            fresh_session=False,
+        )
+        standard_job = await runtime.wait(standard_sub.job_id, 10)
+        assert standard_job.state == "succeeded"
+
+        assert drivers.recorded_sessions[1] == "new-session-1"
+        assert drivers.recorded_prompts[1] == "next standard prompt"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fresh_job_failover_preserves_freshness(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
+    )
+
+    class FailoverDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts: list[tuple[str, str, str]] = []
+
+        async def execute(
+            self,
+            *,
+            target: TargetConfig,
+            session_id: str,
+            prompt: str = "",
+            **kwargs,
+        ) -> DriverResult:
+            self.attempts.append((target.id, session_id, prompt))
+            if target.id == "primary":
+                return DriverResult("RETRYABLE", "", "", "transient error", "backend_failure")
+            return DriverResult("SUCCESS", "secondary-session", "success", "", "")
+
+    drivers = FailoverDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    primary_key = target_execution_key(catalog.targets[0])
+    secondary_key = target_execution_key(catalog.targets[1])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        for target, target_key in zip(catalog.targets, (primary_key, secondary_key), strict=True):
+            runtime.database.append_turn(
+                project_id=project.id,
+                context_key="stream",
+                role="implement",
+                target_id=target.id,
+                target_key=target_key,
+                session_id=f"old-{target.id}-session",
+                prompt=f"{target.id} turn",
+                response=f"{target.id} response",
+            )
+
+        submitted = await runtime.submit(
+            project.id,
+            "implement",
+            "failover prompt",
+            context_key="stream",
+            fresh_session=True,
+        )
+        job = await runtime.wait(submitted.job_id, 10)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+
+        assert drivers.attempts == [
+            ("primary", "", "failover prompt"),
+            ("secondary", "", "failover prompt"),
+        ]
+        assert runtime.database.session(project.id, "stream", "implement", primary_key) == ""
+        assert runtime.database.session(project.id, "stream", "implement", secondary_key) == "secondary-session"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fresh_job_retry_survives_and_runs_fresh(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class OnceFailingDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+            self.recorded_sessions: list[str] = []
+            self.recorded_prompts: list[str] = []
+
+        async def execute(self, *, session_id: str, prompt: str = "", **kwargs) -> DriverResult:
+            self.calls += 1
+            self.recorded_sessions.append(session_id)
+            self.recorded_prompts.append(prompt)
+            if self.calls == 1:
+                return DriverResult("TARGET_FATAL", "", "", "fatal error", "backend_failure")
+            return DriverResult("SUCCESS", "retry-session", "ok", "", "")
+
+    drivers = OnceFailingDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="stream",
+            role="implement",
+            target_id=catalog.targets[0].id,
+            target_key=tkey,
+            session_id="old-session",
+            prompt="turn 1",
+            response="response 1",
+        )
+
+        submitted = await runtime.submit(
+            project.id,
+            "implement",
+            "retry prompt",
+            context_key="stream",
+            fresh_session=True,
+        )
+        failed_job = await runtime.wait(submitted.job_id, 10)
+        assert failed_job.state == "failed"
+
+        # Failed fresh job does not clear preexisting sessions
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
+
+        # Retry the job
+        retried = await runtime.retry(submitted.job_id)
+        assert retried.job_id == submitted.job_id
+        record = runtime.database.job_record(submitted.job_id)
+        assert record and record["fresh_session"] == 1
+
+        succeeded_job = await runtime.wait(submitted.job_id, 10)
+        assert succeeded_job.state == "succeeded"
+
+        # Both attempts (initial and retry) received empty session and exact prompt
+        assert drivers.recorded_sessions == ["", ""]
+        assert drivers.recorded_prompts == ["retry prompt", "retry prompt"]
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "retry-session"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fresh_job_without_returned_session_clears_old_session(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class NoSessionDrivers(FakeDrivers):
+        async def execute(self, **kwargs) -> DriverResult:
+            return DriverResult("SUCCESS", "", "success without session", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = NoSessionDrivers()
+    tkey = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="stream",
+            role="implement",
+            target_id=catalog.targets[0].id,
+            target_key=tkey,
+            session_id="old-session",
+            prompt="turn 1",
+            response="response 1",
+        )
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
+
+        submitted = await runtime.submit(
+            project.id,
+            "implement",
+            "stateless prompt",
+            context_key="stream",
+            fresh_session=True,
+        )
+        job = await runtime.wait(submitted.job_id, 10)
+        assert job.state == "succeeded"
+
+        # Old session removed, no new session stored
+        assert runtime.database.session(project.id, "stream", "implement", tkey) == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_standard_sessionless_reconstructs_history_while_fresh_bypasses(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class CaptureDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prompts: list[str] = []
+
+        async def execute(self, *, prompt: str = "", **kwargs) -> DriverResult:
+            self.prompts.append(prompt)
+            return DriverResult("SUCCESS", "", "ok", "", "")
+
+    drivers = CaptureDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        # Turn with no session
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="history-stream",
+            role="implement",
+            target_id=catalog.targets[0].id,
+            target_key=tkey,
+            session_id="",
+            prompt="prior question",
+            response="prior answer",
+        )
+
+        # Standard job injects history
+        sub_standard = await runtime.submit(
+            project.id,
+            "implement",
+            "current task",
+            context_key="history-stream",
+            fresh_session=False,
+        )
+        await runtime.wait(sub_standard.job_id, 10)
+        assert "Previous context:" in drivers.prompts[0]
+        assert "prior question" in drivers.prompts[0]
+        assert "current task" in drivers.prompts[0]
+
+        # Fresh job bypasses history
+        sub_fresh = await runtime.submit(
+            project.id,
+            "implement",
+            "current task",
+            context_key="history-stream",
+            fresh_session=True,
+        )
+        await runtime.wait(sub_fresh.job_id, 10)
+        assert drivers.prompts[1] == "current task"
+        assert "Previous context:" not in drivers.prompts[1]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fresh_session_flag_survives_daemon_restart(tmp_path) -> None:
+    root = repository(tmp_path)
+    home = tmp_path / "home"
+    catalog = config(home)
+    database = Database(catalog.database_path)
+    project = database.upsert_project(project_id="project", alias="project", root=root.as_posix())
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    database.create_job(
+        job_id="queued-fresh",
+        project_id=project.id,
+        workflow="implement",
+        profile="balanced",
+        prompt="fresh restart prompt",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="implement",
+        fresh_session=True,
+    )
+    database.close()
+
+    class CaptureDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sessions: list[str] = []
+            self.prompts: list[str] = []
+
+        async def execute(self, *, session_id: str, prompt: str = "", **kwargs) -> DriverResult:
+            self.sessions.append(session_id)
+            self.prompts.append(prompt)
+            return DriverResult("SUCCESS", "restarted-session", "done", "", "")
+
+    drivers = CaptureDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        job = await runtime.wait("queued-fresh", 10)
+        assert job.state == "succeeded"
+        assert drivers.sessions == [""]
+        assert drivers.prompts == ["fresh restart prompt"]
     finally:
         await runtime.close()

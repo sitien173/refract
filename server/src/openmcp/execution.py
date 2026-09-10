@@ -46,7 +46,7 @@ class TargetExecutor:
         resolve against the refreshed catalog.
         """
         self.config = config
-    async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: threading.Event) -> TargetExecutionResult:
+    async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: threading.Event, fresh_session: bool = False) -> TargetExecutionResult:
         attempted: set[str] = set()
         last_target_id = ""
         last = DriverResult("TARGET_FATAL", "", "", "No healthy target", "no_target")
@@ -65,8 +65,12 @@ class TargetExecutor:
             attempted.add(target.id)
             last_target_id = target.id
             target_key = target_execution_key(target)
-            session_id = self.database.session(project.id, context_key, workflow, target_key)
-            effective_prompt = prompt if session_id else self._with_history(project.id, context_key, workflow, prompt)
+            if fresh_session:
+                session_id = ""
+                effective_prompt = prompt
+            else:
+                session_id = self.database.session(project.id, context_key, workflow, target_key)
+                effective_prompt = prompt if session_id else self._with_history(project.id, context_key, workflow, prompt)
             self.database.event(job_id, "target.selected", {"workflow": workflow, "target": target.id, "attempt": attempt + 1})
             semaphore = self._target_semaphores.setdefault(target_key, asyncio.Semaphore(target.max_concurrency))
             self._target_active.setdefault(target_key, 0)
@@ -89,6 +93,8 @@ class TargetExecutor:
             log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": attempt + 1, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
             if last.outcome == "SUCCESS":
                 self.database.record_target_success(target_key)
+                if fresh_session:
+                    self.database.clear_context_sessions(project.id, context_key, workflow)
                 self.database.append_turn(project_id=project.id, context_key=context_key, role=workflow, target_id=target.id, target_key=target_key, session_id=last.session_id, prompt=prompt, response=last.text)
                 return TargetExecutionResult(last, target.id)
             if last.outcome in {"CANCELLED", "REQUEST_FATAL"}:
@@ -223,7 +229,17 @@ class JobRunner:
             self.database.start_job(job_id)
             await self._notify(job_id)
             plan = parse_execution_plan(json.loads(record["execution_plan_json"]))
-            execution = await self.targets.execute(job_id=job_id, project=project, workflow=record["workflow"], context_key=record["context_key"], plan=plan, prompt=record["prompt"], cwd=root, cancel_event=cancel_event)
+            execution = await self.targets.execute(
+                job_id=job_id,
+                project=project,
+                workflow=record["workflow"],
+                context_key=record["context_key"],
+                plan=plan,
+                prompt=record["prompt"],
+                cwd=root,
+                cancel_event=cancel_event,
+                fresh_session=bool(record.get("fresh_session", 0)),
+            )
             if execution.result.outcome != "SUCCESS" or cancel_event.is_set():
                 final_state = "interrupted" if cancel_event.is_set() and self.is_closing() else "cancelled" if cancel_event.is_set() else "failed"
                 raise RuntimeError(execution.result.error or execution.result.outcome)
