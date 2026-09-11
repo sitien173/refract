@@ -25,6 +25,7 @@ vi.mock('../api', () => ({
   deleteConfigurationProfile: vi.fn(),
   getProjectJobs: vi.fn(),
   getJob: vi.fn(),
+  getJobOutput: vi.fn(),
   getTaskGuide: vi.fn(),
   getProjectProfileOverrides: vi.fn(),
   getProjectProfileOverride: vi.fn(),
@@ -117,6 +118,14 @@ describe('Dashboard integrated user flows', () => {
       result: {
         output: 'Implementation completed without errors.',
       },
+    })
+
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [],
+      cursor: 0,
+      has_more: false,
+      retained_from: 0,
+      stream_status: 'unavailable',
     })
 
     vi.mocked(api.getTargets).mockResolvedValue([
@@ -280,18 +289,20 @@ describe('Dashboard integrated user flows', () => {
     expect(screen.getByText('gpt-5.6')).toBeInTheDocument()
 
     // Verifies legacy resolution replaced history entry rather than pushing a duplicate
-    expect(replaceSpy).toHaveBeenCalledWith(
-      {},
-      '',
-      '/dashboard/projects/proj-alpha/jobs/job-999'
-    )
+    await waitFor(() => {
+      expect(replaceSpy).toHaveBeenCalledWith(
+        {},
+        '',
+        '/dashboard/projects/proj-alpha/jobs/job-999'
+      )
+    })
     expect(pushSpy).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       '/dashboard/projects/proj-alpha/jobs/job-999'
     )
 
-    const backBtn = screen.getByRole('button', { name: /Back to jobs list/i })
+    const backBtn = await screen.findByRole('button', { name: /Back to jobs list/i })
     fireEvent.click(backBtn)
 
     expect(await screen.findByText('Alpha Service')).toBeInTheDocument()

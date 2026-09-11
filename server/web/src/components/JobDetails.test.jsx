@@ -2,6 +2,7 @@ import { createRef } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import JobDetails from './JobDetails'
+import * as api from '../api'
 
 describe('JobDetails component', () => {
   const mockJob = {
@@ -133,5 +134,113 @@ describe('JobDetails component', () => {
     expect(ref.current).toHaveAttribute('tabindex', '-1')
     ref.current.focus()
     expect(document.activeElement).toBe(ref.current)
+  })
+
+  it('renders transcript section above execution result', () => {
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'target-node-1',
+          backend: 'codex',
+          status: 'running',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Live streaming progress', status: 'streaming' },
+          ],
+        },
+      ],
+      status: 'live',
+      streamStatus: 'active',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={mockJob} stream={mockStream} />)
+
+    expect(screen.getByText('Live streaming progress')).toBeInTheDocument()
+    expect(screen.getByText('Execution status')).toBeInTheDocument()
+  })
+
+  it('suppresses duplicate final result text when transcript matches job.result.text exactly', () => {
+    const matchingJob = {
+      ...mockJob,
+      state: 'succeeded',
+      result: { text: 'Exact matching text.' },
+    }
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'target-node-1',
+          backend: 'codex',
+          status: 'succeeded',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Exact matching text.', status: 'completed' },
+          ],
+        },
+      ],
+      status: 'complete',
+      streamStatus: 'complete',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={matchingJob} stream={mockStream} />)
+
+    // Transcript has the text
+    expect(screen.getByText('Exact matching text.')).toBeInTheDocument()
+    // Duplicate "Result output" block is suppressed
+    expect(screen.queryByText('Result output')).not.toBeInTheDocument()
+  })
+
+  it('retains authoritative result output when transcript is truncated or unavailable', () => {
+    const truncatedJob = {
+      ...mockJob,
+      state: 'succeeded',
+      result: { text: 'Authoritative final text.' },
+    }
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'target-node-1',
+          backend: 'codex',
+          status: 'succeeded',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Partial...', status: 'streaming' },
+            { type: 'truncated', reason: 'max_job_bytes' },
+          ],
+        },
+      ],
+      status: 'truncated',
+      streamStatus: 'truncated',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={truncatedJob} stream={mockStream} />)
+
+    expect(screen.getByText('Result output')).toBeInTheDocument()
+    expect(screen.getByText('Authoritative final text.')).toBeInTheDocument()
+  })
+
+  it('handles loading-to-job transition without altering React hook execution order', () => {
+    // Initial render with no job while loading
+    const { rerender } = render(<JobDetails job={null} isLoading={true} />)
+    expect(screen.getByTestId('job-details-loading')).toBeInTheDocument()
+
+    // Transition to loaded job state
+    rerender(<JobDetails job={mockJob} isLoading={false} />)
+    expect(screen.getByTestId('job-details')).toBeInTheDocument()
+    expect(screen.getByText('Job job-xyz-123')).toBeInTheDocument()
+  })
+
+  it('makes no network request when job is absent', () => {
+    const getJobOutputSpy = vi.spyOn(api, 'getJobOutput')
+    render(<JobDetails job={null} isLoading={true} />)
+    expect(getJobOutputSpy).not.toHaveBeenCalled()
   })
 })
