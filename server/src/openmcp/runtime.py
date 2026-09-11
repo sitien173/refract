@@ -28,7 +28,7 @@ from openmcp.models import (
 )
 from openmcp.planning import execution_plan_data, resolve_execution_plan
 from openmcp.scheduler import ProjectScheduler
-from openmcp.streaming import DEFAULT_RETENTION_DAYS
+from openmcp.streaming import DEFAULT_RETENTION_DAYS, JobStreamHub
 from openmcp.workflows import get_workflow, validate_request
 
 
@@ -48,6 +48,16 @@ class Runtime:
         self.config = config
         self.config.home.mkdir(parents=True, exist_ok=True)
         self.database = Database(config.database_path)
+        self.stream_hub = JobStreamHub()
+        orig_append = self.database.append_stream_events
+
+        def _append_and_publish(job_id: str, events: list[Any]) -> list[JobStreamEvent]:
+            persisted = orig_append(job_id, events)
+            if persisted:
+                self.stream_hub.publish(job_id, persisted[-1].id)
+            return persisted
+
+        self.database.append_stream_events = _append_and_publish
         self._catalog = config
         self._config_health = self._seed_config_health(config)
         self._closing = False

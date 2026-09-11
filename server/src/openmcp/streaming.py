@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import threading
 from typing import Any, Callable
 
 from openmcp.database import Database
@@ -310,9 +311,62 @@ class StreamRecorder:
         await self.flush()
 
 
+class JobStreamHub:
+    """Runtime-owned in-memory cursor invalidation hub. Retains no transcript payload."""
+
+    def __init__(self) -> None:
+        self._subscribers: dict[str, set[tuple[asyncio.Queue[int], asyncio.AbstractEventLoop]]] = {}
+        self._lock = threading.Lock()
+
+    def subscribe(self, job_id: str) -> asyncio.Queue[int]:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[int] = asyncio.Queue(maxsize=1)
+        with self._lock:
+            self._subscribers.setdefault(job_id, set()).add((queue, loop))
+        return queue
+
+    def unsubscribe(self, job_id: str, queue: asyncio.Queue[int]) -> None:
+        with self._lock:
+            subscribers = self._subscribers.get(job_id)
+            if subscribers is not None:
+                to_remove = [item for item in subscribers if item[0] is queue]
+                for item in to_remove:
+                    subscribers.discard(item)
+                if not subscribers:
+                    self._subscribers.pop(job_id, None)
+
+    def publish(self, job_id: str, cursor: int) -> None:
+        with self._lock:
+            subscribers = list(self._subscribers.get(job_id, ()))
+        for queue, loop in subscribers:
+            def _put(q=queue, c=cursor) -> None:
+                if q.full():
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                try:
+                    q.put_nowait(c)
+                except asyncio.QueueFull:
+                    pass
+
+            if loop.is_closed():
+                continue
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+
+            if running_loop is loop:
+                _put()
+            else:
+                loop.call_soon_threadsafe(_put)
+
+
 __all__ = [
     "DEFAULT_RETENTION_DAYS",
     "FLUSH_INTERVAL_SECONDS",
+    "JobStreamHub",
     "MAX_BATCH_BYTES",
     "MAX_BATCH_EVENTS",
     "MAX_JOB_BYTES",

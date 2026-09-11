@@ -16,6 +16,7 @@ from openmcp.streaming import (
     MAX_JOB_EVENTS,
     MAX_TEXT_EVENT_BYTES,
     TRUNCATION_KIND,
+    JobStreamHub,
     StreamRecorder,
 )
 
@@ -390,3 +391,57 @@ async def test_recorder_failed_persistence_status_does_not_raise(db, monkeypatch
     assert job is not None
     assert job.result.text == ""
     await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_hub_publish_delivers_cursor() -> None:
+    hub = JobStreamHub()
+    q = hub.subscribe("job-1")
+    hub.publish("job-1", 42)
+    item = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert item == 42
+    hub.unsubscribe("job-1", q)
+
+
+@pytest.mark.asyncio
+async def test_hub_coalescing_capacity_one() -> None:
+    hub = JobStreamHub()
+    q = hub.subscribe("job-1")
+    hub.publish("job-1", 10)
+    hub.publish("job-1", 20)
+    hub.publish("job-1", 30)
+    assert q.qsize() == 1
+    item = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert item == 30
+    assert q.empty()
+    hub.unsubscribe("job-1", q)
+
+
+@pytest.mark.asyncio
+async def test_hub_unsubscribe_cleans_up() -> None:
+    hub = JobStreamHub()
+    q1 = hub.subscribe("job-1")
+    q2 = hub.subscribe("job-1")
+    assert len(hub._subscribers["job-1"]) == 2
+    hub.unsubscribe("job-1", q1)
+    assert len(hub._subscribers["job-1"]) == 1
+    hub.unsubscribe("job-1", q2)
+    assert "job-1" not in hub._subscribers
+
+
+@pytest.mark.asyncio
+async def test_hub_publish_cross_thread() -> None:
+    import threading
+    hub = JobStreamHub()
+    q = hub.subscribe("job-1")
+
+    def worker():
+        hub.publish("job-1", 99)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+
+    item = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert item == 99
+    hub.unsubscribe("job-1", q)
