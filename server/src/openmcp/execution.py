@@ -110,9 +110,11 @@ class TargetExecutor:
                     await recorder.flush()
 
             drain_task = asyncio.create_task(drain_stream()) if bridge and recorder else None
+            attempt_result: DriverResult | None = None
+            driver_exc: BaseException | None = None
             try:
                 with log_context(target_id=target.id):
-                    last = await self.drivers.execute(
+                    attempt_result = await self.drivers.execute(
                         target=target,
                         prompt=effective_prompt,
                         cwd=cwd,
@@ -121,12 +123,38 @@ class TargetExecutor:
                         cancel_event=cancel_event,
                         emitter=bridge.emit if bridge else None,
                     )
+                    last = attempt_result
+            except BaseException as exc:
+                driver_exc = exc
+                raise
             finally:
                 if bridge:
                     await bridge.close()
                 if drain_task:
                     await drain_task
                 if recorder:
+                    res = attempt_result
+                    if res is None:
+                        if cancel_event.is_set():
+                            res = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+                        else:
+                            err_msg = str(driver_exc) if driver_exc else "execution_failed"
+                            res = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
+                    status = (
+                        "succeeded"
+                        if res.outcome == "SUCCESS"
+                        else "cancelled"
+                        if res.outcome == "CANCELLED"
+                        else "failed"
+                    )
+                    await recorder.record(
+                        "attempt.finished",
+                        {
+                            "status": status,
+                            "outcome": res.outcome,
+                            "error_code": res.error_code,
+                        },
+                    )
                     await recorder.close()
                 self._target_active[target_key] -= 1
                 semaphore.release()

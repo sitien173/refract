@@ -1259,6 +1259,15 @@ async def test_accepted_events_flush_before_lifecycle_completion(tmp_path) -> No
 
         events = runtime.database.stream_events(sub.job_id, after=0)
         assert any(e.kind == "assistant.text.delta" and e.data.get("text") == "streaming content" for e in events)
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].attempt == 1
+        assert finished[0].data["status"] == "succeeded"
+        assert finished[0].data["outcome"] == "SUCCESS"
+        assert finished[0].data["error_code"] == ""
+        delta_idx = next(i for i, e in enumerate(events) if e.kind == "assistant.text.delta")
+        finished_idx = next(i for i, e in enumerate(events) if e.kind == "attempt.finished")
+        assert delta_idx < finished_idx
         # Authoritative final result matches
         assert job.result.text == "streaming content"
     finally:
@@ -1308,8 +1317,70 @@ async def test_failed_attempts_retain_attempt_labels(tmp_path) -> None:
         assert len(attempt_2_events) == 1
         assert attempt_2_events[0].data["text"] == "attempt-2"
 
+        a1_all = [e for e in events if e.attempt == 1]
+        a2_all = [e for e in events if e.attempt == 2]
+        assert [e.kind for e in a1_all] == ["assistant.text.delta", "attempt.finished"]
+        assert a1_all[1].data["status"] == "failed"
+        assert a1_all[1].data["outcome"] == "RETRYABLE"
+        assert a1_all[1].data["error_code"] == "backend_failure"
+
+        assert [e.kind for e in a2_all] == ["assistant.text.delta", "attempt.finished"]
+        assert a2_all[1].data["status"] == "succeeded"
+        assert a2_all[1].data["outcome"] == "SUCCESS"
+        assert a2_all[1].data["error_code"] == ""
+
         # Authoritative result is ONLY the successful one
         assert job.result.text == "final success"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_finished_does_not_reuse_prior_attempt_on_exception(tmp_path) -> None:
+    """If drivers.execute raises an exception, the recorder must not reuse the prior attempt's DriverResult."""
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 2)
+    cat = replace(
+        config(tmp_path / "home"),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+
+    class CrashingDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            self.call_count += 1
+            if emitter:
+                def worker(c):
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
+                await asyncio.to_thread(worker, self.call_count)
+            if self.call_count == 1:
+                return DriverResult("RETRYABLE", "", "", "first attempt failed", "backend_failure")
+            raise RuntimeError("driver crash on attempt 2")
+
+    runtime = Runtime(cat)
+    runtime.drivers = CrashingDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "do crashing attempt")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "failed"
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        a1_finished = [e for e in events if e.attempt == 1 and e.kind == "attempt.finished"]
+        a2_finished = [e for e in events if e.attempt == 2 and e.kind == "attempt.finished"]
+        assert len(a1_finished) == 1
+        assert a1_finished[0].data["status"] == "failed"
+        assert a1_finished[0].data["outcome"] == "RETRYABLE"
+        assert a1_finished[0].data["error_code"] == "backend_failure"
+
+        assert len(a2_finished) == 1
+        assert a2_finished[0].data["status"] == "failed"
+        assert a2_finished[0].data["outcome"] != "RETRYABLE"
+        assert a2_finished[0].data["error_code"] == "execution_error"
     finally:
         await runtime.close()
 

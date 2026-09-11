@@ -173,7 +173,7 @@ export function useJobStream(jobId, options = {}) {
           setError(err)
         }
       } finally {
-        if (inFlightJobRef.current === targetJobId) {
+        if (inFlightJobRef.current === targetJobId && fetchEpochRef.current === fetchEpoch) {
           inFlightJobRef.current = null
         }
         if (activeJobIdRef.current === targetJobId && fetchEpochRef.current === fetchEpoch) {
@@ -194,6 +194,31 @@ export function useJobStream(jobId, options = {}) {
     abortControllerRef.current = controller
     return drainPages(jobId, controller.signal)
   }, [jobId, drainPages])
+
+  const prevTerminalRef = useRef({ jobId, isTerminal })
+
+  useEffect(() => {
+    const prev = prevTerminalRef.current
+    prevTerminalRef.current = { jobId, isTerminal }
+
+    if (prev.jobId === jobId && !prev.isTerminal && isTerminal) {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+      inFlightJobRef.current = null
+      const controller = new AbortController()
+      abortControllerRef.current = controller
+
+      drainPages(jobId, controller.signal).finally(() => {
+        if (activeJobIdRef.current === jobId) {
+          if (esRef.current) {
+            esRef.current.close()
+            esRef.current = null
+          }
+        }
+      })
+    }
+  }, [jobId, isTerminal, drainPages])
 
   // Setup initial fetch and EventSource
   useEffect(() => {
@@ -235,7 +260,7 @@ export function useJobStream(jobId, options = {}) {
 
     // Setup EventSource if available
     let es = null
-    if (typeof window !== 'undefined' && typeof window.EventSource !== 'undefined') {
+    if (!isTerminal && typeof window !== 'undefined' && typeof window.EventSource !== 'undefined') {
       const url = `/dashboard/api/jobs/${encodeURIComponent(jobId)}/output/updates`
       es = new window.EventSource(url)
       esRef.current = es

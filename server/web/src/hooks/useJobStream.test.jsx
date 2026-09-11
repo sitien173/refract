@@ -330,4 +330,138 @@ describe('useJobStream hook', () => {
     expect(result.current.events).toHaveLength(1)
     expect(result.current.events[0].data.text).toBe('from job B')
   })
+
+  it('performs one final output refresh, refreshes cursor and streamStatus, and closes EventSource when transitioning from isTerminal false to true', async () => {
+    vi.spyOn(api, 'getJobOutput')
+      .mockResolvedValueOnce({
+        events: [{ id: 1, kind: 'assistant.text_delta', data: { text: 'live chunk' } }],
+        cursor: 1,
+        has_more: false,
+        retained_from: 1,
+        stream_status: 'active',
+      })
+      .mockResolvedValueOnce({
+        events: [{ id: 2, kind: 'attempt.finished', data: { status: 'succeeded' } }],
+        cursor: 2,
+        has_more: false,
+        retained_from: 1,
+        stream_status: 'complete',
+      })
+
+    const { result, rerender } = renderHook(({ isTerminal }) => useJobStream('job-term-trans', { isTerminal }), {
+      initialProps: { isTerminal: false },
+    })
+
+    await waitFor(() => expect(result.current.cursor).toBe(1))
+    expect(result.current.streamStatus).toBe('active')
+    const es = MockEventSource.instances[0]
+    expect(es).toBeDefined()
+    expect(es.readyState).not.toBe(2)
+
+    // Transition to isTerminal: true
+    rerender({ isTerminal: true })
+
+    await waitFor(() => expect(result.current.cursor).toBe(2))
+    expect(result.current.streamStatus).toBe('complete')
+    expect(result.current.events).toHaveLength(2)
+    expect(api.getJobOutput).toHaveBeenCalledTimes(2)
+    expect(es.readyState).toBe(2) // Closed
+  })
+
+  it('does not add a redundant final fetch for an initially terminal job', async () => {
+    vi.spyOn(api, 'getJobOutput').mockResolvedValueOnce({
+      events: [{ id: 1, kind: 'assistant.text_delta', data: { text: 'done' } }],
+      cursor: 1,
+      has_more: false,
+      retained_from: 1,
+      stream_status: 'complete',
+    })
+
+    const { result, rerender } = renderHook(({ isTerminal }) => useJobStream('job-init-term', { isTerminal }), {
+      initialProps: { isTerminal: true },
+    })
+
+    await waitFor(() => expect(result.current.cursor).toBe(1))
+    expect(api.getJobOutput).toHaveBeenCalledTimes(1)
+
+    // Rerender with isTerminal still true
+    rerender({ isTerminal: true })
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(api.getJobOutput).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not continuously poll terminal jobs', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(api, 'getJobOutput').mockResolvedValue({
+        events: [{ id: 1, kind: 'assistant.text_delta', data: { text: 'done' } }],
+        cursor: 1,
+        has_more: false,
+        retained_from: 1,
+        stream_status: 'complete',
+      })
+
+      const { result } = renderHook(() => useJobStream('job-no-poll', { isTerminal: true, pollIntervalMs: 1000 }))
+
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(result.current.cursor).toBe(1)
+      expect(api.getJobOutput).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      expect(api.getJobOutput).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ensures a terminal transition supersedes a concurrent request', async () => {
+    let resolveInitial
+    const initialPromise = new Promise((resolve) => {
+      resolveInitial = resolve
+    })
+
+    vi.spyOn(api, 'getJobOutput')
+      .mockImplementationOnce(() => initialPromise)
+      .mockResolvedValueOnce({
+        events: [{ id: 2, kind: 'attempt.finished', data: { status: 'succeeded' } }],
+        cursor: 2,
+        has_more: false,
+        retained_from: 2,
+        stream_status: 'complete',
+      })
+
+    const { result, rerender } = renderHook(({ isTerminal }) => useJobStream('job-concurrent', { isTerminal }), {
+      initialProps: { isTerminal: false },
+    })
+
+    // Initial fetch is stalled in flight
+    expect(result.current.cursor).toBe(0)
+
+    // Terminal transition happens while initial request is in flight
+    rerender({ isTerminal: true })
+
+    // Terminal fetch should supersede and resolve
+    await waitFor(() => expect(result.current.cursor).toBe(2))
+    expect(result.current.streamStatus).toBe('complete')
+    expect(result.current.events).toHaveLength(1)
+
+    // If initial fetch resolves later with stale data, it must not overwrite
+    resolveInitial({
+      events: [{ id: 1, kind: 'assistant.text_delta', data: { text: 'stale initial' } }],
+      cursor: 1,
+      has_more: false,
+      retained_from: 1,
+      stream_status: 'active',
+    })
+
+    await new Promise((r) => setTimeout(r, 20))
+    expect(result.current.cursor).toBe(2)
+    expect(result.current.streamStatus).toBe('complete')
+  })
 })
