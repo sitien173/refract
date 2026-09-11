@@ -122,21 +122,22 @@ def table_columns(database: Database, table: str) -> set[str]:
     return database._columns(table)
 
 
-def test_fresh_database_uses_v10_schema(tmp_path) -> None:
+def test_fresh_database_uses_v11_schema(tmp_path) -> None:
     database = Database(tmp_path / "openmcp.db")
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
     assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
+    assert "job_stream_events" in tables
     assert "stages" not in tables and "artifacts" not in tables
     database.close()
 
 
-def test_v6_migrates_to_v10_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v6_migrates_to_v11_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v6_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
     assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
@@ -152,11 +153,11 @@ def test_v6_migrates_to_v10_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_v5_migrates_to_v10_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v5_migrates_to_v11_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v5_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
     assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
@@ -171,38 +172,41 @@ def test_v5_migrates_to_v10_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_reopening_v10_is_a_noop(tmp_path) -> None:
+def test_reopening_v11_is_a_noop(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     first = Database(path)
     first.close()
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 11
     second.close()
 
 
-def test_v9_migrates_to_v10_adding_fresh_session_column(tmp_path) -> None:
+def test_v9_migrates_to_v11_adding_fresh_session_column(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v9_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
     assert "fresh_session" in table_columns(database, "jobs")
+    assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     record = database.job_record("job")
     assert record and record["fresh_session"] == 0
     database.close()
 
 
-def test_v8_migrates_to_v10_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
+def test_v8_migrates_to_v11_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v8_database(path)
 
     database = Database(path)
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "context_instructions" not in tables
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
     assert "fresh_session" in table_columns(database, "jobs")
+    assert "job_stream_events" in tables
     record = database.job_record("job")
     assert record and record["fresh_session"] == 0
     database.close()
+
 
 
 def test_create_job_persists_fresh_session_flag(tmp_path) -> None:
@@ -386,4 +390,354 @@ def test_append_turn_atomic_rollback_preserves_sessions(tmp_path) -> None:
 
     database._connection.execute("DROP TRIGGER fail_turn")
     assert database.session(project.id, "stream", "implement", "primary") == "old-session"
+    database.close()
+
+
+def create_v10_database(path) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        PRAGMA foreign_keys=ON;
+        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '', fresh_session INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
+        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
+        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
+        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
+        CREATE INDEX events_job_idx ON events(job_id, id);
+        CREATE INDEX context_turns_stream_idx ON context_turns(project_id, context_key, role, id);
+        PRAGMA user_version=10;
+    """)
+    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", ("project", "project", "/project", "2026-01-01"))
+    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", "project", "consult", "balanced", "prompt", "{}", "consult", "succeeded", "result text", "target", 2, "", "rev", 0, "2026-01-01", "2026-01-02"))
+    connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", ("job", "2026-01-01", "job.queued", "{}"))
+    connection.commit()
+    connection.close()
+
+
+def test_v10_migrates_to_v11_adding_stream_events_table(tmp_path) -> None:
+    path = tmp_path / "openmcp.db"
+    create_v10_database(path)
+    database = Database(path)
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    expected_cols = {
+        "id", "job_id", "created_at", "attempt", "target_id",
+        "backend", "kind", "entity_id", "parent_entity_id",
+        "data_json", "size_bytes",
+    }
+    assert table_columns(database, "job_stream_events") == expected_cols
+    indices = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "job_stream_events_job_idx" in indices
+    job = database.job("job")
+    assert job and job.result.text == "result text"
+    database.close()
+
+
+def test_append_stream_events_persists_batch_transactionally(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    database.create_job(
+        job_id="job-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    events = [
+        {
+            "created_at": "2026-09-11T04:40:00Z",
+            "attempt": 1,
+            "target_id": "target-a",
+            "backend": "claude",
+            "kind": "assistant.message.started",
+            "entity_id": "msg-1",
+            "parent_entity_id": "",
+            "data": {"role": "assistant"},
+        },
+        {
+            "created_at": "2026-09-11T04:40:01Z",
+            "attempt": 1,
+            "target_id": "target-a",
+            "backend": "claude",
+            "kind": "assistant.text.delta",
+            "entity_id": "msg-1",
+            "parent_entity_id": "",
+            "data": {"text": "chunk 1"},
+        },
+    ]
+    persisted = database.append_stream_events("job-1", events)
+    assert len(persisted) == 2
+    assert persisted[0].id > 0
+    assert persisted[1].id > persisted[0].id
+    assert persisted[0].kind == "assistant.message.started"
+    assert persisted[1].data == {"text": "chunk 1"}
+
+    rows = database._connection.execute(
+        "SELECT id, kind, data_json, size_bytes FROM job_stream_events WHERE job_id='job-1' ORDER BY id"
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[1]["size_bytes"] == len(json.dumps({"text": "chunk 1"}, ensure_ascii=False).encode("utf-8"))
+    database.close()
+
+
+def test_stream_events_returns_ascending_cursor_pages(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    database.create_job(
+        job_id="job-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    batch = [
+        {
+            "attempt": 1,
+            "target_id": "t1",
+            "backend": "claude",
+            "kind": "assistant.text.delta",
+            "entity_id": f"msg-{i}",
+            "parent_entity_id": "",
+            "data": {"text": f"token-{i}"},
+        }
+        for i in range(5)
+    ]
+    persisted = database.append_stream_events("job-1", batch)
+    ids = [e.id for e in persisted]
+
+    page1 = database.stream_events("job-1", after=0, limit=2)
+    assert [e.id for e in page1] == ids[:2]
+
+    page2 = database.stream_events("job-1", after=ids[1], limit=2)
+    assert [e.id for e in page2] == ids[2:4]
+
+    page3 = database.stream_events("job-1", after=ids[3], limit=2)
+    assert [e.id for e in page3] == ids[4:]
+
+    page4 = database.stream_events("job-1", after=ids[4], limit=2)
+    assert page4 == []
+    database.close()
+
+
+def test_stream_high_water_and_retained_from_lookups(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    database.create_job(
+        job_id="job-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    assert database.stream_high_water("job-1") == 0
+    assert database.stream_retained_from("job-1") == 0
+
+    batch = [
+        {
+            "attempt": 1,
+            "target_id": "t1",
+            "backend": "claude",
+            "kind": "assistant.text.delta",
+            "entity_id": f"msg-{i}",
+            "parent_entity_id": "",
+            "data": {"text": f"token-{i}"},
+        }
+        for i in range(3)
+    ]
+    persisted = database.append_stream_events("job-1", batch)
+    assert database.stream_high_water("job-1") == persisted[-1].id
+    assert database.stream_retained_from("job-1") == persisted[0].id
+    database.close()
+
+
+def test_stream_events_cascade_delete_on_job_deletion(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    database.create_job(
+        job_id="job-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    database.append_stream_events("job-1", [{
+        "attempt": 1,
+        "target_id": "t1",
+        "backend": "claude",
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "parent_entity_id": "",
+        "data": {"text": "hi"},
+    }])
+    assert database.stream_high_water("job-1") > 0
+    with database._connection:
+        database._connection.execute("DELETE FROM jobs WHERE id='job-1'")
+    assert database.stream_high_water("job-1") == 0
+    count = database._connection.execute("SELECT COUNT(*) FROM job_stream_events WHERE job_id='job-1'").fetchone()[0]
+    assert count == 0
+    database.close()
+
+
+def test_database_reopen_preserves_stream_events_and_cursors(tmp_path) -> None:
+    path = tmp_path / "openmcp.db"
+    database = Database(path)
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    database.create_job(
+        job_id="job-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    persisted = database.append_stream_events("job-1", [{
+        "attempt": 1,
+        "target_id": "t1",
+        "backend": "claude",
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "parent_entity_id": "",
+        "data": {"text": "persisted token"},
+    }])
+    event_id = persisted[0].id
+    database.close()
+
+    reopened = Database(path)
+    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert reopened.stream_high_water("job-1") == event_id
+    assert reopened.stream_retained_from("job-1") == event_id
+    events = reopened.stream_events("job-1", after=0)
+    assert len(events) == 1
+    assert events[0].id == event_id
+    assert events[0].data == {"text": "persisted token"}
+    reopened.close()
+
+
+def test_stream_totals_computes_event_count_and_bytes(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    database.create_job(
+        job_id="job-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    totals = database.stream_totals("job-1")
+    assert totals.events == 0
+    assert totals.bytes == 0
+
+    database.append_stream_events("job-1", [
+        {
+            "attempt": 1,
+            "target_id": "t1",
+            "backend": "claude",
+            "kind": "assistant.text.delta",
+            "entity_id": "msg-1",
+            "parent_entity_id": "",
+            "data": {"text": "a" * 100},
+        },
+        {
+            "attempt": 1,
+            "target_id": "t1",
+            "backend": "claude",
+            "kind": "assistant.text.delta",
+            "entity_id": "msg-1",
+            "parent_entity_id": "",
+            "data": {"text": "b" * 200},
+        },
+    ])
+    totals2 = database.stream_totals("job-1")
+    assert totals2.events == 2
+    assert totals2.bytes > 300
+    events_count, total_bytes = totals2
+    assert events_count == 2
+    assert total_bytes == totals2.bytes
+    database.close()
+
+
+def test_prune_terminal_stream_events_removes_only_terminal_before_cutoff(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+
+    # job-old-term: terminal, updated long ago
+    database.create_job(
+        job_id="job-old-term",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    with database._connection:
+        database._connection.execute(
+            "UPDATE jobs SET state='succeeded', updated_at='2026-09-01T00:00:00Z' WHERE id='job-old-term'"
+        )
+
+    # job-recent-term: terminal, updated recently
+    database.create_job(
+        job_id="job-recent-term",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k2",
+    )
+    with database._connection:
+        database._connection.execute(
+            "UPDATE jobs SET state='failed', updated_at='2026-09-10T00:00:00Z' WHERE id='job-recent-term'"
+        )
+
+    # job-old-active: active (running), updated long ago
+    database.create_job(
+        job_id="job-old-active",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k3",
+    )
+    with database._connection:
+        database._connection.execute(
+            "UPDATE jobs SET state='running', updated_at='2026-09-01T00:00:00Z' WHERE id='job-old-active'"
+        )
+
+    for jid in ("job-old-term", "job-recent-term", "job-old-active"):
+        database.append_stream_events(jid, [{
+            "attempt": 1,
+            "target_id": "t1",
+            "backend": "claude",
+            "kind": "assistant.text.delta",
+            "entity_id": "msg-1",
+            "parent_entity_id": "",
+            "data": {"text": "data"},
+        }])
+
+    cutoff = "2026-09-05T00:00:00Z"
+    deleted = database.prune_terminal_stream_events(cutoff)
+    assert deleted == 1
+
+    assert database.stream_high_water("job-old-term") == 0
+    assert database.stream_high_water("job-recent-term") > 0
+    assert database.stream_high_water("job-old-active") > 0
+
+    # Job rows themselves are never deleted
+    assert database.job("job-old-term") is not None
+    assert database.job("job-recent-term") is not None
+    assert database.job("job-old-active") is not None
     database.close()

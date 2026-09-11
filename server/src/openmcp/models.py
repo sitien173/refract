@@ -369,6 +369,39 @@ class ResourcePayload(BaseModel):
     data: Any
 
 
+StreamStatus = Literal["unavailable", "active", "complete", "truncated", "failed"]
+
+
+class JobStreamEvent(BaseModel):
+    id: int = 0
+    version: int = 1
+    job_id: str = ""
+    created_at: str = ""
+    attempt: int = 1
+    target_id: str = ""
+    backend: str = ""
+    kind: str = ""
+    entity_id: str = ""
+    parent_entity_id: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class StreamTotals(BaseModel):
+    events: int = 0
+    bytes: int = 0
+
+    def __iter__(self):
+        return iter((self.events, self.bytes))
+
+
+class JobOutputResponse(BaseModel):
+    events: list[JobStreamEvent] = Field(default_factory=list)
+    cursor: int = 0
+    has_more: bool = False
+    retained_from: int = 0
+    stream_status: StreamStatus = "unavailable"
+
+
 __all__ = [
     "ActionResult",
     "ConfigHealth",
@@ -381,8 +414,10 @@ __all__ = [
     "ConfigurationHealth",
     "ContextStreamView",
     "DaemonStatusResult",
+    "JobOutputResponse",
     "JobResult",
     "JobState",
+    "JobStreamEvent",
     "JobSummary",
     "JOB_RESOURCE_URI_TEMPLATE",
     "ProfileDeleteResponse",
@@ -396,6 +431,8 @@ __all__ = [
     "ProjectOverrideResponse",
     "ProjectView",
     "ResourcePayload",
+    "StreamStatus",
+    "StreamTotals",
     "SubmissionResult",
     "TERMINAL_STATES",
     "TargetDeleteResponse",

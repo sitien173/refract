@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openmcp.config import DaemonConfig, load_config, load_project_config
@@ -27,6 +28,7 @@ from openmcp.models import (
 )
 from openmcp.planning import execution_plan_data, resolve_execution_plan
 from openmcp.scheduler import ProjectScheduler
+from openmcp.streaming import DEFAULT_RETENTION_DAYS
 from openmcp.workflows import get_workflow, validate_request
 
 
@@ -79,13 +81,25 @@ class Runtime:
     def drivers(self, value: DriverRegistry) -> None:
         self.target_executor.drivers = value
 
+    def prune_retained_transcripts(self, days: int = DEFAULT_RETENTION_DAYS) -> int:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        pruned = self.database.prune_terminal_stream_events(cutoff)
+        if pruned > 0:
+            log.info(
+                "Pruned expired stream transcripts",
+                extra={"event": "stream.retention_pruned", "deleted_events": pruned},
+            )
+        return pruned
+
     async def start(self) -> None:
         self._closing = False
+        self.prune_retained_transcripts()
         interrupted = self.database.interrupt_active_jobs()
         for job in interrupted:
             await self._notify_job_resource(job_resource_uri(job["id"]))
         await self.scheduler.start(self.database.queued_jobs())
         log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
+
 
     async def close(self) -> None:
         self._closing = True

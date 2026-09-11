@@ -1,0 +1,319 @@
+from __future__ import annotations
+
+import asyncio
+import sqlite3
+from unittest.mock import MagicMock
+
+import pytest
+
+from openmcp.database import Database
+from openmcp.models import JobStreamEvent
+from openmcp.streaming import (
+    FLUSH_INTERVAL_SECONDS,
+    MAX_BATCH_BYTES,
+    MAX_BATCH_EVENTS,
+    MAX_JOB_BYTES,
+    MAX_JOB_EVENTS,
+    MAX_TEXT_EVENT_BYTES,
+    TRUNCATION_KIND,
+    StreamRecorder,
+)
+
+
+@pytest.fixture
+def db(tmp_path):
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    database.create_job(
+        job_id="job-stream",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    yield database
+    database.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_text_coalescing(db):
+    committed_cursors = []
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        on_commit=committed_cursors.append,
+    )
+    await recorder.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "Hello "},
+    })
+    await recorder.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "world!"},
+    })
+    # A different entity should not coalesce with msg-1
+    await recorder.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-2",
+        "data": {"text": "Other entity"},
+    })
+    await recorder.flush()
+
+    events = db.stream_events("job-stream", after=0)
+    assert len(events) == 2
+    assert events[0].entity_id == "msg-1"
+    assert events[0].data["text"] == "Hello world!"
+    assert events[1].entity_id == "msg-2"
+    assert events[1].data["text"] == "Other entity"
+    assert len(committed_cursors) == 1
+    assert committed_cursors[0] == events[1].id
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_50_event_batch_flush(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        flush_interval_s=10.0,  # avoid timer flush
+    )
+    for i in range(49):
+        await recorder.record({
+            "kind": "tool.started",
+            "entity_id": f"tool-{i}",
+            "data": {"tool": "search"},
+        })
+    # 49 events: not flushed yet
+    assert db.stream_high_water("job-stream") == 0
+
+    # 50th event triggers automatic batch flush
+    await recorder.record({
+        "kind": "tool.started",
+        "entity_id": "tool-49",
+        "data": {"tool": "search"},
+    })
+    assert db.stream_high_water("job-stream") > 0
+    events = db.stream_events("job-stream", after=0, limit=100)
+    assert len(events) == 50
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_64kib_batch_flush(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        flush_interval_s=10.0,
+    )
+    # Record events of ~7 KiB each
+    payload = "x" * 7000
+    for i in range(9):
+        await recorder.record({
+            "kind": "stream.notice",
+            "entity_id": f"notice-{i}",
+            "data": {"text": payload},
+        })
+    # 9 * ~7 KiB ≈ 63 KiB < 64 KiB: not flushed yet
+    assert db.stream_high_water("job-stream") == 0
+
+    # 10th event pushes buffer over 64 KiB: triggers automatic flush
+    await recorder.record({
+        "kind": "stream.notice",
+        "entity_id": "notice-9",
+        "data": {"text": payload},
+    })
+    assert db.stream_high_water("job-stream") > 0
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_timer_flush(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        flush_interval_s=0.05,
+    )
+    await recorder.record({
+        "kind": "assistant.message.started",
+        "entity_id": "msg-1",
+        "data": {"role": "assistant"},
+    })
+    assert db.stream_high_water("job-stream") == 0
+
+    # Wait for timer to fire
+    await asyncio.sleep(0.1)
+    assert db.stream_high_water("job-stream") > 0
+    events = db.stream_events("job-stream", after=0)
+    assert len(events) == 1
+    assert events[0].kind == "assistant.message.started"
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_8kib_text_splitting(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+    )
+    # 18 KiB of text in one delta
+    large_text = "a" * (18 * 1024)
+    await recorder.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": large_text},
+    })
+    await recorder.flush()
+
+    events = db.stream_events("job-stream", after=0)
+    assert len(events) >= 3
+    for e in events:
+        assert len(e.data["text"].encode("utf-8")) <= MAX_TEXT_EVENT_BYTES
+    reconstructed = "".join(e.data["text"] for e in events)
+    assert reconstructed == large_text
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_job_event_limit_and_truncation_marker(db):
+    max_events = 10
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        max_job_events=max_events,
+    )
+    for i in range(15):
+        await recorder.record({
+            "kind": "stream.notice",
+            "entity_id": f"notice-{i}",
+            "data": {"text": f"notice {i}"},
+        })
+    await recorder.flush()
+
+    events = db.stream_events("job-stream", after=0, limit=100)
+    # Exactly max_events regular events + exactly 1 stream.truncated marker
+    assert len(events) == max_events + 1
+    assert events[-1].kind == TRUNCATION_KIND
+    assert recorder.truncated is True
+
+    # Recording further events drops them; truncation marker is not duplicated
+    await recorder.record({
+        "kind": "stream.notice",
+        "entity_id": "notice-extra",
+        "data": {"text": "extra"},
+    })
+    await recorder.flush()
+
+    events_after = db.stream_events("job-stream", after=0, limit=100)
+    assert len(events_after) == max_events + 1
+    truncation_events = [e for e in events_after if e.kind == TRUNCATION_KIND]
+    assert len(truncation_events) == 1
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_job_bytes_limit_and_truncation_marker(db):
+    max_bytes = 1000
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        max_job_bytes=max_bytes,
+    )
+    payload = "y" * 300
+    for i in range(6):
+        await recorder.record({
+            "kind": "stream.notice",
+            "entity_id": f"notice-{i}",
+            "data": {"text": payload},
+        })
+    await recorder.flush()
+
+    events = db.stream_events("job-stream", after=0, limit=100)
+    assert len(events) > 0
+    assert events[-1].kind == TRUNCATION_KIND
+    assert recorder.truncated is True
+    truncation_events = [e for e in events if e.kind == TRUNCATION_KIND]
+    assert len(truncation_events) == 1
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_explicit_final_flush(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        flush_interval_s=10.0,
+    )
+    await recorder.record({
+        "kind": "attempt.started",
+        "entity_id": "attempt-1",
+        "data": {},
+    })
+    assert db.stream_high_water("job-stream") == 0
+
+    await recorder.close()
+    assert db.stream_high_water("job-stream") > 0
+    events = db.stream_events("job-stream", after=0)
+    assert len(events) == 1
+    assert events[0].kind == "attempt.started"
+
+
+@pytest.mark.asyncio
+async def test_recorder_failed_persistence_status_does_not_raise(db, monkeypatch):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+    )
+    def broken_append(*args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(db, "append_stream_events", broken_append)
+
+    committed = []
+    recorder._on_commit = committed.append
+
+    await recorder.record({
+        "kind": "stream.notice",
+        "entity_id": "notice-1",
+        "data": {"text": "hello"},
+    })
+    # flush should catch exception, set recorder.failed = True, and not crash
+    await recorder.flush()
+    assert recorder.failed is True
+    assert len(committed) == 0
+
+    # Job in DB remains intact with unchanged result
+    job = db.job("job-stream")
+    assert job is not None
+    assert job.result.text == ""
+    await recorder.close()
