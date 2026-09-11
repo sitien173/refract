@@ -2,7 +2,7 @@
 
 ## Status
 
-Confirmed on 2026-09-11.
+Confirmed and verified on 2026-09-11.
 
 ## Purpose
 

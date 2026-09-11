@@ -44,7 +44,7 @@ def test_imports() -> None:
 
 
 def test_backend_params_are_transport_only() -> None:
-    expected = {"PROMPT", "cd", "SESSION_ID", "args", "timeout_s", "cancel_event"}
+    expected = {"PROMPT", "cd", "SESSION_ID", "args", "timeout_s", "cancel_event", "emitter"}
     assert {field.name for field in fields(AgyParams)} == expected
     assert {field.name for field in fields(ClaudeParams)} == expected
     assert {field.name for field in fields(CodexParams)} == expected

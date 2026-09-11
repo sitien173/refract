@@ -1497,3 +1497,224 @@ def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
     target_old = TargetConfig(id="target-old-codex", backend="codex-old")
     monkeypatch.setattr("shutil.which", lambda name: str(fake_old_codex) if name == "codex-old" else (str(fake_codex) if name == "codex" else None))
     assert registry.supports_structured_streaming(target_old) is False
+
+
+@pytest.mark.asyncio
+async def test_execution_durable_reload_preserves_streaming_and_authoritative_result(tmp_path) -> None:
+    """Complete job streaming execution, restart runtime, and assert durable reconstruction."""
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    class SampleDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.message.started", "entity_id": "m1", "data": {}})
+                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "live tokens"}})
+                    emitter({"kind": "assistant.message.completed", "entity_id": "m1", "data": {}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-1", "live tokens", "", "")
+
+    runtime1 = Runtime(cfg)
+    runtime1.drivers = SampleDrivers()
+    await runtime1.start()
+    try:
+        project = runtime1.register_project(str(root))
+        sub = await runtime1.submit(project.id, "implement", "test reload")
+        job = await runtime1.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        hw1 = runtime1.database.stream_high_water(sub.job_id)
+        assert hw1 > 0
+    finally:
+        await runtime1.close()
+
+    runtime2 = Runtime(cfg)
+    try:
+        hw2 = runtime2.database.stream_high_water(sub.job_id)
+        assert hw2 == hw1
+        events = runtime2.database.stream_events(sub.job_id, after=0)
+        assert len(events) >= 3
+        assert any(e.kind == "assistant.text.delta" and e.data.get("text") == "live tokens" for e in events)
+        job2 = runtime2.database.job(sub.job_id)
+        assert job2 is not None
+        assert job2.result.text == "live tokens"
+    finally:
+        await runtime2.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_retries_across_runtime_reload(tmp_path) -> None:
+    """Failed attempt transcripts and retry attempts survive daemon restart with correct labels."""
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 2)
+    cfg = replace(
+        config(tmp_path / "home"),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+
+    class RetryDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.count = 0
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            self.count += 1
+            if emitter:
+                def worker(c):
+                    emitter({"kind": "assistant.text.delta", "entity_id": f"msg-{c}", "data": {"text": f"attempt-{c}-text"}})
+                await asyncio.to_thread(worker, self.count)
+            if self.count == 1:
+                return DriverResult("RETRYABLE", "", "", "transient error", "network_err")
+            return DriverResult("SUCCESS", "sess-retry", "successful second attempt", "", "")
+
+    runtime1 = Runtime(cfg)
+    runtime1.drivers = RetryDrivers()
+    await runtime1.start()
+    try:
+        project = runtime1.register_project(str(root))
+        sub = await runtime1.submit(project.id, "implement", "retry test")
+        job = await runtime1.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+    finally:
+        await runtime1.close()
+
+    runtime2 = Runtime(cfg)
+    try:
+        events = runtime2.database.stream_events(sub.job_id, after=0)
+        a1 = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
+        a2 = [e for e in events if e.attempt == 2 and e.kind == "assistant.text.delta"]
+        assert len(a1) == 1
+        assert a1[0].data["text"] == "attempt-1-text"
+        assert len(a2) == 1
+        assert a2[0].data["text"] == "attempt-2-text"
+        reloaded_job = runtime2.database.job(sub.job_id)
+        assert reloaded_job.result.text == "successful second attempt"
+    finally:
+        await runtime2.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_truncation_limits_preserve_final_result(tmp_path, monkeypatch) -> None:
+    """Stream truncation marks stream.truncated while keeping job.result.text authoritative."""
+    from openmcp.streaming import StreamRecorder
+
+    orig_init = StreamRecorder.__init__
+    def custom_init(self, *args, **kwargs):
+        kwargs.setdefault("max_job_bytes", 500)
+        orig_init(self, *args, **kwargs)
+    monkeypatch.setattr(StreamRecorder, "__init__", custom_init)
+
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    class VoluminousDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    for i in range(10):
+                        emitter({"kind": "assistant.text.delta", "entity_id": f"m{i}", "data": {"text": "A" * 100}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-vol", "Full authoritative final text exceeding quota.", "", "")
+
+    runtime = Runtime(cfg)
+    runtime.drivers = VoluminousDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "voluminous test")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.text == "Full authoritative final text exceeding quota."
+
+        assert runtime.database.stream_is_truncated(sub.job_id) is True
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert any(e.kind == "stream.truncated" for e in events)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_persistence_failure_does_not_corrupt_stream_or_fail_job(tmp_path) -> None:
+    """Persistence failure logs warning and records event without aborting terminal job state."""
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    class FailingStreamDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "first event"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-fail", "terminal result text", "", "")
+
+    runtime = Runtime(cfg)
+    runtime.drivers = FailingStreamDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        orig_append = runtime.database.append_stream_events
+
+        call_count = 0
+        def fragile_append(job_id, events):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise RuntimeError("simulated disk write failure")
+            return orig_append(job_id, events)
+
+        runtime.database.append_stream_events = fragile_append
+        sub = await runtime.submit(project.id, "implement", "persistence fail test")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.text == "terminal result text"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_security_regression_fixtures_strip_forbidden_content(tmp_path) -> None:
+    """Security regression asserting forbidden content never reaches database rows across execution."""
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    forbidden_secrets = [
+        "FORBIDDEN_PROMPT_SECRET_ABC123",
+        "FORBIDDEN_THINKING_DELTA_XYZ789",
+        "FORBIDDEN_TOOL_ARG_SSH_KEY_999",
+        "FORBIDDEN_TOOL_RESULT_HASH_555",
+        "FORBIDDEN_BASH_CMD_LINE_777",
+        "FORBIDDEN_DIAGNOSTIC_TRACE_333",
+        "FORBIDDEN_ENV_VARIABLE_222",
+        "FORBIDDEN_SUBAGENT_TRANSCRIPT_111",
+    ]
+
+    class DirtyNormalizedDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "safe-msg", "data": {"text": "Safe verified response."}})
+                    emitter({"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "read"}})
+                    emitter({"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-clean", "Safe verified response.", "", "")
+
+    runtime = Runtime(cfg)
+    runtime.drivers = DirtyNormalizedDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", f"run with {forbidden_secrets[0]}")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.text == "Safe verified response."
+
+        cursor = runtime.database._connection.execute(
+            "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
+            (sub.job_id,),
+        )
+        stream_rows_raw = str(cursor.fetchall())
+        for secret in forbidden_secrets:
+            assert secret not in stream_rows_raw
+    finally:
+        await runtime.close()

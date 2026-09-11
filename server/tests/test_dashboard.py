@@ -1715,3 +1715,218 @@ async def test_rest_to_subscription_race_resolved_by_initial_cursor(active_runti
         assert delta_data["events"][0]["id"] == hw2
     finally:
         await sse.close()
+
+
+@pytest.mark.asyncio
+async def test_job_output_sse_catch_up_after_reconnect(active_runtime) -> None:
+    runtime = active_runtime
+    project = runtime.database.project("project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    job_id = "job-catchup"
+    runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="prompt",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="consult",
+    )
+    p1 = runtime.database.append_stream_events(job_id, [{"kind": "assistant.text.delta", "data": {"text": "part 1"}}])
+    c1 = p1[0].id
+    app = create_application()
+
+    # Client connects to SSE and reads cursor c1
+    sse1 = await open_sse_client(app, f"/dashboard/api/jobs/{job_id}/output/updates")
+    await sse1.read_start()
+    chunk1 = await sse1.read_chunk()
+    assert f"id: {c1}" in chunk1.decode("utf-8")
+
+    # Client disconnects
+    await sse1.close()
+
+    # While disconnected, events 2 and 3 commit
+    p2 = runtime.database.append_stream_events(job_id, [
+        {"kind": "assistant.text.delta", "data": {"text": "part 2"}},
+        {"kind": "assistant.text.delta", "data": {"text": "part 3"}},
+    ])
+    c2 = p2[0].id
+    c3 = p2[1].id
+
+    # Client reconnects to SSE, immediately receiving current high-water cursor c3
+    sse2 = await open_sse_client(app, f"/dashboard/api/jobs/{job_id}/output/updates")
+    try:
+        await sse2.read_start()
+        chunk2 = await sse2.read_chunk()
+        text2 = chunk2.decode("utf-8")
+        assert f"id: {c3}" in text2
+        reconnected_cursor = json.loads(text2.split("data: ")[1].strip())["cursor"]
+        assert reconnected_cursor == c3
+
+        # Client catches up via REST replay for events after c1
+        status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}/output?after={c1}")
+        assert status == 200
+        replay_payload = json.loads(body)
+        assert replay_payload["cursor"] == c3
+        assert replay_payload["has_more"] is False
+        assert [e["id"] for e in replay_payload["events"]] == [c2, c3]
+        assert [e["data"]["text"] for e in replay_payload["events"]] == ["part 2", "part 3"]
+    finally:
+        await sse2.close()
+
+
+@pytest.mark.asyncio
+async def test_job_output_historical_fallback_preserves_authoritative_result(active_runtime) -> None:
+    runtime = active_runtime
+    project = runtime.database.project("project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    job_id = "job-historical-fallback"
+    runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="consultation question",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="consult",
+    )
+    runtime.database.finish_job(
+        job_id=job_id,
+        state="succeeded",
+        text="authoritative historical consultation answer",
+    )
+    app = create_application()
+
+    # REST output reports unavailable stream status and zero cursor
+    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}/output")
+    assert status == 200
+    output_data = json.loads(body)
+    assert output_data["stream_status"] == "unavailable"
+    assert output_data["events"] == []
+    assert output_data["cursor"] == 0
+    assert output_data["has_more"] is False
+
+    # Job endpoint preserves authoritative output text
+    status_job, _, body_job = await request(app, f"/dashboard/api/jobs/{job_id}")
+    assert status_job == 200
+    job_data = json.loads(body_job)
+    assert job_data["result"]["text"] == "authoritative historical consultation answer"
+
+
+@pytest.mark.asyncio
+async def test_security_regressions_forbidden_provider_content_not_in_dashboard_or_db(
+    active_runtime, monkeypatch, tmp_path
+) -> None:
+    from openmcp.backends.claude import ClaudeParams, _execute_sync as claude_sync
+    from openmcp.backends.codex import CodexParams, _execute_sync as codex_sync
+    from openmcp.backends.pi import PiParams, _execute_sync as pi_sync
+    from openmcp.backends.agy import AgyParams, _execute_once as agy_execute_once
+
+    runtime = active_runtime
+    project = runtime.database.project("project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+
+    forbidden_tokens = [
+        "PROMPT_SECRET_NEVER_LEAK_P99",
+        "REASONING_THINKING_NEVER_LEAK_R88",
+        "TOOL_ARGUMENT_PATH_NEVER_LEAK_A77",
+        "TOOL_RESULT_BODY_NEVER_LEAK_O66",
+        "BASH_COMMAND_LINE_NEVER_LEAK_C55",
+        "STDERR_DIAGNOSTIC_TRACE_NEVER_LEAK_D44",
+        "API_KEY_CREDENTIAL_NEVER_LEAK_K33",
+        "SUBAGENT_TRANSCRIPT_NEVER_LEAK_S22",
+    ]
+
+    dirty_claude_stream = [
+        json.dumps({"type": "system", "content": f"system prompt {forbidden_tokens[0]}"}),
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "thinking_delta", "thinking": forbidden_tokens[1]},
+                "index": 0,
+            },
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_sec",
+                    "name": "Read",
+                    "input": {"path": forbidden_tokens[2], "cmd": forbidden_tokens[4]},
+                },
+            },
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 1},
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "Safe public response."},
+                "index": 2,
+            },
+        }),
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Safe public response.",
+            "session_id": "claude-sec-sess",
+        }),
+    ]
+
+    claude_events = []
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+    monkeypatch.setattr(
+        "openmcp.backends.claude.run_shell_command",
+        lambda *args, **kwargs: (line for line in dirty_claude_stream),
+    )
+    res_claude = claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=claude_events.append))
+    assert res_claude.outcome == "OK"
+
+    # Persist Claude normalized stream events
+    job_id = "job-security-claude"
+    runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="prompt",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="consult",
+    )
+    runtime.database.append_stream_events(job_id, claude_events)
+    runtime.database.finish_job(job_id, "succeeded", text="Safe public response.")
+
+    app = create_application()
+
+    # 1. Assert raw SQLite rows contain none of the forbidden tokens
+    cursor = runtime.database._connection.execute(
+        "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
+        (job_id,),
+    )
+    rows_text = str(cursor.fetchall())
+    for token in forbidden_tokens:
+        assert token not in rows_text
+
+    # 2. Assert REST /output endpoint contains none of the forbidden tokens
+    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}/output")
+    assert status == 200
+    body_text = body.decode("utf-8")
+    for token in forbidden_tokens:
+        assert token not in body_text
+
+    # 3. Assert SSE stream contains none of the forbidden tokens
+    sse = await open_sse_client(app, f"/dashboard/api/jobs/{job_id}/output/updates")
+    try:
+        await sse.read_start()
+        chunk = await sse.read_chunk()
+        for token in forbidden_tokens:
+            assert token not in chunk.decode("utf-8")
+    finally:
+        await sse.close()

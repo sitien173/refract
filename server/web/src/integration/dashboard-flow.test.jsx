@@ -602,4 +602,92 @@ describe('Dashboard integrated user flows', () => {
     // Assert CSRF token is not leaked in the DOM
     expect(container.innerHTML).not.toContain('secret-csrf-token')
   })
+
+  it('renders multi-attempt transcript, handles truncation banner, and protects forbidden content', async () => {
+    window.history.pushState({}, '', '/dashboard/projects/proj-alpha/jobs/job-999')
+
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [
+        {
+          id: 1,
+          attempt: 1,
+          kind: 'attempt.started',
+          data: {},
+        },
+        {
+          id: 2,
+          attempt: 1,
+          kind: 'tool.started',
+          entity_id: 'tool-1',
+          data: { tool: 'Read' },
+        },
+        {
+          id: 3,
+          attempt: 1,
+          kind: 'attempt.finished',
+          data: { outcome: 'RETRYABLE' },
+        },
+        {
+          id: 4,
+          attempt: 2,
+          kind: 'attempt.started',
+          data: {},
+        },
+        {
+          id: 5,
+          attempt: 2,
+          kind: 'assistant.text.delta',
+          entity_id: 'msg-1',
+          data: { text: 'Second attempt succeeded.' },
+        },
+        {
+          id: 6,
+          attempt: 2,
+          kind: 'stream.truncated',
+          data: { reason: 'max_job_bytes' },
+        },
+      ],
+      cursor: 6,
+      has_more: false,
+      retained_from: 1,
+      stream_status: 'truncated',
+    })
+
+    const { container } = render(<App />)
+
+    expect(await screen.findByText('Job job-999')).toBeInTheDocument()
+    expect(api.getJobOutput).toHaveBeenCalledWith('job-999', expect.any(Object), expect.any(Object))
+    await waitFor(() => {
+      expect(container.querySelector('.transcript-status-badge')?.textContent).toBe('Transcript truncated')
+    })
+    expect(await screen.findByText(/Attempt 1/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Attempt 2/i)).toBeInTheDocument()
+    expect(await screen.findByText('Second attempt succeeded.')).toBeInTheDocument()
+
+    // Assert planted secrets are never in the rendered DOM
+    expect(container.innerHTML).not.toContain('FORBIDDEN_PROMPT_SECRET')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_THINKING_TOKEN')
+  })
+
+  it('renders historical fallback card cleanly when stream_status is unavailable', async () => {
+    window.history.pushState({}, '', '/dashboard/projects/proj-alpha/jobs/job-999')
+
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [],
+      cursor: 0,
+      has_more: false,
+      retained_from: 0,
+      stream_status: 'unavailable',
+    })
+
+    const { container } = render(<App />)
+
+    expect(await screen.findByText('Job job-999')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(container.querySelector('.transcript-status-badge')?.textContent).toBe('Transcript unavailable')
+    })
+    // Authoritative final result output is displayed in the Result card
+    expect(screen.getByText('Implementation completed without errors.')).toBeInTheDocument()
+    expect(screen.getByText('Transcript is not available for this job.')).toBeInTheDocument()
+  })
 })
