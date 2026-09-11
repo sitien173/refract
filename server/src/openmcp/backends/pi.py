@@ -97,7 +97,7 @@ def _extract_output(lines: list[str]) -> tuple[str, str, str]:
                     if text:
                         agent_message = text
                         break
-        if event.get("type") == "error":
+        if event.get("type") in {"error", "server_error"}:
             error = event.get("error") or event.get("message")
             if isinstance(error, str) and error:
                 diagnostics.append(error)

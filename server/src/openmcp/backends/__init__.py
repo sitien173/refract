@@ -24,6 +24,7 @@ _DEFAULT_FATAL_TOKENS = (
     "not logged in",
     "not logged",
     "login required",
+    "auth_unavailable",
 )
 
 

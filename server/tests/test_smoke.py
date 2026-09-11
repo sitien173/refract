@@ -686,6 +686,29 @@ async def test_pi_nonzero_exit_is_fatal_despite_agent_output(
 
 
 @pytest.mark.asyncio
+async def test_pi_server_error_auth_unavailable_is_fatal(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield json.dumps(
+            {
+                "message": "auth_unavailable: no auth available (providers=openai-compatible-codex-chatgpt, model=chatgpt-web/high)",
+                "type": "server_error",
+                "code": "internal_server_error",
+            }
+        )
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "fatal_backend"
+    assert "auth_unavailable" in out.error
+
+
+@pytest.mark.asyncio
 async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path) -> None:
     from openmcp.backends import codex as codex_backend
 
