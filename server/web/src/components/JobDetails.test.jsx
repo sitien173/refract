@@ -195,6 +195,38 @@ describe('JobDetails component', () => {
     expect(screen.queryByText('Result output')).not.toBeInTheDocument()
   })
 
+  it('does not suppress final result when text differs by whitespace', () => {
+    const whitespaceJob = {
+      ...mockJob,
+      state: 'succeeded',
+      result: { text: 'Exact matching text.\n' },
+    }
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'target-node-1',
+          backend: 'codex',
+          status: 'succeeded',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Exact matching text.', status: 'completed' },
+          ],
+        },
+      ],
+      status: 'complete',
+      streamStatus: 'complete',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={whitespaceJob} stream={mockStream} />)
+
+    // Both transcript and authoritative result output render because text differs by trailing whitespace
+    expect(screen.getAllByText(/Exact matching text/)).toHaveLength(2)
+    expect(screen.getByText('Result output')).toBeInTheDocument()
+  })
+
   it('retains authoritative result output when transcript is truncated or unavailable', () => {
     const truncatedJob = {
       ...mockJob,

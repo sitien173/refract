@@ -315,4 +315,44 @@ describe('JobTranscript component', () => {
     expect(screen.queryByText('TOP_SECRET')).not.toBeInTheDocument()
     expect(screen.queryByText('SECRET_DATA')).not.toBeInTheDocument()
   })
+
+  it('preserves bounded DOM when virtualizer rows are unavailable for a large transcript', () => {
+    const largeEntities = Array.from({ length: 100 }, (_, i) => ({
+      type: 'attempt',
+      attempt: i + 1,
+      target_id: `target-${i + 1}`,
+      backend: 'codex',
+      status: 'succeeded',
+      started_at: '2026-09-11 10:00:00',
+      items: [
+        {
+          type: 'assistant_message',
+          entity_id: `msg-${i + 1}`,
+          text: `Message chunk for attempt ${i + 1}`,
+          status: 'completed',
+        },
+        {
+          type: 'tool_call',
+          entity_id: `tool-${i + 1}`,
+          tool_name: 'inspect_node',
+          call_id: `call-${i + 1}`,
+          status: 'completed',
+        },
+      ],
+    }))
+
+    const { container } = render(
+      <JobTranscript
+        entities={largeEntities}
+        status="live"
+        streamStatus="active"
+      />
+    )
+
+    // Flat items would be 300 total (100 headers + 100 messages + 100 tool calls)
+    // DOM nodes must remain strictly bounded even before layout measurement
+    const renderedNodes = container.querySelectorAll('.transcript-attempt-header, .transcript-card')
+    expect(renderedNodes.length).toBeLessThanOrEqual(20)
+    expect(renderedNodes.length).toBeGreaterThan(0)
+  })
 })

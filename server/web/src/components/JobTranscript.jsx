@@ -88,15 +88,20 @@ export default function JobTranscript({
     }
   }
 
+  const INITIAL_BOUNDED_COUNT = 20
   const virtualItems = virtualizer.getVirtualItems()
   const renderItems = virtualItems.length > 0
     ? virtualItems.map((virtualRow) => ({
         ...flatItems[virtualRow.index],
         virtualRow,
       }))
-    : flatItems.map((it) => ({
+    : flatItems.slice(0, INITIAL_BOUNDED_COUNT).map((it, idx) => ({
         ...it,
-        virtualRow: null,
+        virtualRow: {
+          index: idx,
+          start: idx * 72,
+          size: 72,
+        },
       }))
 
   const statusMessage = getStatusLabel(status, streamStatus)
@@ -152,7 +157,7 @@ export default function JobTranscript({
             <div
               className="transcript-virtual-inner"
               style={{
-                height: virtualItems.length > 0 ? `${virtualizer.getTotalSize()}px` : 'auto',
+                height: `${virtualizer.getTotalSize()}px`,
                 position: 'relative',
                 width: '100%',
               }}

@@ -73,7 +73,7 @@ export default function JobDetails({
   const isDuplicateFinalText =
     Boolean(resultText) &&
     stream?.streamStatus === 'complete' &&
-    reconstructedFinalText.trim() === resultText.trim()
+    reconstructedFinalText === resultText
 
   const shouldRenderResultText = Boolean(resultText) && !isDuplicateFinalText
   const shouldRenderResultSection = Boolean(

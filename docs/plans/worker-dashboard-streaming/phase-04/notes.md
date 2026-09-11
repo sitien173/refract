@@ -165,3 +165,31 @@
 - `npm --prefix web run build` passed cleanly.
 - `git diff --check` passed cleanly.
 - Root cause: `JobDetails` had early returns before calling `useJobStream` and `useMemo`, altering hook execution order on loading-to-job transitions.
+
+## Result Equality and Bounded Measurement Fix
+
+### Decisions made
+- Removed trimming from `isDuplicateFinalText` in `JobDetails.jsx:73-76` to enforce exact original-string equality.
+- Added a regression test in `JobDetails.test.jsx` proving whitespace differences retain authoritative result output.
+- Replaced the unbounded flat-items fallback in `JobTranscript.jsx:91-100,155-160` with a bounded initial window of at most 20 items.
+- Preserved virtual container height as `${virtualizer.getTotalSize()}px` across measured and unmeasured states.
+- Added a large-transcript regression test in `JobTranscript.test.jsx` asserting DOM cards/headers remain bounded to at most 20 nodes.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Exact original-string equality prevents accidental suppression when trailing whitespaces or newlines differ.
+- An initial bounded window of 20 items provides sufficient content for layout without DOM bloat.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED: `npm --prefix web test -- --run src/components/JobDetails.test.jsx src/components/JobTranscript.test.jsx` failed with 2 errors (unexpected suppression on whitespace difference; 300 nodes rendered instead of <= 20).
+- GREEN: `npm --prefix web test -- --run src/hooks/useJobStream.test.jsx src/components/JobTranscript.test.jsx src/components/JobDetails.test.jsx src/integration/dashboard-flow.test.jsx` passed all 40 tests.
+- `npm --prefix web run build` passed cleanly.
+- `git diff --check` passed cleanly.
