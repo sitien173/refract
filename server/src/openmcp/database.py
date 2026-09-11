@@ -870,6 +870,13 @@ class Database:
             return StreamTotals(events=0, bytes=0)
         return StreamTotals(events=int(row["event_count"]), bytes=int(row["total_bytes"]))
 
+    def stream_is_truncated(self, job_id: str) -> bool:
+        row = self._connection.execute(
+            "SELECT 1 FROM job_stream_events WHERE job_id=? AND kind='stream.truncated' LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        return row is not None
+
     def prune_terminal_stream_events(self, older_than: str) -> int:
         terminal_states_tuple = tuple(TERMINAL_STATES)
         placeholders = ",".join("?" for _ in terminal_states_tuple)

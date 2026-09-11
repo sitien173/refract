@@ -93,7 +93,11 @@ class StreamRecorder:
         self._total_bytes: int = totals.bytes
         self._truncated: bool = False
 
-        if self._total_events >= self.max_job_events or self._total_bytes >= self.max_job_bytes:
+        if (
+            self._total_events >= self.max_job_events
+            or self._total_bytes >= self.max_job_bytes
+            or self.database.stream_is_truncated(job_id)
+        ):
             self._truncated = True
 
     @property
@@ -173,6 +177,13 @@ class StreamRecorder:
                             last["data"]["text"] = merged
                             self._buffer_bytes += diff
                             self._total_bytes += diff
+                            if (
+                                len(self._buffer) >= self.max_batch_events
+                                or self._buffer_bytes >= self.max_batch_bytes
+                            ):
+                                await self.flush()
+                            else:
+                                self._schedule_timer()
                             continue
                 await self._push_event({
                     "attempt": self.attempt,
@@ -197,21 +208,22 @@ class StreamRecorder:
     async def _mark_truncated(self, entity_id: str, parent_entity_id: str) -> None:
         self._truncated = True
         await self.flush()
-        trunc_evt = {
-            "attempt": self.attempt,
-            "target_id": self.target_id,
-            "backend": self.backend,
-            "kind": TRUNCATION_KIND,
-            "entity_id": entity_id or "stream",
-            "parent_entity_id": parent_entity_id,
-            "data": {"reason": "limit_exceeded"},
-        }
-        trunc_bytes = len(json.dumps(trunc_evt["data"], ensure_ascii=False).encode("utf-8"))
-        self._buffer.append(trunc_evt)
-        self._buffer_bytes += trunc_bytes
-        self._total_events += 1
-        self._total_bytes += trunc_bytes
-        await self.flush()
+        if not self.database.stream_is_truncated(self.job_id):
+            trunc_evt = {
+                "attempt": self.attempt,
+                "target_id": self.target_id,
+                "backend": self.backend,
+                "kind": TRUNCATION_KIND,
+                "entity_id": entity_id or "stream",
+                "parent_entity_id": parent_entity_id,
+                "data": {"reason": "limit_exceeded"},
+            }
+            trunc_bytes = len(json.dumps(trunc_evt["data"], ensure_ascii=False).encode("utf-8"))
+            self._buffer.append(trunc_evt)
+            self._buffer_bytes += trunc_bytes
+            self._total_events += 1
+            self._total_bytes += trunc_bytes
+            await self.flush()
 
     async def _push_event(self, evt: dict[str, Any]) -> None:
         if self._truncated:

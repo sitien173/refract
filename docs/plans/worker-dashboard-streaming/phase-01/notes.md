@@ -91,3 +91,26 @@
 ### Test evidence
 - RED -> GREEN: GREEN: 40 tests in test_database.py, test_streaming.py, test_runtime.py passed.
 - Root cause (bugfix only): not applicable
+
+## Review Findings Fix
+
+### Decisions made
+- Added Database.stream_is_truncated method.
+- Reconstructed durable truncation in StreamRecorder on initialization.
+- Triggered flush immediately when text coalescing crosses 64 KiB.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: RED: test_recorder_64kib_batch_flush and test_recorder_reconstructs_durable_truncation_across_instances_and_reopen failed in tests/test_streaming.py, and test_stream_is_truncated_lookup failed in tests/test_database.py. GREEN: 42 tests in test_database.py, test_streaming.py, test_runtime.py passed.
+- Root cause (bugfix only): StreamRecorder only checked numeric totals on init rather than existing truncation markers. Coalescing branch updated buffer bytes but bypassed batch threshold flush with continue.

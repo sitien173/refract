@@ -741,3 +741,41 @@ def test_prune_terminal_stream_events_removes_only_terminal_before_cutoff(tmp_pa
     assert database.job("job-recent-term") is not None
     assert database.job("job-old-active") is not None
     database.close()
+
+
+def test_stream_is_truncated_lookup(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    database.create_job(
+        job_id="job-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    assert database.stream_is_truncated("job-1") is False
+
+    database.append_stream_events("job-1", [{
+        "attempt": 1,
+        "target_id": "t1",
+        "backend": "claude",
+        "kind": "assistant.text.delta",
+        "entity_id": "m1",
+        "parent_entity_id": "",
+        "data": {"text": "hi"},
+    }])
+    assert database.stream_is_truncated("job-1") is False
+
+    database.append_stream_events("job-1", [{
+        "attempt": 1,
+        "target_id": "t1",
+        "backend": "claude",
+        "kind": "stream.truncated",
+        "entity_id": "stream",
+        "parent_entity_id": "",
+        "data": {"reason": "limit_exceeded"},
+    }])
+    assert database.stream_is_truncated("job-1") is True
+    database.close()

@@ -118,25 +118,98 @@ async def test_recorder_64kib_batch_flush(db):
         backend="claude",
         flush_interval_s=10.0,
     )
-    # Record events of ~7 KiB each
-    payload = "x" * 7000
+    # Record events of ~6.8 KiB each to bring buffer near 64 KiB (~61.2 KiB)
+    payload = "x" * 6800
     for i in range(9):
         await recorder.record({
             "kind": "stream.notice",
             "entity_id": f"notice-{i}",
             "data": {"text": payload},
         })
-    # 9 * ~7 KiB ≈ 63 KiB < 64 KiB: not flushed yet
+    # Add an initial text delta of 3 KiB (~64.2 KiB buffer total, below 64 KiB = 65536 B)
+    await recorder.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-coalesce",
+        "data": {"text": "y" * 3000},
+    })
+    # Total buffer bytes < 64 KiB: not flushed yet
     assert db.stream_high_water("job-stream") == 0
 
-    # 10th event pushes buffer over 64 KiB: triggers automatic flush
+    # Coalescing another 3 KiB into msg-coalesce brings total to ~67.2 KiB, crossing 64 KiB
     await recorder.record({
-        "kind": "stream.notice",
-        "entity_id": "notice-9",
-        "data": {"text": payload},
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-coalesce",
+        "data": {"text": "z" * 3000},
     })
+    # Must immediately trigger automatic batch flush upon crossing threshold
     assert db.stream_high_water("job-stream") > 0
     await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_reconstructs_durable_truncation_across_instances_and_reopen(tmp_path):
+    db_path = tmp_path / "openmcp.db"
+    db1 = Database(db_path)
+    proj = db1.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db1.create_job(
+        job_id="job-trunc",
+        project_id=proj.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="p",
+        execution_plan_json="{}",
+        context_key="k",
+    )
+    rec1 = StreamRecorder(
+        database=db1,
+        job_id="job-trunc",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        max_job_events=3,
+    )
+    for i in range(4):
+        await rec1.record({
+            "kind": "stream.notice",
+            "entity_id": f"n-{i}",
+            "data": {"text": f"val-{i}"},
+        })
+    await rec1.flush()
+    assert rec1.truncated is True
+    await rec1.close()
+    db1.close()
+
+    # Reopen database and initialize a fresh recorder instance with high ceiling
+    db2 = Database(db_path)
+    rec2 = StreamRecorder(
+        database=db2,
+        job_id="job-trunc",
+        attempt=2,
+        target_id="t2",
+        backend="claude",
+        max_job_events=20000,
+        max_job_bytes=8 * 1024 * 1024,
+    )
+    assert rec2.truncated is True
+
+    # Later content must be rejected
+    await rec2.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-late",
+        "data": {"text": "should be rejected"},
+    })
+    await rec2.flush()
+
+    events = db2.stream_events("job-trunc", after=0, limit=100)
+    for e in events:
+        if e.kind == "assistant.text.delta":
+            assert "should be rejected" not in e.data.get("text", "")
+
+    trunc_markers = [e for e in events if e.kind == TRUNCATION_KIND]
+    assert len(trunc_markers) == 1
+    await rec2.close()
+    db2.close()
+
 
 
 @pytest.mark.asyncio
