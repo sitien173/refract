@@ -122,7 +122,7 @@ def _classify_output(agent_messages: str, session_id: str, error_text: str) -> B
     return result
 
 
-def _execute_once(params: AgyParams) -> BackendResult:
+def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None) -> BackendResult:
     """Execute one agy CLI session and return normalized backend result."""
     cd = Path(params.cd).expanduser().absolute()
     if not cd.is_dir():
@@ -143,6 +143,12 @@ def _execute_once(params: AgyParams) -> BackendResult:
             error="The `agy` CLI was not found on PATH. Please install Antigravity CLI and ensure `agy` is available.",
             error_class="missing_cli",
         )
+
+    if entity_state is None:
+        entity_state = {"assistant": 0, "tool": 0}
+    entity_state["assistant"] += 1
+    current_assistant_id = f"msg-{entity_state['assistant']}"
+    active_tool_id = ""
 
     cwd = os.fspath(cd)
     error_text = ""
@@ -181,8 +187,11 @@ def _execute_once(params: AgyParams) -> BackendResult:
             # Keep OpenMCP-owned transport arguments after target arguments:
             # callers may tune the CLI, but cannot replace the prompt or log.
             cmd.extend(["--print", params.PROMPT])
-            stdout_lines = []
-            entity_counter = 0
+            stdout_lines: list[str] = []
+            assistant_deltas: list[str] = []
+            terminal_lines: list[str] = []
+            structured_detected = False
+
             for line in run_shell_command(
                 cmd,
                 cwd=cwd,
@@ -190,49 +199,75 @@ def _execute_once(params: AgyParams) -> BackendResult:
                 cancel_event=params.cancel_event,
             ):
                 stdout_lines.append(line)
-                if params.emitter:
-                    stripped = line.strip()
-                    try:
-                        event = json.loads(stripped)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(event, dict):
-                        continue
+                stripped = line.strip()
+                if not stripped:
+                    continue
+
+                event = None
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    pass
+
+                if isinstance(event, dict):
+                    structured_detected = True
                     evt_type = event.get("type", "")
                     if evt_type in {"assistant.text.delta", "assistant.message.delta", "text_delta"}:
                         text = str(event.get("text", "") or event.get("delta", ""))
                         if text:
-                            params.emitter({
-                                "kind": "assistant.text.delta",
-                                "entity_id": f"msg-{entity_counter or 1}",
-                                "data": {"text": text},
-                            })
+                            assistant_deltas.append(text)
+                            if params.emitter:
+                                params.emitter({
+                                    "kind": "assistant.text.delta",
+                                    "entity_id": current_assistant_id,
+                                    "data": {"text": text},
+                                })
+                    elif evt_type in {"assistant.message", "assistant_message", "message"}:
+                        text = str(event.get("text", "") or event.get("content", ""))
+                        if text:
+                            terminal_lines.append(text)
+                    elif evt_type == "result":
+                        text = str(event.get("result", ""))
+                        if text:
+                            terminal_lines.append(text)
                     elif evt_type in {"tool.started", "tool_started"}:
-                        entity_counter += 1
+                        entity_state["tool"] += 1
+                        active_tool_id = f"tool-{entity_state['tool']}"
                         tool_name = str(event.get("tool_name", "") or event.get("tool", ""))
-                        params.emitter({
-                            "kind": "tool.started",
-                            "entity_id": f"tool-{entity_counter}",
-                            "data": {"tool": tool_name},
-                        })
+                        if params.emitter:
+                            params.emitter({
+                                "kind": "tool.started",
+                                "entity_id": active_tool_id,
+                                "data": {"tool": tool_name},
+                            })
                     elif evt_type in {"tool.completed", "tool_completed"}:
                         status = str(event.get("status", "completed"))
-                        params.emitter({
-                            "kind": "tool.completed",
-                            "entity_id": f"tool-{entity_counter or 1}",
-                            "data": {"status": status},
-                        })
+                        if params.emitter:
+                            params.emitter({
+                                "kind": "tool.completed",
+                                "entity_id": active_tool_id or f"tool-{entity_state['tool'] or 1}",
+                                "data": {"status": status},
+                            })
+                        active_tool_id = ""
+                else:
+                    if _CONVERSATION_ID_RE.search(line):
+                        continue
+                    terminal_lines.append(line)
+
             try:
                 log_text = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 log_text = ""
-            # The CLI's actual reply is printed to stdout; --log-file only
-            # captures internal server diagnostics (and, incidentally, the
-            # "Created/Streaming conversation <id>" lines used below to
-            # resolve the session id). Prefer stdout, fall back to the log
-            # only if the CLI printed nothing there.
-            stdout_text = "\n".join(stdout_lines).strip()
-            agent_messages = stdout_text or log_text
+
+            if structured_detected:
+                assistant_text = "".join(assistant_deltas).strip()
+                terminal_text = "\n".join(terminal_lines).strip()
+                if assistant_text and terminal_text:
+                    agent_messages = f"{assistant_text}\n\n{terminal_text}"
+                else:
+                    agent_messages = terminal_text or assistant_text
+            else:
+                agent_messages = "\n".join(terminal_lines).strip()
         finally:
             try:
                 os.unlink(tmp_log_path)
@@ -255,7 +290,8 @@ def _execute_once(params: AgyParams) -> BackendResult:
         error_text = str(exc)
         execution_error = True
 
-    match = _CONVERSATION_ID_RE.search(log_text) or _CONVERSATION_ID_RE.search(agent_messages)
+    stdout_raw = "\n".join(stdout_lines)
+    match = _CONVERSATION_ID_RE.search(log_text) or _CONVERSATION_ID_RE.search(stdout_raw)
     extracted_session_id = match.group(1) if match else params.SESSION_ID
     if extracted_session_id:
         log.info("agy: resolved session id: %s", extracted_session_id)
@@ -309,7 +345,8 @@ def _execute_once(params: AgyParams) -> BackendResult:
 def _execute_sync(params: AgyParams) -> BackendResult:
     """Execute an agy CLI session and continue while current-turn tasks remain pending."""
     outer_started_at = time.time()
-    result = _execute_once(params)
+    entity_state = {"assistant": 0, "tool": 0}
+    result = _execute_once(params, entity_state=entity_state)
     if result.outcome != "OK" or not result.SESSION_ID:
         return result
 
@@ -329,7 +366,8 @@ def _execute_sync(params: AgyParams) -> BackendResult:
                 timeout_s=params.timeout_s,
                 cancel_event=params.cancel_event,
                 emitter=params.emitter,
-            )
+            ),
+            entity_state=entity_state,
         )
         if continuation.outcome != "OK":
             log.warning("agy: continuation %d returned outcome=%s; stopping loop", continuations, continuation.outcome)

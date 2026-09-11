@@ -207,9 +207,10 @@ class DriverRegistry:
     @staticmethod
     def _detect_structured_mode(backend: str, executable_path: str) -> bool:
         """Check if resolved provider CLI supports the required structured output flags."""
+        help_cmd = [executable_path, "exec", "--help"] if backend == "codex" else [executable_path, "--help"]
         try:
             completed = subprocess.run(
-                [executable_path, "--help"],
+                help_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

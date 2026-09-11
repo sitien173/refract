@@ -1448,3 +1448,52 @@ def test_detect_structured_mode_invokes_help_probe_and_detects_support(tmp_path,
     # Cached per resolved executable: second call should not re-invoke probe
     assert registry.supports_structured_streaming(target) is True
     assert marker.read_text(encoding="utf-8").splitlines() == ["called"]
+
+
+def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
+    """Codex capability probe must run 'codex exec --help' rather than top-level 'codex --help'."""
+    from openmcp.drivers import DriverRegistry
+
+    invocations: list[str] = []
+    fake_codex = tmp_path / "fake-codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "exec" ] && [ "$2" = "--help" ]; then\n'
+        '  echo "exec-probe" >> ' + str(tmp_path / "codex_log.txt") + '\n'
+        '  echo "Usage: codex exec [OPTIONS] [PROMPT]"\n'
+        '  echo "Options:"\n'
+        '  echo "  --json  Output structured JSONL events"\n'
+        'elif [ "$1" = "--help" ]; then\n'
+        '  echo "toplevel-probe" >> ' + str(tmp_path / "codex_log.txt") + '\n'
+        '  echo "Usage: codex [OPTIONS] COMMAND [ARGS]..."\n'
+        '  echo "Commands:"\n'
+        '  echo "  exec    Execute prompt"\n'
+        '  echo "  review  Review workspace"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    registry = DriverRegistry()
+    target = TargetConfig(id="target-codex", backend="codex")
+    monkeypatch.setattr("shutil.which", lambda name: str(fake_codex) if name == "codex" else None)
+
+    # Must probe 'exec --help' and detect structured streaming support
+    assert registry.supports_structured_streaming(target) is True
+    log_content = (tmp_path / "codex_log.txt").read_text(encoding="utf-8").strip()
+    assert log_content == "exec-probe"
+
+    # Also test representative older codex where exec --help lacks --json
+    fake_old_codex = tmp_path / "fake-old-codex"
+    fake_old_codex.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "exec" ] && [ "$2" = "--help" ]; then\n'
+        '  echo "Usage: codex exec [OPTIONS] [PROMPT]"\n'
+        '  echo "Options: --help Show this message"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_old_codex.chmod(0o755)
+    target_old = TargetConfig(id="target-old-codex", backend="codex-old")
+    monkeypatch.setattr("shutil.which", lambda name: str(fake_old_codex) if name == "codex-old" else (str(fake_codex) if name == "codex" else None))
+    assert registry.supports_structured_streaming(target_old) is False

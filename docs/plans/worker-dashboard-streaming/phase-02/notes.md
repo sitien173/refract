@@ -100,3 +100,42 @@
 - Root cause (bugfix only): Test fake driver in `test_accepted_events_flush_before_lifecycle_completion` called synchronous emitter directly on the asyncio event loop thread instead of a worker thread, deadlocking `asyncio.run_coroutine_threadsafe(...).result()`. Fixed by emitting via `asyncio.to_thread(worker)`.
 - Root cause (blocking defect): `src/openmcp/drivers.py` was missing `import subprocess`, causing `_detect_structured_mode()` to raise `NameError` on `subprocess.run()`, which was caught and caused default capability probes to return `False`. Fixed by importing `subprocess`.
 - Gap resolved: `DriverRegistry.supports_structured_streaming()` now inspects resolved executable path capability via `--help` subprocess probe, caches per executable path, and falls back cleanly to final-only invocation without prompt retries.
+
+## Task 5
+
+### Decisions made
+- Parsed Agy terminal assistant content separately from raw JSON tool events, metadata lines, and internal log output, ensuring fixture secrets never reach `result.agent_messages` or `job.result.text`.
+- Supported Pi `--mode json` `message_update.assistantMessageEvent` text deltas and `tool_execution_start`/`tool_execution_end` shapes; updated `PI_JSON_FIXTURE` to current representative shapes.
+- Unwrapped Claude top-level `stream_event` envelopes to inspect nested `event` for streaming normalization and terminal `result` extraction; updated `CLAUDE_STREAM_JSON_FIXTURE` accordingly.
+- Probed `codex exec --help` instead of top-level `codex --help` for Codex capability detection, asserting support from `exec --help` containing `--json` while top-level help lists commands without `--json`.
+- Maintained `entity_state` across Agy continuations in `_execute_sync`, producing unique synthetic assistant entity IDs (`msg-1`, `msg-2`, etc.) across real adapter continuations while preserving session and final result extraction.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Agy CLI output format when streaming uses stream-json events interspersed with possible metadata or terminal strings; assistant messages are isolated from tool events.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED:
+  - `test_claude_streaming_normalization`: failed with `assert 0 >= 2` when stream_event envelopes were not unwrapped.
+  - `test_pi_streaming_normalization`: failed with `assert 0 >= 1` when real Pi message_update and tool_execution shapes were unrecognized.
+  - `test_agy_streaming_normalization`: failed with `assert 'secret_token_val' not in result.agent_messages` because raw JSON output leaked into agent messages.
+  - `test_agy_continuations_unique_synthetic_entities`: failed with `AssertionError: assert 'msg-1' != 'msg-1'` when continuation entity IDs collided.
+  - `test_codex_capability_probes_exec_subcommand`: failed with `assert False is True` when top-level help without `--json` was probed.
+- GREEN:
+  - All 5 tests passed after surgical updates to `claude.py`, `pi.py`, `agy.py`, and `drivers.py`.
+  - Full suite `uv run pytest tests/test_streaming_backends.py tests/test_execution.py tests/test_live_backends.py -m 'not live'`: 50 passed, 3 deselected in 11.39s.
+  - `git diff --check`: Clean, zero whitespace issues.
+- Root causes:
+  - (1) Agy raw stdout and log fallback reached `agent_messages` directly, including tool arguments and outputs.
+  - (2) Pi backend and fixture used flattened shapes rather than `message_update.assistantMessageEvent` and `tool_execution_*`.
+  - (3) Claude stream-json envelopes wrapped partial messages under `stream_event.event`.
+  - (4) Codex capability probed `codex --help` rather than `codex exec --help`.
+  - (5) Agy adapter continuations re-instantiated local counter, reusing `msg-1`.

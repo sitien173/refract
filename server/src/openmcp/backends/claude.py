@@ -75,8 +75,13 @@ def _extract_output(lines: list[str]) -> tuple[str, str, str, str]:
             if line.strip():
                 diagnostics.append(line.strip())
             continue
-        if isinstance(event, dict) and event.get("type") == "result":
-            final_result = event
+        if isinstance(event, dict):
+            if event.get("type") == "stream_event" and isinstance(event.get("event"), dict):
+                inner = event["event"]
+                if inner.get("type") == "result":
+                    final_result = inner
+            elif event.get("type") == "result":
+                final_result = event
 
     if final_result is None:
         return "", "", "\n".join(diagnostics).strip(), ""
@@ -164,11 +169,15 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
             lines.append(line)
             if params.emitter:
                 try:
-                    event = json.loads(line)
+                    raw_event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(event, dict):
+                if not isinstance(raw_event, dict):
                     continue
+                if raw_event.get("type") == "stream_event" and isinstance(raw_event.get("event"), dict):
+                    event = raw_event["event"]
+                else:
+                    event = raw_event
                 evt_type = event.get("type")
                 if evt_type == "content_block_delta":
                     delta = event.get("delta", {})

@@ -20,38 +20,53 @@ from openmcp.backends.pi import PiParams, _execute_sync as pi_sync
 CLAUDE_STREAM_JSON_FIXTURE = [
     # System / prompt echo events (must be ignored)
     json.dumps({"type": "system", "content": "system prompt secret_token_123"}),
-    # Assistant text delta
+    # Assistant text delta wrapped in stream_event envelope
     json.dumps({
-        "type": "content_block_delta",
-        "delta": {"type": "text_delta", "text": "Analyzing the code..."},
-        "index": 0,
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "Analyzing the code..."},
+            "index": 0,
+        },
     }),
     # Thinking block (must be ignored, including planted secret)
     json.dumps({
-        "type": "content_block_delta",
-        "delta": {"type": "thinking_delta", "thinking": "secret_reasoning_456"},
-        "index": 1,
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_delta",
+            "delta": {"type": "thinking_delta", "thinking": "secret_reasoning_456"},
+            "index": 1,
+        },
     }),
     # Tool use start event (safe lifecycle only; arguments must NOT leak)
     json.dumps({
-        "type": "content_block_start",
-        "content_block": {
-            "type": "tool_use",
-            "id": "toolu_01",
-            "name": "Read",
-            "input": {"path": "/etc/shadow", "secret_arg": "pass123"},
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_start",
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "Read",
+                "input": {"path": "/etc/shadow", "secret_arg": "pass123"},
+            },
         },
     }),
     # Tool result / finish event (result data must NOT leak)
     json.dumps({
-        "type": "content_block_stop",
-        "index": 2,
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_stop",
+            "index": 2,
+        },
     }),
     # Another assistant text delta
     json.dumps({
-        "type": "content_block_delta",
-        "delta": {"type": "text_delta", "text": " Found 0 bugs."},
-        "index": 3,
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": " Found 0 bugs."},
+            "index": 3,
+        },
     }),
     # Final result event (authoritative final result & session)
     json.dumps({
@@ -107,22 +122,25 @@ CODEX_JSONL_FIXTURE = [
 PI_JSON_FIXTURE = [
     # Session event
     json.dumps({"type": "session", "id": "pi-sess-abc-123"}),
-    # Text delta
+    # Text delta wrapped in message_update.assistantMessageEvent
     json.dumps({
-        "type": "text_delta",
-        "text": "Checking project files.",
+        "type": "message_update",
+        "assistantMessageEvent": {
+            "type": "text_delta",
+            "delta": "Checking project files.",
+        },
     }),
-    # Tool start with secret args (must NOT leak)
+    # Tool execution start with secret args (must NOT leak)
     json.dumps({
-        "type": "tool_call",
-        "id": "pi_tool_1",
-        "tool": "grep",
+        "type": "tool_execution_start",
+        "tool_call_id": "pi_tool_1",
+        "tool_name": "grep",
         "args": {"pattern": "secret_pwd_999"},
     }),
-    # Tool result with secret output (must NOT leak)
+    # Tool execution end with secret output (must NOT leak)
     json.dumps({
-        "type": "tool_result",
-        "id": "pi_tool_1",
+        "type": "tool_execution_end",
+        "tool_call_id": "pi_tool_1",
         "status": "success",
         "result": "matched secret_pwd_999 in config",
     }),
@@ -299,3 +317,53 @@ def test_agy_streaming_normalization(tmp_path, monkeypatch):
     serialized = json.dumps(events)
     assert "secret_token_val" not in serialized
     assert "secret_stdout_result" not in serialized
+    # Fixture secrets must NOT leak into returned agent_messages
+    assert "secret_token_val" not in result.agent_messages
+    assert "secret_stdout_result" not in result.agent_messages
+
+
+def test_agy_continuations_unique_synthetic_entities(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    events: list[dict[str, Any]] = []
+
+    def emitter(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    call_count = 0
+
+    def fake_run_shell(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return iter([
+            "Created conversation 12345678-1234-1234-1234-123456789abc",
+            json.dumps({
+                "type": "assistant.text.delta",
+                "text": f"Continuation {call_count}",
+            }),
+            f"Done {call_count}",
+        ])
+
+    monkeypatch.setattr("openmcp.backends.agy.run_shell_command", fake_run_shell)
+    pending_checks = [True, False]
+    monkeypatch.setattr(
+        "openmcp.backends.agy._agy_has_pending_tasks",
+        lambda *args, **kwargs: pending_checks.pop(0) if pending_checks else False,
+    )
+
+    params = AgyParams(
+        PROMPT="inspect",
+        cd=workspace,
+        emitter=emitter,
+    )
+    result = agy_sync(params)
+
+    assert result.outcome == "OK"
+    deltas = [e for e in events if e.get("kind") == "assistant.text.delta"]
+    assert len(deltas) == 2
+    # Continuation events must have unique synthetic assistant entities
+    assert deltas[0]["entity_id"] != deltas[1]["entity_id"]
+    assert deltas[0]["entity_id"] == "msg-1"
+    assert deltas[1]["entity_id"] == "msg-2"

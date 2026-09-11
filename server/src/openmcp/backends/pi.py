@@ -161,28 +161,44 @@ def _execute_sync(params: PiParams) -> BackendResult:
                 if not isinstance(event, dict):
                     continue
                 evt_type = event.get("type", "")
-                if evt_type == "text_delta":
-                    text = str(event.get("text", ""))
+                if evt_type == "message_update":
+                    ame = event.get("assistantMessageEvent")
+                    if isinstance(ame, dict):
+                        delta_val = ame.get("delta")
+                        if isinstance(delta_val, str):
+                            text = delta_val
+                        elif isinstance(delta_val, dict):
+                            text = str(delta_val.get("text", ""))
+                        else:
+                            text = str(ame.get("text", "") or ame.get("content", ""))
+                        if text:
+                            params.emitter({
+                                "kind": "assistant.text.delta",
+                                "entity_id": "msg-1",
+                                "data": {"text": text},
+                            })
+                elif evt_type == "text_delta":
+                    text = str(event.get("text", "") or event.get("delta", ""))
                     if text:
                         params.emitter({
                             "kind": "assistant.text.delta",
                             "entity_id": "msg-1",
                             "data": {"text": text},
                         })
-                elif evt_type == "tool_call":
+                elif evt_type in {"tool_execution_start", "tool_call"}:
                     entity_counter += 1
-                    raw_id = str(event.get("id", ""))
+                    raw_id = str(event.get("tool_call_id") or event.get("id") or "")
                     entity_id = f"tool-{entity_counter}"
                     if raw_id:
                         raw_to_entity[raw_id] = entity_id
-                    tool_name = str(event.get("tool", "") or event.get("name", ""))
+                    tool_name = str(event.get("tool_name") or event.get("tool") or event.get("name") or "")
                     params.emitter({
                         "kind": "tool.started",
                         "entity_id": entity_id,
                         "data": {"tool": tool_name},
                     })
-                elif evt_type == "tool_result":
-                    raw_id = str(event.get("id", ""))
+                elif evt_type in {"tool_execution_end", "tool_result"}:
+                    raw_id = str(event.get("tool_call_id") or event.get("id") or "")
                     entity_id = raw_to_entity.get(raw_id) or f"tool-{entity_counter or 1}"
                     status = str(event.get("status", "completed"))
                     params.emitter({
