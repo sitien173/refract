@@ -11,9 +11,10 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generator
+from typing import Any
 
 from . import BackendResult, classify_backend_output
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
@@ -29,6 +30,7 @@ class CodexParams:
     args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
+    emitter: Callable[[dict[str, Any]], None] | None = None
 
 
 def run_shell_command(
@@ -243,6 +245,8 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     timed_out = False
     execution_failed = False
 
+    entity_counter = 0
+    raw_to_entity: dict[str, str] = {}
     try:
         for line in run_shell_command(
             cmd,
@@ -251,6 +255,64 @@ def _execute_sync(params: CodexParams) -> BackendResult:
             cancel_event=params.cancel_event,
         ):
             stdout_lines.append(line)
+            if params.emitter:
+                stripped = line.strip()
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                event_type = parsed.get("type", "")
+                item = parsed.get("item", {})
+                if not isinstance(item, dict):
+                    continue
+                item_type = item.get("type", "")
+                raw_id = str(item.get("id", ""))
+                if event_type == "item.started":
+                    if item_type == "agent_message":
+                        entity_counter += 1
+                        entity_id = f"msg-{entity_counter}"
+                        if raw_id:
+                            raw_to_entity[raw_id] = entity_id
+                        params.emitter({
+                            "kind": "assistant.message.started",
+                            "entity_id": entity_id,
+                            "data": {},
+                        })
+                    elif item_type == "tool_call":
+                        entity_counter += 1
+                        entity_id = f"tool-{entity_counter}"
+                        if raw_id:
+                            raw_to_entity[raw_id] = entity_id
+                        params.emitter({
+                            "kind": "tool.started",
+                            "entity_id": entity_id,
+                            "data": {"tool": str(item.get("name", ""))},
+                        })
+                elif event_type == "item.completed":
+                    if item_type == "agent_message":
+                        entity_id = raw_to_entity.get(raw_id) or f"msg-{entity_counter or 1}"
+                        msg_text = str(item.get("text", ""))
+                        if msg_text:
+                            params.emitter({
+                                "kind": "assistant.text.delta",
+                                "entity_id": entity_id,
+                                "data": {"text": msg_text},
+                            })
+                        params.emitter({
+                            "kind": "assistant.message.completed",
+                            "entity_id": entity_id,
+                            "data": {},
+                        })
+                    elif item_type == "tool_call":
+                        entity_id = raw_to_entity.get(raw_id) or f"tool-{entity_counter or 1}"
+                        status = str(item.get("status", "completed"))
+                        params.emitter({
+                            "kind": "tool.completed",
+                            "entity_id": entity_id,
+                            "data": {"status": status},
+                        })
     except ShellCommandCancelled:
         log.warning("codex subprocess cancelled")
         err_message = "cancelled"

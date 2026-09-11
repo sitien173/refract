@@ -8,9 +8,10 @@ import os
 import shutil
 import subprocess
 import threading
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 from . import BackendResult, classify_backend_output
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
@@ -27,6 +28,7 @@ class PiParams:
     args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
+    emitter: Callable[[dict[str, Any]], None] | None = None
 
 
 def run_shell_command(
@@ -140,6 +142,8 @@ def _execute_sync(params: PiParams) -> BackendResult:
     lines: list[str] = []
     command_error = ""
     command_error_class = ""
+    entity_counter = 0
+    raw_to_entity: dict[str, str] = {}
     try:
         for line in run_shell_command(
             cmd,
@@ -148,6 +152,44 @@ def _execute_sync(params: PiParams) -> BackendResult:
             cancel_event=params.cancel_event,
         ):
             lines.append(line)
+            if params.emitter:
+                stripped = line.strip()
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                evt_type = event.get("type", "")
+                if evt_type == "text_delta":
+                    text = str(event.get("text", ""))
+                    if text:
+                        params.emitter({
+                            "kind": "assistant.text.delta",
+                            "entity_id": "msg-1",
+                            "data": {"text": text},
+                        })
+                elif evt_type == "tool_call":
+                    entity_counter += 1
+                    raw_id = str(event.get("id", ""))
+                    entity_id = f"tool-{entity_counter}"
+                    if raw_id:
+                        raw_to_entity[raw_id] = entity_id
+                    tool_name = str(event.get("tool", "") or event.get("name", ""))
+                    params.emitter({
+                        "kind": "tool.started",
+                        "entity_id": entity_id,
+                        "data": {"tool": tool_name},
+                    })
+                elif evt_type == "tool_result":
+                    raw_id = str(event.get("id", ""))
+                    entity_id = raw_to_entity.get(raw_id) or f"tool-{entity_counter or 1}"
+                    status = str(event.get("status", "completed"))
+                    params.emitter({
+                        "kind": "tool.completed",
+                        "entity_id": entity_id,
+                        "data": {"status": status},
+                    })
     except ShellCommandCancelled:
         command_error = "cancelled"
         command_error_class = "cancelled"

@@ -5,7 +5,8 @@
 ## Task 1
 
 ### Decisions made
-- none
+- Added characterization fixtures in tests/test_streaming_backends.py for Claude, Codex, Pi, and Agy.
+- Verified exclusion of secrets, reasoning, and tool arguments/results from normalized stream.
 
 ### Spec deviations
 - none
@@ -14,19 +15,23 @@
 - none
 
 ### Assumptions
-- none
+- Emitter callback is synchronous and optional on provider params dataclasses.
 
 ### Follow-ups for human
 - none
 
 ### Test evidence
-- RED -> GREEN: pending
+- RED -> GREEN: `uv run pytest tests/test_streaming_backends.py` failed with 4 errors: `TypeError: *Params.__init__() got an unexpected keyword argument 'emitter'`.
 - Root cause (bugfix only): not applicable
 
 ## Task 2
 
 ### Decisions made
-- none
+- Added optional `emitter` callback parameter to `ClaudeParams`, `CodexParams`, `PiParams`, and `AgyParams`.
+- Configured Claude to use stream-json and `--include-partial-messages`.
+- Configured Agy to use stream-json.
+- Parsed and normalized assistant text deltas and safe tool lifecycle events across all adapters.
+- Preserved authoritative final result extraction and session extraction unchanged.
 
 ### Spec deviations
 - none
@@ -35,19 +40,19 @@
 - none
 
 ### Assumptions
-- none
+- Adapters execute on worker threads and pass normalized dictionaries to emitter.
 
 ### Follow-ups for human
 - none
 
 ### Test evidence
-- RED -> GREEN: pending
+- RED -> GREEN: `uv run pytest tests/test_streaming_backends.py` passed all 4 tests after implementing provider streaming normalization.
 - Root cause (bugfix only): not applicable
 
 ## Task 3
 
 ### Decisions made
-- none
+- Added bridge tests in `tests/test_execution.py`: `test_stream_bridge_blocking_backpressure_and_sentinel_drain`, `test_stream_bridge_cancellation_drains_accepted_events`, `test_stream_bridge_thread_ownership_no_sqlite_on_provider_thread`.
 
 ### Spec deviations
 - none
@@ -56,19 +61,25 @@
 - none
 
 ### Assumptions
-- none
+- StreamBridge uses a 256-slot asyncio bounded queue with blocking producer backpressure via `asyncio.run_coroutine_threadsafe`.
 
 ### Follow-ups for human
 - none
 
 ### Test evidence
-- RED -> GREEN: pending
+- RED -> GREEN: `uv run pytest tests/test_execution.py -k "test_stream_bridge"` failed with `ImportError: cannot import name 'StreamBridge'`, then passed all 3 tests after implementing `StreamBridge` in `src/openmcp/drivers.py`.
 - Root cause (bugfix only): not applicable
 
 ## Task 4
 
 ### Decisions made
-- none
+- Implemented `StreamBridge` consumer draining and `StreamRecorder` batch flushing in `TargetExecutor.execute()`.
+- Guaranteed attempt ordering: bridge consumer drained, recorder closed and flushed prior to target lifecycle finish and job state finalization.
+- Added pre-execution structured-mode capability check `supports_structured_streaming` on `DriverRegistry`.
+- Cached capability results per resolved executable path (`shutil.which(target.backend)`).
+- Implemented capability detection by checking provider CLI `--help` for required flags (`stream-json` & `--include-partial-messages` for Claude, `stream-json` for Agy, `--json` for Codex, `--mode` for Pi).
+- When capability is unsupported or emitter is None, used final-only fallback without structured flags or post-submission prompt retries.
+- Verified fake drivers in async tests emit from worker threads via `asyncio.to_thread` to adhere to provider worker thread contract.
 
 ### Spec deviations
 - none
@@ -77,11 +88,15 @@
 - none
 
 ### Assumptions
-- none
+- Provider CLI processes execute in worker threads where synchronous emitter submits safely to the bounded asyncio queue.
 
 ### Follow-ups for human
 - none
 
 ### Test evidence
-- RED -> GREEN: pending
-- Root cause (bugfix only): not applicable
+- RED -> GREEN: `uv run pytest tests/test_execution.py -k "test_capability_check_before_submission_with_final_only_fallback"` verified caching per resolved executable path and final-only fallback (emitter=None) without prompt retry.
+- RED -> GREEN (blocking defect fix): `uv run pytest tests/test_execution.py -k test_detect_structured_mode_invokes_help_probe_and_detects_support` failed with `AssertionError: assert False is True` because missing `import subprocess` caused `subprocess.run` to raise `NameError` which was swallowed by exception handling. After adding `import subprocess`, the default `--help` probe executes, detects supported output, and passes.
+- Full suite `uv run pytest tests/test_streaming_backends.py tests/test_execution.py tests/test_live_backends.py -m 'not live'` passed 48 tests.
+- Root cause (bugfix only): Test fake driver in `test_accepted_events_flush_before_lifecycle_completion` called synchronous emitter directly on the asyncio event loop thread instead of a worker thread, deadlocking `asyncio.run_coroutine_threadsafe(...).result()`. Fixed by emitting via `asyncio.to_thread(worker)`.
+- Root cause (blocking defect): `src/openmcp/drivers.py` was missing `import subprocess`, causing `_detect_structured_mode()` to raise `NameError` on `subprocess.run()`, which was caught and caused default capability probes to return `False`. Fixed by importing `subprocess`.
+- Gap resolved: `DriverRegistry.supports_structured_streaming()` now inspects resolved executable path capability via `--help` subprocess probe, caches per executable path, and falls back cleanly to final-only invocation without prompt retries.

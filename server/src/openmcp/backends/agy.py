@@ -11,10 +11,11 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator
+from typing import Any
 
 from . import BackendResult, classify_backend_output
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
@@ -36,6 +37,7 @@ class AgyParams:
     args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
+    emitter: Callable[[dict[str, Any]], None] | None = None
 
 
 _UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
@@ -165,9 +167,13 @@ def _execute_once(params: AgyParams) -> BackendResult:
                 "agy",
                 "--dangerously-skip-permissions",
                 *params.args,
+            ]
+            if params.emitter is not None:
+                cmd.extend(["--output-format", "stream-json"])
+            cmd.extend([
                 "--log-file",
                 tmp_log_path,
-            ]
+            ])
             if params.SESSION_ID:
                 cmd.extend(["--conversation", params.SESSION_ID])
             else:
@@ -176,6 +182,7 @@ def _execute_once(params: AgyParams) -> BackendResult:
             # callers may tune the CLI, but cannot replace the prompt or log.
             cmd.extend(["--print", params.PROMPT])
             stdout_lines = []
+            entity_counter = 0
             for line in run_shell_command(
                 cmd,
                 cwd=cwd,
@@ -183,6 +190,38 @@ def _execute_once(params: AgyParams) -> BackendResult:
                 cancel_event=params.cancel_event,
             ):
                 stdout_lines.append(line)
+                if params.emitter:
+                    stripped = line.strip()
+                    try:
+                        event = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    evt_type = event.get("type", "")
+                    if evt_type in {"assistant.text.delta", "assistant.message.delta", "text_delta"}:
+                        text = str(event.get("text", "") or event.get("delta", ""))
+                        if text:
+                            params.emitter({
+                                "kind": "assistant.text.delta",
+                                "entity_id": f"msg-{entity_counter or 1}",
+                                "data": {"text": text},
+                            })
+                    elif evt_type in {"tool.started", "tool_started"}:
+                        entity_counter += 1
+                        tool_name = str(event.get("tool_name", "") or event.get("tool", ""))
+                        params.emitter({
+                            "kind": "tool.started",
+                            "entity_id": f"tool-{entity_counter}",
+                            "data": {"tool": tool_name},
+                        })
+                    elif evt_type in {"tool.completed", "tool_completed"}:
+                        status = str(event.get("status", "completed"))
+                        params.emitter({
+                            "kind": "tool.completed",
+                            "entity_id": f"tool-{entity_counter or 1}",
+                            "data": {"status": status},
+                        })
             try:
                 log_text = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
             except OSError:
@@ -289,6 +328,7 @@ def _execute_sync(params: AgyParams) -> BackendResult:
                 args=params.args,
                 timeout_s=params.timeout_s,
                 cancel_event=params.cancel_event,
+                emitter=params.emitter,
             )
         )
         if continuation.outcome != "OK":

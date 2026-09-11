@@ -1120,3 +1120,331 @@ async def test_fresh_job_failure_updating_state_to_succeeded_preserves_old_sessi
         assert len(runtime.database.recent_turns(project.id, "stream", "implement", 100)) == initial_turns
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_blocking_backpressure_and_sentinel_drain(tmp_path) -> None:
+    """Queue capacity of 256 blocks producer until consumer drains."""
+    from openmcp.drivers import StreamBridge
+
+    bridge = StreamBridge(queue_capacity=256)
+    producer_threads: set[int] = set()
+
+    # In a worker thread, emit 300 events
+    def worker():
+        import threading
+        producer_threads.add(threading.get_ident())
+        for i in range(300):
+            bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"{i} "}})
+        bridge.close_producer()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    consumed = []
+    async for evt in bridge.consumer():
+        consumed.append(evt)
+
+    thread.join(timeout=2.0)
+    assert len(consumed) == 300
+    assert len(producer_threads) == 1
+    assert producer_threads != {threading.get_ident()}
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_event_loop_close_drains_accepted_events() -> None:
+    from openmcp.drivers import StreamBridge
+
+    bridge = StreamBridge(queue_capacity=256)
+    await bridge.queue.put({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "accepted"},
+    })
+    await bridge.close()
+
+    assert [event async for event in bridge.consumer()] == [{
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "accepted"},
+    }]
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_cancellation_drains_accepted_events(tmp_path) -> None:
+    from openmcp.drivers import StreamBridge
+
+    bridge = StreamBridge(queue_capacity=256)
+
+    def worker():
+        for i in range(10):
+            bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"item-{i}"}})
+        bridge.close_producer()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    consumed = []
+    async for evt in bridge.consumer():
+        consumed.append(evt)
+
+    thread.join(timeout=2.0)
+    assert len(consumed) == 10
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_thread_ownership_no_sqlite_on_provider_thread(tmp_path) -> None:
+    """Assert provider threads never touch the SQLite database."""
+    from openmcp.drivers import StreamBridge
+    root = repository(tmp_path)
+    cat = config(tmp_path / "home")
+    runtime = Runtime(cat)
+    await runtime.start()
+
+    accessed_threads: set[int] = set()
+    orig_append = runtime.database.append_stream_events
+
+    def tracking_append(*args, **kwargs):
+        accessed_threads.add(threading.get_ident())
+        return orig_append(*args, **kwargs)
+
+    runtime.database.append_stream_events = tracking_append
+
+    bridge = StreamBridge(queue_capacity=256)
+    worker_tid = None
+
+    def worker():
+        nonlocal worker_tid
+        worker_tid = threading.get_ident()
+        bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "hello"}})
+        bridge.close_producer()
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
+    async for _ in bridge.consumer():
+        pass
+    t.join(timeout=2.0)
+
+    try:
+        assert worker_tid is not None
+        assert worker_tid not in accessed_threads
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_accepted_events_flush_before_lifecycle_completion(tmp_path) -> None:
+    """Accepted stream events must be durably flushed before attempt.finished and job terminal state."""
+    root = repository(tmp_path)
+    cat = config(tmp_path / "home")
+
+    class StreamingDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "streaming content"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-1", "streaming content", "", "")
+
+    runtime = Runtime(cat)
+    runtime.drivers = StreamingDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "do streaming")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert any(e.kind == "assistant.text.delta" and e.data.get("text") == "streaming content" for e in events)
+        # Authoritative final result matches
+        assert job.result.text == "streaming content"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_attempts_retain_attempt_labels(tmp_path) -> None:
+    """Failed attempt transcripts must retain their attempt number and separate from successful attempts."""
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 2)
+    cat = replace(
+        config(tmp_path / "home"),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+
+    class MultiAttemptDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            self.call_count += 1
+            if emitter:
+                def worker(c):
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
+                await asyncio.to_thread(worker, self.call_count)
+            if self.call_count == 1:
+                return DriverResult("RETRYABLE", "", "", "first attempt failed", "backend_failure")
+            return DriverResult("SUCCESS", "sess-2", "final success", "", "")
+
+    runtime = Runtime(cat)
+    runtime.drivers = MultiAttemptDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "do attempts")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        attempt_1_events = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
+        attempt_2_events = [e for e in events if e.attempt == 2 and e.kind == "assistant.text.delta"]
+        assert len(attempt_1_events) == 1
+        assert attempt_1_events[0].data["text"] == "attempt-1"
+        assert len(attempt_2_events) == 1
+        assert attempt_2_events[0].data["text"] == "attempt-2"
+
+        # Authoritative result is ONLY the successful one
+        assert job.result.text == "final success"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_agy_continuations_stay_one_openmcp_attempt(tmp_path) -> None:
+    """Agy continuations within one attempt must remain attempt=1."""
+    root = repository(tmp_path)
+    cat = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="agy"),),
+    )
+
+    class AgyContinuationDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    # Continuation 1
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "part 1"}})
+                    # Continuation 2
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-2", "data": {"text": "part 2"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "agy-sess", "part 1\n\npart 2", "", "")
+
+    runtime = Runtime(cat)
+    runtime.drivers = AgyContinuationDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "do agy")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.attempts == 1
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        deltas = [e for e in events if e.kind == "assistant.text.delta"]
+        assert len(deltas) == 2
+        assert all(e.attempt == 1 for e in deltas)
+        assert {e.entity_id for e in deltas} == {"msg-1", "msg-2"}
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_capability_check_before_submission_with_final_only_fallback(tmp_path, monkeypatch) -> None:
+    """Structured mode capability check happens before prompt submission with final-only fallback."""
+    from openmcp.drivers import DriverRegistry
+
+    registry = DriverRegistry()
+    target_old = TargetConfig(id="target-old", backend="claude-old")
+    target_new = TargetConfig(id="target-new", backend="claude-new")
+
+    fake_bins = {
+        "claude-old": "/bin/claude-old",
+        "claude-new": "/bin/claude-new",
+    }
+    monkeypatch.setattr("shutil.which", lambda name: fake_bins.get(name))
+
+    # Assert capability check method exists and caches per resolved executable
+    assert hasattr(registry, "supports_structured_streaming")
+    checks = []
+
+    def fake_version_check(exe_path: str) -> bool:
+        checks.append(exe_path)
+        return "new" in exe_path
+
+    # Check for target_old -> False, cached per resolved executable /bin/claude-old
+    assert registry.supports_structured_streaming(target_old, version_check=fake_version_check) is False
+    assert len(checks) == 1
+    # Repeated call uses cache without calling check again
+    assert registry.supports_structured_streaming(target_old, version_check=fake_version_check) is False
+    assert len(checks) == 1
+
+    # Check for target_new -> True, cached per resolved executable /bin/claude-new
+    assert registry.supports_structured_streaming(target_new, version_check=fake_version_check) is True
+    assert len(checks) == 2
+    assert registry.supports_structured_streaming(target_new, version_check=fake_version_check) is True
+    assert len(checks) == 2
+
+    # In execution, when capability is unsupported, TargetExecutor falls back to final-only invocation (emitter=None)
+    root = repository(tmp_path)
+    target_exec = TargetConfig(id="target-exec", backend="claude")
+    cat = config(tmp_path / "home", (target_exec,))
+    runtime = Runtime(cat)
+
+    received_emitters = []
+
+    class MockExecutorDrivers(FakeDrivers):
+        def supports_structured_streaming(self, target, **kwargs):
+            return False
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            received_emitters.append(emitter)
+            return DriverResult("SUCCESS", "sess-old", "fallback output", "", "")
+
+    runtime.drivers = MockExecutorDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "test fallback")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.text == "fallback output"
+        # Emitter passed to driver must be None for final-only fallback
+        assert received_emitters == [None]
+        # No stream events recorded
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert len(events) == 0
+    finally:
+        await runtime.close()
+
+
+def test_detect_structured_mode_invokes_help_probe_and_detects_support(tmp_path, monkeypatch) -> None:
+    """Default capability probe invokes configured --help command and detects supported structured mode."""
+    from openmcp.drivers import DriverRegistry
+
+    marker = tmp_path / "probe_invoked.txt"
+    fake_cli = tmp_path / "fake-claude"
+    fake_cli.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "--help" ]; then\n'
+        f"  echo called >> {marker}\n"
+        '  echo "options: stream-json --include-partial-messages"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    registry = DriverRegistry()
+    target = TargetConfig(id="target-claude", backend="claude")
+    monkeypatch.setattr("shutil.which", lambda name: str(fake_cli) if name == "claude" else None)
+
+    # Reach default capability probe without version_check override
+    assert registry.supports_structured_streaming(target) is True
+    assert marker.read_text(encoding="utf-8").strip() == "called"
+
+    # Cached per resolved executable: second call should not re-invoke probe
+    assert registry.supports_structured_streaming(target) is True
+    assert marker.read_text(encoding="utf-8").splitlines() == ["called"]

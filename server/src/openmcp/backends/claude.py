@@ -8,9 +8,10 @@ import os
 import shutil
 import subprocess
 import threading
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 from openmcp.logging_setup import get_logger
 
@@ -28,6 +29,7 @@ class ClaudeParams:
     args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
+    emitter: Callable[[dict[str, Any]], None] | None = None
 
 
 def run_shell_command(
@@ -121,9 +123,18 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
         "-p",
         "--permission-mode",
         "bypassPermissions",
-        "--output-format",
-        "json",
     ]
+    if params.emitter is not None:
+        cmd.extend([
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+        ])
+    else:
+        cmd.extend([
+            "--output-format",
+            "json",
+        ])
     if params.SESSION_ID:
         cmd.extend(["--resume", params.SESSION_ID])
     cmd.extend(["--", params.PROMPT])
@@ -141,6 +152,8 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
     lines: list[str] = []
     command_error = ""
     command_error_class = ""
+    entity_counter = 0
+    active_tool_id = ""
     try:
         for line in run_shell_command(
             cmd,
@@ -149,6 +162,42 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
             cancel_event=params.cancel_event,
         ):
             lines.append(line)
+            if params.emitter:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                evt_type = event.get("type")
+                if evt_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                        text = delta.get("text", "")
+                        if text:
+                            params.emitter({
+                                "kind": "assistant.text.delta",
+                                "entity_id": f"msg-{event.get('index', 0)}",
+                                "data": {"text": text},
+                            })
+                elif evt_type == "content_block_start":
+                    cb = event.get("content_block", {})
+                    if isinstance(cb, dict) and cb.get("type") == "tool_use":
+                        entity_counter += 1
+                        active_tool_id = f"tool-{entity_counter}"
+                        params.emitter({
+                            "kind": "tool.started",
+                            "entity_id": active_tool_id,
+                            "data": {"tool": str(cb.get("name", ""))},
+                        })
+                elif evt_type == "content_block_stop":
+                    if active_tool_id:
+                        params.emitter({
+                            "kind": "tool.completed",
+                            "entity_id": active_tool_id,
+                            "data": {"status": "completed"},
+                        })
+                        active_tool_id = ""
     except ShellCommandCancelled:
         command_error = "backend command cancelled"
         command_error_class = "cancelled"
