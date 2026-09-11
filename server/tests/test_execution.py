@@ -1850,6 +1850,7 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             json.dumps({"type": "result", "result": "Agy verified clean."}),
         ],
     }
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/mock")
 
     class RealAdapterDrivers(FakeDrivers):
         def __init__(self, backend_name):
