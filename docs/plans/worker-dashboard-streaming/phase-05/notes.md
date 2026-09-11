@@ -89,10 +89,10 @@
 
 ### Decisions made
 - Added `emitter` to expected backend parameter fields.
-- Restored unstructured log fallback in `agy.py`.
-- Handled legacy `_execute_once` invocations in `agy.py`.
+- Preserved unstructured stdout fallback without promoting raw Agy logs.
+- Selected the `_execute_once` call signature before prompt execution.
 - Rebuilt production dashboard assets with Vite.
-- Re-ran complete test suites and linters.
+- Re-ran complete test suites and release checks.
 
 ### Spec deviations
 - none
@@ -107,9 +107,41 @@
 - none
 
 ### Test evidence
-- `uv run pytest`: 374 passed, 3 deselected.
+- `uv run pytest`: 378 passed, 3 deselected.
 - `npm --prefix web test`: 18 files passed, 144 tests passed.
-- `npm --prefix web run build`: built cleanly in 2.03s.
+- `npm --prefix web run build`: built cleanly in 2.04s.
 - `uv build`: built wheel and sdist cleanly.
 - `uv run openmcp doctor`: exited code 0.
 - `git diff --check`: exited code 0.
+
+## Review Fix
+
+### Decisions made
+- Kept raw `log_text` strictly for session extraction.
+- Excluded raw logs from `agent_messages` and results.
+- Inspected `_execute_once` signature prior to prompt execution.
+- Removed broad `TypeError` catch from `_execute_sync`.
+- Exercised Claude, Codex, Pi, and Agy fixtures.
+- Exercised adapters in worker threads using `to_thread`.
+- Injected forbidden args and results into UI fixtures.
+- Verified DOM excludes all injected forbidden fields.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Adapters execute synchronously in dedicated worker threads.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- `tests/test_execution.py`: 54 passed in 5.86s.
+- `tests/test_dashboard.py`: 38 passed in 1.18s.
+- Combined execution and dashboard tests: 92 passed in 12.17s.
+- `dashboard-flow.test.jsx`: 7 passed in 1.50s.
+- Production dashboard built cleanly with Vite in 2.08s.
+- `git diff --check`: passed with zero errors.
