@@ -6,6 +6,7 @@ import json
 import subprocess
 import threading
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -1718,3 +1719,188 @@ async def test_execution_security_regression_fixtures_strip_forbidden_content(tm
             assert secret not in stream_rows_raw
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_agy_never_promotes_log_text_to_agent_messages_on_empty_stdout(tmp_path, monkeypatch) -> None:
+    """Empty stdout with diagnostic/secret log text extracts session ID but never promotes log text."""
+    from openmcp.backends import agy as agy_backend
+    from openmcp.backends.agy import AgyParams
+
+    secret_diagnostic = "DIAGNOSTIC_SECRET_TRACE_TOKEN_NEVER_PROMOTE_777"
+    session_id = "11111111-2222-3333-4444-555555555555"
+
+    def fake_run_shell(cmd, cwd=None, **kwargs):
+        log_idx = cmd.index("--log-file") + 1
+        log_path = Path(cmd[log_idx])
+        log_path.write_text(
+            f"Created conversation {session_id}\n[diag] {secret_diagnostic}\nserver internal dump",
+            encoding="utf-8",
+        )
+        yield ""
+
+    monkeypatch.setattr(agy_backend.shutil, "which", lambda _: "/bin/agy")
+    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell)
+
+    res = await agy_backend.execute(AgyParams(PROMPT="test", cd=tmp_path))
+    assert res.SESSION_ID == session_id
+    assert secret_diagnostic not in res.agent_messages
+    assert "server internal dump" not in res.agent_messages
+    assert res.agent_messages == ""
+    assert res.outcome == "FATAL"
+    assert res.error_class == "no_agent_messages"
+
+
+def test_agy_execute_sync_post_submission_type_error_single_invocation(tmp_path, monkeypatch) -> None:
+    """Post-submission TypeError in _execute_once raises immediately with exactly one invocation."""
+    from openmcp.backends import agy as agy_backend
+    from openmcp.backends.agy import AgyParams
+
+    call_count = 0
+
+    def fail_with_type_error(params, entity_state=None):
+        nonlocal call_count
+        call_count += 1
+        raise TypeError("post-submission internal failure")
+
+    monkeypatch.setattr(agy_backend, "_execute_once", fail_with_type_error)
+
+    with pytest.raises(TypeError, match="post-submission internal failure"):
+        agy_backend._execute_sync(AgyParams(PROMPT="test", cd=tmp_path))
+
+    assert call_count == 1
+
+
+def test_agy_continuation_post_submission_type_error_single_invocation(tmp_path, monkeypatch) -> None:
+    """Post-submission TypeError during continuation raises immediately with exactly one continuation invocation."""
+    from openmcp.backends import agy as agy_backend
+    from openmcp.backends.agy import AgyParams, BackendResult
+
+    initial_called = 0
+    continuation_called = 0
+
+    def step_execute_once(params, entity_state=None):
+        nonlocal initial_called, continuation_called
+        if params.PROMPT == "test":
+            initial_called += 1
+            return BackendResult("OK", "sess-cont-123", "first reply", "", "")
+        continuation_called += 1
+        raise TypeError("post-submission continuation failure")
+
+    monkeypatch.setattr(agy_backend, "_execute_once", step_execute_once)
+    monkeypatch.setattr(agy_backend, "_agy_has_pending_tasks", lambda *args: True)
+
+    with pytest.raises(TypeError, match="post-submission continuation failure"):
+        agy_backend._execute_sync(AgyParams(PROMPT="test", cd=tmp_path))
+
+    assert initial_called == 1
+    assert continuation_called == 1
+
+
+@pytest.mark.asyncio
+async def test_execution_all_provider_fixtures_persistence_and_authoritative_results(tmp_path, monkeypatch) -> None:
+    """Exercise sanitized Claude, Codex, Pi, and Agy fixtures through execution flow."""
+    from openmcp.backends.claude import ClaudeParams, _execute_sync as claude_sync
+    from openmcp.backends.codex import CodexParams, _execute_sync as codex_sync
+    from openmcp.backends.pi import PiParams, _execute_sync as pi_sync
+    from openmcp.backends.agy import AgyParams, _execute_once as agy_execute_once
+
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    secrets = [
+        "SECRET_CLAUDE_PROMPT_999",
+        "SECRET_CODEX_CMD_888",
+        "SECRET_PI_PATTERN_777",
+        "SECRET_AGY_DIAG_666",
+        "SECRET_REASONING_555",
+        "SECRET_TOOL_RESULT_444",
+    ]
+
+    dirty_streams = {
+        "claude": [
+            json.dumps({"type": "system", "content": f"system {secrets[0]}"}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": secrets[4]}, "index": 0}}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "id": "t1", "name": "read", "input": {"secret": secrets[1]}}}}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_stop", "index": 1}}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Claude verified clean."}, "index": 2}}),
+            json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Claude verified clean.", "session_id": "c-sess"}),
+        ],
+        "codex": [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "item.started", "item": {"type": "tool_call", "id": "tc1", "name": "bash", "input": secrets[1]}}),
+            json.dumps({"type": "item.completed", "item": {"type": "tool_call", "id": "tc1", "name": "bash", "output": secrets[5], "status": "completed"}}),
+            json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": secrets[4]}}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "m1", "text": "Codex verified clean."}}),
+        ],
+        "pi": [
+            json.dumps({"type": "session", "id": "pi-sess"}),
+            json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": secrets[4]}}),
+            json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "Pi verified clean."}}),
+            json.dumps({"type": "tool_execution_start", "toolCallId": "pt1", "toolName": "grep", "args": {"pattern": secrets[2]}}),
+            json.dumps({"type": "tool_execution_end", "toolCallId": "pt1", "isError": False, "result": secrets[5]}),
+            json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "Pi verified clean."}]}}),
+        ],
+        "agy": [
+            "Created conversation 12345678-1234-1234-1234-123456789abc",
+            f"[diagnostic] {secrets[3]} and server trace",
+            json.dumps({"type": "assistant.text.delta", "text": "Agy verified clean."}),
+            json.dumps({"type": "tool.started", "tool_name": "exec", "arguments": {"token": secrets[1]}}),
+            json.dumps({"type": "tool.completed", "status": "completed", "result": secrets[5]}),
+            json.dumps({"type": "result", "result": "Agy verified clean."}),
+        ],
+    }
+
+    class RealAdapterDrivers(FakeDrivers):
+        def __init__(self, backend_name):
+            super().__init__()
+            self.backend_name = backend_name
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            lines = dirty_streams[self.backend_name]
+            def run_adapter():
+                if self.backend_name == "claude":
+                    monkeypatch.setattr("openmcp.backends.claude.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    return claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+                elif self.backend_name == "codex":
+                    monkeypatch.setattr("openmcp.backends.codex.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    return codex_sync(CodexParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+                elif self.backend_name == "pi":
+                    monkeypatch.setattr("openmcp.backends.pi.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    return pi_sync(PiParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+                else:
+                    monkeypatch.setattr("openmcp.backends.agy.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    return agy_execute_once(AgyParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+
+            res = await asyncio.to_thread(run_adapter)
+            return DriverResult(
+                outcome="SUCCESS" if res.outcome == "OK" else "FATAL",
+                session_id=res.SESSION_ID,
+                text=res.agent_messages,
+                error=res.error,
+                error_code=res.error_class,
+            )
+
+    for backend_name in ("claude", "codex", "pi", "agy"):
+        runtime = Runtime(cfg)
+        runtime.drivers = RealAdapterDrivers(backend_name)
+        await runtime.start()
+        try:
+            project = runtime.register_project(str(root))
+            sub = await runtime.submit(project.id, "implement", f"run {backend_name}")
+            job = await runtime.wait(sub.job_id, 5)
+            assert job.state == "succeeded"
+            assert "verified clean." in job.result.text
+
+            for s in secrets:
+                assert s not in job.result.text
+
+            cursor = runtime.database._connection.execute(
+                "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
+                (sub.job_id,),
+            )
+            rows_str = str(cursor.fetchall())
+            for s in secrets:
+                assert s not in rows_str
+        finally:
+            await runtime.close()

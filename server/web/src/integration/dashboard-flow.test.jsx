@@ -612,42 +612,75 @@ describe('Dashboard integrated user flows', () => {
           id: 1,
           attempt: 1,
           kind: 'attempt.started',
-          data: {},
+          data: {
+            prompt: 'FORBIDDEN_PROMPT_SECRET',
+            system_prompt: 'FORBIDDEN_SYSTEM_PROMPT',
+          },
         },
         {
           id: 2,
           attempt: 1,
           kind: 'tool.started',
           entity_id: 'tool-1',
-          data: { tool: 'Read' },
+          data: {
+            tool: 'Read',
+            args: { path: '/etc/shadow', secret: 'FORBIDDEN_TOOL_ARG_SSH_KEY_999' },
+            arguments: 'FORBIDDEN_RAW_ARGUMENTS_123',
+            reasoning: 'FORBIDDEN_TOOL_REASONING_456',
+          },
         },
         {
           id: 3,
+          attempt: 1,
+          kind: 'tool.completed',
+          entity_id: 'tool-1',
+          data: {
+            status: 'completed',
+            result: 'FORBIDDEN_TOOL_RESULT_HASH_555',
+            output: 'FORBIDDEN_TOOL_OUTPUT_SECRET',
+            stdout: 'FORBIDDEN_RAW_STDOUT_SECRET',
+          },
+        },
+        {
+          id: 4,
           attempt: 1,
           kind: 'attempt.finished',
           data: { outcome: 'RETRYABLE' },
         },
         {
-          id: 4,
+          id: 5,
           attempt: 2,
           kind: 'attempt.started',
           data: {},
         },
         {
-          id: 5,
+          id: 6,
+          attempt: 2,
+          kind: 'assistant.message.started',
+          entity_id: 'msg-1',
+          data: {
+            reasoning: 'FORBIDDEN_THINKING_TOKEN',
+            chain_of_thought: 'FORBIDDEN_COT_SECRET',
+          },
+        },
+        {
+          id: 7,
           attempt: 2,
           kind: 'assistant.text.delta',
           entity_id: 'msg-1',
-          data: { text: 'Second attempt succeeded.' },
+          data: {
+            text: 'Second attempt succeeded.',
+            reasoning: 'FORBIDDEN_DELTA_REASONING',
+          },
         },
         {
-          id: 6,
+          id: 8,
           attempt: 2,
           kind: 'stream.truncated',
           data: { reason: 'max_job_bytes' },
         },
       ],
-      cursor: 6,
+      cursor: 8,
       has_more: false,
       retained_from: 1,
       stream_status: 'truncated',
@@ -664,9 +697,18 @@ describe('Dashboard integrated user flows', () => {
     expect(await screen.findByText(/Attempt 2/i)).toBeInTheDocument()
     expect(await screen.findByText('Second attempt succeeded.')).toBeInTheDocument()
 
-    // Assert planted secrets are never in the rendered DOM
-    expect(container.innerHTML).not.toContain('FORBIDDEN_PROMPT_SECRET')
+    // Assert injected forbidden args, results, and reasoning fields never appear in the rendered DOM
+    expect(container.innerHTML).not.toContain('FORBIDDEN_TOOL_ARG_SSH_KEY_999')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_RAW_ARGUMENTS_123')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_TOOL_REASONING_456')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_TOOL_RESULT_HASH_555')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_TOOL_OUTPUT_SECRET')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_RAW_STDOUT_SECRET')
     expect(container.innerHTML).not.toContain('FORBIDDEN_THINKING_TOKEN')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_COT_SECRET')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_DELTA_REASONING')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_PROMPT_SECRET')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_SYSTEM_PROMPT')
   })
 
   it('renders historical fallback card cleanly when stream_status is unavailable', async () => {

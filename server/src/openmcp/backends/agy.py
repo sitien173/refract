@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -268,7 +269,7 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
                 else:
                     agent_messages = terminal_text or assistant_text
             else:
-                agent_messages = "\n".join(unstructured_lines).strip() or log_text.strip()
+                agent_messages = "\n".join(unstructured_lines).strip()
         finally:
             try:
                 os.unlink(tmp_log_path)
@@ -347,10 +348,16 @@ def _execute_sync(params: AgyParams) -> BackendResult:
     """Execute an agy CLI session and continue while current-turn tasks remain pending."""
     outer_started_at = time.time()
     entity_state = {"assistant": 0, "tool": 0}
-    try:
-        result = _execute_once(params, entity_state=entity_state)
-    except TypeError:
-        result = _execute_once(params)
+    sig = inspect.signature(_execute_once)
+    supports_entity_state = (
+        "entity_state" in sig.parameters
+        or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    )
+    result = (
+        _execute_once(params, entity_state=entity_state)
+        if supports_entity_state
+        else _execute_once(params)
+    )
     if result.outcome != "OK" or not result.SESSION_ID:
         return result
 
@@ -361,31 +368,20 @@ def _execute_sync(params: AgyParams) -> BackendResult:
         continuations += 1
         log.info("agy: task.md has pending [ ] items; continuation %d/%d", continuations, _AGY_MAX_CONTINUATIONS)
         continue_started_at = time.time()
-        try:
-            continuation = _execute_once(
-                AgyParams(
-                    PROMPT=_CONTINUE_PROMPT,
-                    cd=Path(params.cd),
-                    SESSION_ID=session_id,
-                    args=params.args,
-                    timeout_s=params.timeout_s,
-                    cancel_event=params.cancel_event,
-                    emitter=params.emitter,
-                ),
-                entity_state=entity_state,
-            )
-        except TypeError:
-            continuation = _execute_once(
-                AgyParams(
-                    PROMPT=_CONTINUE_PROMPT,
-                    cd=Path(params.cd),
-                    SESSION_ID=session_id,
-                    args=params.args,
-                    timeout_s=params.timeout_s,
-                    cancel_event=params.cancel_event,
-                    emitter=params.emitter,
-                ),
-            )
+        continuation_params = AgyParams(
+            PROMPT=_CONTINUE_PROMPT,
+            cd=Path(params.cd),
+            SESSION_ID=session_id,
+            args=params.args,
+            timeout_s=params.timeout_s,
+            cancel_event=params.cancel_event,
+            emitter=params.emitter,
+        )
+        continuation = (
+            _execute_once(continuation_params, entity_state=entity_state)
+            if supports_entity_state
+            else _execute_once(continuation_params)
+        )
         if continuation.outcome != "OK":
             log.warning("agy: continuation %d returned outcome=%s; stopping loop", continuations, continuation.outcome)
             continuation.agent_messages = (

@@ -1880,53 +1880,147 @@ async def test_security_regressions_forbidden_provider_content_not_in_dashboard_
         }),
     ]
 
-    claude_events = []
+    dirty_codex_stream = [
+        json.dumps({"type": "thread.started", "thread_id": forbidden_tokens[0]}),
+        json.dumps({
+            "type": "item.started",
+            "item": {
+                "type": "tool_call",
+                "id": "codex_tool_1",
+                "name": "bash",
+                "input": f"cat {forbidden_tokens[2]} {forbidden_tokens[4]}",
+            },
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {
+                "type": "tool_call",
+                "id": "codex_tool_1",
+                "name": "bash",
+                "output": f"root:{forbidden_tokens[3]}",
+                "status": "completed",
+            },
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "reasoning", "text": forbidden_tokens[1]},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "id": "m1", "text": "Safe Codex response."},
+        }),
+    ]
+
+    dirty_pi_stream = [
+        json.dumps({"type": "session", "id": forbidden_tokens[0]}),
+        json.dumps({
+            "type": "message_update",
+            "assistantMessageEvent": {
+                "type": "thinking_delta",
+                "delta": forbidden_tokens[1],
+            },
+        }),
+        json.dumps({
+            "type": "message_update",
+            "assistantMessageEvent": {
+                "type": "text_delta",
+                "delta": "Safe Pi response.",
+            },
+        }),
+        json.dumps({
+            "type": "tool_execution_start",
+            "toolCallId": "pi_tool_1",
+            "toolName": "grep",
+            "args": {"pattern": forbidden_tokens[2]},
+        }),
+        json.dumps({
+            "type": "tool_execution_end",
+            "toolCallId": "pi_tool_1",
+            "isError": False,
+            "result": forbidden_tokens[3],
+        }),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Safe Pi response."}],
+            },
+        }),
+    ]
+
+    dirty_agy_stream = [
+        "Created conversation 12345678-1234-1234-1234-123456789abc",
+        f"[diagnostic] {forbidden_tokens[5]} and trace {forbidden_tokens[6]}",
+        json.dumps({
+            "type": "assistant.text.delta",
+            "text": "Safe Agy response.",
+        }),
+        json.dumps({
+            "type": "tool.started",
+            "tool_name": "execute_code",
+            "arguments": {"script": forbidden_tokens[2], "secret": forbidden_tokens[4]},
+        }),
+        json.dumps({
+            "type": "tool.completed",
+            "status": "completed",
+            "result": forbidden_tokens[3],
+        }),
+        json.dumps({
+            "type": "result",
+            "result": "Safe Agy response.",
+        }),
+    ]
+
     monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
-    monkeypatch.setattr(
-        "openmcp.backends.claude.run_shell_command",
-        lambda *args, **kwargs: (line for line in dirty_claude_stream),
-    )
-    res_claude = claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=claude_events.append))
-    assert res_claude.outcome == "OK"
-
-    # Persist Claude normalized stream events
-    job_id = "job-security-claude"
-    runtime.database.create_job(
-        job_id=job_id,
-        project_id=project.id,
-        workflow="consult",
-        profile="balanced",
-        prompt="prompt",
-        execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="consult",
-    )
-    runtime.database.append_stream_events(job_id, claude_events)
-    runtime.database.finish_job(job_id, "succeeded", text="Safe public response.")
-
     app = create_application()
 
-    # 1. Assert raw SQLite rows contain none of the forbidden tokens
-    cursor = runtime.database._connection.execute(
-        "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
-        (job_id,),
-    )
-    rows_text = str(cursor.fetchall())
-    for token in forbidden_tokens:
-        assert token not in rows_text
+    providers = [
+        ("claude", "job-security-claude", "openmcp.backends.claude.run_shell_command", lambda e: claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_claude_stream, "Safe public response."),
+        ("codex", "job-security-codex", "openmcp.backends.codex.run_shell_command", lambda e: codex_sync(CodexParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_codex_stream, "Safe Codex response."),
+        ("pi", "job-security-pi", "openmcp.backends.pi.run_shell_command", lambda e: pi_sync(PiParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_pi_stream, "Safe Pi response."),
+        ("agy", "job-security-agy", "openmcp.backends.agy.run_shell_command", lambda e: agy_execute_once(AgyParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_agy_stream, "Safe Agy response."),
+    ]
 
-    # 2. Assert REST /output endpoint contains none of the forbidden tokens
-    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}/output")
-    assert status == 200
-    body_text = body.decode("utf-8")
-    for token in forbidden_tokens:
-        assert token not in body_text
+    for name, job_id, patch_target, runner, stream_lines, safe_text in providers:
+        events: list[dict[str, Any]] = []
+        monkeypatch.setattr(patch_target, lambda *args, lines=stream_lines, **kwargs: (line for line in lines))
+        res = runner(events.append)
+        assert res.outcome == "OK"
 
-    # 3. Assert SSE stream contains none of the forbidden tokens
-    sse = await open_sse_client(app, f"/dashboard/api/jobs/{job_id}/output/updates")
-    try:
-        await sse.read_start()
-        chunk = await sse.read_chunk()
+        runtime.database.create_job(
+            job_id=job_id,
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt=f"prompt for {name}",
+            execution_plan_json=json.dumps(execution_plan_data(plan)),
+            context_key="consult",
+        )
+        runtime.database.append_stream_events(job_id, events)
+        runtime.database.finish_job(job_id, "succeeded", text=safe_text)
+
+        # 1. Assert raw SQLite rows contain none of the forbidden tokens
+        cursor = runtime.database._connection.execute(
+            "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
+            (job_id,),
+        )
+        rows_text = str(cursor.fetchall())
         for token in forbidden_tokens:
-            assert token not in chunk.decode("utf-8")
-    finally:
-        await sse.close()
+            assert token not in rows_text, f"{name} SQLite row leaked {token}"
+
+        # 2. Assert REST /output endpoint contains none of the forbidden tokens
+        status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}/output")
+        assert status == 200
+        body_text = body.decode("utf-8")
+        for token in forbidden_tokens:
+            assert token not in body_text, f"{name} REST output leaked {token}"
+
+        # 3. Assert SSE stream contains none of the forbidden tokens
+        sse = await open_sse_client(app, f"/dashboard/api/jobs/{job_id}/output/updates")
+        try:
+            await sse.read_start()
+            chunk = await sse.read_chunk()
+            for token in forbidden_tokens:
+                assert token not in chunk.decode("utf-8"), f"{name} SSE leaked {token}"
+        finally:
+            await sse.close()
