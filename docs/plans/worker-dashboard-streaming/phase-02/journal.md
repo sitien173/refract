@@ -23,17 +23,17 @@ Normalize safe provider events and bridge worker-thread output into the durable 
 - Task 2 (GREEN): Added optional `emitter` parameter to `ClaudeParams`, `CodexParams`, `PiParams`, and `AgyParams`. Configured Claude to use `stream-json` and `--include-partial-messages`, Agy to use `stream-json`, Codex to normalize items from `exec --json`, and Pi to normalize JSON mode events. Preserved authoritative final result extraction and session extraction unchanged.
 - Task 3 (RED/GREEN): Added `StreamBridge` in `src/openmcp/drivers.py` with 256-slot bounded queue, blocking backpressure from provider worker threads, sentinel closure, and event-loop close handling. Tested backpressure, sentinel drain, and confirmed zero SQLite access on provider threads.
 - Task 4 (RED/GREEN): Integrated `StreamBridge` and `StreamRecorder` in `TargetExecutor.execute()`. Ensured accepted events flush before target lifecycle finish and terminal job state. Added pre-execution capability detection `supports_structured_streaming` on `DriverRegistry` cached per resolved executable path with clean final-only fallback when streaming is unsupported or emitter is None (omits structured flags and avoids prompt retry). Resolved deadlock in test fake drivers by running synchronous emitters inside worker threads via `asyncio.to_thread`. Fixed blocking defect where `src/openmcp/drivers.py` omitted `import subprocess`, restoring functional `--help` capability probe execution.
-- Task 5 (RED/GREEN): Resolved review findings: isolated Agy terminal assistant content preventing tool argument/result secret leakage into agent messages/job text; normalized Pi real `message_update.assistantMessageEvent` and `tool_execution_*` event shapes with representative fixture; unwrapped Claude `stream_event` envelopes for partial messages and terminal result extraction; switched Codex capability check to probe `codex exec --help`; coordinated synthetic assistant entity IDs across Agy continuations.
+- Task 5 (RED/GREEN): Resolved review findings: isolated Agy terminal assistant content rejecting object payloads and diagnostic lines, preventing tool argument/result/secret leakage into agent messages and job text; normalized Pi real `message_update.assistantMessageEvent.type == "text_delta"` and camelCase `toolCallId`/`toolName` event shapes with `isError` mapping; unwrapped Claude `stream_event` envelopes for partial messages and terminal result extraction; switched Codex capability check to probe `codex exec --help`; coordinated synthetic assistant entity IDs across Agy continuations.
 
 ### Verification Evidence
-- `uv run pytest tests/test_streaming_backends.py tests/test_execution.py tests/test_live_backends.py -m 'not live'`: 50 passed, 3 deselected in 11.39s.
+- `uv run pytest tests/test_streaming_backends.py tests/test_execution.py tests/test_live_backends.py -m 'not live'`: 50 passed, 3 deselected in 10.91s.
 - `git diff --check`: Clean, zero whitespace issues.
 
 # EXTERNAL RESPONSE
 ## META
 - Phase: 2
 - Started: 2026-09-11T05:41:20Z
-- Finished: 2026-09-11T07:34:30Z
+- Finished: 2026-09-11T07:52:45Z
 - Plan dir: docs/plans/worker-dashboard-streaming/phase-02
 ## SUMMARY
 Normalized safe provider events and bridged worker-thread output to durable stream recording.

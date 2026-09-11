@@ -104,8 +104,10 @@
 ## Task 5
 
 ### Decisions made
-- Parsed Agy terminal assistant content separately from raw JSON tool events, metadata lines, and internal log output, ensuring fixture secrets never reach `result.agent_messages` or `job.result.text`.
-- Supported Pi `--mode json` `message_update.assistantMessageEvent` text deltas and `tool_execution_start`/`tool_execution_end` shapes; updated `PI_JSON_FIXTURE` to current representative shapes.
+- Parsed Agy terminal assistant content separately from raw JSON tool events, metadata lines, and internal log output. Accepted only explicit string-valued assistant and result fields, rejecting arbitrary objects without calling `str()`.
+- Ignored non-JSON output in Agy once structured JSON is detected across the stream (except recognized conversation metadata lines), keeping diagnostic lines and server traces out of `agent_messages`.
+- Enforced `assistantMessageEvent.type == "text_delta"` in Pi JSON mode before emitting text deltas, excluding thinking deltas.
+- Supported real camelCase `toolCallId` and `toolName` in Pi backend, and mapped `isError` to safe status without leaking error text or arguments into emitted data.
 - Unwrapped Claude top-level `stream_event` envelopes to inspect nested `event` for streaming normalization and terminal `result` extraction; updated `CLAUDE_STREAM_JSON_FIXTURE` accordingly.
 - Probed `codex exec --help` instead of top-level `codex --help` for Codex capability detection, asserting support from `exec --help` containing `--json` while top-level help lists commands without `--json`.
 - Maintained `entity_state` across Agy continuations in `_execute_sync`, producing unique synthetic assistant entity IDs (`msg-1`, `msg-2`, etc.) across real adapter continuations while preserving session and final result extraction.
@@ -117,7 +119,7 @@
 - none
 
 ### Assumptions
-- Agy CLI output format when streaming uses stream-json events interspersed with possible metadata or terminal strings; assistant messages are isolated from tool events.
+- In structured mode, provider CLI transcript output consists of JSON event lines; non-JSON lines in structured mode represent process diagnostics rather than assistant content.
 
 ### Follow-ups for human
 - none
@@ -125,17 +127,17 @@
 ### Test evidence
 - RED:
   - `test_claude_streaming_normalization`: failed with `assert 0 >= 2` when stream_event envelopes were not unwrapped.
-  - `test_pi_streaming_normalization`: failed with `assert 0 >= 1` when real Pi message_update and tool_execution shapes were unrecognized.
-  - `test_agy_streaming_normalization`: failed with `assert 'secret_token_val' not in result.agent_messages` because raw JSON output leaked into agent messages.
+  - `test_pi_streaming_normalization`: failed with `assert 0 >= 1` initially; failed with `assert 4 == 3` when `thinking_delta` was not excluded and camelCase `toolName` was missing.
+  - `test_agy_streaming_normalization`: failed with `assert 'secret_token_val' not in result.agent_messages` initially; failed with `assert 'secret_diagnostic_marker' not in result.agent_messages` when diagnostic lines and object payloads were present in agent messages.
   - `test_agy_continuations_unique_synthetic_entities`: failed with `AssertionError: assert 'msg-1' != 'msg-1'` when continuation entity IDs collided.
   - `test_codex_capability_probes_exec_subcommand`: failed with `assert False is True` when top-level help without `--json` was probed.
 - GREEN:
   - All 5 tests passed after surgical updates to `claude.py`, `pi.py`, `agy.py`, and `drivers.py`.
-  - Full suite `uv run pytest tests/test_streaming_backends.py tests/test_execution.py tests/test_live_backends.py -m 'not live'`: 50 passed, 3 deselected in 11.39s.
+  - Full suite `uv run pytest tests/test_streaming_backends.py tests/test_execution.py tests/test_live_backends.py -m 'not live'`: 50 passed, 3 deselected in 10.91s.
   - `git diff --check`: Clean, zero whitespace issues.
 - Root causes:
-  - (1) Agy raw stdout and log fallback reached `agent_messages` directly, including tool arguments and outputs.
-  - (2) Pi backend and fixture used flattened shapes rather than `message_update.assistantMessageEvent` and `tool_execution_*`.
+  - (1) Agy raw stdout and log fallback reached `agent_messages` directly, including tool arguments and outputs. Agy also stringified object payloads and included non-JSON diagnostic lines in structured mode.
+  - (2) Pi backend and fixture used flattened/snake_case shapes rather than `toolCallId`/`toolName`, and did not gate `message_update` on `assistantMessageEvent.type == "text_delta"`.
   - (3) Claude stream-json envelopes wrapped partial messages under `stream_event.event`.
   - (4) Codex capability probed `codex --help` rather than `codex exec --help`.
   - (5) Agy adapter continuations re-instantiated local counter, reusing `msg-1`.

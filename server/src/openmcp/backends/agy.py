@@ -190,6 +190,7 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
             stdout_lines: list[str] = []
             assistant_deltas: list[str] = []
             terminal_lines: list[str] = []
+            unstructured_lines: list[str] = []
             structured_detected = False
 
             for line in run_shell_command(
@@ -213,23 +214,23 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
                     structured_detected = True
                     evt_type = event.get("type", "")
                     if evt_type in {"assistant.text.delta", "assistant.message.delta", "text_delta"}:
-                        text = str(event.get("text", "") or event.get("delta", ""))
-                        if text:
-                            assistant_deltas.append(text)
+                        val = event.get("text") if isinstance(event.get("text"), str) else event.get("delta")
+                        if isinstance(val, str) and val:
+                            assistant_deltas.append(val)
                             if params.emitter:
                                 params.emitter({
                                     "kind": "assistant.text.delta",
                                     "entity_id": current_assistant_id,
-                                    "data": {"text": text},
+                                    "data": {"text": val},
                                 })
                     elif evt_type in {"assistant.message", "assistant_message", "message"}:
-                        text = str(event.get("text", "") or event.get("content", ""))
-                        if text:
-                            terminal_lines.append(text)
+                        val = event.get("text") if isinstance(event.get("text"), str) else event.get("content")
+                        if isinstance(val, str) and val:
+                            terminal_lines.append(val)
                     elif evt_type == "result":
-                        text = str(event.get("result", ""))
-                        if text:
-                            terminal_lines.append(text)
+                        val = event.get("result")
+                        if isinstance(val, str) and val:
+                            terminal_lines.append(val)
                     elif evt_type in {"tool.started", "tool_started"}:
                         entity_state["tool"] += 1
                         active_tool_id = f"tool-{entity_state['tool']}"
@@ -252,7 +253,7 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
                 else:
                     if _CONVERSATION_ID_RE.search(line):
                         continue
-                    terminal_lines.append(line)
+                    unstructured_lines.append(line)
 
             try:
                 log_text = Path(tmp_log_path).read_text(encoding="utf-8", errors="ignore")
@@ -267,7 +268,7 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
                 else:
                     agent_messages = terminal_text or assistant_text
             else:
-                agent_messages = "\n".join(terminal_lines).strip()
+                agent_messages = "\n".join(unstructured_lines).strip()
         finally:
             try:
                 os.unlink(tmp_log_path)

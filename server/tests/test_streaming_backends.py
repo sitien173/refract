@@ -122,6 +122,14 @@ CODEX_JSONL_FIXTURE = [
 PI_JSON_FIXTURE = [
     # Session event
     json.dumps({"type": "session", "id": "pi-sess-abc-123"}),
+    # Thinking delta (must be ignored, type is not text_delta)
+    json.dumps({
+        "type": "message_update",
+        "assistantMessageEvent": {
+            "type": "thinking_delta",
+            "delta": "secret_thinking_pwd",
+        },
+    }),
     # Text delta wrapped in message_update.assistantMessageEvent
     json.dumps({
         "type": "message_update",
@@ -130,18 +138,18 @@ PI_JSON_FIXTURE = [
             "delta": "Checking project files.",
         },
     }),
-    # Tool execution start with secret args (must NOT leak)
+    # Tool execution start with real camelCase toolCallId and toolName (secret args must NOT leak)
     json.dumps({
         "type": "tool_execution_start",
-        "tool_call_id": "pi_tool_1",
-        "tool_name": "grep",
+        "toolCallId": "pi_tool_1",
+        "toolName": "grep",
         "args": {"pattern": "secret_pwd_999"},
     }),
-    # Tool execution end with secret output (must NOT leak)
+    # Tool execution end with real camelCase toolCallId and isError (secret output must NOT leak)
     json.dumps({
         "type": "tool_execution_end",
-        "tool_call_id": "pi_tool_1",
-        "status": "success",
+        "toolCallId": "pi_tool_1",
+        "isError": False,
         "result": "matched secret_pwd_999 in config",
     }),
     # Final message_end event
@@ -157,6 +165,8 @@ PI_JSON_FIXTURE = [
 AGY_STREAM_JSON_FIXTURE = [
     # Session / conversation created
     "Created conversation 12345678-1234-1234-1234-123456789abc",
+    # Diagnostic non-JSON output (must be ignored once structured JSON is detected)
+    "[diagnostic] secret_diagnostic_marker and server trace",
     # Text delta
     json.dumps({
         "type": "assistant.text.delta",
@@ -174,8 +184,16 @@ AGY_STREAM_JSON_FIXTURE = [
         "status": "success",
         "output": "secret_stdout_result",
     }),
-    # Final output
-    "Antigravity done.",
+    # Object payload event (must NOT be str() converted into agent_messages)
+    json.dumps({
+        "type": "result",
+        "result": {"arbitrary_secret_obj": "secret_object_val"},
+    }),
+    # Final explicit string-valued assistant message
+    json.dumps({
+        "type": "assistant.message",
+        "text": "Antigravity finished successfully.",
+    }),
 ]
 
 
@@ -279,9 +297,19 @@ def test_pi_streaming_normalization(tmp_path, monkeypatch):
     assert result.SESSION_ID == "pi-sess-abc-123"
     assert result.agent_messages == "Final Pi Answer"
 
-    assert len(events) >= 1
+    assert len(events) == 3
+    kinds = [e["kind"] for e in events]
+    assert kinds == ["assistant.text.delta", "tool.started", "tool.completed"]
+    assert events[0]["data"]["text"] == "Checking project files."
+    assert events[1]["data"]["tool"] == "grep"
+    assert events[1]["entity_id"] == "tool-1"
+    assert events[2]["data"]["status"] == "completed"
+    assert events[2]["entity_id"] == "tool-1"
+
     serialized = json.dumps(events)
     assert "secret_pwd_999" not in serialized
+    # Thinking deltas must be excluded
+    assert "secret_thinking_pwd" not in serialized
 
 
 def test_agy_streaming_normalization(tmp_path, monkeypatch):
@@ -320,6 +348,13 @@ def test_agy_streaming_normalization(tmp_path, monkeypatch):
     # Fixture secrets must NOT leak into returned agent_messages
     assert "secret_token_val" not in result.agent_messages
     assert "secret_stdout_result" not in result.agent_messages
+    # Diagnostic non-JSON output must be ignored when structured mode is detected
+    assert "secret_diagnostic_marker" not in result.agent_messages
+    # Arbitrary object fields must never be str() converted into agent_messages
+    assert "secret_object_val" not in result.agent_messages
+    assert "arbitrary_secret_obj" not in result.agent_messages
+    assert result.agent_messages == "Running antigravity analysis.\n\nAntigravity finished successfully."
+
 
 
 def test_agy_continuations_unique_synthetic_entities(tmp_path, monkeypatch):
