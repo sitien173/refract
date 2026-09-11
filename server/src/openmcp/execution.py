@@ -132,19 +132,19 @@ class TargetExecutor:
                     await bridge.close()
                 if drain_task:
                     await drain_task
+                if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+                    attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+                    last = attempt_result
                 if recorder:
                     res = attempt_result
                     if res is None:
-                        if cancel_event.is_set():
-                            res = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-                        else:
-                            err_msg = str(driver_exc) if driver_exc else "execution_failed"
-                            res = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
+                        err_msg = str(driver_exc) if driver_exc else "execution_failed"
+                        res = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
                     status = (
-                        "succeeded"
+                        "cancelled"
+                        if cancel_event.is_set() or res.outcome == "CANCELLED"
+                        else "succeeded"
                         if res.outcome == "SUCCESS"
-                        else "cancelled"
-                        if res.outcome == "CANCELLED"
                         else "failed"
                     )
                     await recorder.record(

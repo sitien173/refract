@@ -230,12 +230,13 @@ class StreamRecorder:
         if self._truncated:
             return
         evt_bytes = len(json.dumps(evt["data"], ensure_ascii=False).encode("utf-8"))
-        if self._total_events + 1 > self.max_job_events or self._total_bytes + evt_bytes > self.max_job_bytes:
-            await self._mark_truncated(
-                str(evt.get("entity_id", "")),
-                str(evt.get("parent_entity_id", "")),
-            )
-            return
+        if evt.get("kind") != "attempt.finished":
+            if self._total_events + 1 > self.max_job_events or self._total_bytes + evt_bytes > self.max_job_bytes:
+                await self._mark_truncated(
+                    str(evt.get("entity_id", "")),
+                    str(evt.get("parent_entity_id", "")),
+                )
+                return
 
         self._buffer.append(evt)
         self._buffer_bytes += evt_bytes

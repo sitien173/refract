@@ -336,6 +336,91 @@ async def test_recorder_job_bytes_limit_and_truncation_marker(db):
 
 
 @pytest.mark.asyncio
+async def test_recorder_exact_job_event_limit_retains_finish_marker_without_truncation(db):
+    max_events = 5
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        max_job_events=max_events,
+    )
+    for i in range(max_events):
+        await recorder.record({
+            "kind": "stream.notice",
+            "entity_id": f"notice-{i}",
+            "data": {"text": f"notice {i}"},
+        })
+    await recorder.flush()
+
+    assert recorder.truncated is False
+    assert db.stream_is_truncated("job-stream") is False
+
+    await recorder.record(
+        "attempt.finished",
+        {
+            "status": "succeeded",
+            "outcome": "SUCCESS",
+            "error_code": "",
+        },
+    )
+    await recorder.close()
+
+    assert recorder.truncated is False
+    assert db.stream_is_truncated("job-stream") is False
+
+    events = db.stream_events("job-stream", after=0, limit=100)
+    assert len(events) == max_events + 1
+    assert not any(e.kind == TRUNCATION_KIND for e in events)
+    assert events[-1].kind == "attempt.finished"
+    assert events[-1].data["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_recorder_exact_job_bytes_limit_retains_finish_marker_without_truncation(db):
+    max_bytes = 500
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+        max_job_bytes=max_bytes,
+    )
+    payload = "x" * 88
+    for i in range(5):
+        await recorder.record({
+            "kind": "stream.notice",
+            "entity_id": f"notice-{i}",
+            "data": {"text": payload},
+        })
+    await recorder.flush()
+
+    assert recorder.truncated is False
+    assert db.stream_is_truncated("job-stream") is False
+
+    await recorder.record(
+        "attempt.finished",
+        {
+            "status": "succeeded",
+            "outcome": "SUCCESS",
+            "error_code": "",
+        },
+    )
+    await recorder.close()
+
+    assert recorder.truncated is False
+    assert db.stream_is_truncated("job-stream") is False
+
+    events = db.stream_events("job-stream", after=0, limit=100)
+    assert len(events) == 6
+    assert not any(e.kind == TRUNCATION_KIND for e in events)
+    assert events[-1].kind == "attempt.finished"
+    assert events[-1].data["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
 async def test_recorder_explicit_final_flush(db):
     recorder = StreamRecorder(
         database=db,

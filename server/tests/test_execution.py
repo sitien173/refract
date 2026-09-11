@@ -1275,6 +1275,125 @@ async def test_accepted_events_flush_before_lifecycle_completion(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_attempt_finished_cancelled_status_on_job_cancellation(tmp_path) -> None:
+    root = repository(tmp_path)
+    cat = config(tmp_path / "home")
+
+    class CancellingStreamingDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def execute(self, *, emitter=None, cancel_event=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "stream before cancel"}})
+                await asyncio.to_thread(worker)
+            self.started.set()
+            while cancel_event and not cancel_event.is_set():
+                await asyncio.sleep(0.01)
+            return DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+
+    drivers = CancellingStreamingDrivers()
+    runtime = Runtime(cat)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "cancel test")
+        await drivers.started.wait()
+        await runtime.cancel(sub.job_id)
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "cancelled"
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert any(e.kind == "assistant.text.delta" for e in events)
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].attempt == 1
+        assert finished[0].data["status"] == "cancelled"
+        assert finished[0].data["outcome"] == "CANCELLED"
+        assert finished[0].data["error_code"] == "cancelled"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_finished_records_cancelled_status_when_cancel_event_set(tmp_path) -> None:
+    root = repository(tmp_path)
+    cat = config(tmp_path / "home")
+
+    class RaceCancellingDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, cancel_event=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "streaming content"}})
+                await asyncio.to_thread(worker)
+            if cancel_event:
+                cancel_event.set()
+            return DriverResult("SUCCESS", "sess-1", "streaming content", "", "")
+
+    runtime = Runtime(cat)
+    runtime.drivers = RaceCancellingDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "test cancel race")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state in {"cancelled", "interrupted"}
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].data["status"] == "cancelled"
+        assert finished[0].data["outcome"] == "CANCELLED"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_exact_quota_boundary_retains_finish_marker(tmp_path, monkeypatch) -> None:
+    from openmcp.streaming import StreamRecorder
+
+    orig_init = StreamRecorder.__init__
+    def custom_init(self, *args, **kwargs):
+        kwargs.setdefault("max_job_events", 2)
+        orig_init(self, *args, **kwargs)
+    monkeypatch.setattr(StreamRecorder, "__init__", custom_init)
+
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    class ExactBoundaryDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "first"}})
+                    emitter({"kind": "assistant.text.delta", "entity_id": "m2", "data": {"text": "second"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-1", "all good", "", "")
+
+    runtime = Runtime(cfg)
+    runtime.drivers = ExactBoundaryDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "exact quota test")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert runtime.database.stream_is_truncated(sub.job_id) is False
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert not any(e.kind == "stream.truncated" for e in events)
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].data["status"] == "succeeded"
+        assert finished[0].data["outcome"] == "SUCCESS"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_failed_attempts_retain_attempt_labels(tmp_path) -> None:
     """Failed attempt transcripts must retain their attempt number and separate from successful attempts."""
     root = repository(tmp_path)
