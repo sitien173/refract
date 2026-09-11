@@ -15,7 +15,19 @@ it does not route or execute OpenMCP jobs.
 3. Give each phase a complete task-guidance input.
 4. Specify exact files, acceptance criteria, reviewer checks, fresh verification
    commands, and one conventional commit message.
-5. Offer `executing-plans`.
+5. Finish plan authoring before phase detailing or execution.
+
+## Recommended Next Step
+
+After the plan commit, suggest a separate phase-detailing step:
+
+1. Submit one job through the `consult` workflow.
+2. Base it on the confirmed design and completed implementation plan.
+3. Ask it to produce implementation detail for every phase without changing
+   phase scope.
+4. Materialize each result in `phase-<NN>/prompt.md`, `notes.md`, and `journal.md`.
+   Write the detail to `prompt.md`. Scaffold the other files from bundled templates.
+5. Offer `executing-plans` after every phase artifact is ready.
 
 ## Storage
 
@@ -26,13 +38,11 @@ docs/plans/<slug>/
   PLAN.md
   DESIGN.md
   .handover.md
-  CLOSEOUT.md   # written at closeout, not at authoring
 ```
 
 Initialize handover with the canonical schema: active status, phase zero, null
-project and job fields, and empty completion lists. Record every backlog row this
-plan will close in `backlog_ids`. Do not create phase directories until
-execution.
+project and job fields, and empty completion lists. Create phase directories only
+during the separate phase-detailing step or execution.
 
 A documentation-only plan may use `docs/plans/<slug>-plan.md`. Convert a flat
 implementation plan to folder layout before execution.
@@ -69,8 +79,6 @@ implementation plan to folder layout before execution.
 ## Rules
 
 - Never replace matching active work.
-- Flip each source row from `ready` to `in-plan` with `ref: <slug>`, in the same
-  commit that creates the plan directory. See `shared/backlog-contract.md`.
 - Do not call `task_guide`, register a project, or submit jobs while authoring.
 - Do not hard-code a default profile, target, model, or provider.
 - Do not create empty directories or `.gitkeep` files.

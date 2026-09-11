@@ -179,7 +179,6 @@ next_action: "Execute Phase <N>"
 project_id: <OpenMCP project UUID|null>
 phase_base: <commit|null>
 context_key: <plan-slug>
-backlog_ids: [<B-NNN>, ...]
 guidance:
   implement: { workflow: implement, profile: <name|null> }
   consult: { workflow: consult, profile: <name|null> }

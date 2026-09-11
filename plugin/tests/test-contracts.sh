@@ -77,38 +77,6 @@ grep -q '^## Quality Review$' shared/journal-template.md
 grep -q '^## Review Result$' shared/journal-template.md
 grep -q '^## Final Commit$' shared/journal-template.md
 
-for status in inbox ready in-plan done declined; do
-    grep -q "\`${status}\`" shared/backlog-contract.md
-done
-grep -q '<!-- next id: B-001 -->' shared/backlog-contract.md
-grep -q 'in the same edit that appends the row' shared/backlog-contract.md
-grep -q 'No column alignment' shared/backlog-contract.md
-grep -q 'only when no project job is active' shared/backlog-contract.md
-grep -q 'docs/plans/BACKLOG.md' shared/backlog-contract.md
-grep -q 'shared/backlog-contract.md' hooks/superpowers-ccg-session-start.sh
-grep -q 'shared/backlog-contract.md' commands/backlog.md
-for verb in 'add <text>' 'triage'; do
-    grep -q "${verb}" commands/backlog.md
-done
-
-grep -q '^backlog_ids:' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'backlog_ids' skills/writing-plans/SKILL.md
-grep -q 'ready` to `in-plan`' skills/writing-plans/SKILL.md
-grep -q 'CLOSEOUT.md' skills/writing-plans/SKILL.md
-grep -q 'B-NNN` backlog id' skills/brainstorming/SKILL.md
-grep -q 'Never write to the backlog' skills/brainstorming/SKILL.md
-
-grep -q '^## Shipped$' shared/closeout-template.md
-grep -q '^## Retro$' shared/closeout-template.md
-grep -q '^## Follow-ups$' shared/closeout-template.md
-grep -q 'shared/closeout-template.md' hooks/superpowers-ccg-session-start.sh
-grep -q '^## Closeout$' skills/executing-plans/SKILL.md
-grep -q 'chore(plan): close <slug>' skills/executing-plans/SKILL.md
-grep -q 'never by matching titles' skills/executing-plans/SKILL.md
-grep -q 'Accepted debt must never be lost' skills/coordinating-multi-model-work/references/review.md
-grep -q 'Blocking findings are never filed' skills/coordinating-multi-model-work/references/review.md
-grep -q 'Filing a row never creates its own commit' skills/coordinating-multi-model-work/references/review.md
-
 for skill in skills/*/SKILL.md; do
     grep -qi 'owns' "$skill"
     if [[ "$skill" != "skills/coordinating-multi-model-work/SKILL.md" ]]; then
@@ -130,6 +98,9 @@ fi
 grep -q 'Every executable plan' skills/writing-plans/SKILL.md
 grep -q 'Do not hard-code a default profile' skills/writing-plans/SKILL.md
 grep -q 'Do not call `task_guide`, register a project, or submit jobs' skills/writing-plans/SKILL.md
+grep -q 'Submit one job through the `consult` workflow' skills/writing-plans/SKILL.md
+grep -q 'confirmed design and completed implementation plan' skills/writing-plans/SKILL.md
+grep -q '`phase-<NN>/prompt.md`, `notes.md`, and `journal.md`' skills/writing-plans/SKILL.md
 grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
 
 grep -q 'OpenMCP provides four fixed workflows' skills/coordinating-multi-model-work/SKILL.md

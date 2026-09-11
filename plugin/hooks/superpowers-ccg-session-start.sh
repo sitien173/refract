@@ -19,8 +19,6 @@ Bundled worker contracts:
 - ${plugin_root}/shared/erp.md
 - ${plugin_root}/shared/notes-template.md
 - ${plugin_root}/shared/journal-template.md
-- ${plugin_root}/shared/backlog-contract.md
-- ${plugin_root}/shared/closeout-template.md
 ENDOFCOMPACT
 )"
 

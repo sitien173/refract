@@ -10,9 +10,7 @@ OpenMCP mechanics or implementation planning.
 
 ## Workflow
 
-1. Inspect only the project context needed to understand the request. When the
-   request is a `B-NNN` backlog id, read that row and use its title and source
-   as the request.
+1. Inspect only the project context needed to understand the request.
 2. Ask one question at a time; prefer bounded choices when useful.
 3. Clarify purpose, users, constraints, non-goals, success criteria, and risks.
 4. For non-trivial design, request one focused Gate 1 consultation and reconcile
@@ -26,7 +24,6 @@ OpenMCP mechanics or implementation planning.
 ## Rules
 
 - User requirements override consultation.
-- Never write to the backlog; this skill only reads a row.
 - Do not plan implementation before design confirmation.
 - Do not ask multiple clarification questions at once.
 - Do not implement product changes.
