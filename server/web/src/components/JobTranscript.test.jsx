@@ -1422,9 +1422,13 @@ describe('JobTranscript component', () => {
 
       expect(screen.getByRole('button', { name: 'Jump to live' })).toBeInTheDocument()
 
+      const scrollToMock = vi.fn()
+      scrollContainer.scrollTo = scrollToMock
+
       const contentGroup = screen.getByRole('group', { name: 'Content' })
       fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Text' }))
 
+      expect(scrollToMock).not.toHaveBeenCalled()
       expect(screen.getByRole('button', { name: 'Jump to live' })).toBeInTheDocument()
 
       fireEvent.click(screen.getByRole('button', { name: 'Jump to live' }))
