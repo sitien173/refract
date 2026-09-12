@@ -530,3 +530,145 @@ async def test_hub_publish_cross_thread() -> None:
     item = await asyncio.wait_for(q.get(), timeout=1.0)
     assert item == 99
     hub.unsubscribe("job-1", q)
+
+
+@pytest.mark.asyncio
+async def test_recorder_reasoning_summary_coalescing(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+    )
+    await recorder.record({
+        "kind": "assistant.reasoning_summary.delta",
+        "entity_id": "summary-1",
+        "parent_entity_id": "msg-1",
+        "data": {"text": "Analyzing the "},
+    })
+    await recorder.record({
+        "kind": "assistant.reasoning_summary.delta",
+        "entity_id": "summary-1",
+        "parent_entity_id": "msg-1",
+        "data": {"text": "algorithm complexity."},
+    })
+    await recorder.flush()
+
+    events = db.stream_events("job-stream", after=0)
+    assert len(events) == 1
+    assert events[0].kind == "assistant.reasoning_summary.delta"
+    assert events[0].entity_id == "summary-1"
+    assert events[0].parent_entity_id == "msg-1"
+    assert events[0].data["text"] == "Analyzing the algorithm complexity."
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_text_and_reasoning_summary_separation(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+    )
+    await recorder.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "ent-1",
+        "parent_entity_id": "p-1",
+        "data": {"text": "Text part."},
+    })
+    # Same entity_id and parent_entity_id, but different kind: must NEVER coalesce
+    await recorder.record({
+        "kind": "assistant.reasoning_summary.delta",
+        "entity_id": "ent-1",
+        "parent_entity_id": "p-1",
+        "data": {"text": "Summary part."},
+    })
+    # Same kind, same entity_id, but different parent_entity_id: must NEVER coalesce
+    await recorder.record({
+        "kind": "assistant.reasoning_summary.delta",
+        "entity_id": "ent-1",
+        "parent_entity_id": "p-2",
+        "data": {"text": "Other parent."},
+    })
+    await recorder.flush()
+
+    events = db.stream_events("job-stream", after=0)
+    assert len(events) == 3
+    assert events[0].kind == "assistant.text.delta"
+    assert events[0].data["text"] == "Text part."
+    assert events[1].kind == "assistant.reasoning_summary.delta"
+    assert events[1].parent_entity_id == "p-1"
+    assert events[1].data["text"] == "Summary part."
+    assert events[2].kind == "assistant.reasoning_summary.delta"
+    assert events[2].parent_entity_id == "p-2"
+    assert events[2].data["text"] == "Other parent."
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_reasoning_summary_8kib_utf8_splitting(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+    )
+    # 18 KiB of multi-byte characters
+    large_summary = "€" * (6 * 1024)  # 3 bytes per char -> 18 KiB
+    await recorder.record({
+        "kind": "assistant.reasoning_summary.delta",
+        "entity_id": "summary-split",
+        "data": {"text": large_summary},
+    })
+    await recorder.flush()
+
+    events = db.stream_events("job-stream", after=0)
+    assert len(events) >= 3
+    for e in events:
+        assert e.kind == "assistant.reasoning_summary.delta"
+        assert len(e.data["text"].encode("utf-8")) <= MAX_TEXT_EVENT_BYTES
+    reconstructed = "".join(e.data["text"] for e in events)
+    assert reconstructed == large_summary
+    await recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_text_like_events_discard_extra_fields(db):
+    recorder = StreamRecorder(
+        database=db,
+        job_id="job-stream",
+        attempt=1,
+        target_id="t1",
+        backend="claude",
+    )
+    # Extra keys in assistant.text.delta
+    await recorder.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-extra",
+        "data": {"text": "hello", "extra_token": "secret_1", "raw_thinking": "secret_2"},
+    })
+    # Coalescing into msg-extra with extra keys
+    await recorder.record({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-extra",
+        "data": {"text": " world", "extra_token_2": "secret_3"},
+    })
+    # Extra keys in assistant.reasoning_summary.delta
+    await recorder.record({
+        "kind": "assistant.reasoning_summary.delta",
+        "entity_id": "summary-extra",
+        "data": {"text": "summary content", "leak_key": "secret_4"},
+    })
+    await recorder.flush()
+
+    events = db.stream_events("job-stream", after=0)
+    assert len(events) == 2
+    assert events[0].kind == "assistant.text.delta"
+    assert events[0].data == {"text": "hello world"}
+    assert events[1].kind == "assistant.reasoning_summary.delta"
+    assert events[1].data == {"text": "summary content"}
+    await recorder.close()

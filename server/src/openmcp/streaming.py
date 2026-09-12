@@ -150,7 +150,7 @@ class StreamRecorder:
         else:
             raise TypeError(f"Unsupported event type: {type(event_or_kind)}")
 
-        if kind == "assistant.text.delta":
+        if kind in {"assistant.text.delta", "assistant.reasoning_summary.delta"}:
             text = str(evt_data.get("text", ""))
             chunks = _split_text(text, self.max_text_event_bytes)
             if not chunks:
@@ -161,7 +161,7 @@ class StreamRecorder:
                 if self._buffer:
                     last = self._buffer[-1]
                     if (
-                        last["kind"] == "assistant.text.delta"
+                        last["kind"] == kind
                         and last["entity_id"] == entity_id
                         and last["parent_entity_id"] == parent_entity_id
                     ):
@@ -169,13 +169,13 @@ class StreamRecorder:
                         merged = last_text + chunk
                         if len(merged.encode("utf-8")) <= self.max_text_event_bytes:
                             old_bytes = len(json.dumps(last["data"], ensure_ascii=False).encode("utf-8"))
-                            new_data = dict(last["data"], text=merged)
+                            new_data = {"text": merged}
                             new_bytes = len(json.dumps(new_data, ensure_ascii=False).encode("utf-8"))
                             diff = new_bytes - old_bytes
                             if self._total_bytes + diff > self.max_job_bytes:
                                 await self._mark_truncated(entity_id, parent_entity_id)
                                 return
-                            last["data"]["text"] = merged
+                            last["data"] = new_data
                             self._buffer_bytes += diff
                             self._total_bytes += diff
                             if (

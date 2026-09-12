@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import BackendResult, classify_backend_output
+from . import BackendResult, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
@@ -285,7 +285,11 @@ def _execute_sync(params: CodexParams) -> BackendResult:
                         entity_id = f"tool-{entity_counter}"
                         if raw_id:
                             raw_to_entity[raw_id] = entity_id
-                        tool_data: dict[str, Any] = {"tool": str(item.get("name", ""))}
+                        tool_name = str(item.get("name", ""))
+                        tool_data: dict[str, Any] = {
+                            "tool": tool_name,
+                            "activity": classify_tool_activity("codex", tool_name),
+                        }
                         if "input" in item:
                             tool_data["input"] = item["input"]
                         params.emitter({

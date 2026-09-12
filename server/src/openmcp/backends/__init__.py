@@ -90,4 +90,21 @@ def classify_backend_output(
     )
 
 
-__all__ = ["BackendResult", "classify_backend_output"]
+_VERIFIED_COMMANDS: dict[str, frozenset[str]] = {
+    "claude": frozenset({"bash"}),
+    "codex": frozenset({"bash"}),
+}
+
+
+def classify_tool_activity(provider: str, tool_name: str) -> Literal["command", "tool_call"]:
+    """Classify tool activity as 'command' or 'tool_call'.
+
+    Uses exact, case-sensitive provider and tool-name allow-lists.
+    """
+    commands = _VERIFIED_COMMANDS.get(provider)
+    if commands is not None and tool_name in commands:
+        return "command"
+    return "tool_call"
+
+
+__all__ = ["BackendResult", "classify_backend_output", "classify_tool_activity"]

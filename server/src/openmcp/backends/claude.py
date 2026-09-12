@@ -15,7 +15,7 @@ from typing import Any
 
 from openmcp.logging_setup import get_logger
 
-from . import BackendResult, classify_backend_output
+from . import BackendResult, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 
 log = get_logger("claude")
@@ -194,7 +194,11 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
                     if isinstance(cb, dict) and cb.get("type") == "tool_use":
                         entity_counter += 1
                         active_tool_id = f"tool-{entity_counter}"
-                        tool_data: dict[str, Any] = {"tool": str(cb.get("name", ""))}
+                        tool_name = str(cb.get("name", ""))
+                        tool_data: dict[str, Any] = {
+                            "tool": tool_name,
+                            "activity": classify_tool_activity("claude", tool_name),
+                        }
                         if "input" in cb:
                             tool_data["input"] = cb["input"]
                         params.emitter({

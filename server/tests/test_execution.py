@@ -2104,5 +2104,21 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
                 assert secrets[2] in rows_data_text, f"{backend_name} missing persisted tool input {secrets[2]}"
             if backend_name in {"codex", "pi", "agy"}:
                 assert secrets[5] in rows_data_text, f"{backend_name} missing persisted tool output {secrets[5]}"
+
+            # Activity classification in persisted stream events
+            tool_start_rows = [r for r in rows if r["kind"] == "tool.started"]
+            assert len(tool_start_rows) >= 1
+            for r in tool_start_rows:
+                data = json.loads(r["data_json"])
+                assert "activity" in data, f"{backend_name} missing activity in persisted tool.started"
+                if backend_name == "codex":
+                    assert data["activity"] == "command"
+                else:
+                    assert data["activity"] == "tool_call"
+
+            tool_completed_rows = [r for r in rows if r["kind"] == "tool.completed"]
+            for r in tool_completed_rows:
+                data = json.loads(r["data_json"])
+                assert "activity" not in data, f"{backend_name} leaked activity to tool.completed"
         finally:
             await runtime.close()

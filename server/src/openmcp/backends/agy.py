@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import BackendResult, classify_backend_output
+from . import BackendResult, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
@@ -193,6 +193,8 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
             terminal_lines: list[str] = []
             unstructured_lines: list[str] = []
             structured_detected = False
+            stream_session_id = ""
+            final_response = ""
 
             for line in run_shell_command(
                 cmd,
@@ -214,7 +216,74 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
                 if isinstance(event, dict):
                     structured_detected = True
                     evt_type = event.get("type", "")
-                    if evt_type in {"assistant.text.delta", "assistant.message.delta", "text_delta"}:
+                    current_evt = event.get("event", "")
+                    conversation_id = event.get("conversation_id")
+                    if isinstance(conversation_id, str) and conversation_id:
+                        stream_session_id = conversation_id
+
+                    if current_evt == "step_update":
+                        update = event.get("step_update")
+                        if not isinstance(update, dict):
+                            continue
+                        conversation_id = update.get("conversation_id")
+                        if isinstance(conversation_id, str) and conversation_id:
+                            stream_session_id = conversation_id
+                        step_type = update.get("step_type", "")
+                        state = update.get("state", "")
+                        if step_type == "agent_response":
+                            val = update.get("text_delta")
+                            if isinstance(val, str) and val:
+                                assistant_deltas.append(val)
+                                if params.emitter:
+                                    params.emitter({
+                                        "kind": "assistant.text.delta",
+                                        "entity_id": current_assistant_id,
+                                        "data": {"text": val},
+                                    })
+                        elif step_type == "tool":
+                            tool_info = update.get("tool_info")
+                            if not isinstance(tool_info, dict):
+                                tool_info = {}
+                            if state == "ACTIVE":
+                                entity_state["tool"] += 1
+                                active_tool_id = f"tool-{entity_state['tool']}"
+                                tool_name = str(
+                                    update.get("tool_name", "")
+                                    or tool_info.get("name", "")
+                                )
+                                tool_data: dict[str, Any] = {
+                                    "tool": tool_name,
+                                    "activity": classify_tool_activity("agy", tool_name),
+                                }
+                                if "parameters" in tool_info:
+                                    tool_data["input"] = tool_info["parameters"]
+                                if params.emitter:
+                                    params.emitter({
+                                        "kind": "tool.started",
+                                        "entity_id": active_tool_id,
+                                        "data": tool_data,
+                                    })
+                            elif state == "DONE":
+                                tool_data = {"status": "completed"}
+                                if "output" in tool_info:
+                                    tool_data["output"] = tool_info["output"]
+                                if params.emitter:
+                                    params.emitter({
+                                        "kind": "tool.completed",
+                                        "entity_id": active_tool_id or f"tool-{entity_state['tool'] or 1}",
+                                        "data": tool_data,
+                                    })
+                                active_tool_id = ""
+                    elif current_evt == "result":
+                        current_result = event.get("result")
+                        if isinstance(current_result, dict):
+                            conversation_id = current_result.get("conversation_id")
+                            if isinstance(conversation_id, str) and conversation_id:
+                                stream_session_id = conversation_id
+                            response = current_result.get("response")
+                            if isinstance(response, str) and response:
+                                final_response = response
+                    elif evt_type in {"assistant.text.delta", "assistant.message.delta", "text_delta"}:
                         val = event.get("text") if isinstance(event.get("text"), str) else event.get("delta")
                         if isinstance(val, str) and val:
                             assistant_deltas.append(val)
@@ -236,7 +305,10 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
                         entity_state["tool"] += 1
                         active_tool_id = f"tool-{entity_state['tool']}"
                         tool_name = str(event.get("tool_name", "") or event.get("tool", ""))
-                        tool_data: dict[str, Any] = {"tool": tool_name}
+                        tool_data: dict[str, Any] = {
+                            "tool": tool_name,
+                            "activity": classify_tool_activity("agy", tool_name),
+                        }
                         if "arguments" in event:
                             tool_data["input"] = event["arguments"]
                         if params.emitter:
@@ -272,7 +344,9 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
             if structured_detected:
                 assistant_text = "".join(assistant_deltas).strip()
                 terminal_text = "\n".join(terminal_lines).strip()
-                if assistant_text and terminal_text:
+                if final_response:
+                    agent_messages = final_response.strip()
+                elif assistant_text and terminal_text:
                     agent_messages = f"{assistant_text}\n\n{terminal_text}"
                 else:
                     agent_messages = terminal_text or assistant_text
@@ -302,7 +376,9 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
 
     stdout_raw = "\n".join(stdout_lines)
     match = _CONVERSATION_ID_RE.search(log_text) or _CONVERSATION_ID_RE.search(stdout_raw)
-    extracted_session_id = match.group(1) if match else params.SESSION_ID
+    extracted_session_id = (
+        match.group(1) if match else stream_session_id or params.SESSION_ID
+    )
     if extracted_session_id:
         log.info("agy: resolved session id: %s", extracted_session_id)
     else:

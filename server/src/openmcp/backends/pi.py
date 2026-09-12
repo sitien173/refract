@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import BackendResult, classify_backend_output
+from . import BackendResult, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
@@ -192,7 +192,10 @@ def _execute_sync(params: PiParams) -> BackendResult:
                     if raw_id:
                         raw_to_entity[raw_id] = entity_id
                     tool_name = str(event.get("toolName") or event.get("tool_name") or event.get("tool") or event.get("name") or "")
-                    tool_data: dict[str, Any] = {"tool": tool_name}
+                    tool_data: dict[str, Any] = {
+                        "tool": tool_name,
+                        "activity": classify_tool_activity("pi", tool_name),
+                    }
                     if "args" in event:
                         tool_data["input"] = event["args"]
                     params.emitter({

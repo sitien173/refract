@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from openmcp.backends import classify_tool_activity
 from openmcp.backends.agy import AgyParams, _execute_once, _execute_sync as agy_sync
 from openmcp.backends.claude import ClaudeParams, _execute_sync as claude_sync
 from openmcp.backends.codex import CodexParams, _execute_sync as codex_sync
@@ -234,10 +235,12 @@ def test_claude_streaming_normalization(tmp_path, monkeypatch):
 
     started_evt = next(e for e in events if e["kind"] == "tool.started")
     assert started_evt["data"]["tool"] == "Read"
+    assert started_evt["data"]["activity"] == "tool_call"
     assert started_evt["data"]["input"] == {"path": "/etc/shadow", "secret_arg": "pass123"}
 
     completed_evt = next(e for e in events if e["kind"] == "tool.completed")
     assert completed_evt["data"] == {"status": "completed"}
+    assert "activity" not in completed_evt["data"]
     assert "output" not in completed_evt["data"]
 
     serialized = json.dumps(events)
@@ -250,6 +253,55 @@ def test_claude_streaming_normalization(tmp_path, monkeypatch):
     # Tool arguments must not leak into agent_messages
     assert "pass123" not in result.agent_messages
     assert "secret_arg" not in result.agent_messages
+
+
+def test_claude_streaming_bash_activity_command(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    stream_fixture = [
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_bash",
+                    "name": "bash",
+                    "input": {"command": "ls -la"},
+                },
+            },
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_stop",
+                "index": 0,
+            },
+        }),
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Done",
+            "session_id": "claude-bash-sess",
+        }),
+    ]
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.claude.run_shell_command",
+        lambda *args, **kwargs: (line for line in stream_fixture),
+    )
+
+    result = claude_sync(ClaudeParams(PROMPT="test", cd=workspace, emitter=events.append))
+    assert result.outcome == "OK"
+    started_evt = next(e for e in events if e["kind"] == "tool.started")
+    assert started_evt["data"]["tool"] == "bash"
+    assert started_evt["data"]["activity"] == "command"
+    assert started_evt["data"]["input"] == {"command": "ls -la"}
+    completed_evt = next(e for e in events if e["kind"] == "tool.completed")
+    assert "activity" not in completed_evt["data"]
 
 
 def test_claude_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
@@ -443,10 +495,12 @@ def test_codex_streaming_normalization(tmp_path, monkeypatch):
     assert len(events) >= 1
     started_evt = next(e for e in events if e["kind"] == "tool.started")
     assert started_evt["data"]["tool"] == "bash"
+    assert started_evt["data"]["activity"] == "command"
     assert started_evt["data"]["input"] == "cat /etc/passwd secret_key_789"
 
     completed_evt = next(e for e in events if e["kind"] == "tool.completed")
     assert completed_evt["data"]["status"] == "completed"
+    assert "activity" not in completed_evt["data"]
     assert completed_evt["data"]["output"] == "root:secret_hash_value"
 
     serialized = json.dumps(events)
@@ -458,6 +512,47 @@ def test_codex_streaming_normalization(tmp_path, monkeypatch):
     # Final agent message does not leak tool payload
     assert "secret_key_789" not in result.agent_messages
     assert "secret_hash_value" not in result.agent_messages
+
+
+def test_codex_streaming_non_bash_tool_activity_tool_call(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    stream_fixture = [
+        json.dumps({"type": "thread.started", "thread_id": "codex-other-123"}),
+        json.dumps({
+            "type": "item.started",
+            "item": {
+                "type": "tool_call",
+                "id": "tool_call_read",
+                "name": "read_file",
+                "input": {"path": "/tmp/test.txt"},
+            },
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {
+                "type": "tool_call",
+                "id": "tool_call_read",
+                "name": "read_file",
+                "output": "contents",
+            },
+        }),
+    ]
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.codex.run_shell_command",
+        lambda *args, **kwargs: (line for line in stream_fixture),
+    )
+
+    result = codex_sync(CodexParams(PROMPT="test", cd=workspace, emitter=events.append))
+    assert result.outcome == "OK"
+    started_evt = next(e for e in events if e["kind"] == "tool.started")
+    assert started_evt["data"]["tool"] == "read_file"
+    assert started_evt["data"]["activity"] == "tool_call"
+    completed_evt = next(e for e in events if e["kind"] == "tool.completed")
+    assert "activity" not in completed_evt["data"]
 
 
 def test_codex_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
@@ -571,9 +666,11 @@ def test_pi_streaming_normalization(tmp_path, monkeypatch):
     assert kinds == ["assistant.text.delta", "tool.started", "tool.completed"]
     assert events[0]["data"]["text"] == "Checking project files."
     assert events[1]["data"]["tool"] == "grep"
+    assert events[1]["data"]["activity"] == "tool_call"
     assert events[1]["entity_id"] == "tool-1"
     assert events[1]["data"]["input"] == {"pattern": "secret_pwd_999"}
     assert events[2]["data"]["status"] == "completed"
+    assert "activity" not in events[2]["data"]
     assert events[2]["data"]["output"] == "matched secret_pwd_999 in config"
     assert events[2]["entity_id"] == "tool-1"
 
@@ -703,10 +800,12 @@ def test_agy_streaming_normalization(tmp_path, monkeypatch):
     assert len(events) >= 1
     started_evt = next(e for e in events if e["kind"] == "tool.started")
     assert started_evt["data"]["tool"] == "execute_code"
+    assert started_evt["data"]["activity"] == "tool_call"
     assert started_evt["data"]["input"] == {"script": "secret_token_val"}
 
     completed_evt = next(e for e in events if e["kind"] == "tool.completed")
     assert completed_evt["data"]["status"] == "success"
+    assert "activity" not in completed_evt["data"]
     assert completed_evt["data"]["output"] == "secret_stdout_result"
 
     serialized = json.dumps(events)
@@ -721,6 +820,105 @@ def test_agy_streaming_normalization(tmp_path, monkeypatch):
     assert "secret_object_val" not in result.agent_messages
     assert "arbitrary_secret_obj" not in result.agent_messages
     assert result.agent_messages == "Running antigravity analysis.\n\nAntigravity finished successfully."
+
+
+def test_agy_current_stream_json_protocol(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    conversation_id = "12345678-1234-1234-1234-123456789abc"
+    stream_fixture = [
+        json.dumps({
+            "event": "init",
+            "conversation_id": conversation_id,
+            "init": {"model": "Gemini 3.8 Flash (High)"},
+        }),
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": conversation_id,
+                "step_index": 1,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {
+                    "name": "view_file",
+                    "parameters": {"AbsolutePath": "/tmp/example.txt"},
+                },
+            },
+        }),
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": conversation_id,
+                "step_index": 1,
+                "state": "DONE",
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {
+                    "name": "view_file",
+                    "parameters": {"AbsolutePath": "/tmp/example.txt"},
+                    "output": "1 line, 3 bytes",
+                },
+            },
+        }),
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": conversation_id,
+                "step_index": 2,
+                "state": "ACTIVE",
+                "step_type": "agent_response",
+                "text_delta": "OK",
+            },
+        }),
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": conversation_id,
+                "status": "SUCCESS",
+                "response": "OK\n",
+                "usage": {"private_diagnostic": "ignored"},
+            },
+        }),
+    ]
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.agy.run_shell_command",
+        lambda *args, **kwargs: (line for line in stream_fixture),
+    )
+
+    result = _execute_once(
+        AgyParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    )
+
+    assert result.outcome == "OK"
+    assert result.SESSION_ID == conversation_id
+    assert result.agent_messages == "OK"
+    assert events == [
+        {
+            "kind": "tool.started",
+            "entity_id": "tool-1",
+            "data": {
+                "tool": "view_file",
+                "activity": "tool_call",
+                "input": {"AbsolutePath": "/tmp/example.txt"},
+            },
+        },
+        {
+            "kind": "tool.completed",
+            "entity_id": "tool-1",
+            "data": {"status": "completed", "output": "1 line, 3 bytes"},
+        },
+        {
+            "kind": "assistant.text.delta",
+            "entity_id": "msg-1",
+            "data": {"text": "OK"},
+        },
+    ]
+    assert "activity" not in events[1]["data"]
+    assert "private_diagnostic" not in result.agent_messages
 
 
 def test_agy_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
@@ -883,3 +1081,354 @@ def test_agy_continuations_unique_synthetic_entities(tmp_path, monkeypatch):
     assert deltas[0]["entity_id"] != deltas[1]["entity_id"]
     assert deltas[0]["entity_id"] == "msg-1"
     assert deltas[1]["entity_id"] == "msg-2"
+
+
+def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    candidate_tools = ["bash", "Bash", "bash_exec", "sub_bash", "exec", "execute_code", "runner"]
+
+    # Test Claude stream with all candidate tools
+    claude_stream = []
+    for idx, tool in enumerate(candidate_tools):
+        claude_stream.extend([
+            json.dumps({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": f"tu_{idx}",
+                        "name": tool,
+                        "input": {"command": "bash -c whoami", "cmd": "bash"},
+                    },
+                },
+            }),
+            json.dumps({
+                "type": "stream_event",
+                "event": {"type": "content_block_stop", "index": idx},
+            }),
+        ])
+    claude_stream.append(
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "OK",
+            "session_id": "c-sess",
+        })
+    )
+
+    claude_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.claude.run_shell_command",
+        lambda *args, **kwargs: (line for line in claude_stream),
+    )
+    res_claude = claude_sync(ClaudeParams(PROMPT="test", cd=workspace, emitter=claude_events.append))
+    assert res_claude.outcome == "OK"
+    starts = [e for e in claude_events if e["kind"] == "tool.started"]
+    assert len(starts) == len(candidate_tools)
+    for start in starts:
+        tool_name = start["data"]["tool"]
+        if tool_name == "bash":
+            assert start["data"]["activity"] == "command"
+        else:
+            assert start["data"]["activity"] == "tool_call"
+
+    # Test Codex stream with candidate tools
+    codex_stream = [json.dumps({"type": "thread.started", "thread_id": "codex-test-th"})]
+    for idx, tool in enumerate(candidate_tools):
+        codex_stream.extend([
+            json.dumps({
+                "type": "item.started",
+                "item": {
+                    "type": "tool_call",
+                    "id": f"tc_{idx}",
+                    "name": tool,
+                    "input": {"command": "bash -c whoami"},
+                },
+            }),
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "tool_call", "id": f"tc_{idx}", "output": "ok"},
+            }),
+        ])
+    codex_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.codex.run_shell_command",
+        lambda *args, **kwargs: (line for line in codex_stream),
+    )
+    res_codex = codex_sync(CodexParams(PROMPT="test", cd=workspace, emitter=codex_events.append))
+    assert res_codex.outcome == "OK"
+    c_starts = [e for e in codex_events if e["kind"] == "tool.started"]
+    assert len(c_starts) == len(candidate_tools)
+    for start in c_starts:
+        tool_name = start["data"]["tool"]
+        if tool_name == "bash":
+            assert start["data"]["activity"] == "command"
+        else:
+            assert start["data"]["activity"] == "tool_call"
+
+    # Test Pi stream: all tools must remain tool_call
+    pi_stream = []
+    for idx, tool in enumerate(candidate_tools):
+        pi_stream.extend([
+            json.dumps({
+                "type": "tool_execution_start",
+                "toolCallId": f"pi_{idx}",
+                "toolName": tool,
+                "args": {"command": "bash -c ls"},
+            }),
+            json.dumps({
+                "type": "tool_execution_end",
+                "toolCallId": f"pi_{idx}",
+                "result": "done",
+            }),
+        ])
+    pi_stream.append(
+        json.dumps({
+            "type": "message_end",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Pi done"}]},
+        })
+    )
+    pi_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.pi.run_shell_command",
+        lambda *args, **kwargs: (line for line in pi_stream),
+    )
+    res_pi = pi_sync(PiParams(PROMPT="test", cd=workspace, emitter=pi_events.append))
+    assert res_pi.outcome == "OK"
+    pi_starts = [e for e in pi_events if e["kind"] == "tool.started"]
+    assert len(pi_starts) == len(candidate_tools)
+    for start in pi_starts:
+        assert start["data"]["activity"] == "tool_call"
+
+    # Test Agy stream: all tools must remain tool_call
+    agy_stream = ["Created conversation 12345678-1234-1234-1234-123456789abc"]
+    for idx, tool in enumerate(candidate_tools):
+        agy_stream.extend([
+            json.dumps({
+                "event": "step_update",
+                "step_update": {
+                    "step_index": idx + 1,
+                    "state": "ACTIVE",
+                    "step_type": "tool",
+                    "tool_name": tool,
+                    "tool_info": {"name": tool, "parameters": {"cmd": "bash"}},
+                },
+            }),
+            json.dumps({
+                "event": "step_update",
+                "step_update": {
+                    "step_index": idx + 1,
+                    "state": "DONE",
+                    "step_type": "tool",
+                    "tool_name": tool,
+                    "tool_info": {"name": tool, "output": "ok"},
+                },
+            }),
+        ])
+    agy_stream.append(
+        json.dumps({
+            "event": "result",
+            "result": {"status": "SUCCESS", "response": "Agy done"},
+        })
+    )
+    agy_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.agy.run_shell_command",
+        lambda *args, **kwargs: (line for line in agy_stream),
+    )
+    monkeypatch.setattr(
+        "openmcp.backends.agy._agy_has_pending_tasks",
+        lambda *args, **kwargs: False,
+    )
+    res_agy = _execute_once(AgyParams(PROMPT="test", cd=workspace, emitter=agy_events.append))
+    assert res_agy.outcome == "OK"
+    agy_starts = [e for e in agy_events if e["kind"] == "tool.started"]
+    assert len(agy_starts) == len(candidate_tools)
+    for start in agy_starts:
+        assert start["data"]["activity"] == "tool_call"
+
+
+def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    cot_secret = "HIDDEN_COT_SECRET_NEVER_EMIT_999"
+    diag_secret = "INTERNAL_DIAGNOSTIC_SECRET_888"
+
+    # Claude stream with thinking_delta, system prompt, and diagnostics
+    claude_lines = [
+        f"[diagnostic] {diag_secret}",
+        json.dumps({"type": "system", "content": f"System prompt with {diag_secret}"}),
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "thinking_delta", "thinking": cot_secret},
+                "index": 0,
+            },
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "Clean response"},
+                "index": 1,
+            },
+        }),
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Clean response",
+            "session_id": "c-sess",
+        }),
+    ]
+    claude_evts: list[dict[str, Any]] = []
+    monkeypatch.setattr("openmcp.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
+    c_res = claude_sync(ClaudeParams(PROMPT="test", cd=workspace, emitter=claude_evts.append))
+    assert c_res.outcome == "OK"
+    assert cot_secret not in json.dumps(claude_evts)
+    assert diag_secret not in json.dumps(claude_evts)
+    assert not any(e["kind"] == "assistant.reasoning_summary.delta" for e in claude_evts)
+
+    # Codex stream with reasoning item and stderr trace
+    codex_lines = [
+        f"stderr trace: {diag_secret}",
+        json.dumps({"type": "thread.started", "thread_id": "th-1"}),
+        json.dumps({
+            "type": "item.started",
+            "item": {"type": "reasoning", "id": "r1", "text": cot_secret},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "reasoning", "id": "r1", "text": cot_secret},
+        }),
+        json.dumps({
+            "type": "item.started",
+            "item": {"type": "thought", "id": "t1", "text": cot_secret},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "thought", "id": "t1", "text": cot_secret},
+        }),
+        json.dumps({
+            "type": "item.started",
+            "item": {"type": "agent_message", "id": "m1"},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "id": "m1", "text": "Clean response"},
+        }),
+    ]
+    codex_evts: list[dict[str, Any]] = []
+    monkeypatch.setattr("openmcp.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
+    cdx_res = codex_sync(CodexParams(PROMPT="test", cd=workspace, emitter=codex_evts.append))
+    assert cdx_res.outcome == "OK"
+    assert cot_secret not in json.dumps(codex_evts)
+    assert diag_secret not in json.dumps(codex_evts)
+    assert not any(e["kind"] == "assistant.reasoning_summary.delta" for e in codex_evts)
+
+    # Pi stream with thinking deltas and thoughts
+    pi_lines = [
+        f"pi stderr: {diag_secret}",
+        json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": cot_secret}}),
+        json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "thought", "delta": cot_secret}}),
+        json.dumps({"type": "text_delta", "text": "Clean response"}),
+        json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "Clean response"}]}}),
+    ]
+    pi_evts: list[dict[str, Any]] = []
+    monkeypatch.setattr("openmcp.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
+    p_res = pi_sync(PiParams(PROMPT="test", cd=workspace, emitter=pi_evts.append))
+    assert p_res.outcome == "OK"
+    assert cot_secret not in json.dumps(pi_evts)
+    assert diag_secret not in json.dumps(pi_evts)
+    assert not any(e["kind"] == "assistant.reasoning_summary.delta" for e in pi_evts)
+
+    # Agy stream with thought step_update and usage diagnostics
+    agy_lines = [
+        "Created conversation 12345678-1234-1234-1234-123456789abc",
+        f"[trace] {diag_secret}",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 1,
+                "state": "ACTIVE",
+                "step_type": "thought",
+                "text_delta": cot_secret,
+            },
+        }),
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 2,
+                "state": "ACTIVE",
+                "step_type": "reasoning",
+                "text_delta": cot_secret,
+            },
+        }),
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 3,
+                "state": "ACTIVE",
+                "step_type": "agent_response",
+                "text_delta": "Clean response",
+            },
+        }),
+        json.dumps({
+            "event": "result",
+            "result": {
+                "status": "SUCCESS",
+                "response": "Clean response",
+                "usage": {"private_diagnostic": diag_secret},
+            },
+        }),
+    ]
+    agy_evts: list[dict[str, Any]] = []
+    monkeypatch.setattr("openmcp.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
+    monkeypatch.setattr("openmcp.backends.agy._agy_has_pending_tasks", lambda *a, **k: False)
+    a_res = _execute_once(AgyParams(PROMPT="test", cd=workspace, emitter=agy_evts.append))
+    assert a_res.outcome == "OK"
+    assert cot_secret not in json.dumps(agy_evts)
+    assert diag_secret not in json.dumps(agy_evts)
+    assert not any(e["kind"] == "assistant.reasoning_summary.delta" for e in agy_evts)
+
+
+def test_classify_tool_activity_unit():
+    # Exact case-sensitive mappings
+    assert classify_tool_activity("claude", "bash") == "command"
+    assert classify_tool_activity("codex", "bash") == "command"
+
+    # Case sensitivity rejection
+    assert classify_tool_activity("claude", "Bash") == "tool_call"
+    assert classify_tool_activity("claude", "BASH") == "tool_call"
+    assert classify_tool_activity("codex", "Bash") == "tool_call"
+
+    # Substring rejection
+    assert classify_tool_activity("claude", "bash_exec") == "tool_call"
+    assert classify_tool_activity("claude", "my_bash") == "tool_call"
+    assert classify_tool_activity("codex", "run_bash") == "tool_call"
+
+    # Other tools default to tool_call
+    assert classify_tool_activity("claude", "read") == "tool_call"
+    assert classify_tool_activity("claude", "exec") == "tool_call"
+    assert classify_tool_activity("codex", "execute_code") == "tool_call"
+    assert classify_tool_activity("codex", "edit") == "tool_call"
+
+    # Pi and Agy have no verified commands
+    assert classify_tool_activity("pi", "bash") == "tool_call"
+    assert classify_tool_activity("pi", "grep") == "tool_call"
+    assert classify_tool_activity("agy", "bash") == "tool_call"
+    assert classify_tool_activity("agy", "exec") == "tool_call"
+    assert classify_tool_activity("agy", "execute_code") == "tool_call"
+    assert classify_tool_activity("agy", "view_file") == "tool_call"
+
+    # Unknown provider
+    assert classify_tool_activity("unknown", "bash") == "tool_call"
+    assert classify_tool_activity("", "") == "tool_call"
