@@ -277,6 +277,7 @@ export default function JobDetails({
           error={stream.error}
           isLoading={stream.isLoading}
           onRefresh={stream.refresh}
+          submittedPrompt={job?.prompt}
         />
       )}
 

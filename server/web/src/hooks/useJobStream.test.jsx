@@ -666,4 +666,124 @@ describe('reduceTranscriptEvents', () => {
     expect(items[1].input).toBe('test')
     expect(items[1].output).toBe('done')
   })
+
+  it('assigns role assistant and contentType text to assistant message items', () => {
+    const events = [
+      { id: 1, kind: 'assistant.message.started', entity_id: 'm-1' },
+      { id: 2, kind: 'assistant.text.delta', entity_id: 'm-1', data: { text: 'Hello' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const item = attempts[0].items[0]
+    expect(item.role).toBe('assistant')
+    expect(item.contentType).toBe('text')
+  })
+
+  it('assigns role assistant and contentType thinking to reasoning summary items and merges correctly', () => {
+    const events = [
+      {
+        id: 1,
+        kind: 'assistant.reasoning_summary.delta',
+        entity_id: 'sum-1',
+        data: { text: 'Analyzing code structure. ', raw_thinking: 'secret_leak', prompt: 'ignore' },
+      },
+      {
+        id: 2,
+        kind: 'assistant.reasoning_summary.delta',
+        entity_id: 'sum-1',
+        data: { text: 'Identified 2 areas.', generic_reasoning: 'secret_leak_2' },
+      },
+      {
+        id: 3,
+        kind: 'assistant.text.delta',
+        entity_id: 'msg-1',
+        data: { text: 'Here is the answer.' },
+      },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const items = attempts[0].items
+    expect(items).toHaveLength(2)
+
+    expect(items[0].role).toBe('assistant')
+    expect(items[0].contentType).toBe('thinking')
+    expect(items[0].text).toBe('Analyzing code structure. Identified 2 areas.')
+    expect(items[0].raw_thinking).toBeUndefined()
+    expect(items[0].generic_reasoning).toBeUndefined()
+    expect(items[0].prompt).toBeUndefined()
+
+    expect(items[1].role).toBe('assistant')
+    expect(items[1].contentType).toBe('text')
+    expect(items[1].text).toBe('Here is the answer.')
+  })
+
+  it('keeps reasoning summaries with different parents separate', () => {
+    const events = [
+      {
+        id: 1,
+        kind: 'assistant.reasoning_summary.delta',
+        entity_id: 'sum-shared',
+        parent_entity_id: 'msg-1',
+        data: { text: 'First summary.' },
+      },
+      {
+        id: 2,
+        kind: 'assistant.reasoning_summary.delta',
+        entity_id: 'sum-shared',
+        parent_entity_id: 'msg-2',
+        data: { text: 'Second summary.' },
+      },
+    ]
+
+    const items = reduceTranscriptEvents(events)[0].items
+    expect(items).toHaveLength(2)
+    expect(items[0].parent_entity_id).toBe('msg-1')
+    expect(items[0].text).toBe('First summary.')
+    expect(items[1].parent_entity_id).toBe('msg-2')
+    expect(items[1].text).toBe('Second summary.')
+  })
+
+  it('assigns contentType command only on exact activity command and defaults all others to tool_call', () => {
+    const events = [
+      // Exact command
+      { id: 1, kind: 'tool.started', entity_id: 't-cmd', data: { tool_name: 'bash', activity: 'command', input: 'ls' } },
+      // Explicit tool_call
+      { id: 2, kind: 'tool.started', entity_id: 't-call', data: { tool_name: 'read_file', activity: 'tool_call', input: 'file.txt' } },
+      // Missing activity
+      { id: 3, kind: 'tool.started', entity_id: 't-missing', data: { tool_name: 'bash' } },
+      // Unknown activity string
+      { id: 4, kind: 'tool.started', entity_id: 't-unknown', data: { tool_name: 'bash', activity: 'shell' } },
+      // Name has bash/cmd substring but no command activity
+      { id: 5, kind: 'tool.started', entity_id: 't-sub', data: { tool_name: 'bash_runner', activity: 'tool_call' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const items = attempts[0].items
+    expect(items).toHaveLength(5)
+
+    expect(items[0].role).toBe('assistant')
+    expect(items[0].contentType).toBe('command')
+
+    expect(items[1].role).toBe('assistant')
+    expect(items[1].contentType).toBe('tool_call')
+
+    expect(items[2].role).toBe('assistant')
+    expect(items[2].contentType).toBe('tool_call')
+
+    expect(items[3].role).toBe('assistant')
+    expect(items[3].contentType).toBe('tool_call')
+
+    expect(items[4].role).toBe('assistant')
+    expect(items[4].contentType).toBe('tool_call')
+  })
+
+  it('keeps structural notices free of fabricated role or content metadata', () => {
+    const events = [
+      { id: 1, kind: 'stream.notice', entity_id: 'n-1', data: { text: 'Notice text' } },
+      { id: 2, kind: 'stream.truncated', entity_id: 'tr-1', data: { reason: 'limit' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const items = attempts[0].items
+    expect(items[0].role).toBeUndefined()
+    expect(items[0].contentType).toBeUndefined()
+    expect(items[1].role).toBeUndefined()
+    expect(items[1].contentType).toBeUndefined()
+  })
 })

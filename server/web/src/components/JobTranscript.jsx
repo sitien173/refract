@@ -55,15 +55,19 @@ function ToolCallItem({ item, onToggle }) {
     }
   }
 
+  const isCommand = item.contentType === 'command'
+  const label = isCommand ? 'Command' : 'Tool'
+  const cardClass = isCommand ? 'transcript-command-card' : 'transcript-tool-card'
+
   return (
     <details
       ref={detailsRef}
-      className="transcript-card transcript-tool-card transcript-tool-disclosure"
+      className={`transcript-card ${cardClass} transcript-tool-disclosure`}
       onToggle={handleToggle}
     >
       <summary className="transcript-tool-summary">
         <div className="transcript-tool-summary-main">
-          <span className="eyebrow">Tool</span>
+          <span className="eyebrow">{label}</span>
           <span className="tool-name">
             <strong>{item.tool_name}</strong>
           </span>
@@ -107,6 +111,18 @@ function ToolCallItem({ item, onToggle }) {
   )
 }
 
+const DEFAULT_ROLE_FILTERS = {
+  user: true,
+  assistant: true,
+}
+
+const DEFAULT_CONTENT_FILTERS = {
+  text: true,
+  thinking: false,
+  tool_call: true,
+  command: true,
+}
+
 export default function JobTranscript({
   entities = [],
   status = 'live',
@@ -114,11 +130,20 @@ export default function JobTranscript({
   error = null,
   isLoading = false,
   onRefresh,
+  submittedPrompt = '',
 }) {
   const parentRef = useRef(null)
   const [isFollowing, setIsFollowing] = useState(true)
   const isFollowingRef = useRef(true)
   isFollowingRef.current = isFollowing
+
+  const [roleFilters, setRoleFilters] = useState(DEFAULT_ROLE_FILTERS)
+  const [contentFilters, setContentFilters] = useState(DEFAULT_CONTENT_FILTERS)
+
+  const handleResetFilters = useCallback(() => {
+    setRoleFilters(DEFAULT_ROLE_FILTERS)
+    setContentFilters(DEFAULT_CONTENT_FILTERS)
+  }, [])
 
   const manualPointerScrollRef = useRef(false)
   const prevScrollTopRef = useRef(0)
@@ -126,24 +151,54 @@ export default function JobTranscript({
 
   const flatItems = useMemo(() => {
     const items = []
-    for (const attempt of entities) {
+
+    if (submittedPrompt && roleFilters.user && contentFilters.text) {
       items.push({
-        key: `attempt-header-${attempt.attempt}`,
-        type: 'attempt_header',
-        attempt,
+        key: 'submitted-prompt',
+        type: 'user_message',
+        item: {
+          role: 'user',
+          contentType: 'text',
+          text: submittedPrompt,
+        },
       })
-      for (let i = 0; i < attempt.items.length; i += 1) {
-        const it = attempt.items[i]
+    }
+
+    for (const attempt of entities) {
+      const visibleItems = attempt.items.filter((it) => {
+        if (it.type === 'notice' || it.type === 'truncated') {
+          return true
+        }
+        const role = it.role || 'assistant'
+        const contentType =
+          it.contentType ||
+          (it.type === 'reasoning_summary'
+            ? 'thinking'
+            : it.type === 'tool_call'
+            ? 'tool_call'
+            : 'text')
+        return Boolean(roleFilters[role] && contentFilters[contentType])
+      })
+
+      if (visibleItems.length > 0) {
         items.push({
-          key: `${attempt.attempt}-${it.type}-${it.entity_id || it.call_id || i}`,
-          type: it.type,
-          item: it,
+          key: `attempt-header-${attempt.attempt}`,
+          type: 'attempt_header',
           attempt,
         })
+        for (let i = 0; i < visibleItems.length; i += 1) {
+          const it = visibleItems[i]
+          items.push({
+            key: `${attempt.attempt}-${it.type}-${it.parent_entity_id || ''}-${it.entity_id || it.call_id || i}`,
+            type: it.type,
+            item: it,
+            attempt,
+          })
+        }
       }
     }
     return items
-  }, [entities])
+  }, [entities, submittedPrompt, roleFilters, contentFilters])
 
   const virtualizer = useVirtualizer({
     count: flatItems.length,
@@ -191,7 +246,7 @@ export default function JobTranscript({
   const contentSignature = useMemo(() => {
     let len = 0
     for (const it of flatItems) {
-      if (it.type === 'assistant_message') {
+      if (it.type === 'assistant_message' || it.type === 'reasoning_summary') {
         len += it.item?.text?.length || 0
       }
     }
@@ -371,116 +426,223 @@ export default function JobTranscript({
         </div>
       ) : (
         <div className="transcript-container-wrapper">
-          <div
-            ref={parentRef}
-            className="transcript-scroll-container"
-            data-testid="transcript-scroll-container"
-            onScroll={handleScroll}
-            onWheel={handleWheel}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onPointerDown={handlePointerDown}
-            onPointerUp={handlePointerEnd}
-            onPointerCancel={handlePointerEnd}
-            onKeyDown={handleKeyDown}
-            tabIndex={0}
-            role="region"
-            aria-label="Job execution transcript"
-          >
-            <div
-              className="transcript-virtual-inner"
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                position: 'relative',
-                width: '100%',
-              }}
-            >
-              {renderItems.map(({ key, type, attempt, item, virtualRow }) => {
-                const style = virtualRow
-                  ? {
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      transform: `translateY(${virtualRow.start}px)`,
+          <div className="transcript-toolbar">
+            <div className="transcript-filters">
+              <fieldset className="transcript-filter-group">
+                <legend>Role</legend>
+                <label className="transcript-filter-label">
+                  <input
+                    type="checkbox"
+                    checked={roleFilters.user}
+                    onChange={(e) =>
+                      setRoleFilters((prev) => ({ ...prev, user: e.target.checked }))
                     }
-                  : undefined
+                  />
+                  <span>User</span>
+                </label>
+                <label className="transcript-filter-label">
+                  <input
+                    type="checkbox"
+                    checked={roleFilters.assistant}
+                    onChange={(e) =>
+                      setRoleFilters((prev) => ({ ...prev, assistant: e.target.checked }))
+                    }
+                  />
+                  <span>Assistant</span>
+                </label>
+              </fieldset>
 
-                let content = null
-
-                if (type === 'attempt_header') {
-                  content = (
-                    <div className="transcript-attempt-header">
-                      <div className="attempt-title">
-                        <strong>Attempt {attempt.attempt}</strong>
-                        {attempt.target_id && (
-                          <code className="cell-code transcript-identifier">
-                            {attempt.target_id}
-                          </code>
-                        )}
-                        {attempt.backend && (
-                          <span className="profile-tag">{attempt.backend}</span>
-                        )}
-                      </div>
-                      <StatusBadge status={attempt.status} label={attempt.status} />
-                    </div>
-                  )
-                } else if (type === 'assistant_message') {
-                  content = (
-                    <div className="transcript-card transcript-assistant-card">
-                      <div className="transcript-card-header">
-                        <span className="eyebrow">Assistant</span>
-                        {item.status === 'streaming' && (
-                          <span
-                            className="streaming-indicator"
-                            aria-label="Streaming in progress"
-                          >
-                            <span
-                              className="status-dot status-dot-running"
-                              aria-hidden="true"
-                            />
-                            streaming…
-                          </span>
-                        )}
-                      </div>
-                      <div className="transcript-assistant-text transcript-text">
-                        {item.text}
-                      </div>
-                    </div>
-                  )
-                } else if (type === 'tool_call') {
-                  content = <ToolCallItem item={item} onToggle={handleToggle} />
-                } else if (type === 'notice') {
-                  content = (
-                    <div className="transcript-card transcript-notice-card">
-                      <p className="caption">{item.text}</p>
-                    </div>
-                  )
-                } else if (type === 'truncated') {
-                  content = (
-                    <div className="transcript-card transcript-truncated-card">
-                      <span className="eyebrow">Stream truncated</span>
-                      <p className="caption">Reason: {item.reason}</p>
-                    </div>
-                  )
-                }
-
-                if (!content) return null
-
-                return (
-                  <div
-                    key={key}
-                    ref={virtualizer.measureElement}
-                    data-index={virtualRow ? virtualRow.index : undefined}
-                    style={style}
-                    className="transcript-virtual-row"
-                  >
-                    {content}
-                  </div>
-                )
-              })}
+              <fieldset className="transcript-filter-group">
+                <legend>Content</legend>
+                <label className="transcript-filter-label">
+                  <input
+                    type="checkbox"
+                    checked={contentFilters.text}
+                    onChange={(e) =>
+                      setContentFilters((prev) => ({ ...prev, text: e.target.checked }))
+                    }
+                  />
+                  <span>Text</span>
+                </label>
+                <label className="transcript-filter-label">
+                  <input
+                    type="checkbox"
+                    checked={contentFilters.thinking}
+                    onChange={(e) =>
+                      setContentFilters((prev) => ({ ...prev, thinking: e.target.checked }))
+                    }
+                  />
+                  <span>Thinking</span>
+                </label>
+                <label className="transcript-filter-label">
+                  <input
+                    type="checkbox"
+                    checked={contentFilters.tool_call}
+                    onChange={(e) =>
+                      setContentFilters((prev) => ({ ...prev, tool_call: e.target.checked }))
+                    }
+                  />
+                  <span>Tool Call</span>
+                </label>
+                <label className="transcript-filter-label">
+                  <input
+                    type="checkbox"
+                    checked={contentFilters.command}
+                    onChange={(e) =>
+                      setContentFilters((prev) => ({ ...prev, command: e.target.checked }))
+                    }
+                  />
+                  <span>Command</span>
+                </label>
+              </fieldset>
             </div>
           </div>
+
+          {flatItems.length === 0 ? (
+            <div className="transcript-filter-empty">
+              <p className="caption">No transcript entries match the current filters.</p>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={handleResetFilters}
+              >
+                Reset filters
+              </button>
+            </div>
+          ) : (
+            <div
+              ref={parentRef}
+              className="transcript-scroll-container"
+              data-testid="transcript-scroll-container"
+              onScroll={handleScroll}
+              onWheel={handleWheel}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onPointerDown={handlePointerDown}
+              onPointerUp={handlePointerEnd}
+              onPointerCancel={handlePointerEnd}
+              onKeyDown={handleKeyDown}
+              tabIndex={0}
+              role="region"
+              aria-label="Job execution transcript"
+            >
+              <div
+                className="transcript-virtual-inner"
+                style={{
+                  height: `${virtualizer.getTotalSize()}px`,
+                  position: 'relative',
+                  width: '100%',
+                }}
+              >
+                {renderItems.map(({ key, type, attempt, item, virtualRow }) => {
+                  const style = virtualRow
+                    ? {
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }
+                    : undefined
+
+                  let content = null
+
+                  if (type === 'attempt_header') {
+                    content = (
+                      <div className="transcript-attempt-header">
+                        <div className="attempt-title">
+                          <strong>Attempt {attempt.attempt}</strong>
+                          {attempt.target_id && (
+                            <code className="cell-code transcript-identifier">
+                              {attempt.target_id}
+                            </code>
+                          )}
+                          {attempt.backend && (
+                            <span className="profile-tag">{attempt.backend}</span>
+                          )}
+                        </div>
+                        <StatusBadge status={attempt.status} label={attempt.status} />
+                      </div>
+                    )
+                  } else if (type === 'user_message') {
+                    content = (
+                      <div className="transcript-card transcript-user-card">
+                        <div className="transcript-card-header">
+                          <span className="eyebrow">User</span>
+                        </div>
+                        <div className="transcript-user-text transcript-text">
+                          {item.text}
+                        </div>
+                      </div>
+                    )
+                  } else if (type === 'assistant_message') {
+                    content = (
+                      <div className="transcript-card transcript-assistant-card">
+                        <div className="transcript-card-header">
+                          <span className="eyebrow">Assistant</span>
+                          {item.status === 'streaming' && (
+                            <span
+                              className="streaming-indicator"
+                              aria-label="Streaming in progress"
+                            >
+                              <span
+                                className="status-dot status-dot-running"
+                                aria-hidden="true"
+                              />
+                              streaming…
+                            </span>
+                          )}
+                        </div>
+                        <div className="transcript-assistant-text transcript-text">
+                          {item.text}
+                        </div>
+                      </div>
+                    )
+                  } else if (type === 'reasoning_summary') {
+                    content = (
+                      <div className="transcript-card transcript-thinking-card">
+                        <div className="transcript-card-header">
+                          <span className="eyebrow">Thinking</span>
+                        </div>
+                        <div className="transcript-thinking-text transcript-text">
+                          {item.text}
+                        </div>
+                      </div>
+                    )
+                  } else if (type === 'tool_call') {
+                    content = <ToolCallItem item={item} onToggle={handleToggle} />
+                  } else if (type === 'notice') {
+                    content = (
+                      <div className="transcript-card transcript-notice-card">
+                        <p className="caption">{item.text}</p>
+                      </div>
+                    )
+                  } else if (type === 'truncated') {
+                    content = (
+                      <div className="transcript-card transcript-truncated-card">
+                        <span className="eyebrow">Stream truncated</span>
+                        <p className="caption">Reason: {item.reason}</p>
+                      </div>
+                    )
+                  }
+
+                  if (!content) return null
+
+                  return (
+                    <div
+                      key={key}
+                      ref={virtualizer.measureElement}
+                      data-index={virtualRow ? virtualRow.index : undefined}
+                      style={style}
+                      className="transcript-virtual-row"
+                    >
+                      {content}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           {!isFollowing && (
             <button

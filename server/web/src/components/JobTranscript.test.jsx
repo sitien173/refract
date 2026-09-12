@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import JobTranscript from './JobTranscript'
 import { reduceTranscriptEvents } from '../hooks/useJobStream'
@@ -1082,6 +1082,353 @@ describe('JobTranscript component', () => {
       const mountedRows = container.querySelectorAll('.transcript-virtual-row')
       expect(mountedRows.length).toBeLessThanOrEqual(20)
       expect(mountedRows.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('Transcript Role and Content Filters (Task 5)', () => {
+    it('renders native fieldset groups with legends and exact default checkbox states', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            { type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Hello' },
+          ],
+        },
+      ]
+      render(<JobTranscript entities={entities} status="live" submittedPrompt="Test prompt" />)
+
+      const roleGroup = screen.getByRole('group', { name: 'Role' })
+      const contentGroup = screen.getByRole('group', { name: 'Content' })
+
+      expect(roleGroup).toBeInTheDocument()
+      expect(contentGroup).toBeInTheDocument()
+
+      const userCheckbox = within(roleGroup).getByRole('checkbox', { name: 'User' })
+      const assistantCheckbox = within(roleGroup).getByRole('checkbox', { name: 'Assistant' })
+      expect(userCheckbox).toBeChecked()
+      expect(assistantCheckbox).toBeChecked()
+
+      const textCheckbox = within(contentGroup).getByRole('checkbox', { name: 'Text' })
+      const thinkingCheckbox = within(contentGroup).getByRole('checkbox', { name: 'Thinking' })
+      const toolCallCheckbox = within(contentGroup).getByRole('checkbox', { name: 'Tool Call' })
+      const commandCheckbox = within(contentGroup).getByRole('checkbox', { name: 'Command' })
+
+      expect(textCheckbox).toBeChecked()
+      expect(thinkingCheckbox).not.toBeChecked()
+      expect(toolCallCheckbox).toBeChecked()
+      expect(commandCheckbox).toBeChecked()
+    })
+
+    it('renders a single User/Text card before attempts when submittedPrompt is provided, preserving whitespace', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            { type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Response' },
+          ],
+        },
+        {
+          type: 'attempt',
+          attempt: 2,
+          items: [
+            { type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Retry response' },
+          ],
+        },
+      ]
+      const promptText = 'Line 1\n  Line 2 indented\nLine 3'
+      const { container } = render(
+        <JobTranscript entities={entities} status="live" submittedPrompt={promptText} />
+      )
+
+      const userCards = container.querySelectorAll('.transcript-user-card')
+      expect(userCards).toHaveLength(1)
+      expect(userCards[0]).toHaveTextContent('User')
+      const userText = userCards[0].querySelector('.transcript-user-text')
+      expect(userText.textContent).toBe('Line 1\n  Line 2 indented\nLine 3')
+
+      const rows = container.querySelectorAll('.transcript-virtual-row')
+      expect(rows[0]).toContainElement(userCards[0])
+    })
+
+    it('filters entries using OR within Role group and Content group, and AND across groups', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            { type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Assistant Text' },
+            { type: 'tool_call', role: 'assistant', contentType: 'tool_call', tool_name: 'read_file', status: 'completed' },
+            { type: 'tool_call', role: 'assistant', contentType: 'command', tool_name: 'bash', status: 'completed' },
+          ],
+        },
+      ]
+      render(
+        <JobTranscript entities={entities} status="live" submittedPrompt="User Prompt" />
+      )
+
+      expect(screen.getByText('User Prompt')).toBeInTheDocument()
+      expect(screen.getByText('Assistant Text')).toBeInTheDocument()
+      expect(screen.getByText('read_file')).toBeInTheDocument()
+      expect(screen.getByText('bash')).toBeInTheDocument()
+
+      const roleGroup = screen.getByRole('group', { name: 'Role' })
+      const contentGroup = screen.getByRole('group', { name: 'Content' })
+
+      fireEvent.click(within(roleGroup).getByRole('checkbox', { name: 'User' }))
+      expect(screen.queryByText('User Prompt')).not.toBeInTheDocument()
+      expect(screen.getByText('Assistant Text')).toBeInTheDocument()
+
+      fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Text' }))
+      expect(screen.queryByText('Assistant Text')).not.toBeInTheDocument()
+      expect(screen.getByText('read_file')).toBeInTheDocument()
+      expect(screen.getByText('bash')).toBeInTheDocument()
+
+      fireEvent.click(within(roleGroup).getByRole('checkbox', { name: 'Assistant' }))
+      expect(screen.queryByText('read_file')).not.toBeInTheDocument()
+      expect(screen.queryByText('bash')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Transcript Role and Content Filters (Task 6)', () => {
+    it('renders Thinking card only when Thinking filter is enabled', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'reasoning_summary',
+              role: 'assistant',
+              contentType: 'thinking',
+              entity_id: 'sum-1',
+              text: 'Internal step summary',
+            },
+          ],
+        },
+      ]
+      const { container } = render(<JobTranscript entities={entities} status="live" />)
+
+      // Thinking is disabled by default
+      expect(screen.queryByText('Internal step summary')).not.toBeInTheDocument()
+      expect(container.querySelector('.transcript-thinking-card')).not.toBeInTheDocument()
+
+      // Enable Thinking filter
+      const contentGroup = screen.getByRole('group', { name: 'Content' })
+      fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Thinking' }))
+
+      expect(screen.getByText('Internal step summary')).toBeInTheDocument()
+      const thinkingCard = container.querySelector('.transcript-thinking-card')
+      expect(thinkingCard).toBeInTheDocument()
+      expect(thinkingCard.querySelector('.eyebrow')).toHaveTextContent('Thinking')
+    })
+
+    it('distinguishes Command disclosures from Tool Call disclosures and falls back historical tool calls', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              role: 'assistant',
+              contentType: 'command',
+              entity_id: 'c-1',
+              tool_name: 'bash',
+              status: 'completed',
+            },
+            {
+              type: 'tool_call',
+              role: 'assistant',
+              contentType: 'tool_call',
+              entity_id: 't-1',
+              tool_name: 'read_file',
+              status: 'completed',
+            },
+            {
+              type: 'tool_call',
+              role: 'assistant',
+              entity_id: 'h-1',
+              tool_name: 'legacy_tool',
+              status: 'completed',
+            },
+          ],
+        },
+      ]
+      const { container } = render(<JobTranscript entities={entities} status="live" />)
+
+      const disclosures = container.querySelectorAll('details')
+      expect(disclosures).toHaveLength(3)
+
+      const commandEyebrow = disclosures[0].querySelector('.eyebrow')
+      expect(commandEyebrow).toHaveTextContent('Command')
+
+      const toolEyebrow = disclosures[1].querySelector('.eyebrow')
+      expect(toolEyebrow).toHaveTextContent('Tool')
+
+      const legacyEyebrow = disclosures[2].querySelector('.eyebrow')
+      expect(legacyEyebrow).toHaveTextContent('Tool')
+    })
+
+    it('renders filtered-empty message and restores defaults via Reset filters button', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'assistant_message',
+              role: 'assistant',
+              contentType: 'text',
+              text: 'Active assistant content',
+            },
+          ],
+        },
+      ]
+      render(<JobTranscript entities={entities} status="live" />)
+
+      expect(screen.getByText('Active assistant content')).toBeInTheDocument()
+
+      const roleGroup = screen.getByRole('group', { name: 'Role' })
+      const contentGroup = screen.getByRole('group', { name: 'Content' })
+
+      // Uncheck assistant to produce empty match
+      fireEvent.click(within(roleGroup).getByRole('checkbox', { name: 'Assistant' }))
+
+      expect(screen.queryByText('Active assistant content')).not.toBeInTheDocument()
+      expect(screen.getByText('No transcript entries match the current filters.')).toBeInTheDocument()
+      expect(screen.queryByText('Transcript is not available for this job.')).not.toBeInTheDocument()
+
+      const resetBtn = screen.getByRole('button', { name: 'Reset filters' })
+      expect(resetBtn).toBeInTheDocument()
+
+      fireEvent.click(resetBtn)
+
+      // Defaults restored
+      expect(within(roleGroup).getByRole('checkbox', { name: 'User' })).toBeChecked()
+      expect(within(roleGroup).getByRole('checkbox', { name: 'Assistant' })).toBeChecked()
+      expect(within(contentGroup).getByRole('checkbox', { name: 'Text' })).toBeChecked()
+      expect(within(contentGroup).getByRole('checkbox', { name: 'Thinking' })).not.toBeChecked()
+      expect(within(contentGroup).getByRole('checkbox', { name: 'Tool Call' })).toBeChecked()
+      expect(within(contentGroup).getByRole('checkbox', { name: 'Command' })).toBeChecked()
+
+      expect(screen.getByText('Active assistant content')).toBeInTheDocument()
+    })
+  })
+
+  describe('Transcript Role and Content Filters (Task 7)', () => {
+    it('filters rows before virtualization and maintains bounded fallback', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            { type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Text 1' },
+            { type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Text 2' },
+            { type: 'tool_call', role: 'assistant', contentType: 'command', tool_name: 'bash', status: 'completed' },
+          ],
+        },
+      ]
+      const { container } = render(<JobTranscript entities={entities} status="live" />)
+
+      const initialRows = container.querySelectorAll('.transcript-virtual-row')
+      expect(initialRows).toHaveLength(4)
+
+      const contentGroup = screen.getByRole('group', { name: 'Content' })
+      fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Command' }))
+
+      const filteredRows = container.querySelectorAll('.transcript-virtual-row')
+      expect(filteredRows).toHaveLength(3)
+      expect(screen.queryByText('bash')).not.toBeInTheDocument()
+      expect(filteredRows.length).toBeLessThanOrEqual(20)
+    })
+
+    it('remeasures dynamic height when command disclosure is toggled', async () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              role: 'assistant',
+              contentType: 'command',
+              entity_id: 'cmd-1',
+              tool_name: 'git_status',
+              status: 'completed',
+              input: 'status',
+              output: 'clean',
+            },
+            {
+              type: 'assistant_message',
+              role: 'assistant',
+              contentType: 'text',
+              entity_id: 'msg-after',
+              text: 'Done',
+              status: 'completed',
+            },
+          ],
+        },
+      ]
+
+      let isExpanded = false
+      const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect
+      HTMLElement.prototype.getBoundingClientRect = function () {
+        if (this.classList && this.classList.contains('transcript-virtual-row')) {
+          const isCommandRow = this.querySelector('.transcript-command-card')
+          if (isCommandRow && isExpanded) {
+            return { width: 800, height: 160, top: 0, bottom: 160, left: 0, right: 800 }
+          }
+          return { width: 800, height: 72, top: 0, bottom: 72, left: 0, right: 800 }
+        }
+        return originalGetBoundingClientRect.apply(this)
+      }
+
+      try {
+        const { container } = render(<JobTranscript entities={entities} status="live" />)
+        const commandSummary = container.querySelector('.transcript-tool-summary')
+        const commandDetails = container.querySelector('details')
+
+        isExpanded = true
+        fireEvent.click(commandSummary)
+        fireEvent(commandDetails, new Event('toggle'))
+
+        await waitFor(() => {
+          const rows = container.querySelectorAll('.transcript-virtual-row')
+          expect(rows[2].style.transform).toBe('translateY(248px)')
+        })
+      } finally {
+        HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect
+      }
+    })
+
+    it('preserves follow-live pause across filter toggles without scrolling or resuming', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            { type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Msg 1' },
+            { type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Msg 2' },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={entities} status="live" />)
+      const scrollContainer = container.querySelector('.transcript-scroll-container')
+
+      fireEvent.wheel(scrollContainer, { deltaY: -50 })
+
+      expect(screen.getByRole('button', { name: 'Jump to live' })).toBeInTheDocument()
+
+      const contentGroup = screen.getByRole('group', { name: 'Content' })
+      fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Text' }))
+
+      expect(screen.getByRole('button', { name: 'Jump to live' })).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Jump to live' }))
+      expect(screen.queryByRole('button', { name: 'Jump to live' })).not.toBeInTheDocument()
     })
   })
 })

@@ -315,4 +315,52 @@ describe('JobDetails component', () => {
     expect(details).toBeInTheDocument()
     expect(details.open).toBe(false)
   })
+
+  it('passes only exact stored job.prompt as submittedPrompt to transcript and renders User card', () => {
+    const promptJob = {
+      ...mockJob,
+      prompt: 'Exact stored prompt for transcript',
+      execution_plan: {
+        raw_prompt: 'Expanded prompt secret',
+      },
+    }
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          status: 'running',
+          items: [{ type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Working on it' }],
+        },
+      ],
+      status: 'live',
+      streamStatus: 'active',
+      error: null,
+      isLoading: false,
+    }
+    render(<JobDetails job={promptJob} stream={mockStream} />)
+
+    const userCard = document.querySelector('.transcript-user-card')
+    expect(userCard).toBeInTheDocument()
+    expect(userCard.textContent).toContain('Exact stored prompt for transcript')
+    expect(userCard.textContent).not.toContain('Expanded prompt secret')
+  })
+
+  it('preserves unavailable stream state without rendering a synthetic User card when historical stream is unavailable', () => {
+    const promptJob = {
+      ...mockJob,
+      prompt: 'Stored prompt that should not appear as transcript',
+    }
+    const mockStream = {
+      entities: [],
+      status: 'complete',
+      streamStatus: 'unavailable',
+      error: null,
+      isLoading: false,
+    }
+    render(<JobDetails job={promptJob} stream={mockStream} />)
+
+    expect(screen.getByText('Transcript is not available for this job.')).toBeInTheDocument()
+    expect(document.querySelector('.transcript-user-card')).not.toBeInTheDocument()
+  })
 })

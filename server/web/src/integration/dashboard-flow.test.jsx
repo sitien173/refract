@@ -732,4 +732,84 @@ describe('Dashboard integrated user flows', () => {
     expect(screen.getByText('Implementation completed without errors.')).toBeInTheDocument()
     expect(screen.getByText('Transcript is not available for this job.')).toBeInTheDocument()
   })
+
+  it('integrates stored prompt, normalized categories, filter toggles, and security exclusions', async () => {
+    window.history.pushState({}, '', '/dashboard/projects/proj-alpha/jobs/job-999')
+
+    vi.mocked(api.getJob).mockResolvedValue({
+      id: 'job-999',
+      project_id: 'proj-alpha',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'running',
+      target_id: 'worker-1',
+      config_revision: 'rev-overall-001',
+      attempts: 1,
+      created_at: '2026-09-04 15:00:00',
+      updated_at: '2026-09-04 15:01:00',
+      prompt: 'Clean stored prompt\nwith formatting',
+      execution_plan: {
+        raw_prompt: 'SECRET_PLAN_PROMPT_DO_NOT_EXPOSE',
+        targets: [
+          {
+            id: 'worker-1',
+            system_prompt: 'SECRET_TARGET_SYSTEM_PROMPT_HIDDEN',
+          },
+        ],
+      },
+    })
+
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [
+        { id: 1, attempt: 1, target_id: 'worker-1', kind: 'attempt.started', created_at: '2026-09-04 15:00:01' },
+        { id: 2, attempt: 1, kind: 'assistant.message.started', entity_id: 'm-1' },
+        { id: 3, attempt: 1, kind: 'assistant.text.delta', entity_id: 'm-1', data: { text: 'Integrated assistant response' } },
+        { id: 4, attempt: 1, kind: 'assistant.reasoning_summary.delta', entity_id: 's-1', data: { text: 'Integrated thinking text' } },
+        { id: 5, attempt: 1, kind: 'tool.started', entity_id: 't-cmd', data: { tool_name: 'git_checkout', activity: 'command', input: 'checkout main' } },
+        { id: 6, attempt: 1, kind: 'tool.started', entity_id: 't-tool', data: { tool_name: 'code_search', activity: 'tool_call', input: 'query' } },
+      ],
+      cursor: 6,
+      has_more: false,
+      retained_from: 1,
+      stream_status: 'active',
+    })
+
+    const { container } = render(<App />)
+
+    expect(await screen.findByText('Job job-999')).toBeInTheDocument()
+    expect(await screen.findByText(/Attempt 1/i)).toBeInTheDocument()
+
+    // Single User/Text card before attempts
+    const userCard = container.querySelector('.transcript-user-card')
+    expect(userCard).toBeInTheDocument()
+    expect(userCard.querySelector('.transcript-user-text').textContent).toBe('Clean stored prompt\nwith formatting')
+
+    // Security exclusions: secrets must never exist in the DOM
+    expect(container.innerHTML).not.toContain('SECRET_PLAN_PROMPT_DO_NOT_EXPOSE')
+    expect(container.innerHTML).not.toContain('SECRET_TARGET_SYSTEM_PROMPT_HIDDEN')
+
+    // Native filter controls
+    const roleGroup = screen.getByRole('group', { name: 'Role' })
+    const contentGroup = screen.getByRole('group', { name: 'Content' })
+
+    // By default Thinking is unchecked
+    expect(within(contentGroup).getByRole('checkbox', { name: 'Thinking' })).not.toBeChecked()
+    expect(screen.queryByText('Integrated thinking text')).not.toBeInTheDocument()
+
+    // Assistant text, command, and tool call are visible
+    expect(screen.getByText('Integrated assistant response')).toBeInTheDocument()
+    expect(screen.getByText('git_checkout')).toBeInTheDocument()
+    expect(screen.getByText('code_search')).toBeInTheDocument()
+
+    // Enable Thinking
+    fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Thinking' }))
+    expect(screen.getByText('Integrated thinking text')).toBeInTheDocument()
+
+    // Uncheck Text
+    fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Text' }))
+    expect(screen.queryByText('Clean stored prompt\nwith formatting')).not.toBeInTheDocument()
+    expect(screen.queryByText('Integrated assistant response')).not.toBeInTheDocument()
+    expect(screen.getByText('git_checkout')).toBeInTheDocument()
+    expect(screen.getByText('code_search')).toBeInTheDocument()
+  })
 })

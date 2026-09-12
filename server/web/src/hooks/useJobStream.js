@@ -27,7 +27,7 @@ export function reduceTranscriptEvents(events = []) {
     if (event.target_id && !attempt.target_id) attempt.target_id = event.target_id
     if (event.backend && !attempt.backend) attempt.backend = event.backend
 
-    const { kind, entity_id, data = {} } = event
+    const { kind, entity_id, parent_entity_id = '', data = {} } = event
 
     if (kind === 'attempt.started') {
       attempt.started_at = event.created_at || attempt.started_at
@@ -39,6 +39,8 @@ export function reduceTranscriptEvents(events = []) {
     } else if (kind === 'assistant.message.started' || kind === 'assistant.message_start') {
       attempt.items.push({
         type: 'assistant_message',
+        role: 'assistant',
+        contentType: 'text',
         entity_id: entity_id || `msg-${event.id}`,
         text: data.text || '',
         status: 'streaming',
@@ -57,9 +59,43 @@ export function reduceTranscriptEvents(events = []) {
       if (!item) {
         item = {
           type: 'assistant_message',
+          role: 'assistant',
+          contentType: 'text',
           entity_id: targetId || `msg-${event.id}`,
           text: '',
           status: 'streaming',
+        }
+        attempt.items.push(item)
+      }
+      item.text += data.text || ''
+    } else if (kind === 'assistant.reasoning_summary.delta') {
+      const targetId = entity_id || ''
+      let item = null
+      if (targetId) {
+        item = attempt.items.find(
+          (it) =>
+            it.type === 'reasoning_summary' &&
+            it.entity_id === targetId &&
+            it.parent_entity_id === parent_entity_id
+        )
+      } else {
+        const last = attempt.items[attempt.items.length - 1]
+        if (
+          last &&
+          last.type === 'reasoning_summary' &&
+          last.parent_entity_id === parent_entity_id
+        ) {
+          item = last
+        }
+      }
+      if (!item) {
+        item = {
+          type: 'reasoning_summary',
+          role: 'assistant',
+          contentType: 'thinking',
+          entity_id: targetId || `summary-${event.id}`,
+          parent_entity_id,
+          text: '',
         }
         attempt.items.push(item)
       }
@@ -73,8 +109,11 @@ export function reduceTranscriptEvents(events = []) {
         item.status = 'completed'
       }
     } else if (kind === 'tool.started' || kind === 'tool.call_start') {
+      const isCommand = data.activity === 'command'
       const toolItem = {
         type: 'tool_call',
+        role: 'assistant',
+        contentType: isCommand ? 'command' : 'tool_call',
         entity_id: entity_id || `tool-${event.id}`,
         tool_name: data.tool || data.tool_name || data.name || 'tool',
         status: 'running',
