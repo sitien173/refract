@@ -79,24 +79,26 @@
 ## Task 4
 
 ### Decisions made
-- Consulted `isProgrammaticScrollRef` in `handleScroll` so that programmatic scroll events do not disable follow-live auto-scrolling.
-- Bound `isProgrammaticScrollRef` to programmatic scroll execution via `try ... finally` block.
 - Scrolled to live edge on mount and content updates while following is active.
-- Tracked user scroll intent explicitly using wheel, touch, keyboard upward navigation, and manual scroll offset detection.
-- Displayed persistent "Jump to live" button whenever following is disabled, restoring following on click.
+- Paused following only for explicit manual navigation intent.
+- Handled wheel, touch, keyboard, and scrollbar pointer navigation directly.
+- Ignored bare scroll events from delayed browser delivery or virtualizer reconciliation.
+- Displayed persistent "Jump to live" whenever following is disabled.
 
 ### Spec deviations
 - none
 
 ### Tradeoffs accepted
 - Follow-live scrolling targets the virtualizer live edge using `virtualizer.scrollToEnd` and `parentRef.current.scrollTo`.
+- Bare scroll events never pause following without manual input intent.
 
 ### Assumptions
-- User scrolling upwards indicates intent to inspect historical lines and pause auto-scroll.
+- Upward wheel, touch, keyboard, or scrollbar navigation indicates historical inspection.
 
 ### Follow-ups for human
 - none
 
 ### Test evidence
-- RED -> GREEN: `src/components/JobTranscript.test.jsx` follow-live tests pass, asserting mount follow calls, real dispatched programmatic scroll event follow preservation, manual upward scroll follow disabling, and jump-to-live restoration.
-- Root cause (bugfix only): `isProgrammaticScrollRef` was defined but never read in `handleScroll`, and mount `scrollTo` calls were not asserted.
+- RED -> GREEN: `src/components/JobTranscript.test.jsx` follow-live tests pass, asserting mount follow calls, delayed bare-scroll preservation, explicit manual pause, and jump-to-live restoration.
+- Final focused verification: 67 tests passed across reducer, transcript, and job-details suites.
+- Root cause: Time-bounded programmatic markers could race delayed virtualizer reconciliation.
