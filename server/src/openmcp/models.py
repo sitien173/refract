@@ -354,6 +354,7 @@ class DashboardJob(BaseModel):
     project_id: str
     workflow: str
     profile: str
+    prompt: str = ""
     state: JobState
     context_key: str
     config_revision: str = ""

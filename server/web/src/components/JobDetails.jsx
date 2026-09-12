@@ -202,6 +202,23 @@ export default function JobDetails({
         </section>
       </div>
 
+      <section className="panel job-prompt-panel" aria-labelledby="job-prompt-heading">
+        <details className="job-prompt-disclosure">
+          <summary className="job-prompt-summary">
+            <h3 id="job-prompt-heading">Prompt details</h3>
+          </summary>
+          <div className="job-prompt-content">
+            {job.prompt ? (
+              <pre className="code-block prompt-text">{job.prompt}</pre>
+            ) : (
+              <div className="prompt-unavailable">
+                <p className="caption">Prompt unavailable</p>
+              </div>
+            )}
+          </div>
+        </details>
+      </section>
+
       <section className="panel job-plan-panel" aria-labelledby="job-plan-heading">
         <div className="panel-header">
           <h3 id="job-plan-heading">Execution plan</h3>

@@ -452,7 +452,7 @@ describe('JobTranscript component', () => {
       expect(codes[1].textContent).toBe('hello\nworld')
     })
 
-    it('displays exact "Input not available" and "Output not available" when payloads are omitted', () => {
+    it('displays exact "Input was not captured for this event." and "Output was not captured for this event." when payloads are omitted', () => {
       const toolEntity = [
         {
           type: 'attempt',
@@ -473,8 +473,8 @@ describe('JobTranscript component', () => {
       fireEvent.click(container.querySelector('summary'))
       fireEvent(details, new Event('toggle'))
 
-      expect(screen.getByText('Input not available')).toBeInTheDocument()
-      expect(screen.getByText('Output not available')).toBeInTheDocument()
+      expect(screen.getByText('Input was not captured for this event.')).toBeInTheDocument()
+      expect(screen.getByText('Output was not captured for this event.')).toBeInTheDocument()
     })
 
     it('renders valid falsy payloads visibly without falling back to unavailable', () => {
@@ -509,8 +509,8 @@ describe('JobTranscript component', () => {
         fireEvent(d, new Event('toggle'))
       })
 
-      expect(screen.queryByText('Input not available')).not.toBeInTheDocument()
-      expect(screen.queryByText('Output not available')).not.toBeInTheDocument()
+      expect(screen.queryByText('Input was not captured for this event.')).not.toBeInTheDocument()
+      expect(screen.queryByText('Output was not captured for this event.')).not.toBeInTheDocument()
       expect(container).toHaveTextContent('false')
       expect(container).toHaveTextContent('0')
       expect(container).toHaveTextContent('null')

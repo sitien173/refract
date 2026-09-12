@@ -253,13 +253,64 @@ async def test_dashboard_job_detail_redacts_execution_plan(active_runtime) -> No
 
     payload = json.loads(body)
     assert status == 200
-    assert "prompt" not in payload
+    assert payload["prompt"] == "secret job prompt"
     assert "execution_plan" in payload
     serialized = json.dumps(payload)
     assert "system_prompt" not in serialized
+    assert "raw_prompt" not in serialized
     assert "backend_profile" not in serialized
     assert '"args"' not in serialized
     assert payload["execution_plan"]["selection"]["targets"] == ["primary"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_job_detail_preserves_prompt_whitespace_and_multiline(active_runtime) -> None:
+    runtime = active_runtime
+    project = runtime.database.project("project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    multiline_prompt = "Line 1\n  Line 2 with indentation\n\nLine 3"
+    runtime.database.create_job(
+        job_id="job-multiline",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt=multiline_prompt,
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="consult",
+    )
+    app = create_application()
+
+    status, _, body = await request(app, "/dashboard/api/jobs/job-multiline")
+
+    payload = json.loads(body)
+    assert status == 200
+    assert payload["prompt"] == multiline_prompt
+    serialized = json.dumps(payload)
+    assert "system_prompt" not in serialized
+    assert "raw_prompt" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_dashboard_job_detail_empty_prompt(active_runtime) -> None:
+    runtime = active_runtime
+    project = runtime.database.project("project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    runtime.database.create_job(
+        job_id="job-empty",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="consult",
+    )
+    app = create_application()
+
+    status, _, body = await request(app, "/dashboard/api/jobs/job-empty")
+
+    payload = json.loads(body)
+    assert status == 200
+    assert payload["prompt"] == ""
 
 
 def make_static(root: Path) -> None:

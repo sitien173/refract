@@ -295,6 +295,7 @@ def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
         project_id=job.project_id,
         workflow=job.workflow,
         profile=job.profile,
+        prompt=str(record.get("prompt") or ""),
         state=job.state,
         context_key=job.context_key,
         config_revision=job.config_revision,

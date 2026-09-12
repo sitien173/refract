@@ -89,7 +89,7 @@ function ToolCallItem({ item, onToggle }) {
               </pre>
             ) : (
               <p className="caption transcript-payload-empty">
-                Input not available
+                Input was not captured for this event.
               </p>
             )}
           </div>
@@ -101,7 +101,7 @@ function ToolCallItem({ item, onToggle }) {
               </pre>
             ) : (
               <p className="caption transcript-payload-empty">
-                Output not available
+                Output was not captured for this event.
               </p>
             )}
           </div>

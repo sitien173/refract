@@ -316,6 +316,48 @@ describe('JobDetails component', () => {
     expect(details.open).toBe(false)
   })
 
+  it('renders clearly labeled prompt details in a collapsed native details disclosure preserving whitespace', () => {
+    const promptJob = {
+      ...mockJob,
+      prompt: 'Task description:\n  - step one\n  - step two',
+    }
+    const { container } = render(<JobDetails job={promptJob} />)
+
+    expect(screen.getByRole('heading', { name: 'Prompt details' })).toBeInTheDocument()
+    const details = container.querySelector('details.job-prompt-disclosure')
+    expect(details).toBeInTheDocument()
+    expect(details.open).toBe(false)
+
+    const pre = container.querySelector('pre.prompt-text')
+    expect(pre).toBeInTheDocument()
+    expect(pre.textContent).toBe('Task description:\n  - step one\n  - step two')
+  })
+
+  it('renders explicit unavailable text when stored job prompt is empty', () => {
+    const emptyPromptJob = {
+      ...mockJob,
+      prompt: '',
+    }
+    render(<JobDetails job={emptyPromptJob} />)
+
+    expect(screen.getByRole('heading', { name: 'Prompt details' })).toBeInTheDocument()
+    expect(screen.getByText('Prompt unavailable')).toBeInTheDocument()
+  })
+
+  it('strictly displays stored prompt without exposing target system_prompt or execution_plan.raw_prompt', () => {
+    const secureJob = {
+      ...mockJob,
+      prompt: 'Legitimate stored job prompt',
+    }
+    const { container } = render(<JobDetails job={secureJob} />)
+
+    expect(screen.getAllByText('Legitimate stored job prompt').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText('SECRET_SYSTEM_PROMPT_DO_NOT_LEAK')).not.toBeInTheDocument()
+    expect(screen.queryByText('SECRET_PROMPT_PAYLOAD')).not.toBeInTheDocument()
+    expect(container.innerHTML).not.toContain('SECRET_SYSTEM_PROMPT_DO_NOT_LEAK')
+    expect(container.innerHTML).not.toContain('SECRET_PROMPT_PAYLOAD')
+  })
+
   it('passes only exact stored job.prompt as submittedPrompt to transcript and renders User card', () => {
     const promptJob = {
       ...mockJob,
