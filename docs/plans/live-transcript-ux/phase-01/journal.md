@@ -9,7 +9,7 @@
 - Consultation Profile: consult
 - Review Profile: review
 - Implementation Job: 9fe35294-fd70-4aa1-88d7-4ba207a9713b
-- Review Job: n/a
+- Review Job: 317d7770-68df-4ae5-b161-1395c9dd921c
 - Started: 2026-09-12T13:44:41+07:00
 - Finished: 2026-09-12T13:54:00+07:00
 
@@ -43,7 +43,13 @@ TASK_COMPLETE
 
 ## Quality Review
 
-<!-- Coordinator appends the independent review response here. -->
+# CODE QUALITY REVIEW
+
+- Status: FAIL
+- Findings:
+  - High, `src/openmcp/backends/claude.py:207-216`: Claude copied output and result fields from `content_block_stop`. Remove these fallbacks and test that unrelated stop fields remain excluded.
+  - Medium, `src/openmcp/backends/agy.py:242-245`: Agy accepted unproven input and args aliases. Retain only the observed arguments field and adjust fixtures.
+- Scope checked: Phase 1 provider adapters and tests.
 
 ## Review Result
 
