@@ -5,7 +5,8 @@
 ## Task 1
 
 ### Decisions made
-- none
+- Rebuild once from the dirty working tree because current assets omit Phase 2 filters.
+- Protect dirty frontend source using pre-build and post-build SHA-256 checks.
 
 ### Spec deviations
 - none
