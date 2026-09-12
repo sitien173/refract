@@ -86,9 +86,18 @@ export function reduceTranscriptEvents(events = []) {
       attempt.items.push(toolItem)
     } else if (kind === 'tool.completed' || kind === 'tool.call_end') {
       const targetId = entity_id || ''
-      const item = targetId
-        ? attempt.items.find((it) => it.type === 'tool_call' && (it.entity_id === targetId || it.call_id === targetId))
-        : [...attempt.items].reverse().find((it) => it.type === 'tool_call' && it.status === 'running')
+      let item = null
+      if (targetId) {
+        item = attempt.items.find((it) => it.type === 'tool_call' && it.entity_id === targetId)
+      } else {
+        const legacyCallId = data.call_id || data.callId || ''
+        if (legacyCallId) {
+          item = attempt.items.find((it) => it.type === 'tool_call' && (it.call_id === legacyCallId || it.entity_id === legacyCallId))
+        }
+        if (!item) {
+          item = [...attempt.items].reverse().find((it) => it.type === 'tool_call' && it.status === 'running')
+        }
+      }
       if (item) {
         item.status = data.status || data.outcome || 'completed'
         if (Object.prototype.hasOwnProperty.call(data, 'output')) {

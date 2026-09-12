@@ -538,6 +538,47 @@ describe('reduceTranscriptEvents', () => {
     expect('output' in items[0]).toBe(false)
   })
 
+  it('matches explicit tool completion only by normalized entity_id and prevents collision with call_id', () => {
+    const events = [
+      { id: 1, kind: 'tool.started', entity_id: 'tool-alpha', data: { tool_name: 'toolA', call_id: 'tool-beta', input: 'in-A' } },
+      { id: 2, kind: 'tool.started', entity_id: 'tool-beta', data: { tool_name: 'toolB', call_id: 'other-call', input: 'in-B' } },
+      { id: 3, kind: 'tool.completed', entity_id: 'tool-beta', data: { status: 'completed', output: 'result-for-beta' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const items = attempts[0].items
+    expect(items).toHaveLength(2)
+
+    expect(items[0].entity_id).toBe('tool-alpha')
+    expect(items[0].status).toBe('running')
+    expect(items[0].input).toBe('in-A')
+    expect('output' in items[0]).toBe(false)
+
+    expect(items[1].entity_id).toBe('tool-beta')
+    expect(items[1].status).toBe('completed')
+    expect(items[1].input).toBe('in-B')
+    expect(items[1].output).toBe('result-for-beta')
+  })
+
+  it('preserves legacy fallback to call_id and running status when explicit entity_id is absent', () => {
+    const events = [
+      { id: 1, kind: 'tool.started', entity_id: 'tool-legacy-1', data: { tool_name: 'tool_1', call_id: 'c-100' } },
+      { id: 2, kind: 'tool.started', entity_id: 'tool-legacy-2', data: { tool_name: 'tool_2', call_id: 'c-200' } },
+      { id: 3, kind: 'tool.completed', data: { call_id: 'c-100', status: 'completed', output: 'legacy-output-1' } },
+      { id: 4, kind: 'tool.completed', data: { status: 'completed', output: 'legacy-output-2' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const items = attempts[0].items
+    expect(items).toHaveLength(2)
+
+    expect(items[0].entity_id).toBe('tool-legacy-1')
+    expect(items[0].status).toBe('completed')
+    expect(items[0].output).toBe('legacy-output-1')
+
+    expect(items[1].entity_id).toBe('tool-legacy-2')
+    expect(items[1].status).toBe('completed')
+    expect(items[1].output).toBe('legacy-output-2')
+  })
+
   it('distinguishes absent values from present null and falsy values', () => {
     const events = [
       { id: 1, kind: 'tool.started', entity_id: 'tool-absent', data: { tool_name: 't1' } },

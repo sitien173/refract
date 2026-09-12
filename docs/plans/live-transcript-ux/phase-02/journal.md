@@ -53,6 +53,10 @@ TASK_COMPLETE
   - Medium, `web/src/components/JobTranscript.jsx:110,145-159,232-246`: Programmatic scroll marker is unused and its boundary is untested.
 - Scope checked: Phase 2 frontend source and tests.
 
+### Fix Re-review
+
+- Status: PENDING
+
 ## Review Result
 
 - Spec Status: PENDING
@@ -60,5 +64,5 @@ TASK_COMPLETE
 
 ## Final Commit
 
-- Implementation: pending
+- Implementation: pending review
 - State record: this journal update's commit

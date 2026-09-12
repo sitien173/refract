@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import StatusBadge from './StatusBadge'
 
@@ -26,29 +26,71 @@ function formatPayload(value) {
 
 function ToolCallItem({ item, onToggle }) {
   const [isOpen, setIsOpen] = useState(false)
+  const detailsRef = useRef(null)
+  const isFirstRender = useRef(true)
+
+  useLayoutEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+      return
+    }
+    if (detailsRef.current && onToggle) {
+      const row = detailsRef.current.closest('.transcript-virtual-row')
+      if (row) {
+        onToggle(row)
+      }
+    }
+  }, [isOpen, onToggle])
+
   const hasInput = Object.prototype.hasOwnProperty.call(item, 'input')
   const hasOutput = Object.prototype.hasOwnProperty.call(item, 'output')
 
   const handleToggle = (e) => {
-    setIsOpen(e.currentTarget.open)
-    if (onToggle) onToggle(e)
+    const nextOpen = e.currentTarget.open
+    if (nextOpen !== isOpen) {
+      setIsOpen(nextOpen)
+    } else if (onToggle && detailsRef.current) {
+      const row = detailsRef.current.closest('.transcript-virtual-row')
+      if (row) onToggle(row)
+    }
   }
 
   const handleSummaryClick = (e) => {
     const details = e.currentTarget.closest('details')
     if (details) {
       const nextOpen = !details.open
-      setIsOpen(nextOpen)
-      if (onToggle) onToggle(e)
+      details.open = nextOpen
+      if (nextOpen !== isOpen) {
+        setIsOpen(nextOpen)
+      }
+    }
+  }
+
+  const handleSummaryKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      const details = e.currentTarget.closest('details')
+      if (details) {
+        const nextOpen = !details.open
+        details.open = nextOpen
+        if (nextOpen !== isOpen) {
+          setIsOpen(nextOpen)
+        }
+      }
     }
   }
 
   return (
     <details
+      ref={detailsRef}
       className="transcript-card transcript-tool-card transcript-tool-disclosure"
       onToggle={handleToggle}
     >
-      <summary className="transcript-tool-summary" onClick={handleSummaryClick}>
+      <summary
+        className="transcript-tool-summary"
+        onClick={handleSummaryClick}
+        onKeyDown={handleSummaryKeyDown}
+      >
         <div className="transcript-tool-summary-main">
           <span className="eyebrow">Tool</span>
           <span className="tool-name">
@@ -139,24 +181,45 @@ export default function JobTranscript({
     overscan: 5,
     gap: 8,
     useFlushSync: false,
+    initialRect: { width: 800, height: 600 },
     getItemKey: (index) => flatItems[index]?.key || index,
+    observeElementRect: (instance, cb) => {
+      const element = instance.scrollElement
+      if (!element) return
+      const handler = () => {
+        const width = element.clientWidth || element.offsetWidth || 800
+        const height = element.clientHeight || element.offsetHeight || 600
+        cb({ width, height })
+      }
+      handler()
+      const targetWindow = instance.targetWindow || window
+      if (!targetWindow.ResizeObserver) return () => {}
+      const observer = new targetWindow.ResizeObserver(handler)
+      observer.observe(element)
+      return () => observer.disconnect()
+    },
+    measureElement: (element) => {
+      const rect = element.getBoundingClientRect()
+      return rect.height || element.offsetHeight || 72
+    },
   })
 
   const scrollToLive = useCallback(() => {
     isProgrammaticScrollRef.current = true
-    if (virtualizer && typeof virtualizer.scrollToEnd === 'function') {
-      virtualizer.scrollToEnd({ behavior: 'auto' })
-    }
-    if (parentRef.current && typeof parentRef.current.scrollTo === 'function') {
-      parentRef.current.scrollTo({
-        top: parentRef.current.scrollHeight,
-        behavior: 'auto',
-      })
-      prevScrollTopRef.current = parentRef.current.scrollTop
-    }
-    setTimeout(() => {
+    try {
+      if (virtualizer && typeof virtualizer.scrollToEnd === 'function') {
+        virtualizer.scrollToEnd({ behavior: 'auto' })
+      }
+      if (parentRef.current && typeof parentRef.current.scrollTo === 'function') {
+        parentRef.current.scrollTo({
+          top: parentRef.current.scrollHeight,
+          behavior: 'auto',
+        })
+        prevScrollTopRef.current = parentRef.current.scrollTop
+      }
+    } finally {
       isProgrammaticScrollRef.current = false
-    }, 0)
+    }
   }, [virtualizer])
 
   const contentSignature = useMemo(() => {
@@ -183,19 +246,34 @@ export default function JobTranscript({
 
   useEffect(() => {
     const handleResize = () => {
-      if (virtualizer && typeof virtualizer.measure === 'function') {
-        virtualizer.measure()
-      }
+      if (!parentRef.current || !virtualizer) return
+      const rowElements = parentRef.current.querySelectorAll('.transcript-virtual-row')
+      rowElements.forEach((el) => {
+        if (typeof virtualizer.measureElement === 'function') {
+          virtualizer.measureElement(el)
+        }
+      })
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [virtualizer])
 
-  const handleToggle = useCallback(() => {
-    if (virtualizer && typeof virtualizer.measure === 'function') {
-      virtualizer.measure()
-    }
-  }, [virtualizer])
+  const handleToggle = useCallback(
+    (target) => {
+      if (!virtualizer) return
+      const row =
+        target instanceof Element
+          ? (target.classList?.contains('transcript-virtual-row')
+              ? target
+              : target.closest?.('.transcript-virtual-row'))
+          : target?.currentTarget?.closest?.('.transcript-virtual-row')
+
+      if (row && typeof virtualizer.measureElement === 'function') {
+        virtualizer.measureElement(row)
+      }
+    },
+    [virtualizer]
+  )
 
   const handleWheel = (e) => {
     if (e.deltaY < 0) {
@@ -231,6 +309,10 @@ export default function JobTranscript({
 
   const handleScroll = () => {
     if (!parentRef.current) return
+    if (isProgrammaticScrollRef.current) {
+      prevScrollTopRef.current = parentRef.current.scrollTop
+      return
+    }
     const { scrollTop, scrollHeight, clientHeight } = parentRef.current
 
     const prevScrollTop = prevScrollTopRef.current

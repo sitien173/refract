@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import JobTranscript from './JobTranscript'
 import { reduceTranscriptEvents } from '../hooks/useJobStream'
@@ -571,22 +571,77 @@ describe('JobTranscript component', () => {
       expect(container).toHaveTextContent('<b data-testid="injected-html">Bold</b>')
       expect(container).toHaveTextContent('<script>alert(1)</script>')
     })
+
+    it('activates and toggles native disclosure via Enter and Space keyboard events on summary', () => {
+      const toolEntity = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              entity_id: 'tool-kbd',
+              tool_name: 'test_kbd',
+              status: 'completed',
+              input: { param: 42 },
+              output: 'result-ok',
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+      const details = container.querySelector('details')
+      const summary = container.querySelector('summary')
+
+      expect(details.open).toBe(false)
+      expect(screen.queryByText('Input')).not.toBeInTheDocument()
+
+      // Activate with Enter key
+      fireEvent.keyDown(summary, { key: 'Enter' })
+      expect(details.open).toBe(true)
+      expect(screen.getByText('Input')).toBeInTheDocument()
+      expect(screen.getByText('Output')).toBeInTheDocument()
+      expect(container).toHaveTextContent('result-ok')
+
+      // Toggle closed with Space key
+      fireEvent.keyDown(summary, { key: ' ' })
+      expect(details.open).toBe(false)
+      expect(screen.queryByText('Input')).not.toBeInTheDocument()
+
+      // Toggle open with Space key
+      fireEvent.keyDown(summary, { key: ' ' })
+      expect(details.open).toBe(true)
+      expect(screen.getByText('Input')).toBeInTheDocument()
+
+      // Unrelated key does not toggle
+      fireEvent.keyDown(summary, { key: 'Escape' })
+      expect(details.open).toBe(true)
+    })
   })
 
   describe('measured virtualization and follow-live behavior', () => {
     it('initializes in follow-live mode and scrolls to live edge on mount', () => {
       const scrollToMock = vi.fn()
-      render(
-        <JobTranscript
-          entities={sampleEntities}
-          status="live"
-          streamStatus="active"
-        />
-      )
-      const scrollContainer = screen.getByTestId('transcript-scroll-container')
-      scrollContainer.scrollTo = scrollToMock
-
-      expect(scrollContainer).toBeInTheDocument()
+      HTMLElement.prototype.scrollTo = scrollToMock
+      try {
+        render(
+          <JobTranscript
+            entities={sampleEntities}
+            status="live"
+            streamStatus="active"
+          />
+        )
+        const scrollContainer = screen.getByTestId('transcript-scroll-container')
+        expect(scrollContainer).toBeInTheDocument()
+        expect(scrollToMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            behavior: 'auto',
+          })
+        )
+      } finally {
+        delete HTMLElement.prototype.scrollTo
+      }
     })
 
     it('follows assistant text growth and new entities while live following is active', () => {
@@ -815,7 +870,71 @@ describe('JobTranscript component', () => {
       expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
     })
 
-    it('attaches virtualizer measurement to each rendered row and remeasures on disclosure toggle and resize', () => {
+    it('consults isProgrammaticScrollRef during programmatic scroll events without disabling following, while manual upward scrolling disables following', () => {
+      const { rerender } = render(
+        <JobTranscript
+          entities={sampleEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      const scrollContainer = screen.getByTestId('transcript-scroll-container')
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+
+      let programmaticScrollDispatched = false
+      scrollContainer.scrollTo = vi.fn(function (options) {
+        if (typeof options === 'object' && options.top !== undefined) {
+          this.scrollTop = options.top
+        }
+        programmaticScrollDispatched = true
+        // Dispatch a real scroll event during programmatic scrolling execution
+        this.dispatchEvent(new Event('scroll'))
+      })
+
+      // Trigger programmatic scroll via assistant content update
+      const grownEntities = [
+        {
+          ...sampleEntities[0],
+          items: [
+            {
+              ...sampleEntities[0].items[0],
+              text: 'Grown assistant text triggers scrollToLive',
+            },
+            sampleEntities[0].items[1],
+          ],
+        },
+      ]
+
+      rerender(
+        <JobTranscript
+          entities={grownEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      expect(programmaticScrollDispatched).toBe(true)
+      // Programmatic scroll event MUST NOT disable following
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+
+      // Now simulate a manual upward scroll (dispatched when not in programmatic scroll)
+      Object.defineProperty(scrollContainer, 'scrollHeight', { value: 1200, configurable: true })
+      Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true })
+      Object.defineProperty(scrollContainer, 'scrollTop', { value: 100, configurable: true, writable: true })
+
+      fireEvent.scroll(scrollContainer)
+
+      // Manual upward scrolling MUST disable following and show Jump to live button
+      const jumpBtn = screen.getByRole('button', { name: /jump to live/i })
+      expect(jumpBtn).toBeInTheDocument()
+
+      // Clicking Jump to live restores following
+      fireEvent.click(jumpBtn)
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+    })
+
+    it('directly remeasures changed row heights on disclosure toggle, updates positions, ensures later-row non-overlap, and remeasures on responsive reflow', async () => {
       const toolEntities = [
         {
           type: 'attempt',
@@ -824,40 +943,148 @@ describe('JobTranscript component', () => {
             {
               type: 'assistant_message',
               entity_id: 'msg-1',
-              text: 'First line of assistant message',
+              text: 'Introductory assistant message',
               status: 'completed',
             },
             {
               type: 'tool_call',
-              entity_id: 'tool-1',
-              tool_name: 'test_measure',
+              entity_id: 'tool-measure-1',
+              tool_name: 'test_measure_tool',
               status: 'completed',
-              input: { data: 'test' },
+              input: { query: 'run' },
+              output: 'tool completed output',
+            },
+            {
+              type: 'assistant_message',
+              entity_id: 'msg-2',
+              text: 'Subsequent assistant message following tool call',
+              status: 'completed',
             },
           ],
         },
       ]
 
+      let toolExpanded = false
+      let reflowNarrow = false
+
+      const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect
+      HTMLElement.prototype.getBoundingClientRect = function () {
+        if (this.classList.contains('transcript-virtual-row')) {
+          const index = this.getAttribute('data-index')
+          if (index === '0') {
+            return { width: reflowNarrow ? 400 : 800, height: reflowNarrow ? 100 : 72, top: 0, bottom: reflowNarrow ? 100 : 72, left: 0, right: 800 }
+          }
+          if (index === '1') {
+            return { width: 800, height: 72, top: 0, bottom: 72, left: 0, right: 800 }
+          }
+          if (index === '2') {
+            return { width: 800, height: toolExpanded ? 180 : 72, top: 0, bottom: toolExpanded ? 180 : 72, left: 0, right: 800 }
+          }
+          if (index === '3') {
+            return { width: 800, height: 72, top: 0, bottom: 72, left: 0, right: 800 }
+          }
+        }
+        return originalGetBoundingClientRect.call(this)
+      }
+
+      try {
+        const { container } = render(
+          <JobTranscript
+            entities={toolEntities}
+            status="live"
+            streamStatus="active"
+          />
+        )
+
+        let rows = container.querySelectorAll('.transcript-virtual-row')
+        expect(rows.length).toBe(4)
+
+        // Initially collapsed:
+        // row 0: start 0, size 72
+        // row 1: start 80, size 72
+        // row 2: start 160, size 72
+        // row 3: start 240, size 72
+        expect(rows[2].style.transform).toBe('translateY(160px)')
+        expect(rows[3].style.transform).toBe('translateY(240px)')
+
+        // Verify later row does not overlap earlier row
+        const initialRow2Start = 160
+        const initialRow2Size = 72
+        const initialRow3Start = 240
+        expect(initialRow3Start).toBeGreaterThanOrEqual(initialRow2Start + initialRow2Size)
+
+        // Expand tool disclosure
+        toolExpanded = true
+        const summary = container.querySelector('summary')
+        fireEvent.click(summary)
+
+        // Remeasured with changed row height (180px)
+        await waitFor(() => {
+          rows = container.querySelectorAll('.transcript-virtual-row')
+          expect(rows[2].style.transform).toBe('translateY(160px)')
+          expect(rows[3].style.transform).toBe('translateY(348px)')
+        })
+
+        // Assert later-row non-overlap after expansion (348 >= 160 + 180 = 340)
+        const expandedRow2Start = 160
+        const expandedRow2Size = 180
+        const expandedRow3Start = 348
+        expect(expandedRow3Start).toBeGreaterThanOrEqual(expandedRow2Start + expandedRow2Size)
+
+        // Collapse tool disclosure again
+        toolExpanded = false
+        fireEvent.click(summary)
+
+        await waitFor(() => {
+          rows = container.querySelectorAll('.transcript-virtual-row')
+          expect(rows[3].style.transform).toBe('translateY(240px)')
+        })
+
+        // Responsive reflow: row 0 wraps and height increases to 100px
+        reflowNarrow = true
+        fireEvent(window, new Event('resize'))
+
+        await waitFor(() => {
+          rows = container.querySelectorAll('.transcript-virtual-row')
+          expect(rows[1].style.transform).toBe('translateY(108px)')
+          expect(rows[2].style.transform).toBe('translateY(188px)')
+          expect(rows[3].style.transform).toBe('translateY(268px)')
+        })
+
+        // Assert non-overlap after reflow
+        expect(188).toBeGreaterThanOrEqual(108 + 72)
+        expect(268).toBeGreaterThanOrEqual(188 + 72)
+      } finally {
+        HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect
+      }
+    })
+
+    it('preserves strictly bounded mounted row elements for large transcripts in virtualizer', () => {
+      const largeEntities = Array.from({ length: 50 }, (_, i) => ({
+        type: 'attempt',
+        attempt: i + 1,
+        target_id: `target-${i + 1}`,
+        items: [
+          {
+            type: 'assistant_message',
+            entity_id: `msg-${i + 1}`,
+            text: `Message chunk ${i + 1}`,
+            status: 'completed',
+          },
+        ],
+      }))
+
       const { container } = render(
         <JobTranscript
-          entities={toolEntities}
+          entities={largeEntities}
           status="live"
           streamStatus="active"
         />
       )
 
-      // Every rendered row has data-index attribute for virtualizer measurement
-      const rows = container.querySelectorAll('[data-index]')
-      expect(rows.length).toBeGreaterThan(0)
-
-      // Toggle disclosure triggers measurement without error
-      const summary = container.querySelector('summary')
-      if (summary) {
-        fireEvent.click(summary)
-      }
-
-      // Window resize triggers reflow measurement without error
-      fireEvent(window, new Event('resize'))
+      const mountedRows = container.querySelectorAll('.transcript-virtual-row')
+      expect(mountedRows.length).toBeLessThanOrEqual(20)
+      expect(mountedRows.length).toBeGreaterThan(0)
     })
   })
 })
