@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import JobTranscript from './JobTranscript'
 import { reduceTranscriptEvents } from '../hooks/useJobStream'
@@ -213,7 +213,7 @@ describe('JobTranscript component', () => {
     expect(liveRegion).toHaveTextContent(/Reconnecting/i)
   })
 
-  it('shows Jump to live button when user is scrolled up and new items arrive', async () => {
+  it('shows Jump to live button when user is scrolled up and new items arrive', () => {
     const { rerender } = render(
       <JobTranscript
         entities={sampleEntities}
@@ -224,17 +224,14 @@ describe('JobTranscript component', () => {
 
     const container = screen.getByTestId('transcript-scroll-container')
 
-    // Wait for initial mount scroll to settle
-    await new Promise((resolve) => setTimeout(resolve, 150))
-
-    // Simulate user scrolled up
+    // Simulate scrollbar pointer navigation upward
     Object.defineProperty(container, 'scrollHeight', { value: 1000, configurable: true })
     Object.defineProperty(container, 'clientHeight', { value: 300, configurable: true })
     Object.defineProperty(container, 'scrollTop', { value: 100, configurable: true, writable: true })
 
-    act(() => {
-      fireEvent.scroll(container)
-    })
+    fireEvent.pointerDown(container)
+    fireEvent.scroll(container)
+    fireEvent.pointerUp(container)
 
     // New items arrive
     const updatedEntities = [
@@ -269,7 +266,6 @@ describe('JobTranscript component', () => {
 
     fireEvent.click(jumpToLiveBtn)
     expect(jumpToLiveBtn).not.toBeInTheDocument()
-    await new Promise((resolve) => setTimeout(resolve, 150))
   })
 
   it('renders historical fallback note when stream is unavailable', () => {
@@ -890,7 +886,7 @@ describe('JobTranscript component', () => {
       expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
     })
 
-    it('consults isProgrammaticScrollRef during programmatic scroll events without disabling following, while manual upward scrolling disables following', async () => {
+    it('ignores delayed programmatic scroll events without timing assumptions', () => {
       const { rerender } = render(
         <JobTranscript
           entities={sampleEntities}
@@ -900,141 +896,36 @@ describe('JobTranscript component', () => {
       )
 
       const scrollContainer = screen.getByTestId('transcript-scroll-container')
-      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
-
-      let programmaticScrollDispatched = false
-      scrollContainer.scrollTo = vi.fn(function (options) {
-        if (typeof options === 'object' && options.top !== undefined) {
-          this.scrollTop = options.top
-        }
-        programmaticScrollDispatched = true
-        // Deliver asynchronous native scroll event across event-loop tick
-        setTimeout(() => {
-          act(() => {
-            this.dispatchEvent(new Event('scroll'))
-          })
-        }, 15)
-      })
-
-      // Trigger programmatic scroll via assistant content update
-      const grownEntities = [
-        {
-          ...sampleEntities[0],
-          items: [
-            {
-              ...sampleEntities[0].items[0],
-              text: 'Grown assistant text triggers scrollToLive',
-            },
-            sampleEntities[0].items[1],
-          ],
-        },
-      ]
-
-      rerender(
-        <JobTranscript
-          entities={grownEntities}
-          status="live"
-          streamStatus="active"
-        />
-      )
-
-      await waitFor(() => {
-        expect(programmaticScrollDispatched).toBe(true)
-      })
-      // Programmatic scroll event MUST NOT disable following across async delivery
-      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
-
-      // Wait for programmatic scroll settlement
-      await new Promise((resolve) => setTimeout(resolve, 150))
-
-      // Now simulate a manual upward scroll (dispatched after settlement)
       Object.defineProperty(scrollContainer, 'scrollHeight', { value: 1200, configurable: true })
       Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true })
       Object.defineProperty(scrollContainer, 'scrollTop', { value: 100, configurable: true, writable: true })
 
-      fireEvent.scroll(scrollContainer)
-
-      // Manual upward scrolling MUST disable following and show Jump to live button
-      const jumpBtn = screen.getByRole('button', { name: /jump to live/i })
-      expect(jumpBtn).toBeInTheDocument()
-
-      // Clicking Jump to live restores following
-      fireEvent.click(jumpBtn)
-      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
-      await new Promise((resolve) => setTimeout(resolve, 150))
-    })
-
-    it('keeps programmatic scroll intent active across asynchronous native scroll delivery and virtualizer reconciliation until settlement', async () => {
-      const { rerender } = render(
-        <JobTranscript
-          entities={sampleEntities}
-          status="live"
-          streamStatus="active"
-        />
-      )
-
-      const scrollContainer = screen.getByTestId('transcript-scroll-container')
-      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
-
-      let deliveryCount = 0
-      scrollContainer.scrollTo = vi.fn(function (options) {
-        if (typeof options === 'object' && options.top !== undefined) {
-          this.scrollTop = options.top
-        }
-        // Asynchronous scroll event delivery sequence simulating browser delivery + virtualizer reconciliation
-        setTimeout(() => {
-          deliveryCount += 1
-          act(() => {
-            this.dispatchEvent(new Event('scroll'))
-          })
-        }, 10)
-        setTimeout(() => {
-          deliveryCount += 1
-          act(() => {
-            this.dispatchEvent(new Event('scroll'))
-          })
-        }, 30)
-      })
-
-      const grownEntities = [
-        {
-          ...sampleEntities[0],
-          items: [
-            {
-              ...sampleEntities[0].items[0],
-              text: 'Grown assistant text triggering async scroll delivery and reconciliation',
-            },
-            sampleEntities[0].items[1],
-          ],
-        },
-      ]
-
       rerender(
         <JobTranscript
-          entities={grownEntities}
+          entities={[
+            {
+              ...sampleEntities[0],
+              items: [
+                {
+                  ...sampleEntities[0].items[0],
+                  text: 'Grown assistant text triggers scrollToLive',
+                },
+                sampleEntities[0].items[1],
+              ],
+            },
+          ]}
           status="live"
           streamStatus="active"
         />
       )
 
-      await waitFor(() => {
-        expect(deliveryCount).toBeGreaterThanOrEqual(2)
-      })
-
-      // Programmatic scroll intent remained active through multiple asynchronous deliveries
+      fireEvent.scroll(scrollContainer)
       expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
 
-      // After settlement window clears intent
-      await new Promise((resolve) => setTimeout(resolve, 150))
-
-      // Subsequent manual upward scroll correctly triggers jump button
-      Object.defineProperty(scrollContainer, 'scrollHeight', { value: 1500, configurable: true })
-      Object.defineProperty(scrollContainer, 'clientHeight', { value: 500, configurable: true })
-      Object.defineProperty(scrollContainer, 'scrollTop', { value: 200, configurable: true, writable: true })
-
+      fireEvent.pointerDown(scrollContainer)
       fireEvent.scroll(scrollContainer)
-
       expect(screen.getByRole('button', { name: /jump to live/i })).toBeInTheDocument()
+      fireEvent.pointerUp(scrollContainer)
     })
 
     it('directly remeasures changed row heights on disclosure toggle, updates positions, ensures later-row non-overlap, and remeasures on responsive reflow', async () => {

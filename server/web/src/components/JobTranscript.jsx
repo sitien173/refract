@@ -120,31 +120,9 @@ export default function JobTranscript({
   const isFollowingRef = useRef(true)
   isFollowingRef.current = isFollowing
 
-  const isProgrammaticScrollRef = useRef(false)
-  const programmaticScrollTimerRef = useRef(null)
+  const manualPointerScrollRef = useRef(false)
   const prevScrollTopRef = useRef(0)
   const touchStartYRef = useRef(0)
-
-  const clearProgrammaticScrollTimer = useCallback(() => {
-    if (programmaticScrollTimerRef.current !== null) {
-      clearTimeout(programmaticScrollTimerRef.current)
-      programmaticScrollTimerRef.current = null
-    }
-  }, [])
-
-  const scheduleProgrammaticScrollSettlement = useCallback(() => {
-    clearProgrammaticScrollTimer()
-    programmaticScrollTimerRef.current = setTimeout(() => {
-      isProgrammaticScrollRef.current = false
-      programmaticScrollTimerRef.current = null
-    }, 50)
-  }, [clearProgrammaticScrollTimer])
-
-  useEffect(() => {
-    return () => {
-      clearProgrammaticScrollTimer()
-    }
-  }, [clearProgrammaticScrollTimer])
 
   const flatItems = useMemo(() => {
     const items = []
@@ -198,22 +176,17 @@ export default function JobTranscript({
   })
 
   const scrollToLive = useCallback(() => {
-    isProgrammaticScrollRef.current = true
-    try {
-      if (virtualizer && typeof virtualizer.scrollToEnd === 'function') {
-        virtualizer.scrollToEnd({ behavior: 'auto' })
-      }
-      if (parentRef.current && typeof parentRef.current.scrollTo === 'function') {
-        parentRef.current.scrollTo({
-          top: parentRef.current.scrollHeight,
-          behavior: 'auto',
-        })
-        prevScrollTopRef.current = parentRef.current.scrollTop
-      }
-    } finally {
-      scheduleProgrammaticScrollSettlement()
+    if (virtualizer && typeof virtualizer.scrollToEnd === 'function') {
+      virtualizer.scrollToEnd({ behavior: 'auto' })
     }
-  }, [virtualizer, scheduleProgrammaticScrollSettlement])
+    if (parentRef.current && typeof parentRef.current.scrollTo === 'function') {
+      parentRef.current.scrollTo({
+        top: parentRef.current.scrollHeight,
+        behavior: 'auto',
+      })
+      prevScrollTopRef.current = parentRef.current.scrollTop
+    }
+  }, [virtualizer])
 
   const contentSignature = useMemo(() => {
     let len = 0
@@ -270,8 +243,6 @@ export default function JobTranscript({
 
   const handleWheel = (e) => {
     if (e.deltaY < 0) {
-      clearProgrammaticScrollTimer()
-      isProgrammaticScrollRef.current = false
       setIsFollowing(false)
     }
   }
@@ -286,8 +257,6 @@ export default function JobTranscript({
     if (e.touches && e.touches.length > 0) {
       const deltaY = e.touches[0].clientY - touchStartYRef.current
       if (deltaY > 5) {
-        clearProgrammaticScrollTimer()
-        isProgrammaticScrollRef.current = false
         setIsFollowing(false)
       }
     }
@@ -300,19 +269,22 @@ export default function JobTranscript({
       e.key === 'Home' ||
       (e.key === ' ' && e.shiftKey)
     ) {
-      clearProgrammaticScrollTimer()
-      isProgrammaticScrollRef.current = false
       setIsFollowing(false)
     }
   }
 
+  const handlePointerDown = (e) => {
+    if (e.target === e.currentTarget) {
+      manualPointerScrollRef.current = true
+    }
+  }
+
+  const handlePointerEnd = () => {
+    manualPointerScrollRef.current = false
+  }
+
   const handleScroll = () => {
     if (!parentRef.current) return
-    if (isProgrammaticScrollRef.current) {
-      prevScrollTopRef.current = parentRef.current.scrollTop
-      scheduleProgrammaticScrollSettlement()
-      return
-    }
     const { scrollTop, scrollHeight, clientHeight } = parentRef.current
 
     const prevScrollTop = prevScrollTopRef.current
@@ -323,7 +295,7 @@ export default function JobTranscript({
       scrollTop < prevScrollTop - 2 ||
       (maxScroll > 0 && scrollTop < maxScroll - 50)
 
-    if (isUpward) {
+    if (isUpward && manualPointerScrollRef.current) {
       setIsFollowing(false)
     }
   }
@@ -407,6 +379,9 @@ export default function JobTranscript({
             onWheel={handleWheel}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
+            onPointerDown={handlePointerDown}
+            onPointerUp={handlePointerEnd}
+            onPointerCancel={handlePointerEnd}
             onKeyDown={handleKeyDown}
             tabIndex={0}
             role="region"
