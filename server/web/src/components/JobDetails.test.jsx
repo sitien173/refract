@@ -275,4 +275,44 @@ describe('JobDetails component', () => {
     render(<JobDetails job={null} isLoading={true} />)
     expect(getJobOutputSpy).not.toHaveBeenCalled()
   })
+
+  it('renders chronological transcript with expandable tool details inside job details view', () => {
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'worker-node-1',
+          backend: 'codex',
+          status: 'succeeded',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Analyzing repository.', status: 'completed' },
+            {
+              type: 'tool_call',
+              entity_id: 't1',
+              tool_name: 'git_status',
+              status: 'completed',
+              input: { path: '.' },
+              output: 'clean working tree',
+            },
+            { type: 'assistant_message', entity_id: 'm2', text: 'Repository is clean.', status: 'completed' },
+          ],
+        },
+      ],
+      status: 'complete',
+      streamStatus: 'complete',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={mockJob} stream={mockStream} />)
+
+    expect(screen.getByText('Analyzing repository.')).toBeInTheDocument()
+    expect(screen.getByText('git_status')).toBeInTheDocument()
+    expect(screen.getByText('Repository is clean.')).toBeInTheDocument()
+
+    const details = document.querySelector('details.transcript-tool-disclosure')
+    expect(details).toBeInTheDocument()
+    expect(details.open).toBe(false)
+  })
 })

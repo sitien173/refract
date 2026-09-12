@@ -45,9 +45,15 @@ export function reduceTranscriptEvents(events = []) {
       })
     } else if (kind === 'assistant.text.delta' || kind === 'assistant.text_delta') {
       const targetId = entity_id || ''
-      let item = targetId
-        ? attempt.items.find((it) => it.type === 'assistant_message' && it.entity_id === targetId)
-        : [...attempt.items].reverse().find((it) => it.type === 'assistant_message')
+      let item = null
+      if (targetId) {
+        item = attempt.items.find((it) => it.type === 'assistant_message' && it.entity_id === targetId)
+      } else {
+        const last = attempt.items[attempt.items.length - 1]
+        if (last && last.type === 'assistant_message' && last.status !== 'completed') {
+          item = last
+        }
+      }
       if (!item) {
         item = {
           type: 'assistant_message',
@@ -62,18 +68,22 @@ export function reduceTranscriptEvents(events = []) {
       const targetId = entity_id || ''
       const item = targetId
         ? attempt.items.find((it) => it.type === 'assistant_message' && it.entity_id === targetId)
-        : [...attempt.items].reverse().find((it) => it.type === 'assistant_message')
+        : [...attempt.items].reverse().find((it) => it.type === 'assistant_message' && it.status !== 'completed')
       if (item) {
         item.status = 'completed'
       }
     } else if (kind === 'tool.started' || kind === 'tool.call_start') {
-      attempt.items.push({
+      const toolItem = {
         type: 'tool_call',
         entity_id: entity_id || `tool-${event.id}`,
         tool_name: data.tool || data.tool_name || data.name || 'tool',
         status: 'running',
         call_id: data.call_id || data.callId || entity_id || '',
-      })
+      }
+      if (Object.prototype.hasOwnProperty.call(data, 'input')) {
+        toolItem.input = data.input
+      }
+      attempt.items.push(toolItem)
     } else if (kind === 'tool.completed' || kind === 'tool.call_end') {
       const targetId = entity_id || ''
       const item = targetId
@@ -81,6 +91,9 @@ export function reduceTranscriptEvents(events = []) {
         : [...attempt.items].reverse().find((it) => it.type === 'tool_call' && it.status === 'running')
       if (item) {
         item.status = data.status || data.outcome || 'completed'
+        if (Object.prototype.hasOwnProperty.call(data, 'output')) {
+          item.output = data.output
+        }
       }
     } else if (kind === 'stream.notice') {
       attempt.items.push({

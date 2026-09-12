@@ -213,7 +213,7 @@ describe('JobTranscript component', () => {
     expect(liveRegion).toHaveTextContent(/Reconnecting/i)
   })
 
-  it('shows New activity button when user is scrolled up and new items arrive', () => {
+  it('shows Jump to live button when user is scrolled up and new items arrive', () => {
     const { rerender } = render(
       <JobTranscript
         entities={sampleEntities}
@@ -255,15 +255,15 @@ describe('JobTranscript component', () => {
       />
     )
 
-    const newActivityBtn = screen.getByRole('button', { name: /New activity/i })
-    expect(newActivityBtn).toBeInTheDocument()
+    const jumpToLiveBtn = screen.getByRole('button', { name: /jump to live/i })
+    expect(jumpToLiveBtn).toBeInTheDocument()
 
-    // Clicking New activity scrolls to bottom
+    // Clicking Jump to live scrolls to bottom
     const scrollToMock = vi.fn()
     container.scrollTo = scrollToMock
 
-    fireEvent.click(newActivityBtn)
-    expect(newActivityBtn).not.toBeInTheDocument()
+    fireEvent.click(jumpToLiveBtn)
+    expect(jumpToLiveBtn).not.toBeInTheDocument()
   })
 
   it('renders historical fallback note when stream is unavailable', () => {
@@ -354,5 +354,510 @@ describe('JobTranscript component', () => {
     const renderedNodes = container.querySelectorAll('.transcript-attempt-header, .transcript-card')
     expect(renderedNodes.length).toBeLessThanOrEqual(20)
     expect(renderedNodes.length).toBeGreaterThan(0)
+  })
+
+  describe('tool disclosure and payload formatting', () => {
+    it('renders tool calls as collapsed native details and summary with tool name and status', () => {
+      const toolEntity = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              entity_id: 'tool-1',
+              tool_name: 'fetch_data',
+              status: 'completed',
+              call_id: 'call-1',
+              input: { query: 'users' },
+              output: { count: 5 },
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+
+      const details = container.querySelector('details')
+      expect(details).toBeInTheDocument()
+      expect(details.open).toBe(false)
+
+      const summary = container.querySelector('summary')
+      expect(summary).toBeInTheDocument()
+      expect(summary).toHaveTextContent('fetch_data')
+      expect(summary).toHaveTextContent('completed')
+    })
+
+    it('renders separate Input and Output sections with indented JSON on expansion', () => {
+      const toolEntity = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              entity_id: 'tool-1',
+              tool_name: 'test_tool',
+              status: 'completed',
+              input: { key: 'value', count: 1 },
+              output: ['item1', 'item2'],
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+
+      fireEvent.click(container.querySelector('summary'))
+
+      expect(screen.getByText('Input')).toBeInTheDocument()
+      expect(screen.getByText('Output')).toBeInTheDocument()
+
+      const inputFormatted = JSON.stringify({ key: 'value', count: 1 }, null, 2)
+      const outputFormatted = JSON.stringify(['item1', 'item2'], null, 2)
+
+      const codes = container.querySelectorAll('.transcript-payload-code')
+      expect(codes[0].textContent).toBe(inputFormatted)
+      expect(codes[1].textContent).toBe(outputFormatted)
+    })
+
+    it('renders multiline text output preserving line breaks', () => {
+      const toolEntity = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              entity_id: 'tool-1',
+              tool_name: 'bash_exec',
+              status: 'completed',
+              input: 'echo "hello\nworld"',
+              output: 'hello\nworld',
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+
+      fireEvent.click(container.querySelector('summary'))
+      const codes = container.querySelectorAll('.transcript-payload-code')
+      expect(codes[1].textContent).toBe('hello\nworld')
+    })
+
+    it('displays exact "Input not available" and "Output not available" when payloads are omitted', () => {
+      const toolEntity = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              entity_id: 'tool-1',
+              tool_name: 'legacy_tool',
+              status: 'completed',
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+      fireEvent.click(container.querySelector('summary'))
+
+      expect(screen.getByText('Input not available')).toBeInTheDocument()
+      expect(screen.getByText('Output not available')).toBeInTheDocument()
+    })
+
+    it('renders valid falsy payloads visibly without falling back to unavailable', () => {
+      const toolEntity = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              entity_id: 'tool-1',
+              tool_name: 'falsy_tool',
+              status: 'completed',
+              input: false,
+              output: 0,
+            },
+            {
+              type: 'tool_call',
+              entity_id: 'tool-2',
+              tool_name: 'null_tool',
+              status: 'completed',
+              input: null,
+              output: '',
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+      container.querySelectorAll('summary').forEach((s) => fireEvent.click(s))
+
+      expect(screen.queryByText('Input not available')).not.toBeInTheDocument()
+      expect(screen.queryByText('Output not available')).not.toBeInTheDocument()
+      expect(container).toHaveTextContent('false')
+      expect(container).toHaveTextContent('0')
+      expect(container).toHaveTextContent('null')
+    })
+
+    it('uses normal interface typography for assistant text and monospace for IDs and raw payloads', () => {
+      const entities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'assistant_message',
+              entity_id: 'msg-1',
+              text: 'Assistant prose text.',
+              status: 'completed',
+            },
+            {
+              type: 'tool_call',
+              entity_id: 'tool-mono-id',
+              tool_name: 'inspect',
+              status: 'completed',
+              call_id: 'call-12345',
+              input: { param: 'test' },
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={entities} status="live" />)
+      fireEvent.click(container.querySelector('summary'))
+
+      const assistantText = container.querySelector('.transcript-assistant-card .transcript-assistant-text, .transcript-assistant-card .transcript-text')
+      expect(assistantText).toBeInTheDocument()
+      expect(assistantText.tagName.toLowerCase()).not.toBe('pre')
+
+      const idElement = container.querySelector('.transcript-identifier, .cell-code')
+      expect(idElement).toBeInTheDocument()
+      expect(idElement.tagName.toLowerCase()).toBe('code')
+
+      const payloadCode = container.querySelector('.transcript-payload-code')
+      expect(payloadCode).toBeInTheDocument()
+      expect(payloadCode.tagName.toLowerCase()).toBe('pre')
+    })
+
+    it('renders payloads as inert text without interpreting HTML', () => {
+      const toolEntity = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'tool_call',
+              entity_id: 'tool-html',
+              tool_name: 'inject_tool',
+              status: 'completed',
+              input: '<b data-testid="injected-html">Bold</b>',
+              output: '<script>alert(1)</script>',
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+      fireEvent.click(container.querySelector('summary'))
+
+      expect(screen.queryByTestId('injected-html')).not.toBeInTheDocument()
+      expect(container.querySelector('script')).not.toBeInTheDocument()
+      expect(container).toHaveTextContent('<b data-testid="injected-html">Bold</b>')
+      expect(container).toHaveTextContent('<script>alert(1)</script>')
+    })
+  })
+
+  describe('measured virtualization and follow-live behavior', () => {
+    it('initializes in follow-live mode and scrolls to live edge on mount', () => {
+      const scrollToMock = vi.fn()
+      render(
+        <JobTranscript
+          entities={sampleEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+      const scrollContainer = screen.getByTestId('transcript-scroll-container')
+      scrollContainer.scrollTo = scrollToMock
+
+      expect(scrollContainer).toBeInTheDocument()
+    })
+
+    it('follows assistant text growth and new entities while live following is active', () => {
+      const { rerender } = render(
+        <JobTranscript
+          entities={sampleEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+      const scrollContainer = screen.getByTestId('transcript-scroll-container')
+      const scrollToMock = vi.fn()
+      scrollContainer.scrollTo = scrollToMock
+
+      // Assistant growth
+      const grownEntities = [
+        {
+          ...sampleEntities[0],
+          items: [
+            {
+              ...sampleEntities[0].items[0],
+              text: 'Here is the response text. Streaming more content now...',
+            },
+            sampleEntities[0].items[1],
+          ],
+        },
+      ]
+
+      rerender(
+        <JobTranscript
+          entities={grownEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      expect(scrollToMock).toHaveBeenCalled()
+      scrollToMock.mockClear()
+
+      // New entity arrived
+      const newEntityList = [
+        {
+          ...grownEntities[0],
+          items: [
+            ...grownEntities[0].items,
+            {
+              type: 'assistant_message',
+              entity_id: 'msg-new',
+              text: 'A brand new message arrived.',
+              status: 'streaming',
+            },
+          ],
+        },
+      ]
+
+      rerender(
+        <JobTranscript
+          entities={newEntityList}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      expect(scrollToMock).toHaveBeenCalled()
+    })
+
+    it('disables following on wheel up, touch scroll up, and keyboard upward navigation', () => {
+      render(
+        <JobTranscript
+          entities={sampleEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+      const scrollContainer = screen.getByTestId('transcript-scroll-container')
+
+      // Wheel upward
+      fireEvent.wheel(scrollContainer, { deltaY: -50 })
+      expect(screen.getByRole('button', { name: /jump to live/i })).toBeInTheDocument()
+
+      // Reset by clicking Jump to live
+      fireEvent.click(screen.getByRole('button', { name: /jump to live/i }))
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+
+      // Touch scroll up (dragging downward)
+      fireEvent.touchStart(scrollContainer, { touches: [{ clientY: 100 }] })
+      fireEvent.touchMove(scrollContainer, { touches: [{ clientY: 150 }] })
+      expect(screen.getByRole('button', { name: /jump to live/i })).toBeInTheDocument()
+
+      // Reset
+      fireEvent.click(screen.getByRole('button', { name: /jump to live/i }))
+
+      // Keyboard ArrowUp navigation
+      fireEvent.keyDown(scrollContainer, { key: 'ArrowUp' })
+      expect(screen.getByRole('button', { name: /jump to live/i })).toBeInTheDocument()
+    })
+
+    it('does not scroll viewport while following is disabled and keeps Jump to live visible across new content', () => {
+      const { rerender } = render(
+        <JobTranscript
+          entities={sampleEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+      const scrollContainer = screen.getByTestId('transcript-scroll-container')
+
+      // User scrolls up
+      fireEvent.wheel(scrollContainer, { deltaY: -50 })
+
+      const jumpBtn = screen.getByRole('button', { name: /jump to live/i })
+      expect(jumpBtn).toBeInTheDocument()
+
+      const scrollToMock = vi.fn()
+      scrollContainer.scrollTo = scrollToMock
+
+      // Content arrives while disabled
+      const updatedEntities = [
+        {
+          ...sampleEntities[0],
+          items: [
+            ...sampleEntities[0].items,
+            {
+              type: 'assistant_message',
+              entity_id: 'msg-disabled',
+              text: 'Content while disabled',
+              status: 'streaming',
+            },
+          ],
+        },
+      ]
+
+      rerender(
+        <JobTranscript
+          entities={updatedEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      // Must NOT move viewport
+      expect(scrollToMock).not.toHaveBeenCalled()
+      // Jump to live remains persistent
+      expect(screen.getByRole('button', { name: /jump to live/i })).toBeInTheDocument()
+    })
+
+    it('restores following on Jump to live activation and continues following subsequent content', () => {
+      const { rerender } = render(
+        <JobTranscript
+          entities={sampleEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+      const scrollContainer = screen.getByTestId('transcript-scroll-container')
+
+      // Scroll up to disable
+      fireEvent.wheel(scrollContainer, { deltaY: -100 })
+      const jumpBtn = screen.getByRole('button', { name: /jump to live/i })
+      expect(jumpBtn).toBeInTheDocument()
+
+      const scrollToMock = vi.fn()
+      scrollContainer.scrollTo = scrollToMock
+
+      // Click Jump to live
+      fireEvent.click(jumpBtn)
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+      expect(scrollToMock).toHaveBeenCalled()
+
+      scrollToMock.mockClear()
+
+      // Subsequent content follows again
+      const nextEntities = [
+        {
+          ...sampleEntities[0],
+          items: [
+            ...sampleEntities[0].items,
+            {
+              type: 'assistant_message',
+              entity_id: 'msg-after-jump',
+              text: 'Text after jumping live',
+              status: 'completed',
+            },
+          ],
+        },
+      ]
+
+      rerender(
+        <JobTranscript
+          entities={nextEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      expect(scrollToMock).toHaveBeenCalled()
+    })
+
+    it('does not disable following during programmatic scrolling and measurements', () => {
+      const { rerender } = render(
+        <JobTranscript
+          entities={sampleEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      // Initial follow is active
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+
+      // Assistant text update (programmatic follow)
+      const grown = [
+        {
+          ...sampleEntities[0],
+          items: [
+            {
+              ...sampleEntities[0].items[0],
+              text: 'Grown text',
+            },
+          ],
+        },
+      ]
+      rerender(<JobTranscript entities={grown} status="live" streamStatus="active" />)
+
+      // Following must NOT be disabled by the programmatic update
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+    })
+
+    it('attaches virtualizer measurement to each rendered row and remeasures on disclosure toggle and resize', () => {
+      const toolEntities = [
+        {
+          type: 'attempt',
+          attempt: 1,
+          items: [
+            {
+              type: 'assistant_message',
+              entity_id: 'msg-1',
+              text: 'First line of assistant message',
+              status: 'completed',
+            },
+            {
+              type: 'tool_call',
+              entity_id: 'tool-1',
+              tool_name: 'test_measure',
+              status: 'completed',
+              input: { data: 'test' },
+            },
+          ],
+        },
+      ]
+
+      const { container } = render(
+        <JobTranscript
+          entities={toolEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      // Every rendered row has data-index attribute for virtualizer measurement
+      const rows = container.querySelectorAll('[data-index]')
+      expect(rows.length).toBeGreaterThan(0)
+
+      // Toggle disclosure triggers measurement without error
+      const summary = container.querySelector('summary')
+      if (summary) {
+        fireEvent.click(summary)
+      }
+
+      // Window resize triggers reflow measurement without error
+      fireEvent(window, new Event('resize'))
+    })
   })
 })

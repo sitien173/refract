@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import StatusBadge from './StatusBadge'
 
@@ -13,6 +13,87 @@ function getStatusLabel(status, streamStatus) {
   return status
 }
 
+function formatPayload(value) {
+  if (typeof value === 'string') {
+    return value
+  }
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function ToolCallItem({ item, onToggle }) {
+  const [isOpen, setIsOpen] = useState(false)
+  const hasInput = Object.prototype.hasOwnProperty.call(item, 'input')
+  const hasOutput = Object.prototype.hasOwnProperty.call(item, 'output')
+
+  const handleToggle = (e) => {
+    setIsOpen(e.currentTarget.open)
+    if (onToggle) onToggle(e)
+  }
+
+  const handleSummaryClick = (e) => {
+    const details = e.currentTarget.closest('details')
+    if (details) {
+      const nextOpen = !details.open
+      setIsOpen(nextOpen)
+      if (onToggle) onToggle(e)
+    }
+  }
+
+  return (
+    <details
+      className="transcript-card transcript-tool-card transcript-tool-disclosure"
+      onToggle={handleToggle}
+    >
+      <summary className="transcript-tool-summary" onClick={handleSummaryClick}>
+        <div className="transcript-tool-summary-main">
+          <span className="eyebrow">Tool</span>
+          <span className="tool-name">
+            <strong>{item.tool_name}</strong>
+          </span>
+          {(item.call_id || item.entity_id) && (
+            <code className="cell-code caption transcript-identifier">
+              {item.call_id || item.entity_id}
+            </code>
+          )}
+        </div>
+        <StatusBadge status={item.status} label={item.status} />
+      </summary>
+      {isOpen && (
+        <div className="transcript-tool-body">
+          <div className="transcript-payload-section">
+            <span className="eyebrow transcript-payload-label">Input</span>
+            {hasInput ? (
+              <pre className="transcript-payload-code">
+                {formatPayload(item.input)}
+              </pre>
+            ) : (
+              <p className="caption transcript-payload-empty">
+                Input not available
+              </p>
+            )}
+          </div>
+          <div className="transcript-payload-section">
+            <span className="eyebrow transcript-payload-label">Output</span>
+            {hasOutput ? (
+              <pre className="transcript-payload-code">
+                {formatPayload(item.output)}
+              </pre>
+            ) : (
+              <p className="caption transcript-payload-empty">
+                Output not available
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </details>
+  )
+}
+
 export default function JobTranscript({
   entities = [],
   status = 'live',
@@ -22,8 +103,13 @@ export default function JobTranscript({
   onRefresh,
 }) {
   const parentRef = useRef(null)
-  const isAtBottomRef = useRef(true)
-  const [showNewActivity, setShowNewActivity] = useState(false)
+  const [isFollowing, setIsFollowing] = useState(true)
+  const isFollowingRef = useRef(true)
+  isFollowingRef.current = isFollowing
+
+  const isProgrammaticScrollRef = useRef(false)
+  const prevScrollTopRef = useRef(0)
+  const touchStartYRef = useRef(0)
 
   const flatItems = useMemo(() => {
     const items = []
@@ -46,66 +132,147 @@ export default function JobTranscript({
     return items
   }, [entities])
 
-  const prevCountRef = useRef(flatItems.length)
-
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 72,
     overscan: 5,
+    gap: 8,
+    useFlushSync: false,
+    getItemKey: (index) => flatItems[index]?.key || index,
   })
+
+  const scrollToLive = useCallback(() => {
+    isProgrammaticScrollRef.current = true
+    if (virtualizer && typeof virtualizer.scrollToEnd === 'function') {
+      virtualizer.scrollToEnd({ behavior: 'auto' })
+    }
+    if (parentRef.current && typeof parentRef.current.scrollTo === 'function') {
+      parentRef.current.scrollTo({
+        top: parentRef.current.scrollHeight,
+        behavior: 'auto',
+      })
+      prevScrollTopRef.current = parentRef.current.scrollTop
+    }
+    setTimeout(() => {
+      isProgrammaticScrollRef.current = false
+    }, 0)
+  }, [virtualizer])
+
+  const contentSignature = useMemo(() => {
+    let len = 0
+    for (const it of flatItems) {
+      if (it.type === 'assistant_message') {
+        len += it.item?.text?.length || 0
+      }
+    }
+    return `${flatItems.length}:${len}`
+  }, [flatItems])
+
+  const prevSignatureRef = useRef('')
+
+  useEffect(() => {
+    const isInitial = prevSignatureRef.current === ''
+    const isChanged = prevSignatureRef.current !== contentSignature
+    prevSignatureRef.current = contentSignature
+
+    if ((isInitial || isChanged) && isFollowingRef.current) {
+      scrollToLive()
+    }
+  }, [contentSignature, scrollToLive])
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (virtualizer && typeof virtualizer.measure === 'function') {
+        virtualizer.measure()
+      }
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [virtualizer])
+
+  const handleToggle = useCallback(() => {
+    if (virtualizer && typeof virtualizer.measure === 'function') {
+      virtualizer.measure()
+    }
+  }, [virtualizer])
+
+  const handleWheel = (e) => {
+    if (e.deltaY < 0) {
+      setIsFollowing(false)
+    }
+  }
+
+  const handleTouchStart = (e) => {
+    if (e.touches && e.touches.length > 0) {
+      touchStartYRef.current = e.touches[0].clientY
+    }
+  }
+
+  const handleTouchMove = (e) => {
+    if (e.touches && e.touches.length > 0) {
+      const deltaY = e.touches[0].clientY - touchStartYRef.current
+      if (deltaY > 5) {
+        setIsFollowing(false)
+      }
+    }
+  }
+
+  const handleKeyDown = (e) => {
+    if (
+      e.key === 'ArrowUp' ||
+      e.key === 'PageUp' ||
+      e.key === 'Home' ||
+      (e.key === ' ' && e.shiftKey)
+    ) {
+      setIsFollowing(false)
+    }
+  }
 
   const handleScroll = () => {
     if (!parentRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = parentRef.current
-    const atBottom = scrollHeight - scrollTop - clientHeight < 50
-    isAtBottomRef.current = atBottom
-    if (atBottom) {
-      setShowNewActivity(false)
+
+    const prevScrollTop = prevScrollTopRef.current
+    prevScrollTopRef.current = scrollTop
+
+    const maxScroll = Math.max(0, scrollHeight - clientHeight)
+    const isUpward =
+      scrollTop < prevScrollTop - 2 ||
+      (maxScroll > 0 && scrollTop < maxScroll - 50)
+
+    if (isUpward) {
+      setIsFollowing(false)
     }
   }
 
-  useEffect(() => {
-    if (flatItems.length > prevCountRef.current) {
-      if (isAtBottomRef.current && parentRef.current) {
-        if (typeof parentRef.current.scrollTo === 'function') {
-          parentRef.current.scrollTo({ top: parentRef.current.scrollHeight, behavior: 'smooth' })
-        }
-      } else {
-        setShowNewActivity(true)
-      }
-    }
-    prevCountRef.current = flatItems.length
-  }, [flatItems.length])
-
-  const scrollToBottom = () => {
-    if (parentRef.current) {
-      if (typeof parentRef.current.scrollTo === 'function') {
-        parentRef.current.scrollTo({ top: parentRef.current.scrollHeight, behavior: 'smooth' })
-      }
-      isAtBottomRef.current = true
-      setShowNewActivity(false)
-    }
+  const handleJumpToLive = () => {
+    setIsFollowing(true)
+    isFollowingRef.current = true
+    scrollToLive()
   }
 
   const INITIAL_BOUNDED_COUNT = 20
   const virtualItems = virtualizer.getVirtualItems()
-  const renderItems = virtualItems.length > 0
-    ? virtualItems.map((virtualRow) => ({
-        ...flatItems[virtualRow.index],
-        virtualRow,
-      }))
-    : flatItems.slice(0, INITIAL_BOUNDED_COUNT).map((it, idx) => ({
-        ...it,
-        virtualRow: {
-          index: idx,
-          start: idx * 72,
-          size: 72,
-        },
-      }))
+  const renderItems =
+    virtualItems.length > 0
+      ? virtualItems.map((virtualRow) => ({
+          ...flatItems[virtualRow.index],
+          virtualRow,
+        }))
+      : flatItems.slice(0, INITIAL_BOUNDED_COUNT).map((it, idx) => ({
+          ...it,
+          virtualRow: {
+            index: idx,
+            start: idx * (72 + 8),
+            size: 72,
+          },
+        }))
 
   const statusMessage = getStatusLabel(status, streamStatus)
-  const isUnavailable = streamStatus === 'unavailable' || (entities.length === 0 && (status === 'complete' || streamStatus === 'complete'))
+  const isUnavailable =
+    streamStatus === 'unavailable' ||
+    (entities.length === 0 && (status === 'complete' || streamStatus === 'complete'))
 
   return (
     <section className="panel job-transcript-panel" aria-labelledby="job-transcript-heading">
@@ -113,7 +280,12 @@ export default function JobTranscript({
         <div className="transcript-header-title">
           <h3 id="job-transcript-heading">Live transcript</h3>
           <span className={`transcript-status-badge status-badge-${status}`}>
-            <span className={`status-dot status-dot-${status === 'live' ? 'running' : status === 'failed' ? 'failed' : 'neutral'}`} aria-hidden="true" />
+            <span
+              className={`status-dot status-dot-${
+                status === 'live' ? 'running' : status === 'failed' ? 'failed' : 'neutral'
+              }`}
+              aria-hidden="true"
+            />
             {statusMessage}
           </span>
         </div>
@@ -150,6 +322,10 @@ export default function JobTranscript({
             className="transcript-scroll-container"
             data-testid="transcript-scroll-container"
             onScroll={handleScroll}
+            onWheel={handleWheel}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onKeyDown={handleKeyDown}
             tabIndex={0}
             role="region"
             aria-label="Job execution transcript"
@@ -173,81 +349,90 @@ export default function JobTranscript({
                     }
                   : undefined
 
+                let content = null
+
                 if (type === 'attempt_header') {
-                  return (
-                    <div key={key} style={style} className="transcript-attempt-header">
+                  content = (
+                    <div className="transcript-attempt-header">
                       <div className="attempt-title">
                         <strong>Attempt {attempt.attempt}</strong>
-                        {attempt.target_id && <code className="cell-code">{attempt.target_id}</code>}
-                        {attempt.backend && <span className="profile-tag">{attempt.backend}</span>}
+                        {attempt.target_id && (
+                          <code className="cell-code transcript-identifier">
+                            {attempt.target_id}
+                          </code>
+                        )}
+                        {attempt.backend && (
+                          <span className="profile-tag">{attempt.backend}</span>
+                        )}
                       </div>
                       <StatusBadge status={attempt.status} label={attempt.status} />
                     </div>
                   )
-                }
-
-                if (type === 'assistant_message') {
-                  return (
-                    <div key={key} style={style} className="transcript-card transcript-assistant-card">
+                } else if (type === 'assistant_message') {
+                  content = (
+                    <div className="transcript-card transcript-assistant-card">
                       <div className="transcript-card-header">
                         <span className="eyebrow">Assistant</span>
                         {item.status === 'streaming' && (
-                          <span className="streaming-indicator" aria-label="Streaming in progress">
-                            <span className="status-dot status-dot-running" aria-hidden="true" />
+                          <span
+                            className="streaming-indicator"
+                            aria-label="Streaming in progress"
+                          >
+                            <span
+                              className="status-dot status-dot-running"
+                              aria-hidden="true"
+                            />
                             streaming…
                           </span>
                         )}
                       </div>
-                      <pre className="transcript-text">{item.text}</pre>
-                    </div>
-                  )
-                }
-
-                if (type === 'tool_call') {
-                  return (
-                    <div key={key} style={style} className="transcript-card transcript-tool-card">
-                      <div className="transcript-card-header">
-                        <span className="eyebrow">Tool</span>
-                        <StatusBadge status={item.status} label={item.status} />
-                      </div>
-                      <div className="tool-call-details">
-                        <span className="tool-name"><strong>{item.tool_name}</strong></span>
-                        {item.call_id && <code className="cell-code caption">{item.call_id}</code>}
+                      <div className="transcript-assistant-text transcript-text">
+                        {item.text}
                       </div>
                     </div>
                   )
-                }
-
-                if (type === 'notice') {
-                  return (
-                    <div key={key} style={style} className="transcript-card transcript-notice-card">
+                } else if (type === 'tool_call') {
+                  content = <ToolCallItem item={item} onToggle={handleToggle} />
+                } else if (type === 'notice') {
+                  content = (
+                    <div className="transcript-card transcript-notice-card">
                       <p className="caption">{item.text}</p>
                     </div>
                   )
-                }
-
-                if (type === 'truncated') {
-                  return (
-                    <div key={key} style={style} className="transcript-card transcript-truncated-card">
+                } else if (type === 'truncated') {
+                  content = (
+                    <div className="transcript-card transcript-truncated-card">
                       <span className="eyebrow">Stream truncated</span>
                       <p className="caption">Reason: {item.reason}</p>
                     </div>
                   )
                 }
 
-                return null
+                if (!content) return null
+
+                return (
+                  <div
+                    key={key}
+                    ref={virtualizer.measureElement}
+                    data-index={virtualRow ? virtualRow.index : undefined}
+                    style={style}
+                    className="transcript-virtual-row"
+                  >
+                    {content}
+                  </div>
+                )
               })}
             </div>
           </div>
 
-          {showNewActivity && (
+          {!isFollowing && (
             <button
               type="button"
-              className="button button-primary button-sm transcript-new-activity-btn"
-              onClick={scrollToBottom}
-              aria-label="New activity, scroll to live edge"
+              className="button button-primary button-sm transcript-jump-live-btn"
+              onClick={handleJumpToLive}
+              aria-label="Jump to live"
             >
-              ↓ New activity
+              ↓ Jump to live
             </button>
           )}
         </div>

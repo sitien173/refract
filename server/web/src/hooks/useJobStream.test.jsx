@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
-import { useJobStream } from './useJobStream'
+import { reduceTranscriptEvents, useJobStream } from './useJobStream'
 
 class MockEventSource {
   static instances = []
@@ -463,5 +463,166 @@ describe('useJobStream hook', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(result.current.cursor).toBe(2)
     expect(result.current.streamStatus).toBe('complete')
+  })
+})
+
+describe('reduceTranscriptEvents', () => {
+  it('preserves chronological ordering for assistant, tool, assistant sequences', () => {
+    const events = [
+      { id: 1, kind: 'assistant.message.started', entity_id: 'msg-1' },
+      { id: 2, kind: 'assistant.text.delta', entity_id: 'msg-1', data: { text: 'First response' } },
+      { id: 3, kind: 'assistant.message.completed', entity_id: 'msg-1' },
+      { id: 4, kind: 'tool.started', entity_id: 'tool-1', data: { tool_name: 'read_file', input: { path: 'a.txt' } } },
+      { id: 5, kind: 'tool.completed', entity_id: 'tool-1', data: { status: 'completed', output: 'content' } },
+      { id: 6, kind: 'assistant.message.started', entity_id: 'msg-2' },
+      { id: 7, kind: 'assistant.text.delta', entity_id: 'msg-2', data: { text: 'Second response' } },
+      { id: 8, kind: 'assistant.message.completed', entity_id: 'msg-2' },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    expect(attempts).toHaveLength(1)
+    const items = attempts[0].items
+    expect(items).toHaveLength(3)
+    expect(items[0].type).toBe('assistant_message')
+    expect(items[0].text).toBe('First response')
+    expect(items[1].type).toBe('tool_call')
+    expect(items[1].entity_id).toBe('tool-1')
+    expect(items[2].type).toBe('assistant_message')
+    expect(items[2].text).toBe('Second response')
+  })
+
+  it('handles interleaved tools with distinct identifiers correctly', () => {
+    const events = [
+      { id: 1, kind: 'tool.started', entity_id: 'tool-A', data: { tool_name: 'toolA', input: { id: 'A' } } },
+      { id: 2, kind: 'tool.started', entity_id: 'tool-B', data: { tool_name: 'toolB', input: { id: 'B' } } },
+      { id: 3, kind: 'tool.completed', entity_id: 'tool-A', data: { status: 'completed', output: 'result-A' } },
+      { id: 4, kind: 'tool.completed', entity_id: 'tool-B', data: { status: 'completed', output: 'result-B' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const items = attempts[0].items
+    expect(items).toHaveLength(2)
+    expect(items[0].entity_id).toBe('tool-A')
+    expect(items[0].input).toEqual({ id: 'A' })
+    expect(items[0].output).toBe('result-A')
+    expect(items[0].status).toBe('completed')
+
+    expect(items[1].entity_id).toBe('tool-B')
+    expect(items[1].input).toEqual({ id: 'B' })
+    expect(items[1].output).toBe('result-B')
+    expect(items[1].status).toBe('completed')
+  })
+
+  it('preserves raw object input and raw string output', () => {
+    const rawInput = { nested: { array: [1, 2, 3], flag: true } }
+    const rawOutput = 'Command output:\nLine 1\nLine 2'
+    const events = [
+      { id: 1, kind: 'tool.started', entity_id: 'tool-1', data: { tool_name: 'exec', input: rawInput } },
+      { id: 2, kind: 'tool.completed', entity_id: 'tool-1', data: { status: 'completed', output: rawOutput } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const tool = attempts[0].items[0]
+    expect(tool.input).toEqual(rawInput)
+    expect(tool.output).toBe(rawOutput)
+  })
+
+  it('authoritatively matches completion by entity_id and never attaches to another tool', () => {
+    const events = [
+      { id: 1, kind: 'tool.started', entity_id: 'tool-X', data: { tool_name: 'toolX', input: 'x' } },
+      { id: 2, kind: 'tool.completed', entity_id: 'tool-Y', data: { status: 'completed', output: 'y' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const items = attempts[0].items
+    expect(items).toHaveLength(1)
+    expect(items[0].entity_id).toBe('tool-X')
+    expect(items[0].status).toBe('running')
+    expect(items[0].input).toBe('x')
+    expect('output' in items[0]).toBe(false)
+  })
+
+  it('distinguishes absent values from present null and falsy values', () => {
+    const events = [
+      { id: 1, kind: 'tool.started', entity_id: 'tool-absent', data: { tool_name: 't1' } },
+      { id: 2, kind: 'tool.completed', entity_id: 'tool-absent', data: { status: 'completed' } },
+      { id: 3, kind: 'tool.started', entity_id: 'tool-null', data: { tool_name: 't2', input: null } },
+      { id: 4, kind: 'tool.completed', entity_id: 'tool-null', data: { status: 'completed', output: null } },
+      { id: 5, kind: 'tool.started', entity_id: 'tool-falsy-1', data: { tool_name: 't3', input: false } },
+      { id: 6, kind: 'tool.completed', entity_id: 'tool-falsy-1', data: { status: 'completed', output: 0 } },
+      { id: 7, kind: 'tool.started', entity_id: 'tool-falsy-2', data: { tool_name: 't4', input: '' } },
+      { id: 8, kind: 'tool.completed', entity_id: 'tool-falsy-2', data: { status: 'completed', output: [] } },
+      { id: 9, kind: 'tool.started', entity_id: 'tool-falsy-3', data: { tool_name: 't5', input: {} } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const items = attempts[0].items
+
+    expect('input' in items[0]).toBe(false)
+    expect('output' in items[0]).toBe(false)
+
+    expect('input' in items[1]).toBe(true)
+    expect(items[1].input).toBeNull()
+    expect('output' in items[1]).toBe(true)
+    expect(items[1].output).toBeNull()
+
+    expect('input' in items[2]).toBe(true)
+    expect(items[2].input).toBe(false)
+    expect('output' in items[2]).toBe(true)
+    expect(items[2].output).toBe(0)
+
+    expect('input' in items[3]).toBe(true)
+    expect(items[3].input).toBe('')
+    expect('output' in items[3]).toBe(true)
+    expect(items[3].output).toEqual([])
+
+    expect('input' in items[4]).toBe(true)
+    expect(items[4].input).toEqual({})
+  })
+
+  it('handles failed tool status with available output', () => {
+    const events = [
+      { id: 1, kind: 'tool.started', entity_id: 'tool-err', data: { tool_name: 'failing_tool', input: { arg: 1 } } },
+      { id: 2, kind: 'tool.completed', entity_id: 'tool-err', data: { status: 'failed', output: 'Process exited with code 1: permission denied' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const item = attempts[0].items[0]
+    expect(item.status).toBe('failed')
+    expect(item.input).toEqual({ arg: 1 })
+    expect(item.output).toBe('Process exited with code 1: permission denied')
+  })
+
+  it('handles historical rows without payloads preserving status and identifiers', () => {
+    const events = [
+      { id: 1, kind: 'tool.started', entity_id: 'tool-hist', data: { tool: 'legacy_tool', call_id: 'call-hist' } },
+      { id: 2, kind: 'tool.completed', entity_id: 'tool-hist', data: { status: 'succeeded' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    const item = attempts[0].items[0]
+    expect(item.tool_name).toBe('legacy_tool')
+    expect(item.status).toBe('succeeded')
+    expect(item.call_id).toBe('call-hist')
+    expect('input' in item).toBe(false)
+    expect('output' in item).toBe(false)
+  })
+
+  it('handles legacy event aliases for tools, assistant, and attempts', () => {
+    const events = [
+      { id: 1, attempt: 1, kind: 'attempt.started', target_id: 'node-1' },
+      { id: 2, attempt: 1, kind: 'assistant.message_start', entity_id: 'm-1' },
+      { id: 3, attempt: 1, kind: 'assistant.text_delta', entity_id: 'm-1', data: { text: 'Drafting...' } },
+      { id: 4, attempt: 1, kind: 'assistant.message_end', entity_id: 'm-1' },
+      { id: 5, attempt: 1, kind: 'tool.call_start', entity_id: 't-1', data: { tool_name: 'test_call', input: 'test' } },
+      { id: 6, attempt: 1, kind: 'tool.call_end', entity_id: 't-1', data: { outcome: 'success', output: 'done' } },
+      { id: 7, attempt: 1, kind: 'attempt.completed', data: { outcome: 'succeeded' } },
+    ]
+    const attempts = reduceTranscriptEvents(events)
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0].status).toBe('succeeded')
+    const items = attempts[0].items
+    expect(items).toHaveLength(2)
+    expect(items[0].type).toBe('assistant_message')
+    expect(items[0].text).toBe('Drafting...')
+    expect(items[0].status).toBe('completed')
+    expect(items[1].type).toBe('tool_call')
+    expect(items[1].tool_name).toBe('test_call')
+    expect(items[1].status).toBe('success')
+    expect(items[1].input).toBe('test')
+    expect(items[1].output).toBe('done')
   })
 })
