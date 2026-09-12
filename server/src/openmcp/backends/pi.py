@@ -192,10 +192,13 @@ def _execute_sync(params: PiParams) -> BackendResult:
                     if raw_id:
                         raw_to_entity[raw_id] = entity_id
                     tool_name = str(event.get("toolName") or event.get("tool_name") or event.get("tool") or event.get("name") or "")
+                    tool_data: dict[str, Any] = {"tool": tool_name}
+                    if "args" in event:
+                        tool_data["input"] = event["args"]
                     params.emitter({
                         "kind": "tool.started",
                         "entity_id": entity_id,
-                        "data": {"tool": tool_name},
+                        "data": tool_data,
                     })
                 elif evt_type in {"tool_execution_end", "tool_result"}:
                     raw_id = str(event.get("toolCallId") or event.get("tool_call_id") or event.get("id") or "")
@@ -207,10 +210,13 @@ def _execute_sync(params: PiParams) -> BackendResult:
                         status = "completed"
                     else:
                         status = str(event.get("status", "completed"))
+                    tool_data = {"status": status}
+                    if "result" in event:
+                        tool_data["output"] = event["result"]
                     params.emitter({
                         "kind": "tool.completed",
                         "entity_id": entity_id,
-                        "data": {"status": status},
+                        "data": tool_data,
                     })
     except ShellCommandCancelled:
         command_error = "cancelled"

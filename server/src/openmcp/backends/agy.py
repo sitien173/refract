@@ -236,19 +236,31 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
                         entity_state["tool"] += 1
                         active_tool_id = f"tool-{entity_state['tool']}"
                         tool_name = str(event.get("tool_name", "") or event.get("tool", ""))
+                        tool_data: dict[str, Any] = {"tool": tool_name}
+                        if "arguments" in event:
+                            tool_data["input"] = event["arguments"]
+                        elif "input" in event:
+                            tool_data["input"] = event["input"]
+                        elif "args" in event:
+                            tool_data["input"] = event["args"]
                         if params.emitter:
                             params.emitter({
                                 "kind": "tool.started",
                                 "entity_id": active_tool_id,
-                                "data": {"tool": tool_name},
+                                "data": tool_data,
                             })
                     elif evt_type in {"tool.completed", "tool_completed"}:
                         status = str(event.get("status", "completed"))
+                        tool_data = {"status": status}
+                        if "output" in event:
+                            tool_data["output"] = event["output"]
+                        elif "result" in event:
+                            tool_data["output"] = event["result"]
                         if params.emitter:
                             params.emitter({
                                 "kind": "tool.completed",
                                 "entity_id": active_tool_id or f"tool-{entity_state['tool'] or 1}",
-                                "data": {"status": status},
+                                "data": tool_data,
                             })
                         active_tool_id = ""
                 else:

@@ -2090,8 +2090,19 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
                 "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
                 (sub.job_id,),
             )
-            rows_str = str(cursor.fetchall())
-            for s in secrets:
-                assert s not in rows_str
+            rows = cursor.fetchall()
+            rows_data_text = " ".join(r["data_json"] for r in rows)
+
+            # Prompts (secrets[0]), diagnostic traces (secrets[3]), and reasoning (secrets[4]) must never persist
+            for s in [secrets[0], secrets[3], secrets[4]]:
+                assert s not in rows_data_text, f"{backend_name} leaked non-tool secret {s} in stream event data"
+
+            # Approved tool payloads must persist in the stream event data
+            if backend_name in {"claude", "codex", "agy"}:
+                assert secrets[1] in rows_data_text, f"{backend_name} missing persisted tool input {secrets[1]}"
+            if backend_name == "pi":
+                assert secrets[2] in rows_data_text, f"{backend_name} missing persisted tool input {secrets[2]}"
+            if backend_name in {"codex", "pi", "agy"}:
+                assert secrets[5] in rows_data_text, f"{backend_name} missing persisted tool output {secrets[5]}"
         finally:
             await runtime.close()

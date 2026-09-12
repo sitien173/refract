@@ -229,13 +229,123 @@ def test_claude_streaming_normalization(tmp_path, monkeypatch):
     assert len(events) >= 2
     kinds = [e["kind"] for e in events]
     assert "assistant.text.delta" in kinds
+    assert "tool.started" in kinds
+    assert "tool.completed" in kinds
+
+    started_evt = next(e for e in events if e["kind"] == "tool.started")
+    assert started_evt["data"]["tool"] == "Read"
+    assert started_evt["data"]["input"] == {"path": "/etc/shadow", "secret_arg": "pass123"}
+
+    completed_evt = next(e for e in events if e["kind"] == "tool.completed")
+    assert completed_evt["data"] == {"status": "completed"}
+    assert "output" not in completed_evt["data"]
 
     serialized = json.dumps(events)
-    # Planted secrets must not be in serialized events
+    # Planted non-tool secrets must not be in serialized events
     assert "secret_token_123" not in serialized
     assert "secret_reasoning_456" not in serialized
-    assert "secret_arg" not in serialized
-    assert "pass123" not in serialized
+    # Approved tool input is present in serialized events
+    assert "secret_arg" in serialized
+    assert "pass123" in serialized
+    # Tool arguments must not leak into agent_messages
+    assert "pass123" not in result.agent_messages
+    assert "secret_arg" not in result.agent_messages
+
+
+def test_claude_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    nested_input = {
+        "nested": {"key": [1, 2.5, "three", False, True, None, {"deep": True}]},
+        "empty_list": [],
+        "empty_dict": {},
+        "empty_str": "",
+        "zero": 0,
+        "false_val": False,
+    }
+
+    stream_fixture = [
+        # Tool 1: complex nested input
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": "NestedTool",
+                    "input": nested_input,
+                },
+            },
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 0},
+        }),
+        # Tool 2: missing input field
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "t2",
+                    "name": "NoInputTool",
+                },
+            },
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 1},
+        }),
+        # Tool 3: null input
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "t3",
+                    "name": "NullInputTool",
+                    "input": None,
+                },
+            },
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 2},
+        }),
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Done",
+            "session_id": "claude-sess",
+        }),
+    ]
+
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.claude.run_shell_command",
+        lambda *args, **kwargs: (line for line in stream_fixture),
+    )
+
+    params = ClaudeParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    result = claude_sync(params)
+    assert result.outcome == "OK"
+
+    tool_starts = [e for e in events if e["kind"] == "tool.started"]
+    assert len(tool_starts) == 3
+
+    # Nested structure preserved exactly
+    assert tool_starts[0]["data"]["input"] == nested_input
+    # Missing input remains absent
+    assert "input" not in tool_starts[1]["data"]
+    # Provider-supplied null remains present
+    assert "input" in tool_starts[2]["data"]
+    assert tool_starts[2]["data"]["input"] is None
 
 
 def test_codex_streaming_normalization(tmp_path, monkeypatch):
@@ -264,11 +374,103 @@ def test_codex_streaming_normalization(tmp_path, monkeypatch):
     assert result.SESSION_ID == "codex-thread-1234-5678"
 
     assert len(events) >= 1
+    started_evt = next(e for e in events if e["kind"] == "tool.started")
+    assert started_evt["data"]["tool"] == "bash"
+    assert started_evt["data"]["input"] == "cat /etc/passwd secret_key_789"
+
+    completed_evt = next(e for e in events if e["kind"] == "tool.completed")
+    assert completed_evt["data"]["status"] == "completed"
+    assert completed_evt["data"]["output"] == "root:secret_hash_value"
+
     serialized = json.dumps(events)
-    # Exclude secrets & tool arguments/outputs
-    assert "secret_key_789" not in serialized
-    assert "secret_hash_value" not in serialized
+    # Exclude reasoning
     assert "secret_chain_of_thought" not in serialized
+    # Include tool payload
+    assert "secret_key_789" in serialized
+    assert "secret_hash_value" in serialized
+    # Final agent message does not leak tool payload
+    assert "secret_key_789" not in result.agent_messages
+    assert "secret_hash_value" not in result.agent_messages
+
+
+def test_codex_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    nested_payload = {
+        "cmd": "process",
+        "params": [1, False, None, {"k": "v"}],
+        "zero": 0,
+        "empty_str": "",
+    }
+    nested_output = {"exit_code": 0, "records": [{"id": 101, "ok": True}]}
+
+    stream_fixture = [
+        json.dumps({"type": "thread.started", "thread_id": "codex-nested-123"}),
+        # Tool 1: complex nested input and output
+        json.dumps({
+            "type": "item.started",
+            "item": {"type": "tool_call", "id": "tc1", "name": "process_tool", "input": nested_payload},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "tool_call", "id": "tc1", "name": "process_tool", "output": nested_output, "status": "completed"},
+        }),
+        # Tool 2: missing input and output
+        json.dumps({
+            "type": "item.started",
+            "item": {"type": "tool_call", "id": "tc2", "name": "bare_tool"},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "tool_call", "id": "tc2", "name": "bare_tool", "status": "completed"},
+        }),
+        # Tool 3: null input and null output
+        json.dumps({
+            "type": "item.started",
+            "item": {"type": "tool_call", "id": "tc3", "name": "null_tool", "input": None},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "tool_call", "id": "tc3", "name": "null_tool", "output": None, "status": "completed"},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "id": "m1", "text": "Finished."},
+        }),
+    ]
+
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.codex.run_shell_command",
+        lambda *args, **kwargs: (line for line in stream_fixture),
+    )
+
+    params = CodexParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    result = codex_sync(params)
+    assert result.outcome == "OK"
+
+    tool_starts = [e for e in events if e["kind"] == "tool.started"]
+    tool_comps = [e for e in events if e["kind"] == "tool.completed"]
+
+    assert len(tool_starts) == 3
+    assert len(tool_comps) == 3
+
+    # Preserved nested structure
+    assert tool_starts[0]["data"]["input"] == nested_payload
+    assert tool_comps[0]["data"]["output"] == nested_output
+    assert tool_starts[0]["entity_id"] == tool_comps[0]["entity_id"]
+
+    # Missing fields remain absent
+    assert "input" not in tool_starts[1]["data"]
+    assert "output" not in tool_comps[1]["data"]
+
+    # Provider null remains present
+    assert "input" in tool_starts[2]["data"]
+    assert tool_starts[2]["data"]["input"] is None
+    assert "output" in tool_comps[2]["data"]
+    assert tool_comps[2]["data"]["output"] is None
 
 
 def test_pi_streaming_normalization(tmp_path, monkeypatch):
@@ -303,13 +505,103 @@ def test_pi_streaming_normalization(tmp_path, monkeypatch):
     assert events[0]["data"]["text"] == "Checking project files."
     assert events[1]["data"]["tool"] == "grep"
     assert events[1]["entity_id"] == "tool-1"
+    assert events[1]["data"]["input"] == {"pattern": "secret_pwd_999"}
     assert events[2]["data"]["status"] == "completed"
+    assert events[2]["data"]["output"] == "matched secret_pwd_999 in config"
     assert events[2]["entity_id"] == "tool-1"
 
     serialized = json.dumps(events)
-    assert "secret_pwd_999" not in serialized
+    assert "secret_pwd_999" in serialized
     # Thinking deltas must be excluded
     assert "secret_thinking_pwd" not in serialized
+    assert "secret_pwd_999" not in result.agent_messages
+
+
+def test_pi_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    nested_args = {"nested": [1, False, None, {"sub": "data"}], "zero": 0}
+    nested_result = {"matches": [{"file": "a.py", "line": 42}], "count": 1}
+
+    stream_fixture = [
+        json.dumps({"type": "session", "id": "pi-nested-sess"}),
+        # Tool 1: camelCase IDs, nested args and result, error status
+        json.dumps({
+            "type": "tool_execution_start",
+            "toolCallId": "call_1",
+            "toolName": "nested_pi_tool",
+            "args": nested_args,
+        }),
+        json.dumps({
+            "type": "tool_execution_end",
+            "toolCallId": "call_1",
+            "isError": True,
+            "result": nested_result,
+        }),
+        # Tool 2: snake_case tool_call_id, missing args and result
+        json.dumps({
+            "type": "tool_call",
+            "tool_call_id": "call_2",
+            "name": "bare_pi_tool",
+        }),
+        json.dumps({
+            "type": "tool_result",
+            "tool_call_id": "call_2",
+            "status": "completed",
+        }),
+        # Tool 3: null args and null result
+        json.dumps({
+            "type": "tool_execution_start",
+            "toolCallId": "call_3",
+            "toolName": "null_pi_tool",
+            "args": None,
+        }),
+        json.dumps({
+            "type": "tool_execution_end",
+            "toolCallId": "call_3",
+            "isError": False,
+            "result": None,
+        }),
+        json.dumps({
+            "type": "message_end",
+            "message": {"role": "assistant", "content": "Done"},
+        }),
+    ]
+
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.pi.run_shell_command",
+        lambda *args, **kwargs: (line for line in stream_fixture),
+    )
+
+    params = PiParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    result = pi_sync(params)
+    assert result.outcome == "OK"
+
+    tool_starts = [e for e in events if e["kind"] == "tool.started"]
+    tool_comps = [e for e in events if e["kind"] == "tool.completed"]
+
+    assert len(tool_starts) == 3
+    assert len(tool_comps) == 3
+
+    # Nested structures and error status normalization
+    assert tool_starts[0]["data"]["input"] == nested_args
+    assert tool_comps[0]["data"]["output"] == nested_result
+    assert tool_comps[0]["data"]["status"] == "error"
+    assert tool_starts[0]["entity_id"] == tool_comps[0]["entity_id"]
+
+    # Missing fields remain absent
+    assert "input" not in tool_starts[1]["data"]
+    assert "output" not in tool_comps[1]["data"]
+    assert tool_starts[1]["entity_id"] == tool_comps[1]["entity_id"]
+
+    # Null fields remain present
+    assert "input" in tool_starts[2]["data"]
+    assert tool_starts[2]["data"]["input"] is None
+    assert "output" in tool_comps[2]["data"]
+    assert tool_comps[2]["data"]["output"] is None
 
 
 def test_agy_streaming_normalization(tmp_path, monkeypatch):
@@ -342,9 +634,17 @@ def test_agy_streaming_normalization(tmp_path, monkeypatch):
     assert result.SESSION_ID == "12345678-1234-1234-1234-123456789abc"
 
     assert len(events) >= 1
+    started_evt = next(e for e in events if e["kind"] == "tool.started")
+    assert started_evt["data"]["tool"] == "execute_code"
+    assert started_evt["data"]["input"] == {"script": "secret_token_val"}
+
+    completed_evt = next(e for e in events if e["kind"] == "tool.completed")
+    assert completed_evt["data"]["status"] == "success"
+    assert completed_evt["data"]["output"] == "secret_stdout_result"
+
     serialized = json.dumps(events)
-    assert "secret_token_val" not in serialized
-    assert "secret_stdout_result" not in serialized
+    assert "secret_token_val" in serialized
+    assert "secret_stdout_result" in serialized
     # Fixture secrets must NOT leak into returned agent_messages
     assert "secret_token_val" not in result.agent_messages
     assert "secret_stdout_result" not in result.agent_messages
@@ -354,6 +654,104 @@ def test_agy_streaming_normalization(tmp_path, monkeypatch):
     assert "secret_object_val" not in result.agent_messages
     assert "arbitrary_secret_obj" not in result.agent_messages
     assert result.agent_messages == "Running antigravity analysis.\n\nAntigravity finished successfully."
+
+
+def test_agy_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    nested_args = {"nested": [1, False, None, {"inner": 123}], "empty": {}}
+    nested_res = {"stdout": "ok", "items": [{"val": 1}]}
+
+    stream_fixture = [
+        "Created conversation 12345678-1234-1234-1234-123456789abc",
+        # Tool 1: arguments and result
+        json.dumps({
+            "type": "tool.started",
+            "tool_name": "agy_tool_1",
+            "arguments": nested_args,
+        }),
+        json.dumps({
+            "type": "tool.completed",
+            "tool_name": "agy_tool_1",
+            "status": "completed",
+            "result": nested_res,
+        }),
+        # Tool 2: input and output alternatives
+        json.dumps({
+            "type": "tool_started",
+            "tool": "agy_tool_2",
+            "input": "input_string",
+        }),
+        json.dumps({
+            "type": "tool_completed",
+            "status": "completed",
+            "output": "output_string",
+        }),
+        # Tool 3: missing arguments and output
+        json.dumps({
+            "type": "tool.started",
+            "tool_name": "bare_tool",
+        }),
+        json.dumps({
+            "type": "tool.completed",
+            "status": "completed",
+        }),
+        # Tool 4: provider null arguments and output
+        json.dumps({
+            "type": "tool.started",
+            "tool_name": "null_tool",
+            "arguments": None,
+        }),
+        json.dumps({
+            "type": "tool.completed",
+            "status": "completed",
+            "output": None,
+        }),
+        json.dumps({
+            "type": "result",
+            "result": "Done",
+        }),
+    ]
+
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.agy.run_shell_command",
+        lambda *args, **kwargs: (line for line in stream_fixture),
+    )
+    monkeypatch.setattr(
+        "openmcp.backends.agy._agy_has_pending_tasks",
+        lambda *args, **kwargs: False,
+    )
+
+    params = AgyParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    result = _execute_once(params)
+    assert result.outcome == "OK"
+
+    tool_starts = [e for e in events if e["kind"] == "tool.started"]
+    tool_comps = [e for e in events if e["kind"] == "tool.completed"]
+
+    assert len(tool_starts) == 4
+    assert len(tool_comps) == 4
+
+    # Nested preservation
+    assert tool_starts[0]["data"]["input"] == nested_args
+    assert tool_comps[0]["data"]["output"] == nested_res
+
+    # Alternative input / output field support
+    assert tool_starts[1]["data"]["input"] == "input_string"
+    assert tool_comps[1]["data"]["output"] == "output_string"
+
+    # Missing fields remain absent
+    assert "input" not in tool_starts[2]["data"]
+    assert "output" not in tool_comps[2]["data"]
+
+    # Provider null remains present
+    assert "input" in tool_starts[3]["data"]
+    assert tool_starts[3]["data"]["input"] is None
+    assert "output" in tool_comps[3]["data"]
+    assert tool_comps[3]["data"]["output"] is None
 
 
 

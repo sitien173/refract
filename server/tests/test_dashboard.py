@@ -1999,23 +1999,41 @@ async def test_security_regressions_forbidden_provider_content_not_in_dashboard_
         runtime.database.append_stream_events(job_id, events)
         runtime.database.finish_job(job_id, "succeeded", text=safe_text)
 
-        # 1. Assert raw SQLite rows contain none of the forbidden tokens
+        # 1. Assert raw SQLite rows contain none of the non-tool forbidden tokens
         cursor = runtime.database._connection.execute(
             "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
             (job_id,),
         )
-        rows_text = str(cursor.fetchall())
-        for token in forbidden_tokens:
+        rows = cursor.fetchall()
+        rows_text = " ".join(r["data_json"] for r in rows)
+        private_tokens = [
+            forbidden_tokens[0],
+            forbidden_tokens[1],
+            forbidden_tokens[5],
+            forbidden_tokens[6],
+            forbidden_tokens[7],
+        ]
+        for token in private_tokens:
             assert token not in rows_text, f"{name} SQLite row leaked {token}"
 
-        # 2. Assert REST /output endpoint contains none of the forbidden tokens
+        # Approved tool payloads must persist in SQLite rows
+        assert forbidden_tokens[2] in rows_text, f"{name} SQLite row missing tool input {forbidden_tokens[2]}"
+        if name in {"codex", "pi", "agy"}:
+            assert forbidden_tokens[3] in rows_text, f"{name} SQLite row missing tool output {forbidden_tokens[3]}"
+
+        # 2. Assert REST /output endpoint contains none of the non-tool forbidden tokens
         status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}/output")
         assert status == 200
         body_text = body.decode("utf-8")
-        for token in forbidden_tokens:
+        for token in private_tokens:
             assert token not in body_text, f"{name} REST output leaked {token}"
 
-        # 3. Assert SSE stream contains none of the forbidden tokens
+        # Approved tool payloads must be present in REST output
+        assert forbidden_tokens[2] in body_text, f"{name} REST output missing tool input {forbidden_tokens[2]}"
+        if name in {"codex", "pi", "agy"}:
+            assert forbidden_tokens[3] in body_text, f"{name} REST output missing tool output {forbidden_tokens[3]}"
+
+        # 3. Assert SSE stream contains none of the forbidden tokens (cursor notification only)
         sse = await open_sse_client(app, f"/dashboard/api/jobs/{job_id}/output/updates")
         try:
             await sse.read_start()
@@ -2024,3 +2042,113 @@ async def test_security_regressions_forbidden_provider_content_not_in_dashboard_
                 assert token not in chunk.decode("utf-8"), f"{name} SSE leaked {token}"
         finally:
             await sse.close()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_job_output_preserves_nested_tool_payloads(active_runtime) -> None:
+    """Verify provider event -> normalized event -> StreamRecorder -> SQLite data_json -> dashboard output API preserving structural equality."""
+    runtime = active_runtime
+    project = runtime.database.project("project")
+    plan = resolve_execution_plan("implement", runtime.catalog, "balanced")
+    app = create_application()
+    job_id = "job-tool-payloads-pipeline"
+
+    runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="implement",
+        profile="balanced",
+        prompt="test payloads",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="implement",
+    )
+
+    nested_input = {
+        "params": [1, 2.5, "test", True, False, None, {"nested_key": "val"}],
+        "empty_obj": {},
+        "empty_arr": [],
+        "zero": 0,
+        "false_val": False,
+        "empty_str": "",
+    }
+    nested_output = {
+        "stdout": "output lines\nsecond line",
+        "exit_code": 0,
+        "records": [{"id": 1, "valid": True, "meta": None}],
+    }
+
+    events = [
+        # Tool with complex nested input and output
+        {"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "complex_tool", "input": nested_input}},
+        {"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed", "output": nested_output}},
+        # Tool with missing input and missing output
+        {"kind": "tool.started", "entity_id": "tool-2", "data": {"tool": "bare_tool"}},
+        {"kind": "tool.completed", "entity_id": "tool-2", "data": {"status": "completed"}},
+        # Tool with provider-supplied null input and output
+        {"kind": "tool.started", "entity_id": "tool-3", "data": {"tool": "null_tool", "input": None}},
+        {"kind": "tool.completed", "entity_id": "tool-3", "data": {"status": "completed", "output": None}},
+    ]
+
+    runtime.database.append_stream_events(job_id, events)
+    runtime.database.finish_job(job_id, "succeeded", text="Finished successfully.")
+
+    # 1. Verify SQLite data_json rows preserve exact types and keys
+    cursor = runtime.database._connection.execute(
+        "SELECT id, kind, entity_id, data_json FROM job_stream_events WHERE job_id=? ORDER BY id",
+        (job_id,),
+    )
+    db_rows = cursor.fetchall()
+    assert len(db_rows) == 6
+
+    row1_data = json.loads(db_rows[0]["data_json"])
+    assert row1_data["tool"] == "complex_tool"
+    assert row1_data["input"] == nested_input
+
+    row2_data = json.loads(db_rows[1]["data_json"])
+    assert row2_data["status"] == "completed"
+    assert row2_data["output"] == nested_output
+
+    row3_data = json.loads(db_rows[2]["data_json"])
+    assert row3_data["tool"] == "bare_tool"
+    assert "input" not in row3_data
+
+    row4_data = json.loads(db_rows[3]["data_json"])
+    assert row4_data["status"] == "completed"
+    assert "output" not in row4_data
+
+    row5_data = json.loads(db_rows[4]["data_json"])
+    assert row5_data["tool"] == "null_tool"
+    assert "input" in row5_data
+    assert row5_data["input"] is None
+
+    row6_data = json.loads(db_rows[5]["data_json"])
+    assert row6_data["status"] == "completed"
+    assert "output" in row6_data
+    assert row6_data["output"] is None
+
+    # 2. Verify REST /output endpoint returns exact types and structures
+    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}/output?after=0&limit=10")
+    assert status == 200
+    payload = json.loads(body.decode("utf-8"))
+    api_events = payload["events"]
+    assert len(api_events) == 6
+
+    assert api_events[0]["data"]["tool"] == "complex_tool"
+    assert api_events[0]["data"]["input"] == nested_input
+
+    assert api_events[1]["data"]["status"] == "completed"
+    assert api_events[1]["data"]["output"] == nested_output
+
+    assert api_events[2]["data"]["tool"] == "bare_tool"
+    assert "input" not in api_events[2]["data"]
+
+    assert api_events[3]["data"]["status"] == "completed"
+    assert "output" not in api_events[3]["data"]
+
+    assert api_events[4]["data"]["tool"] == "null_tool"
+    assert "input" in api_events[4]["data"]
+    assert api_events[4]["data"]["input"] is None
+
+    assert api_events[5]["data"]["status"] == "completed"
+    assert "output" in api_events[5]["data"]
+    assert api_events[5]["data"]["output"] is None

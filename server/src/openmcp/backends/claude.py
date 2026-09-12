@@ -194,17 +194,30 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
                     if isinstance(cb, dict) and cb.get("type") == "tool_use":
                         entity_counter += 1
                         active_tool_id = f"tool-{entity_counter}"
+                        tool_data: dict[str, Any] = {"tool": str(cb.get("name", ""))}
+                        if "input" in cb:
+                            tool_data["input"] = cb["input"]
                         params.emitter({
                             "kind": "tool.started",
                             "entity_id": active_tool_id,
-                            "data": {"tool": str(cb.get("name", ""))},
+                            "data": tool_data,
                         })
                 elif evt_type == "content_block_stop":
                     if active_tool_id:
+                        comp_data: dict[str, Any] = {"status": "completed"}
+                        cb = event.get("content_block", {})
+                        if isinstance(cb, dict) and "output" in cb:
+                            comp_data["output"] = cb["output"]
+                        elif isinstance(cb, dict) and "result" in cb:
+                            comp_data["output"] = cb["result"]
+                        elif "output" in event:
+                            comp_data["output"] = event["output"]
+                        elif "result" in event:
+                            comp_data["output"] = event["result"]
                         params.emitter({
                             "kind": "tool.completed",
                             "entity_id": active_tool_id,
-                            "data": {"status": "completed"},
+                            "data": comp_data,
                         })
                         active_tool_id = ""
     except ShellCommandCancelled:

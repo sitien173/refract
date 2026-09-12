@@ -285,10 +285,13 @@ def _execute_sync(params: CodexParams) -> BackendResult:
                         entity_id = f"tool-{entity_counter}"
                         if raw_id:
                             raw_to_entity[raw_id] = entity_id
+                        tool_data: dict[str, Any] = {"tool": str(item.get("name", ""))}
+                        if "input" in item:
+                            tool_data["input"] = item["input"]
                         params.emitter({
                             "kind": "tool.started",
                             "entity_id": entity_id,
-                            "data": {"tool": str(item.get("name", ""))},
+                            "data": tool_data,
                         })
                 elif event_type == "item.completed":
                     if item_type == "agent_message":
@@ -308,10 +311,13 @@ def _execute_sync(params: CodexParams) -> BackendResult:
                     elif item_type == "tool_call":
                         entity_id = raw_to_entity.get(raw_id) or f"tool-{entity_counter or 1}"
                         status = str(item.get("status", "completed"))
+                        tool_data = {"status": status}
+                        if "output" in item:
+                            tool_data["output"] = item["output"]
                         params.emitter({
                             "kind": "tool.completed",
                             "entity_id": entity_id,
-                            "data": {"status": status},
+                            "data": tool_data,
                         })
     except ShellCommandCancelled:
         log.warning("codex subprocess cancelled")
