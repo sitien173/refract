@@ -55,42 +55,13 @@ function ToolCallItem({ item, onToggle }) {
     }
   }
 
-  const handleSummaryClick = (e) => {
-    const details = e.currentTarget.closest('details')
-    if (details) {
-      const nextOpen = !details.open
-      details.open = nextOpen
-      if (nextOpen !== isOpen) {
-        setIsOpen(nextOpen)
-      }
-    }
-  }
-
-  const handleSummaryKeyDown = (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      const details = e.currentTarget.closest('details')
-      if (details) {
-        const nextOpen = !details.open
-        details.open = nextOpen
-        if (nextOpen !== isOpen) {
-          setIsOpen(nextOpen)
-        }
-      }
-    }
-  }
-
   return (
     <details
       ref={detailsRef}
       className="transcript-card transcript-tool-card transcript-tool-disclosure"
       onToggle={handleToggle}
     >
-      <summary
-        className="transcript-tool-summary"
-        onClick={handleSummaryClick}
-        onKeyDown={handleSummaryKeyDown}
-      >
+      <summary className="transcript-tool-summary">
         <div className="transcript-tool-summary-main">
           <span className="eyebrow">Tool</span>
           <span className="tool-name">
@@ -150,8 +121,30 @@ export default function JobTranscript({
   isFollowingRef.current = isFollowing
 
   const isProgrammaticScrollRef = useRef(false)
+  const programmaticScrollTimerRef = useRef(null)
   const prevScrollTopRef = useRef(0)
   const touchStartYRef = useRef(0)
+
+  const clearProgrammaticScrollTimer = useCallback(() => {
+    if (programmaticScrollTimerRef.current !== null) {
+      clearTimeout(programmaticScrollTimerRef.current)
+      programmaticScrollTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleProgrammaticScrollSettlement = useCallback(() => {
+    clearProgrammaticScrollTimer()
+    programmaticScrollTimerRef.current = setTimeout(() => {
+      isProgrammaticScrollRef.current = false
+      programmaticScrollTimerRef.current = null
+    }, 50)
+  }, [clearProgrammaticScrollTimer])
+
+  useEffect(() => {
+    return () => {
+      clearProgrammaticScrollTimer()
+    }
+  }, [clearProgrammaticScrollTimer])
 
   const flatItems = useMemo(() => {
     const items = []
@@ -218,9 +211,9 @@ export default function JobTranscript({
         prevScrollTopRef.current = parentRef.current.scrollTop
       }
     } finally {
-      isProgrammaticScrollRef.current = false
+      scheduleProgrammaticScrollSettlement()
     }
-  }, [virtualizer])
+  }, [virtualizer, scheduleProgrammaticScrollSettlement])
 
   const contentSignature = useMemo(() => {
     let len = 0
@@ -277,6 +270,8 @@ export default function JobTranscript({
 
   const handleWheel = (e) => {
     if (e.deltaY < 0) {
+      clearProgrammaticScrollTimer()
+      isProgrammaticScrollRef.current = false
       setIsFollowing(false)
     }
   }
@@ -291,6 +286,8 @@ export default function JobTranscript({
     if (e.touches && e.touches.length > 0) {
       const deltaY = e.touches[0].clientY - touchStartYRef.current
       if (deltaY > 5) {
+        clearProgrammaticScrollTimer()
+        isProgrammaticScrollRef.current = false
         setIsFollowing(false)
       }
     }
@@ -303,6 +300,8 @@ export default function JobTranscript({
       e.key === 'Home' ||
       (e.key === ' ' && e.shiftKey)
     ) {
+      clearProgrammaticScrollTimer()
+      isProgrammaticScrollRef.current = false
       setIsFollowing(false)
     }
   }
@@ -311,6 +310,7 @@ export default function JobTranscript({
     if (!parentRef.current) return
     if (isProgrammaticScrollRef.current) {
       prevScrollTopRef.current = parentRef.current.scrollTop
+      scheduleProgrammaticScrollSettlement()
       return
     }
     const { scrollTop, scrollHeight, clientHeight } = parentRef.current

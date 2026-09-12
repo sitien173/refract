@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import JobTranscript from './JobTranscript'
 import { reduceTranscriptEvents } from '../hooks/useJobStream'
@@ -213,7 +213,7 @@ describe('JobTranscript component', () => {
     expect(liveRegion).toHaveTextContent(/Reconnecting/i)
   })
 
-  it('shows Jump to live button when user is scrolled up and new items arrive', () => {
+  it('shows Jump to live button when user is scrolled up and new items arrive', async () => {
     const { rerender } = render(
       <JobTranscript
         entities={sampleEntities}
@@ -224,12 +224,17 @@ describe('JobTranscript component', () => {
 
     const container = screen.getByTestId('transcript-scroll-container')
 
+    // Wait for initial mount scroll to settle
+    await new Promise((resolve) => setTimeout(resolve, 150))
+
     // Simulate user scrolled up
     Object.defineProperty(container, 'scrollHeight', { value: 1000, configurable: true })
     Object.defineProperty(container, 'clientHeight', { value: 300, configurable: true })
     Object.defineProperty(container, 'scrollTop', { value: 100, configurable: true, writable: true })
 
-    fireEvent.scroll(container)
+    act(() => {
+      fireEvent.scroll(container)
+    })
 
     // New items arrive
     const updatedEntities = [
@@ -264,6 +269,7 @@ describe('JobTranscript component', () => {
 
     fireEvent.click(jumpToLiveBtn)
     expect(jumpToLiveBtn).not.toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 150))
   })
 
   it('renders historical fallback note when stream is unavailable', () => {
@@ -408,7 +414,9 @@ describe('JobTranscript component', () => {
 
       const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
 
+      const details = container.querySelector('details')
       fireEvent.click(container.querySelector('summary'))
+      fireEvent(details, new Event('toggle'))
 
       expect(screen.getByText('Input')).toBeInTheDocument()
       expect(screen.getByText('Output')).toBeInTheDocument()
@@ -441,7 +449,9 @@ describe('JobTranscript component', () => {
 
       const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
 
+      const details = container.querySelector('details')
       fireEvent.click(container.querySelector('summary'))
+      fireEvent(details, new Event('toggle'))
       const codes = container.querySelectorAll('.transcript-payload-code')
       expect(codes[1].textContent).toBe('hello\nworld')
     })
@@ -463,7 +473,9 @@ describe('JobTranscript component', () => {
       ]
 
       const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+      const details = container.querySelector('details')
       fireEvent.click(container.querySelector('summary'))
+      fireEvent(details, new Event('toggle'))
 
       expect(screen.getByText('Input not available')).toBeInTheDocument()
       expect(screen.getByText('Output not available')).toBeInTheDocument()
@@ -496,7 +508,10 @@ describe('JobTranscript component', () => {
       ]
 
       const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
-      container.querySelectorAll('summary').forEach((s) => fireEvent.click(s))
+      container.querySelectorAll('details').forEach((d) => {
+        d.open = true
+        fireEvent(d, new Event('toggle'))
+      })
 
       expect(screen.queryByText('Input not available')).not.toBeInTheDocument()
       expect(screen.queryByText('Output not available')).not.toBeInTheDocument()
@@ -530,7 +545,9 @@ describe('JobTranscript component', () => {
       ]
 
       const { container } = render(<JobTranscript entities={entities} status="live" />)
+      const details = container.querySelector('details')
       fireEvent.click(container.querySelector('summary'))
+      fireEvent(details, new Event('toggle'))
 
       const assistantText = container.querySelector('.transcript-assistant-card .transcript-assistant-text, .transcript-assistant-card .transcript-text')
       expect(assistantText).toBeInTheDocument()
@@ -564,7 +581,9 @@ describe('JobTranscript component', () => {
       ]
 
       const { container } = render(<JobTranscript entities={toolEntity} status="live" />)
+      const details = container.querySelector('details')
       fireEvent.click(container.querySelector('summary'))
+      fireEvent(details, new Event('toggle'))
 
       expect(screen.queryByTestId('injected-html')).not.toBeInTheDocument()
       expect(container.querySelector('script')).not.toBeInTheDocument()
@@ -572,7 +591,7 @@ describe('JobTranscript component', () => {
       expect(container).toHaveTextContent('<script>alert(1)</script>')
     })
 
-    it('activates and toggles native disclosure via Enter and Space keyboard events on summary', () => {
+    it('preserves native keyboard semantics and synchronizes state via details onToggle', () => {
       const toolEntity = [
         {
           type: 'attempt',
@@ -597,26 +616,27 @@ describe('JobTranscript component', () => {
       expect(details.open).toBe(false)
       expect(screen.queryByText('Input')).not.toBeInTheDocument()
 
-      // Activate with Enter key
-      fireEvent.keyDown(summary, { key: 'Enter' })
-      expect(details.open).toBe(true)
+      // Native keyboard semantics preserved without custom preventDefault interception
+      const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true })
+      summary.dispatchEvent(enterEvent)
+      expect(enterEvent.defaultPrevented).toBe(false)
+
+      const spaceEvent = new KeyboardEvent('keydown', { key: ' ', cancelable: true, bubbles: true })
+      summary.dispatchEvent(spaceEvent)
+      expect(spaceEvent.defaultPrevented).toBe(false)
+
+      // State synchronizes through details onToggle
+      details.open = true
+      fireEvent(details, new Event('toggle'))
+
       expect(screen.getByText('Input')).toBeInTheDocument()
       expect(screen.getByText('Output')).toBeInTheDocument()
       expect(container).toHaveTextContent('result-ok')
 
-      // Toggle closed with Space key
-      fireEvent.keyDown(summary, { key: ' ' })
-      expect(details.open).toBe(false)
+      details.open = false
+      fireEvent(details, new Event('toggle'))
+
       expect(screen.queryByText('Input')).not.toBeInTheDocument()
-
-      // Toggle open with Space key
-      fireEvent.keyDown(summary, { key: ' ' })
-      expect(details.open).toBe(true)
-      expect(screen.getByText('Input')).toBeInTheDocument()
-
-      // Unrelated key does not toggle
-      fireEvent.keyDown(summary, { key: 'Escape' })
-      expect(details.open).toBe(true)
     })
   })
 
@@ -870,7 +890,7 @@ describe('JobTranscript component', () => {
       expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
     })
 
-    it('consults isProgrammaticScrollRef during programmatic scroll events without disabling following, while manual upward scrolling disables following', () => {
+    it('consults isProgrammaticScrollRef during programmatic scroll events without disabling following, while manual upward scrolling disables following', async () => {
       const { rerender } = render(
         <JobTranscript
           entities={sampleEntities}
@@ -888,8 +908,12 @@ describe('JobTranscript component', () => {
           this.scrollTop = options.top
         }
         programmaticScrollDispatched = true
-        // Dispatch a real scroll event during programmatic scrolling execution
-        this.dispatchEvent(new Event('scroll'))
+        // Deliver asynchronous native scroll event across event-loop tick
+        setTimeout(() => {
+          act(() => {
+            this.dispatchEvent(new Event('scroll'))
+          })
+        }, 15)
       })
 
       // Trigger programmatic scroll via assistant content update
@@ -914,11 +938,16 @@ describe('JobTranscript component', () => {
         />
       )
 
-      expect(programmaticScrollDispatched).toBe(true)
-      // Programmatic scroll event MUST NOT disable following
+      await waitFor(() => {
+        expect(programmaticScrollDispatched).toBe(true)
+      })
+      // Programmatic scroll event MUST NOT disable following across async delivery
       expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
 
-      // Now simulate a manual upward scroll (dispatched when not in programmatic scroll)
+      // Wait for programmatic scroll settlement
+      await new Promise((resolve) => setTimeout(resolve, 150))
+
+      // Now simulate a manual upward scroll (dispatched after settlement)
       Object.defineProperty(scrollContainer, 'scrollHeight', { value: 1200, configurable: true })
       Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true })
       Object.defineProperty(scrollContainer, 'scrollTop', { value: 100, configurable: true, writable: true })
@@ -932,6 +961,80 @@ describe('JobTranscript component', () => {
       // Clicking Jump to live restores following
       fireEvent.click(jumpBtn)
       expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    })
+
+    it('keeps programmatic scroll intent active across asynchronous native scroll delivery and virtualizer reconciliation until settlement', async () => {
+      const { rerender } = render(
+        <JobTranscript
+          entities={sampleEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      const scrollContainer = screen.getByTestId('transcript-scroll-container')
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+
+      let deliveryCount = 0
+      scrollContainer.scrollTo = vi.fn(function (options) {
+        if (typeof options === 'object' && options.top !== undefined) {
+          this.scrollTop = options.top
+        }
+        // Asynchronous scroll event delivery sequence simulating browser delivery + virtualizer reconciliation
+        setTimeout(() => {
+          deliveryCount += 1
+          act(() => {
+            this.dispatchEvent(new Event('scroll'))
+          })
+        }, 10)
+        setTimeout(() => {
+          deliveryCount += 1
+          act(() => {
+            this.dispatchEvent(new Event('scroll'))
+          })
+        }, 30)
+      })
+
+      const grownEntities = [
+        {
+          ...sampleEntities[0],
+          items: [
+            {
+              ...sampleEntities[0].items[0],
+              text: 'Grown assistant text triggering async scroll delivery and reconciliation',
+            },
+            sampleEntities[0].items[1],
+          ],
+        },
+      ]
+
+      rerender(
+        <JobTranscript
+          entities={grownEntities}
+          status="live"
+          streamStatus="active"
+        />
+      )
+
+      await waitFor(() => {
+        expect(deliveryCount).toBeGreaterThanOrEqual(2)
+      })
+
+      // Programmatic scroll intent remained active through multiple asynchronous deliveries
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+
+      // After settlement window clears intent
+      await new Promise((resolve) => setTimeout(resolve, 150))
+
+      // Subsequent manual upward scroll correctly triggers jump button
+      Object.defineProperty(scrollContainer, 'scrollHeight', { value: 1500, configurable: true })
+      Object.defineProperty(scrollContainer, 'clientHeight', { value: 500, configurable: true })
+      Object.defineProperty(scrollContainer, 'scrollTop', { value: 200, configurable: true, writable: true })
+
+      fireEvent.scroll(scrollContainer)
+
+      expect(screen.getByRole('button', { name: /jump to live/i })).toBeInTheDocument()
     })
 
     it('directly remeasures changed row heights on disclosure toggle, updates positions, ensures later-row non-overlap, and remeasures on responsive reflow', async () => {
@@ -1016,7 +1119,9 @@ describe('JobTranscript component', () => {
         // Expand tool disclosure
         toolExpanded = true
         const summary = container.querySelector('summary')
+        const toolDetails = container.querySelector('details')
         fireEvent.click(summary)
+        fireEvent(toolDetails, new Event('toggle'))
 
         // Remeasured with changed row height (180px)
         await waitFor(() => {
@@ -1034,6 +1139,7 @@ describe('JobTranscript component', () => {
         // Collapse tool disclosure again
         toolExpanded = false
         fireEvent.click(summary)
+        fireEvent(toolDetails, new Event('toggle'))
 
         await waitFor(() => {
           rows = container.querySelectorAll('.transcript-virtual-row')
