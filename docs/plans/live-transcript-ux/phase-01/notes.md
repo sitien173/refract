@@ -98,3 +98,30 @@
   - `uv run pytest -q tests/test_dashboard.py -k "output or stream or security"` (10 passed)
   - `git diff --check` (clean)
 - Root cause (bugfix only): n/a
+
+## Review Fix
+
+### Decisions made
+- In `src/openmcp/backends/claude.py`, removed all `content_block_stop` output and result extraction fallbacks; tool completion now emits status only.
+- Added regression test `test_claude_streaming_content_block_stop_output_ignored` in `tests/test_streaming_backends.py` confirming `content_block_stop` output and result fields are excluded.
+- In `src/openmcp/backends/agy.py`, removed speculative `input` and `args` fallback aliases; supported only the observed `arguments` input field.
+- Adjusted synthetic test fixtures in `tests/test_streaming_backends.py` and added assertions verifying unproven `input` and `args` fields are ignored.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: GREEN: Verification commands passed:
+  - `uv run pytest -q tests/test_streaming_backends.py` (10 passed)
+  - `uv run pytest -q tests/test_streaming_backends.py tests/test_execution.py tests/test_dashboard.py` (107 passed)
+  - `git diff --check` (clean)
+- Root cause (bugfix only): Claude `content_block_stop` included speculative output/result extraction logic not present in real provider events. Agy accepted unproven `input`/`args` aliases rather than strictly adhering to observed `arguments` fields.

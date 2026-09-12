@@ -348,6 +348,73 @@ def test_claude_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
     assert tool_starts[2]["data"]["input"] is None
 
 
+def test_claude_streaming_content_block_stop_output_ignored(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    stream_fixture = [
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": "bash",
+                    "input": {"cmd": "echo hi"},
+                },
+            },
+        }),
+        json.dumps({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_stop",
+                "index": 0,
+                "output": "unrelated_stop_output",
+                "result": "unrelated_stop_result",
+                "content_block": {
+                    "output": "unrelated_cb_output",
+                    "result": "unrelated_cb_result",
+                },
+            },
+            "output": "unrelated_top_output",
+            "result": "unrelated_top_result",
+        }),
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Done",
+            "session_id": "claude-sess",
+        }),
+    ]
+
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openmcp.backends.claude.run_shell_command",
+        lambda *args, **kwargs: (line for line in stream_fixture),
+    )
+
+    params = ClaudeParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    result = claude_sync(params)
+    assert result.outcome == "OK"
+
+    completed_events = [e for e in events if e["kind"] == "tool.completed"]
+    assert len(completed_events) == 1
+    assert completed_events[0]["data"] == {"status": "completed"}
+    assert "output" not in completed_events[0]["data"]
+    assert "result" not in completed_events[0]["data"]
+
+    serialized = json.dumps(events)
+    assert "unrelated_stop_output" not in serialized
+    assert "unrelated_stop_result" not in serialized
+    assert "unrelated_cb_output" not in serialized
+    assert "unrelated_cb_result" not in serialized
+    assert "unrelated_top_output" not in serialized
+    assert "unrelated_top_result" not in serialized
+
+
 def test_codex_streaming_normalization(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -678,18 +745,29 @@ def test_agy_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
             "status": "completed",
             "result": nested_res,
         }),
-        # Tool 2: input and output alternatives
+        # Tool 2: arguments and output alternatives
         json.dumps({
             "type": "tool_started",
             "tool": "agy_tool_2",
-            "input": "input_string",
+            "arguments": "arg_string",
         }),
         json.dumps({
             "type": "tool_completed",
             "status": "completed",
             "output": "output_string",
         }),
-        # Tool 3: missing arguments and output
+        # Tool 3: unproven input and args fields are ignored
+        json.dumps({
+            "type": "tool.started",
+            "tool_name": "unproven_tool",
+            "input": "ignored_input_val",
+            "args": "ignored_args_val",
+        }),
+        json.dumps({
+            "type": "tool.completed",
+            "status": "completed",
+        }),
+        # Tool 4: missing arguments and output
         json.dumps({
             "type": "tool.started",
             "tool_name": "bare_tool",
@@ -698,7 +776,7 @@ def test_agy_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
             "type": "tool.completed",
             "status": "completed",
         }),
-        # Tool 4: provider null arguments and output
+        # Tool 5: provider null arguments and output
         json.dumps({
             "type": "tool.started",
             "tool_name": "null_tool",
@@ -732,26 +810,31 @@ def test_agy_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
     tool_starts = [e for e in events if e["kind"] == "tool.started"]
     tool_comps = [e for e in events if e["kind"] == "tool.completed"]
 
-    assert len(tool_starts) == 4
-    assert len(tool_comps) == 4
+    assert len(tool_starts) == 5
+    assert len(tool_comps) == 5
 
     # Nested preservation
     assert tool_starts[0]["data"]["input"] == nested_args
     assert tool_comps[0]["data"]["output"] == nested_res
 
-    # Alternative input / output field support
-    assert tool_starts[1]["data"]["input"] == "input_string"
+    # Alternative event type and output field support
+    assert tool_starts[1]["data"]["input"] == "arg_string"
     assert tool_comps[1]["data"]["output"] == "output_string"
 
-    # Missing fields remain absent
+    # Unproven input/args aliases ignored
     assert "input" not in tool_starts[2]["data"]
-    assert "output" not in tool_comps[2]["data"]
+    assert "ignored_input_val" not in json.dumps(events)
+    assert "ignored_args_val" not in json.dumps(events)
+
+    # Missing fields remain absent
+    assert "input" not in tool_starts[3]["data"]
+    assert "output" not in tool_comps[3]["data"]
 
     # Provider null remains present
-    assert "input" in tool_starts[3]["data"]
-    assert tool_starts[3]["data"]["input"] is None
-    assert "output" in tool_comps[3]["data"]
-    assert tool_comps[3]["data"]["output"] is None
+    assert "input" in tool_starts[4]["data"]
+    assert tool_starts[4]["data"]["input"] is None
+    assert "output" in tool_comps[4]["data"]
+    assert tool_comps[4]["data"]["output"] is None
 
 
 

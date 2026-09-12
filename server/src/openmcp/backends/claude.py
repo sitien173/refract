@@ -204,20 +204,10 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
                         })
                 elif evt_type == "content_block_stop":
                     if active_tool_id:
-                        comp_data: dict[str, Any] = {"status": "completed"}
-                        cb = event.get("content_block", {})
-                        if isinstance(cb, dict) and "output" in cb:
-                            comp_data["output"] = cb["output"]
-                        elif isinstance(cb, dict) and "result" in cb:
-                            comp_data["output"] = cb["result"]
-                        elif "output" in event:
-                            comp_data["output"] = event["output"]
-                        elif "result" in event:
-                            comp_data["output"] = event["result"]
                         params.emitter({
                             "kind": "tool.completed",
                             "entity_id": active_tool_id,
-                            "data": comp_data,
+                            "data": {"status": "completed"},
                         })
                         active_tool_id = ""
     except ShellCommandCancelled:

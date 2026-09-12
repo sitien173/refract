@@ -41,6 +41,28 @@ None
 ## NEXT
 TASK_COMPLETE
 
+# EXTERNAL RESPONSE
+## META
+- Phase 1 review fix / Started 2026-09-12T14:07:58+07:00 / Finished 2026-09-12T14:11:00+07:00 / Plan docs/plans/live-transcript-ux/phase-01
+## SUMMARY
+Cleared both Phase 1 review findings by removing speculative content_block_stop output/result extraction in Claude and unproven input/args aliases in Agy.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | src/openmcp/backends/claude.py | Remove content_block_stop output/result extraction so completion contains status only. |
+| Modify | src/openmcp/backends/agy.py | Support only observed arguments input field, removing input/args fallbacks. |
+| Modify | tests/test_streaming_backends.py | Add Claude stop-field regression test and adjust Agy synthetic fixtures to verify arguments-only normalization. |
+| Modify | docs/plans/live-transcript-ux/phase-01/notes.md | Record review fix decisions and verification evidence. |
+| Modify | docs/plans/live-transcript-ux/phase-01/journal.md | Record review fix external response. |
+## NOTES
+- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4, ## Review Fix)
+## SPEC COMPLIANCE
+- Meets Spec? YES — all review findings resolved cleanly and regression suites pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
 ## Quality Review
 
 # CODE QUALITY REVIEW

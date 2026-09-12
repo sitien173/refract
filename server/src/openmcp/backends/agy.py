@@ -239,10 +239,6 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
                         tool_data: dict[str, Any] = {"tool": tool_name}
                         if "arguments" in event:
                             tool_data["input"] = event["arguments"]
-                        elif "input" in event:
-                            tool_data["input"] = event["input"]
-                        elif "args" in event:
-                            tool_data["input"] = event["args"]
                         if params.emitter:
                             params.emitter({
                                 "kind": "tool.started",
