@@ -90,6 +90,14 @@ export async function getJob(jobId) {
   return request(`/dashboard/api/jobs/${encodeURIComponent(jobId)}`)
 }
 
+export async function getJobOutput(jobId, { after = 0, limit = 100 } = {}, signal) {
+  const params = new URLSearchParams()
+  if (after !== undefined && after !== null) params.set('after', String(after))
+  if (limit !== undefined && limit !== null) params.set('limit', String(limit))
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  return request(`/dashboard/api/jobs/${encodeURIComponent(jobId)}/output${qs}`, { signal })
+}
+
 export async function getTaskGuide(projectId) {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
   return request(`/dashboard/api/task-guide${query}`)

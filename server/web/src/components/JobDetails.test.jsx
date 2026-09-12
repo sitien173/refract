@@ -2,6 +2,7 @@ import { createRef } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import JobDetails from './JobDetails'
+import * as api from '../api'
 
 describe('JobDetails component', () => {
   const mockJob = {
@@ -133,5 +134,275 @@ describe('JobDetails component', () => {
     expect(ref.current).toHaveAttribute('tabindex', '-1')
     ref.current.focus()
     expect(document.activeElement).toBe(ref.current)
+  })
+
+  it('renders transcript section above execution result', () => {
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'target-node-1',
+          backend: 'codex',
+          status: 'running',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Live streaming progress', status: 'streaming' },
+          ],
+        },
+      ],
+      status: 'live',
+      streamStatus: 'active',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={mockJob} stream={mockStream} />)
+
+    expect(screen.getByText('Live streaming progress')).toBeInTheDocument()
+    expect(screen.getByText('Execution status')).toBeInTheDocument()
+  })
+
+  it('suppresses duplicate final result text when transcript matches job.result.text exactly', () => {
+    const matchingJob = {
+      ...mockJob,
+      state: 'succeeded',
+      result: { text: 'Exact matching text.' },
+    }
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'target-node-1',
+          backend: 'codex',
+          status: 'succeeded',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Exact matching text.', status: 'completed' },
+          ],
+        },
+      ],
+      status: 'complete',
+      streamStatus: 'complete',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={matchingJob} stream={mockStream} />)
+
+    // Transcript has the text
+    expect(screen.getByText('Exact matching text.')).toBeInTheDocument()
+    // Duplicate "Result output" block is suppressed
+    expect(screen.queryByText('Result output')).not.toBeInTheDocument()
+  })
+
+  it('does not suppress final result when text differs by whitespace', () => {
+    const whitespaceJob = {
+      ...mockJob,
+      state: 'succeeded',
+      result: { text: 'Exact matching text.\n' },
+    }
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'target-node-1',
+          backend: 'codex',
+          status: 'succeeded',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Exact matching text.', status: 'completed' },
+          ],
+        },
+      ],
+      status: 'complete',
+      streamStatus: 'complete',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={whitespaceJob} stream={mockStream} />)
+
+    // Both transcript and authoritative result output render because text differs by trailing whitespace
+    expect(screen.getAllByText(/Exact matching text/)).toHaveLength(2)
+    expect(screen.getByText('Result output')).toBeInTheDocument()
+  })
+
+  it('retains authoritative result output when transcript is truncated or unavailable', () => {
+    const truncatedJob = {
+      ...mockJob,
+      state: 'succeeded',
+      result: { text: 'Authoritative final text.' },
+    }
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'target-node-1',
+          backend: 'codex',
+          status: 'succeeded',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Partial...', status: 'streaming' },
+            { type: 'truncated', reason: 'max_job_bytes' },
+          ],
+        },
+      ],
+      status: 'truncated',
+      streamStatus: 'truncated',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={truncatedJob} stream={mockStream} />)
+
+    expect(screen.getByText('Result output')).toBeInTheDocument()
+    expect(screen.getByText('Authoritative final text.')).toBeInTheDocument()
+  })
+
+  it('handles loading-to-job transition without altering React hook execution order', () => {
+    // Initial render with no job while loading
+    const { rerender } = render(<JobDetails job={null} isLoading={true} />)
+    expect(screen.getByTestId('job-details-loading')).toBeInTheDocument()
+
+    // Transition to loaded job state
+    rerender(<JobDetails job={mockJob} isLoading={false} />)
+    expect(screen.getByTestId('job-details')).toBeInTheDocument()
+    expect(screen.getByText('Job job-xyz-123')).toBeInTheDocument()
+  })
+
+  it('makes no network request when job is absent', () => {
+    const getJobOutputSpy = vi.spyOn(api, 'getJobOutput')
+    render(<JobDetails job={null} isLoading={true} />)
+    expect(getJobOutputSpy).not.toHaveBeenCalled()
+  })
+
+  it('renders chronological transcript with expandable tool details inside job details view', () => {
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          target_id: 'worker-node-1',
+          backend: 'codex',
+          status: 'succeeded',
+          items: [
+            { type: 'assistant_message', entity_id: 'm1', text: 'Analyzing repository.', status: 'completed' },
+            {
+              type: 'tool_call',
+              entity_id: 't1',
+              tool_name: 'git_status',
+              status: 'completed',
+              input: { path: '.' },
+              output: 'clean working tree',
+            },
+            { type: 'assistant_message', entity_id: 'm2', text: 'Repository is clean.', status: 'completed' },
+          ],
+        },
+      ],
+      status: 'complete',
+      streamStatus: 'complete',
+      error: null,
+      isLoading: false,
+    }
+
+    render(<JobDetails job={mockJob} stream={mockStream} />)
+
+    expect(screen.getByText('Analyzing repository.')).toBeInTheDocument()
+    expect(screen.getByText('git_status')).toBeInTheDocument()
+    expect(screen.getByText('Repository is clean.')).toBeInTheDocument()
+
+    const details = document.querySelector('details.transcript-tool-disclosure')
+    expect(details).toBeInTheDocument()
+    expect(details.open).toBe(false)
+  })
+
+  it('renders clearly labeled prompt details in a collapsed native details disclosure preserving whitespace', () => {
+    const promptJob = {
+      ...mockJob,
+      prompt: 'Task description:\n  - step one\n  - step two',
+    }
+    const { container } = render(<JobDetails job={promptJob} />)
+
+    expect(screen.getByRole('heading', { name: 'Prompt details' })).toBeInTheDocument()
+    const details = container.querySelector('details.job-prompt-disclosure')
+    expect(details).toBeInTheDocument()
+    expect(details.open).toBe(false)
+
+    const pre = container.querySelector('pre.prompt-text')
+    expect(pre).toBeInTheDocument()
+    expect(pre.textContent).toBe('Task description:\n  - step one\n  - step two')
+  })
+
+  it('renders explicit unavailable text when stored job prompt is empty', () => {
+    const emptyPromptJob = {
+      ...mockJob,
+      prompt: '',
+    }
+    render(<JobDetails job={emptyPromptJob} />)
+
+    expect(screen.getByRole('heading', { name: 'Prompt details' })).toBeInTheDocument()
+    expect(screen.getByText('Prompt unavailable')).toBeInTheDocument()
+  })
+
+  it('strictly displays stored prompt without exposing target system_prompt or execution_plan.raw_prompt', () => {
+    const secureJob = {
+      ...mockJob,
+      prompt: 'Legitimate stored job prompt',
+    }
+    const { container } = render(<JobDetails job={secureJob} />)
+
+    expect(screen.getAllByText('Legitimate stored job prompt').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText('SECRET_SYSTEM_PROMPT_DO_NOT_LEAK')).not.toBeInTheDocument()
+    expect(screen.queryByText('SECRET_PROMPT_PAYLOAD')).not.toBeInTheDocument()
+    expect(container.innerHTML).not.toContain('SECRET_SYSTEM_PROMPT_DO_NOT_LEAK')
+    expect(container.innerHTML).not.toContain('SECRET_PROMPT_PAYLOAD')
+  })
+
+  it('passes only exact stored job.prompt as submittedPrompt to transcript and renders User card', () => {
+    const promptJob = {
+      ...mockJob,
+      prompt: 'Exact stored prompt for transcript',
+      execution_plan: {
+        raw_prompt: 'Expanded prompt secret',
+      },
+    }
+    const mockStream = {
+      entities: [
+        {
+          type: 'attempt',
+          attempt: 1,
+          status: 'running',
+          items: [{ type: 'assistant_message', role: 'assistant', contentType: 'text', text: 'Working on it' }],
+        },
+      ],
+      status: 'live',
+      streamStatus: 'active',
+      error: null,
+      isLoading: false,
+    }
+    render(<JobDetails job={promptJob} stream={mockStream} />)
+
+    const userCard = document.querySelector('.transcript-user-card')
+    expect(userCard).toBeInTheDocument()
+    expect(userCard.textContent).toContain('Exact stored prompt for transcript')
+    expect(userCard.textContent).not.toContain('Expanded prompt secret')
+  })
+
+  it('preserves unavailable stream state without rendering a synthetic User card when historical stream is unavailable', () => {
+    const promptJob = {
+      ...mockJob,
+      prompt: 'Stored prompt that should not appear as transcript',
+    }
+    const mockStream = {
+      entities: [],
+      status: 'complete',
+      streamStatus: 'unavailable',
+      error: null,
+      isLoading: false,
+    }
+    render(<JobDetails job={promptJob} stream={mockStream} />)
+
+    expect(screen.getByText('Transcript is not available for this job.')).toBeInTheDocument()
+    expect(document.querySelector('.transcript-user-card')).not.toBeInTheDocument()
   })
 })

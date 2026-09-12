@@ -8,11 +8,12 @@ import os
 import shutil
 import subprocess
 import threading
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
-from . import BackendResult, classify_backend_output
+from . import BackendResult, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from openmcp.logging_setup import get_logger
 
@@ -27,6 +28,7 @@ class PiParams:
     args: tuple[str, ...] = ()
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
+    emitter: Callable[[dict[str, Any]], None] | None = None
 
 
 def run_shell_command(
@@ -140,6 +142,8 @@ def _execute_sync(params: PiParams) -> BackendResult:
     lines: list[str] = []
     command_error = ""
     command_error_class = ""
+    entity_counter = 0
+    raw_to_entity: dict[str, str] = {}
     try:
         for line in run_shell_command(
             cmd,
@@ -148,6 +152,75 @@ def _execute_sync(params: PiParams) -> BackendResult:
             cancel_event=params.cancel_event,
         ):
             lines.append(line)
+            if params.emitter:
+                stripped = line.strip()
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                evt_type = event.get("type", "")
+                if evt_type == "message_update":
+                    ame = event.get("assistantMessageEvent")
+                    if isinstance(ame, dict) and ame.get("type") == "text_delta":
+                        delta_val = ame.get("delta")
+                        if isinstance(delta_val, str):
+                            text = delta_val
+                        elif isinstance(ame.get("text"), str):
+                            text = ame["text"]
+                        else:
+                            text = ""
+                        if text:
+                            params.emitter({
+                                "kind": "assistant.text.delta",
+                                "entity_id": "msg-1",
+                                "data": {"text": text},
+                            })
+                elif evt_type == "text_delta":
+                    text = event.get("text") if isinstance(event.get("text"), str) else (event.get("delta") if isinstance(event.get("delta"), str) else "")
+                    if text:
+                        params.emitter({
+                            "kind": "assistant.text.delta",
+                            "entity_id": "msg-1",
+                            "data": {"text": text},
+                        })
+                elif evt_type in {"tool_execution_start", "tool_call"}:
+                    entity_counter += 1
+                    raw_id = str(event.get("toolCallId") or event.get("tool_call_id") or event.get("id") or "")
+                    entity_id = f"tool-{entity_counter}"
+                    if raw_id:
+                        raw_to_entity[raw_id] = entity_id
+                    tool_name = str(event.get("toolName") or event.get("tool_name") or event.get("tool") or event.get("name") or "")
+                    tool_data: dict[str, Any] = {
+                        "tool": tool_name,
+                        "activity": classify_tool_activity("pi", tool_name),
+                    }
+                    if "args" in event:
+                        tool_data["input"] = event["args"]
+                    params.emitter({
+                        "kind": "tool.started",
+                        "entity_id": entity_id,
+                        "data": tool_data,
+                    })
+                elif evt_type in {"tool_execution_end", "tool_result"}:
+                    raw_id = str(event.get("toolCallId") or event.get("tool_call_id") or event.get("id") or "")
+                    entity_id = raw_to_entity.get(raw_id) or f"tool-{entity_counter or 1}"
+                    is_error = event.get("isError")
+                    if is_error is True:
+                        status = "error"
+                    elif is_error is False:
+                        status = "completed"
+                    else:
+                        status = str(event.get("status", "completed"))
+                    tool_data = {"status": status}
+                    if "result" in event:
+                        tool_data["output"] = event["result"]
+                    params.emitter({
+                        "kind": "tool.completed",
+                        "entity_id": entity_id,
+                        "data": tool_data,
+                    })
     except ShellCommandCancelled:
         command_error = "cancelled"
         command_error_class = "cancelled"

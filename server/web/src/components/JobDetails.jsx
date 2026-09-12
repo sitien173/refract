@@ -1,5 +1,8 @@
+import { useMemo } from 'react'
 import Alert from './Alert'
 import StatusBadge from './StatusBadge'
+import JobTranscript from './JobTranscript'
+import { useJobStream } from '../hooks/useJobStream'
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted'])
 
@@ -11,7 +14,22 @@ export default function JobDetails({
   onRefresh,
   onBack,
   headingRef,
+  stream: providedStream,
 }) {
+  const isTerminal = job ? TERMINAL_STATES.has(job.state) : true
+  const internalStream = useJobStream(job?.id, { isTerminal })
+  const stream = providedStream || internalStream
+
+  const reconstructedFinalText = useMemo(() => {
+    if (!stream?.entities || stream.entities.length === 0) return ''
+    const lastAttempt = stream.entities[stream.entities.length - 1]
+    if (!lastAttempt || !lastAttempt.items) return ''
+    return lastAttempt.items
+      .filter((it) => it.type === 'assistant_message')
+      .map((it) => it.text)
+      .join('')
+  }, [stream?.entities])
+
   if (error && !job) {
     return (
       <div className="job-details-container" data-testid="job-details-error">
@@ -46,11 +64,21 @@ export default function JobDetails({
 
   if (!job) return null
 
-  const isTerminal = job ? TERMINAL_STATES.has(job.state) : true
   const plan = job.execution_plan || {}
   const hasPlan = Boolean(plan && Object.keys(plan).length > 0)
   const selection = plan.selection || {}
   const targets = Array.isArray(plan.targets) ? plan.targets : []
+
+  const resultText = job.result?.output || job.result?.text || ''
+  const isDuplicateFinalText =
+    Boolean(resultText) &&
+    stream?.streamStatus === 'complete' &&
+    reconstructedFinalText === resultText
+
+  const shouldRenderResultText = Boolean(resultText) && !isDuplicateFinalText
+  const shouldRenderResultSection = Boolean(
+    job.result && (job.result.error || shouldRenderResultText)
+  )
 
   return (
     <div className="job-details-container" data-testid="job-details">
@@ -174,6 +202,23 @@ export default function JobDetails({
         </section>
       </div>
 
+      <section className="panel job-prompt-panel" aria-labelledby="job-prompt-heading">
+        <details className="job-prompt-disclosure">
+          <summary className="job-prompt-summary">
+            <h3 id="job-prompt-heading">Prompt details</h3>
+          </summary>
+          <div className="job-prompt-content">
+            {job.prompt ? (
+              <pre className="code-block prompt-text">{job.prompt}</pre>
+            ) : (
+              <div className="prompt-unavailable">
+                <p className="caption">Prompt unavailable</p>
+              </div>
+            )}
+          </div>
+        </details>
+      </section>
+
       <section className="panel job-plan-panel" aria-labelledby="job-plan-heading">
         <div className="panel-header">
           <h3 id="job-plan-heading">Execution plan</h3>
@@ -241,7 +286,19 @@ export default function JobDetails({
         </div>
       </section>
 
-      {job.result && (job.result.error || job.result.text || job.result.output) && (
+      {stream && (
+        <JobTranscript
+          entities={stream.entities}
+          status={stream.status}
+          streamStatus={stream.streamStatus}
+          error={stream.error}
+          isLoading={stream.isLoading}
+          onRefresh={stream.refresh}
+          submittedPrompt={job?.prompt}
+        />
+      )}
+
+      {shouldRenderResultSection && (
         <section className="panel job-result-panel" aria-labelledby="job-result-heading">
           <div className="panel-header">
             <h3 id="job-result-heading">Execution result</h3>
@@ -252,7 +309,7 @@ export default function JobDetails({
                 <p>{job.result.error}</p>
               </Alert>
             )}
-            {(job.result.output || job.result.text) && (
+            {shouldRenderResultText && (
               <div className="result-output-area">
                 <span className="eyebrow">Result output</span>
                 <pre className="code-block">{job.result.output || job.result.text}</pre>

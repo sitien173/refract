@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
+import subprocess
 import threading
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from openmcp.backends import BackendResult
 from openmcp.backends.agy import AgyParams, execute as agy_execute
@@ -14,6 +17,56 @@ from openmcp.backends.claude import ClaudeParams, execute as claude_execute
 from openmcp.backends.codex import CodexParams, execute as codex_execute
 from openmcp.backends.pi import PiParams, execute as pi_execute
 from openmcp.config import TargetConfig, validate_target_args
+
+_PRODUCER_SENTINEL = object()
+
+
+class StreamBridge:
+    """Bounded queue bridging provider worker threads to daemon asyncio event loop."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None, queue_capacity: int = 256) -> None:
+        self.loop = loop or asyncio.get_running_loop()
+        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=queue_capacity)
+        self._closed = False
+
+    def emit(self, event: dict[str, Any]) -> None:
+        """Synchronous emitter called on provider worker threads."""
+        if self._closed:
+            return
+        try:
+            future = asyncio.run_coroutine_threadsafe(self.queue.put(event), self.loop)
+            future.result()
+        except Exception:
+            pass
+
+    def close_producer(self) -> None:
+        """Signal end of production from a provider thread."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            future = asyncio.run_coroutine_threadsafe(self.queue.put(_PRODUCER_SENTINEL), self.loop)
+            future.result()
+        except Exception:
+            pass
+
+    async def close(self) -> None:
+        """Signal end of production from the event loop."""
+        if self._closed:
+            return
+        self._closed = True
+        await self.queue.put(_PRODUCER_SENTINEL)
+
+    async def consumer(self) -> AsyncIterator[dict[str, Any]]:
+        """Asynchronously iterate events until producer finishes."""
+        while True:
+            item = await self.queue.get()
+            try:
+                if item is _PRODUCER_SENTINEL:
+                    break
+                yield item
+            finally:
+                self.queue.task_done()
 
 
 DriverOutcome = Literal[
@@ -124,9 +177,59 @@ def _normalize(result: BackendResult) -> DriverResult:
 
 
 class DriverRegistry:
+    def __init__(self) -> None:
+        self._capability_cache: dict[str, bool] = {}
+
     @staticmethod
     def available(target: TargetConfig) -> bool:
         return shutil.which(target.backend) is not None
+
+    def supports_structured_streaming(
+        self,
+        target: TargetConfig,
+        version_check: Callable[[str], bool] | None = None,
+    ) -> bool:
+        """Pre-execution capability check for structured streaming with caching per executable path."""
+        resolved = shutil.which(target.backend)
+        if resolved is None:
+            return False
+        if resolved in self._capability_cache:
+            return self._capability_cache[resolved]
+
+        if version_check is not None:
+            supported = version_check(resolved)
+        else:
+            supported = self._detect_structured_mode(target.backend, resolved)
+
+        self._capability_cache[resolved] = supported
+        return supported
+
+    @staticmethod
+    def _detect_structured_mode(backend: str, executable_path: str) -> bool:
+        """Check if resolved provider CLI supports the required structured output flags."""
+        help_cmd = [executable_path, "exec", "--help"] if backend == "codex" else [executable_path, "--help"]
+        try:
+            completed = subprocess.run(
+                help_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            help_text = completed.stdout or ""
+        except Exception:
+            return False
+
+        if backend == "claude":
+            return "stream-json" in help_text and "--include-partial-messages" in help_text
+        if backend == "agy":
+            return "stream-json" in help_text
+        if backend == "codex":
+            return "--json" in help_text
+        if backend == "pi":
+            return "--mode" in help_text
+        return False
 
     async def execute(
         self,
@@ -137,6 +240,7 @@ class DriverRegistry:
         session_id: str,
         timeout_s: int,
         cancel_event: threading.Event,
+        emitter: Callable[[dict[str, Any]], None] | None = None,
     ) -> DriverResult:
         try:
             args = _target_args(target)
@@ -157,6 +261,7 @@ class DriverRegistry:
                     args=args,
                     timeout_s=timeout_s,
                     cancel_event=cancel_event,
+                    emitter=emitter,
                 )
             )
         elif target.backend == "codex":
@@ -168,6 +273,7 @@ class DriverRegistry:
                     args=args,
                     timeout_s=timeout_s,
                     cancel_event=cancel_event,
+                    emitter=emitter,
                 )
             )
         elif target.backend == "pi":
@@ -179,6 +285,7 @@ class DriverRegistry:
                     args=args,
                     timeout_s=timeout_s,
                     cancel_event=cancel_event,
+                    emitter=emitter,
                 )
             )
         elif target.backend == "claude":
@@ -190,6 +297,7 @@ class DriverRegistry:
                     args=args,
                     timeout_s=timeout_s,
                     cancel_event=cancel_event,
+                    emitter=emitter,
                 )
             )
         else:
@@ -203,4 +311,4 @@ class DriverRegistry:
         return _normalize(result)
 
 
-__all__ = ["DriverOutcome", "DriverRegistry", "DriverResult"]
+__all__ = ["DriverOutcome", "DriverRegistry", "DriverResult", "StreamBridge"]

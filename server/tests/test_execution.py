@@ -6,6 +6,7 @@ import json
 import subprocess
 import threading
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -1120,3 +1121,1004 @@ async def test_fresh_job_failure_updating_state_to_succeeded_preserves_old_sessi
         assert len(runtime.database.recent_turns(project.id, "stream", "implement", 100)) == initial_turns
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_blocking_backpressure_and_sentinel_drain(tmp_path) -> None:
+    """Queue capacity of 256 blocks producer until consumer drains."""
+    from openmcp.drivers import StreamBridge
+
+    bridge = StreamBridge(queue_capacity=256)
+    producer_threads: set[int] = set()
+
+    # In a worker thread, emit 300 events
+    def worker():
+        import threading
+        producer_threads.add(threading.get_ident())
+        for i in range(300):
+            bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"{i} "}})
+        bridge.close_producer()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    consumed = []
+    async for evt in bridge.consumer():
+        consumed.append(evt)
+
+    thread.join(timeout=2.0)
+    assert len(consumed) == 300
+    assert len(producer_threads) == 1
+    assert producer_threads != {threading.get_ident()}
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_event_loop_close_drains_accepted_events() -> None:
+    from openmcp.drivers import StreamBridge
+
+    bridge = StreamBridge(queue_capacity=256)
+    await bridge.queue.put({
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "accepted"},
+    })
+    await bridge.close()
+
+    assert [event async for event in bridge.consumer()] == [{
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "accepted"},
+    }]
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_cancellation_drains_accepted_events(tmp_path) -> None:
+    from openmcp.drivers import StreamBridge
+
+    bridge = StreamBridge(queue_capacity=256)
+
+    def worker():
+        for i in range(10):
+            bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"item-{i}"}})
+        bridge.close_producer()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    consumed = []
+    async for evt in bridge.consumer():
+        consumed.append(evt)
+
+    thread.join(timeout=2.0)
+    assert len(consumed) == 10
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_thread_ownership_no_sqlite_on_provider_thread(tmp_path) -> None:
+    """Assert provider threads never touch the SQLite database."""
+    from openmcp.drivers import StreamBridge
+    root = repository(tmp_path)
+    cat = config(tmp_path / "home")
+    runtime = Runtime(cat)
+    await runtime.start()
+
+    accessed_threads: set[int] = set()
+    orig_append = runtime.database.append_stream_events
+
+    def tracking_append(*args, **kwargs):
+        accessed_threads.add(threading.get_ident())
+        return orig_append(*args, **kwargs)
+
+    runtime.database.append_stream_events = tracking_append
+
+    bridge = StreamBridge(queue_capacity=256)
+    worker_tid = None
+
+    def worker():
+        nonlocal worker_tid
+        worker_tid = threading.get_ident()
+        bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "hello"}})
+        bridge.close_producer()
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
+    async for _ in bridge.consumer():
+        pass
+    t.join(timeout=2.0)
+
+    try:
+        assert worker_tid is not None
+        assert worker_tid not in accessed_threads
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_accepted_events_flush_before_lifecycle_completion(tmp_path) -> None:
+    """Accepted stream events must be durably flushed before attempt.finished and job terminal state."""
+    root = repository(tmp_path)
+    cat = config(tmp_path / "home")
+
+    class StreamingDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "streaming content"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-1", "streaming content", "", "")
+
+    runtime = Runtime(cat)
+    runtime.drivers = StreamingDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "do streaming")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert any(e.kind == "assistant.text.delta" and e.data.get("text") == "streaming content" for e in events)
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].attempt == 1
+        assert finished[0].data["status"] == "succeeded"
+        assert finished[0].data["outcome"] == "SUCCESS"
+        assert finished[0].data["error_code"] == ""
+        delta_idx = next(i for i, e in enumerate(events) if e.kind == "assistant.text.delta")
+        finished_idx = next(i for i, e in enumerate(events) if e.kind == "attempt.finished")
+        assert delta_idx < finished_idx
+        # Authoritative final result matches
+        assert job.result.text == "streaming content"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_finished_cancelled_status_on_job_cancellation(tmp_path) -> None:
+    root = repository(tmp_path)
+    cat = config(tmp_path / "home")
+
+    class CancellingStreamingDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def execute(self, *, emitter=None, cancel_event=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "stream before cancel"}})
+                await asyncio.to_thread(worker)
+            self.started.set()
+            while cancel_event and not cancel_event.is_set():
+                await asyncio.sleep(0.01)
+            return DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+
+    drivers = CancellingStreamingDrivers()
+    runtime = Runtime(cat)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "cancel test")
+        await drivers.started.wait()
+        await runtime.cancel(sub.job_id)
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "cancelled"
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert any(e.kind == "assistant.text.delta" for e in events)
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].attempt == 1
+        assert finished[0].data["status"] == "cancelled"
+        assert finished[0].data["outcome"] == "CANCELLED"
+        assert finished[0].data["error_code"] == "cancelled"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_finished_records_cancelled_status_when_cancel_event_set(tmp_path) -> None:
+    root = repository(tmp_path)
+    cat = config(tmp_path / "home")
+
+    class RaceCancellingDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, cancel_event=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "streaming content"}})
+                await asyncio.to_thread(worker)
+            if cancel_event:
+                cancel_event.set()
+            return DriverResult("SUCCESS", "sess-1", "streaming content", "", "")
+
+    runtime = Runtime(cat)
+    runtime.drivers = RaceCancellingDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "test cancel race")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state in {"cancelled", "interrupted"}
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].data["status"] == "cancelled"
+        assert finished[0].data["outcome"] == "CANCELLED"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_exact_quota_boundary_retains_finish_marker(tmp_path, monkeypatch) -> None:
+    from openmcp.streaming import StreamRecorder
+
+    orig_init = StreamRecorder.__init__
+    def custom_init(self, *args, **kwargs):
+        kwargs.setdefault("max_job_events", 2)
+        orig_init(self, *args, **kwargs)
+    monkeypatch.setattr(StreamRecorder, "__init__", custom_init)
+
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    class ExactBoundaryDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "first"}})
+                    emitter({"kind": "assistant.text.delta", "entity_id": "m2", "data": {"text": "second"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-1", "all good", "", "")
+
+    runtime = Runtime(cfg)
+    runtime.drivers = ExactBoundaryDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "exact quota test")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert runtime.database.stream_is_truncated(sub.job_id) is False
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert not any(e.kind == "stream.truncated" for e in events)
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].data["status"] == "succeeded"
+        assert finished[0].data["outcome"] == "SUCCESS"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_attempts_retain_attempt_labels(tmp_path) -> None:
+    """Failed attempt transcripts must retain their attempt number and separate from successful attempts."""
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 2)
+    cat = replace(
+        config(tmp_path / "home"),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+
+    class MultiAttemptDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            self.call_count += 1
+            if emitter:
+                def worker(c):
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
+                await asyncio.to_thread(worker, self.call_count)
+            if self.call_count == 1:
+                return DriverResult("RETRYABLE", "", "", "first attempt failed", "backend_failure")
+            return DriverResult("SUCCESS", "sess-2", "final success", "", "")
+
+    runtime = Runtime(cat)
+    runtime.drivers = MultiAttemptDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "do attempts")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        attempt_1_events = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
+        attempt_2_events = [e for e in events if e.attempt == 2 and e.kind == "assistant.text.delta"]
+        assert len(attempt_1_events) == 1
+        assert attempt_1_events[0].data["text"] == "attempt-1"
+        assert len(attempt_2_events) == 1
+        assert attempt_2_events[0].data["text"] == "attempt-2"
+
+        a1_all = [e for e in events if e.attempt == 1]
+        a2_all = [e for e in events if e.attempt == 2]
+        assert [e.kind for e in a1_all] == ["assistant.text.delta", "attempt.finished"]
+        assert a1_all[1].data["status"] == "failed"
+        assert a1_all[1].data["outcome"] == "RETRYABLE"
+        assert a1_all[1].data["error_code"] == "backend_failure"
+
+        assert [e.kind for e in a2_all] == ["assistant.text.delta", "attempt.finished"]
+        assert a2_all[1].data["status"] == "succeeded"
+        assert a2_all[1].data["outcome"] == "SUCCESS"
+        assert a2_all[1].data["error_code"] == ""
+
+        # Authoritative result is ONLY the successful one
+        assert job.result.text == "final success"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_finished_does_not_reuse_prior_attempt_on_exception(tmp_path) -> None:
+    """If drivers.execute raises an exception, the recorder must not reuse the prior attempt's DriverResult."""
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 2)
+    cat = replace(
+        config(tmp_path / "home"),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+
+    class CrashingDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            self.call_count += 1
+            if emitter:
+                def worker(c):
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
+                await asyncio.to_thread(worker, self.call_count)
+            if self.call_count == 1:
+                return DriverResult("RETRYABLE", "", "", "first attempt failed", "backend_failure")
+            raise RuntimeError("driver crash on attempt 2")
+
+    runtime = Runtime(cat)
+    runtime.drivers = CrashingDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "do crashing attempt")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "failed"
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        a1_finished = [e for e in events if e.attempt == 1 and e.kind == "attempt.finished"]
+        a2_finished = [e for e in events if e.attempt == 2 and e.kind == "attempt.finished"]
+        assert len(a1_finished) == 1
+        assert a1_finished[0].data["status"] == "failed"
+        assert a1_finished[0].data["outcome"] == "RETRYABLE"
+        assert a1_finished[0].data["error_code"] == "backend_failure"
+
+        assert len(a2_finished) == 1
+        assert a2_finished[0].data["status"] == "failed"
+        assert a2_finished[0].data["outcome"] != "RETRYABLE"
+        assert a2_finished[0].data["error_code"] == "execution_error"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_agy_continuations_stay_one_openmcp_attempt(tmp_path) -> None:
+    """Agy continuations within one attempt must remain attempt=1."""
+    root = repository(tmp_path)
+    cat = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="agy"),),
+    )
+
+    class AgyContinuationDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    # Continuation 1
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "part 1"}})
+                    # Continuation 2
+                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-2", "data": {"text": "part 2"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "agy-sess", "part 1\n\npart 2", "", "")
+
+    runtime = Runtime(cat)
+    runtime.drivers = AgyContinuationDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "do agy")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.attempts == 1
+
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        deltas = [e for e in events if e.kind == "assistant.text.delta"]
+        assert len(deltas) == 2
+        assert all(e.attempt == 1 for e in deltas)
+        assert {e.entity_id for e in deltas} == {"msg-1", "msg-2"}
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_capability_check_before_submission_with_final_only_fallback(tmp_path, monkeypatch) -> None:
+    """Structured mode capability check happens before prompt submission with final-only fallback."""
+    from openmcp.drivers import DriverRegistry
+
+    registry = DriverRegistry()
+    target_old = TargetConfig(id="target-old", backend="claude-old")
+    target_new = TargetConfig(id="target-new", backend="claude-new")
+
+    fake_bins = {
+        "claude-old": "/bin/claude-old",
+        "claude-new": "/bin/claude-new",
+    }
+    monkeypatch.setattr("shutil.which", lambda name: fake_bins.get(name))
+
+    # Assert capability check method exists and caches per resolved executable
+    assert hasattr(registry, "supports_structured_streaming")
+    checks = []
+
+    def fake_version_check(exe_path: str) -> bool:
+        checks.append(exe_path)
+        return "new" in exe_path
+
+    # Check for target_old -> False, cached per resolved executable /bin/claude-old
+    assert registry.supports_structured_streaming(target_old, version_check=fake_version_check) is False
+    assert len(checks) == 1
+    # Repeated call uses cache without calling check again
+    assert registry.supports_structured_streaming(target_old, version_check=fake_version_check) is False
+    assert len(checks) == 1
+
+    # Check for target_new -> True, cached per resolved executable /bin/claude-new
+    assert registry.supports_structured_streaming(target_new, version_check=fake_version_check) is True
+    assert len(checks) == 2
+    assert registry.supports_structured_streaming(target_new, version_check=fake_version_check) is True
+    assert len(checks) == 2
+
+    # In execution, when capability is unsupported, TargetExecutor falls back to final-only invocation (emitter=None)
+    root = repository(tmp_path)
+    target_exec = TargetConfig(id="target-exec", backend="claude")
+    cat = config(tmp_path / "home", (target_exec,))
+    runtime = Runtime(cat)
+
+    received_emitters = []
+
+    class MockExecutorDrivers(FakeDrivers):
+        def supports_structured_streaming(self, target, **kwargs):
+            return False
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            received_emitters.append(emitter)
+            return DriverResult("SUCCESS", "sess-old", "fallback output", "", "")
+
+    runtime.drivers = MockExecutorDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "test fallback")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.text == "fallback output"
+        # Emitter passed to driver must be None for final-only fallback
+        assert received_emitters == [None]
+        # No stream events recorded
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert len(events) == 0
+    finally:
+        await runtime.close()
+
+
+def test_detect_structured_mode_invokes_help_probe_and_detects_support(tmp_path, monkeypatch) -> None:
+    """Default capability probe invokes configured --help command and detects supported structured mode."""
+    from openmcp.drivers import DriverRegistry
+
+    marker = tmp_path / "probe_invoked.txt"
+    fake_cli = tmp_path / "fake-claude"
+    fake_cli.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "--help" ]; then\n'
+        f"  echo called >> {marker}\n"
+        '  echo "options: stream-json --include-partial-messages"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    registry = DriverRegistry()
+    target = TargetConfig(id="target-claude", backend="claude")
+    monkeypatch.setattr("shutil.which", lambda name: str(fake_cli) if name == "claude" else None)
+
+    # Reach default capability probe without version_check override
+    assert registry.supports_structured_streaming(target) is True
+    assert marker.read_text(encoding="utf-8").strip() == "called"
+
+    # Cached per resolved executable: second call should not re-invoke probe
+    assert registry.supports_structured_streaming(target) is True
+    assert marker.read_text(encoding="utf-8").splitlines() == ["called"]
+
+
+def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
+    """Codex capability probe must run 'codex exec --help' rather than top-level 'codex --help'."""
+    from openmcp.drivers import DriverRegistry
+
+    invocations: list[str] = []
+    fake_codex = tmp_path / "fake-codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "exec" ] && [ "$2" = "--help" ]; then\n'
+        '  echo "exec-probe" >> ' + str(tmp_path / "codex_log.txt") + '\n'
+        '  echo "Usage: codex exec [OPTIONS] [PROMPT]"\n'
+        '  echo "Options:"\n'
+        '  echo "  --json  Output structured JSONL events"\n'
+        'elif [ "$1" = "--help" ]; then\n'
+        '  echo "toplevel-probe" >> ' + str(tmp_path / "codex_log.txt") + '\n'
+        '  echo "Usage: codex [OPTIONS] COMMAND [ARGS]..."\n'
+        '  echo "Commands:"\n'
+        '  echo "  exec    Execute prompt"\n'
+        '  echo "  review  Review workspace"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    registry = DriverRegistry()
+    target = TargetConfig(id="target-codex", backend="codex")
+    monkeypatch.setattr("shutil.which", lambda name: str(fake_codex) if name == "codex" else None)
+
+    # Must probe 'exec --help' and detect structured streaming support
+    assert registry.supports_structured_streaming(target) is True
+    log_content = (tmp_path / "codex_log.txt").read_text(encoding="utf-8").strip()
+    assert log_content == "exec-probe"
+
+    # Also test representative older codex where exec --help lacks --json
+    fake_old_codex = tmp_path / "fake-old-codex"
+    fake_old_codex.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "exec" ] && [ "$2" = "--help" ]; then\n'
+        '  echo "Usage: codex exec [OPTIONS] [PROMPT]"\n'
+        '  echo "Options: --help Show this message"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_old_codex.chmod(0o755)
+    target_old = TargetConfig(id="target-old-codex", backend="codex-old")
+    monkeypatch.setattr("shutil.which", lambda name: str(fake_old_codex) if name == "codex-old" else (str(fake_codex) if name == "codex" else None))
+    assert registry.supports_structured_streaming(target_old) is False
+
+
+@pytest.mark.asyncio
+async def test_execution_durable_reload_preserves_streaming_and_authoritative_result(tmp_path) -> None:
+    """Complete job streaming execution, restart runtime, and assert durable reconstruction."""
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    class SampleDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.message.started", "entity_id": "m1", "data": {}})
+                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "live tokens"}})
+                    emitter({"kind": "assistant.message.completed", "entity_id": "m1", "data": {}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-1", "live tokens", "", "")
+
+    runtime1 = Runtime(cfg)
+    runtime1.drivers = SampleDrivers()
+    await runtime1.start()
+    try:
+        project = runtime1.register_project(str(root))
+        sub = await runtime1.submit(project.id, "implement", "test reload")
+        job = await runtime1.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        hw1 = runtime1.database.stream_high_water(sub.job_id)
+        assert hw1 > 0
+    finally:
+        await runtime1.close()
+
+    runtime2 = Runtime(cfg)
+    try:
+        hw2 = runtime2.database.stream_high_water(sub.job_id)
+        assert hw2 == hw1
+        events = runtime2.database.stream_events(sub.job_id, after=0)
+        assert len(events) >= 3
+        assert any(e.kind == "assistant.text.delta" and e.data.get("text") == "live tokens" for e in events)
+        job2 = runtime2.database.job(sub.job_id)
+        assert job2 is not None
+        assert job2.result.text == "live tokens"
+    finally:
+        await runtime2.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_retries_across_runtime_reload(tmp_path) -> None:
+    """Failed attempt transcripts and retry attempts survive daemon restart with correct labels."""
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 2)
+    cfg = replace(
+        config(tmp_path / "home"),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+
+    class RetryDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.count = 0
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            self.count += 1
+            if emitter:
+                def worker(c):
+                    emitter({"kind": "assistant.text.delta", "entity_id": f"msg-{c}", "data": {"text": f"attempt-{c}-text"}})
+                await asyncio.to_thread(worker, self.count)
+            if self.count == 1:
+                return DriverResult("RETRYABLE", "", "", "transient error", "network_err")
+            return DriverResult("SUCCESS", "sess-retry", "successful second attempt", "", "")
+
+    runtime1 = Runtime(cfg)
+    runtime1.drivers = RetryDrivers()
+    await runtime1.start()
+    try:
+        project = runtime1.register_project(str(root))
+        sub = await runtime1.submit(project.id, "implement", "retry test")
+        job = await runtime1.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+    finally:
+        await runtime1.close()
+
+    runtime2 = Runtime(cfg)
+    try:
+        events = runtime2.database.stream_events(sub.job_id, after=0)
+        a1 = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
+        a2 = [e for e in events if e.attempt == 2 and e.kind == "assistant.text.delta"]
+        assert len(a1) == 1
+        assert a1[0].data["text"] == "attempt-1-text"
+        assert len(a2) == 1
+        assert a2[0].data["text"] == "attempt-2-text"
+        reloaded_job = runtime2.database.job(sub.job_id)
+        assert reloaded_job.result.text == "successful second attempt"
+    finally:
+        await runtime2.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_truncation_limits_preserve_final_result(tmp_path, monkeypatch) -> None:
+    """Stream truncation marks stream.truncated while keeping job.result.text authoritative."""
+    from openmcp.streaming import StreamRecorder
+
+    orig_init = StreamRecorder.__init__
+    def custom_init(self, *args, **kwargs):
+        kwargs.setdefault("max_job_bytes", 500)
+        orig_init(self, *args, **kwargs)
+    monkeypatch.setattr(StreamRecorder, "__init__", custom_init)
+
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    class VoluminousDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    for i in range(10):
+                        emitter({"kind": "assistant.text.delta", "entity_id": f"m{i}", "data": {"text": "A" * 100}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-vol", "Full authoritative final text exceeding quota.", "", "")
+
+    runtime = Runtime(cfg)
+    runtime.drivers = VoluminousDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", "voluminous test")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.text == "Full authoritative final text exceeding quota."
+
+        assert runtime.database.stream_is_truncated(sub.job_id) is True
+        events = runtime.database.stream_events(sub.job_id, after=0)
+        assert any(e.kind == "stream.truncated" for e in events)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_persistence_failure_does_not_corrupt_stream_or_fail_job(tmp_path) -> None:
+    """Persistence failure logs warning and records event without aborting terminal job state."""
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    class FailingStreamDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "first event"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-fail", "terminal result text", "", "")
+
+    runtime = Runtime(cfg)
+    runtime.drivers = FailingStreamDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        orig_append = runtime.database.append_stream_events
+
+        call_count = 0
+        def fragile_append(job_id, events):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise RuntimeError("simulated disk write failure")
+            return orig_append(job_id, events)
+
+        runtime.database.append_stream_events = fragile_append
+        sub = await runtime.submit(project.id, "implement", "persistence fail test")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.text == "terminal result text"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_security_regression_fixtures_strip_forbidden_content(tmp_path) -> None:
+    """Security regression asserting forbidden content never reaches database rows across execution."""
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    forbidden_secrets = [
+        "FORBIDDEN_PROMPT_SECRET_ABC123",
+        "FORBIDDEN_THINKING_DELTA_XYZ789",
+        "FORBIDDEN_TOOL_ARG_SSH_KEY_999",
+        "FORBIDDEN_TOOL_RESULT_HASH_555",
+        "FORBIDDEN_BASH_CMD_LINE_777",
+        "FORBIDDEN_DIAGNOSTIC_TRACE_333",
+        "FORBIDDEN_ENV_VARIABLE_222",
+        "FORBIDDEN_SUBAGENT_TRANSCRIPT_111",
+    ]
+
+    class DirtyNormalizedDrivers(FakeDrivers):
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            if emitter:
+                def worker():
+                    emitter({"kind": "assistant.text.delta", "entity_id": "safe-msg", "data": {"text": "Safe verified response."}})
+                    emitter({"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "read"}})
+                    emitter({"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed"}})
+                await asyncio.to_thread(worker)
+            return DriverResult("SUCCESS", "sess-clean", "Safe verified response.", "", "")
+
+    runtime = Runtime(cfg)
+    runtime.drivers = DirtyNormalizedDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub = await runtime.submit(project.id, "implement", f"run with {forbidden_secrets[0]}")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.text == "Safe verified response."
+
+        cursor = runtime.database._connection.execute(
+            "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
+            (sub.job_id,),
+        )
+        stream_rows_raw = str(cursor.fetchall())
+        for secret in forbidden_secrets:
+            assert secret not in stream_rows_raw
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_agy_never_promotes_log_text_to_agent_messages_on_empty_stdout(tmp_path, monkeypatch) -> None:
+    """Empty stdout with diagnostic/secret log text extracts session ID but never promotes log text."""
+    from openmcp.backends import agy as agy_backend
+    from openmcp.backends.agy import AgyParams
+
+    secret_diagnostic = "DIAGNOSTIC_SECRET_TRACE_TOKEN_NEVER_PROMOTE_777"
+    session_id = "11111111-2222-3333-4444-555555555555"
+
+    def fake_run_shell(cmd, cwd=None, **kwargs):
+        log_idx = cmd.index("--log-file") + 1
+        log_path = Path(cmd[log_idx])
+        log_path.write_text(
+            f"Created conversation {session_id}\n[diag] {secret_diagnostic}\nserver internal dump",
+            encoding="utf-8",
+        )
+        yield ""
+
+    monkeypatch.setattr(agy_backend.shutil, "which", lambda _: "/bin/agy")
+    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell)
+
+    res = await agy_backend.execute(AgyParams(PROMPT="test", cd=tmp_path))
+    assert res.SESSION_ID == session_id
+    assert secret_diagnostic not in res.agent_messages
+    assert "server internal dump" not in res.agent_messages
+    assert res.agent_messages == ""
+    assert res.outcome == "FATAL"
+    assert res.error_class == "no_agent_messages"
+
+
+def test_agy_execute_sync_post_submission_type_error_single_invocation(tmp_path, monkeypatch) -> None:
+    """Post-submission TypeError in _execute_once raises immediately with exactly one invocation."""
+    from openmcp.backends import agy as agy_backend
+    from openmcp.backends.agy import AgyParams
+
+    call_count = 0
+
+    def fail_with_type_error(params, entity_state=None):
+        nonlocal call_count
+        call_count += 1
+        raise TypeError("post-submission internal failure")
+
+    monkeypatch.setattr(agy_backend, "_execute_once", fail_with_type_error)
+
+    with pytest.raises(TypeError, match="post-submission internal failure"):
+        agy_backend._execute_sync(AgyParams(PROMPT="test", cd=tmp_path))
+
+    assert call_count == 1
+
+
+def test_agy_continuation_post_submission_type_error_single_invocation(tmp_path, monkeypatch) -> None:
+    """Post-submission TypeError during continuation raises immediately with exactly one continuation invocation."""
+    from openmcp.backends import agy as agy_backend
+    from openmcp.backends.agy import AgyParams, BackendResult
+
+    initial_called = 0
+    continuation_called = 0
+
+    def step_execute_once(params, entity_state=None):
+        nonlocal initial_called, continuation_called
+        if params.PROMPT == "test":
+            initial_called += 1
+            return BackendResult("OK", "sess-cont-123", "first reply", "", "")
+        continuation_called += 1
+        raise TypeError("post-submission continuation failure")
+
+    monkeypatch.setattr(agy_backend, "_execute_once", step_execute_once)
+    monkeypatch.setattr(agy_backend, "_agy_has_pending_tasks", lambda *args: True)
+
+    with pytest.raises(TypeError, match="post-submission continuation failure"):
+        agy_backend._execute_sync(AgyParams(PROMPT="test", cd=tmp_path))
+
+    assert initial_called == 1
+    assert continuation_called == 1
+
+
+@pytest.mark.asyncio
+async def test_execution_all_provider_fixtures_persistence_and_authoritative_results(tmp_path, monkeypatch) -> None:
+    """Exercise sanitized Claude, Codex, Pi, and Agy fixtures through execution flow."""
+    from openmcp.backends.claude import ClaudeParams, _execute_sync as claude_sync
+    from openmcp.backends.codex import CodexParams, _execute_sync as codex_sync
+    from openmcp.backends.pi import PiParams, _execute_sync as pi_sync
+    from openmcp.backends.agy import AgyParams, _execute_once as agy_execute_once
+
+    root = repository(tmp_path)
+    cfg = config(tmp_path / "home")
+
+    secrets = [
+        "SECRET_CLAUDE_PROMPT_999",
+        "SECRET_CODEX_CMD_888",
+        "SECRET_PI_PATTERN_777",
+        "SECRET_AGY_DIAG_666",
+        "SECRET_REASONING_555",
+        "SECRET_TOOL_RESULT_444",
+    ]
+
+    dirty_streams = {
+        "claude": [
+            json.dumps({"type": "system", "content": f"system {secrets[0]}"}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": secrets[4]}, "index": 0}}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "id": "t1", "name": "read", "input": {"secret": secrets[1]}}}}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_stop", "index": 1}}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Claude verified clean."}, "index": 2}}),
+            json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Claude verified clean.", "session_id": "c-sess"}),
+        ],
+        "codex": [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "item.started", "item": {"type": "tool_call", "id": "tc1", "name": "bash", "input": secrets[1]}}),
+            json.dumps({"type": "item.completed", "item": {"type": "tool_call", "id": "tc1", "name": "bash", "output": secrets[5], "status": "completed"}}),
+            json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": secrets[4]}}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "m1", "text": "Codex verified clean."}}),
+        ],
+        "pi": [
+            json.dumps({"type": "session", "id": "pi-sess"}),
+            json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": secrets[4]}}),
+            json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "Pi verified clean."}}),
+            json.dumps({"type": "tool_execution_start", "toolCallId": "pt1", "toolName": "grep", "args": {"pattern": secrets[2]}}),
+            json.dumps({"type": "tool_execution_end", "toolCallId": "pt1", "isError": False, "result": secrets[5]}),
+            json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "Pi verified clean."}]}}),
+        ],
+        "agy": [
+            "Created conversation 12345678-1234-1234-1234-123456789abc",
+            f"[diagnostic] {secrets[3]} and server trace",
+            json.dumps({"type": "assistant.text.delta", "text": "Agy verified clean."}),
+            json.dumps({"type": "tool.started", "tool_name": "exec", "arguments": {"token": secrets[1]}}),
+            json.dumps({"type": "tool.completed", "status": "completed", "result": secrets[5]}),
+            json.dumps({"type": "result", "result": "Agy verified clean."}),
+        ],
+    }
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/mock")
+
+    class RealAdapterDrivers(FakeDrivers):
+        def __init__(self, backend_name):
+            super().__init__()
+            self.backend_name = backend_name
+
+        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+            lines = dirty_streams[self.backend_name]
+            def run_adapter():
+                if self.backend_name == "claude":
+                    monkeypatch.setattr("openmcp.backends.claude.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    return claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+                elif self.backend_name == "codex":
+                    monkeypatch.setattr("openmcp.backends.codex.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    return codex_sync(CodexParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+                elif self.backend_name == "pi":
+                    monkeypatch.setattr("openmcp.backends.pi.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    return pi_sync(PiParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+                else:
+                    monkeypatch.setattr("openmcp.backends.agy.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    return agy_execute_once(AgyParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+
+            res = await asyncio.to_thread(run_adapter)
+            return DriverResult(
+                outcome="SUCCESS" if res.outcome == "OK" else "FATAL",
+                session_id=res.SESSION_ID,
+                text=res.agent_messages,
+                error=res.error,
+                error_code=res.error_class,
+            )
+
+    for backend_name in ("claude", "codex", "pi", "agy"):
+        runtime = Runtime(cfg)
+        runtime.drivers = RealAdapterDrivers(backend_name)
+        await runtime.start()
+        try:
+            project = runtime.register_project(str(root))
+            sub = await runtime.submit(project.id, "implement", f"run {backend_name}")
+            job = await runtime.wait(sub.job_id, 5)
+            assert job.state == "succeeded"
+            assert "verified clean." in job.result.text
+
+            for s in secrets:
+                assert s not in job.result.text
+
+            cursor = runtime.database._connection.execute(
+                "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
+                (sub.job_id,),
+            )
+            rows = cursor.fetchall()
+            rows_data_text = " ".join(r["data_json"] for r in rows)
+
+            # Prompts (secrets[0]), diagnostic traces (secrets[3]), and reasoning (secrets[4]) must never persist
+            for s in [secrets[0], secrets[3], secrets[4]]:
+                assert s not in rows_data_text, f"{backend_name} leaked non-tool secret {s} in stream event data"
+
+            # Approved tool payloads must persist in the stream event data
+            if backend_name in {"claude", "codex", "agy"}:
+                assert secrets[1] in rows_data_text, f"{backend_name} missing persisted tool input {secrets[1]}"
+            if backend_name == "pi":
+                assert secrets[2] in rows_data_text, f"{backend_name} missing persisted tool input {secrets[2]}"
+            if backend_name in {"codex", "pi", "agy"}:
+                assert secrets[5] in rows_data_text, f"{backend_name} missing persisted tool output {secrets[5]}"
+
+            # Activity classification in persisted stream events
+            tool_start_rows = [r for r in rows if r["kind"] == "tool.started"]
+            assert len(tool_start_rows) >= 1
+            for r in tool_start_rows:
+                data = json.loads(r["data_json"])
+                assert "activity" in data, f"{backend_name} missing activity in persisted tool.started"
+                if backend_name == "codex":
+                    assert data["activity"] == "command"
+                else:
+                    assert data["activity"] == "tool_call"
+
+            tool_completed_rows = [r for r in rows if r["kind"] == "tool.completed"]
+            for r in tool_completed_rows:
+                data = json.loads(r["data_json"])
+                assert "activity" not in data, f"{backend_name} leaked activity to tool.completed"
+        finally:
+            await runtime.close()

@@ -25,6 +25,7 @@ vi.mock('../api', () => ({
   deleteConfigurationProfile: vi.fn(),
   getProjectJobs: vi.fn(),
   getJob: vi.fn(),
+  getJobOutput: vi.fn(),
   getTaskGuide: vi.fn(),
   getProjectProfileOverrides: vi.fn(),
   getProjectProfileOverride: vi.fn(),
@@ -117,6 +118,14 @@ describe('Dashboard integrated user flows', () => {
       result: {
         output: 'Implementation completed without errors.',
       },
+    })
+
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [],
+      cursor: 0,
+      has_more: false,
+      retained_from: 0,
+      stream_status: 'unavailable',
     })
 
     vi.mocked(api.getTargets).mockResolvedValue([
@@ -280,18 +289,20 @@ describe('Dashboard integrated user flows', () => {
     expect(screen.getByText('gpt-5.6')).toBeInTheDocument()
 
     // Verifies legacy resolution replaced history entry rather than pushing a duplicate
-    expect(replaceSpy).toHaveBeenCalledWith(
-      {},
-      '',
-      '/dashboard/projects/proj-alpha/jobs/job-999'
-    )
+    await waitFor(() => {
+      expect(replaceSpy).toHaveBeenCalledWith(
+        {},
+        '',
+        '/dashboard/projects/proj-alpha/jobs/job-999'
+      )
+    })
     expect(pushSpy).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       '/dashboard/projects/proj-alpha/jobs/job-999'
     )
 
-    const backBtn = screen.getByRole('button', { name: /Back to jobs list/i })
+    const backBtn = await screen.findByRole('button', { name: /Back to jobs list/i })
     fireEvent.click(backBtn)
 
     expect(await screen.findByText('Alpha Service')).toBeInTheDocument()
@@ -590,5 +601,215 @@ describe('Dashboard integrated user flows', () => {
 
     // Assert CSRF token is not leaked in the DOM
     expect(container.innerHTML).not.toContain('secret-csrf-token')
+  })
+
+  it('renders multi-attempt transcript, handles truncation banner, and protects forbidden content', async () => {
+    window.history.pushState({}, '', '/dashboard/projects/proj-alpha/jobs/job-999')
+
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [
+        {
+          id: 1,
+          attempt: 1,
+          kind: 'attempt.started',
+          data: {
+            prompt: 'FORBIDDEN_PROMPT_SECRET',
+            system_prompt: 'FORBIDDEN_SYSTEM_PROMPT',
+          },
+        },
+        {
+          id: 2,
+          attempt: 1,
+          kind: 'tool.started',
+          entity_id: 'tool-1',
+          data: {
+            tool: 'Read',
+            args: { path: '/etc/shadow', secret: 'FORBIDDEN_TOOL_ARG_SSH_KEY_999' },
+            arguments: 'FORBIDDEN_RAW_ARGUMENTS_123',
+            reasoning: 'FORBIDDEN_TOOL_REASONING_456',
+          },
+        },
+        {
+          id: 3,
+          attempt: 1,
+          kind: 'tool.completed',
+          entity_id: 'tool-1',
+          data: {
+            status: 'completed',
+            result: 'FORBIDDEN_TOOL_RESULT_HASH_555',
+            output: 'FORBIDDEN_TOOL_OUTPUT_SECRET',
+            stdout: 'FORBIDDEN_RAW_STDOUT_SECRET',
+          },
+        },
+        {
+          id: 4,
+          attempt: 1,
+          kind: 'attempt.finished',
+          data: { outcome: 'RETRYABLE' },
+        },
+        {
+          id: 5,
+          attempt: 2,
+          kind: 'attempt.started',
+          data: {},
+        },
+        {
+          id: 6,
+          attempt: 2,
+          kind: 'assistant.message.started',
+          entity_id: 'msg-1',
+          data: {
+            reasoning: 'FORBIDDEN_THINKING_TOKEN',
+            chain_of_thought: 'FORBIDDEN_COT_SECRET',
+          },
+        },
+        {
+          id: 7,
+          attempt: 2,
+          kind: 'assistant.text.delta',
+          entity_id: 'msg-1',
+          data: {
+            text: 'Second attempt succeeded.',
+            reasoning: 'FORBIDDEN_DELTA_REASONING',
+          },
+        },
+        {
+          id: 8,
+          attempt: 2,
+          kind: 'stream.truncated',
+          data: { reason: 'max_job_bytes' },
+        },
+      ],
+      cursor: 8,
+      has_more: false,
+      retained_from: 1,
+      stream_status: 'truncated',
+    })
+
+    const { container } = render(<App />)
+
+    expect(await screen.findByText('Job job-999')).toBeInTheDocument()
+    expect(api.getJobOutput).toHaveBeenCalledWith('job-999', expect.any(Object), expect.any(Object))
+    await waitFor(() => {
+      expect(container.querySelector('.transcript-status-badge')?.textContent).toBe('Transcript truncated')
+    })
+    expect(await screen.findByText(/Attempt 1/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Attempt 2/i)).toBeInTheDocument()
+    expect(await screen.findByText('Second attempt succeeded.')).toBeInTheDocument()
+
+    // Assert injected forbidden args, results, and reasoning fields never appear in the rendered DOM
+    expect(container.innerHTML).not.toContain('FORBIDDEN_TOOL_ARG_SSH_KEY_999')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_RAW_ARGUMENTS_123')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_TOOL_REASONING_456')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_TOOL_RESULT_HASH_555')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_TOOL_OUTPUT_SECRET')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_RAW_STDOUT_SECRET')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_THINKING_TOKEN')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_COT_SECRET')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_DELTA_REASONING')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_PROMPT_SECRET')
+    expect(container.innerHTML).not.toContain('FORBIDDEN_SYSTEM_PROMPT')
+  })
+
+  it('renders historical fallback card cleanly when stream_status is unavailable', async () => {
+    window.history.pushState({}, '', '/dashboard/projects/proj-alpha/jobs/job-999')
+
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [],
+      cursor: 0,
+      has_more: false,
+      retained_from: 0,
+      stream_status: 'unavailable',
+    })
+
+    const { container } = render(<App />)
+
+    expect(await screen.findByText('Job job-999')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(container.querySelector('.transcript-status-badge')?.textContent).toBe('Transcript unavailable')
+    })
+    // Authoritative final result output is displayed in the Result card
+    expect(screen.getByText('Implementation completed without errors.')).toBeInTheDocument()
+    expect(screen.getByText('Transcript is not available for this job.')).toBeInTheDocument()
+  })
+
+  it('integrates stored prompt, normalized categories, filter toggles, and security exclusions', async () => {
+    window.history.pushState({}, '', '/dashboard/projects/proj-alpha/jobs/job-999')
+
+    vi.mocked(api.getJob).mockResolvedValue({
+      id: 'job-999',
+      project_id: 'proj-alpha',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'running',
+      target_id: 'worker-1',
+      config_revision: 'rev-overall-001',
+      attempts: 1,
+      created_at: '2026-09-04 15:00:00',
+      updated_at: '2026-09-04 15:01:00',
+      prompt: 'Clean stored prompt\nwith formatting',
+      execution_plan: {
+        raw_prompt: 'SECRET_PLAN_PROMPT_DO_NOT_EXPOSE',
+        targets: [
+          {
+            id: 'worker-1',
+            system_prompt: 'SECRET_TARGET_SYSTEM_PROMPT_HIDDEN',
+          },
+        ],
+      },
+    })
+
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [
+        { id: 1, attempt: 1, target_id: 'worker-1', kind: 'attempt.started', created_at: '2026-09-04 15:00:01' },
+        { id: 2, attempt: 1, kind: 'assistant.message.started', entity_id: 'm-1' },
+        { id: 3, attempt: 1, kind: 'assistant.text.delta', entity_id: 'm-1', data: { text: 'Integrated assistant response' } },
+        { id: 4, attempt: 1, kind: 'assistant.reasoning_summary.delta', entity_id: 's-1', data: { text: 'Integrated thinking text' } },
+        { id: 5, attempt: 1, kind: 'tool.started', entity_id: 't-cmd', data: { tool_name: 'git_checkout', activity: 'command', input: 'checkout main' } },
+        { id: 6, attempt: 1, kind: 'tool.started', entity_id: 't-tool', data: { tool_name: 'code_search', activity: 'tool_call', input: 'query' } },
+      ],
+      cursor: 6,
+      has_more: false,
+      retained_from: 1,
+      stream_status: 'active',
+    })
+
+    const { container } = render(<App />)
+
+    expect(await screen.findByText('Job job-999')).toBeInTheDocument()
+    expect(await screen.findByText(/Attempt 1/i)).toBeInTheDocument()
+
+    // Single User/Text card before attempts
+    const userCard = container.querySelector('.transcript-user-card')
+    expect(userCard).toBeInTheDocument()
+    expect(userCard.querySelector('.transcript-user-text').textContent).toBe('Clean stored prompt\nwith formatting')
+
+    // Security exclusions: secrets must never exist in the DOM
+    expect(container.innerHTML).not.toContain('SECRET_PLAN_PROMPT_DO_NOT_EXPOSE')
+    expect(container.innerHTML).not.toContain('SECRET_TARGET_SYSTEM_PROMPT_HIDDEN')
+
+    // Native filter controls
+    const roleGroup = screen.getByRole('group', { name: 'Role' })
+    const contentGroup = screen.getByRole('group', { name: 'Content' })
+
+    // By default Thinking is unchecked
+    expect(within(contentGroup).getByRole('checkbox', { name: 'Thinking' })).not.toBeChecked()
+    expect(screen.queryByText('Integrated thinking text')).not.toBeInTheDocument()
+
+    // Assistant text, command, and tool call are visible
+    expect(screen.getByText('Integrated assistant response')).toBeInTheDocument()
+    expect(screen.getByText('git_checkout')).toBeInTheDocument()
+    expect(screen.getByText('code_search')).toBeInTheDocument()
+
+    // Enable Thinking
+    fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Thinking' }))
+    expect(screen.getByText('Integrated thinking text')).toBeInTheDocument()
+
+    // Uncheck Text
+    fireEvent.click(within(contentGroup).getByRole('checkbox', { name: 'Text' }))
+    expect(screen.queryByText('Clean stored prompt\nwith formatting')).not.toBeInTheDocument()
+    expect(screen.queryByText('Integrated assistant response')).not.toBeInTheDocument()
+    expect(screen.getByText('git_checkout')).toBeInTheDocument()
+    expect(screen.getByText('code_search')).toBeInTheDocument()
   })
 })

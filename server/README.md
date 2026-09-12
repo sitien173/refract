@@ -397,6 +397,17 @@ The dashboard supports controlled editing of configurations:
 - **Editable context instructions:** Durable workflow context instructions remain editable. Updates require confirmation and apply to future jobs.
 - **External daemon settings:** Core daemon options remain managed on disk.
 
+### Worker Live Dashboard Streaming
+
+The dashboard renders live transcripts for running jobs.
+
+- **Provider support:** Claude, Codex, Pi, and Agy support streaming. Unsupported versions fall back to final-only execution safely.
+- **Content exclusions:** Transcripts include assistant text and tool status. Prompts, reasoning, and tool arguments remain excluded. Tool results, diagnostics, and environment variables remain excluded.
+- **Storage boundaries:** Transcripts cap at 20000 events or 8 MiB. Individual text events cannot exceed 8 KiB. Limits record a truncation marker and stop recording.
+- **Authoritative results:** `job.result.text` remains authoritative across all executions. Truncation or stream failures never alter final output.
+- **Historical fallback:** Older jobs without stream events show final results.
+- **Subagent streaming:** Subagent text streaming remains deferred.
+
 ## Development and Testing
 
 ```bash

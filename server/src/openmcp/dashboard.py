@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import secrets
@@ -11,7 +12,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -25,6 +26,7 @@ from openmcp.models import (
     DashboardError,
     DashboardJob,
     DashboardOverview,
+    JobOutputResponse,
     ProfileDeleteResponse,
     ProfileEditorData,
     ProfileEditorResponse,
@@ -33,6 +35,8 @@ from openmcp.models import (
     ProjectOverrideDeleteResponse,
     ProjectOverrideListResponse,
     ProjectOverrideResponse,
+    StreamStatus,
+    TERMINAL_STATES,
     TargetDeleteResponse,
     TargetEditorData,
     TargetListResponse,
@@ -42,6 +46,7 @@ from openmcp.planning import parse_execution_plan
 
 
 _STATIC_DIR = Path(__file__).parent / "dashboard_static"
+SSE_KEEPALIVE_INTERVAL_S: float = 20.0
 
 
 @dataclass
@@ -290,6 +295,7 @@ def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
         project_id=job.project_id,
         workflow=job.workflow,
         profile=job.profile,
+        prompt=str(record.get("prompt") or ""),
         state=job.state,
         context_key=job.context_key,
         config_revision=job.config_revision,
@@ -1295,6 +1301,103 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except RuntimeError:
             return _runtime_error()
 
+    async def job_output(request: Request) -> Response:
+        try:
+            runtime = _runtime(state)
+            job_id = request.path_params["job_id"]
+            job = runtime.database.job(job_id)
+            if job is None:
+                return _error("Unknown job", 404, code="not_found")
+            try:
+                after = max(0, int(request.query_params.get("after", 0)))
+            except (ValueError, TypeError):
+                after = 0
+            try:
+                limit = int(request.query_params.get("limit", 100))
+            except (ValueError, TypeError):
+                limit = 100
+            safe_limit = max(1, min(limit, 500))
+
+            high_water = runtime.database.stream_high_water(job_id)
+            events = runtime.database.stream_events(job_id, after=after, limit=safe_limit)
+            retained_from = runtime.database.stream_retained_from(job_id)
+
+            lifecycle_events = runtime.database.events(job_id)
+            if any(event.get("kind") == "stream.persistence_failed" for event in lifecycle_events):
+                stream_status: StreamStatus = "failed"
+            elif runtime.database.stream_is_truncated(job_id):
+                stream_status = "truncated"
+            elif job.state not in TERMINAL_STATES:
+                stream_status = "active"
+            elif retained_from <= 0:
+                stream_status = "unavailable"
+            else:
+                stream_status = "complete"
+
+            cursor = events[-1].id if events else after
+            has_more = bool(events and events[-1].id < high_water)
+
+            return _json_response(
+                JobOutputResponse(
+                    events=events,
+                    cursor=cursor,
+                    has_more=has_more,
+                    retained_from=retained_from,
+                    stream_status=stream_status,
+                )
+            )
+        except RuntimeError:
+            return _runtime_error()
+
+    async def job_output_updates(request: Request) -> Response:
+        try:
+            runtime = _runtime(state)
+            job_id = request.path_params["job_id"]
+            job = runtime.database.job(job_id)
+            if job is None:
+                return _error("Unknown job", 404, code="not_found")
+
+            async def event_generator():
+                queue = runtime.stream_hub.subscribe(job_id)
+                try:
+                    initial_hw = runtime.database.stream_high_water(job_id)
+                    last_sent = initial_hw
+                    yield (
+                        f"event: output-updated\n"
+                        f"id: {initial_hw}\n"
+                        f"data: {json.dumps({'cursor': initial_hw})}\n\n"
+                    ).encode("utf-8")
+
+                    while True:
+                        if await request.is_disconnected():
+                            break
+                        try:
+                            cursor = await asyncio.wait_for(
+                                queue.get(), timeout=SSE_KEEPALIVE_INTERVAL_S
+                            )
+                            if cursor > last_sent:
+                                last_sent = cursor
+                                yield (
+                                    f"event: output-updated\n"
+                                    f"id: {cursor}\n"
+                                    f"data: {json.dumps({'cursor': cursor})}\n\n"
+                                ).encode("utf-8")
+                        except asyncio.TimeoutError:
+                            yield b": keepalive\n\n"
+                finally:
+                    runtime.stream_hub.unsubscribe(job_id, queue)
+
+            response = StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+            )
+            response.headers["Cache-Control"] = "no-cache"
+            response.headers["Connection"] = "keep-alive"
+            response.headers["X-Accel-Buffering"] = "no"
+            return response
+        except RuntimeError:
+            return _runtime_error()
+
     async def api_not_found(request: Request) -> Response:
         return _error(
             "Dashboard API route not found",
@@ -1374,6 +1477,8 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         Route("/dashboard/api/projects/{project_id}/jobs", project_jobs, methods=["GET"]),
         Route("/dashboard/api/jobs/{job_id}", job, methods=["GET"]),
         Route("/dashboard/api/jobs/{job_id}/events", job_events, methods=["GET"]),
+        Route("/dashboard/api/jobs/{job_id}/output", job_output, methods=["GET"]),
+        Route("/dashboard/api/jobs/{job_id}/output/updates", job_output_updates, methods=["GET"]),
         Route("/dashboard/api", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         Route("/dashboard/api/{path:path}", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         Route("/dashboard/assets", missing_asset, methods=["GET"]),

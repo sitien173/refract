@@ -44,7 +44,7 @@ def test_imports() -> None:
 
 
 def test_backend_params_are_transport_only() -> None:
-    expected = {"PROMPT", "cd", "SESSION_ID", "args", "timeout_s", "cancel_event"}
+    expected = {"PROMPT", "cd", "SESSION_ID", "args", "timeout_s", "cancel_event", "emitter"}
     assert {field.name for field in fields(AgyParams)} == expected
     assert {field.name for field in fields(ClaudeParams)} == expected
     assert {field.name for field in fields(CodexParams)} == expected
@@ -188,8 +188,8 @@ async def test_agy_extracts_session_id_from_conversation_log(monkeypatch, tmp_pa
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         log_path = Path(cmd[cmd.index("--log-file") + 1])
-        log_path.write_text(f"{prefix} conversation {session_id}\nPONG", encoding="utf-8")
-        yield ""
+        log_path.write_text(f"{prefix} conversation {session_id}", encoding="utf-8")
+        yield "PONG"
 
     monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
@@ -198,7 +198,7 @@ async def test_agy_extracts_session_id_from_conversation_log(monkeypatch, tmp_pa
 
     assert out.outcome == "OK"
     assert out.SESSION_ID == session_id
-    assert out.agent_messages == f"{prefix} conversation {session_id}\nPONG"
+    assert out.agent_messages == "PONG"
 
 
 @pytest.mark.asyncio
@@ -231,7 +231,7 @@ async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
         captured["cmd"] = cmd
         log_path = Path(cmd[cmd.index("--log-file") + 1])
         log_path.write_text("PONG", encoding="utf-8")
-        yield ""
+        yield "PONG"
 
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setattr(agy_backend.shutil, "which", lambda name: f"C:/bin/{name}.exe")

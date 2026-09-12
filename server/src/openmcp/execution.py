@@ -14,10 +14,11 @@ from pathlib import Path
 
 from openmcp.config import DaemonConfig, TargetConfig
 from openmcp.database import Database
-from openmcp.drivers import DriverRegistry, DriverResult
+from openmcp.drivers import DriverRegistry, DriverResult, StreamBridge
 from openmcp.logging_setup import get_logger, log_context
 from openmcp.models import ProjectView, TargetView, job_resource_uri
 from openmcp.planning import ExecutionPlan, parse_execution_plan, target_execution_key
+from openmcp.streaming import StreamRecorder
 
 
 log = get_logger("execution")
@@ -84,10 +85,77 @@ class TargetExecutor:
             started_at = time.monotonic()
             log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt + 1, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
             self._target_active[target_key] += 1
+            supports_streaming = (
+                self.drivers.supports_structured_streaming(target)
+                if hasattr(self.drivers, "supports_structured_streaming")
+                else True
+            )
+            bridge = StreamBridge(queue_capacity=256) if supports_streaming else None
+            recorder = (
+                StreamRecorder(
+                    database=self.database,
+                    job_id=job_id,
+                    attempt=attempt + 1,
+                    target_id=target.id,
+                    backend=target.backend,
+                )
+                if supports_streaming
+                else None
+            )
+
+            async def drain_stream():
+                if bridge and recorder:
+                    async for event in bridge.consumer():
+                        await recorder.record(event)
+                    await recorder.flush()
+
+            drain_task = asyncio.create_task(drain_stream()) if bridge and recorder else None
+            attempt_result: DriverResult | None = None
+            driver_exc: BaseException | None = None
             try:
                 with log_context(target_id=target.id):
-                    last = await self.drivers.execute(target=target, prompt=effective_prompt, cwd=cwd, session_id=session_id, timeout_s=plan.selection.timeout_s, cancel_event=cancel_event)
+                    attempt_result = await self.drivers.execute(
+                        target=target,
+                        prompt=effective_prompt,
+                        cwd=cwd,
+                        session_id=session_id,
+                        timeout_s=plan.selection.timeout_s,
+                        cancel_event=cancel_event,
+                        emitter=bridge.emit if bridge else None,
+                    )
+                    last = attempt_result
+            except BaseException as exc:
+                driver_exc = exc
+                raise
             finally:
+                if bridge:
+                    await bridge.close()
+                if drain_task:
+                    await drain_task
+                if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+                    attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+                    last = attempt_result
+                if recorder:
+                    res = attempt_result
+                    if res is None:
+                        err_msg = str(driver_exc) if driver_exc else "execution_failed"
+                        res = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
+                    status = (
+                        "cancelled"
+                        if cancel_event.is_set() or res.outcome == "CANCELLED"
+                        else "succeeded"
+                        if res.outcome == "SUCCESS"
+                        else "failed"
+                    )
+                    await recorder.record(
+                        "attempt.finished",
+                        {
+                            "status": status,
+                            "outcome": res.outcome,
+                            "error_code": res.error_code,
+                        },
+                    )
+                    await recorder.close()
                 self._target_active[target_key] -= 1
                 semaphore.release()
             self.database.event(job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": attempt + 1, "outcome": last.outcome, "error_code": last.error_code})

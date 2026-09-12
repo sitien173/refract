@@ -6,14 +6,22 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from openmcp.logging_setup import get_logger
-from openmcp.models import ContextStreamView, JobResult, JobView, ProjectView
+from openmcp.models import (
+    ContextStreamView,
+    JobResult,
+    JobStreamEvent,
+    JobView,
+    ProjectView,
+    StreamTotals,
+    TERMINAL_STATES,
+)
 
 
 log = get_logger("database")
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 
 def utc_now() -> str:
@@ -66,6 +74,7 @@ class Database:
                 self._create_support_tables()
             self._migrate_v8_to_v9()
             self._migrate_v9_to_v10()
+            self._migrate_v10_to_v11()
         log.debug(
             "Database schema is current",
             extra={"event": "database.migrated", "schema_version": _SCHEMA_VERSION},
@@ -115,6 +124,38 @@ class Database:
             self._connection.rollback()
             raise
 
+    def _migrate_v10_to_v11(self) -> None:
+        """Add job_stream_events table for durable worker transcripts."""
+        version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if version >= 11:
+            return
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS job_stream_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    target_id TEXT NOT NULL,
+                    backend TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    parent_entity_id TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS job_stream_events_job_idx
+                    ON job_stream_events(job_id, id);
+                """
+            )
+            self._connection.execute("PRAGMA user_version=11")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
     def _tables(self) -> set[str]:
         return {
             row["name"]
@@ -128,7 +169,9 @@ class Database:
             "jobs": "PRAGMA table_info(jobs)",
             "projects": "PRAGMA table_info(projects)",
             "context_sessions": "PRAGMA table_info(context_sessions)",
+            "job_stream_events": "PRAGMA table_info(job_stream_events)",
         }
+
         try:
             statement = statements[table]
         except KeyError as exc:
@@ -212,8 +255,24 @@ class Database:
             CREATE INDEX IF NOT EXISTS events_job_idx ON events(job_id, id);
             CREATE INDEX IF NOT EXISTS context_turns_stream_idx
                 ON context_turns(project_id, context_key, role, id);
+            CREATE TABLE IF NOT EXISTS job_stream_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                target_id TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                parent_entity_id TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS job_stream_events_job_idx
+                ON job_stream_events(job_id, id);
             """
         )
+
 
     def _normalize_legacy_columns(self) -> None:
         columns = self._columns("jobs")
@@ -683,6 +742,154 @@ class Database:
             self._connection.execute("""INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until) VALUES (?, ?, ?)
                 ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures, circuit_open_until=excluded.circuit_open_until""", (target_id, failures, circuit_open_until))
         return failures
+
+    def append_stream_events(
+        self,
+        job_id: str,
+        events: Sequence[JobStreamEvent | dict[str, Any]],
+    ) -> list[JobStreamEvent]:
+        if not events:
+            return []
+        persisted: list[JobStreamEvent] = []
+        now = utc_now()
+        with self._connection:
+            for item in events:
+                if isinstance(item, JobStreamEvent):
+                    created_at = item.created_at or now
+                    attempt = item.attempt
+                    target_id = item.target_id
+                    backend = item.backend
+                    kind = item.kind
+                    entity_id = item.entity_id
+                    parent_entity_id = item.parent_entity_id
+                    data = item.data
+                elif isinstance(item, dict):
+                    created_at = item.get("created_at") or now
+                    attempt = int(item.get("attempt", 1))
+                    target_id = str(item.get("target_id", ""))
+                    backend = str(item.get("backend", ""))
+                    kind = str(item.get("kind", ""))
+                    entity_id = str(item.get("entity_id", ""))
+                    parent_entity_id = str(item.get("parent_entity_id", ""))
+                    data = item.get("data", {})
+                else:
+                    raise TypeError(f"Unsupported event type: {type(item)}")
+                data_json = json.dumps(data, ensure_ascii=False)
+                size_bytes = len(data_json.encode("utf-8"))
+                cursor = self._connection.execute(
+                    """INSERT INTO job_stream_events(
+                        job_id, created_at, attempt, target_id, backend,
+                        kind, entity_id, parent_entity_id, data_json, size_bytes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job_id,
+                        created_at,
+                        attempt,
+                        target_id,
+                        backend,
+                        kind,
+                        entity_id,
+                        parent_entity_id,
+                        data_json,
+                        size_bytes,
+                    ),
+                )
+                event_id = int(cursor.lastrowid)
+                persisted.append(
+                    JobStreamEvent(
+                        id=event_id,
+                        version=1,
+                        job_id=job_id,
+                        created_at=created_at,
+                        attempt=attempt,
+                        target_id=target_id,
+                        backend=backend,
+                        kind=kind,
+                        entity_id=entity_id,
+                        parent_entity_id=parent_entity_id,
+                        data=data,
+                    )
+                )
+        return persisted
+
+    def stream_events(
+        self,
+        job_id: str,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> list[JobStreamEvent]:
+        safe_limit = max(1, min(limit, 500))
+        rows = self._connection.execute(
+            """SELECT id, job_id, created_at, attempt, target_id, backend,
+                      kind, entity_id, parent_entity_id, data_json
+               FROM job_stream_events
+               WHERE job_id=? AND id > ?
+               ORDER BY id ASC
+               LIMIT ?""",
+            (job_id, after, safe_limit),
+        ).fetchall()
+        return [
+            JobStreamEvent(
+                id=row["id"],
+                version=1,
+                job_id=row["job_id"],
+                created_at=row["created_at"],
+                attempt=row["attempt"],
+                target_id=row["target_id"],
+                backend=row["backend"],
+                kind=row["kind"],
+                entity_id=row["entity_id"],
+                parent_entity_id=row["parent_entity_id"],
+                data=json.loads(row["data_json"]),
+            )
+            for row in rows
+        ]
+
+    def stream_high_water(self, job_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(id), 0) AS high_water FROM job_stream_events WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+        return int(row["high_water"]) if row else 0
+
+    def stream_retained_from(self, job_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COALESCE(MIN(id), 0) AS retained_from FROM job_stream_events WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+        return int(row["retained_from"]) if row else 0
+
+    def stream_totals(self, job_id: str) -> StreamTotals:
+        row = self._connection.execute(
+            """SELECT COUNT(*) AS event_count, COALESCE(SUM(size_bytes), 0) AS total_bytes
+               FROM job_stream_events WHERE job_id=?""",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            return StreamTotals(events=0, bytes=0)
+        return StreamTotals(events=int(row["event_count"]), bytes=int(row["total_bytes"]))
+
+    def stream_is_truncated(self, job_id: str) -> bool:
+        row = self._connection.execute(
+            "SELECT 1 FROM job_stream_events WHERE job_id=? AND kind='stream.truncated' LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        return row is not None
+
+    def prune_terminal_stream_events(self, older_than: str) -> int:
+        terminal_states_tuple = tuple(TERMINAL_STATES)
+        placeholders = ",".join("?" for _ in terminal_states_tuple)
+        with self._connection:
+            cursor = self._connection.execute(
+                f"""DELETE FROM job_stream_events
+                    WHERE job_id IN (
+                        SELECT id FROM jobs
+                        WHERE state IN ({placeholders}) AND updated_at < ?
+                    )""",
+                (*terminal_states_tuple, older_than),
+            )
+            return cursor.rowcount
 
 
 __all__ = ["Database", "utc_now"]

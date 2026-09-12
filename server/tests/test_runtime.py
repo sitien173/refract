@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 
@@ -219,4 +220,297 @@ async def test_project_override_runtime_activation_and_plan_preservation(tmp_pat
     assert record1_after is not None
     assert record1_after["execution_plan_json"] == plan1_before
 
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_start_prunes_expired_terminal_transcripts_without_pruning_active_jobs(tmp_path) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "config.toml"
+    _config(path)
+    runtime = Runtime(load_config(path))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "project")
+
+    # 1. Expired terminal job (10 days old)
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    runtime.database.create_job(
+        job_id="job-expired-term",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="p1",
+        execution_plan_json="{}",
+        context_key="c1",
+    )
+    with runtime.database._connection:
+        runtime.database._connection.execute(
+            "UPDATE jobs SET state='succeeded', updated_at=? WHERE id='job-expired-term'",
+            (old_ts,),
+        )
+    runtime.database.append_stream_events("job-expired-term", [{
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "old terminal transcript"},
+    }])
+
+    # 2. Recent terminal job (2 days old)
+    recent_ts = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    runtime.database.create_job(
+        job_id="job-recent-term",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="p2",
+        execution_plan_json="{}",
+        context_key="c2",
+    )
+    with runtime.database._connection:
+        runtime.database._connection.execute(
+            "UPDATE jobs SET state='succeeded', updated_at=? WHERE id='job-recent-term'",
+            (recent_ts,),
+        )
+    runtime.database.append_stream_events("job-recent-term", [{
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "recent terminal transcript"},
+    }])
+
+    # 3. Active running job (10 days old) - should NOT be pruned despite being old
+    runtime.database.create_job(
+        job_id="job-old-running",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="p3",
+        execution_plan_json="{}",
+        context_key="c3",
+    )
+    with runtime.database._connection:
+        runtime.database._connection.execute(
+            "UPDATE jobs SET state='running', updated_at=? WHERE id='job-old-running'",
+            (old_ts,),
+        )
+    runtime.database.append_stream_events("job-old-running", [{
+        "kind": "assistant.text.delta",
+        "entity_id": "msg-1",
+        "data": {"text": "active running transcript"},
+    }])
+
+    # Verify initial stream data exists
+    assert runtime.database.stream_high_water("job-expired-term") > 0
+    assert runtime.database.stream_high_water("job-recent-term") > 0
+    assert runtime.database.stream_high_water("job-old-running") > 0
+
+    # Start runtime (triggers start retention cleanup)
+    await runtime.start()
+
+    # Expired terminal transcript is pruned
+    assert runtime.database.stream_high_water("job-expired-term") == 0
+
+    # Recent terminal and active running transcripts are preserved
+    assert runtime.database.stream_high_water("job-recent-term") > 0
+    # Note: runtime.start() interrupts active jobs upon restart, changing running -> interrupted,
+    # but the stream events of active jobs prior to start were not pruned by the retention step!
+    assert runtime.database.stream_high_water("job-old-running") > 0
+
+    # All job records themselves remain intact
+    assert runtime.database.job("job-expired-term") is not None
+    assert runtime.database.job("job-recent-term") is not None
+    assert runtime.database.job("job-old-running") is not None
+
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_durable_reload_reconstructs_cursor_and_events(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "project")
+    job_id = "job-reload-test"
+    runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="c1",
+    )
+    events = [
+        {"kind": "assistant.message.started", "entity_id": "msg-1", "data": {}},
+        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "chunk 1"}},
+        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "chunk 2"}},
+        {"kind": "assistant.message.completed", "entity_id": "msg-1", "data": {}},
+    ]
+    persisted = runtime.database.append_stream_events(job_id, events)
+    expected_hw = persisted[-1].id
+    expected_retained = persisted[0].id
+    await runtime.close()
+
+    reopened = Runtime(load_config(config_path))
+    try:
+        assert reopened.database.stream_high_water(job_id) == expected_hw
+        assert reopened.database.stream_retained_from(job_id) == expected_retained
+        totals = reopened.database.stream_totals(job_id)
+        assert totals.events == 4
+        assert totals.bytes > 0
+        replayed = reopened.database.stream_events(job_id, after=0)
+        assert len(replayed) == 4
+        assert [e.id for e in replayed] == [p.id for p in persisted]
+        assert [e.kind for e in replayed] == [e["kind"] for e in events]
+        assert replayed[1].data["text"] == "chunk 1"
+        assert replayed[2].data["text"] == "chunk 2"
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_truncation_marker_durable_across_reload(tmp_path) -> None:
+    from openmcp.streaming import StreamRecorder
+
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "project")
+    job_id = "job-trunc-reload"
+    runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="c1",
+    )
+    recorder = StreamRecorder(
+        database=runtime.database,
+        job_id=job_id,
+        attempt=1,
+        target_id="primary",
+        backend="codex",
+        max_job_bytes=100,
+    )
+    await recorder.record({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "x" * 60}})
+    await recorder.record({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "y" * 60}})
+    await recorder.close()
+
+    assert runtime.database.stream_is_truncated(job_id) is True
+    await runtime.close()
+
+    reopened = Runtime(load_config(config_path))
+    try:
+        assert reopened.database.stream_is_truncated(job_id) is True
+        new_recorder = StreamRecorder(
+            database=reopened.database,
+            job_id=job_id,
+            attempt=1,
+            target_id="primary",
+            backend="codex",
+        )
+        assert new_recorder.truncated is True
+        await new_recorder.record({"kind": "assistant.text.delta", "entity_id": "msg-2", "data": {"text": "suppressed"}})
+        await new_recorder.close()
+
+        events = reopened.database.stream_events(job_id, after=0)
+        assert not any(e.data.get("text") == "suppressed" for e in events)
+        assert any(e.kind == "stream.truncated" for e in events)
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_persistence_failure_retains_prior_events(tmp_path) -> None:
+    from openmcp.streaming import StreamRecorder
+
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "project")
+    job_id = "job-persist-fail"
+    runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="c1",
+    )
+    runtime.database.append_stream_events(job_id, [
+        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "safe before failure"}}
+    ])
+    assert runtime.database.stream_high_water(job_id) > 0
+
+    recorder = StreamRecorder(
+        database=runtime.database,
+        job_id=job_id,
+        attempt=1,
+        target_id="primary",
+        backend="codex",
+    )
+
+    def broken_append(*args, **kwargs):
+        raise RuntimeError("simulated disk full error")
+
+    runtime.database.append_stream_events = broken_append
+    await recorder.record({"kind": "assistant.text.delta", "entity_id": "msg-2", "data": {"text": "will fail"}})
+    await recorder.flush()
+
+    assert recorder.failed is True
+    del runtime.database.append_stream_events
+    events = runtime.database.stream_events(job_id, after=0)
+    assert len(events) == 1
+    assert events[0].data["text"] == "safe before failure"
+    lifecycle = runtime.database.events(job_id)
+    assert any(e.get("kind") == "stream.persistence_failed" for e in lifecycle)
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_historical_fallback_for_jobs_without_events(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "project")
+    job_id = "job-legacy"
+    runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="c1",
+    )
+    runtime.database.finish_job(job_id, "succeeded", text="authoritative historical result")
+
+    assert runtime.database.stream_high_water(job_id) == 0
+    assert runtime.database.stream_retained_from(job_id) == 0
+    assert runtime.database.stream_events(job_id, after=0) == []
+    assert runtime.database.stream_is_truncated(job_id) is False
+    job = runtime.database.job(job_id)
+    assert job is not None
+    assert job.result.text == "authoritative historical result"
     await runtime.close()
