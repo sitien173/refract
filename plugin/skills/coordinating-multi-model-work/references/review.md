@@ -2,12 +2,11 @@
 
 ## Specification and verification
 
-After implementation is terminal and you have committed the validated changes:
+After implementation is terminal and the validated changes have a checkpoint:
 
-1. Require no active project job and a clean root at your implementation commit.
-2. Inspect that implementation commit and
-   `refs/plans/<slug>/phase-<NN>/base..HEAD` for the phase. Resolve the anchor
-   through [git-anchors.md](git-anchors.md); a stale cached commit halts here.
+1. Require no active project job and a clean root.
+2. Inspect `refs/plans/<slug>/phase-<NN>/base..HEAD`. Resolve the anchor through
+   [git-anchors.md](git-anchors.md). A stale anchor halts here.
 3. Check declared paths and acceptance criteria.
 4. Apply `verifying-before-completion` to run every declared command fresh.
 5. Recheck the same HEAD and clean state.
@@ -16,52 +15,58 @@ Any scope, requirement, or evidence failure blocks quality review.
 
 ## Independent quality review
 
-Review only what this phase changed; never request a full-codebase scan. Submit
-the first `review` job for a plan with `fresh_session: true` and a full reviewer
-contract. Submit later review jobs prompt-only, scoped to the phase delta with:
+Review only what this phase changed. Submit the first `review` job for a plan
+with `fresh_session: true` and a full reviewer contract. Submit later review jobs
+prompt-only, scoped to the phase delta with:
 
-- the exact diff to review: `refs/plans/<slug>/phase-<NN>/base..HEAD` and the
-  paths in FILES MODIFIED,
-- the plan acceptance criteria and reviewer checklist as the rubric,
-- the selected review profile and the plan `context_key` (`<plan-slug>`).
+- the exact range `refs/plans/<slug>/phase-<NN>/base..HEAD`,
+- paths in FILES MODIFIED,
+- acceptance criteria and reviewer checklist,
+- the selected profile and plan `context_key`.
 
-State the paths and range in the prompt and instruct the reviewer to judge only
-whether those changes are correct, secure, and meet the plan. Pre-existing code
-outside the delta is out of scope and is not a finding.
+Instruct the reviewer to judge only whether those changes are correct, secure,
+and meet the plan. Pre-existing code outside the delta is out of scope.
 
-Correctness and security findings force `FAIL`. Run review against a read-only
-target so it cannot mutate files; make no commit for a review.
+Correctness and security findings force `FAIL`. Review through a read-only target
+and make no commit for review output.
 
 ## Review-fix loop
 
-When review returns blocking findings, iterate until it passes or you stop for
-the user:
+When review returns blocking findings:
 
-1. Collect the blocking findings — every correctness and security finding, plus
-   any the user requires — into one fix batch.
+1. Collect every blocking finding into one fix batch.
 2. Submit one `FIX:` `implement` job on the plan `context_key`, listing only the
-   findings, the allowed paths, and the checks to rerun. The worker resumes its
-   session, so send no contract or ERP restatement.
-3. Validate and commit the fix yourself with a `fix:` message.
-4. Re-review only the fix delta: submit a `review` scoped to the paths the fix
-   touched and the findings it must clear, not the whole phase again. Re-run only
-   the checks the fix affected.
-5. Exit when review returns no blocking findings.
+   findings, allowed paths, and checks to rerun.
+3. Validate the fix and create a temporary checkpoint commit.
+4. Re-review only the fix delta and rerun affected checks.
+5. Exit when no blocking findings remain.
 
-Bound this to two automatic fix cycles. If blocking findings remain after the
-second cycle, stop and hand the open findings back to the user instead of looping
-further.
+Bound this to two automatic fix cycles. Return remaining findings after the
+second cycle.
 
-## Finalize
+## Finalize phase
 
 After both reviews pass and no job is active:
 
 1. Append evidence to `journal.md`.
-2. Set `refs/plans/<slug>/phase-<NN>/impl` to the current HEAD, which is the last
-   validated fix commit. Write it once, here, and never earlier.
-3. Update `.handover.md`, recording that ref and, as an advisory cache, the HEAD
-   you captured before the initial implementation as `phase_base`.
-4. Under `tracked`, commit only coordination state as
-   `chore(plan): record phase <N>`. Under `untracked`, make no commit; the ref
-   set in step 2 already records the phase.
-5. Confirm the root is clean. This requirement is identical in both modes.
+2. Checkpoint final coordination state under `tracked`.
+3. Set `refs/plans/<slug>/phase-<NN>/impl` to the current HEAD.
+4. Update `.handover.md` with both phase refs and summaries.
+5. Confirm the root is clean.
+
+The phase checkpoint is temporary branch history. Its refs remain authoritative
+after final plan consolidation.
+
+## Finalize plan
+
+After the final phase closes:
+
+1. Mark handover `DONE` and finish every journal.
+2. Checkpoint final coordination state under `tracked`.
+3. Follow [git-anchors.md](git-anchors.md) to consolidate all plan checkpoints.
+4. Use the single plan-level Conventional Commit message from `PLAN.md`.
+5. Set the plan `impl` ref and run final verification at that exact HEAD.
+6. Confirm the root is clean and HEAD equals the plan `impl` ref.
+
+The completed branch contains one commit for the plan. Phase refs retain the
+reviewable implementation and fix checkpoints.

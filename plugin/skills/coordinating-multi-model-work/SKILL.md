@@ -71,8 +71,9 @@ resets, or restores; assume it did none of these.
 
 - Require an attached branch before every job so commits land; a dirty tree does
   not block submission. Record HEAD and pre-existing dirt to attribute changes.
-- Anchor every phase through [references/git-anchors.md](references/git-anchors.md).
-  A recorded commit is a cache; history rewriting may invalidate it at any time.
+- Before creating plan artifacts, anchor clean HEAD as the plan `base`. Anchor
+  every phase through [references/git-anchors.md](references/git-anchors.md).
+  Phase commits are local checkpoints. Consolidation leaves one plan commit.
 - Edit or commit known coordination files only when no project job is active.
 - After submission, do not edit the root until that job is terminal.
 - Every file is visible to workers and nothing is auto-restored. Never expose
@@ -117,9 +118,9 @@ already matched, and warn once that `git clean -fdx` destroys the plan directory
 and that a fresh checkout starts without it. Never write `.gitignore`; a
 committed ignore file imposes one contributor's choice on everyone.
 
-Tracking mode governs plan-artifact commits alone. Phase anchors are written in
-both modes, and the clean-root requirement is identical in both. Excluded files
-never dirty the tree, so nothing about them justifies relaxing it.
+Tracking mode governs plan-artifact checkpoints alone. Plan and phase anchors
+are written in both modes. The clean-root requirement is identical in both.
+Excluded files never dirty the tree, so nothing about them relaxes it.
 
 ## Task Guidance
 
@@ -165,9 +166,8 @@ For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch wit
 
 - Submit one prompt-only `implement` job with the saved route.
 - Wait with `timeout_s: 300`; wait for the job to finish and read `result.text` on success or `result.error` on failure.
-- On success, read `result.text`, then inspect the actual filesystem changes,
-  run the phase validation, and commit the reconciled diff with the phase commit
-  message only after validation passes.
+- On success, read `result.text`, inspect the actual filesystem changes, run the
+  phase validation, and create a temporary checkpoint commit only after it passes.
 - On failure, cancellation, or interruption, read `result.error`. The worker's
   partial changes remain on disk; inspect, reconcile, and report what is
   retained. A retry does not reset the tree, so reconcile first, then retry once
@@ -176,9 +176,10 @@ For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch wit
 
 ## Gate 3: Review
 
-After implementation commits, load [references/review.md](references/review.md).
-Specification failure blocks quality review. Correctness and security force
-`FAIL`. Review through a read-only target; never commit a review.
+After the implementation checkpoint, load
+[references/review.md](references/review.md). Specification failure blocks
+quality review. Correctness and security force `FAIL`. Review through a
+read-only target; never commit a review.
 
 ```text
 # CODE QUALITY REVIEW
@@ -210,6 +211,8 @@ topic: <one-line topic>
 current_phase: <N>
 next_action: "Execute Phase <N>"
 project_id: <OpenMCP project UUID|null>
+plan_base_ref: <refs/plans/<slug>/base|null>
+plan_impl_ref: <refs/plans/<slug>/impl|null>
 phase_base: <commit|null>
 phase_base_ref: <refs/plans/...|null>
 context_key: <plan-slug>
@@ -220,12 +223,11 @@ guidance:
 job_refs: { phase: <N>, latest_consult: <id|null>, latest_implementation: <id|null>, latest_review: <id|null> }
 read_first: [<file>, ...]
 completed_tasks: [{ phase, task, summary }, ...]
-completed_phases: [{ phase, ref, commit, summary }, ...]
+completed_phases: [{ phase, base_ref, impl_ref, summary }, ...]
 ---
 ```
 
-`ref` is authoritative. `phase_base` and `commit` are advisory caches that a
-rewrite is allowed to invalidate. Resolve both through
-[references/git-anchors.md](references/git-anchors.md) before use.
-
-No phase is complete without fresh evidence and both required reviews.
+Refs are authoritative. Commit fields are advisory caches. Resolve both through
+[references/git-anchors.md](references/git-anchors.md) before use. A phase is
+complete after fresh evidence and both reviews. A plan is complete only after
+all phase checkpoints are consolidated into its single branch commit.

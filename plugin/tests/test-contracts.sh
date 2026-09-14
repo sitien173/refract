@@ -75,7 +75,7 @@ grep -q 'Use `completed` only with `TASK_COMPLETE`' shared/erp.md
 grep -q '^## Implementation Response$' shared/journal-template.md
 grep -q '^## Quality Review$' shared/journal-template.md
 grep -q '^## Review Result$' shared/journal-template.md
-grep -q '^## Final Commit$' shared/journal-template.md
+grep -q '^## Final Checkpoint$' shared/journal-template.md
 
 for skill in skills/*/SKILL.md; do
     if [[ "$skill" != "skills/using-superpowers/SKILL.md" ]]; then
@@ -99,9 +99,12 @@ if grep -R -E 'job_submit|job_wait|job_retry|job_cancel|project_register|openmcp
 fi
 
 grep -q 'Every executable plan' skills/writing-plans/SKILL.md
+grep -q "Coordinator's plan \`base\` anchor" skills/writing-plans/SKILL.md
 grep -q 'Do not hard-code a default profile' skills/writing-plans/SKILL.md
 grep -q 'Do not call `task_guide`, register a project, or submit jobs' skills/writing-plans/SKILL.md
 grep -q 'Submit one job through the `consult` workflow' skills/writing-plans/SKILL.md
+grep -q 'one Conventional Commit message for the completed plan' skills/writing-plans/SKILL.md
+grep -q 'sole branch commit replaces local phase checkpoints' skills/writing-plans/SKILL.md
 grep -q 'confirmed design and completed implementation plan' skills/writing-plans/SKILL.md
 grep -q '`phase-<NN>/prompt.md`, `notes.md`, and `journal.md`' skills/writing-plans/SKILL.md
 grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
@@ -122,7 +125,7 @@ grep -q 'Call `status`; require' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'project_register' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'task_guide' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'result.text' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'commit the reconciled diff' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'temporary checkpoint commit' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You own the entire Git lifecycle' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://projects/<project_id>/jobs' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'openmcp://projects/<project_id>/profiles' skills/coordinating-multi-model-work/SKILL.md
@@ -130,8 +133,13 @@ grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Same-project jobs run FIFO' skills/coordinating-multi-model-work/SKILL.md
 
 anchors=skills/coordinating-multi-model-work/references/git-anchors.md
+grep -qF 'refs/plans/<slug>/base' "$anchors"
+grep -qF 'refs/plans/<slug>/impl' "$anchors"
 grep -qF 'refs/plans/<slug>/phase-<NN>/base' "$anchors"
 grep -qF 'refs/plans/<slug>/phase-<NN>/impl' "$anchors"
+grep -q 'Create one replacement commit from the final checkpoint tree' "$anchors"
+grep -q 'Atomically move the attached branch' "$anchors"
+grep -q 'sole plan commit' "$anchors"
 grep -qF 'git cat-file -e <sha>^{commit}' "$anchors"
 grep -qF 'git merge-base --is-ancestor <sha> HEAD' "$anchors"
 grep -q 'STALE_ANCHOR' "$anchors"

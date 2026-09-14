@@ -45,9 +45,9 @@ job_submit:
 
 Omit `profile` when guidance omits it. Omit `fresh_session` on resumed jobs;
 its false default resumes the worker stream. Every job is prompt-only: the worker
-edits files but never commits. After the job is terminal, the
-coordinating skill validates the filesystem changes and commits them with the
-phase Conventional Commit message.
+edits files but never commits. After the job is terminal, the coordinating skill
+validates the filesystem changes and creates a temporary checkpoint commit. The
+final plan consolidation replaces these checkpoints with one branch commit.
 
 ## Phase Prompt
 
@@ -93,5 +93,4 @@ prompt with `FIX:` and include only:
 
 Do not resend the contract, ERP format, or role. Submit with the plan
 `context_key` (`<slug>`), like every job in the plan. The coordinating skill runs
-the bounded review–fix loop, then commits the validated fix with a `fix:` commit
-message.
+the bounded review-fix loop and checkpoints each validated fix temporarily.

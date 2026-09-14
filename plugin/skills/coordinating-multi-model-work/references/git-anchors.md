@@ -1,53 +1,88 @@
-# Phase Anchors
+# Plan and Phase Anchors
 
-Phase identity must survive history rewriting. A squash, rebase, or reset moves
-or destroys commits, so a recorded SHA is not a durable anchor. This file owns
-the anchor format, its write lifecycle, and the resolution rules.
+Plan identity and reviewed phase checkpoints must survive consolidation and
+history rewriting. This file owns anchor formats, writes, and resolution.
 
 ## Namespace
 
 ```text
-refs/plans/<slug>/phase-<NN>/base   commit before the implementation job
-refs/plans/<slug>/phase-<NN>/impl   final validated commit for the phase
+refs/plans/<slug>/base              commit before plan work
+refs/plans/<slug>/impl              sole final plan commit
+refs/plans/<slug>/phase-<NN>/base   checkpoint before phase implementation
+refs/plans/<slug>/phase-<NN>/impl   final validated phase checkpoint
 ```
 
-Two properties carry the design. The namespace sits outside `refs/heads`, so
-rewriting a branch never rewrites it. A ref also makes its object reachable, so
-collection never removes the commit it names. Default push refspecs cover
-`refs/heads` alone, so these stay local.
+Refs sit outside `refs/heads`. Consolidating or rewriting the branch therefore
+does not move them. Each ref also retains its commit object locally. Default push
+refspecs omit these refs.
 
 ## Write lifecycle
 
 | Moment | Action |
 |---|---|
-| Gate 2, before submitting the implementation job | Set `base` to clean HEAD. |
-| Gate 3, review-fix loop | No ref writes. |
-| Gate 3, Finalize | Set `impl` to HEAD after the last validated fix commit. |
+| Before preparing Phase 1 | Set plan `base` to clean HEAD. |
+| Gate 2, before implementation | Set phase `base` to clean checkpoint HEAD. |
+| Gate 3, after the final phase fix | Set phase `impl` to validated checkpoint HEAD. |
+| Final plan consolidation | Replace branch checkpoints with one commit, then set plan `impl` to HEAD. |
 
 ```text
-git update-ref refs/plans/<slug>/phase-<NN>/base <clean HEAD>
-git update-ref refs/plans/<slug>/phase-<NN>/impl <validated HEAD>
+git update-ref refs/plans/<slug>/base <clean HEAD>
+git update-ref refs/plans/<slug>/phase-<NN>/base <checkpoint HEAD>
+git update-ref refs/plans/<slug>/phase-<NN>/impl <validated checkpoint HEAD>
+git update-ref refs/plans/<slug>/impl <sole plan commit>
 ```
 
-`impl` is written once, at Finalize, so it always names the final validated
-state of the phase. Writing it earlier makes it stale for every fix cycle, which
-is why the review-fix loop reviews against HEAD instead: `impl` does not exist
-while that loop runs.
+Write each `impl` once. Phase `impl` captures reviewed evidence before
+consolidation. Plan `impl` captures the resulting single branch commit.
 
-## Review range
+## Consolidation
 
-A closed phase is reviewed and re-inspected through its refs:
+After every phase passes and final coordination state is ready:
+
+1. Confirm no project job is active.
+2. Confirm every phase has `base` and `impl` refs.
+3. Confirm the root is clean at the final checkpoint.
+4. Create one replacement commit from the final checkpoint tree. Give it the
+   plan `base` as parent and use `PLAN.md`'s message.
+5. Atomically move the attached branch from the checkpoint tip to that commit.
+6. Set the plan `impl` ref to the resulting HEAD.
+7. Run final verification against that exact HEAD.
+
+Use Git plumbing so the working tree remains unchanged:
+
+```text
+<replacement> = git commit-tree <checkpoint>^{tree} -p <plan-base> -m "<plan message>"
+git update-ref <attached-branch-ref> <replacement> <checkpoint>
+git update-ref refs/plans/<slug>/impl <replacement>
+```
+
+The old value on the branch update makes a moved tip fail atomically. This
+rewrite is allowed only at final plan consolidation. Phase refs retain every
+reviewed range and comprehensive artifact.
+
+## Review ranges
+
+Review an active phase through:
+
+```text
+refs/plans/<slug>/phase-<NN>/base..HEAD
+```
+
+Inspect a closed phase through:
 
 ```text
 refs/plans/<slug>/phase-<NN>/base..refs/plans/<slug>/phase-<NN>/impl
 ```
 
-This range does not depend on HEAD, so rewriting history after the phase closes
-cannot move it.
+Inspect the completed plan through:
+
+```text
+refs/plans/<slug>/base..refs/plans/<slug>/impl
+```
 
 ## Resolution
 
-Recorded `commit` fields are advisory caches. Before trusting one, both checks
+Recorded commit fields are advisory caches. Before trusting one, both checks
 must succeed:
 
 ```text
@@ -55,39 +90,26 @@ git cat-file -e <sha>^{commit}
 git merge-base --is-ancestor <sha> HEAD
 ```
 
-Both are required. The first alone accepts a commit that still exists but has
-left the branch. That case is the dangerous one: a range built from it still
-resolves and still returns a diff, so a gate reviews the wrong delta and reports
-success with nothing surfacing as an error.
-
-On failure, descend:
+Phase checkpoint caches normally fail the ancestry check after consolidation.
+That is expected. Their refs remain authoritative and must resolve directly.
 
 | Rung | Source | Outcome |
 |---|---|---|
-| 1 | Cached `commit`, both checks pass | Use it. |
-| 2 | `refs/plans/<slug>/phase-<NN>/{base,impl}` | Use the ref. Authoritative. |
-| 3 | `git reflog` | Candidate only. Offer to the user; never use silently. |
-| 4 | `FILES MODIFIED` in `phase-<NN>/journal.md` | Path scope without a diff. Degraded inspection only. |
+| 1 | Cached commit, both checks pass | Use it. |
+| 2 | Corresponding plan or phase ref | Use the ref. Authoritative. |
+| 3 | `git reflog` | Candidate only. Offer it; never use silently. |
+| 4 | `FILES MODIFIED` in the phase journal | Degraded path inspection only. |
 
-When nothing above rung 4 resolves, set handover `status: STALE_ANCHOR` and
-stop. Halting is the purpose of the ladder. It converts a silent wrong-scope
-review into a visible failure the user can act on.
-
-Never repair a broken anchor by guessing a replacement SHA, and never widen a
-range to make it resolve.
+When nothing resolves, set handover `status: STALE_ANCHOR` and stop. Never guess
+a replacement SHA or widen a range merely to make it resolve.
 
 ## Retention
 
-Anchors accumulate at two per phase and are never pruned automatically. Their
-objects are retained deliberately, so a rewritten phase stays readable. Deletion
-is manual:
+Anchors remain local and are never pruned automatically. Their objects are
+retained deliberately. Deletion is manual:
 
 ```text
 git update-ref -d refs/plans/<slug>/phase-<NN>/base
 ```
 
-## Scope
-
-Anchors are local to the repository and are written in every plan-artifact
-tracking mode, because implementation commits are rewritten regardless of
-whether plan files are committed.
+Write anchors in both plan-artifact tracking modes.

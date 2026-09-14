@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 10.8.0 -->
+<!-- ccg-shared-version: 10.9.0 -->
 
 # Phase <N> — Journal: <phase title>
 
@@ -33,11 +33,13 @@ sections.
 - Spec Status: PENDING
 - Debt: none
 
-## Final Commit
+## Final Checkpoint
 
-- Implementation: pending
-- Anchor ref: refs/plans/<slug>/phase-<NN>/impl
-- State record: this journal update's commit, or `n/a (untracked)` when
-  `ccg.plans.tracking` is `untracked` and plan artifacts are not committed
+- Phase base ref: refs/plans/<slug>/phase-<NN>/base
+- Phase implementation ref: refs/plans/<slug>/phase-<NN>/impl
+- Plan commit ref: refs/plans/<slug>/impl or `pending`
+- State checkpoint: temporary commit, or `n/a (untracked)` when plan artifacts
+  are excluded
 
-The anchor ref is written in both tracking modes. Only the state record varies.
+Phase refs retain review evidence after checkpoint consolidation. The plan ref
+names the sole commit retained on the branch.

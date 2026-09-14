@@ -9,17 +9,18 @@ Load `coordinating-multi-model-work` first. This skill owns plan structure only;
 it does not route or execute OpenMCP jobs.
 
 ## Workflow
-
-1. Read the confirmed design and only enough code to scope implementation.
-2. Divide work into outcome-based phases of two to four related tasks.
-3. Give each phase a complete task-guidance input.
-4. Specify exact files, acceptance criteria, reviewer checks, fresh verification
-   commands, and one conventional commit message.
-5. Finish plan authoring before phase detailing or execution.
+1. Before creating plan artifacts, require the Coordinator's plan `base` anchor
+   at clean HEAD.
+2. Read the confirmed design and only enough code to scope implementation.
+3. Divide work into outcome-based phases of two to four related tasks.
+4. Give each phase a complete task-guidance input.
+5. Specify exact files, acceptance criteria, reviewer checks, and fresh
+   verification commands for every phase.
+6. Specify one Conventional Commit message for the completed plan.
+7. Finish plan authoring before phase detailing or execution.
 
 ## Recommended Next Step
-
-After the plan commit, suggest a separate phase-detailing step:
+After plan authoring, suggest a separate phase-detailing step:
 
 1. Submit one job through the `consult` workflow.
 2. Base it on the confirmed design and completed implementation plan.
@@ -47,6 +48,13 @@ during the separate phase-detailing step or execution.
 A documentation-only plan may use `docs/plans/<slug>-plan.md`. Convert a flat
 implementation plan to folder layout before execution.
 
+## Plan Commit
+Record one plan-level message before the phase sections:
+```markdown
+**Commit:** `type(scope): concise plan outcome`
+```
+This sole branch commit replaces local phase checkpoints after every phase passes.
+
 ## Phase Template
 
 ```markdown
@@ -72,8 +80,6 @@ implementation plan to folder layout before execution.
 
 **Verification Checks:**
 - `<exact command>`
-
-**Commit:** `type(scope): concise outcome`
 ```
 
 ## Rules
