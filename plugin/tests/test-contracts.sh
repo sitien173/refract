@@ -129,6 +129,23 @@ grep -q 'openmcp://projects/<project_id>/profiles' skills/coordinating-multi-mod
 grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Same-project jobs run FIFO' skills/coordinating-multi-model-work/SKILL.md
 
+anchors=skills/coordinating-multi-model-work/references/git-anchors.md
+grep -qF 'refs/plans/<slug>/phase-<NN>/base' "$anchors"
+grep -qF 'refs/plans/<slug>/phase-<NN>/impl' "$anchors"
+grep -qF 'git cat-file -e <sha>^{commit}' "$anchors"
+grep -qF 'git merge-base --is-ancestor <sha> HEAD' "$anchors"
+grep -q 'STALE_ANCHOR' "$anchors"
+grep -q 'STALE_ANCHOR' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'ccg.plans.tracking' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'git ls-files docs/plans' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'git check-ignore -q docs/plans' skills/coordinating-multi-model-work/SKILL.md
+test "$(wc -l < "$anchors")" -le 120
+
+if grep -R -F 'phase_base..HEAD' "${workflow_files[@]}"; then
+    printf 'unconditional phase_base review range reintroduced\n' >&2
+    exit 1
+fi
+
 grep -q 'workflow: implement' skills/executing-plans/implementer-prompt.md
 grep -q 'job_submit' skills/executing-plans/implementer-prompt.md
 grep -q '^  prompt: |$' skills/executing-plans/implementer-prompt.md
