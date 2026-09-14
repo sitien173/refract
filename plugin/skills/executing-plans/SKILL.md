@@ -23,8 +23,10 @@ review, and handover. This skill owns only the folder-plan phase procedure.
    `chore(plan): prepare phase <N>`; unrelated changes block execution.
 5. Run any routed consultation. Incorporate its relevant findings and commit
    only that prompt update.
-6. Record the clean HEAD before the initial implementation as `phase_base`; you
-   own this reference, since OpenMCP tracks no base commit.
+6. Before the initial implementation, set `refs/plans/<slug>/phase-<NN>/base` to
+   the clean HEAD and record that same HEAD as the `phase_base` cache. You own
+   both, since OpenMCP tracks no base commit. See
+   `skills/coordinating-multi-model-work/references/git-anchors.md`.
 7. Run Gate 2 with `implementer-prompt.md`, then Gate 3. Blocking findings run
    the coordinator's bounded review–fix loop, which re-reviews only the fix
    delta.

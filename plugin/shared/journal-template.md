@@ -36,4 +36,5 @@ sections.
 ## Final Commit
 
 - Implementation: pending
+- Anchor ref: refs/plans/<slug>/phase-<NN>/impl
 - State record: this journal update's commit

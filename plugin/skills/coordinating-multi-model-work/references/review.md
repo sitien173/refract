@@ -5,7 +5,9 @@
 After implementation is terminal and you have committed the validated changes:
 
 1. Require no active project job and a clean root at your implementation commit.
-2. Inspect that implementation commit and `phase_base..HEAD` for the phase.
+2. Inspect that implementation commit and
+   `refs/plans/<slug>/phase-<NN>/base..HEAD` for the phase. Resolve the anchor
+   through [git-anchors.md](git-anchors.md); a stale cached commit halts here.
 3. Check declared paths and acceptance criteria.
 4. Apply `verifying-before-completion` to run every declared command fresh.
 5. Recheck the same HEAD and clean state.
@@ -18,7 +20,8 @@ Review only what this phase changed; never request a full-codebase scan. Submit
 the first `review` job for a plan with `fresh_session: true` and a full reviewer
 contract. Submit later review jobs prompt-only, scoped to the phase delta with:
 
-- the exact diff to review: `phase_base..HEAD` and the paths in FILES MODIFIED,
+- the exact diff to review: `refs/plans/<slug>/phase-<NN>/base..HEAD` and the
+  paths in FILES MODIFIED,
 - the plan acceptance criteria and reviewer checklist as the rubric,
 - the selected review profile and the plan `context_key` (`<plan-slug>`).
 
@@ -54,7 +57,9 @@ further.
 After both reviews pass and no job is active:
 
 1. Append evidence to `journal.md`.
-2. Update `.handover.md`, recording the HEAD you captured before the initial
-   implementation as `phase_base`.
-3. Commit only coordination state as `chore(plan): record phase <N>`.
-4. Confirm the root is clean.
+2. Set `refs/plans/<slug>/phase-<NN>/impl` to the current HEAD, which is the last
+   validated fix commit. Write it once, here, and never earlier.
+3. Update `.handover.md`, recording that ref and, as an advisory cache, the HEAD
+   you captured before the initial implementation as `phase_base`.
+4. Commit only coordination state as `chore(plan): record phase <N>`.
+5. Confirm the root is clean.

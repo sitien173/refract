@@ -71,6 +71,8 @@ resets, or restores; assume it did none of these.
 
 - Require an attached branch before every job so commits land; a dirty tree does
   not block submission. Record HEAD and pre-existing dirt to attribute changes.
+- Anchor every phase through [references/git-anchors.md](references/git-anchors.md).
+  A recorded commit is a cache; history rewriting may invalidate it at any time.
 - Edit or commit known coordination files only when no project job is active.
 - After submission, do not edit the root until that job is terminal.
 - Every file is visible to workers and nothing is auto-restored. Never expose
@@ -172,12 +174,13 @@ docs/plans/<slug>/
 
 ```yaml
 ---
-status: ACTIVE | BLOCKED | DONE
+status: ACTIVE | BLOCKED | STALE_ANCHOR | DONE
 topic: <one-line topic>
 current_phase: <N>
 next_action: "Execute Phase <N>"
 project_id: <OpenMCP project UUID|null>
 phase_base: <commit|null>
+phase_base_ref: <refs/plans/...|null>
 context_key: <plan-slug>
 guidance:
   implement: { workflow: implement, profile: <name|null> }
@@ -186,8 +189,12 @@ guidance:
 job_refs: { phase: <N>, latest_consult: <id|null>, latest_implementation: <id|null>, latest_review: <id|null> }
 read_first: [<file>, ...]
 completed_tasks: [{ phase, task, summary }, ...]
-completed_phases: [{ phase, commit, summary }, ...]
+completed_phases: [{ phase, ref, commit, summary }, ...]
 ---
 ```
+
+`ref` is authoritative. `phase_base` and `commit` are advisory caches that a
+rewrite is allowed to invalidate. Resolve both through
+[references/git-anchors.md](references/git-anchors.md) before use.
 
 No phase is complete without fresh evidence and both required reviews.
