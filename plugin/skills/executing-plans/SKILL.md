@@ -19,10 +19,11 @@ review, and handover. This skill owns only the folder-plan phase procedure.
 3. For an active phase, reuse saved guidance. Do not re-run `task_guide` for an
    active phase. For a new phase, run canonical setup and guidance.
 4. Create `phase-<NN>/prompt.md`, `notes.md`, and `journal.md` from the bundled
-   templates. Commit only known plan artifacts as
-   `chore(plan): prepare phase <N>`; unrelated changes block execution.
-5. Run any routed consultation. Incorporate its relevant findings and commit
-   only that prompt update.
+   templates. Under `tracked`, commit only known plan artifacts as
+   `chore(plan): prepare phase <N>`; unrelated changes block execution. Under
+   `untracked`, write the files and make no commit.
+5. Run any routed consultation. Incorporate its relevant findings, and under
+   `tracked` commit only that prompt update.
 6. Before the initial implementation, set `refs/plans/<slug>/phase-<NN>/base` to
    the clean HEAD and record that same HEAD as the `phase_base` cache. You own
    both, since OpenMCP tracks no base commit. See

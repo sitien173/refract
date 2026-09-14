@@ -84,11 +84,42 @@ resets, or restores; assume it did none of these.
 1. Call `status`; require `status="running"`. If unavailable, report and stop.
 2. Resolve the Git root and read `openmcp://projects`.
 3. Register an absent root with `project_register`; save its `project_id`.
-4. Reconcile `active` from `openmcp://projects/<project_id>/jobs`. Fetch a job
+4. Resolve plan-artifact tracking for the repository, once and never again.
+5. Reconcile `active` from `openmcp://projects/<project_id>/jobs`. Fetch a job
    resource only for a specific result.
 
 Job records own state; Git state lives only in the working tree. Wait on active
 jobs without local edits. Stop when handover, jobs, and Git disagree.
+
+### Plan-Artifact Tracking
+
+`ccg.plans.tracking` holds `tracked` or `untracked` and decides whether anything
+under `docs/plans` is committed. Read and write it with `git config --local`, so
+no global or system value leaks across repositories. It lives in `.git/config`,
+which is never pushed, is untouched by history rewriting, and survives
+`git clean`, so the setting cannot exclude itself.
+
+Take the first rung that matches:
+
+| Rung | Condition | Mode | Ask |
+|---|---|---|---|
+| 1 | The key is already set | Its stored value | No |
+| 2 | `git ls-files docs/plans` returns rows | `tracked` | No |
+| 3 | `git check-ignore -q docs/plans` succeeds | `untracked` | No |
+| 4 | Neither signal | The user's answer | Once, then persist |
+
+Rung 2 precedes rung 3 deliberately. A repository that both commits plan files
+and ignores the path has already chosen `tracked`, and reversing it would need a
+migration nobody asked for.
+
+In `untracked` mode, append `docs/plans/` to `.git/info/exclude` unless rung 3
+already matched, and warn once that `git clean -fdx` destroys the plan directory
+and that a fresh checkout starts without it. Never write `.gitignore`; a
+committed ignore file imposes one contributor's choice on everyone.
+
+Tracking mode governs plan-artifact commits alone. Phase anchors are written in
+both modes, and the clean-root requirement is identical in both. Excluded files
+never dirty the tree, so nothing about them justifies relaxing it.
 
 ## Task Guidance
 

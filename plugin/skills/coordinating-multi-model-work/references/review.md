@@ -61,5 +61,7 @@ After both reviews pass and no job is active:
    validated fix commit. Write it once, here, and never earlier.
 3. Update `.handover.md`, recording that ref and, as an advisory cache, the HEAD
    you captured before the initial implementation as `phase_base`.
-4. Commit only coordination state as `chore(plan): record phase <N>`.
-5. Confirm the root is clean.
+4. Under `tracked`, commit only coordination state as
+   `chore(plan): record phase <N>`. Under `untracked`, make no commit; the ref
+   set in step 2 already records the phase.
+5. Confirm the root is clean. This requirement is identical in both modes.

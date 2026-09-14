@@ -37,4 +37,7 @@ sections.
 
 - Implementation: pending
 - Anchor ref: refs/plans/<slug>/phase-<NN>/impl
-- State record: this journal update's commit
+- State record: this journal update's commit, or `n/a (untracked)` when
+  `ccg.plans.tracking` is `untracked` and plan artifacts are not committed
+
+The anchor ref is written in both tracking modes. Only the state record varies.
