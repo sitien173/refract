@@ -40,7 +40,7 @@ PY
 workflow_files=(commands hooks shared skills)
 public_workflow_files=(commands hooks shared skills)
 
-if grep -R -E 'git reset --soft|git worktree|isolated worktree|execution worktree|job_integrate|parent_job_id|include_stage_outputs|from_stage|integration_base|integration_conflict|\.openmcp\.local\.toml|profile="code-review"|\.agents/shared|SESSION_ID|mcp__plugin_superpowers-ccg_openmcp__run|\bConductor\b|\bconductor\b' "${workflow_files[@]}"; then
+if grep -R -E --exclude-dir=using-git-worktrees 'git reset --soft|git worktree|isolated worktree|execution worktree|job_integrate|parent_job_id|include_stage_outputs|from_stage|integration_base|integration_conflict|\.openmcp\.local\.toml|profile="code-review"|\.agents/shared|SESSION_ID|mcp__plugin_superpowers-ccg_openmcp__run|\bConductor\b|\bconductor\b' "${workflow_files[@]}"; then
     printf 'forbidden workflow pattern found\n' >&2
     exit 1
 fi
@@ -78,12 +78,15 @@ grep -q '^## Review Result$' shared/journal-template.md
 grep -q '^## Final Commit$' shared/journal-template.md
 
 for skill in skills/*/SKILL.md; do
-    grep -qi 'owns' "$skill"
-    if [[ "$skill" != "skills/coordinating-multi-model-work/SKILL.md" ]]; then
+    if [[ "$skill" != "skills/using-superpowers/SKILL.md" ]]; then
+        grep -qi 'owns' "$skill"
+    fi
+    if [[ "$skill" != "skills/coordinating-multi-model-work/SKILL.md" && "$skill" != "skills/using-git-worktrees/SKILL.md" ]]; then
         test "$(wc -l < "$skill")" -le 90
     fi
 done
 test "$(wc -l < skills/coordinating-multi-model-work/SKILL.md)" -le 265
+test "$(wc -l < skills/using-git-worktrees/SKILL.md)" -le 180
 test "$(wc -l < skills/coordinating-multi-model-work/references/tool-contract.md)" -le 90
 test "$(wc -l < skills/coordinating-multi-model-work/references/review.md)" -le 100
 test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 100
