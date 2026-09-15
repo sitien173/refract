@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 10.7.0 -->
+<!-- ccg-shared-version: 11.0.0 -->
 # External Response Protocol (ERP)
 
 Worker-facing contract for the implementation response. This bundled file is
