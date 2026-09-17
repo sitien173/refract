@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: "Establishes a reproducible root cause before fixing bugs, failures, regressions, or performance problems."
+description: "Use when facing a bug, test failure, regression, or performance problem - establishes a reproducible root cause before any fix."
 ---
 
 # Systematic Debugging

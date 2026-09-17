@@ -1,6 +1,6 @@
 ---
 name: executing-plans
-description: "Runs or resumes one phase of a folder-layout plan through the canonical OpenMCP gates."
+description: "Use when running or resuming one phase of a folder-layout plan - drives it through the canonical OpenMCP gates."
 ---
 
 # Executing Plans
@@ -28,7 +28,7 @@ review, and handover. This skill owns only the folder-plan phase procedure.
 6. Before the initial implementation, set `refs/plans/<slug>/phase-<NN>/base` to
    the clean checkpoint HEAD and record that same HEAD as the `phase_base` cache.
    You own both, since OpenMCP tracks no base commit. See
-   `skills/coordinating-multi-model-work/references/git-anchors.md`.
+   [git-anchors.md](../coordinating-multi-model-work/references/git-anchors.md).
 7. Run Gate 2 with `implementer-prompt.md`, then Gate 3. Blocking findings run
    the coordinator's bounded review-fix loop, which re-reviews only the fix
    delta. Phase commits are temporary checkpoints retained by local refs.
@@ -45,5 +45,5 @@ review, and handover. This skill owns only the folder-plan phase procedure.
 
 ## References
 
-- `skills/coordinating-multi-model-work/SKILL.md`
-- `skills/executing-plans/implementer-prompt.md`
+- [coordinating-multi-model-work](../coordinating-multi-model-work/SKILL.md)
+- [implementer-prompt.md](implementer-prompt.md)

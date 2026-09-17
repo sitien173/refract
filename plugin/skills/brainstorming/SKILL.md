@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: "Clarifies intent, constraints, and trade-offs into a confirmed design before implementation planning."
+description: "Use when a feature or idea needs design before planning - clarifies intent, constraints, and trade-offs into a confirmed design document."
 ---
 
 # Brainstorming Ideas Into Designs
@@ -14,7 +14,8 @@ OpenMCP mechanics or implementation planning.
 2. Ask one question at a time; prefer bounded choices when useful.
 3. Clarify purpose, users, constraints, non-goals, success criteria, and risks.
 4. For non-trivial design, request one focused Gate 1 consultation and reconcile
-   its advice with user requirements.
+   its advice with user requirements. When OpenMCP is unavailable, continue the
+   dialogue and record the skipped consultation in the design document.
 5. Present two or three viable approaches, their trade-offs, and a
    recommendation.
 6. Develop the selected design in short sections; confirm each section.

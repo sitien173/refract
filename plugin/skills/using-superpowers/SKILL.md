@@ -21,10 +21,26 @@ Then announce "Using [skill] to [purpose]" and follow the skill exactly. If it h
 
 ## Skill Priority
 
-When multiple skills apply, process skills come first — they set the approach, then implementation skills (frontend-design, etc.) carry it out. Brainstorming and systematic-debugging are Superpowers' most common process skills, but the rule holds for any of them.
+When multiple skills apply, process skills come first — they set the approach, then implementation skills (test-driven-development, etc.) carry it out. Brainstorming and systematic-debugging are the most common process skills, but the rule holds for any of them.
 
-- "Let's build X" → superpowers:brainstorming first, then implementation skills.
-- "Fix this bug" → superpowers:systematic-debugging first, then domain skills.
+- "Let's build X" → superpowers-ccg:brainstorming first, then implementation skills.
+- "Fix this bug" → superpowers-ccg:systematic-debugging first, then domain skills.
+
+## Scope Check
+
+Skills always apply; OpenMCP coordination does not. Before loading
+`coordinating-multi-model-work`, classify the request. Do the work directly with
+your own tools, and say so in one line, when it is:
+
+- a single-file or trivially scoped edit,
+- documentation, comments, config, or formatting,
+- a rename, string change, dependency bump, or one-line fix,
+- anything the user asks you to just do directly.
+
+Load `coordinating-multi-model-work` when work spans multiple phases or
+components, carries real correctness or security risk, needs a design decision,
+or the user asks for a plan. Process skills such as systematic-debugging and
+test-driven-development still apply to direct work.
 
 ## Red Flags
 

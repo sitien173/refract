@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: "Applies RED → GREEN → REFACTOR to changed behavior and characterization coverage to behavior-preserving refactors."
+description: "Use when writing or changing production behavior, or refactoring - applies RED → GREEN → REFACTOR and characterization coverage for behavior-preserving refactors."
 ---
 
 # Test-Driven Development

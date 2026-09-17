@@ -81,7 +81,7 @@ Follow this priority order. Explicit user preference always beats observed files
 git check-ignore -q .worktrees 2>/dev/null || git check-ignore -q worktrees 2>/dev/null
 ```
 
-**If NOT ignored:** Add to .gitignore, commit the change, then proceed.
+**If NOT ignored:** append the directory to `$(git rev-parse --git-common-dir)/info/exclude`, then proceed. Never write `.gitignore` for this; a committed ignore file imposes one contributor's layout on everyone.
 
 **Why critical:** Prevents accidentally committing worktree contents to repository.
 
@@ -96,6 +96,14 @@ cd "$path"
 ```
 
 **Sandbox fallback:** If `git worktree add` fails with a permission error (sandbox denial), tell the user the sandbox blocked worktree creation and you're working in the current directory instead. Then run setup and baseline tests in place.
+
+## OpenMCP Registration
+
+OpenMCP jobs run in the registered directory, and `project_register` takes a
+path. Create the worktree before the Coordinator's setup step, so the worktree
+root is what gets registered and receives its own `project_id`. A worktree
+registered this way owns its own job queue. Plan anchors under `refs/plans/`
+live in the shared `.git` directory and resolve from every worktree.
 
 ## Step 2: Project Setup
 
@@ -149,7 +157,7 @@ Ready to implement <feature-name>
 | `worktrees/` exists | Use it (verify ignored) |
 | Both exist | Use `.worktrees/` |
 | Neither exists | Check instruction file, then default `.worktrees/` |
-| Directory not ignored | Add to .gitignore + commit |
+| Directory not ignored | Append to `.git/info/exclude` |
 | Permission error on create | Sandbox fallback, work in place |
 | Tests fail during baseline | Report failures + ask |
 | No package.json/Cargo.toml | Skip dependency install |

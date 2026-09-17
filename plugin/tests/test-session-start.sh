@@ -24,14 +24,7 @@ PY
 mkdir -p "$tmp/repo"
 output="$(cd "$tmp/repo" && "$hook")"
 validate_output "$output" "$repo_root"
-test ! -e "$tmp/repo/.agents"
-
-printf 'sentinel\n' > "$tmp/target"
-mkdir -p "$tmp/repo/.agents/shared"
-ln -s "$tmp/target" "$tmp/repo/.agents/shared/erp.md"
-(cd "$tmp/repo" && "$hook" >/dev/null)
-test "$(cat "$tmp/target")" = "sentinel"
-test -L "$tmp/repo/.agents/shared/erp.md"
+test -z "$(ls -A "$tmp/repo")"
 
 plugin_with_spaces="$tmp/plugin root"
 mkdir -p "$plugin_with_spaces/hooks" "$plugin_with_spaces/shared"

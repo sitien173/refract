@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: "Turns a confirmed design into a resumable phase plan with explicit scope, acceptance criteria, review checks, and verification commands."
+description: "Use when a confirmed design needs an implementation plan - produces a resumable phase plan with explicit scope, acceptance criteria, review checks, and verification commands."
 ---
 
 # Writing Plans

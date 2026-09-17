@@ -1,6 +1,6 @@
 ---
 name: coordinating-multi-model-work
-description: "Coordinates Plan → Execute → Review through OpenMCP, including setup, routing, job lifecycle, independent review, and resume. Load first for delegated plan work."
+description: "Use before any Plan, Execute, or Review action on delegated work - coordinates Plan → Execute → Review through OpenMCP, including setup, routing, job lifecycle, independent review, and resume."
 ---
 
 # Coordinating Multi-Model Work
@@ -82,8 +82,12 @@ resets, or restores; assume it did none of these.
 
 ## Setup and Resume
 
-1. Call `status`; require `status="running"`. If unavailable, report and stop.
-2. Resolve the Git root and read `openmcp://projects`.
+1. Call `status`; require `status="running"`. If unavailable, report it once.
+   Brainstorming and plan authoring continue without consultation and record
+   the skipped consult; Execute and Review stop until it is running.
+2. Resolve the Git root and read `openmcp://projects`. When the user wants an
+   isolated workspace, run `using-git-worktrees` before this step so the
+   worktree root is the path that gets registered.
 3. Register an absent root with `project_register`; save its `project_id`.
 4. Resolve plan-artifact tracking for the repository, once and never again.
 5. Reconcile `active` from `openmcp://projects/<project_id>/jobs`. Fetch a job
@@ -142,10 +146,11 @@ An active phase keeps its saved guidance; do not call `task_guide` again until a
 1. Confirm scope, acceptance criteria, risks, and fresh verification commands.
 2. Split work that one implementation job cannot safely own.
 3. Require consultation for unclear, architectural, cross-component,
-   high-impact, or tradeoff-heavy work.
+   high-impact, or tradeoff-heavy work while OpenMCP is running; otherwise
+   record the skipped consult under `Reason`.
 4. For consultation, first reach a clean coordination checkpoint, submit one
-   narrow `consult` job, wait with a finite timeout, and use `result.text`.
-   Copy relevant findings into the implementation prompt.
+   narrow `consult` job, wait through the waiting rule below, and use
+   `result.text`. Copy relevant findings into the implementation prompt.
 
 Emit:
 
@@ -159,15 +164,33 @@ Emit:
 - Done When: <fresh checks>
 ```
 
+## Waiting Rule
+
+`job_wait` returns on completion or on `timeout_s`. A timeout is not a failure.
+While the job is still `queued` or `running`, call `job_wait` again, up to three
+times per job, without editing the root. After the third timeout, report the
+job ID and state, leave the job running, and ask the user whether to keep
+waiting or `job_cancel`. Never submit another job for the same phase while the
+first is non-terminal.
+
 ## Gate 2: Execute
 
 For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch with
 [implementer-prompt.md](../executing-plans/implementer-prompt.md).
 
 - Submit one prompt-only `implement` job with the saved route.
-- Wait with `timeout_s: 300`; wait for the job to finish and read `result.text` on success or `result.error` on failure.
+- Wait with `timeout_s: 300` under the waiting rule; read `result.text` on
+  success or `result.error` on failure.
 - On success, read `result.text`, inspect the actual filesystem changes, run the
   phase validation, and create a temporary checkpoint commit only after it passes.
+- A succeeded job is judged by its ERP `NEXT` line, not by job state:
+  - `TASK_COMPLETE` → validate and checkpoint as above.
+  - `BLOCKED` → do not checkpoint. Answer every item under `CLARIFICATIONS
+    NEEDED` from the plan or the user, then submit one resumed `implement` job
+    carrying only those answers. Unanswerable items set handover `BLOCKED`.
+  - `CONTINUE_CONTEXT` → validate what exists, checkpoint if it passes, then
+    submit one resumed `implement` job saying "Continue Phase <NN>". Bound this
+    to two continuations per phase; then report and ask.
 - On failure, cancellation, or interruption, read `result.error`. The worker's
   partial changes remain on disk; inspect, reconcile, and report what is
   retained. A retry does not reset the tree, so reconcile first, then retry once
@@ -200,6 +223,7 @@ read-only target; never commit a review.
 ```text
 docs/plans/<slug>/
   PLAN.md
+  DESIGN.md
   .handover.md
   phase-01/{prompt,notes,journal}.md
 ```

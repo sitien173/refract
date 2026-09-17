@@ -1,6 +1,6 @@
 ---
 name: verifying-before-completion
-description: "Defines the evidence required before claiming work is complete, fixed, passing, reviewed, or ready to hand off."
+description: "Use before claiming any work is complete, fixed, passing, reviewed, or ready to hand off - defines the fresh evidence each claim requires."
 ---
 
 # Verifying Before Completion
@@ -40,7 +40,7 @@ NO COMPLETION CLAIM WITHOUT FRESH VERIFICATION EVIDENCE
 | Build succeeds | Fresh exit code 0 |
 | Bug is fixed | Original reproduction or regression test passes |
 | Requirements are met | Criterion-by-criterion evidence |
-| Worker finished correctly | Verified commit, diff, clean state, and checks |
+| Worker finished correctly | Inspected diff, fresh checks, clean state, and coordinator checkpoint |
 
 `FAIL` blocks completion. `PASS_WITH_DEBT` is acceptable only for explicit,
 assigned, non-blocking debt. An unrun check is not a passed check; worker

@@ -16,6 +16,7 @@ root = pathlib.Path.cwd()
 paths = [
     root / ".claude-plugin/plugin.json",
     root / ".claude-plugin/marketplace.json",
+    root / ".codex-plugin/plugin.json",
     root / ".mcp.json",
     root / "hooks/hooks.json",
 ]
@@ -23,12 +24,17 @@ documents = {path: json.loads(path.read_text()) for path in paths}
 
 plugin_version = documents[root / ".claude-plugin/plugin.json"]["version"]
 market_version = documents[root / ".claude-plugin/marketplace.json"]["plugins"][0]["version"]
-assert plugin_version == market_version
+codex_version = documents[root / ".codex-plugin/plugin.json"]["version"]
+assert plugin_version == market_version == codex_version
+
+plugin_description = documents[root / ".claude-plugin/plugin.json"]["description"]
+codex_description = documents[root / ".codex-plugin/plugin.json"]["description"]
+assert plugin_description == codex_description
 
 mcp = documents[root / ".mcp.json"]["mcpServers"]["openmcp"]
 assert mcp == {
     "type": "http",
-    "url": "http://127.0.0.1:8765/mcp",
+    "url": "${OPENMCP_URL:-http://127.0.0.1:8765/mcp}",
 }
 assert "/home/" not in json.dumps(mcp)
 

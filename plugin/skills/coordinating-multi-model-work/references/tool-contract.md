@@ -1,6 +1,8 @@
 # OpenMCP Tool Contract
 
-Default endpoint: `http://127.0.0.1:8765/mcp`.
+Default endpoint: `http://127.0.0.1:8765/mcp`. Set `OPENMCP_URL` in the
+environment before starting Claude Code to point the bundled server entry at a
+different host or port.
 
 ## Tools
 

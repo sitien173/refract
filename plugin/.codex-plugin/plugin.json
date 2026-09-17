@@ -1,7 +1,7 @@
 {
   "name": "superpowers-ccg",
-  "version": "11.0.0",
-  "description": "Plan, execute, and review workflow for multi-agent coding tasks.",
+  "version": "11.0.1",
+  "description": "Superpowers-CCG: 3-gate (Plan → Execute → Review) workflow.",
   "author": {
     "name": "sitien173",
     "url": "https://github.com/sitien173"
