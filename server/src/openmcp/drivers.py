@@ -28,11 +28,19 @@ class StreamBridge:
         self.loop = loop or asyncio.get_running_loop()
         self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=queue_capacity)
         self._closed = False
+        self._tool_activity = threading.Event()
+
+    @property
+    def has_tool_activity(self) -> bool:
+        """Report whether this bridge observed any tool.started event."""
+        return self._tool_activity.is_set()
 
     def emit(self, event: dict[str, Any]) -> None:
         """Synchronous emitter called on provider worker threads."""
         if self._closed:
             return
+        if isinstance(event, dict) and event.get("kind") == "tool.started":
+            self._tool_activity.set()
         try:
             future = asyncio.run_coroutine_threadsafe(self.queue.put(event), self.loop)
             future.result()

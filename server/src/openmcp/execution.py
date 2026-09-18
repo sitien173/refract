@@ -90,7 +90,6 @@ class TargetExecutor:
                 if hasattr(self.drivers, "supports_structured_streaming")
                 else True
             )
-            bridge = StreamBridge(queue_capacity=256) if supports_streaming else None
             recorder = (
                 StreamRecorder(
                     database=self.database,
@@ -103,35 +102,162 @@ class TargetExecutor:
                 else None
             )
 
-            async def drain_stream():
-                if bridge and recorder:
-                    async for event in bridge.consumer():
-                        await recorder.record(event)
-                    await recorder.flush()
-
-            drain_task = asyncio.create_task(drain_stream()) if bridge and recorder else None
             attempt_result: DriverResult | None = None
             driver_exc: BaseException | None = None
+            recovered = False
+            recovery_phase = ""
+            replay_blocked = False
             try:
-                with log_context(target_id=target.id):
-                    attempt_result = await self.drivers.execute(
+                attempt_result, has_tool_activity = await self._run_target_invocation(
+                    target=target,
+                    prompt=effective_prompt,
+                    session_id=session_id,
+                    cwd=cwd,
+                    timeout_s=plan.selection.timeout_s,
+                    cancel_event=cancel_event,
+                    recorder=recorder,
+                    supports_streaming=supports_streaming,
+                )
+                last = attempt_result
+
+                if attempt_result.error_code == "context_overflow":
+                    self.database.event(
+                        job_id,
+                        "target.context_overflow",
+                        {
+                            "workflow": workflow,
+                            "target": target.id,
+                            "error_code": "context_overflow",
+                        },
+                    )
+
+                if has_tool_activity and attempt_result.outcome != "SUCCESS":
+                    replay_blocked = True
+
+                can_recover = (
+                    not fresh_session
+                    and bool(session_id)
+                    and attempt_result.error_code == "context_overflow"
+                    and not has_tool_activity
+                    and not cancel_event.is_set()
+                    and attempt_result.outcome not in {"CANCELLED", "REQUEST_FATAL"}
+                )
+
+                if can_recover:
+                    reconstructed_prompt = self._with_history(
+                        project.id, context_key, workflow, prompt
+                    )
+                    self.database.event(
+                        job_id,
+                        "target.session_recovery_started",
+                        {
+                            "workflow": workflow,
+                            "target": target.id,
+                            "phase": "reconstruct",
+                        },
+                    )
+                    attempt_result, has_tool_activity = await self._run_target_invocation(
                         target=target,
-                        prompt=effective_prompt,
+                        prompt=reconstructed_prompt,
+                        session_id="",
                         cwd=cwd,
-                        session_id=session_id,
                         timeout_s=plan.selection.timeout_s,
                         cancel_event=cancel_event,
-                        emitter=bridge.emit if bridge else None,
+                        recorder=recorder,
+                        supports_streaming=supports_streaming,
                     )
                     last = attempt_result
+                    self.database.event(
+                        job_id,
+                        "target.session_recovery_finished",
+                        {
+                            "workflow": workflow,
+                            "target": target.id,
+                            "phase": "reconstruct",
+                            "outcome": attempt_result.outcome,
+                            "error_code": attempt_result.error_code,
+                        },
+                    )
+
+                    if attempt_result.error_code == "context_overflow":
+                        self.database.event(
+                            job_id,
+                            "target.context_overflow",
+                            {
+                                "workflow": workflow,
+                                "target": target.id,
+                                "phase": "reconstruct",
+                                "error_code": "context_overflow",
+                            },
+                        )
+
+                    if has_tool_activity and attempt_result.outcome != "SUCCESS":
+                        replay_blocked = True
+
+                    if attempt_result.outcome == "SUCCESS":
+                        recovered = True
+                        recovery_phase = "reconstruct"
+                    elif (
+                        not replay_blocked
+                        and not cancel_event.is_set()
+                        and attempt_result.outcome not in {"CANCELLED", "REQUEST_FATAL"}
+                        and attempt_result.error_code == "context_overflow"
+                        and reconstructed_prompt != prompt
+                    ):
+                        self.database.event(
+                            job_id,
+                            "target.session_recovery_started",
+                            {
+                                "workflow": workflow,
+                                "target": target.id,
+                                "phase": "fresh",
+                            },
+                        )
+                        attempt_result, has_tool_activity = await self._run_target_invocation(
+                            target=target,
+                            prompt=prompt,
+                            session_id="",
+                            cwd=cwd,
+                            timeout_s=plan.selection.timeout_s,
+                            cancel_event=cancel_event,
+                            recorder=recorder,
+                            supports_streaming=supports_streaming,
+                        )
+                        last = attempt_result
+                        self.database.event(
+                            job_id,
+                            "target.session_recovery_finished",
+                            {
+                                "workflow": workflow,
+                                "target": target.id,
+                                "phase": "fresh",
+                                "outcome": attempt_result.outcome,
+                                "error_code": attempt_result.error_code,
+                            },
+                        )
+
+                        if attempt_result.error_code == "context_overflow":
+                            self.database.event(
+                                job_id,
+                                "target.context_overflow",
+                                {
+                                    "workflow": workflow,
+                                    "target": target.id,
+                                    "phase": "fresh",
+                                    "error_code": "context_overflow",
+                                },
+                            )
+
+                        if has_tool_activity and attempt_result.outcome != "SUCCESS":
+                            replay_blocked = True
+
+                        if attempt_result.outcome == "SUCCESS":
+                            recovered = True
+                            recovery_phase = "fresh"
             except BaseException as exc:
                 driver_exc = exc
                 raise
             finally:
-                if bridge:
-                    await bridge.close()
-                if drain_task:
-                    await drain_task
                 if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
                     attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
                     last = attempt_result
@@ -163,11 +289,34 @@ class TargetExecutor:
             if last.outcome == "SUCCESS":
                 self.database.record_target_success(target_key)
                 if not fresh_session:
-                    self.database.append_turn(project_id=project.id, context_key=context_key, role=workflow, target_id=target.id, target_key=target_key, session_id=last.session_id, prompt=prompt, response=last.text)
+                    self.database.append_turn(
+                        project_id=project.id,
+                        context_key=context_key,
+                        role=workflow,
+                        target_id=target.id,
+                        target_key=target_key,
+                        session_id=last.session_id,
+                        prompt=prompt,
+                        response=last.text,
+                        clear_sessions=recovered,
+                    )
+                    if recovered:
+                        self.database.event(
+                            job_id,
+                            "target.session_replaced",
+                            {
+                                "workflow": workflow,
+                                "target": target.id,
+                                "phase": recovery_phase,
+                            },
+                        )
                 return TargetExecutionResult(last, target.id, target_key)
             if last.outcome in {"CANCELLED", "REQUEST_FATAL"}:
                 return TargetExecutionResult(last, target.id, target_key)
-            self._record_failure(target_key)
+            if last.error_code != "context_overflow":
+                self._record_failure(target_key)
+            if replay_blocked:
+                return TargetExecutionResult(last, target.id, target_key)
             if attempt + 1 < plan.selection.max_attempts:
                 delay = min(8.0, 2.0**attempt) * random.uniform(0.8, 1.2)
                 self.database.event(job_id, "target.retry_scheduled", {"workflow": workflow, "target": target.id, "attempt": attempt + 1, "delay_s": round(delay, 3)})
@@ -175,6 +324,57 @@ class TargetExecutor:
                 if await asyncio.to_thread(cancel_event.wait, delay):
                     break
         return TargetExecutionResult(last, last_target_id)
+
+    async def _run_target_invocation(
+        self,
+        *,
+        target: TargetConfig,
+        prompt: str,
+        session_id: str,
+        cwd: Path,
+        timeout_s: float,
+        cancel_event: threading.Event,
+        recorder: StreamRecorder | None,
+        supports_streaming: bool,
+    ) -> tuple[DriverResult, bool]:
+        bridge = StreamBridge(queue_capacity=256) if supports_streaming else None
+
+        async def drain_stream() -> None:
+            if bridge and recorder:
+                async for event in bridge.consumer():
+                    await recorder.record(event)
+                await recorder.flush()
+
+        drain_task = asyncio.create_task(drain_stream()) if bridge and recorder else None
+        attempt_result: DriverResult | None = None
+        driver_exc: BaseException | None = None
+        try:
+            with log_context(target_id=target.id):
+                attempt_result = await self.drivers.execute(
+                    target=target,
+                    prompt=prompt,
+                    cwd=cwd,
+                    session_id=session_id,
+                    timeout_s=timeout_s,
+                    cancel_event=cancel_event,
+                    emitter=bridge.emit if bridge else None,
+                )
+        except BaseException as exc:
+            driver_exc = exc
+            raise
+        finally:
+            if bridge:
+                await bridge.close()
+            if drain_task:
+                await drain_task
+            if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+                attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+
+        has_tool_activity = bridge.has_tool_activity if bridge else False
+        if attempt_result is None:
+            err_msg = str(driver_exc) if driver_exc else "execution_failed"
+            attempt_result = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
+        return attempt_result, has_tool_activity
 
     @staticmethod
     async def _acquire_target(semaphore: asyncio.Semaphore, cancel_event: threading.Event) -> bool:
@@ -234,6 +434,11 @@ class TargetExecutor:
                 break
             blocks.append(block)
             size += encoded
+        if not blocks:
+            # Every stored turn exceeded the byte budget. Returning the
+            # unwrapped prompt keeps reconstruction identical to the original
+            # prompt so callers can skip a redundant prompt-only recovery.
+            return prompt
         blocks.reverse()
         return f"Previous context:\n\n{'\n\n---\n\n'.join(blocks)}\n\nCurrent request:\n\n{prompt}"
 

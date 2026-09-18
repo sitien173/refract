@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -71,11 +72,22 @@ def _message_text(message: Any) -> str:
     return "".join(parts)
 
 
-def _extract_output(lines: list[str]) -> tuple[str, str, str]:
-    """Return Pi's final reply, session ID, and non-JSON/error output."""
+_CONTEXT_OVERFLOW_PATTERN = re.compile(r"\bcontext_length_exceeded\b")
+
+
+def _is_context_overflow(diagnostic: str) -> bool:
+    """Return True if diagnostic material matches the confirmed context overflow signature."""
+    if not diagnostic:
+        return False
+    return bool(_CONTEXT_OVERFLOW_PATTERN.search(diagnostic))
+
+
+def _extract_output(lines: list[str]) -> tuple[str, str, str, str]:
+    """Return Pi's final reply, session ID, non-JSON/error output, and structured error."""
     session_id = ""
     agent_message = ""
     diagnostics: list[str] = []
+    structured_error = ""
     for line in lines:
         try:
             event = json.loads(line)
@@ -87,14 +99,29 @@ def _extract_output(lines: list[str]) -> tuple[str, str, str]:
             continue
         if event.get("type") == "session" and isinstance(event.get("id"), str):
             session_id = event["id"]
-        if event.get("type") == "message_end":
-            text = _message_text(event.get("message"))
+        if event.get("type") in {"message_end", "message"}:
+            msg = event.get("message")
+            text = _message_text(msg)
             if text:
                 agent_message = text
+            if isinstance(msg, dict) and msg.get("stopReason") == "error":
+                err_msg = msg.get("errorMessage")
+                if isinstance(err_msg, str) and err_msg:
+                    diagnostics.append(err_msg)
+                    structured_error = err_msg
+                else:
+                    structured_error = "error"
         if event.get("type") == "agent_end":
             messages = event.get("messages")
             if isinstance(messages, list):
                 for message in reversed(messages):
+                    if isinstance(message, dict) and message.get("stopReason") == "error" and not structured_error:
+                        err_msg = message.get("errorMessage")
+                        if isinstance(err_msg, str) and err_msg:
+                            diagnostics.append(err_msg)
+                            structured_error = err_msg
+                        else:
+                            structured_error = "error"
                     text = _message_text(message)
                     if text:
                         agent_message = text
@@ -103,7 +130,7 @@ def _extract_output(lines: list[str]) -> tuple[str, str, str]:
             error = event.get("error") or event.get("message")
             if isinstance(error, str) and error:
                 diagnostics.append(error)
-    return agent_message, session_id, "\n".join(diagnostics).strip()
+    return agent_message, session_id, "\n".join(diagnostics).strip(), structured_error
 
 
 def _execute_sync(params: PiParams) -> BackendResult:
@@ -239,7 +266,7 @@ def _execute_sync(params: PiParams) -> BackendResult:
         # A subprocess exception may embed argv and therefore the prompt.
         log.error("pi: unexpected error during stream type=%s", type(exc).__name__)
 
-    agent_messages, extracted_session_id, diagnostics = _extract_output(lines)
+    agent_messages, extracted_session_id, diagnostics, structured_error = _extract_output(lines)
     session_id = extracted_session_id or params.SESSION_ID
     error_text = "\n".join(part for part in (command_error, diagnostics) if part).strip()
     result = classify_backend_output(
@@ -248,14 +275,37 @@ def _execute_sync(params: PiParams) -> BackendResult:
         session_id=session_id,
         error_text=error_text,
     )
-    if command_error and result.outcome == "OK":
+
+    is_overflow = _is_context_overflow(error_text)
+
+    # Precedence 1: Cancellation remains cancelled
+    if (params.cancel_event is not None and params.cancel_event.is_set()) or command_error_class == "cancelled":
+        result.outcome = "FATAL"
+        result.error_class = "cancelled"
+        result.error = "backend command cancelled" if (params.cancel_event is not None and params.cancel_event.is_set()) else (command_error or "cancelled")
+    # Precedence 2: Confirmed context overflow becomes context_overflow (overrides execution_error & partial output)
+    elif is_overflow:
+        result.outcome = "FATAL"
+        result.error_class = "context_overflow"
+        result.error = error_text or "context_length_exceeded"
+    # Precedence 3: Existing fatal authentication and model handling remains unchanged (fatal_backend)
+    elif result.error_class == "fatal_backend":
+        pass
+    # Precedence 4: Other structured assistant failures remain failures (partial text cannot hide failure)
+    elif structured_error:
+        if result.outcome == "OK":
+            result.outcome = "FATAL"
+            result.error_class = command_error_class or "execution_error"
+            result.error = structured_error or error_text
+        elif command_error:
+            result.outcome = "FATAL"
+            result.error_class = command_error_class
+            result.error = command_error
+    # Precedence 5: Ordinary process failures remain execution_error
+    elif command_error and result.outcome == "OK":
         result.outcome = "FATAL"
         result.error_class = command_error_class
         result.error = command_error
-    if params.cancel_event is not None and params.cancel_event.is_set():
-        result.outcome = "FATAL"
-        result.error_class = "cancelled"
-        result.error = "backend command cancelled"
     log.info(
         "pi.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",
         result.outcome, result.SESSION_ID or "", result.error_class, len(result.agent_messages),

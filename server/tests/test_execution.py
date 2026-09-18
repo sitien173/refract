@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import inspect
 import json
 import subprocess
 import threading
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -1194,6 +1195,45 @@ async def test_stream_bridge_cancellation_drains_accepted_events(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_stream_bridge_tool_activity_tracking() -> None:
+    from openmcp.drivers import StreamBridge
+
+    bridge = StreamBridge(queue_capacity=256)
+    # 1. New bridge reports no activity
+    assert bridge.has_tool_activity is False
+
+    def emit_worker(events: list[dict[str, Any]]) -> None:
+        for evt in events:
+            bridge.emit(evt)
+
+    # 2. Assistant deltas do not mark activity
+    await asyncio.to_thread(emit_worker, [{"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "hello"}}])
+    assert bridge.has_tool_activity is False
+
+    # 3. tool.completed alone does not mark activity
+    await asyncio.to_thread(emit_worker, [{"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed"}}])
+    assert bridge.has_tool_activity is False
+
+    # 4. tool.started permanently marks activity
+    await asyncio.to_thread(emit_worker, [{"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "grep"}}])
+    assert bridge.has_tool_activity is True
+
+    # Repeated tool.started retains signal
+    await asyncio.to_thread(emit_worker, [{"kind": "tool.started", "entity_id": "tool-2", "data": {"tool": "read"}}])
+    assert bridge.has_tool_activity is True
+
+    # 5. Closing and draining preserve the signal
+    await asyncio.to_thread(bridge.close_producer)
+    assert bridge.has_tool_activity is True
+
+    consumed = []
+    async for event in bridge.consumer():
+        consumed.append(event)
+    assert len(consumed) == 4
+    assert bridge.has_tool_activity is True
+
+
+@pytest.mark.asyncio
 async def test_stream_bridge_thread_ownership_no_sqlite_on_provider_thread(tmp_path) -> None:
     """Assert provider threads never touch the SQLite database."""
     from openmcp.drivers import StreamBridge
@@ -2122,3 +2162,856 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
                 assert "activity" not in data, f"{backend_name} leaked activity to tool.completed"
         finally:
             await runtime.close()
+
+
+@dataclass(frozen=True)
+class RecordedInvocation:
+    target_id: str
+    session_id: str
+    prompt: str
+    emitted_tool_activity: bool
+
+
+class ScriptedRecoveryDrivers(FakeDrivers):
+    def __init__(self, script: list[tuple[DriverResult, bool]]) -> None:
+        super().__init__()
+        self.script = list(script)
+        self.calls: list[RecordedInvocation] = []
+        self.on_call: Callable[[int, TargetConfig, str, threading.Event | None], None] | None = None
+
+    async def execute(
+        self,
+        *,
+        target: TargetConfig,
+        cwd: Path,
+        session_id: str,
+        prompt: str = "",
+        emitter=None,
+        cancel_event=None,
+        **kwargs,
+    ) -> DriverResult:
+        call_idx = len(self.calls)
+        if self.on_call:
+            self.on_call(call_idx, target, session_id, cancel_event)
+        if self.script:
+            result, emit_tool = self.script.pop(0)
+        else:
+            result, emit_tool = (
+                DriverResult("SUCCESS", f"session-{target.id}", "default text", "", ""),
+                False,
+            )
+
+        if emit_tool and emitter:
+            await asyncio.to_thread(emitter, {"kind": "tool.started", "tool_name": "bash"})
+
+        self.calls.append(
+            RecordedInvocation(
+                target_id=target.id,
+                session_id=session_id,
+                prompt=prompt,
+                emitted_tool_activity=emit_tool,
+            )
+        )
+        return result
+
+
+@pytest.mark.asyncio
+async def test_recovery_resumed_overflow_followed_by_successful_reconstruction(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "reconstructed-sess-2", "reconstructed answer", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="turn 1 prompt",
+            response="turn 1 response",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        assert len(drivers.calls) == 2
+        # Exact invocation order and arguments
+        assert drivers.calls[0].target_id == target.id
+        assert drivers.calls[0].session_id == "old-sess-1"
+        assert drivers.calls[0].prompt == "turn 2 prompt"
+        assert drivers.calls[0].emitted_tool_activity is False
+
+        assert drivers.calls[1].target_id == target.id
+        assert drivers.calls[1].session_id == ""
+        assert "Previous context:\n\nUser:\nturn 1 prompt\n\nAssistant:\nturn 1 response" in drivers.calls[1].prompt
+        assert "Current request:\n\nturn 2 prompt" in drivers.calls[1].prompt
+        assert drivers.calls[1].emitted_tool_activity is False
+
+        # Database session replaced
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "reconstructed-sess-2"
+
+        # Events emitted
+        events = runtime.database.events(sub.job_id)
+        kinds = [e["kind"] for e in events]
+        assert "target.context_overflow" in kinds
+        assert "target.session_recovery_started" in kinds
+        assert "target.session_recovery_finished" in kinds
+        assert "target.session_replaced" in kinds
+
+        # Event payload checks
+        overflow_events = [e for e in events if e["kind"] == "target.context_overflow"]
+        assert overflow_events[0]["data"]["error_code"] == "context_overflow"
+        rec_started = [e for e in events if e["kind"] == "target.session_recovery_started"]
+        assert rec_started[0]["data"]["phase"] == "reconstruct"
+        rec_finished = [e for e in events if e["kind"] == "target.session_recovery_finished"]
+        assert rec_finished[0]["data"]["phase"] == "reconstruct"
+        assert rec_finished[0]["data"]["outcome"] == "SUCCESS"
+        sess_rep = [e for e in events if e["kind"] == "target.session_replaced"]
+        assert sess_rep[0]["data"]["phase"] == "reconstruct"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_reconstruction_overflow_followed_by_prompt_only_success(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "prompt-only-sess-3", "prompt-only answer", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="turn 1 prompt",
+            response="turn 1 response",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        assert len(drivers.calls) == 3
+        # Exact invocation order and arguments
+        assert drivers.calls[0].target_id == target.id
+        assert drivers.calls[0].session_id == "old-sess-1"
+        assert drivers.calls[0].prompt == "turn 2 prompt"
+
+        assert drivers.calls[1].target_id == target.id
+        assert drivers.calls[1].session_id == ""
+        assert "Previous context:" in drivers.calls[1].prompt
+
+        assert drivers.calls[2].target_id == target.id
+        assert drivers.calls[2].session_id == ""
+        assert drivers.calls[2].prompt == "turn 2 prompt"
+
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "prompt-only-sess-3"
+
+        events = runtime.database.events(sub.job_id)
+        phases = [e["data"].get("phase") for e in events if e["kind"] == "target.session_recovery_started"]
+        assert phases == ["reconstruct", "fresh"]
+        rep = [e for e in events if e["kind"] == "target.session_replaced"]
+        assert rep[0]["data"]["phase"] == "fresh"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_duplicate_prompt_only_suppression_when_history_adds_nothing(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "unexpected third call", "context_overflow"), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        # Seed session directly without any turns in context_turns
+        runtime.database._connection.execute(
+            """INSERT INTO context_sessions(project_id, context_key, role, target_id, target_key, lane, session_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '2026-01-01T00:00:00Z')""",
+            (project.id, "feature", "implement", target.id, tkey, "", "old-sess-1"),
+        )
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
+
+        sub = await runtime.submit(project.id, "implement", "turn 1 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "failed"
+
+        # Exactly 2 invocations: resumed call and one empty-session prompt call
+        assert len(drivers.calls) == 2
+        assert drivers.calls[0].session_id == "old-sess-1"
+        assert drivers.calls[0].prompt == "turn 1 prompt"
+        assert drivers.calls[1].session_id == ""
+        assert drivers.calls[1].prompt == "turn 1 prompt"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_tool_activity_during_resumed_call(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
+    )
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), True),
+        (DriverResult("SUCCESS", "should-not-run", "should not run", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id="primary",
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="t1",
+            response="r1",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "failed"
+
+        # Tool activity on resumed call blocks both same-target recovery and cross-target failover
+        assert len(drivers.calls) == 1
+        assert drivers.calls[0].target_id == "primary"
+        assert drivers.calls[0].emitted_tool_activity is True
+
+        # Old session preserved
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
+
+        # Overflow does not penalize health
+        assert runtime.database.target_health(tkey)["consecutive_failures"] == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_tool_activity_during_reconstruction(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
+    )
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), True),
+        (DriverResult("SUCCESS", "should-not-run", "should not run", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id="primary",
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="t1",
+            response="r1",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "failed"
+
+        # Reconstruction emitted tool activity: blocks prompt-only call and cross-target failover
+        assert len(drivers.calls) == 2
+        assert drivers.calls[0].target_id == "primary"
+        assert drivers.calls[1].target_id == "primary"
+        assert drivers.calls[1].emitted_tool_activity is True
+
+        # Old session preserved and health not penalized
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
+        assert runtime.database.target_health(tkey)["consecutive_failures"] == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_ordinary_failure_followed_by_normal_failover(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
+    )
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "ordinary backend failure", "execution_error"), False),
+        (DriverResult("SUCCESS", "sec-sess", "secondary response", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey_primary = target_execution_key(catalog.targets[0])
+    tkey_sec = target_execution_key(catalog.targets[1])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id="primary",
+            target_key=tkey_primary,
+            session_id="old-sess-1",
+            prompt="t1",
+            response="r1",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        assert len(drivers.calls) == 3
+        assert drivers.calls[0].target_id == "primary"
+        assert drivers.calls[1].target_id == "primary"
+        assert drivers.calls[2].target_id == "secondary"
+
+        # Ordinary failure increments consecutive_failures for primary
+        assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 1
+        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == "sec-sess"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_all_bounded_calls_overflowing_before_normal_failover(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
+    )
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "sec-sess", "secondary response", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey_primary = target_execution_key(catalog.targets[0])
+    tkey_sec = target_execution_key(catalog.targets[1])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id="primary",
+            target_key=tkey_primary,
+            session_id="old-sess-1",
+            prompt="t1",
+            response="r1",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        assert len(drivers.calls) == 4
+        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary", "secondary"]
+
+        # Overflow is health-neutral: primary failures remain 0
+        assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 0
+        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == "sec-sess"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_cancellation_during_recovery(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("CANCELLED", "", "", "cancelled", "cancelled"), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+
+    def trigger_cancel(call_idx: int, _target, _sess, cancel_event: threading.Event | None) -> None:
+        if call_idx == 1 and cancel_event:
+            cancel_event.set()
+
+    drivers.on_call = trigger_cancel
+
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="t1",
+            response="r1",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "cancelled"
+
+        assert len(drivers.calls) == 2
+        # Old session preserved on cancellation
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_successful_replacement_resumed_by_next_job(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "replacement-sess-2", "recovered response", "", ""), False),
+        (DriverResult("SUCCESS", "next-sess-3", "next response", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="turn 1 prompt",
+            response="turn 1 response",
+        )
+        sub1 = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job1 = await runtime.wait(sub1.job_id, 5)
+        assert job1.state == "succeeded"
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "replacement-sess-2"
+
+        # Submit next job with same context key and workflow
+        sub2 = await runtime.submit(project.id, "implement", "turn 3 prompt", context_key="feature")
+        job2 = await runtime.wait(sub2.job_id, 5)
+        assert job2.state == "succeeded"
+
+        assert len(drivers.calls) == 3
+        assert drivers.calls[2].session_id == "replacement-sess-2"
+        assert drivers.calls[2].prompt == "turn 3 prompt"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_original_prompt_and_completed_turn_stored_exactly_once(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "final-sess-3", "final answer text", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="seed prompt",
+            response="seed response",
+        )
+        sub = await runtime.submit(project.id, "implement", "unmodified original prompt 42", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        # Check stored turns: exactly 2 turns
+        turns = runtime.database.recent_turns(project.id, "feature", "implement", 10)
+        assert len(turns) == 2
+        assert turns[0]["prompt"] == "seed prompt"
+        assert turns[0]["response"] == "seed response"
+        assert turns[1]["prompt"] == "unmodified original prompt 42"
+        assert turns[1]["response"] == "final answer text"
+        assert "Previous context:" not in turns[1]["prompt"]
+        assert "seed prompt" not in turns[1]["prompt"]
+    finally:
+        await runtime.close()
+
+
+def test_with_history_returns_original_prompt_when_all_turns_exceed_history_bytes(tmp_path) -> None:
+    """Bounded history must not fabricate an empty wrapper when every turn is excluded."""
+    from openmcp.execution import TargetExecutor
+
+    catalog = replace(config(tmp_path / "home"), history_bytes=1)
+    database = Database(catalog.database_path)
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+    database.append_turn(
+        project_id=project.id,
+        context_key="feature",
+        role="implement",
+        target_id="primary",
+        target_key="primary",
+        session_id="old-sess",
+        prompt="seed prompt",
+        response="seed response",
+    )
+    executor = TargetExecutor(catalog, database, FakeDrivers())
+    try:
+        assert executor._with_history(project.id, "feature", "implement", "current task") == "current task"
+    finally:
+        database.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_all_history_excluded_by_bytes_avoids_duplicate_prompt_only(tmp_path) -> None:
+    """When bounds exclude every stored turn, reconstruction equals the prompt and must not repeat it."""
+    root = repository(tmp_path)
+    catalog = replace(config(tmp_path / "home"), history_bytes=1)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "prompt-only-sess-2", "prompt-only answer", "", ""), False),
+        (DriverResult("RETRYABLE", "", "", "unexpected duplicate call", "context_overflow"), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    target = catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="seed prompt",
+            response="seed response",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        # Exactly two invocations: resumed overflow, then prompt-only with the untouched prompt.
+        assert len(drivers.calls) == 2
+        assert drivers.calls[0].session_id == "old-sess-1"
+        assert drivers.calls[0].prompt == "turn 2 prompt"
+        assert drivers.calls[1].session_id == ""
+        assert drivers.calls[1].prompt == "turn 2 prompt"
+
+        events = runtime.database.events(sub.job_id)
+        phases = [e["data"].get("phase") for e in events if e["kind"] == "target.session_recovery_started"]
+        assert phases == ["reconstruct"]
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "prompt-only-sess-2"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_success_with_empty_session_clears_stale_without_replacement(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "", "recovered without session", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="seed prompt",
+            response="seed response",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        # Successfully recovered but no replacement session: stale session is cleared.
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == ""
+        turns = runtime.database.recent_turns(project.id, "feature", "implement", 10)
+        assert len(turns) == 2
+        assert turns[1]["prompt"] == "turn 2 prompt"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_persistence_rollback_preserves_stale_session(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "replacement-sess-2", "recovered text", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="seed prompt",
+            response="seed response",
+        )
+        initial_turns = len(runtime.database.recent_turns(project.id, "feature", "implement", 100))
+
+        runtime.database._connection.execute("""
+            CREATE TRIGGER fail_recovery_turn BEFORE INSERT ON context_turns
+            BEGIN
+                SELECT RAISE(FAIL, 'simulated turn failure');
+            END;
+        """)
+
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "failed"
+
+        runtime.database._connection.execute("DROP TRIGGER fail_recovery_turn")
+
+        # Atomic rollback preserves prior session and turn count on persistence failure.
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
+        assert len(runtime.database.recent_turns(project.id, "feature", "implement", 100)) == initial_turns
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_max_attempts_one_stays_on_selected_target(tmp_path) -> None:
+    root = repository(tmp_path)
+    selection = TargetSelection(("primary",), 1)
+    catalog = replace(
+        config(tmp_path / "home"),
+        profiles={
+            "balanced": {
+                "implement": selection,
+                "review": selection,
+                "consult": selection,
+                "other": selection,
+            }
+        },
+    )
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    target = catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="seed prompt",
+            response="seed response",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "failed"
+
+        # Exactly one selected target and one recorded job attempt despite three internal calls.
+        assert job.attempts == 1
+        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary"]
+        assert runtime.database.target_health(tkey)["consecutive_failures"] == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_target_fatal_uses_normal_health_and_failover(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
+    )
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("TARGET_FATAL", "", "", "target fatal during recovery", "backend_failure"), False),
+        (DriverResult("SUCCESS", "sec-sess", "secondary response", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey_primary = target_execution_key(catalog.targets[0])
+    tkey_sec = target_execution_key(catalog.targets[1])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id="primary",
+            target_key=tkey_primary,
+            session_id="old-sess-1",
+            prompt="seed prompt",
+            response="seed response",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "secondary"]
+        # Genuine recovery failure retains normal health accounting and failover.
+        assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 1
+        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == "sec-sess"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_request_fatal_stops_recovery_and_failover(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
+    )
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("REQUEST_FATAL", "", "", "request fatal during recovery", "execution_error"), False),
+        (DriverResult("SUCCESS", "should-not-run", "should not run", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey_primary = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id="primary",
+            target_key=tkey_primary,
+            session_id="old-sess-1",
+            prompt="seed prompt",
+            response="seed response",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "failed"
+
+        # Request-fatal recovery stops immediately: no prompt-only and no cross-target failover.
+        assert [c.target_id for c in drivers.calls] == ["primary", "primary"]
+        assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 0
+        assert runtime.database.session(project.id, "feature", "implement", tkey_primary) == "old-sess-1"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_internal_calls_count_one_selected_target_attempt(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(
+        tmp_path / "home",
+        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
+    )
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
+        (DriverResult("SUCCESS", "sec-sess", "secondary response", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    tkey_primary = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id="primary",
+            target_key=tkey_primary,
+            session_id="old-sess-1",
+            prompt="seed prompt",
+            response="seed response",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        job = await runtime.wait(sub.job_id, 5)
+        assert job.state == "succeeded"
+
+        # Three internal calls on primary plus one failover to secondary count as two selected targets.
+        assert job.attempts == 2
+        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary", "secondary"]
+    finally:
+        await runtime.close()

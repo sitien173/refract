@@ -393,6 +393,73 @@ def test_append_turn_atomic_rollback_preserves_sessions(tmp_path) -> None:
     database.close()
 
 
+def test_append_turn_clear_sessions_clears_multiple_stale_and_preserves_unrelated(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+
+    database.append_turn(
+        project_id=project.id,
+        context_key="stream-1",
+        role="implement",
+        target_id="primary",
+        target_key="primary-key",
+        session_id="stale-sess-1",
+        prompt="turn 1",
+        response="response 1",
+    )
+    database.append_turn(
+        project_id=project.id,
+        context_key="stream-1",
+        role="implement",
+        target_id="secondary",
+        target_key="secondary-key",
+        session_id="stale-sess-2",
+        prompt="turn 2",
+        response="response 2",
+    )
+
+    database.append_turn(
+        project_id=project.id,
+        context_key="stream-2",
+        role="review",
+        target_id="primary",
+        target_key="primary-key",
+        session_id="unrelated-sess",
+        prompt="review turn",
+        response="review response",
+    )
+
+    assert database.session(project.id, "stream-1", "implement", "primary-key") == "stale-sess-1"
+    assert database.session(project.id, "stream-1", "implement", "secondary-key") == "stale-sess-2"
+    assert database.session(project.id, "stream-2", "review", "primary-key") == "unrelated-sess"
+
+    database.append_turn(
+        project_id=project.id,
+        context_key="stream-1",
+        role="implement",
+        target_id="primary",
+        target_key="primary-key",
+        session_id="replacement-sess",
+        prompt="recovered turn",
+        response="recovered response",
+        clear_sessions=True,
+    )
+
+    assert database.session(project.id, "stream-1", "implement", "primary-key") == "replacement-sess"
+    assert database.session(project.id, "stream-1", "implement", "secondary-key") == ""
+
+    cursor = database._connection.execute(
+        "SELECT target_key, session_id FROM context_sessions WHERE project_id=? AND context_key=? AND role=?",
+        (project.id, "stream-1", "implement"),
+    )
+    rows = cursor.fetchall()
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "replacement-sess"
+
+    assert database.session(project.id, "stream-2", "review", "primary-key") == "unrelated-sess"
+    database.close()
+
+
 def create_v10_database(path) -> None:
     connection = sqlite3.connect(path)
     connection.executescript("""

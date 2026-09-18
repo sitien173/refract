@@ -708,6 +708,293 @@ async def test_pi_server_error_auth_unavailable_is_fatal(monkeypatch, tmp_path) 
     assert "auth_unavailable" in out.error
 
 
+PI_CONTEXT_OVERFLOW_TRACE_FIXTURE = [
+    json.dumps({"type": "session", "version": 3, "id": "pi-overflow-synthetic-session-1"}),
+    json.dumps(
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [],
+                "stopReason": "error",
+                "errorMessage": '502: {"message":"No ChatGPT effort available to this account can carry a Bigger Context stage with <estimated_tokens> estimated tokens and <characters> characters.","type":"invalid_request_error","param":null,"code":"context_length_exceeded"}',
+            },
+        }
+    ),
+    json.dumps({"type": "agent_end", "messages": []}),
+]
+
+
+@pytest.mark.asyncio
+async def test_pi_context_overflow_real_trace(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(
+        pi_backend,
+        "run_shell_command",
+        lambda *args, **kwargs: (line for line in PI_CONTEXT_OVERFLOW_TRACE_FIXTURE),
+    )
+
+    out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "context_overflow"
+    assert "context_length_exceeded" in out.error
+
+
+@pytest.mark.asyncio
+async def test_pi_structured_assistant_error_with_partial_content_is_fatal(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    fixture = [
+        json.dumps({"type": "session", "id": "pi-sess-1"}),
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "partial text before failure"}],
+                    "stopReason": "error",
+                    "errorMessage": "upstream stream disconnected",
+                    "unknown_field": "ignore_me",
+                },
+                "arbitrary_top_field": 123,
+            }
+        ),
+    ]
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(
+        pi_backend,
+        "run_shell_command",
+        lambda *args, **kwargs: (line for line in fixture),
+    )
+
+    out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "execution_error"
+    assert "upstream stream disconnected" in out.error
+
+
+@pytest.mark.asyncio
+async def test_pi_close_negative_overflow_cases_not_classified_as_overflow(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    cases = [
+        "too long",
+        "context error",
+        "prompt too long",
+        "maximum tokens exceeded",
+    ]
+    for msg in cases:
+        fixture = [
+            json.dumps({"type": "session", "id": "pi-sess-1"}),
+            json.dumps(
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "content": [],
+                        "stopReason": "error",
+                        "errorMessage": msg,
+                    },
+                }
+            ),
+        ]
+        monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+        monkeypatch.setattr(
+            pi_backend,
+            "run_shell_command",
+            lambda *args, **kwargs: (line for line in fixture),
+        )
+
+        out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+        assert out.outcome == "FATAL"
+        assert out.error_class != "context_overflow"
+
+
+def test_pi_is_context_overflow_boundary_and_case() -> None:
+    from openmcp.backends.pi import _is_context_overflow
+
+    assert _is_context_overflow('{"code":"context_length_exceeded"}') is True
+    assert _is_context_overflow("error: context_length_exceeded") is True
+    assert _is_context_overflow("prefix_context_length_exceeded_suffix") is False
+    assert _is_context_overflow("notcontext_length_exceeded") is False
+    assert _is_context_overflow("context_length_exceededly") is False
+    assert _is_context_overflow("CONTEXT_LENGTH_EXCEEDED") is False
+    assert _is_context_overflow("Context_Length_Exceeded") is False
+
+
+@pytest.mark.asyncio
+async def test_pi_boundary_and_case_negative_overflow_cases(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    cases = [
+        "prefix_context_length_exceeded_suffix",
+        "notcontext_length_exceeded",
+        "context_length_exceededly",
+        "CONTEXT_LENGTH_EXCEEDED",
+        "Context_Length_Exceeded",
+    ]
+    for msg in cases:
+        fixture = [
+            json.dumps({"type": "session", "id": "pi-sess-1"}),
+            json.dumps(
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "content": [],
+                        "stopReason": "error",
+                        "errorMessage": msg,
+                    },
+                }
+            ),
+        ]
+        monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+        monkeypatch.setattr(
+            pi_backend,
+            "run_shell_command",
+            lambda *args, **kwargs: (line for line in fixture),
+        )
+
+        out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+        assert out.outcome == "FATAL"
+        assert out.error_class != "context_overflow", f"False positive overflow for {msg}"
+
+
+@pytest.mark.asyncio
+async def test_pi_assistant_prose_containing_overflow_token_is_not_overflow(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    fixture = [
+        json.dumps({"type": "session", "id": "pi-sess-1"}),
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": "The error code context_length_exceeded indicates an oversized session.",
+                    "stopReason": "stop",
+                },
+            }
+        ),
+    ]
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(
+        pi_backend,
+        "run_shell_command",
+        lambda *args, **kwargs: (line for line in fixture),
+    )
+
+    out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "OK"
+    assert out.error_class == ""
+    assert "context_length_exceeded" in out.agent_messages
+
+
+@pytest.mark.asyncio
+async def test_pi_cancellation_precedence_over_overflow(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    cancel_evt = threading.Event()
+    cancel_evt.set()
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(
+        pi_backend,
+        "run_shell_command",
+        lambda *args, **kwargs: (line for line in PI_CONTEXT_OVERFLOW_TRACE_FIXTURE),
+    )
+
+    out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path, cancel_event=cancel_evt))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_pi_overflow_overrides_nonzero_exit_and_partial_output(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from openmcp.backends import pi as pi_backend
+    from openmcp.backends._shell import ShellCommandFailed
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield json.dumps({"type": "session", "id": "pi-sess-1"})
+        yield json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": "partial output before crash",
+                    "stopReason": "error",
+                    "errorMessage": '{"code":"context_length_exceeded"}',
+                },
+            }
+        )
+        raise ShellCommandFailed(2)
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "context_overflow"
+
+
+@pytest.mark.asyncio
+async def test_pi_stderr_overflow_detected(monkeypatch, tmp_path) -> None:
+    from openmcp.backends import pi as pi_backend
+
+    def fake_run_shell_command(cmd, cwd=None, **kwargs):
+        yield json.dumps({"type": "session", "id": "pi-sess-1"})
+        yield "Error from provider: context_length_exceeded in session buffer"
+
+    monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+
+    out = await pi_backend.execute(PiParams(PROMPT="x", cd=tmp_path))
+
+    assert out.outcome == "FATAL"
+    assert out.error_class == "context_overflow"
+
+
+def test_pi_driver_normalizes_context_overflow_to_retryable() -> None:
+    from openmcp.drivers import _normalize
+
+    res = BackendResult(
+        outcome="FATAL",
+        SESSION_ID="sess-123",
+        agent_messages="",
+        error="context_length_exceeded",
+        error_class="context_overflow",
+    )
+    norm = _normalize(res)
+    assert norm.outcome == "RETRYABLE"
+    assert norm.error_code == "context_overflow"
+    assert norm.session_id == "sess-123"
+
+
 @pytest.mark.asyncio
 async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path) -> None:
     from openmcp.backends import codex as codex_backend
