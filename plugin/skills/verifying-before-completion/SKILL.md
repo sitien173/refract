@@ -1,6 +1,6 @@
 ---
 name: verifying-before-completion
-description: "Use before claiming any work is complete, fixed, passing, reviewed, or ready to hand off - defines the fresh evidence each claim requires."
+description: "Use before saying work is complete, fixed, passing, reviewed, or ready to hand off, including in a final summary, commit message, or PR description. Defines the fresh evidence each claim requires."
 ---
 
 # Verifying Before Completion
@@ -59,6 +59,18 @@ assigned, non-blocking debt. Worker summaries and prior runs are not proof.
 - **Inconsistent runs.** Report both results and mark the claim unverified.
 - **Revision moved.** HEAD or the tree changed mid-verification: restart at
   the new revision.
+
+## Gotchas
+
+A check proves nothing until it can fail. Each of these once passed vacuously:
+
+- `grep -q` matched text the file held before the change.
+- A phrase wrapped across two lines missed a single-line pattern.
+- `grep -R` on a missing path exited 2, and an enclosing `if` read no match.
+- An unescaped `.` in a basic regex matched any character.
+- An unquoted `$VAR` did not word-split under zsh.
+
+Run each new check once against a state where it must fail.
 
 ## Output Format
 

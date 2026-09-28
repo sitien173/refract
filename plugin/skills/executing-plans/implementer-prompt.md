@@ -6,7 +6,10 @@ waiting, recovery, and review. The worker edits files directly in the working re
 ## First submission (fresh worker session)
 
 The first `implement` job on the plan `context_key` starts fresh and teaches the
-worker its role and output format. Include the full pointer set exactly once:
+worker its role and output format. Include the full pointer set exactly once.
+Every path is absolute: `<repo-root>` is the registered Git root and
+`<plugin-root>` the installed plugin directory. Workers run without the plugin
+loaded and can mis-resolve relative paths.
 
 ```text
 job_submit:
@@ -14,7 +17,7 @@ job_submit:
   workflow: implement
   prompt: |
     <one or two compressed sentences from the user request>
-    Read: docs/plans/<slug>/phase-<NN>/prompt.md
+    Read: <repo-root>/docs/plans/<slug>/phase-<NN>/prompt.md
     Contract: <plugin-root>/shared/worker-contract.md
     Response: <plugin-root>/shared/erp.md
     Notes: <plugin-root>/shared/notes-template.md
@@ -37,7 +40,7 @@ job_submit:
   workflow: implement
   prompt: |
     <one line: what this job adds>
-    Read: docs/plans/<slug>/phase-<NN>/prompt.md
+    Read: <repo-root>/docs/plans/<slug>/phase-<NN>/prompt.md
     Return the ERP response as before.
   context_key: <slug>
   profile: <phase implementation profile>

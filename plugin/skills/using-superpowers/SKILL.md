@@ -1,6 +1,6 @@
 ---
 name: using-superpowers
-description: Use when starting any conversation - establishes how to find and use skills, requiring skill invocation before ANY response including clarifying questions
+description: "Use at the start of every conversation, before the first reply, clarifying question, or tool call. Matches the request to the skills that apply and decides whether the work is direct or coordinated."
 ---
 
 # Using Superpowers
@@ -30,7 +30,7 @@ Skip a skill workflow only when the user explicitly says to.
    - Before plan mode on coordinated work, run `brainstorming` unless a
      confirmed design already exists.
 3. **Announce.** Say "Using <skill> to <purpose>." Create one todo per
-   checklist item the skill defines.
+   numbered step the skill defines.
 4. **Classify scope** with the rule below and emit the scope line.
 5. **Follow** the skill exactly. If on reading it does not fit, state why in
    one line and drop it.

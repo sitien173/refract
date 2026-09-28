@@ -1,6 +1,7 @@
 ---
 name: executing-plans
-description: "Use when running or resuming one phase of a folder-layout plan - drives it through the canonical OpenMCP gates."
+description: "Use when the user asks to run, continue, or resume a plan or its next phase, even without naming the plan. Runs one phase of a folder-layout plan under docs/plans/ through consult, implement, and review, then stops."
+compatibility: Requires git and a running OpenMCP server.
 ---
 
 # Executing Plans
@@ -58,6 +59,13 @@ review, Git, and handover.
 11. **Finalize plan** after the final phase: write final coordination state,
     consolidate every checkpoint into the sole plan commit, set the plan `impl`
     anchor, then invoke `verifying-before-completion`.
+
+## Gotchas
+
+- A phase you implement yourself, for example after the user cancels its job,
+  has no independent review. Record Quality as open debt, never as `PASS`.
+- A phase that routes no worker still gets its `phase-<NN>/` files. Without
+  them, closeout rebuilds follow-ups from memory.
 
 ## Output Format
 

@@ -1,6 +1,6 @@
 ---
 name: using-git-worktrees
-description: Use when starting feature work that needs isolation from current workspace or before executing implementation plans - ensures an isolated workspace exists via native tools or git worktree fallback
+description: "Use when starting feature work that should not touch the current checkout, before executing an implementation plan, or when the user asks for a worktree or isolated workspace. Detects existing isolation, then prefers a native worktree tool, then falls back to git worktree."
 ---
 
 # Using Git Worktrees
@@ -122,7 +122,9 @@ target, or the README instruction. When none is found, ask.
 When the work is coordinated, return to the Coordinator's setup. It registers
 this worktree root with OpenMCP, so the worktree gets its own `project_id` and
 job queue. Plan anchors under `refs/plans/` live in the shared `.git` directory
-and resolve from every worktree.
+and resolve from every worktree. In `untracked` plan mode, a new worktree starts
+without `docs/plans/`; copy the plan directory in before resuming there.
+`.git/info/exclude` is shared, so the copy stays excluded.
 
 ## Output Format
 

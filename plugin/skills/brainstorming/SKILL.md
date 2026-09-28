@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: "Use when a feature or idea needs design before planning - clarifies intent, constraints, and trade-offs into a confirmed design document."
+description: "Use when the user wants to build, add, or change something and the approach is not settled, even if they only describe a problem or a rough idea. Clarifies intent, constraints, and trade-offs into a confirmed design document before any plan or code. Not for a known bug or a fully specified small edit."
 ---
 
 # Brainstorming Ideas Into Designs

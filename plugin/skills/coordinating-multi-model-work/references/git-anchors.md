@@ -90,6 +90,9 @@ git cat-file -e <sha>^{commit}
 git merge-base --is-ancestor <sha> HEAD
 ```
 
+Existence alone proves nothing. After a squash, an old SHA still exists, and
+`<sha>..HEAD` resolves to the wrong delta.
+
 Phase checkpoint caches normally fail the ancestry check after consolidation.
 That is expected. Their refs remain authoritative and must resolve directly.
 

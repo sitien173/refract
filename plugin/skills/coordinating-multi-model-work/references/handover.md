@@ -39,6 +39,7 @@ debt: [{ phase, item, owner }, ...]
 - `job_refs` names the latest job per workflow for `job_refs.phase`. Set it
   immediately after `job_submit` returns, before waiting.
 - `phase_base` and other commit fields are advisory caches. Refs win.
+- `phase_base_ref` names the current phase `base` ref, never an `impl` ref.
 - `read_first` lists paths a resumed session reads before acting. Drop a path
   that no longer exists and note it in the phase journal.
 - Under `BLOCKED`, `next_action` states the exact question or decision needed.

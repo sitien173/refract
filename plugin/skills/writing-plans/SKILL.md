@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: "Use when a confirmed design needs an implementation plan - produces a resumable phase plan with explicit scope, acceptance criteria, review checks, and verification commands."
+description: "Use when a confirmed design needs an implementation plan, or the user asks to break agreed work into phases. Produces a resumable phase plan with exact files, acceptance criteria, review checks, and verification commands. Without a confirmed design, use brainstorming first."
 ---
 
 # Writing Plans
@@ -18,7 +18,8 @@ first; it owns routing, execution, anchors, and Git.
 - Never replace matching active work: a plan for the same topic whose handover
   status is not `DONE`.
 - Every path, criterion, and command is exact and checkable. Each command must
-  exist in this repository today.
+  exist today and pass at the plan `base`. When one fails, the first phase
+  repairs the baseline; otherwise every later evidence gate proves nothing.
 
 ## Workflow
 

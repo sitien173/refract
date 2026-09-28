@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: "Use when facing a bug, test failure, regression, or performance problem - establishes a reproducible root cause before any fix."
+description: "Use when something is broken or behaves unexpectedly: a bug, error, crash, failing or flaky test, regression, or slowdown, even when the user only asks for a quick fix. Establishes a reproducible root cause before any change."
 ---
 
 # Systematic Debugging

@@ -1,6 +1,7 @@
 ---
 name: coordinating-multi-model-work
-description: "Use before any Plan, Execute, or Review action on delegated work - coordinates Plan → Execute → Review through OpenMCP, including setup, routing, job lifecycle, independent review, and resume."
+description: "Use for coordinated work: multi-phase or multi-component changes, risky or design-dependent work, or any request for a plan. Load it before any Plan, Execute, or Review action and when resuming an interrupted plan. Covers OpenMCP setup, routing, job lifecycle, independent review, Git checkpoints, and handover. Skip it for direct work."
+compatibility: Requires git and a running OpenMCP server.
 ---
 
 # Coordinating Multi-Model Work
@@ -109,7 +110,8 @@ no global or system value leaks across repositories. It lives in `.git/config`,
 which is never pushed, survives history rewriting and `git clean`, and so cannot
 exclude itself. Resolve it once per repository and persist it.
 
-Take the first rung that matches:
+Take the first rung that matches. Rung 2 precedes rung 3, so a repository that
+commits plans and later ignores the path stays `tracked`:
 
 | Rung | Condition | Mode | Ask |
 |---|---|---|---|
@@ -141,8 +143,7 @@ Validate via `openmcp://projects/<project_id>/profiles` and `openmcp://workflows
 On an unavailable or mismatched route, stop and report it; never substitute a
 different profile.
 
-An active phase keeps its saved guidance. Call `task_guide` again only when a
-new phase starts.
+An active phase keeps its saved guidance.
 
 ## Gate 1: Plan
 
@@ -171,11 +172,11 @@ Emit:
 
 ## Waiting Rule
 
-`job_wait` returns on completion or on `timeout_s`. A timeout is not a failure.
-While the job is `queued` or `running`, call `job_wait` again, up to three
-times per job, without editing the root. After the third timeout, report the
-job ID and state, leave the job running, and ask the user whether to keep
-waiting or `job_cancel`. Submit nothing else for that phase meanwhile.
+Call `job_wait` once per job, as a background task. NEVER poll it: no repeat
+calls, `sleep`, or job-resource loops. Do other work that leaves the root
+untouched, or end your reply; you are woken with its output. A timeout is not a
+failure: report the job ID and state, leave the job running, and ask the user
+whether to keep waiting or `job_cancel`. Submit nothing else for that phase.
 
 ## Gate 2: Execute
 
@@ -248,8 +249,8 @@ docs/plans/<slug>/
   phase-01/{prompt,notes,journal}.md
 ```
 
-The `.handover.md` schema and field rules live in
-[references/handover.md](references/handover.md). Status values:
+Read [references/handover.md](references/handover.md) before creating or editing
+`.handover.md`. Status values:
 
 | Status | Meaning |
 |---|---|
