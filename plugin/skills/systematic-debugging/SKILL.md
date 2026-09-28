@@ -5,6 +5,8 @@ description: "Use when facing a bug, test failure, regression, or performance pr
 
 # Systematic Debugging
 
+## Role
+
 This skill owns diagnosis. `coordinating-multi-model-work` owns delegation;
 `test-driven-development` owns the regression-test cycle.
 
@@ -16,24 +18,51 @@ NO FIX WITHOUT ROOT-CAUSE EVIDENCE
 
 ## Workflow
 
-1. **Reproduce.** Capture the full error, exact steps, and expected behavior.
-2. **Trace.** Follow bad state backward across component boundaries to the first
-   divergence.
-3. **Compare.** Read a similar working path and list relevant differences.
-4. **Hypothesize.** State one falsifiable cause and test the smallest variable.
-5. **Fix.** Pass the reproduction and root cause into a failing regression test,
-   then apply the smallest source correction.
+1. **Reproduce.** Capture the full error, exact steps, environment, and
+   expected versus actual behavior. For performance, record a baseline: the
+   command and its numbers. Done when the failure occurs on demand.
+2. **Trace.** Follow bad state backward across component boundaries to the
+   first divergence, the earliest point where actual state differs from
+   expected. Add temporary logging or assertions where reading is not enough,
+   and remove them before the fix.
+3. **Compare.** Read a similar working path and list the relevant differences.
+4. **Hypothesize.** Log one falsifiable hypothesis with its predicted
+   observation. Change one variable to test it.
+5. **Confirm.** A hypothesis is confirmed only when the prediction holds and
+   reverting the change brings the failure back.
+6. **Fix.** Hand the reproduction and root cause to `test-driven-development`:
+   a regression test that goes RED for the diagnosed reason, then the smallest
+   source correction.
+
+## Hypothesis Log
+
+Keep one line per hypothesis visible while working:
+
+```text
+H<n>: <cause> | Predict: <observation> | Test: <one change> | Result: confirmed | refuted
+```
 
 ## Stop Conditions
 
-- If reproduction fails or evidence contradicts the hypothesis, return to
-  tracing.
-- After three failed fixes, stop and question the model or architecture.
-- Do not proceed without a regression test unless the user explicitly waives it.
+- Evidence contradicts the hypothesis: mark it refuted and return to Trace.
+- Three refuted hypotheses or three failed fixes: stop, show the log, and
+  question the model or architecture with the user.
+- No reproduction after three attempts: report what was tried, propose
+  instrumentation, and ask before changing code.
+- A regression test is required unless the user explicitly waives it.
 
 ## Rules
 
-- Test one hypothesis at a time.
 - Fix the source, not a downstream symptom.
-- Exclude unrelated refactors and cleanup.
-- Record reproduction, root cause, RED → GREEN evidence, and remaining risk.
+- Keep the change to the fix; leave unrelated refactors and cleanup out.
+
+## Output Format
+
+```text
+# DIAGNOSIS
+- Reproduction: <command or steps> -> <observed failure>
+- Root cause: <file:line> <mechanism>
+- Evidence: <confirmed hypothesis and observation>
+- Regression: <test> RED -> GREEN
+- Remaining risk: <item> | none
+```

@@ -5,104 +5,109 @@ description: "Use before any Plan, Execute, or Review action on delegated work -
 
 # Coordinating Multi-Model Work
 
+## Role
+
 You are Coordinator. You own OpenMCP orchestration, phase boundaries,
-specification review, and handover.
+specification review, Git, and handover. Workers edit files. You judge,
+commit, and report.
 
-Other skills have separate ownership:
+Apply each neighbouring policy from its owner: scope from `using-superpowers`,
+design from `brainstorming`, plan format from `writing-plans`, the phase
+procedure from `executing-plans`, root cause from `systematic-debugging`, test
+order from `test-driven-development`, evidence from
+`verifying-before-completion`, and isolation from `using-git-worktrees`.
 
-- `brainstorming` — design dialogue
-- `writing-plans` — plan format
-- `executing-plans` — folder-plan phase procedure
-- `systematic-debugging` — root-cause method
-- `test-driven-development` — implementation test cycle
-- `verifying-before-completion` — evidence and claim standard
+Read [references/tool-contract.md](references/tool-contract.md) before the
+first OpenMCP call in a session. When `using-superpowers` classified the
+request as direct, leave this skill and do the work with your own tools.
 
-Do not restate those policies here. Read
-[references/tool-contract.md](references/tool-contract.md) before the first
-OpenMCP call in a session.
+## Terms
 
-## When to Skip Coordination
-
-Coordination exists for multi-step, risky, or architectural work. Do not route
-low-stakes requests through OpenMCP; handle them directly with your own tools and
-skip all three gates. Skip when the request is:
-
-- a single-file or trivially scoped edit,
-- documentation, comments, config, or formatting,
-- a rename, string change, dependency bump, or one-line fix,
-- anything the user asks you to just do directly.
-
-Coordinate only when work spans multiple phases or components, carries real
-correctness or security risk, needs a design decision, or the user asks for a
-plan. When the change is small and scope is obvious, do it directly and note in
-one line that you skipped coordination.
+- **Slug**: the plan identity in `docs/plans/<slug>/`. Lowercase kebab-case,
+  confirmed with the user when the first plan artifact is written, fixed once
+  the plan `base` anchor exists. The slug is also the `context_key`.
+- **`<N>` and `<NN>`**: the phase number, and the same number zero-padded to
+  two digits.
+- **Clean root**: `git status --porcelain` prints nothing.
+- **Coordination files**: `PLAN.md`, `DESIGN.md`, `.handover.md`, and the
+  current `phase-<NN>/` files. These are the only files you edit during a plan.
+- **Phase validation**: every command under the phase `Verification Checks`.
 
 ## OpenMCP Contract
 
 OpenMCP provides four fixed workflows: `consult`, `implement`, `other`, and
 `review`. Canonical gates use `consult`, `implement`, and `review`. Use `other`
 only when task guidance selects its explicit profile mapping. Every submission
-creates one job in the registered directory. OpenMCP never touches Git; you own
-every commit, reset, and cleanliness check. Same-project jobs run FIFO.
+creates one job in the registered directory. OpenMCP never touches Git.
+Same-project jobs run FIFO.
 
 Keep provider, model, target, and native session identities private. Select only
 workflows and profiles.
 
 ## Session Resume Key
 
-Sessions use `project_id`, `context_key`, `workflow`, and target key, primarily
-`context_key`. Use the plan slug for every phase and job; never derive another
-key. Each workflow keeps its own resumed session.
+The session key is `project_id`, `context_key`, `workflow`, and target key.
+Use the plan slug as `context_key` for every phase and job. Each workflow keeps
+its own resumed session.
 
-Start the first `implement` and `review` job for a plan with
-`fresh_session: true`. It starts a new backend session while retaining the plan
-key and sends the submitted prompt unchanged. On success, that session replaces
-the stored session for its workflow and key. Later jobs then omit `fresh_session`
-and resume it. A retry retains its setting, so a fresh-job retry starts fresh again.
-
-The first `implement` and `review` jobs carry their full role contracts. Later
-jobs on the same workflow and key send only the delta and phase prompt path. Do
-not resend contracts, response formats, or role descriptions.
+- The first `implement` job and the first `review` job of a plan use
+  `fresh_session: true` and carry their full role contracts.
+- Later jobs on the same workflow omit `fresh_session`, resume that session,
+  and send only the delta plus the phase prompt path.
+- A retry keeps its setting, so a fresh-job retry starts fresh again.
 
 ## Git Ownership
 
 You own the entire Git lifecycle. OpenMCP never checks cleanliness, commits,
-resets, or restores; assume it did none of these.
+resets, or restores. Assume it did none of these.
 
-- Require an attached branch before every job so commits land; a dirty tree does
-  not block submission. Record HEAD and pre-existing dirt to attribute changes.
-- Before creating plan artifacts, anchor clean HEAD as the plan `base`. Anchor
-  every phase through [references/git-anchors.md](references/git-anchors.md).
-  Phase commits are local checkpoints. Consolidation leaves one plan commit.
-- Edit or commit known coordination files only when no project job is active.
-- After submission, do not edit the root until that job is terminal.
-- Every file is visible to workers and nothing is auto-restored. Never expose
-  secrets or request unintended changes.
-- Submit dependent jobs one at a time; verify each result before the next.
+- Require an attached branch before every job. On detached HEAD, stop and ask
+  the user which branch to create or check out.
+- Record HEAD and any pre-existing dirt before each job, so you can attribute
+  every change. A dirty tree does not block submission.
+- Anchors and reviews require a clean root. When other files are dirty, list
+  them and ask the user to commit or stash them. Leave user changes exactly as
+  they are; never stash, reset, or commit them yourself.
+- Anchor the plan and every phase through
+  [references/git-anchors.md](references/git-anchors.md). Phase commits are
+  local checkpoints. Consolidation leaves one plan commit.
+- Edit coordination files only while no project job is active.
+  After submission, do not edit the root until that job is terminal.
+- Workers see every file. Keep secrets out of prompts and name secret-bearing
+  files as out of scope in the phase prompt.
+- Submit dependent jobs one at a time. Verify each result before the next.
 
 ## Setup and Resume
 
 1. Call `status`; require `status="running"`. If unavailable, report it once.
-   Brainstorming and plan authoring continue without consultation and record
-   the skipped consult; Execute and Review stop until it is running.
-2. Resolve the Git root and read `openmcp://projects`. When the user wants an
-   isolated workspace, run `using-git-worktrees` before this step so the
-   worktree root is the path that gets registered.
-3. Register an absent root with `project_register`; save its `project_id`.
-4. Resolve plan-artifact tracking for the repository, once and never again.
-5. Reconcile `active` from `openmcp://projects/<project_id>/jobs`. Fetch a job
-   resource only for a specific result.
+   Brainstorming and plan authoring continue and record the skipped consult.
+   Execute and Review stop until it is running.
+2. When the user wants an isolated workspace, run `using-git-worktrees` first,
+   so the worktree root is the path that gets registered.
+3. Resolve the Git root and read `openmcp://projects`. Register an absent root
+   with `project_register` and save its `project_id` in handover.
+4. Resolve plan-artifact tracking as described below.
+5. Reconcile. Read `active` from `openmcp://projects/<project_id>/jobs`,
+   compare it with handover `job_refs` and Git, and act on the first match:
 
-Job records own state; Git state lives only in the working tree. Wait on active
-jobs without local edits. Stop when handover, jobs, and Git disagree.
+| Handover | Jobs | Git | Action |
+|---|---|---|---|
+| Job ref set | That job active | Any | Wait under the waiting rule. No local edits. |
+| Job ref set | That job terminal | Changes present | Read its result and resume at its gate. |
+| No pending ref | None active | Clean at last checkpoint | Continue from `next_action`. |
+| Any | Active job absent from handover | Any | Stop. Report the job ID and ask. |
+| Any other combination | | | Stop. Report all three states and ask. |
+
+Fetch a job resource only when you need its full result. Job records own job
+state. Git state lives only in the working tree.
 
 ### Plan-Artifact Tracking
 
 `ccg.plans.tracking` holds `tracked` or `untracked` and decides whether anything
 under `docs/plans` is committed. Read and write it with `git config --local`, so
 no global or system value leaks across repositories. It lives in `.git/config`,
-which is never pushed, is untouched by history rewriting, and survives
-`git clean`, so the setting cannot exclude itself.
+which is never pushed, survives history rewriting and `git clean`, and so cannot
+exclude itself. Resolve it once per repository and persist it.
 
 Take the first rung that matches:
 
@@ -113,18 +118,13 @@ Take the first rung that matches:
 | 3 | `git check-ignore -q docs/plans` succeeds | `untracked` | No |
 | 4 | Neither signal | The user's answer | Once, then persist |
 
-Rung 2 precedes rung 3 deliberately. A repository that both commits plan files
-and ignores the path has already chosen `tracked`, and reversing it would need a
-migration nobody asked for.
-
 In `untracked` mode, append `docs/plans/` to `.git/info/exclude` unless rung 3
-already matched, and warn once that `git clean -fdx` destroys the plan directory
-and that a fresh checkout starts without it. Never write `.gitignore`; a
-committed ignore file imposes one contributor's choice on everyone.
+matched, and warn once that `git clean -fdx` destroys the plan directory and a
+fresh checkout starts without it. Leave `.gitignore` untouched; a committed
+ignore file imposes one contributor's choice on everyone.
 
 Tracking mode governs plan-artifact checkpoints alone. Plan and phase anchors
-are written in both modes. The clean-root requirement is identical in both.
-Excluded files never dirty the tree, so nothing about them relaxes it.
+are written in both modes, and the clean-root requirement is identical in both.
 
 ## Task Guidance
 
@@ -137,20 +137,25 @@ For each new phase, call `task_guide` once with the complete phase request and
 - other explicitly supported work → `other`
 
 Use the recommended optional profile, or omit it for the configured default.
-Validate via `openmcp://projects/<project_id>/profiles` and `openmcp://workflows/<project_id>`; stop on an unavailable or mismatched route.
+Validate via `openmcp://projects/<project_id>/profiles` and `openmcp://workflows/<project_id>`.
+On an unavailable or mismatched route, stop and report it; never substitute a
+different profile.
 
-An active phase keeps its saved guidance; do not call `task_guide` again until a new phase starts.
+An active phase keeps its saved guidance. Call `task_guide` again only when a
+new phase starts.
 
 ## Gate 1: Plan
 
 1. Confirm scope, acceptance criteria, risks, and fresh verification commands.
 2. Split work that one implementation job cannot safely own.
-3. Require consultation for unclear, architectural, cross-component,
-   high-impact, or tradeoff-heavy work while OpenMCP is running; otherwise
-   record the skipped consult under `Reason`.
-4. For consultation, first reach a clean coordination checkpoint, submit one
-   narrow `consult` job, wait through the waiting rule below, and use
-   `result.text`. Copy relevant findings into the implementation prompt.
+3. Consult when the work is unclear, architectural, cross-component,
+   high-impact, or tradeoff-heavy and OpenMCP is running. Otherwise record the
+   skipped consult under `Reason`.
+4. To consult: reach a clean root with coordination files checkpointed under
+   `tracked`, submit one narrow `consult` job, wait under the waiting rule, and
+   read `result.text`. Copy relevant findings into the implementation prompt.
+5. After the consult, confirm the root is unchanged. A changed root or a failed
+   consult goes into `Reason`; ask the user whether to proceed without it.
 
 Emit:
 
@@ -167,42 +172,57 @@ Emit:
 ## Waiting Rule
 
 `job_wait` returns on completion or on `timeout_s`. A timeout is not a failure.
-While the job is still `queued` or `running`, call `job_wait` again, up to three
+While the job is `queued` or `running`, call `job_wait` again, up to three
 times per job, without editing the root. After the third timeout, report the
 job ID and state, leave the job running, and ask the user whether to keep
-waiting or `job_cancel`. Never submit another job for the same phase while the
-first is non-terminal.
+waiting or `job_cancel`. Submit nothing else for that phase meanwhile.
 
 ## Gate 2: Execute
 
 For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch with
 [implementer-prompt.md](../executing-plans/implementer-prompt.md).
 
-- Submit one prompt-only `implement` job with the saved route.
-- Wait with `timeout_s: 300` under the waiting rule; read `result.text` on
-  success or `result.error` on failure.
-- On success, read `result.text`, inspect the actual filesystem changes, run the
-  phase validation, and create a temporary checkpoint commit only after it passes.
-- A succeeded job is judged by its ERP `NEXT` line, not by job state:
-  - `TASK_COMPLETE` → validate and checkpoint as above.
-  - `BLOCKED` → do not checkpoint. Answer every item under `CLARIFICATIONS
-    NEEDED` from the plan or the user, then submit one resumed `implement` job
-    carrying only those answers. Unanswerable items set handover `BLOCKED`.
-  - `CONTINUE_CONTEXT` → validate what exists, checkpoint if it passes, then
-    submit one resumed `implement` job saying "Continue Phase <NN>". Bound this
-    to two continuations per phase; then report and ask.
-- On failure, cancellation, or interruption, read `result.error`. The worker's
-  partial changes remain on disk; inspect, reconcile, and report what is
-  retained. A retry does not reset the tree, so reconcile first, then retry once
-  only when the unchanged immutable job remains valid; otherwise submit a new job.
-- Never assume OpenMCP restored anything. All recovery is your own Git.
+1. Submit one prompt-only `implement` job with the saved route.
+2. Wait with `timeout_s: 300` under the waiting rule. Read `result.text` on
+   success or `result.error` on failure.
+3. Diff the working tree against the recorded HEAD. Compare it with ERP
+   `FILES MODIFIED` and the phase file set. An undeclared or out-of-scope path
+   is a specification failure for Gate 3.
+4. Act on the ERP `NEXT` line, not on the job state:
+
+| Outcome | Action |
+|---|---|
+| `TASK_COMPLETE` | Run phase validation. Create a temporary checkpoint commit only after it passes. |
+| `BLOCKED` | No checkpoint. Answer each `CLARIFICATIONS NEEDED` item from the plan or the user, then submit one resumed job carrying only the answers. |
+| `CONTINUE_CONTEXT` | Validate what exists and checkpoint if it passes. Submit one resumed job saying "Continue Phase <NN>". |
+| ERP block or `NEXT` missing | Submit one resumed job asking for the ERP response of the current state. |
+| Job failed, cancelled, or interrupted | Partial changes remain on disk. Reconcile and report them. Then `job_retry` once if the prompt and file set still hold; otherwise submit a new job. |
+
+Bounds: two `BLOCKED` rounds, two continuations, and one ERP re-request per
+phase. Past a bound, or on any unanswerable clarification, set handover
+`BLOCKED` and report. A retry does not reset the tree. All recovery is your own
+Git.
 
 ## Gate 3: Review
 
 After the implementation checkpoint, load
-[references/review.md](references/review.md). Specification failure blocks
-quality review. Correctness and security force `FAIL`. Review through a
-read-only target; never commit a review.
+[references/review.md](references/review.md). Review through a read-only target
+and confirm the root is unchanged afterwards. Never commit a review.
+
+Specification failures and blocking quality findings both enter the bounded
+review-fix loop in `review.md`. A specification failure blocks quality review
+until it is fixed.
+
+Derive each status by the first matching rule:
+
+| Findings | Status |
+|---|---|
+| Any correctness or security finding | `FAIL` |
+| Any other blocking finding | `FAIL` |
+| Only non-blocking findings, each with a named owner | `PASS_WITH_DEBT` |
+| None | `PASS` |
+
+Record debt with its owner in the journal `Review Result` and in handover.
 
 ```text
 # CODE QUALITY REVIEW
@@ -228,28 +248,15 @@ docs/plans/<slug>/
   phase-01/{prompt,notes,journal}.md
 ```
 
-```yaml
----
-status: ACTIVE | BLOCKED | STALE_ANCHOR | DONE
-topic: <one-line topic>
-current_phase: <N>
-next_action: "Execute Phase <N>"
-project_id: <OpenMCP project UUID|null>
-plan_base_ref: <refs/plans/<slug>/base|null>
-plan_impl_ref: <refs/plans/<slug>/impl|null>
-phase_base: <commit|null>
-phase_base_ref: <refs/plans/...|null>
-context_key: <plan-slug>
-guidance:
-  implement: { workflow: implement, profile: <name|null> }
-  consult: { workflow: consult, profile: <name|null> }
-  review: { workflow: review, profile: <name|null> }
-job_refs: { phase: <N>, latest_consult: <id|null>, latest_implementation: <id|null>, latest_review: <id|null> }
-read_first: [<file>, ...]
-completed_tasks: [{ phase, task, summary }, ...]
-completed_phases: [{ phase, base_ref, impl_ref, summary }, ...]
----
-```
+The `.handover.md` schema and field rules live in
+[references/handover.md](references/handover.md). Status values:
+
+| Status | Meaning |
+|---|---|
+| `ACTIVE` | `next_action` is runnable. |
+| `BLOCKED` | Waiting on the user. `next_action` names what is needed. |
+| `STALE_ANCHOR` | An anchor failed to resolve. Stop until the user resolves it. |
+| `DONE` | Plan consolidated and verified. |
 
 Refs are authoritative. Commit fields are advisory caches. Resolve both through
 [references/git-anchors.md](references/git-anchors.md) before use. A phase is

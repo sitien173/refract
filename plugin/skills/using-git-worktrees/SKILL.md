@@ -5,169 +5,141 @@ description: Use when starting feature work that needs isolation from current wo
 
 # Using Git Worktrees
 
-## Overview
+## Role
 
-Ensure work happens in an isolated workspace. Prefer your platform's native worktree tools. Fall back to manual git worktrees only when no native tool is available.
+This skill owns workspace isolation. It ends with a ready workspace on an
+attached branch. `coordinating-multi-model-work` owns everything after that,
+including OpenMCP registration.
 
-**Core principle:** Detect existing isolation first. Then use native tools. Then fall back to git. Never fight the harness.
+Order of preference: detect existing isolation, then use a native worktree
+tool, then fall back to `git worktree`. Never fight the harness.
 
-**Announce at start:** "I'm using the using-git-worktrees skill to set up an isolated workspace."
+## Constraints
+
+- Create at most one worktree per request.
+- Use absolute paths for every command after creation.
+- Write ignore rules only to `$(git rev-parse --git-common-dir)/info/exclude`.
+  A committed `.gitignore` imposes one contributor's layout on everyone.
+- Install dependencies and run tests with the project's own documented
+  commands. When none can be found, ask.
 
 ## Step 0: Detect Existing Isolation
-
-**Before creating anything, check if you are already in an isolated workspace.**
 
 ```bash
 GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
 GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
 BRANCH=$(git branch --show-current)
-```
-
-```bash
-# If this returns a path, you're in a submodule, not a worktree — treat as normal repo
+# Prints a path only inside a submodule. Treat a submodule as a normal repo.
 git rev-parse --show-superproject-working-tree 2>/dev/null
 ```
 
-**If `GIT_DIR != GIT_COMMON` (and not a submodule):** You are already in a linked worktree. Skip to Step 2 (Project Setup). Do NOT create another worktree.
+| Result | Action |
+|---|---|
+| `GIT_DIR != GIT_COMMON`, not a submodule, on a branch | Report "Already isolated at `<path>` on `<branch>`." Go to Step 2. |
+| Same, detached HEAD | Report it. Ask the user for a branch name, because coordination needs an attached branch. Go to Step 2. |
+| `GIT_DIR == GIT_COMMON`, or a submodule | Normal checkout. Continue below. |
 
-Report with branch state:
-- On a branch: "Already in isolated workspace at `<path>` on branch `<name>`."
-- Detached HEAD: "Already in isolated workspace at `<path>` (detached HEAD, externally managed). Branch creation needed at finish time."
+In a normal checkout, honor any worktree preference already declared in the
+user's instructions. Otherwise ask once:
 
-**If `GIT_DIR == GIT_COMMON` (or in a submodule):** You are in a normal repo checkout.
+> "Would you like me to set up an isolated worktree? It protects your current
+> branch from changes."
 
-Has the user already indicated their worktree preference in your instructions? If not, ask for consent before creating a worktree:
+If the user declines, work in place and go to Step 2.
 
-> "Would you like me to set up an isolated worktree? It protects your current branch from changes."
+## Step 1: Create the Workspace
 
-Honor any existing declared preference without asking. If the user declines consent, work in place and skip to Step 2.
+### 1a. Native tool
 
-## Step 1: Create Isolated Workspace
+With consent given, use a native worktree tool when one exists: a tool such as
+`EnterWorktree` or `WorktreeCreate`, a `/worktree` command, or a `--worktree`
+flag. Native tools own placement, branching, and cleanup. Running
+`git worktree add` beside one creates state the harness cannot see or manage.
+Then go to Step 2.
 
-**You have two mechanisms. Try them in this order.**
+### 1b. Git fallback
 
-### 1a. Native Worktree Tools (preferred)
+Use this only when no native tool exists.
 
-The user has asked for an isolated workspace (Step 0 consent). Do you already have a way to create a worktree? It might be a tool with a name like `EnterWorktree`, `WorktreeCreate`, a `/worktree` command, or a `--worktree` flag. If you do, use it and skip to Step 2.
+**Branch name.** Derive a kebab-case name from the task, or from the plan slug
+when one exists. Confirm it with the user. When the branch already exists,
+ask whether to reuse it or pick another name.
 
-Native tools handle directory placement, branch creation, and cleanup automatically. Using `git worktree add` when you have a native tool creates phantom state your harness can't see or manage.
+**Directory.** Take the first rung that matches:
 
-Only proceed to Step 1b if you have no native worktree tool available.
+1. A worktree directory declared in the user's instructions.
+2. An existing `.worktrees/` at the project root.
+3. An existing `worktrees/` at the project root.
+4. Default: `.worktrees/` at the project root.
 
-### 1b. Git Worktree Fallback
-
-**Only use this if Step 1a does not apply** — you have no native worktree tool available. Create a worktree manually using git.
-
-#### Directory Selection
-
-Follow this priority order. Explicit user preference always beats observed filesystem state.
-
-1. **Check your instructions for a declared worktree directory preference.** If the user has already specified one, use it without asking.
-
-2. **Check for an existing project-local worktree directory:**
-   ```bash
-   ls -d .worktrees 2>/dev/null     # Preferred (hidden)
-   ls -d worktrees 2>/dev/null      # Alternative
-   ```
-   If found, use it. If both exist, `.worktrees` wins.
-
-3. **If there is no other guidance available**, default to `.worktrees/` at the project root.
-
-#### Safety Verification (project-local directories only)
-
-**MUST verify directory is ignored before creating worktree:**
+**Ignore check.** A project-local directory must be ignored before creation:
 
 ```bash
-git check-ignore -q .worktrees 2>/dev/null || git check-ignore -q worktrees 2>/dev/null
+git check-ignore -q "$LOCATION"
 ```
 
-**If NOT ignored:** append the directory to `$(git rev-parse --git-common-dir)/info/exclude`, then proceed. Never write `.gitignore` for this; a committed ignore file imposes one contributor's layout on everyone.
+When it is not ignored, append it to the exclude file named in Constraints.
 
-**Why critical:** Prevents accidentally committing worktree contents to repository.
-
-#### Create the Worktree
+**Create:**
 
 ```bash
-# Determine path based on chosen location
-path="$LOCATION/$BRANCH_NAME"
-
-git worktree add "$path" -b "$BRANCH_NAME"
-cd "$path"
+git worktree add "$LOCATION/$BRANCH_NAME" -b "$BRANCH_NAME"
 ```
 
-**Sandbox fallback:** If `git worktree add` fails with a permission error (sandbox denial), tell the user the sandbox blocked worktree creation and you're working in the current directory instead. Then run setup and baseline tests in place.
-
-## OpenMCP Registration
-
-OpenMCP jobs run in the registered directory, and `project_register` takes a
-path. Create the worktree before the Coordinator's setup step, so the worktree
-root is what gets registered and receives its own `project_id`. A worktree
-registered this way owns its own job queue. Plan anchors under `refs/plans/`
-live in the shared `.git` directory and resolve from every worktree.
+On a permission or sandbox error, tell the user the sandbox blocked worktree
+creation, then run Steps 2 and 3 in the current directory.
 
 ## Step 2: Project Setup
 
-Auto-detect and run appropriate setup:
+Find the project's documented setup command in the README, a Makefile, or
+package scripts. When none is documented, select by lockfile:
 
-```bash
-# Node.js
-if [ -f package.json ]; then npm install; fi
+| File present | Command |
+|---|---|
+| `package-lock.json` | `npm ci` |
+| `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` |
+| `yarn.lock` | `yarn install` |
+| `uv.lock` | `uv sync` |
+| `poetry.lock` | `poetry install` |
+| `requirements.txt` only | `pip install -r requirements.txt` |
+| `Cargo.toml` | `cargo build` |
+| `go.mod` | `go mod download` |
 
-# Rust
-if [ -f Cargo.toml ]; then cargo build; fi
-
-# Python
-if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-if [ -f pyproject.toml ]; then poetry install; fi
-
-# Go
-if [ -f go.mod ]; then go mod download; fi
-```
+Several package managers or no match: ask the user. No manifest at all: skip
+setup.
 
 ## Step 3: Verify Clean Baseline
 
-Run tests to ensure workspace starts clean:
+Run the project's documented test command: a `test` script, a `test` make
+target, or the README instruction. When none is found, ask.
 
-```bash
-# Use project-appropriate command
-npm test / cargo test / pytest / go test ./...
+- **Tests fail:** report the failures and ask whether to proceed or
+  investigate. Proceeding past a red baseline is the user's call.
+- **Tests pass:** report ready.
+
+## Step 4: Hand Off
+
+When the work is coordinated, return to the Coordinator's setup. It registers
+this worktree root with OpenMCP, so the worktree gets its own `project_id` and
+job queue. Plan anchors under `refs/plans/` live in the shared `.git` directory
+and resolve from every worktree.
+
+## Output Format
+
+```text
+# WORKSPACE
+- Path: <absolute path>
+- Branch: <name> | detached, branch pending
+- Isolation: existing | native tool | git fallback | in place
+- Setup: <command> -> <result> | skipped
+- Baseline: <command> -> <N passed, M failed> | not run - <reason>
 ```
-
-**If tests fail:** Report failures, ask whether to proceed or investigate.
-
-**If tests pass:** Report ready.
-
-### Report
-
-```
-Worktree ready at <full-path>
-Tests passing (<N> tests, 0 failures)
-Ready to implement <feature-name>
-```
-
-## Quick Reference
-
-| Situation | Action |
-|-----------|--------|
-| Already in linked worktree | Skip creation (Step 0) |
-| In a submodule | Treat as normal repo (Step 0 guard) |
-| Native worktree tool available | Use it (Step 1a) |
-| No native tool | Git worktree fallback (Step 1b) |
-| `.worktrees/` exists | Use it (verify ignored) |
-| `worktrees/` exists | Use it (verify ignored) |
-| Both exist | Use `.worktrees/` |
-| Neither exists | Check instruction file, then default `.worktrees/` |
-| Directory not ignored | Append to `.git/info/exclude` |
-| Permission error on create | Sandbox fallback, work in place |
-| Tests fail during baseline | Report failures + ask |
-| No package.json/Cargo.toml | Skip dependency install |
 
 ## Common Rationalizations
 
 | Excuse | Reality |
-|--------|---------|
-| "I'm obviously not in a worktree — no need to check" | Run Step 0. Harness-created isolation and submodules both fool eyeballing; the detection commands settle it. |
-| "`git worktree add` is quicker than hunting for a native tool" | A native tool (e.g. `EnterWorktree`) owns placement, branching, and cleanup. Bypassing it is the #1 mistake — it creates phantom state your harness can't see or manage. |
-| "The worktree directory is surely ignored already" | Run `git check-ignore`. An unignored worktree directory commits the whole tree into the repo. |
-| "Any directory name works" | Explicit instructions beat an existing project-local directory, which beats the `.worktrees/` default. |
-| "The workspace is fresh — baseline tests can wait" | A dirty baseline makes every later failure ambiguous. Run the tests now; proceeding past failures is your human partner's call. |
+|---|---|
+| "I'm obviously not in a worktree" | Run Step 0. Harness isolation and submodules both fool eyeballing. |
+| "`git worktree add` is quicker than finding a native tool" | The native tool owns placement, branching, and cleanup. Bypassing it creates phantom state. |
+| "The directory is surely ignored" | Run `git check-ignore`. An unignored worktree directory commits the whole tree. |
+| "Baseline tests can wait" | A dirty baseline makes every later failure ambiguous. Run them now. |

@@ -3,64 +3,78 @@ name: using-superpowers
 description: Use when starting any conversation - establishes how to find and use skills, requiring skill invocation before ANY response including clarifying questions
 ---
 
-<EXTREMELY-IMPORTANT>
-If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.
+# Using Superpowers
 
-IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
+## Role
 
-This is not negotiable. You cannot rationalize your way out of this.
-</EXTREMELY-IMPORTANT>
+You route every request to its skills before acting. This file is also the
+single source of truth for coordination scope.
 
-## The Rule
+## Precedence
 
-**Invoke relevant or requested skills BEFORE any response or action** — including clarifying questions, exploring the codebase, or checking files. If it turns out wrong for the situation, you don't have to use it.
+1. User instructions: direct requests, CLAUDE.md, AGENTS.md, GEMINI.md.
+2. Skills.
+3. Default behavior.
 
-**Before entering plan mode:** if you haven't already brainstormed, invoke the brainstorming skill first.
+Skip a skill workflow only when the user explicitly says to.
 
-Then announce "Using [skill] to [purpose]" and follow the skill exactly. If it has a checklist, create a todo per item.
+## Workflow
 
-## Skill Priority
+1. **Match.** Before any response, clarifying question, file read, or command,
+   scan the available skills. Invoke every skill with a plausible match, even a
+   weak one, and every skill the user names.
+2. **Order.** Process skills run first and set the approach. Implementation
+   skills carry it out.
+   - "Let's build X" → `superpowers-ccg:brainstorming`, then implementation skills.
+   - "Fix this bug" → `superpowers-ccg:systematic-debugging`, then domain skills.
+   - Before plan mode on coordinated work, run `brainstorming` unless a
+     confirmed design already exists.
+3. **Announce.** Say "Using <skill> to <purpose>." Create one todo per
+   checklist item the skill defines.
+4. **Classify scope** with the rule below and emit the scope line.
+5. **Follow** the skill exactly. If on reading it does not fit, state why in
+   one line and drop it.
 
-When multiple skills apply, process skills come first — they set the approach, then implementation skills (test-driven-development, etc.) carry it out. Brainstorming and systematic-debugging are the most common process skills, but the rule holds for any of them.
+## Scope Decision
 
-- "Let's build X" → superpowers-ccg:brainstorming first, then implementation skills.
-- "Fix this bug" → superpowers-ccg:systematic-debugging first, then domain skills.
+Emit one line before acting:
 
-## Scope Check
+```text
+Scope: direct | coordinated - <deciding signal>
+```
 
-Skills always apply; OpenMCP coordination does not. Before loading
-`coordinating-multi-model-work`, classify the request. Do the work directly with
-your own tools, and say so in one line, when it is:
+The work is **coordinated** when any risk signal is present, whatever its size:
+
+- it spans multiple phases or components,
+- it carries real correctness, security, data-loss, or migration risk,
+- it needs a design decision,
+- the user asks for a plan.
+
+Otherwise it is **direct**. Typical direct work:
 
 - a single-file or trivially scoped edit,
 - documentation, comments, config, or formatting,
 - a rename, string change, dependency bump, or one-line fix,
 - anything the user asks you to just do directly.
 
-Load `coordinating-multi-model-work` when work spans multiple phases or
-components, carries real correctness or security risk, needs a design decision,
-or the user asks for a plan. Process skills such as systematic-debugging and
-test-driven-development still apply to direct work.
+A risk signal outranks these examples. A one-line auth check or a major-version
+bump is coordinated. When the signal is genuinely ambiguous, ask one bounded
+question: direct or planned.
 
-## Red Flags
+Direct work uses your own tools and skips all three gates. Process skills such
+as `systematic-debugging`, `test-driven-development`, and
+`verifying-before-completion` still apply. Coordinated work loads
+`coordinating-multi-model-work`.
 
-These thoughts mean STOP—you're rationalizing:
+## Rationalization Check
 
-| Thought | Reality |
-|---------|---------|
-| "This is just a simple question" | Questions are tasks. Check for skills. |
-| "I need more context first" | Skill check comes BEFORE clarifying questions. |
-| "Let me explore the codebase first" | Skills tell you HOW to explore. Check first. |
-| "I can check git/files quickly" | Files lack conversation context. Check for skills. |
-| "Let me gather information first" | Skills tell you HOW to gather information. |
-| "This doesn't need a formal skill" | If a skill exists, use it. |
-| "I remember this skill" | Skills evolve. Read current version. |
-| "This doesn't count as a task" | Action = task. Check for skills. |
-| "The skill is overkill" | Simple things become complex. Use it. |
-| "I'll just do this one thing first" | Check BEFORE doing anything. |
-| "This feels productive" | Undisciplined action wastes time. Skills prevent this. |
-| "I know what that means" | Knowing the concept ≠ using the skill. Invoke it. |
+Each thought on the left signals a skipped skill check. Do the right column.
 
-## User Instructions
-
-User instructions (CLAUDE.md, AGENTS.md, GEMINI.md, etc, direct requests) take precedence over skills, which in turn override default behavior. Only skip skill workflows or instructions when your human partner has explicitly told you to.
+| Thought | Do instead |
+|---|---|
+| "This is just a simple question" | Questions are tasks. Run the match step. |
+| "I need more context first" | Match first. Skills define how to gather context. |
+| "Let me explore the codebase first" | Match first. Skills define how to explore. |
+| "I remember this skill" | Read the current version. Skills change. |
+| "The skill is overkill" | Invoke it. The scope decision keeps small work small. |
+| "I'll just do this one thing first" | Match before the first action. |

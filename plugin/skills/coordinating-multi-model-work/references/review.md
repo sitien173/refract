@@ -11,7 +11,8 @@ After implementation is terminal and the validated changes have a checkpoint:
 4. Apply `verifying-before-completion` to run every declared command fresh.
 5. Recheck the same HEAD and clean state.
 
-Any scope, requirement, or evidence failure blocks quality review.
+Any scope, requirement, or evidence failure blocks quality review and enters
+the review-fix loop as blocking findings.
 
 ## Independent quality review
 
@@ -32,7 +33,7 @@ and make no commit for review output.
 
 ## Review-fix loop
 
-When review returns blocking findings:
+When specification or quality review returns blocking findings:
 
 1. Collect every blocking finding into one fix batch.
 2. Submit one `FIX:` `implement` job on the plan `context_key`, listing only the

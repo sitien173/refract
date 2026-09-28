@@ -5,35 +5,78 @@ description: "Use when a feature or idea needs design before planning - clarifie
 
 # Brainstorming Ideas Into Designs
 
-Load `coordinating-multi-model-work` first. This skill owns design dialogue, not
-OpenMCP mechanics or implementation planning.
+## Role
+
+This skill owns design dialogue. Load `coordinating-multi-model-work` first; it
+owns OpenMCP mechanics, Git anchors, and the plan slug. `writing-plans` owns
+implementation planning.
+
+## Constraints
+
+- User requirements override consultation advice.
+- Ask one question per message. Offer two to four bounded choices when the
+  answer space allows it.
+- Produce design only. Product code, plans, and task lists belong to later
+  skills.
+- Apply YAGNI: cut every feature the confirmed purpose does not need.
 
 ## Workflow
 
-1. Inspect only the project context needed to understand the request.
-2. Ask one question at a time; prefer bounded choices when useful.
-3. Clarify purpose, users, constraints, non-goals, success criteria, and risks.
-4. For non-trivial design, request one focused Gate 1 consultation and reconcile
-   its advice with user requirements. When OpenMCP is unavailable, continue the
-   dialogue and record the skipped consultation in the design document.
-5. Present two or three viable approaches, their trade-offs, and a
-   recommendation.
-6. Develop the selected design in short sections; confirm each section.
-7. Cover architecture, data flow, errors, migration, and testing as applicable.
-8. Write the confirmed design, then offer `writing-plans`.
+Each step ends on its stated completion criterion.
 
-## Rules
+1. **Context.** Read only files that bear on the request. Done when you can
+   name every component the idea touches.
+2. **Clarify.** Resolve purpose, users, constraints, non-goals, success
+   criteria, and risks. Done when each has a user-confirmed answer or an
+   explicit `n/a`.
+3. **Consult.** For non-trivial design, request one focused Gate 1
+   consultation through the Coordinator. Non-trivial means any of: a new
+   component, a cross-component change, a data or API contract change, a
+   security impact, or two defensible approaches. Skip it for fully specified,
+   low-risk routine work. When consultation is unavailable or fails, continue
+   and record the reason in the design.
+4. **Approaches.** Present two or three viable approaches with trade-offs and a
+   recommendation. Where consultation conflicts with the user, show both. Done
+   when the user selects one.
+5. **Design.** Develop the selected approach in short sections: architecture,
+   data flow, errors, migration, and testing, as applicable. Confirm each
+   section before the next. When an answer invalidates an earlier section,
+   revisit that section first.
+6. **Write.** Propose a slug and confirm it. The Coordinator sets the plan
+   `base` anchor at a clean root. Then write `docs/plans/<slug>/DESIGN.md` in
+   the format below.
+7. **Approve.** Ask for explicit approval of the whole document. Done when the
+   user approves. Then offer `writing-plans`.
 
-- User requirements override consultation.
-- Do not plan implementation before design confirmation.
-- Do not ask multiple clarification questions at once.
-- Do not implement product changes.
+## Edge Cases
 
-## Key Principles
+- **Direct scope.** The request is direct under `using-superpowers`: say so and
+  leave this skill.
+- **Design waived.** The user wants to skip design: confirm once, write a
+  `DESIGN.md` whose status is `Waived by user`, and offer `writing-plans`.
+- **Existing plan.** `docs/plans/<slug>/` already exists: ask whether to revise
+  it or pick a new slug. Keep the existing files until the user decides.
+- **Dialogue abandoned.** The user stops answering: summarize confirmed and
+  open items in chat and write no file.
 
-- **One question at a time** - Don't overwhelm with multiple questions
-- **Multiple choice preferred** - Easier to answer than open-ended when possible
-- **YAGNI ruthlessly** - Remove unnecessary features from all designs
-- **Explore alternatives** - Always propose 2-3 approaches before settling
-- **Incremental validation** - Present design in sections, validate each
-- **Be flexible** - Go back and clarify when something doesn't make sense
+## Output Format
+
+```markdown
+# <Topic> Design
+
+**Status:** Confirmed <YYYY-MM-DD> | Waived by user
+**Consultation:** <one-line outcome> | skipped - <reason>
+
+## Purpose
+## Users and Success Criteria
+## Constraints and Non-Goals
+## Chosen Approach
+<approach; one line per rejected alternative with its reason>
+## Architecture and Data Flow
+## Errors and Edge Cases
+## Migration
+## Testing
+## Risks and Open Questions
+```
+
+Mark an inapplicable section `n/a` rather than deleting it.
