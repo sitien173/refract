@@ -57,8 +57,8 @@ final plan consolidation replaces these checkpoints with one branch commit.
 Write `docs/plans/<slug>/phase-<NN>/prompt.md`:
 
 ```markdown
-## Original User Request
-<one or two compressed sentences>
+## User Request
+<clean, concise summary of the user request>
 
 ## Phase
 <one outcome>
@@ -77,9 +77,11 @@ Write `docs/plans/<slug>/phase-<NN>/prompt.md`:
 - <acceptance criterion>
 - `<fresh verification command>`
 
+## SKILLS
+- <skill name>: path/to/skill-prompt.md
+
 ## Rules
-Follow the supplied worker contract. Stay within scope. Maintain this phase's
-`notes.md` and `journal.md`.
+Follow the supplied worker contract, project conventions, and the ERP format. Do not edit files outside the allowed set. Stay within scope. Maintain this phase's `notes.md` and `journal.md`.
 
 ## Response Format
 Return the ERP `# EXTERNAL RESPONSE` block and matching status line.
