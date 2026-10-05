@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import uuid
@@ -26,6 +27,7 @@ from openmcp.models import (
     TargetView,
     job_resource_uri,
 )
+from openmcp.notifications import send_job_notification
 from openmcp.planning import execution_plan_data, resolve_execution_plan
 from openmcp.scheduler import ProjectScheduler
 from openmcp.streaming import DEFAULT_RETENTION_DAYS, JobStreamHub
@@ -74,12 +76,51 @@ class Runtime:
         log.debug("Runtime initialized", extra={"event": "runtime.initialized", "database": config.database_path.as_posix(), "max_jobs": config.max_jobs})
 
     async def _notify_job_resource(self, resource_uri: str) -> None:
+        job: JobView | None = None
+        lookup_error: Exception | None = None
+        job_id = resource_uri.removeprefix("openmcp://jobs/")
+        if self._catalog.notifications.enabled:
+            try:
+                job = self.database.job(job_id)
+            except Exception as exc:
+                lookup_error = exc
         try:
             await self.notifier(resource_uri)
         except Exception:
             log.warning(
                 "Job resource notification failed",
                 extra={"event": "job.resource_notification_failed", "resource_uri": resource_uri},
+                exc_info=True,
+            )
+        if not self._catalog.notifications.enabled:
+            return
+        if lookup_error is not None:
+            log.warning(
+                "Desktop notification failed",
+                extra={"event": "job.desktop_notification_failed", "job_id": job_id},
+                exc_info=(
+                    type(lookup_error),
+                    lookup_error,
+                    lookup_error.__traceback__,
+                ),
+            )
+            return
+        if job is None or job.state not in TERMINAL_STATES:
+            return
+        try:
+            project = self.database.project(job.project_id)
+            if project is None:
+                return
+            ok = await asyncio.to_thread(send_job_notification, job, project.alias)
+            if not ok:
+                log.warning(
+                    "Desktop notification failed",
+                    extra={"event": "job.desktop_notification_failed", "job_id": job_id},
+                )
+        except Exception:
+            log.warning(
+                "Desktop notification failed",
+                extra={"event": "job.desktop_notification_failed", "job_id": job_id},
                 exc_info=True,
             )
 

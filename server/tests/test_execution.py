@@ -8,10 +8,11 @@ import subprocess
 import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from openmcp.config import TargetConfig, TargetSelection
+from openmcp.config import NotificationsConfig, TargetConfig, TargetSelection
 from openmcp.database import Database
 from openmcp.drivers import DriverResult
 from openmcp.planning import execution_plan_data, resolve_execution_plan, target_execution_key
@@ -3013,5 +3014,351 @@ async def test_recovery_internal_calls_count_one_selected_target_attempt(tmp_pat
         # Three internal calls on primary plus one failover to secondary count as two selected targets.
         assert job.attempts == 2
         assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary", "secondary"]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_desktop_notifications_succeeded_and_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
+    mock_send = MagicMock(return_value=True)
+    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+
+    runtime = Runtime(catalog)
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(project.id, "implement", "inspect")
+        job = await runtime.wait(submission.job_id, 10)
+        assert job.state == "succeeded"
+        assert mock_send.call_count == 1
+        called_job, called_alias = mock_send.call_args[0]
+        assert called_job.id == submission.job_id
+        assert called_job.state == "succeeded"
+        assert called_alias == project.alias
+
+        mock_send.reset_mock()
+        runtime.drivers = MutatingFailureDrivers()
+        fail_sub = await runtime.submit(project.id, "implement", "fail")
+        fail_job = await runtime.wait(fail_sub.job_id, 10)
+        assert fail_job.state == "failed"
+        assert mock_send.call_count == 1
+        called_job2, called_alias2 = mock_send.call_args[0]
+        assert called_job2.id == fail_sub.job_id
+        assert called_job2.state == "failed"
+        assert called_alias2 == project.alias
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
+    mock_send = MagicMock(return_value=True)
+    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+
+    drivers = BlockingDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        first = await runtime.submit(project.id, "implement", "block")
+        second = await runtime.submit(project.id, "review", "never run")
+        await drivers.started.wait()
+        cancelled_action = await runtime.cancel(second.job_id)
+        assert cancelled_action.state == "cancelled"
+        assert (await runtime.wait(second.job_id, 10)).state == "cancelled"
+        assert mock_send.call_count == 1
+        called_job, called_alias = mock_send.call_args[0]
+        assert called_job.id == second.job_id
+        assert called_job.state == "cancelled"
+        assert called_alias == project.alias
+
+        await runtime.cancel(first.job_id)
+        await runtime.wait(first.job_id, 10)
+    finally:
+        await runtime.close()
+
+    mock_send.reset_mock()
+    rec_home = tmp_path / "home_recovery"
+    rec_catalog = replace(config(rec_home), notifications=NotificationsConfig(enabled=True))
+    database = Database(rec_catalog.database_path)
+    rec_proj = database.upsert_project(project_id="rec-proj", alias="recovery-project", root=root.as_posix())
+    plan = resolve_execution_plan(get_workflow("implement"), rec_catalog, "balanced")
+    database.create_job(
+        job_id="interrupted-job",
+        project_id=rec_proj.id,
+        workflow="implement",
+        profile="balanced",
+        prompt="interrupted",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="recovery",
+    )
+    database.start_job("interrupted-job")
+    database.close()
+
+    runtime_rec = Runtime(rec_catalog)
+    await runtime_rec.start()
+    try:
+        interrupted_job = runtime_rec.database.job("interrupted-job")
+        assert interrupted_job and interrupted_job.state == "interrupted"
+        assert mock_send.call_count == 1
+        called_job3, called_alias3 = mock_send.call_args[0]
+        assert called_job3.id == "interrupted-job"
+        assert called_job3.state == "interrupted"
+        assert called_alias3 == "recovery-project"
+    finally:
+        await runtime_rec.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_desktop_notifications_disabled_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    mock_send = MagicMock(return_value=True)
+    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(project.id, "implement", "inspect")
+        await runtime.wait(submission.job_id, 10)
+        assert mock_send.call_count == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_desktop_notifications_no_call_on_queued_running_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
+    mock_send = MagicMock(return_value=True)
+    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+
+    runtime = Runtime(catalog)
+    runtime.drivers = RetryDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(project.id, "implement", "retry")
+        assert (await runtime.wait(submission.job_id, 10)).state == "failed"
+        assert mock_send.call_count == 1
+
+        retried = await runtime.retry(submission.job_id)
+        assert retried.job_id == submission.job_id
+        assert mock_send.call_count == 1
+        assert (await runtime.wait(retried.job_id, 10)).state == "failed"
+        assert mock_send.call_count == 2
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_desktop_notifications_failure_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    root = repository(tmp_path)
+    catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
+    notifications: list[str] = []
+
+    async def notify(uri: str) -> None:
+        notifications.append(uri)
+
+    mock_send_false = MagicMock(return_value=False)
+    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send_false)
+
+    runtime = Runtime(catalog, notifier=notify)
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        caplog.clear()
+        sub1 = await runtime.submit(project.id, "implement", "inspect")
+        job1 = await runtime.wait(sub1.job_id, 10)
+        assert job1.state == "succeeded"
+        assert notifications == [sub1.resource_uri] * 3
+        failed_records = [
+            r for r in caplog.records
+            if getattr(r, "event", None) == "job.desktop_notification_failed"
+        ]
+        assert len(failed_records) == 1
+        assert failed_records[0].job_id == sub1.job_id
+
+        mock_send_raise = MagicMock(side_effect=RuntimeError("notification daemon down"))
+        monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send_raise)
+        notifications.clear()
+        caplog.clear()
+
+        sub2 = await runtime.submit(project.id, "implement", "inspect2")
+        job2 = await runtime.wait(sub2.job_id, 10)
+        assert job2.state == "succeeded"
+        assert notifications == [sub2.resource_uri] * 3
+        failed_records2 = [
+            r for r in caplog.records
+            if getattr(r, "event", None) == "job.desktop_notification_failed"
+        ]
+        assert len(failed_records2) == 1
+        assert failed_records2[0].job_id == sub2.job_id
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_desktop_notifications_live_catalog_toggle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    mock_send = MagicMock(return_value=True)
+    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        sub1 = await runtime.submit(project.id, "implement", "inspect1")
+        await runtime.wait(sub1.job_id, 10)
+        assert mock_send.call_count == 0
+
+        runtime._catalog = replace(runtime._catalog, notifications=NotificationsConfig(enabled=True))
+        sub2 = await runtime.submit(project.id, "implement", "inspect2")
+        await runtime.wait(sub2.job_id, 10)
+        assert mock_send.call_count == 1
+
+        runtime._catalog = replace(runtime._catalog, notifications=NotificationsConfig(enabled=False))
+        sub3 = await runtime.submit(project.id, "implement", "inspect3")
+        await runtime.wait(sub3.job_id, 10)
+        assert mock_send.call_count == 1
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_retry_preserves_terminal_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
+    mock_send = MagicMock(return_value=True)
+    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+
+    database = Database(catalog.database_path)
+    project = database.upsert_project(project_id="proj-1", alias="retry-project", root=root.as_posix())
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    database.create_job(
+        job_id="failed-1",
+        project_id=project.id,
+        workflow="implement",
+        profile="balanced",
+        prompt="fail",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="retry-ctx",
+    )
+    database.finish_job("failed-1", "failed")
+    database.close()
+
+    first_publish_entered = asyncio.Event()
+    release_first_publish = asyncio.Event()
+    paused_once = False
+
+    async def pausing_notifier(uri: str) -> None:
+        nonlocal paused_once
+        if not paused_once:
+            paused_once = True
+            first_publish_entered.set()
+            await release_first_publish.wait()
+
+    runtime = Runtime(catalog, notifier=pausing_notifier)
+    try:
+        publish_task = asyncio.create_task(
+            runtime._notify_job_resource("openmcp://jobs/failed-1")
+        )
+        await first_publish_entered.wait()
+
+        retry_result = await runtime.retry("failed-1")
+        assert retry_result.state == "queued"
+        assert runtime.database.job("failed-1").state == "queued"
+
+        release_first_publish.set()
+        await publish_task
+
+        assert mock_send.call_count == 1
+        called_job, called_alias = mock_send.call_args[0]
+        assert called_job.id == "failed-1"
+        assert called_job.state == "failed"
+        assert called_alias == "retry-project"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_desktop_notifications_snapshot_lookup_failure_warning_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
+    notifications: list[str] = []
+
+    async def notify(uri: str) -> None:
+        notifications.append(uri)
+
+    runtime = Runtime(catalog, notifier=notify)
+    try:
+        lookup_exc = RuntimeError("database locked")
+        monkeypatch.setattr(
+            runtime.database,
+            "job",
+            MagicMock(side_effect=lookup_exc),
+        )
+
+        caplog.clear()
+        await runtime._notify_job_resource("openmcp://jobs/job-snapshot-err")
+
+        assert notifications == ["openmcp://jobs/job-snapshot-err"]
+        failed_records = [
+            r for r in caplog.records
+            if getattr(r, "event", None) == "job.desktop_notification_failed"
+        ]
+        assert len(failed_records) == 1
+        assert failed_records[0].job_id == "job-snapshot-err"
+        assert failed_records[0].exc_info is not None
+        exc_type, exc_val, exc_tb = failed_records[0].exc_info
+        assert exc_type is RuntimeError
+        assert exc_val is lookup_exc
+        assert exc_tb is not None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_desktop_notifications_disabled_does_not_lookup_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = config(tmp_path / "home")
+    notifications: list[str] = []
+
+    async def notify(uri: str) -> None:
+        notifications.append(uri)
+
+    runtime = Runtime(catalog, notifier=notify)
+    try:
+        mock_job = MagicMock(side_effect=AssertionError("database.job should not be called when disabled"))
+        monkeypatch.setattr(runtime.database, "job", mock_job)
+
+        await runtime._notify_job_resource("openmcp://jobs/job-disabled")
+        assert notifications == ["openmcp://jobs/job-disabled"]
+        mock_job.assert_not_called()
     finally:
         await runtime.close()

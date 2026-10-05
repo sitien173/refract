@@ -62,6 +62,13 @@ class LoggingConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class NotificationsConfig:
+    """Desktop notification settings."""
+
+    enabled: bool = False
+
+
+@dataclass(slots=True, frozen=True)
 class DaemonConfig:
     home: Path
     host: str = "127.0.0.1"
@@ -81,6 +88,7 @@ class DaemonConfig:
     config_modification_time: str = ""
     config_loaded_at: str = ""
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
 
     @property
     def database_path(self) -> Path:
@@ -511,6 +519,19 @@ def _logging_config(raw: Any, home: Path) -> LoggingConfig:
     )
 
 
+def _notifications_config(raw: Any) -> NotificationsConfig:
+    if raw is None:
+        return NotificationsConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("[notifications] must be a TOML table")
+    unknown = set(raw) - {"enabled"}
+    if unknown:
+        raise ValueError(f"Unsupported notifications settings: {sorted(unknown)}")
+    if "enabled" in raw and not isinstance(raw["enabled"], bool):
+        raise ValueError("notifications.enabled must be true or false")
+    return NotificationsConfig(enabled=raw.get("enabled", False))
+
+
 def load_config(path: Path | None = None) -> DaemonConfig:
     home = openmcp_home()
     config_path = path or home / "config.toml"
@@ -565,6 +586,7 @@ def _load_config_values(
         "logging",
         "targets",
         "profiles",
+        "notifications",
     }
     if unsupported:
         raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
@@ -621,6 +643,7 @@ def _load_config_values(
         profiles=profiles,
         profile_declarations=profile_declarations,
         logging=_logging_config(raw.get("logging"), home),
+        notifications=_notifications_config(raw.get("notifications")),
     )
 
 
@@ -686,6 +709,7 @@ def _load_project_config_values(project_root: Path, base: DaemonConfig) -> Daemo
 __all__ = [
     "DaemonConfig",
     "LoggingConfig",
+    "NotificationsConfig",
     "ProfileDeclaration",
     "TargetConfig",
     "TargetSelection",

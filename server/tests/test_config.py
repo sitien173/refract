@@ -4,7 +4,15 @@ import json
 
 import pytest
 
-from openmcp.config import TargetConfig, load_config, load_project_config, load_task_guide, validate_target_args
+from openmcp.config import (
+    NotificationsConfig,
+    TargetConfig,
+    _notifications_config,
+    load_config,
+    load_project_config,
+    load_task_guide,
+    validate_target_args,
+)
 from openmcp.planning import resolve_execution_plan
 from openmcp.workflows import get_workflow
 from tests.orchestration_helpers import config
@@ -576,3 +584,92 @@ def test_daemon_integer_types_are_strict(tmp_path, setting, value, expected) -> 
 
     with pytest.raises(ValueError, match=expected):
         load_config(path)
+
+
+def test_notifications_config_defaults_disabled_when_absent(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config(), encoding="utf-8")
+
+    catalog = load_config(path)
+
+    assert catalog.notifications.enabled is False
+
+
+def test_notifications_config_defaults_disabled_when_empty_table(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config() + "\n[notifications]\n", encoding="utf-8")
+
+    catalog = load_config(path)
+
+    assert catalog.notifications.enabled is False
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [
+        ("enabled = true", True),
+        ("enabled = false", False),
+    ],
+)
+def test_notifications_config_parses_boolean_flag(tmp_path, setting, expected) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config() + f"\n[notifications]\n{setting}\n", encoding="utf-8")
+
+    catalog = load_config(path)
+
+    assert catalog.notifications.enabled is expected
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "[notifications]\nextra = 1\n",
+        '[notifications]\nenabled = "yes"\n',
+        "[notifications]\nenabled = 1\n",
+        "notifications = 1\n",
+    ],
+)
+def test_notifications_config_strict_validation(tmp_path, content) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(f"{content}\n{_explicit_config()}", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_config(path)
+
+
+def test_project_config_rejects_notifications(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / ".openmcp").mkdir(parents=True)
+    (root / ".openmcp" / "config.toml").write_text(
+        "[notifications]\nenabled = true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported project config sections"):
+        load_project_config(root, config(tmp_path / "home"))
+
+
+def test_notifications_config_dataclass_defaults_and_immutability() -> None:
+    notif_config = NotificationsConfig()
+    assert notif_config.enabled is False
+    with pytest.raises(AttributeError):
+        notif_config.enabled = True  # type: ignore[misc]
+
+
+def test_notifications_config_helper_validation() -> None:
+    assert _notifications_config(None) == NotificationsConfig(enabled=False)
+    assert _notifications_config({}) == NotificationsConfig(enabled=False)
+    assert _notifications_config({"enabled": True}) == NotificationsConfig(enabled=True)
+    assert _notifications_config({"enabled": False}) == NotificationsConfig(enabled=False)
+
+    with pytest.raises(ValueError, match=r"\[notifications\] must be a TOML table"):
+        _notifications_config("not a table")
+
+    with pytest.raises(ValueError, match=r"Unsupported notifications settings"):
+        _notifications_config({"extra": 1})
+
+    with pytest.raises(ValueError, match="notifications.enabled must be true or false"):
+        _notifications_config({"enabled": "yes"})
+
+    with pytest.raises(ValueError, match="notifications.enabled must be true or false"):
+        _notifications_config({"enabled": 1})
