@@ -12,9 +12,8 @@ This skill owns diagnosis. `coordinating-multi-model-work` owns delegation;
 
 ## Iron Law
 
-```text
-NO FIX WITHOUT ROOT-CAUSE EVIDENCE
-```
+Change code only after evidence confirms the root cause. A fix without one
+hides the defect instead of removing it.
 
 ## Workflow
 

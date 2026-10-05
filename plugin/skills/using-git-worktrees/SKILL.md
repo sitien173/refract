@@ -136,12 +136,3 @@ without `docs/plans/`; copy the plan directory in before resuming there.
 - Setup: <command> -> <result> | skipped
 - Baseline: <command> -> <N passed, M failed> | not run - <reason>
 ```
-
-## Common Rationalizations
-
-| Excuse | Reality |
-|---|---|
-| "I'm obviously not in a worktree" | Run Step 0. Harness isolation and submodules both fool eyeballing. |
-| "`git worktree add` is quicker than finding a native tool" | The native tool owns placement, branching, and cleanup. Bypassing it creates phantom state. |
-| "The directory is surely ignored" | Run `git check-ignore`. An unignored worktree directory commits the whole tree. |
-| "Baseline tests can wait" | A dirty baseline makes every later failure ambiguous. Run them now. |

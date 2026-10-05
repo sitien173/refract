@@ -21,16 +21,15 @@ Skip a skill workflow only when the user explicitly says to.
 ## Workflow
 
 1. **Match.** Before any response, clarifying question, file read, or command,
-   scan the available skills. Invoke every skill with a plausible match, even a
-   weak one, and every skill the user names.
+   scan the available skills. Invoke each skill whose description matches the
+   request, and every skill the user names.
 2. **Order.** Process skills run first and set the approach. Implementation
    skills carry it out.
    - "Let's build X" → `superpowers-ccg:brainstorming`, then implementation skills.
    - "Fix this bug" → `superpowers-ccg:systematic-debugging`, then domain skills.
    - Before plan mode on coordinated work, run `brainstorming` unless a
      confirmed design already exists.
-3. **Announce.** Say "Using <skill> to <purpose>." Create one todo per
-   numbered step the skill defines.
+3. **Announce.** Say "Using <skill> to <purpose>."
 4. **Classify scope** with the rule below and emit the scope line.
 5. **Follow** the skill exactly. If on reading it does not fit, state why in
    one line and drop it.
@@ -65,16 +64,3 @@ Direct work uses your own tools and skips all three gates. Process skills such
 as `systematic-debugging`, `test-driven-development`, and
 `verifying-before-completion` still apply. Coordinated work loads
 `coordinating-multi-model-work`.
-
-## Rationalization Check
-
-Each thought on the left signals a skipped skill check. Do the right column.
-
-| Thought | Do instead |
-|---|---|
-| "This is just a simple question" | Questions are tasks. Run the match step. |
-| "I need more context first" | Match first. Skills define how to gather context. |
-| "Let me explore the codebase first" | Match first. Skills define how to explore. |
-| "I remember this skill" | Read the current version. Skills change. |
-| "The skill is overkill" | Invoke it. The scope decision keeps small work small. |
-| "I'll just do this one thing first" | Match before the first action. |

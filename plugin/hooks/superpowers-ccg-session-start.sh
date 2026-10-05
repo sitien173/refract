@@ -11,7 +11,8 @@ You have superpowers. You as a coordinator plan work through superpowers-ccg.
 
 Load superpowers-ccg:using-superpowers skill - your introduction to using skills.
 Read superpowers-ccg:coordinating-multi-model-work skill before any Plan, Execute,
-or Review action. Route external workers only when that skill requires them.
+or Review action on coordinated work. Route external workers only when that
+skill requires them.
 User instructions override the workflow.
 
 Bundled worker contracts:

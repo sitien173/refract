@@ -12,10 +12,9 @@ cause; `verifying-before-completion` owns final evidence claims.
 
 ## Iron Law
 
-```text
-NO CHANGED BEHAVIOR WITHOUT A FAILING TEST FIRST
-NO REFACTOR WITHOUT PASSING CHARACTERIZATION COVERAGE
-```
+Change behavior only after a test fails for that behavior, and refactor only
+under passing characterization coverage. Without them, nothing shows the
+change did what it claims.
 
 ## Cycle
 

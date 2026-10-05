@@ -38,7 +38,7 @@ first; it owns routing, execution, anchors, and Git.
 6. **Commit.** Specify one Conventional Commit message for the completed plan.
 7. **Write.** Create `PLAN.md` and `.handover.md`. Under `tracked`, checkpoint
    the plan artifacts.
-8. **Confirm.** Ask the user to approve the phase list before any detailing.
+8. **Confirm.** Ask the user to approve the plan before phase detailing.
 
 ## Recommended Next Step
 

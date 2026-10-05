@@ -12,9 +12,8 @@ the revision, diff ranges, and review sequence.
 
 ## Iron Law
 
-```text
-NO COMPLETION CLAIM WITHOUT FRESH VERIFICATION EVIDENCE
-```
+Claim completion only with verification evidence from the pinned revision.
+Stale or assumed results prove nothing about the current code.
 
 ## Method
 
