@@ -126,6 +126,18 @@ and resolve from every worktree. In `untracked` plan mode, a new worktree starts
 without `docs/plans/`; copy the plan directory in before resuming there.
 `.git/info/exclude` is shared, so the copy stays excluded.
 
+**Symlinked `docs`.** In worktree mode, check whether `docs` is a symlink to the
+shared checkout's `docs`:
+
+```bash
+test -L <worktree path>/docs && readlink -f <worktree path>/docs
+```
+
+When it is, the Write/Edit tool refuses to create plan files under `docs/plans/<slug>/`.
+Do not retry Write/Edit. Create/Update `PLAN.md`, `.handover.md`, and the phase prompt through
+the shell into `docs/plans/<slug>/` of the shared checkout, using the resolved
+path above.
+
 ## Output Format
 
 ```text
