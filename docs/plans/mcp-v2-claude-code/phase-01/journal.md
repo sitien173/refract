@@ -130,7 +130,7 @@ TASK_COMPLETE
 - Pre-restart service state: active; MainPID 2443; started Tue 2026-10-06 11:22:10 +07.
 - Dashboard preflight: `npm --prefix web test` passed, 196 tests in 18 files. Pre-existing React act warnings were emitted; no dashboard edit was made.
 - Daemon restart: completed with no global active or queued jobs. Service active; MainPID 482030; started Wed 2026-10-07 14:01:37 +07.
-- Main-conversation six-minute wait: pending.
+- Main-conversation six-minute wait: PASS, job `7acdca05-746e-43e7-8834-7e85419d25bb`, one native Claude Code `job_wait(timeout_s=3600)` returned `succeeded`. The call ran from 2026-10-07T07:08:39.036Z to 2026-10-07T07:14:46.363Z, duration 367327.53 ms. Timer stdout: `{"probe": "phase-01-main", "elapsed_s": 370.0000799510017}`. Daemon log lines 11332 and 11338 both show progress_token_present=true. The worker changed no file; Git differs from pre-job HEAD only by the coordinator's handover job reference.
 - Subagent six-minute wait: pending.
 - Progress token log: true for Claude Code request_id 35 at 2026-10-07T07:01:45.188Z, daemon PID 482030, in /home/ngosi/.openmcp/openmcp.log lines 11320-11321.
 - Unknown job call: `job_wait(job_id="mcp-v2-phase-01-unknown-job", timeout_s=0)`.
@@ -140,6 +140,13 @@ TASK_COMPLETE
 - Probe submission failed before job creation at 2026-10-07T07:03:50.272Z. Exact daemon cause: `Profile 'base' does not map workflow 'other'`; caller received `Error executing tool job_submit`.
 - Catalog advertises base and workflow other separately but does not show whether they are mapped together. Project active jobs remain empty. Waiting on explicit probe-route approval; no source changes or configuration edits were made.
 - User explicitly approved the existing implement/implement route for both timer probes after the other/base rejection. This is a user-authorized route override, not a silent substitution. No configuration changes are authorized or needed. Both probes must leave the working tree unchanged.
+
+## SDK Error-Delivery Evidence
+
+- Package metadata on 2026-10-07: project test SDK 2.0.0; live pipx SDK 2.3.0. No environment was changed.
+- Current official v2 docs, fetched through Context7 after library resolution: https://py.sdk.modelcontextprotocol.io/v2/servers/handling-errors and https://py.sdk.modelcontextprotocol.io/v2/whats-new.
+- The expected model-visible exception is `mcp.server.mcpserver.exceptions.ToolError`. Ordinary exceptions become masked UnexpectedToolError results. `MCPError` produces a JSON-RPC protocol error rather than the required model-visible isError result.
+- Phase 4 must make OpenMCPError compatible with SDK ToolError and test actual client error delivery against both the locked 2.0.0 environment and live 2.3.0 environment. The confirmed design's assumption that any exception string reaches the model is disproven by the live unknown-job and missing-mapping probes.
 
 ## Final Checkpoint
 
