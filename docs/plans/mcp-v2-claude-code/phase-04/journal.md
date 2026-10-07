@@ -8,7 +8,7 @@
 - Implementation Profile: implement
 - Consultation Profile: consult
 - Review Profile: review
-- Consultation Job: pending
+- Consultation Job: 944810ff-2093-41f0-acfc-e644f4d5dedd
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-10-07
@@ -26,7 +26,22 @@
 
 ## Consultation
 
-Pending.
+- Job 944810ff-2093-41f0-acfc-e644f4d5dedd succeeded with NEXT BLOCKED. No implementation was authorized or performed. Read-only reconciliation passed at 3b21a96fb5617f743236781420224e4d30d5f94e: only the coordinator's handover job reference differs. No active project job. Daemon PID 482030 and startup Wed 2026-10-07 14:01:37 +07 unchanged.
+- Minimum SDK approach: OpenMCPError subclasses ToolError; unexpected handler exceptions become sanitized request-ID internal_error; cancellation propagates unchanged; raw tools/call middleware handles validation and normalizes only recognizable OpenMCP JSON suffixes from SDK error prefixes. All seven tools disable structured output and emit one compact JSON text content. Verify the same client regressions under the existing SDK 2.0.0 and 2.3.0 environments without changing either environment or dependency versions.
+- Confirmed design conflict: malformed, missing, or out-of-range arguments have no applicable documented error code. internal_error would misclassify caller error; protocol INVALID_PARAMS would be an exception to the model-visible JSON rule. Consultation recommends a documented invalid_request code with schema-correction next_action and retryable=false.
+- Confirmed size conflict: fixed 24000-code-point pages can exceed 30000 serialized characters after escaping. Treat 24000 as the maximum candidate page and shrink against the complete serialized response, preserving exact Unicode code-point offsets. A nonterminal timeout_s=0 call is an immediate read with empty result text and no offset advancement.
+- Unbounded active jobs, guidance, dependency and cancellation arrays, and user-derived summary strings cannot fit an unconditional response bound under fixed unpaged shapes. Consultation recommends explicit paging where reconciliation must remain complete; an alternative minimum change is a documented response_too_large error with no silent truncation. A conservative serialized byte budget was offered in the user question to address the token-bound requirement without adding a tokenizer dependency. Neither policy is approved.
+- The only newly necessary Phase 4 implementation path is uv.lock, limited to the editable OpenMCP package version metadata from 1.2.0 to 2.0.0. No dependency re-resolution or upgrade is warranted. Questions permitting that edit remain unanswered.
+- backend_runner.py can be deleted after the server.run facade and its deliberately obsolete tests are removed or replaced. Execution currently converts job IDs to resource URIs solely for notification, and Runtime strips them again before desktop lookup. Pass job IDs directly; keep the desktop consumer and tests/test_notifications.py unchanged. No dashboard source is needed in Phase 4.
+- Required additional regressions: every model-visible error code; pre-validation errors; sanitized internal errors; cancellation propagation; recognizable SDK-prefix normalization; no structured duplicate; escaped and non-ASCII exact paging; complete response bound; approved overflow behavior.
+- Three bounded decision groups were presented with AskUserQuestion after consultation: argument-error policy, bounded-output policy, and necessary file-scope additions. No user response arrived. A timed-out question is not approval. Handover is BLOCKED; no Phase 4 base or implementation checkpoint exists.
+
+## Related Scope Preflight
+
+- Completed read-only semantic retrieval confirms Phase 5 project-job response changes also require web/src/screens/Projects.jsx and its matching test. That caller is absent from the declared Phase 5 Files list. The bounded scope question also received no answer.
+- Dashboard /status and /overview are distinct resources with separate live frontend consumers; do not remove either as an alias. /configuration and /config share a handler; the client uses /configuration. Project /profile-overrides and /configuration/profiles are aliases; the client uses /profile-overrides. Keep client-used paths if approved Phase 5 proceeds.
+- Reuse _dashboard_job, runtime.waiting_metadata, database.dependencies_for_job, and the shared JobDetails. Effective reader capacity is scheduler.max_project_readers; reloaded catalog values may be pending, so do not report catalog values as already effective.
+- Phase 7 read-only documentation research verifies fresh print-mode stream-json output, verbose, no-session-persistence, and forwarding subagent text. Tool approvals do not create availability. Optional PostToolUse duration_ms may supplement daemon request timestamps; whole-session elapsed time is not six-minute tool-call evidence. Existing Phase 1 evidence requires a 450-second or longer probe timer. No fresh session or probe was run in Phase 4.
 
 ## Implementation Response
 
@@ -47,4 +62,4 @@ Pending.
 - Phase base ref: refs/plans/mcp-v2-claude-code/phase-04/base, pending until finalized consultation and prompt
 - Phase implementation ref: refs/plans/mcp-v2-claude-code/phase-04/impl, pending
 - Plan commit ref: pending
-- State checkpoint: preparation only
+- State checkpoint: BLOCKED at Gate 1 on unanswered design and scope decisions; no implementation, Phase 4 base, or Phase 4 implementation checkpoint
