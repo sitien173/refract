@@ -55,7 +55,7 @@ Pending.
 
 ## Final Checkpoint
 
-- Phase base ref: refs/plans/mcp-v2-claude-code/phase-03/base, pending
+- Phase base ref: refs/plans/mcp-v2-claude-code/phase-03/base, d58f176734b2908a33772cf506c67306cddf6deb. Created once at the clean finalized prompt checkpoint after consultation and user scope approval.
 - Phase implementation ref: refs/plans/mcp-v2-claude-code/phase-03/impl, pending
 - Plan commit ref: pending
 - State checkpoint: pending
