@@ -81,7 +81,7 @@ Pending.
 
 ## Final Checkpoint
 
-- Phase base ref: refs/plans/mcp-v2-claude-code/phase-02/base
+- Phase base ref: refs/plans/mcp-v2-claude-code/phase-02/base, a8e6b27445d3cf3e0ef199e085e5383e5fc73d69. Created at the clean finalized prompt checkpoint; object and ancestry checks passed.
 - Phase implementation ref: refs/plans/mcp-v2-claude-code/phase-02/impl
 - Plan commit ref: pending
 - State checkpoint: pending
