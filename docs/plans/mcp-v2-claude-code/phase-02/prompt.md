@@ -60,7 +60,9 @@ No other edits are allowed. The coordinator owns prompt.md, PLAN.md, DESIGN.md, 
 
 ## Consultation Findings
 
-Pending mandatory read-only consultation. Coordinator will add its verified recommendations here before implementation.
+Initial read-only consultation confirmed migration 8 after version 7, atomic dependency validation and insertion, immutable backward-only links, existing `_positive_int` validation, and pending-restart mutation behavior. Its advice remained BLOCKED because the supplied driver-test path was absent and native enforcement could not be verified with its available tools. No production files changed.
+
+The coordinator located the real tests and collected current documentation plus installed native CLI help. Read `consult-evidence.md` for exact evidence and the proposed minimum verified subset. A read-only follow-up must confirm this before implementation. In particular, isolation is necessary to disable custom and built-in extensions, and unproven raw custom arguments remain exclusive. Do not alter those configurations or add a CLI argument-policy framework.
 
 ## SKILLS
 

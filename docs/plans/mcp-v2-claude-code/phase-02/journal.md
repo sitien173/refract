@@ -8,7 +8,7 @@
 - Implementation Profile: implement
 - Consultation Profile: consult
 - Review Profile: review
-- Consultation Job: pending
+- Consultation Job: bef3d5f7-d880-4f80-83fa-b8cc36abdfa5; evidence follow-up pending
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-10-07
@@ -29,7 +29,21 @@
 
 ## Consultation
 
-Pending read-only architecture and implementation-risk advice. No production changes allowed.
+### Initial consult
+
+- Job: bef3d5f7-d880-4f80-83fa-b8cc36abdfa5. Job state succeeded; advisory status BLOCKED.
+- First 300-second wait returned running. User's existing continued-wait approval applied; the next wait used the verified 3600-second cap and returned the terminal result.
+- Confirmed next migration version, atomic dependency validation and insertion, foreign keys and unique-pair/reverse-index requirements, immutable snapshot derivation, strict positive integer helper, and pending-restart mutation behavior.
+- The missing tests/test_drivers.py path and unavailable search/documentation tools prevented verification of native enforcement. Advice was not treated as PASS, and no implementation was submitted.
+- Git stayed at ae03a312cd8ac49abeb9cb8c15b7d065aa5d0aa1. Only the coordinator's recorded consultation reference changed; no source or test edits were made.
+
+### Coordinator evidence and follow-up
+
+- tgrep located the real isolation and transport cases in tests/test_smoke.py. Read-only context, not an additional allowed edit.
+- Installed help and version plus Context7 documentation were inspected. Exact native restrictions, explicit-extension escape, and conservative custom-argv limitation are recorded in consult-evidence.md.
+- Minimum proposal: only the proven isolated, read-only native target subset with no raw custom arguments may establish verified enforcement; every other or mixed fallback plan remains exclusive. Existing invocation behavior and valid configuration remain unchanged.
+- A resumed read-only consult must verify that this subset and the existing immutable snapshot representation fit the declared nine-file scope before implementation.
+- Daemon restart and global configuration changes remain prohibited.
 
 ## Implementation Response
 
