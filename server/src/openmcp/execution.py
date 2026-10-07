@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from openmcp.config import DaemonConfig, TargetConfig
 from openmcp.database import Database
@@ -81,26 +82,31 @@ class TargetExecutor:
                     DriverResult("CANCELLED", "", "", "cancelled", "cancelled"),
                     target.id,
                 )
-            self.database.record_job_attempt(job_id, target.id)
-            started_at = time.monotonic()
-            log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt + 1, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
             self._target_active[target_key] += 1
-            supports_streaming = (
-                self.drivers.supports_structured_streaming(target)
-                if hasattr(self.drivers, "supports_structured_streaming")
-                else True
-            )
-            recorder = (
-                StreamRecorder(
-                    database=self.database,
-                    job_id=job_id,
-                    attempt=attempt + 1,
-                    target_id=target.id,
-                    backend=target.backend,
+            try:
+                self.database.record_job_attempt(job_id, target.id)
+                started_at = time.monotonic()
+                log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt + 1, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
+                supports_streaming = (
+                    self.drivers.supports_structured_streaming(target)
+                    if hasattr(self.drivers, "supports_structured_streaming")
+                    else True
                 )
-                if supports_streaming
-                else None
-            )
+                recorder = (
+                    StreamRecorder(
+                        database=self.database,
+                        job_id=job_id,
+                        attempt=attempt + 1,
+                        target_id=target.id,
+                        backend=target.backend,
+                    )
+                    if supports_streaming
+                    else None
+                )
+            except BaseException:
+                self._target_active[target_key] -= 1
+                semaphore.release()
+                raise
 
             attempt_result: DriverResult | None = None
             driver_exc: BaseException | None = None
@@ -261,29 +267,33 @@ class TargetExecutor:
                 if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
                     attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
                     last = attempt_result
-                if recorder:
-                    res = attempt_result
-                    if res is None:
-                        err_msg = str(driver_exc) if driver_exc else "execution_failed"
-                        res = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
-                    status = (
-                        "cancelled"
-                        if cancel_event.is_set() or res.outcome == "CANCELLED"
-                        else "succeeded"
-                        if res.outcome == "SUCCESS"
-                        else "failed"
-                    )
-                    await recorder.record(
-                        "attempt.finished",
-                        {
-                            "status": status,
-                            "outcome": res.outcome,
-                            "error_code": res.error_code,
-                        },
-                    )
-                    await recorder.close()
-                self._target_active[target_key] -= 1
-                semaphore.release()
+                try:
+                    if recorder:
+                        res = attempt_result
+                        if res is None:
+                            err_msg = str(driver_exc) if driver_exc else "execution_failed"
+                            res = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
+                        status = (
+                            "cancelled"
+                            if cancel_event.is_set() or res.outcome == "CANCELLED"
+                            else "succeeded"
+                            if res.outcome == "SUCCESS"
+                            else "failed"
+                        )
+                        try:
+                            await recorder.record(
+                                "attempt.finished",
+                                {
+                                    "status": status,
+                                    "outcome": res.outcome,
+                                    "error_code": res.error_code,
+                                },
+                            )
+                        finally:
+                            await recorder.close()
+                finally:
+                    self._target_active[target_key] -= 1
+                    semaphore.release()
             self.database.event(job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": attempt + 1, "outcome": last.outcome, "error_code": last.error_code})
             log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": attempt + 1, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
             if last.outcome == "SUCCESS":
@@ -454,6 +464,7 @@ class TargetExecutor:
 
 
 JobNotifier = Callable[[str], Awaitable[None]]
+JobTerminalCallback = Callable[[str, str], Any]
 
 
 async def _noop_notifier(_: str) -> None:
@@ -468,11 +479,13 @@ class JobRunner:
         *,
         is_closing: Callable[[], bool],
         notifier: JobNotifier | None = None,
+        on_terminal: JobTerminalCallback | None = None,
     ) -> None:
         self.database = database
         self.targets = targets
         self.is_closing = is_closing
         self.notifier = notifier or _noop_notifier
+        self.on_terminal = on_terminal or (lambda _job_id, _state: None)
 
     async def _notify(self, job_id: str) -> None:
         try:
@@ -484,20 +497,40 @@ class JobRunner:
                 exc_info=True,
             )
 
+    def _terminal(self, job_id: str, state: str) -> None:
+        try:
+            self.on_terminal(job_id, state)
+        except Exception:
+            log.exception(
+                "Job terminal transition callback failed",
+                extra={"event": "job.terminal_callback_failed", "job_id": job_id, "state": state},
+            )
+
     async def run(self, job_id: str, cancel_event: threading.Event) -> None:
         started_at = time.monotonic()
         record = self.database.job_record(job_id)
         if record is None or record["state"] != "queued":
             return
         project_id = str(record["project_id"])
+        if self.is_closing():
+            # A reserved-but-undispatched queue item remains durable for restart.
+            return
+        if cancel_event.is_set():
+            state = "interrupted" if self.is_closing() else "cancelled"
+            self.database.finish_job(job_id, state, error="cancelled before execution")
+            self._terminal(job_id, state)
+            await self._notify(job_id)
+            return
         project = self.database.project(project_id)
         if project is None:
             self.database.finish_job(job_id, "failed", error="Project was removed")
+            self._terminal(job_id, "failed")
             await self._notify(job_id)
             return
         root = Path(project.root)
         log.info("Job started", extra={"event": "job.started", "job_id": job_id, "project_id": project.id, "workflow": record["workflow"]})
         final_state = "failed"
+        committed_state: str | None = None
         try:
             self.database.start_job(job_id)
             await self._notify(job_id)
@@ -530,16 +563,33 @@ class JobRunner:
                 )
             else:
                 self.database.finish_job(job_id, "succeeded", text=execution.result.text, target_id=execution.target_id)
+            committed_state = "succeeded"
+            self._terminal(job_id, committed_state)
             await self._notify(job_id)
+        except asyncio.CancelledError:
+            if committed_state is None:
+                final_state = "interrupted" if self.is_closing() else "cancelled"
+                self.database.finish_job(job_id, final_state, error="execution task cancelled")
+                committed_state = final_state
+                self._terminal(job_id, final_state)
+            raise
         except Exception as exc:
-            if not isinstance(exc, RuntimeError):
-                log.exception(
-                    "Unexpected job failure",
-                    extra={"event": "job.exception", "job_id": job_id},
+            if committed_state is None:
+                if not isinstance(exc, RuntimeError):
+                    log.exception(
+                        "Unexpected job failure",
+                        extra={"event": "job.exception", "job_id": job_id},
+                    )
+                self.database.finish_job(job_id, final_state, error=str(exc))
+                committed_state = final_state
+                self._terminal(job_id, final_state)
+                await self._notify(job_id)
+            else:
+                log.warning(
+                    "Post-terminal job operation failed",
+                    extra={"event": "job.post_terminal_failed", "job_id": job_id, "state": committed_state},
+                    exc_info=True,
                 )
-            error = str(exc)
-            self.database.finish_job(job_id, final_state, error=error)
-            await self._notify(job_id)
         finally:
             completed = self.database.job(job_id)
             log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})

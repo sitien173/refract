@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from collections import deque
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,7 +29,7 @@ from openmcp.models import (
     job_resource_uri,
 )
 from openmcp.notifications import send_job_notification
-from openmcp.planning import execution_plan_data, resolve_execution_plan
+from openmcp.planning import derive_access_mode, execution_plan_data, resolve_execution_plan
 from openmcp.scheduler import ProjectScheduler
 from openmcp.streaming import DEFAULT_RETENTION_DAYS, JobStreamHub
 from openmcp.workflows import get_workflow, validate_request
@@ -70,8 +71,14 @@ class Runtime:
             self.target_executor,
             is_closing=lambda: self._closing,
             notifier=self._notify_job_resource,
+            on_terminal=self._job_terminal,
         )
-        self.scheduler = ProjectScheduler(config.max_jobs, self.runner.run)
+        self.scheduler = ProjectScheduler(
+            config.max_jobs,
+            self.runner.run,
+            max_project_readers=config.max_project_readers,
+            is_ready=self._dependencies_succeeded,
+        )
         self.mutations = ConfigurationMutationService(self)
         log.debug("Runtime initialized", extra={"event": "runtime.initialized", "database": config.database_path.as_posix(), "max_jobs": config.max_jobs})
 
@@ -146,11 +153,116 @@ class Runtime:
         self._closing = False
         self.prune_retained_transcripts()
         interrupted = self.database.interrupt_active_jobs()
+        changed_terminal_ids: list[str] = [str(job["id"]) for job in interrupted]
         for job in interrupted:
-            await self._notify_job_resource(job_resource_uri(job["id"]))
-        await self.scheduler.start(self.database.queued_jobs())
+            changed_terminal_ids.extend(
+                self._job_terminal(str(job["id"]), "interrupted")
+            )
+        # Repair queued records against terminal parents before any admission or
+        # notifier await, including crashes between parent commit and cascade.
+        for job_id, _project_id in self.database.queued_jobs():
+            changed_terminal_ids.extend(self._cancel_for_failed_parent(job_id))
+        for job_id in dict.fromkeys(changed_terminal_ids):
+            await self._notify_job_resource(job_resource_uri(job_id))
+        await self.scheduler.start()
+        for job_id, _project_id in self.database.queued_jobs():
+            self._enqueue_record(job_id)
         log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
 
+
+    def _dependencies_succeeded(self, job_id: str) -> bool:
+        return all(
+            (record := self.database.job_record(dependency_id)) is not None
+            and record["state"] == "succeeded"
+            for dependency_id in self.database.dependencies_for_job(job_id)
+        )
+
+    def _enqueue_record(self, job_id: str) -> None:
+        record = self.database.job_record(job_id)
+        if record is None or record["state"] != "queued":
+            return
+        self.scheduler.enqueue(
+            job_id,
+            str(record["project_id"]),
+            access_mode=record.get("access_mode", "exclusive"),
+            workflow=str(record["workflow"]),
+            context_key=str(record["context_key"]),
+        )
+
+    def _failed_dependency(self, job_id: str) -> tuple[str, str] | None:
+        for dependency_id in self.database.dependencies_for_job(job_id):
+            record = self.database.job_record(dependency_id)
+            if record is not None and record["state"] in {"failed", "cancelled", "interrupted"}:
+                return dependency_id, str(record["state"])
+        return None
+
+    def _cancel_queued_dependent(
+        self, job_id: str, dependency_id: str, dependency_state: str
+    ) -> list[str]:
+        record = self.database.job_record(job_id)
+        if record is None or record["state"] != "queued":
+            return []
+        reason = f"Dependency {dependency_id} ended in state {dependency_state}"
+        self.database.finish_job(job_id, "cancelled", error=reason)
+        self.database.event(
+            job_id,
+            "job.dependency_cancelled",
+            {
+                "dependency_job_id": dependency_id,
+                "dependency_state": dependency_state,
+                "reason": reason,
+            },
+        )
+        self.scheduler.cancel(job_id)
+        self.scheduler.complete(job_id)
+        return [job_id]
+
+    def _cancel_for_failed_parent(self, job_id: str) -> list[str]:
+        cause = self._failed_dependency(job_id)
+        if cause is None:
+            return []
+        cancelled = self._cancel_queued_dependent(job_id, *cause)
+        if not cancelled:
+            return []
+        return [*cancelled, *self._cascade_unsuccessful(job_id, "cancelled")]
+
+    def _cascade_unsuccessful(self, job_id: str, state: str) -> list[str]:
+        if state == "succeeded":
+            return []
+        cancelled: list[str] = []
+        pending = deque([(job_id, state)])
+        while pending:
+            parent_id, parent_state = pending.popleft()
+            for dependent_id in self.database.dependents_for_job(parent_id):
+                newly_cancelled = self._cancel_queued_dependent(
+                    dependent_id, parent_id, parent_state
+                )
+                for child_id in newly_cancelled:
+                    if child_id not in cancelled:
+                        cancelled.append(child_id)
+                        pending.append((child_id, "cancelled"))
+        return cancelled
+
+    def _job_terminal(self, job_id: str, state: str) -> list[str]:
+        try:
+            return self._cascade_unsuccessful(job_id, state)
+        finally:
+            self.scheduler.complete(job_id, signal=False)
+            self.scheduler.reevaluate()
+
+    def waiting_metadata(self, job_id: str) -> tuple[list[str], str]:
+        """Derive queued dependency and admission blockers without changing state."""
+        record = self.database.job_record(job_id)
+        if record is None or record["state"] != "queued":
+            return [], ""
+        waiting_on: list[str] = []
+        for dependency_id in self.database.dependencies_for_job(job_id):
+            dependency = self.database.job_record(dependency_id)
+            if dependency is None or dependency["state"] != "succeeded":
+                waiting_on.append(dependency_id)
+        if waiting_on:
+            return waiting_on, f"waiting on dependency {waiting_on[0]}"
+        return [], self.scheduler.waiting_reason(job_id)
 
     async def close(self) -> None:
         self._closing = True
@@ -177,7 +289,7 @@ class Runtime:
                 message = "Project registration violates a database constraint"
             raise OrchestrationError(message) from exc
 
-    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False) -> SubmissionResult:
+    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False, depends_on: list[str] | tuple[str, ...] = ()) -> SubmissionResult:
         project = self.database.project(project_id)
         if project is None:
             raise OrchestrationError(f"Unknown project: {project_id}")
@@ -194,18 +306,46 @@ class Runtime:
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
         job_id = str(uuid.uuid4())
-        self.database.create_job(job_id=job_id, project_id=project.id, workflow=workflow, profile=selected_profile, prompt=resolved_prompt, execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False), context_key=context_key.strip() or workflow, config_revision=catalog.config_revision, fresh_session=fresh_session)
+        # The atomic creation API opens its own BEGIN IMMEDIATE transaction.
+        # Preserve the former create_job connection-context behavior for any
+        # already-open caller transaction before entering that API.
+        if self.database._connection.in_transaction:
+            self.database._connection.commit()
+        try:
+            self.database.create_job_with_dependencies(
+                job_id=job_id,
+                project_id=project.id,
+                workflow=workflow,
+                profile=selected_profile,
+                prompt=resolved_prompt,
+                execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False),
+                context_key=context_key.strip() or workflow,
+                config_revision=catalog.config_revision,
+                fresh_session=fresh_session,
+                access_mode=derive_access_mode(plan),
+                depends_on=depends_on,
+            )
+        except ValueError as exc:
+            raise OrchestrationError(str(exc)) from exc
+        if self._cancel_for_failed_parent(job_id):
+            state = "cancelled"
+        else:
+            self._enqueue_record(job_id)
+            state = "queued"
         await self._notify_job_resource(job_resource_uri(job_id))
-        self.scheduler.enqueue(job_id, project.id)
         log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})
-        return SubmissionResult(job_id=job_id, state="queued", resource_uri=job_resource_uri(job_id))
+        return SubmissionResult(job_id=job_id, state=state, resource_uri=job_resource_uri(job_id))
 
     async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:
         job = self.database.job(job_id)
         if job is None:
             raise OrchestrationError(f"Unknown job: {job_id}")
         if job.state in TERMINAL_STATES:
-            return job
+            await self.scheduler.wait(job_id, timeout_s)
+            refreshed = self.database.job(job_id)
+            if refreshed is None:
+                raise OrchestrationError(f"Unknown job: {job_id}")
+            return refreshed
         await self.scheduler.wait(job_id, timeout_s)
         refreshed = self.database.job(job_id)
         if refreshed is None:
@@ -218,10 +358,16 @@ class Runtime:
             raise OrchestrationError(f"Unknown job: {job_id}")
         if job.state == "queued":
             location = self.scheduler.cancel(job_id)
-            if location == "queued":
+            if location in {"queued", "missing"}:
                 self.database.finish_job(job_id, "cancelled")
+                cancelled = self._job_terminal(job_id, "cancelled")
                 await self._notify_job_resource(job_resource_uri(job_id))
-                return ActionResult(success=True, job_id=job_id, state="cancelled")
+                return ActionResult(
+                    success=True,
+                    job_id=job_id,
+                    state="cancelled",
+                    cancelled_dependents=cancelled,
+                )
             if location == "running":
                 self.database.event(job_id, "job.cancellation_requested", {})
                 return ActionResult(success=True, job_id=job_id, state="running")
@@ -236,9 +382,15 @@ class Runtime:
             raise OrchestrationError(f"Unknown job: {job_id}")
         if job.state not in {"failed", "cancelled", "interrupted"}:
             raise OrchestrationError(f"Job cannot be retried from {job.state}")
+        failed_dependency = self._failed_dependency(job_id)
+        if failed_dependency is not None:
+            dependency_id, dependency_state = failed_dependency
+            raise OrchestrationError(
+                f"Cannot retry job: dependency {dependency_id} ended in state {dependency_state}"
+            )
         self.database.reset_retry(job_id)
+        self._enqueue_record(job_id)
         await self._notify_job_resource(job_resource_uri(job_id))
-        self.scheduler.enqueue(job_id, job.project_id)
         return SubmissionResult(job_id=job_id, state="queued", resource_uri=job_resource_uri(job_id))
 
     def status(self) -> DaemonStatusResult:

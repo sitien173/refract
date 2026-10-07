@@ -23,6 +23,873 @@ from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, gi
 
 def test_runtime_submit_signature_omits_commit_message() -> None:
     assert "commit_message" not in inspect.signature(Runtime.submit).parameters
+    assert "depends_on" in inspect.signature(Runtime.submit).parameters
+
+
+@pytest.mark.asyncio
+async def test_global_project_and_target_capacities_apply_together(tmp_path) -> None:
+    (tmp_path / "project-a").mkdir()
+    (tmp_path / "project-b").mkdir()
+    root_a = repository(tmp_path / "project-a")
+    root_b = repository(tmp_path / "project-b")
+    first_driver_started = asyncio.Event()
+    second_runner_started = asyncio.Event()
+    release_drivers = asyncio.Event()
+    second_job_id = ""
+
+    class CapacityDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active = 0
+            self.peak_active = 0
+            self.calls = 0
+
+        async def execute(self, **kwargs) -> DriverResult:
+            self.calls += 1
+            self.active += 1
+            self.peak_active = max(self.peak_active, self.active)
+            if self.calls == 1:
+                first_driver_started.set()
+            try:
+                await release_drivers.wait()
+                return DriverResult("SUCCESS", "", "done", "", "")
+            finally:
+                self.active -= 1
+
+    runtime_holder: dict[str, Runtime] = {}
+    running_job_ids: set[str] = set()
+
+    async def notify(uri: str) -> None:
+        runtime_value = runtime_holder.get("runtime")
+        if runtime_value is None or not second_job_id:
+            return
+        job_id = uri.removeprefix("openmcp://jobs/")
+        record = runtime_value.database.job_record(job_id)
+        if record and record["state"] == "running":
+            running_job_ids.add(job_id)
+            if job_id == second_job_id:
+                second_runner_started.set()
+
+    target = TargetConfig(
+        id="safe-reader", backend="pi", isolated=True, read_only=True, max_concurrency=1
+    )
+    catalog = replace(
+        config(tmp_path / "home", (target,)), max_jobs=2, max_project_readers=2
+    )
+    runtime = Runtime(catalog, notifier=notify)
+    runtime_holder["runtime"] = runtime
+    drivers = CapacityDrivers()
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project_a = runtime.register_project(str(root_a), "a")
+        project_b = runtime.register_project(str(root_b), "b")
+        first = await runtime.submit(project_a.id, "consult", "first", context_key="first")
+        await first_driver_started.wait()
+        second = await runtime.submit(project_a.id, "consult", "second", context_key="second")
+        second_job_id = second.job_id
+        if second_job_id in running_job_ids:
+            second_runner_started.set()
+        await asyncio.wait_for(second_runner_started.wait(), 2)
+        assert runtime.scheduler.active_jobs == 2
+        assert drivers.calls == 1
+
+        third = await runtime.submit(project_a.id, "consult", "third", context_key="third")
+        fourth = await runtime.submit(project_b.id, "consult", "fourth", context_key="fourth")
+        assert runtime.database.job(third.job_id).state == "queued"
+        assert runtime.database.job(fourth.job_id).state == "queued"
+        assert runtime.waiting_metadata(third.job_id)[1] == "waiting for project reader capacity"
+        assert runtime.waiting_metadata(fourth.job_id)[1] == "waiting for global worker capacity"
+
+        release_drivers.set()
+        for submission in (first, second, third, fourth):
+            assert (await runtime.wait(submission.job_id, 5)).state == "succeeded"
+        assert drivers.peak_active == 1
+    finally:
+        release_drivers.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_submit_persists_dependencies_and_plan_access_class(tmp_path) -> None:
+    root = repository(tmp_path)
+    target = TargetConfig(id="safe-reader", backend="pi", isolated=True, read_only=True)
+    catalog = replace(config(tmp_path / "home", (target,)), max_project_readers=2)
+    runtime = Runtime(catalog)
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        parent_a = await runtime.submit(project.id, "consult", "parent a", context_key="a")
+        parent_b = await runtime.submit(project.id, "consult", "parent b", context_key="b")
+        child = await runtime.submit(
+            project.id,
+            "review",
+            "child",
+            context_key="child",
+            depends_on=[parent_a.job_id, parent_b.job_id],
+        )
+
+        record = runtime.database.job_record(child.job_id)
+        assert record is not None
+        assert record["access_mode"] == "parallel_read"
+        assert runtime.database.dependencies_for_job(child.job_id) == [parent_a.job_id, parent_b.job_id]
+        assert (await runtime.wait(parent_a.job_id, 5)).state == "succeeded"
+        assert (await runtime.wait(parent_b.job_id, 5)).state == "succeeded"
+        assert (await runtime.wait(child.job_id, 5)).state == "succeeded"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_parent_returns_transitive_dependents_and_releases_waiters(tmp_path) -> None:
+    root = repository(tmp_path)
+    blocker_started = asyncio.Event()
+    release_blocker = asyncio.Event()
+
+    class GatedDrivers(FakeDrivers):
+        async def execute(self, *, prompt: str, **kwargs) -> DriverResult:
+            if prompt == "blocker":
+                blocker_started.set()
+                await release_blocker.wait()
+            return DriverResult("SUCCESS", "", prompt, "", "")
+
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = GatedDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        blocker = await runtime.submit(project.id, "implement", "blocker")
+        await blocker_started.wait()
+        parent = await runtime.submit(project.id, "review", "parent")
+        child = await runtime.submit(project.id, "review", "child", depends_on=[parent.job_id])
+        sibling = await runtime.submit(project.id, "consult", "sibling", depends_on=[parent.job_id])
+        grandchild = await runtime.submit(
+            project.id, "review", "grandchild",
+            depends_on=[child.job_id, sibling.job_id],
+        )
+        great_grandchild = await runtime.submit(
+            project.id, "review", "great-grandchild", depends_on=[grandchild.job_id]
+        )
+        child_waiter = asyncio.create_task(runtime.wait(child.job_id, 5))
+        sibling_waiter = asyncio.create_task(runtime.wait(sibling.job_id, 5))
+        grandchild_waiter = asyncio.create_task(runtime.wait(grandchild.job_id, 5))
+        great_grandchild_waiter = asyncio.create_task(runtime.wait(great_grandchild.job_id, 5))
+
+        result = await runtime.cancel(parent.job_id)
+
+        assert result.state == "cancelled"
+        assert result.cancelled_dependents == [
+            child.job_id,
+            sibling.job_id,
+            grandchild.job_id,
+            great_grandchild.job_id,
+        ]
+        assert (await child_waiter).state == "cancelled"
+        assert (await sibling_waiter).state == "cancelled"
+        assert (await grandchild_waiter).state == "cancelled"
+        assert (await great_grandchild_waiter).state == "cancelled"
+        release_blocker.set()
+        assert (await runtime.wait(blocker.job_id, 5)).state == "succeeded"
+    finally:
+        release_blocker.set()
+        await runtime.close()
+
+
+def test_runtime_reader_capacity_is_fixed_at_startup(tmp_path) -> None:
+    catalog = replace(config(tmp_path / "home"), max_project_readers=1)
+    runtime = Runtime(catalog)
+
+    runtime._catalog = replace(catalog, max_project_readers=4)
+
+    assert runtime.catalog.max_project_readers == 4
+    assert runtime.scheduler.max_project_readers == 1
+    runtime.database.close()
+
+
+def test_action_result_cancellation_dependents_defaults_empty() -> None:
+    from openmcp.models import ActionResult
+
+    result = ActionResult(success=True, job_id="job", state="cancelled")
+
+    assert result.cancelled_dependents == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_submit_invalid_dependencies_leave_no_job(tmp_path) -> None:
+    (tmp_path / "project-a").mkdir()
+    (tmp_path / "project-b").mkdir()
+    root_a = repository(tmp_path / "project-a")
+    root_b = repository(tmp_path / "project-b")
+    runtime = Runtime(config(tmp_path / "home"))
+    try:
+        project_a = runtime.register_project(str(root_a), "a")
+        project_b = runtime.register_project(str(root_b), "b")
+        valid_parent = runtime.database.create_job(
+            job_id="valid-parent", project_id=project_a.id, workflow="consult",
+            profile="balanced", prompt="parent", execution_plan_json="{}", context_key="parent",
+        )
+        foreign_parent = runtime.database.create_job(
+            job_id="foreign-parent", project_id=project_b.id, workflow="consult",
+            profile="balanced", prompt="parent", execution_plan_json="{}", context_key="parent",
+        )
+        original_count = runtime.database._connection.execute(
+            "SELECT COUNT(*) FROM jobs"
+        ).fetchone()[0]
+        bad_cases = (
+            (project_a.id, ["missing-parent"]),
+            (project_a.id, ["valid-parent", "valid-parent"]),
+            (project_a.id, ["foreign-parent"]),
+        )
+        for index, (project_id, depends_on) in enumerate(bad_cases):
+            with pytest.raises(OrchestrationError, match="dependenc"):
+                await runtime.submit(
+                    project_id,
+                    "review",
+                    f"invalid-{index}",
+                    context_key=f"invalid-{index}",
+                    depends_on=depends_on,
+                )
+        assert runtime.database._connection.execute(
+            "SELECT COUNT(*) FROM jobs"
+        ).fetchone()[0] == original_count
+        assert runtime.database._connection.execute(
+            "SELECT COUNT(*) FROM job_dependencies"
+        ).fetchone()[0] == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fresh_session_jobs_with_identical_scope_remain_serialized(tmp_path) -> None:
+    root = repository(tmp_path)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+
+    class GatedFreshDrivers(FakeDrivers):
+        async def execute(self, *, prompt: str, **kwargs) -> DriverResult:
+            if prompt == "fresh-first":
+                first_started.set()
+                await release_first.wait()
+            elif prompt == "fresh-second":
+                second_started.set()
+            return DriverResult("SUCCESS", "", prompt, "", "")
+
+    target = TargetConfig(
+        id="safe-reader", backend="pi", isolated=True, read_only=True, max_concurrency=2
+    )
+    catalog = replace(config(tmp_path / "home", (target,)), max_project_readers=2)
+    runtime = Runtime(catalog)
+    runtime.drivers = GatedFreshDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        first = await runtime.submit(
+            project.id, "consult", "fresh-first", context_key="same", fresh_session=True
+        )
+        await first_started.wait()
+        second = await runtime.submit(
+            project.id, "consult", "fresh-second", context_key="same", fresh_session=True
+        )
+        assert not second_started.is_set()
+        assert runtime.scheduler.waiting_reason(second.job_id) == "waiting for project session scope"
+        release_first.set()
+        await asyncio.wait_for(second_started.wait(), 2)
+        assert (await runtime.wait(second.job_id, 5)).state == "succeeded"
+    finally:
+        release_first.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_multiple_parents_must_all_succeed_before_child_runs(tmp_path) -> None:
+    root = repository(tmp_path)
+    parent_a_started = asyncio.Event()
+    parent_b_started = asyncio.Event()
+    release_a = asyncio.Event()
+    release_b = asyncio.Event()
+    child_started = asyncio.Event()
+
+    class GatedParents(FakeDrivers):
+        async def execute(self, *, prompt: str, **kwargs) -> DriverResult:
+            if prompt == "parent-a":
+                parent_a_started.set()
+                await release_a.wait()
+            elif prompt == "parent-b":
+                parent_b_started.set()
+                await release_b.wait()
+            elif prompt == "child":
+                child_started.set()
+            return DriverResult("SUCCESS", "", prompt, "", "")
+
+    target = TargetConfig(
+        id="safe-reader", backend="pi", isolated=True, read_only=True, max_concurrency=2
+    )
+    catalog = replace(config(tmp_path / "home", (target,)), max_project_readers=2)
+    runtime = Runtime(catalog)
+    runtime.drivers = GatedParents()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        parent_a = await runtime.submit(project.id, "consult", "parent-a", context_key="a")
+        parent_b = await runtime.submit(project.id, "consult", "parent-b", context_key="b")
+        await asyncio.gather(parent_a_started.wait(), parent_b_started.wait())
+        child = await runtime.submit(
+            project.id, "review", "child", context_key="child",
+            depends_on=[parent_a.job_id, parent_b.job_id],
+        )
+        release_a.set()
+        assert (await runtime.wait(parent_a.job_id, 5)).state == "succeeded"
+        assert not child_started.is_set()
+        release_b.set()
+        await asyncio.wait_for(child_started.wait(), 2)
+        assert (await runtime.wait(child.job_id, 5)).state == "succeeded"
+    finally:
+        release_a.set()
+        release_b.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_submission_access_class_includes_unsafe_fallback_beyond_attempt_limit(tmp_path) -> None:
+    root = repository(tmp_path)
+    safe = TargetConfig(id="safe", backend="pi", isolated=True, read_only=True)
+    unsafe_fallback = TargetConfig(
+        id="fallback", backend="pi", isolated=True, read_only=True, args=("--export", "out.html")
+    )
+    selection = TargetSelection(("safe", "fallback"), max_attempts=1)
+    catalog = replace(
+        config(tmp_path / "home", (safe, unsafe_fallback)),
+        profiles={"balanced": {workflow: selection for workflow in ("consult", "implement", "review", "other")}},
+    )
+    runtime = Runtime(catalog)
+    try:
+        project = runtime.register_project(str(root))
+        submitted = await runtime.submit(project.id, "review", "inspect")
+        record = runtime.database.job_record(submitted.job_id)
+        assert record["access_mode"] == "exclusive"
+        plan = json.loads(record["execution_plan_json"])
+        assert plan["selection"]["max_attempts"] == 1
+        assert [target["id"] for target in plan["targets"]] == ["safe", "fallback"]
+        assert plan["targets"][1]["args"] == ["--export", "out.html"]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_submit_with_failed_parent_returns_cancelled_job_and_cause(tmp_path) -> None:
+    root = repository(tmp_path)
+
+    class FailedDrivers(FakeDrivers):
+        async def execute(self, **kwargs) -> DriverResult:
+            return DriverResult("TARGET_FATAL", "", "", "failed", "backend_failure")
+
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = FailedDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        parent = await runtime.submit(project.id, "implement", "fails")
+        assert (await runtime.wait(parent.job_id, 5)).state == "failed"
+
+        child = await runtime.submit(
+            project.id,
+            "review",
+            "must not execute",
+            depends_on=[parent.job_id],
+        )
+
+        record = runtime.database.job_record(child.job_id)
+        assert child.state == "cancelled"
+        assert record is not None and record["state"] == "cancelled"
+        assert parent.job_id in record["error"]
+        assert any(
+            event["kind"] == "job.dependency_cancelled"
+            and event["data"]["dependency_job_id"] == parent.job_id
+            for event in runtime.database.events(child.job_id)
+        )
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) -> None:
+    from openmcp.execution import JobRunner
+
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    project = runtime.register_project(str(root))
+    plan = resolve_execution_plan(get_workflow("consult"), catalog, "balanced")
+    runtime.database.create_job(
+        job_id="runner-cancel",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="cancel me",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="consult",
+    )
+    started = asyncio.Event()
+
+    class WaitingDrivers(FakeDrivers):
+        async def execute(self, **kwargs) -> DriverResult:
+            started.set()
+            await asyncio.Event().wait()
+
+    runtime.drivers = WaitingDrivers()
+    runner = JobRunner(
+        runtime.database,
+        runtime.target_executor,
+        is_closing=lambda: False,
+    )
+    task = asyncio.create_task(runner.run("runner-cancel", threading.Event()))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert runtime.database.job("runner-cancel").state == "cancelled"
+    runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_preserves_dependencies_and_waits_for_unfinished_parent(tmp_path) -> None:
+    (tmp_path / "project").mkdir()
+    root = repository(tmp_path / "project")
+    parent_started = asyncio.Event()
+    release_parent = asyncio.Event()
+    child_started = asyncio.Event()
+
+    class GatedDrivers(FakeDrivers):
+        async def execute(self, *, prompt: str, **kwargs) -> DriverResult:
+            if prompt == "parent":
+                parent_started.set()
+                await release_parent.wait()
+            elif prompt == "child":
+                child_started.set()
+            return DriverResult("SUCCESS", "", prompt, "", "")
+
+    target = TargetConfig(
+        id="safe-reader", backend="pi", isolated=True, read_only=True, max_concurrency=2
+    )
+    catalog = replace(config(tmp_path / "home", (target,)), max_project_readers=2)
+    runtime = Runtime(catalog)
+    runtime.drivers = GatedDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        parent = await runtime.submit(project.id, "consult", "parent", context_key="parent")
+        await parent_started.wait()
+        child = await runtime.submit(
+            project.id, "review", "child", context_key="child", depends_on=[parent.job_id]
+        )
+        await runtime.cancel(child.job_id)
+        retried = await runtime.retry(child.job_id)
+
+        record = runtime.database.job_record(child.job_id)
+        assert retried.job_id == child.job_id
+        assert record["access_mode"] == "parallel_read"
+        assert runtime.database.dependencies_for_job(child.job_id) == [parent.job_id]
+        assert record["state"] == "queued"
+        assert runtime.scheduler.active_jobs == 1
+        assert not child_started.is_set()
+
+        release_parent.set()
+        await asyncio.wait_for(child_started.wait(), 2)
+        assert (await runtime.wait(child.job_id, 5)).state == "succeeded"
+    finally:
+        release_parent.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_rejects_dependent_with_unsuccessful_parent_without_reset(tmp_path) -> None:
+    root = repository(tmp_path)
+
+    class FailedDrivers(FakeDrivers):
+        async def execute(self, **kwargs) -> DriverResult:
+            return DriverResult("TARGET_FATAL", "", "", "failed", "backend_failure")
+
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = FailedDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        parent = await runtime.submit(project.id, "implement", "parent")
+        await runtime.wait(parent.job_id, 5)
+        child = await runtime.submit(
+            project.id, "review", "child", depends_on=[parent.job_id]
+        )
+        original_events = runtime.database.events(child.job_id)
+
+        with pytest.raises(OrchestrationError, match="dependenc"):
+            await runtime.retry(child.job_id)
+
+        assert runtime.database.job(child.job_id).state == "cancelled"
+        assert runtime.database.dependencies_for_job(child.job_id) == [parent.job_id]
+        assert runtime.database.events(child.job_id) == original_events
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retrying_parent_does_not_revive_cancelled_descendant(tmp_path) -> None:
+    root = repository(tmp_path)
+
+    class FailOnceDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, **kwargs) -> DriverResult:
+            self.calls += 1
+            if self.calls == 1:
+                return DriverResult("TARGET_FATAL", "", "", "failed", "backend_failure")
+            return DriverResult("SUCCESS", "", "recovered", "", "")
+
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = FailOnceDrivers()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        parent = await runtime.submit(project.id, "implement", "parent")
+        await runtime.wait(parent.job_id, 5)
+        child = await runtime.submit(project.id, "review", "child", depends_on=[parent.job_id])
+        assert child.state == "cancelled"
+
+        await runtime.retry(parent.job_id)
+        assert (await runtime.wait(parent.job_id, 5)).state == "succeeded"
+        assert runtime.database.job(child.job_id).state == "cancelled"
+        assert runtime.database.dependencies_for_job(child.job_id) == [parent.job_id]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_reserved_unstarted_parent_cascades_and_retry_uses_new_dispatch(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime_holder: dict[str, Runtime] = {}
+    blocker_notice_entered = asyncio.Event()
+    release_blocker_notice = asyncio.Event()
+    blocker_driver_started = asyncio.Event()
+    release_blocker_driver = asyncio.Event()
+    retry_driver_started = asyncio.Event()
+    release_retry_driver = asyncio.Event()
+    parent_id = ""
+    blocker_job_id = ""
+    dispatch_events: list[threading.Event] = []
+
+    class RetryDriver(FakeDrivers):
+        async def execute(self, *, prompt: str, **kwargs) -> DriverResult:
+            if prompt == "blocker":
+                blocker_driver_started.set()
+                await release_blocker_driver.wait()
+            if prompt == "retry-parent":
+                retry_driver_started.set()
+                await release_retry_driver.wait()
+            return DriverResult("SUCCESS", "", prompt, "", "")
+
+    async def notify(uri: str) -> None:
+        runtime = runtime_holder.get("runtime")
+        if runtime is None:
+            return
+        job_id = uri.removeprefix("openmcp://jobs/")
+        record = runtime.database.job_record(job_id)
+        if job_id == blocker_job_id and record and record["state"] == "succeeded":
+            blocker_notice_entered.set()
+            await release_blocker_notice.wait()
+
+    runtime = Runtime(config(tmp_path / "home"), notifier=notify)
+    runtime_holder["runtime"] = runtime
+    runtime.drivers = RetryDriver()
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        blocker = await runtime.submit(project.id, "implement", "blocker")
+        blocker_job_id = blocker.job_id
+        await blocker_driver_started.wait()
+        release_blocker_driver.set()
+        await asyncio.wait_for(blocker_notice_entered.wait(), 2)
+        parent = await runtime.submit(project.id, "review", "retry-parent")
+        parent_id = parent.job_id
+
+        original_run = runtime.runner.run
+
+        async def trace_dispatch(job_id: str, cancel_event: threading.Event) -> None:
+            if job_id == parent_id:
+                dispatch_events.append(cancel_event)
+            await original_run(job_id, cancel_event)
+
+        runtime.scheduler._run_job = trace_dispatch
+        child = await runtime.submit(
+            project.id, "consult", "child", depends_on=[parent.job_id]
+        )
+        assert runtime.database.job(parent.job_id).state == "queued"
+        assert runtime.scheduler.active_jobs == 1
+
+        cancelled = await runtime.cancel(parent.job_id)
+
+        assert cancelled.state == "cancelled"
+        assert cancelled.cancelled_dependents == [child.job_id]
+        assert runtime.database.job(parent.job_id).state == "cancelled"
+        assert runtime.database.job(child.job_id).state == "cancelled"
+        assert runtime.scheduler.active_jobs == 0
+        assert (await runtime.wait(child.job_id, 1)).state == "cancelled"
+
+        retried = await runtime.retry(parent.job_id)
+        assert retried.job_id == parent.job_id
+        assert runtime.database.job(parent.job_id).state == "queued"
+        assert runtime.database.job(child.job_id).state == "cancelled"
+        assert runtime.scheduler.active_jobs == 1
+
+        release_blocker_notice.set()
+        await asyncio.wait_for(retry_driver_started.wait(), 2)
+        assert len(dispatch_events) == 1
+        assert not dispatch_events[0].is_set()
+        release_retry_driver.set()
+        assert (await runtime.wait(parent.job_id, 5)).state == "succeeded"
+        assert runtime.database.job(child.job_id).state == "cancelled"
+        assert len(dispatch_events) == 1
+    finally:
+        release_blocker_notice.set()
+        release_blocker_driver.set()
+        release_retry_driver.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_is_not_lost_while_terminal_notifier_is_paused(tmp_path) -> None:
+    root = repository(tmp_path)
+    runtime_holder: dict[str, Runtime] = {}
+    driver_started = asyncio.Event()
+    allow_first_failure = asyncio.Event()
+    terminal_notice_entered = asyncio.Event()
+    release_terminal_notice = asyncio.Event()
+
+    class FailThenSucceedDrivers(FakeDrivers):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, **kwargs) -> DriverResult:
+            self.calls += 1
+            if self.calls == 1:
+                driver_started.set()
+                await allow_first_failure.wait()
+                return DriverResult("TARGET_FATAL", "", "", "failed", "backend_failure")
+            return DriverResult("SUCCESS", "", "retried", "", "")
+
+    async def notify(uri: str) -> None:
+        runtime = runtime_holder.get("runtime")
+        if runtime is None:
+            return
+        job_id = uri.removeprefix("openmcp://jobs/")
+        record = runtime.database.job_record(job_id)
+        if record and record["state"] == "failed" and not terminal_notice_entered.is_set():
+            terminal_notice_entered.set()
+            await release_terminal_notice.wait()
+
+    runtime = Runtime(config(tmp_path / "home"), notifier=notify)
+    runtime_holder["runtime"] = runtime
+    drivers = FailThenSucceedDrivers()
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submitted = await runtime.submit(project.id, "implement", "retry race")
+        await driver_started.wait()
+        child = await runtime.submit(
+            project.id,
+            "review",
+            "dependent child",
+            depends_on=[submitted.job_id],
+        )
+        allow_first_failure.set()
+        await asyncio.wait_for(terminal_notice_entered.wait(), 2)
+        assert runtime.database.job(child.job_id).state == "cancelled"
+
+        retry_result = await runtime.retry(submitted.job_id)
+        assert retry_result.job_id == submitted.job_id
+        assert runtime.database.job(submitted.job_id).state == "queued"
+        release_terminal_notice.set()
+        assert (await runtime.wait(submitted.job_id, 5)).state == "succeeded"
+        assert runtime.database.job(child.job_id).state == "cancelled"
+        assert drivers.calls == 2
+    finally:
+        release_terminal_notice.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_cascades_interrupted_and_failed_parents_before_admission(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    database = Database(catalog.database_path)
+    project = database.upsert_project(project_id="p", alias="p", root=root.as_posix())
+    plan = execution_plan_data(resolve_execution_plan(get_workflow("consult"), catalog, "balanced"))
+    serialized_plan = json.dumps(plan)
+    database.create_job(
+        job_id="interrupted-parent", project_id=project.id, workflow="consult", profile="balanced",
+        prompt="parent", execution_plan_json=serialized_plan, context_key="parent",
+    )
+    database.start_job("interrupted-parent")
+    database.create_job_with_dependencies(
+        job_id="interrupted-child", project_id=project.id, workflow="review", profile="balanced",
+        prompt="child", execution_plan_json=serialized_plan, context_key="child",
+        access_mode="exclusive", depends_on=["interrupted-parent"],
+    )
+    database.create_job_with_dependencies(
+        job_id="interrupted-grandchild", project_id=project.id, workflow="review", profile="balanced",
+        prompt="grandchild", execution_plan_json=serialized_plan, context_key="grandchild",
+        access_mode="exclusive", depends_on=["interrupted-child"],
+    )
+    database.create_job(
+        job_id="failed-parent", project_id=project.id, workflow="consult", profile="balanced",
+        prompt="failed", execution_plan_json=serialized_plan, context_key="failed",
+    )
+    database.finish_job("failed-parent", "failed", error="already failed")
+    database.create_job_with_dependencies(
+        job_id="failed-child", project_id=project.id, workflow="review", profile="balanced",
+        prompt="failed child", execution_plan_json=serialized_plan, context_key="failed-child",
+        access_mode="exclusive", depends_on=["failed-parent"],
+    )
+    database.close()
+
+    runtime = Runtime(catalog)
+    drivers = FakeDrivers()
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        assert runtime.database.job("interrupted-parent").state == "interrupted"
+        assert runtime.database.job("interrupted-child").state == "cancelled"
+        assert runtime.database.job("interrupted-grandchild").state == "cancelled"
+        assert runtime.database.job("failed-child").state == "cancelled"
+        assert not drivers.sessions
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["attempt_persistence", "capability_probe", "recorder_setup", "recorder_close"])
+async def test_target_semaphore_released_after_post_acquire_failures(tmp_path, monkeypatch, failure: str) -> None:
+    from openmcp import execution as execution_module
+
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    project = runtime.register_project(str(root))
+    plan = resolve_execution_plan(get_workflow("consult"), catalog, "balanced")
+    target = plan.target("primary")
+    runtime.database.create_job(
+        job_id="target-lease",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="test target lease",
+        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="consult",
+    )
+
+    class CapabilityFailureDrivers(FakeDrivers):
+        def supports_structured_streaming(self, target):
+            raise RuntimeError("capability setup failed")
+
+    if failure == "attempt_persistence":
+        monkeypatch.setattr(
+            runtime.database,
+            "record_job_attempt",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("attempt persistence failed")),
+        )
+    elif failure == "capability_probe":
+        runtime.drivers = CapabilityFailureDrivers()
+    elif failure == "recorder_setup":
+        monkeypatch.setattr(
+            execution_module,
+            "StreamRecorder",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("recorder setup failed")),
+        )
+    else:
+        async def failing_close(_recorder):
+            raise RuntimeError("recorder close failed")
+        monkeypatch.setattr(execution_module.StreamRecorder, "close", failing_close)
+
+    try:
+        with pytest.raises(RuntimeError):
+            await runtime.target_executor.execute(
+                job_id="target-lease",
+                project=project,
+                workflow="consult",
+                context_key="consult",
+                plan=plan,
+                prompt="test target lease",
+                cwd=root,
+                cancel_event=threading.Event(),
+            )
+        target_key = target_execution_key(target)
+        assert runtime.target_executor._target_active[target_key] == 0
+        assert runtime.target_executor._target_semaphores[target_key]._value == 1
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_dependency_waiting_consumes_no_worker_and_releases_after_all_parents(tmp_path) -> None:
+    (tmp_path / "project-a").mkdir()
+    (tmp_path / "project-b").mkdir()
+    root_a = repository(tmp_path / "project-a")
+    root_b = repository(tmp_path / "project-b")
+    parent_started = asyncio.Event()
+    release_parent = asyncio.Event()
+    child_started = asyncio.Event()
+    independent_started = asyncio.Event()
+
+    class GatedDrivers(FakeDrivers):
+        async def execute(self, *, prompt: str, **kwargs) -> DriverResult:
+            if prompt == "parent":
+                parent_started.set()
+                await release_parent.wait()
+            elif prompt == "child":
+                child_started.set()
+            else:
+                independent_started.set()
+            return DriverResult("SUCCESS", "", prompt, "", "")
+
+    target = TargetConfig(
+        id="safe-reader", backend="pi", isolated=True, read_only=True, max_concurrency=2
+    )
+    catalog = replace(config(tmp_path / "home", (target,)), max_jobs=2, max_project_readers=2)
+    runtime = Runtime(catalog)
+    runtime.drivers = GatedDrivers()
+    await runtime.start()
+    try:
+        project_a = runtime.register_project(str(root_a), "a")
+        project_b = runtime.register_project(str(root_b), "b")
+        parent = await runtime.submit(project_a.id, "consult", "parent", context_key="parent")
+        await parent_started.wait()
+        child = await runtime.submit(
+            project_a.id,
+            "review",
+            "child",
+            context_key="child",
+            depends_on=[parent.job_id],
+        )
+        assert runtime.database.job(child.job_id).state == "queued"
+        assert runtime.scheduler.active_jobs == 1
+        waiting_on, waiting_reason = runtime.waiting_metadata(child.job_id)
+        assert waiting_on == [parent.job_id]
+        assert waiting_reason == f"waiting on dependency {parent.job_id}"
+
+        independent = await runtime.submit(project_b.id, "consult", "independent")
+        await asyncio.wait_for(independent_started.wait(), 2)
+        assert not child_started.is_set()
+        release_parent.set()
+        await asyncio.wait_for(child_started.wait(), 2)
+        assert (await runtime.wait(child.job_id, 5)).state == "succeeded"
+        assert (await runtime.wait(independent.job_id, 5)).state == "succeeded"
+    finally:
+        release_parent.set()
+        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -316,14 +1183,46 @@ async def test_queued_and_running_cancellation(tmp_path) -> None:
         first = await runtime.submit(project.id, "implement", "block")
         second = await runtime.submit(project.id, "review", "never run")
         await drivers.started.wait()
-        assert (await runtime.cancel(second.job_id)).state == "cancelled"
-        assert (await runtime.cancel(first.job_id)).state == "running"
+        queued_cancel = await runtime.cancel(second.job_id)
+        assert queued_cancel.state == "cancelled"
+        assert queued_cancel.cancelled_dependents == []
+        running_cancel = await runtime.cancel(first.job_id)
+        assert running_cancel.state == "running"
+        assert running_cancel.cancelled_dependents == []
         assert (await runtime.wait(first.job_id, 10)).state == "cancelled"
         assert (await runtime.wait(second.job_id, 10)).state == "cancelled"
         assert [uri for uri in notifications if uri == first.resource_uri] == [first.resource_uri] * 3
         assert [uri for uri in notifications if uri == second.resource_uri] == [second.resource_uri] * 2
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_leaves_unstarted_queued_job_durable_for_restart(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    drivers = BlockingDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    project = runtime.register_project(str(root))
+    active = await runtime.submit(project.id, "implement", "block active")
+    queued = await runtime.submit(project.id, "review", "run after restart")
+    await drivers.started.wait()
+
+    await runtime.close()
+    database = Database(catalog.database_path)
+    assert database.job(active.job_id).state == "interrupted"
+    assert database.job(queued.job_id).state == "queued"
+    database.close()
+
+    restarted = Runtime(catalog)
+    restarted.drivers = FakeDrivers()
+    await restarted.start()
+    try:
+        assert (await restarted.wait(queued.job_id, 5)).state == "succeeded"
+    finally:
+        await restarted.close()
 
 
 @pytest.mark.asyncio

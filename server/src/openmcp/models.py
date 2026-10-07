@@ -156,6 +156,7 @@ class ActionResult(BaseModel):
     job_id: str
     state: JobState
     error: str = ""
+    cancelled_dependents: list[str] = Field(default_factory=list)
 
 
 class TaskGuideResult(BaseModel):
