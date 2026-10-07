@@ -8,7 +8,7 @@
 - Implementation Profile: implement
 - Consultation Profile: consult
 - Review Profile: review
-- Consultation Job: bef3d5f7-d880-4f80-83fa-b8cc36abdfa5; evidence follow-up pending
+- Consultation Job: bef3d5f7-d880-4f80-83fa-b8cc36abdfa5; follow-up 3dd972c7-b2de-4dda-a44b-c824570dc29e failed
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-10-07
@@ -44,6 +44,13 @@
 - Minimum proposal: only the proven isolated, read-only native target subset with no raw custom arguments may establish verified enforcement; every other or mixed fallback plan remains exclusive. Existing invocation behavior and valid configuration remain unchanged.
 - A resumed read-only consult must verify that this subset and the existing immutable snapshot representation fit the declared nine-file scope before implementation.
 - Daemon restart and global configuration changes remain prohibited.
+
+### Follow-up transport failure
+
+- Job: 3dd972c7-b2de-4dda-a44b-c824570dc29e, terminal failed after one attempt. No advice text was returned.
+- Native streaming transport rejected a completed text block that changed after it had already streamed. The exact transport diagnostic remains in the private job record; no execution identity is copied here.
+- Reconciliation: HEAD f548246c4a22fba9ccfd1b96a4d7562b56ff2445 unchanged; only the coordinator's .handover.md job reference changed. No production/test changes; project active list empty; daemon still PID 482030 with the original Phase 1 start timestamp.
+- Handover was BLOCKED pending recovery. The user explicitly selected one unchanged retry. The existing route, prompt, immutable job plan, and nine-file later implementation set still hold. No Phase 2 base or implementation job has been created. A second transport failure requires a new user decision; no further automatic retry is approved.
 
 ## Implementation Response
 
