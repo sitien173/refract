@@ -137,6 +137,9 @@ TASK_COMPLETE
 - Exact error received by Claude Code: `Error executing tool job_wait`.
 - Daemon request log classified the error as ValueError. The tool response did not include the underlying message; Phase 4 must verify actual SDK error-delivery behavior rather than assuming an ordinary exception exposes its string.
 - Probe route: other with profile base, selected from the saved task guide's catch-all recommendation. Workers must run a 370-second standard-library timer without repository changes. Mapping rejection blocks this route; no silent substitution is permitted.
+- Probe submission failed before job creation at 2026-10-07T07:03:50.272Z. Exact daemon cause: `Profile 'base' does not map workflow 'other'`; caller received `Error executing tool job_submit`.
+- Catalog advertises base and workflow other separately but does not show whether they are mapped together. Project active jobs remain empty. Waiting on explicit probe-route approval; no source changes or configuration edits were made.
+- User explicitly approved the existing implement/implement route for both timer probes after the other/base rejection. This is a user-authorized route override, not a silent substitution. No configuration changes are authorized or needed. Both probes must leave the working tree unchanged.
 
 ## Final Checkpoint
 
