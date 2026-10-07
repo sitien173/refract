@@ -131,7 +131,7 @@ async def test_mcp_exposes_direct_job_contract() -> None:
     assert tools["job_submit"].input_schema["properties"]["fresh_session"]["default"] is False
     assert set(tools["task_guide"].input_schema["properties"]) == {"project_id"}
     assert set(tools["job_wait"].input_schema["properties"]) == {"job_id", "timeout_s"}
-    assert tools["job_wait"].input_schema["properties"]["timeout_s"]["default"] == 300
+    assert tools["job_wait"].input_schema["properties"]["timeout_s"]["default"] == 3600
     assert set(tools["job_retry"].input_schema["properties"]) == {"job_id"}
     assert {"stages", "parent_job_id", "branch", "integration_base", "artifacts", "base_commit"}.isdisjoint(JobView.model_fields)
     assert "commit" not in JobResult.model_fields
@@ -314,10 +314,17 @@ def _job_view(state: str) -> JobView:
     )
 
 
+def test_job_wait_constants() -> None:
+    from openmcp import server
+
+    assert server._MCP_WAIT_TIMEOUT_S == 3600
+    assert server._MCP_HEARTBEAT_INTERVAL_S == 30
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("timeout_s", "expected_timeout_s"),
-    [(None, 300), (0, 300), (5, 5), (30, 30), (45, 45)],
+    [(None, 3600), (0, 3600), (5, 5), (30, 30), (45, 45), (4000, 3600)],
 )
 async def test_job_wait_bounds_public_timeout(timeout_s: int | None, expected_timeout_s: int) -> None:
     initial = _job_view("running")
@@ -355,7 +362,44 @@ async def test_job_wait_bounds_public_timeout(timeout_s: int | None, expected_ti
 
     assert waits == [(initial.id, expected_timeout_s)]
     assert result is latest
-    assert progress_messages == ["running", "succeeded"]
+    assert progress_messages == ["running"]
+
+
+@pytest.mark.asyncio
+async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypatch) -> None:
+    from openmcp import server
+
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    current_job = _job_view("running")
+    done_event = asyncio.Event()
+    progress_messages: list[str] = []
+
+    class Database:
+        def job(self, job_id: str) -> JobView:
+            assert job_id == current_job.id
+            return current_job
+
+    class Runtime:
+        database = Database()
+
+        async def wait(self, job_id: str, timeout_s: int) -> JobView:
+            await done_event.wait()
+            return current_job
+
+    async def report_progress(*, progress: float, total: float, message: str) -> None:
+        progress_messages.append(message)
+        if len(progress_messages) == 3:
+            current_job.state = "succeeded"
+            done_event.set()
+
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context=Runtime()),
+        report_progress=report_progress,
+    )
+
+    result = await job_wait(current_job.id, ctx, timeout_s=3600)
+    assert result.state == "succeeded"
+    assert progress_messages == ["running", "running", "running"]
 
 
 @pytest.mark.asyncio
@@ -372,9 +416,81 @@ async def test_job_wait_rejects_negative_timeout_before_job_lookup() -> None:
 
 
 @pytest.mark.asyncio
+async def test_job_wait_non_terminal_timeout(monkeypatch) -> None:
+    from openmcp import server
+
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    current_job = _job_view("running")
+    progress_messages: list[str] = []
+    timeout_event = asyncio.Event()
+
+    class Database:
+        def job(self, job_id: str) -> JobView:
+            assert job_id == current_job.id
+            return current_job
+
+    class Runtime:
+        database = Database()
+
+        async def wait(self, job_id: str, timeout_s: int) -> JobView:
+            await timeout_event.wait()
+            return current_job
+
+    async def report_progress(*, progress: float, total: float, message: str) -> None:
+        progress_messages.append(message)
+        if len(progress_messages) == 3:
+            timeout_event.set()
+
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context=Runtime()),
+        report_progress=report_progress,
+    )
+
+    result = await job_wait(current_job.id, ctx, timeout_s=10)
+    assert result.state == "running"
+    assert progress_messages == ["running", "running", "running"]
+
+
+@pytest.mark.asyncio
+async def test_job_wait_cancellation_cleanup() -> None:
+    current_job = _job_view("running")
+    wait_started = asyncio.Event()
+    wait_cancelled = asyncio.Event()
+
+    class Database:
+        def job(self, job_id: str) -> JobView:
+            assert job_id == current_job.id
+            return current_job
+
+    class Runtime:
+        database = Database()
+
+        async def wait(self, job_id: str, timeout_s: int) -> JobView:
+            wait_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                wait_cancelled.set()
+                raise
+
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context=Runtime()),
+        report_progress=lambda **kwargs: asyncio.sleep(0),
+    )
+
+    task = asyncio.create_task(job_wait(current_job.id, ctx, timeout_s=3600))
+    await wait_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert wait_cancelled.is_set()
+
+
+@pytest.mark.asyncio
 async def test_job_wait_returns_terminal_job_without_waiting() -> None:
     terminal = _job_view("failed")
     waits: list[str] = []
+    progress_messages: list[str] = []
 
     class Database:
         @staticmethod
@@ -388,13 +504,64 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
             waits.append(job_id)
             return terminal
 
+    async def report_progress(*, progress: float, total: float, message: str) -> None:
+        progress_messages.append(message)
+
     ctx = SimpleNamespace(
         request_context=SimpleNamespace(lifespan_context=Runtime()),
-        report_progress=lambda **kwargs: asyncio.sleep(0),
+        report_progress=report_progress,
     )
 
     assert await job_wait(terminal.id, ctx) is terminal
     assert waits == []
+    assert progress_messages == ["failed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("meta", "expected_present"),
+    [
+        ({"progress_token": "secret-token-123"}, True),
+        ({"progressToken": "secret-token-456"}, True),
+        ({}, False),
+        (None, False),
+    ],
+)
+async def test_job_wait_logs_progress_token_presence(caplog, meta, expected_present) -> None:
+    import logging
+
+    terminal = _job_view("succeeded")
+
+    class Database:
+        @staticmethod
+        def job(job_id: str) -> JobView:
+            return terminal
+
+    class Runtime:
+        database = Database()
+
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context=Runtime(), meta=meta),
+        report_progress=lambda **kwargs: asyncio.sleep(0),
+    )
+
+    with caplog.at_level(logging.INFO, logger="openmcp.server"):
+        result = await job_wait(terminal.id, ctx)
+
+    assert result is terminal
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "operation", "") == "job_wait"
+    ]
+    assert len(records) >= 2  # started and finished
+    for record in records:
+        assert getattr(record, "progress_token_present", None) is expected_present
+        # Verify the secret token value is NEVER logged anywhere
+        assert "secret-token-123" not in record.getMessage()
+        assert "secret-token-123" not in str(record.__dict__)
+        assert "secret-token-456" not in record.getMessage()
+        assert "secret-token-456" not in str(record.__dict__)
 
 
 @pytest.mark.asyncio

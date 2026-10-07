@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Literal, ParamSpec, TypeVar, cast
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Mapping, ParamSpec, TypeVar, cast
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
@@ -34,7 +34,8 @@ from openmcp.workflows import BUILTIN_WORKFLOWS
 
 log = get_logger("server")
 _DAEMON_CONFIG = None
-_MCP_WAIT_TIMEOUT_S = 300
+_MCP_WAIT_TIMEOUT_S = 3600
+_MCP_HEARTBEAT_INTERVAL_S: float = 30.0
 subscription_bus = InMemorySubscriptionBus()
 _DASHBOARD_STATE = DashboardState()
 _ACTIVE_RUNTIME = None
@@ -115,24 +116,60 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 
+def _progress_token_present(context: Any) -> bool:
+    if context is None:
+        return False
+    try:
+        req_ctx = getattr(context, "request_context", None)
+        if req_ctx is None:
+            return False
+        meta = getattr(req_ctx, "meta", None)
+        if meta is None:
+            return False
+        token = None
+        if isinstance(meta, Mapping):
+            token = meta.get("progress_token")
+            if token is None:
+                token = meta.get("progressToken")
+        else:
+            token = getattr(meta, "progress_token", None)
+            if token is None:
+                token = getattr(meta, "progressToken", None)
+        return token is not None and not isinstance(token, bool)
+    except Exception:
+        return False
+
+
 def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
     def decorate(function: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
         @wraps(function)
         async def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-            context = next((value for value in (*args, *kwargs.values()) if isinstance(value, Context)), None)
-            request_id = context.request_id if context is not None else ""
+            context = next((value for value in (*args, *kwargs.values()) if isinstance(value, Context) or hasattr(value, "request_context")), None)
+            request_id = getattr(context, "request_id", "") if context is not None else ""
             started_at = time.monotonic()
+            extra_started: dict[str, Any] = {"event": "mcp.request_started", "operation": operation}
+            if operation == "job_wait":
+                extra_started["progress_token_present"] = _progress_token_present(context)
             with log_context(request_id=request_id):
-                log.info("MCP tool request started", extra={"event": "mcp.request_started", "operation": operation})
+                log.info("MCP tool request started", extra=extra_started)
                 try:
                     result = await function(*args, **kwargs)
                 except asyncio.CancelledError:
-                    log.warning("MCP tool request cancelled", extra={"event": "mcp.request_finished", "operation": operation, "outcome": "cancelled", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
+                    extra_cancelled: dict[str, Any] = {"event": "mcp.request_finished", "operation": operation, "outcome": "cancelled", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)}
+                    if operation == "job_wait":
+                        extra_cancelled["progress_token_present"] = _progress_token_present(context)
+                    log.warning("MCP tool request cancelled", extra=extra_cancelled)
                     raise
                 except Exception as exc:
-                    log.warning("MCP tool request failed", extra={"event": "mcp.request_finished", "operation": operation, "outcome": "failed", "error_type": type(exc).__name__, "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
+                    extra_failed: dict[str, Any] = {"event": "mcp.request_finished", "operation": operation, "outcome": "failed", "error_type": type(exc).__name__, "duration_ms": round((time.monotonic() - started_at) * 1000, 2)}
+                    if operation == "job_wait":
+                        extra_failed["progress_token_present"] = _progress_token_present(context)
+                    log.warning("MCP tool request failed", extra=extra_failed)
                     raise
-                log.info("MCP tool request completed", extra={"event": "mcp.request_finished", "operation": operation, "outcome": "success", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
+                extra_completed: dict[str, Any] = {"event": "mcp.request_finished", "operation": operation, "outcome": "success", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)}
+                if operation == "job_wait":
+                    extra_completed["progress_token_present"] = _progress_token_present(context)
+                log.info("MCP tool request completed", extra=extra_completed)
                 return result
         return wrapped
     return decorate
@@ -182,11 +219,36 @@ async def job_wait(job_id: str, ctx: Context, timeout_s: int = _MCP_WAIT_TIMEOUT
     await ctx.report_progress(progress=1.0 if job.state in TERMINAL_STATES else 0.0, total=1.0, message=job.state)
     if job.state in TERMINAL_STATES:
         return job
-    await runtime.wait(job_id, timeout_s)
+
+    interval = float(_MCP_HEARTBEAT_INTERVAL_S) if _MCP_HEARTBEAT_INTERVAL_S > 0 else 30.0
+    wait_task = asyncio.create_task(runtime.wait(job_id, timeout_s))
+    try:
+        while not wait_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(wait_task), timeout=interval)
+                break
+            except TimeoutError:
+                refreshed = runtime.database.job(job_id)
+                if refreshed is None:
+                    raise ValueError(f"Unknown job: {job_id}")
+                if refreshed.state in TERMINAL_STATES:
+                    break
+                await ctx.report_progress(
+                    progress=0.0,
+                    total=1.0,
+                    message=refreshed.state,
+                )
+    finally:
+        if not wait_task.done():
+            wait_task.cancel()
+            try:
+                await wait_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
     refreshed = runtime.database.job(job_id)
     if refreshed is None:
         raise ValueError(f"Unknown job: {job_id}")
-    await ctx.report_progress(progress=1.0 if refreshed.state in TERMINAL_STATES else 0.0, total=1.0, message=refreshed.state)
     return refreshed
 
 
