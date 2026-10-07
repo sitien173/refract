@@ -2,7 +2,7 @@
 
 ## Status
 
-Preparation for a read-only consultation. No implementation is authorized until the Coordinator incorporates the consultation, finalizes this prompt, and anchors the clean phase base.
+Finalized after successful read-only consultation and exact caller audit. Implementation is authorized only from the recorded clean phase base with the saved implement/implement route.
 
 ## Goal
 
@@ -48,14 +48,14 @@ Only these paths and worker-owned notes/journal may be written after finalizatio
 - docs/plans/mcp-v2-claude-code/phase-05/notes.md
 - docs/plans/mcp-v2-claude-code/phase-05/journal.md
 
-The consultation must confirm the exact matching test set. JobDetail and RuntimeSettings have no standalone test in the current file inventory; use shared-detail, App, and integration coverage. No new unrelated tests or source paths are implied by the inventory.
+The consultation confirmed this matching test set. JobDetail and RuntimeSettings have no standalone test; Jobs.test.jsx already covers JobDetail and shared-detail, App, and integration coverage cover the remaining behavior. No new unrelated tests or source paths are implied.
 
 ## Tasks
 
 1. Add access_mode, depends_on, waiting_on, waiting_reason to DashboardJob and render the metadata in the shared detail and relevant lists. Reuse _dashboard_job, runtime.waiting_metadata, and database.dependencies_for_job. Read the immutable access snapshot; do not derive it again from reloaded routing. Keep operator-only fields rather than substituting the privacy-limited MCP DTO.
-2. Return project jobs as active, recent, more_recent. Keep all active jobs; more_recent is an integer count. Update every consumer, including Projects.jsx and ProjectDetail.jsx. Preserve unrelated unfiltered global-job behavior. Do not add legacy array-shape fallbacks or new pagination features.
-3. Expose max_project_readers with effective and pending values separately. Effective capacity is scheduler.max_project_readers, not a reloaded catalog value that requires restart. Use the existing runtime-settings form patterns and a native integer number input with minimum 1. Pending edits must not imply that the live scheduler changed. Do not restart the daemon.
-4. Confirm route decisions against source and record them in the journal. Prior read-only preflight found /dashboard/api/status and /dashboard/api/overview are distinct resources with different frontend consumers, so retain both. The client uses /dashboard/api/configuration, so remove its /dashboard/api/config alias. The client uses /dashboard/api/projects/{project_id}/profile-overrides, so remove /dashboard/api/projects/{project_id}/configuration/profiles. Removed paths must return 404 for valid fixtures, not a missing-project error or SPA HTML fallback. Keep canonical-route tests, CSRF, loopback rules, and deep links intact.
+2. Return project jobs as active, recent, more_recent. Partition before limiting: keep every queued/running job in active, the first 10 terminal jobs in recent, and the remaining terminal count in integer more_recent. Preserve newest-created ordering and operator DTOs. Exact empty shape is {active:[], recent:[], more_recent:0}. Update all three audited consumers: Jobs.jsx concatenates active/recent and polls until loaded active is empty; ProjectDetail.jsx updates polling, filters, rows, and total count with more_recent; Projects.jsx uses active.length for activity. Display omitted recent-history counts without new pagination. Jobs.jsx remains project-selected, including its existing selection URL behavior. Do not invent an unfiltered global endpoint, navigation change, or legacy array fallback.
+3. Expose max_project_readers with effective and pending values separately. Effective capacity is scheduler.max_project_readers; configured/pending is catalog.max_project_readers. GET /dashboard/api/settings adds daemon.max_project_readers and effective.max_project_readers. RuntimeSettings currently has tables, not a form; add only a one-field reader-capacity form and PUT /dashboard/api/settings within the approved files. Accept exactly {max_project_readers: positive_integer} with a strict model that forbids extras and rejects bool/string/float/zero/negative. Use a native number input min=1, step=1, required and submit a numeric integer, never parseInt truncation. Add the configured key to knownDaemonKeys. Reuse mutateWithCsrf and If-Match; preserve loopback/origin/CSRF checks and existing mutation-error handling. Under mutations.lock, use load_source and read_document, change only the daemon key, then commit_document with expected_revision. Return refreshed settings and publish pending configuration without altering live scheduler capacity. Keep unrelated TOML unchanged. Show Saved; restart required. Preserve dirty drafts on background refresh and on conflict; require explicit reload before retrying a conflict. Do not restart the daemon.
+4. Record these source-confirmed route decisions in the journal. Retain /dashboard/api/status and /dashboard/api/overview: they are distinct resources consumed by ConfigHealth and Overview. Keep /dashboard/api/configuration; remove only exact /dashboard/api/config, not /config/health or browser /dashboard/config. Keep /dashboard/api/projects/{project_id}/profile-overrides and its CRUD item routes; remove all five /configuration/profiles alias registrations, including list GET/POST and item GET/PUT/DELETE. Removed paths must return 404 JSON with Dashboard API route not found using a registered project, existing override, valid Host/Origin/CSRF/revision and bodies, not missing-entity errors or SPA HTML fallback. Keep API catchall-before-SPA ordering, canonical-route tests, CSRF, loopback rules, project configuration reads, and deep links intact.
 5. Run npm --prefix web run build and retain only its regenerated asset delta. Do not edit generated files manually. A repeated build must yield the same tracked output.
 
 ## Acceptance and review
@@ -70,14 +70,14 @@ The consultation must confirm the exact matching test set. JobDetail and Runtime
 
 ## Test order and fresh checks
 
-Record exact RED before production edits for the metadata, grouping/callers, reader settings, and removed aliases. Then implement the smallest correction and run GREEN. Use isolated fixtures and preserve unrelated operator/transport characterization.
+Record exact RED before production edits for the metadata, grouping/callers, reader settings, and removed aliases. Then implement the smallest correction and run GREEN. Use isolated fixtures and preserve unrelated operator/transport characterization. Cover more than 10 active and terminal jobs, integer omitted counts, empty shape and isolation; immutable access after catalog publication and real dependency waiting; pending-only settings save, strict invalid values, stale revision, security and unrelated TOML preservation; explicit valid-fixture alias errors. The pre-existing Profiles dirty-draft baseline failed once then passed untouched. It is not Phase 5 RED and does not authorize Profiles/editor/modal fixes or act-warning cleanup. Report any recurrence separately.
 
 - timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_dashboard.py -q
 - timeout --kill-after=5s 180s npm --prefix web test
 - timeout --kill-after=5s 180s npm --prefix web run build
 - timeout --kill-after=5s 180s uv run --extra dev pytest -q
 - git diff --check
-- Rebuild assets once more and verify no additional generated delta.
+- Snapshot the entire generated dashboard_static directory outside the repository, rebuild assets once more, and compare the full directories with diff -r. Require no difference. Include newly generated untracked hashes and obsolete-file removals; git diff alone does not establish reproducibility.
 
 ## Constraints
 
