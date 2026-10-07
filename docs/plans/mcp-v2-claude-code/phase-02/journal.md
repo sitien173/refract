@@ -8,7 +8,7 @@
 - Implementation Profile: implement
 - Consultation Profile: consult
 - Review Profile: review
-- Consultation Job: bef3d5f7-d880-4f80-83fa-b8cc36abdfa5; follow-up 3dd972c7-b2de-4dda-a44b-c824570dc29e failed
+- Consultation Job: bef3d5f7-d880-4f80-83fa-b8cc36abdfa5; follow-up 3dd972c7-b2de-4dda-a44b-c824570dc29e succeeded after the approved retry
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-10-07
@@ -50,7 +50,16 @@
 - Job: 3dd972c7-b2de-4dda-a44b-c824570dc29e, terminal failed after one attempt. No advice text was returned.
 - Native streaming transport rejected a completed text block that changed after it had already streamed. The exact transport diagnostic remains in the private job record; no execution identity is copied here.
 - Reconciliation: HEAD f548246c4a22fba9ccfd1b96a4d7562b56ff2445 unchanged; only the coordinator's .handover.md job reference changed. No production/test changes; project active list empty; daemon still PID 482030 with the original Phase 1 start timestamp.
-- Handover was BLOCKED pending recovery. The user explicitly selected one unchanged retry. The existing route, prompt, immutable job plan, and nine-file later implementation set still hold. No Phase 2 base or implementation job has been created. A second transport failure requires a new user decision; no further automatic retry is approved.
+- Handover was BLOCKED pending recovery. The user explicitly selected one unchanged retry. The existing route, prompt, immutable job plan, and nine-file later implementation set still hold. No Phase 2 base or implementation job had been created. No further automatic retry was approved.
+
+### Accepted follow-up
+
+- The one approved job_retry and one 3600-second wait returned job state succeeded with advisory status PASS. The job record reports four underlying execution attempts; the coordinator made one retry call.
+- Read-only reconciliation passed at fd5af88c2ecef019462b91a3924d1824906d08d3: clean attached main, no production/test changes, no active project job, unchanged daemon PID/start timestamp.
+- Accepted API: pure static DriverRegistry.supports_verified_read_only(target). Verified only for the documented native adapter with isolated=True, read_only=True, and empty raw args; all other cases false. No executable probe or transport change.
+- Accepted API: derive_access_mode(plan) evaluates every selected immutable target, requires a nonempty selection, and returns parallel_read only when all qualify. Existing snapshot format suffices. Do not ignore fallbacks beyond attempt count.
+- Accepted regressions cover unsafe primaries/fallbacks, advisory-only and unknown adapters, unisolated targets, raw custom arguments, snapshot round trips/catalog replacement, workflow independence, and an empty selection. Existing explicit-extension rejection and custom argv invocation remain unchanged.
+- Consultation now reports no remaining user clarification or documentation gap. Its verified recommendations are copied into prompt.md. Migration/configuration advice from the initial consult remains adopted. Runtime/scheduler/MCP consumer wiring remains Phase 3 or later.
 
 ## Implementation Response
 

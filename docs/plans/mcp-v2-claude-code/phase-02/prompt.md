@@ -60,9 +60,16 @@ No other edits are allowed. The coordinator owns prompt.md, PLAN.md, DESIGN.md, 
 
 ## Consultation Findings
 
-Initial read-only consultation confirmed migration 8 after version 7, atomic dependency validation and insertion, immutable backward-only links, existing `_positive_int` validation, and pending-restart mutation behavior. Its advice remained BLOCKED because the supplied driver-test path was absent and native enforcement could not be verified with its available tools. No production files changed.
+The resumed read-only consultation is PASS after the user's approved unchanged retry. No source or test files changed. Verified recommendations:
 
-The coordinator located the real tests and collected current documentation plus installed native CLI help. Read `consult-evidence.md` for exact evidence and the proposed minimum verified subset. A read-only follow-up must confirm this before implementation. In particular, isolation is necessary to disable custom and built-in extensions, and unproven raw custom arguments remain exclusive. Do not alter those configurations or add a CLI argument-policy framework.
+- Use migration 8 after version 7 and the existing database migration/transaction patterns. Validate every parent and insert the job and links atomically. Keep default migration mode exclusive, both job foreign keys, unique pairs, and indexed reverse lookup. Do not add a dependency mutation API or graph traversal.
+- Add the pure static `DriverRegistry.supports_verified_read_only(target: TargetConfig) -> bool`. The verified subset is the existing adapter branch constructing `PiParams`, with `isolated=True`, `read_only=True`, and empty raw `args`. Every other adapter or custom argument case returns false. Do not probe executables, reuse the streaming-capability cache, or modify `_target_args()`.
+- Add `derive_access_mode(plan: ExecutionPlan) -> Literal["parallel_read", "exclusive"]` in planning.py. Require a nonempty selection and evaluate every identifier in `plan.selection.targets` via `plan.target()`. Do not truncate fallbacks by attempt count, use workflow labels, or read a later catalog. Existing frozen targets and snapshot serialization already carry the needed fields; no snapshot-format change is necessary.
+- Persist the provided derived mode through the new creation API. Phase 3 owns runtime consumer wiring. Keep this phase inside its declared database/planning/configuration APIs and tests.
+- Reuse `_positive_int` and the existing mutation validation and pending-restart mechanism for max_project_readers.
+- Deterministic classification regressions cover a qualifying target and fallback chain, writable/unisolated/unverified/advisory-only targets, unsafe primary or fallback including beyond attempt count, every nonempty raw-argument case, snapshot round trips/catalog replacement, workflow independence, unknown adapter capability, and an empty programmatic selection. Otherwise-valid custom args stay valid and round-trip unchanged. Keep existing explicit-extension rejection intact.
+
+Read `consult-evidence.md` for exact source/test citations and current documentation. `tests/test_smoke.py` is read-only evidence, not an additional allowed edit. Verified native tool restrictions are not a kernel sandbox claim. Do not add an argument parser, safety-flag matrix, new native flags, or a configuration switch.
 
 ## SKILLS
 
