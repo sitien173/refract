@@ -111,7 +111,7 @@ project_resolve -> task_guide -> job_submit -> job_wait
 
 1. `project_resolve` expands `~`, applies `Path.resolve()`, and requires an existing directory.
 2. A stored root match returns the stored project and ignores `alias`.
-3. No match creates the project with `alias`.
+3. No match creates the project. The default alias is the directory name, suffixed `-2`, `-3`, and so on when taken. An explicit taken alias raises `alias_taken`.
 4. A unique constraint on `root` settles concurrent calls; the loser re-reads the existing row.
 5. The server does not walk up to a Git root. The description tells the caller to pass the Git root.
 
@@ -226,6 +226,7 @@ No stack trace or provider detail reaches the client.
 |---|---|---|
 | `unknown_project` | Unregistered `project_id` | Call `project_resolve` with the Git root |
 | `invalid_path` | Path missing or not a directory | Pass an existing absolute directory |
+| `alias_taken` | Explicit `alias` already used by another project | Pass a unique alias or omit it |
 | `unknown_job` | `job_id` not found | Call `job_list` for the project |
 | `unknown_profile` | Profile not in the project catalog | Call `task_guide` and use a listed profile |
 | `invalid_dependency` | Unknown, duplicate, or other-project dependency ID | Fix `depends_on`; message names the ID |
