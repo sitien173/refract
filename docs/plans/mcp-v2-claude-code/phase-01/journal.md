@@ -47,6 +47,16 @@ TASK_COMPLETE
 
 ## Quality Review
 
+### Review 1
+
+- Job: 9a6a1cc8-2652-4106-95c5-81df08e4b018
+- Pinned revision: 9591691a9eba1786b6306366fe1c318a26d53d0e
+- Status: FAIL
+- P1, src/openmcp/server.py:237: Running heartbeats repeat progress=0.0 with total=1.0. MCP progress must increase. Use an increasing heartbeat counter without a known total and test the values.
+- P2, src/openmcp/server.py:131-138: The token detector accepts SDK-normalized values that the dispatcher ignores, including boolean and floating-point wire tokens and a snake-case-only wire key. Detect presence using the SDK's accepted raw wire-token rules and add tests using actual metadata extraction.
+- No reviewer writes. The handover difference is the coordinator's post-submission job-reference update.
+- V1 shapes, timeout cap, immediate return, and cancellation cleanup were preserved.
+
 ## Review Result
 
 - Spec Status: PENDING
