@@ -233,3 +233,62 @@ def test_shutdown_restores_warning_logger(tmp_path) -> None:
     assert warnings_logger.handlers == original_handlers
     assert warnings_logger.level == original_level
     assert warnings_logger.propagate is original_propagate
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_progress_token_presence_boolean_is_visible_in_json_formatter(present: bool) -> None:
+    record = logging.makeLogRecord(
+        {
+            "msg": "MCP tool request started",
+            "operation": "job_wait",
+            "progress_token_present": present,
+        }
+    )
+
+    json_output = logging_setup._JsonFormatter().format(record)
+
+    assert json.loads(json_output)["progress_token_present"] is present
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_progress_token_presence_boolean_is_visible_in_text_formatter(present: bool) -> None:
+    record = logging.makeLogRecord(
+        {
+            "msg": "MCP tool request started",
+            "operation": "job_wait",
+            "progress_token_present": present,
+        }
+    )
+
+    text_output = logging_setup._formatter("text").format(record)
+
+    assert f"progress_token_present={present}" in text_output
+
+
+def test_progress_token_presence_formatter_rejects_non_boolean_and_redacts_secrets() -> None:
+    record = logging.makeLogRecord(
+        {
+            "msg": "request token=message-secret-value",
+            "operation": "job_wait",
+            "progress_token_present": "raw-progress-token-value",
+            "progress_token": "another-secret-token-value",
+            "api_key": "api-secret-value",
+        }
+    )
+
+    json_output = logging_setup._JsonFormatter().format(record)
+    text_output = logging_setup._formatter("text").format(record)
+    payload = json.loads(json_output)
+
+    assert payload["progress_token_present"] == "[REDACTED]"
+    assert payload["progress_token"] == "[REDACTED]"
+    assert payload["api_key"] == "[REDACTED]"
+    assert "progress_token_present" not in text_output
+    for secret in (
+        "message-secret-value",
+        "raw-progress-token-value",
+        "another-secret-token-value",
+        "api-secret-value",
+    ):
+        assert secret not in json_output
+        assert secret not in text_output

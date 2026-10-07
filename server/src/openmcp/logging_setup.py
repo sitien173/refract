@@ -224,7 +224,10 @@ class _JsonFormatter(logging.Formatter):
                 payload[field] = _safe_value(value, field)
         for key, value in record.__dict__.items():
             if key not in _STANDARD_RECORD_FIELDS and key not in _CONTEXT_FIELDS:
-                payload[key] = _safe_value(value, key)
+                if key == "progress_token_present" and type(value) is bool:
+                    payload[key] = value
+                else:
+                    payload[key] = _safe_value(value, key)
         if record.exc_info:
             payload["exception"] = _redact_text(self.formatException(record.exc_info))
         if record.stack_info:
@@ -248,11 +251,15 @@ class _TextFormatter(logging.Formatter):
         finally:
             record.msg = original_message
             record.args = original_args
-        context = " ".join(
+        context_fields = [
             f"{field}={_safe_value(getattr(record, field))}"
             for field in _CONTEXT_FIELDS
             if getattr(record, field, "")
-        )
+        ]
+        progress_token_present = getattr(record, "progress_token_present", None)
+        if type(progress_token_present) is bool:
+            context_fields.append(f"progress_token_present={progress_token_present}")
+        context = " ".join(context_fields)
         return f"{rendered} [{context}]" if context else rendered
 
 

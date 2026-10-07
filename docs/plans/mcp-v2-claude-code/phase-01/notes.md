@@ -80,3 +80,38 @@
 - GREEN focused: same command -> 11 passed, 27 deselected.
 - GREEN server: `uv run --extra dev pytest tests/test_server.py -q` -> 38 passed.
 - GREEN full: `uv run --extra dev pytest -q` -> 476 passed, 3 deselected.
+
+## Review Fix Cycle 2 — Logging Sink
+
+### Decisions made
+- JSON output preserves `progress_token_present` only when it is a direct log-record extra whose exact runtime type is bool. Every non-bool value still flows through the unchanged sensitive-key redactor.
+- Text output appends only a genuine boolean `progress_token_present` to the existing context section. Other extra fields remain unrendered.
+- Generic secret-key and message redaction behavior is unchanged.
+
+### Test evidence
+- RED: `uv run --extra dev pytest tests/test_logging.py -q -k 'progress_token_presence_formatter or progress_token_presence_boolean'` -> 4 failed, 1 passed, 9 deselected. JSON failed with `AssertionError: assert '[REDACTED]' is True` (also False); text failed because `progress_token_present=True/False` was absent from output.
+- GREEN focused: same command -> 5 passed, 9 deselected.
+- GREEN requested module checks: `uv run --extra dev pytest tests/test_server.py tests/test_logging.py -q` -> 52 passed.
+- GREEN full: `uv run --extra dev pytest -q` -> 481 passed, 3 deselected.
+- `git diff --check` -> passed.
+
+## Task 4
+
+### Decisions made
+- Preserve only a genuine boolean under the exact progress_token_present field in each production formatter. The user approved the additional logging files.
+
+### Spec deviations
+- Phase 1's file set and verification command include logging_setup.py and test_logging.py under the approved scope extension.
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED and GREEN evidence is recorded in Review Fix Cycle 2 above.
+- The coordinator reran the original reproduction after the fix; JSON and text both exposed the boolean without a token value.

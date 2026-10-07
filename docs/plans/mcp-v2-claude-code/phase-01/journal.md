@@ -85,12 +85,26 @@ TASK_COMPLETE
 - Fix cycle 2 must preserve only this exact boolean field while leaving token-value redaction intact. This blocks the mandatory live observability acceptance.
 - The user authorized waiting through normal timeouts for all jobs in this plan. Failures, unresolved questions, and review-fix bounds still stop execution.
 
+### Fix Cycle 2 Remediation
+
+- Finished: 2026-10-07T13:46:12+07:00
+- Status: Implemented and locally verified; independent re-review pending.
+- JSON formatter preserves the exact `progress_token_present` field only for direct bool-valued extras; non-bools continue through generic sensitive-key redaction.
+- Text formatter includes only that exact field when its value is a bool; it does not serialize other extras.
+- Added formatter regressions for `True`, `False`, non-boolean token content, unrelated secret fields, and message redaction.
+- RED: 4 failed / 1 passed / 9 deselected, with JSON redacting both booleans and text omitting both. Exact evidence is in `notes.md` under Review Fix Cycle 2.
+- GREEN: focused regressions 5 passed / 9 deselected; requested server/logging tests 52 passed; full suite 481 passed / 3 deselected; `git diff --check` passed.
+- Live acceptance remains pending coordinator work. No daemon restart or OpenMCP call performed.
+
 ## Coordinator Verification
 
 - Fix cycle 1, fresh coordinator run: `uv run --extra dev pytest tests/test_server.py -q` passed, 38 tests.
 - Fix cycle 1, fresh coordinator run: `uv run --extra dev pytest -q` passed, 476 tests, 3 deselected.
 - `git diff --check` passed.
 - No active project job after the fix. Changed paths match the declared implementation files plus coordinator-owned handover metadata.
+- Fix cycle 2, fresh coordinator run: `uv run --extra dev pytest tests/test_server.py tests/test_logging.py -q` passed, 52 tests.
+- Fix cycle 2, fresh coordinator run: `uv run --extra dev pytest -q` passed, 481 tests, 3 deselected.
+- Original formatter reproduction passed at 2026-10-07T06:48:05Z: JSON preserved progress_token_present=true and text emitted progress_token_present=True.
 - Independent re-review and live acceptance remain pending.
 
 ## Review Result
