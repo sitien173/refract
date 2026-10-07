@@ -192,6 +192,16 @@ class DriverRegistry:
     def available(target: TargetConfig) -> bool:
         return shutil.which(target.backend) is not None
 
+    @staticmethod
+    def supports_verified_read_only(target: TargetConfig) -> bool:
+        """Return whether this target uses the verified native read-only policy."""
+        return (
+            target.backend == "pi"
+            and target.isolated
+            and target.read_only
+            and not target.args
+        )
+
     def supports_structured_streaming(
         self,
         target: TargetConfig,

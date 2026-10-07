@@ -122,24 +122,24 @@ def table_columns(database: Database, table: str) -> set[str]:
     return database._columns(table)
 
 
-def test_fresh_database_uses_v11_schema(tmp_path) -> None:
+def test_fresh_database_uses_v12_schema(tmp_path) -> None:
     database = Database(tmp_path / "openmcp.db")
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "created_at", "updated_at"}
     assert "job_stream_events" in tables
     assert "stages" not in tables and "artifacts" not in tables
     database.close()
 
 
-def test_v6_migrates_to_v11_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v6_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v6_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
@@ -153,13 +153,13 @@ def test_v6_migrates_to_v11_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_v5_migrates_to_v11_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v5_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v5_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
@@ -172,20 +172,20 @@ def test_v5_migrates_to_v11_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_reopening_v11_is_a_noop(tmp_path) -> None:
+def test_reopening_v12_is_a_noop(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     first = Database(path)
     first.close()
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     second.close()
 
 
-def test_v9_migrates_to_v11_adding_fresh_session_column(tmp_path) -> None:
+def test_v9_migrates_to_v12_adding_fresh_session_column(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v9_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     assert "fresh_session" in table_columns(database, "jobs")
     assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     record = database.job_record("job")
@@ -193,14 +193,14 @@ def test_v9_migrates_to_v11_adding_fresh_session_column(tmp_path) -> None:
     database.close()
 
 
-def test_v8_migrates_to_v11_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
+def test_v8_migrates_to_v12_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v8_database(path)
 
     database = Database(path)
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "context_instructions" not in tables
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     assert "fresh_session" in table_columns(database, "jobs")
     assert "job_stream_events" in tables
     record = database.job_record("job")
@@ -482,11 +482,11 @@ def create_v10_database(path) -> None:
     connection.close()
 
 
-def test_v10_migrates_to_v11_adding_stream_events_table(tmp_path) -> None:
+def test_v10_migrates_to_v12_adding_stream_events_table(tmp_path) -> None:
     path = tmp_path / "openmcp.db"
     create_v10_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     expected_cols = {
         "id", "job_id", "created_at", "attempt", "target_id",
@@ -680,7 +680,7 @@ def test_database_reopen_preserves_stream_events_and_cursors(tmp_path) -> None:
     database.close()
 
     reopened = Database(path)
-    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     assert reopened.stream_high_water("job-1") == event_id
     assert reopened.stream_retained_from("job-1") == event_id
     events = reopened.stream_events("job-1", after=0)
@@ -845,4 +845,115 @@ def test_stream_is_truncated_lookup(tmp_path) -> None:
         "data": {"reason": "limit_exceeded"},
     }])
     assert database.stream_is_truncated("job-1") is True
+    database.close()
+
+
+def test_v11_migrates_existing_jobs_as_exclusive_without_dependencies(tmp_path) -> None:
+    path = tmp_path / "openmcp.db"
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '', fresh_session INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        INSERT INTO projects VALUES ('p1', 'p1', '/p1', 'now');
+        INSERT INTO jobs VALUES ('old', 'p1', 'consult', 'balanced', 'prompt', '{}', 'consult', 'queued', '', '', 0, '', '', 0, 'now', 'now');
+        PRAGMA user_version=11;
+    """)
+    connection.close()
+
+    database = Database(path)
+
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert "access_mode" in table_columns(database, "jobs")
+    assert database.job_record("old")["access_mode"] == "exclusive"
+    assert database._connection.execute("SELECT COUNT(*) FROM job_dependencies").fetchone()[0] == 0
+    database.close()
+
+
+def test_create_job_with_dependencies_is_atomic_and_supports_reverse_lookup(tmp_path) -> None:
+    database = Database(tmp_path / "openmcp.db")
+    first_project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
+    second_project = database.upsert_project(project_id="p2", alias="p2", root="/p2")
+    database.create_job(
+        job_id="dependency-1", project_id=first_project.id, workflow="consult",
+        profile="balanced", prompt="first", execution_plan_json="{}", context_key="k1",
+    )
+    database.create_job(
+        job_id="dependency-2", project_id=first_project.id, workflow="consult",
+        profile="balanced", prompt="second", execution_plan_json="{}", context_key="k2",
+    )
+    database.create_job(
+        job_id="foreign-project", project_id=second_project.id, workflow="consult",
+        profile="balanced", prompt="foreign", execution_plan_json="{}", context_key="k3",
+    )
+
+    parent_read_transactions: list[bool] = []
+
+    def trace_parent_reads(statement: str) -> None:
+        if statement.lstrip().upper().startswith("SELECT PROJECT_ID FROM JOBS WHERE ID="):
+            parent_read_transactions.append(database._connection.in_transaction)
+
+    database._connection.set_trace_callback(trace_parent_reads)
+    database.create_job_with_dependencies(
+        job_id="dependent", project_id=first_project.id, workflow="review",
+        profile="balanced", prompt="review", execution_plan_json="{}", context_key="k4",
+        access_mode="parallel_read", depends_on=["dependency-1", "dependency-2"],
+    )
+    database._connection.set_trace_callback(None)
+
+    assert parent_read_transactions == [True, True]
+    assert database.job_record("dependent")["access_mode"] == "parallel_read"
+    assert database.dependencies_for_job("dependent") == ["dependency-1", "dependency-2"]
+    assert database.dependents_for_job("dependency-1") == ["dependent"]
+    assert database.dependents_for_job("dependency-2") == ["dependent"]
+    for job_id, dependencies in (
+        ("unknown", ["missing"]),
+        ("later-unknown", ["dependency-1", "missing"]),
+        ("duplicate", ["dependency-1", "dependency-1"]),
+        ("cross-project", ["foreign-project"]),
+    ):
+        with pytest.raises(ValueError, match="dependenc"):
+            database.create_job_with_dependencies(
+                job_id=job_id, project_id=first_project.id, workflow="review",
+                profile="balanced", prompt="bad", execution_plan_json="{}", context_key=job_id,
+                access_mode="exclusive", depends_on=dependencies,
+            )
+        assert database.job_record(job_id) is None
+        assert database._connection.execute(
+            "SELECT COUNT(*) FROM job_dependencies WHERE job_id=?", (job_id,)
+        ).fetchone()[0] == 0
+        assert not database._connection.in_transaction
+
+    schema = database._connection.execute("PRAGMA foreign_key_list(job_dependencies)").fetchall()
+    assert len(schema) == 2
+    assert {row["table"] for row in schema} == {"jobs"}
+    indices = {row["name"] for row in database._connection.execute("PRAGMA index_list(job_dependencies)")}
+    assert "job_dependencies_dependency_idx" in indices
+    index_columns = [
+        row["name"]
+        for row in database._connection.execute(
+            "PRAGMA index_info(job_dependencies_dependency_idx)"
+        )
+    ]
+    assert index_columns == ["dependency_job_id"]
+    with pytest.raises(sqlite3.IntegrityError):
+        with database._connection:
+            database._connection.execute(
+                "INSERT INTO job_dependencies(job_id, dependency_job_id) VALUES ('dependent', 'dependency-1')"
+            )
+
+    database._connection.execute("""
+        CREATE TRIGGER reject_dependency_insert BEFORE INSERT ON job_dependencies
+        WHEN NEW.job_id='trigger-failure'
+        BEGIN SELECT RAISE(ABORT, 'simulated link failure'); END;
+    """)
+    with pytest.raises(sqlite3.IntegrityError, match="simulated link failure"):
+        database.create_job_with_dependencies(
+            job_id="trigger-failure", project_id=first_project.id, workflow="review",
+            profile="balanced", prompt="bad", execution_plan_json="{}", context_key="trigger-failure",
+            access_mode="exclusive", depends_on=["dependency-1"],
+        )
+    assert database.job_record("trigger-failure") is None
+    assert database._connection.execute(
+        "SELECT COUNT(*) FROM events WHERE job_id='trigger-failure'"
+    ).fetchone()[0] == 0
     database.close()

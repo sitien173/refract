@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 from openmcp.config import (
     DaemonConfig,
@@ -13,6 +13,7 @@ from openmcp.config import (
     TargetSelection,
     validate_target_args,
 )
+from openmcp.drivers import DriverRegistry
 from openmcp.workflows import get_workflow
 
 
@@ -164,6 +165,20 @@ def resolve_execution_plan(
         selection,
         tuple(target_by_id[value] for value in selection.targets),
     )
+
+
+def derive_access_mode(plan: ExecutionPlan) -> Literal["parallel_read", "exclusive"]:
+    """Classify a saved plan using verified enforcement for every possible target."""
+    if not plan.selection.targets:
+        return "exclusive"
+    for target_id in plan.selection.targets:
+        try:
+            target = plan.target(target_id)
+        except StopIteration:
+            return "exclusive"
+        if not DriverRegistry.supports_verified_read_only(target):
+            return "exclusive"
+    return "parallel_read"
 
 
 def target_execution_key(target: TargetConfig) -> str:

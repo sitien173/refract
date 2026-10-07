@@ -6,7 +6,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 from openmcp.logging_setup import get_logger
 from openmcp.models import (
@@ -21,7 +21,7 @@ from openmcp.models import (
 
 
 log = get_logger("database")
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 12
 
 
 def utc_now() -> str:
@@ -75,6 +75,7 @@ class Database:
             self._migrate_v8_to_v9()
             self._migrate_v9_to_v10()
             self._migrate_v10_to_v11()
+            self._migrate_v11_to_v12()
         log.debug(
             "Database schema is current",
             extra={"event": "database.migrated", "schema_version": _SCHEMA_VERSION},
@@ -156,6 +157,34 @@ class Database:
             self._connection.rollback()
             raise
 
+    def _migrate_v11_to_v12(self) -> None:
+        """Persist immutable job dependencies and conservative access classes."""
+        version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if version >= 12:
+            return
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            if "access_mode" not in self._columns("jobs"):
+                self._connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'exclusive'"
+                )
+            self._connection.execute(
+                """CREATE TABLE IF NOT EXISTS job_dependencies (
+                    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                    dependency_job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                    PRIMARY KEY (job_id, dependency_job_id)
+                )"""
+            )
+            self._connection.execute(
+                """CREATE INDEX IF NOT EXISTS job_dependencies_dependency_idx
+                   ON job_dependencies(dependency_job_id)"""
+            )
+            self._connection.execute("PRAGMA user_version=12")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
     def _tables(self) -> set[str]:
         return {
             row["name"]
@@ -205,12 +234,24 @@ class Database:
                 error TEXT NOT NULL DEFAULT '',
                 config_revision TEXT NOT NULL DEFAULT '',
                 fresh_session INTEGER NOT NULL DEFAULT 0,
+                access_mode TEXT NOT NULL DEFAULT 'exclusive',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             """
         )
         self._create_support_tables()
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS job_dependencies (
+                job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                dependency_job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                PRIMARY KEY (job_id, dependency_job_id)
+            )"""
+        )
+        self._connection.execute(
+            """CREATE INDEX IF NOT EXISTS job_dependencies_dependency_idx
+               ON job_dependencies(dependency_job_id)"""
+        )
         self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
         self._connection.commit()
 
@@ -575,6 +616,75 @@ class Database:
                 ),
             )
         self.event(job_id, "job.queued", {"workflow": workflow, "profile": profile})
+
+    def create_job_with_dependencies(
+        self,
+        *,
+        job_id: str,
+        project_id: str,
+        workflow: str,
+        profile: str,
+        prompt: str,
+        execution_plan_json: str,
+        context_key: str,
+        access_mode: Literal["parallel_read", "exclusive"],
+        depends_on: Sequence[str] = (),
+        config_revision: str = "",
+        fresh_session: bool = False,
+    ) -> None:
+        """Create a job and its immutable same-project dependency links atomically."""
+        if access_mode not in {"parallel_read", "exclusive"}:
+            raise ValueError("Invalid job access mode")
+        if isinstance(depends_on, (str, bytes)):
+            raise ValueError("Dependencies must be a sequence of job IDs")
+        dependency_ids = tuple(depends_on)
+        if any(not isinstance(value, str) or not value for value in dependency_ids):
+            raise ValueError("Dependency IDs must be non-empty strings")
+        if len(set(dependency_ids)) != len(dependency_ids):
+            raise ValueError("Duplicate dependency ID")
+
+        now = utc_now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        with self._connection:
+            for dependency_id in dependency_ids:
+                parent = self._connection.execute(
+                    "SELECT project_id FROM jobs WHERE id=?", (dependency_id,)
+                ).fetchone()
+                if parent is None or parent["project_id"] != project_id:
+                    raise ValueError(f"Invalid dependency: {dependency_id}")
+            self._connection.execute(
+                """INSERT INTO jobs(id, project_id, workflow, profile, prompt,
+                   execution_plan_json, context_key, state, config_revision,
+                   fresh_session, access_mode, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)""",
+                (
+                    job_id, project_id, workflow, profile, prompt,
+                    execution_plan_json, context_key, config_revision,
+                    1 if fresh_session else 0, access_mode, now, now,
+                ),
+            )
+            self._connection.executemany(
+                "INSERT INTO job_dependencies(job_id, dependency_job_id) VALUES (?, ?)",
+                ((job_id, dependency_id) for dependency_id in dependency_ids),
+            )
+            self._connection.execute(
+                "INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, 'job.queued', ?)",
+                (job_id, now, json.dumps({"workflow": workflow, "profile": profile})),
+            )
+
+    def dependencies_for_job(self, job_id: str) -> list[str]:
+        rows = self._connection.execute(
+            "SELECT dependency_job_id FROM job_dependencies WHERE job_id=? ORDER BY rowid",
+            (job_id,),
+        ).fetchall()
+        return [row["dependency_job_id"] for row in rows]
+
+    def dependents_for_job(self, job_id: str) -> list[str]:
+        rows = self._connection.execute(
+            "SELECT job_id FROM job_dependencies WHERE dependency_job_id=? ORDER BY rowid",
+            (job_id,),
+        ).fetchall()
+        return [row["job_id"] for row in rows]
 
     def queued_jobs(self) -> list[tuple[str, str]]:
         return [(row["id"], row["project_id"]) for row in self._connection.execute("SELECT id, project_id FROM jobs WHERE state='queued' ORDER BY created_at, id").fetchall()]

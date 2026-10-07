@@ -12,7 +12,7 @@
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-10-07
-- Finished: pending
+- Finished: 2026-10-07T16:17:32+07:00
 
 ## Setup and Guidance
 
@@ -63,11 +63,113 @@
 
 ## Implementation Response
 
-Worker appends the full ERP response here.
+# EXTERNAL RESPONSE
+## META
+- Phase: Phase 2 — Dependency persistence, access classes, and reader capacity
+- Started: 2026-10-07 (time not recorded)
+- Finished: 2026-10-07T16:17:32+07:00
+- Plan dir: docs/plans/mcp-v2-claude-code
+- Pre-job HEAD: 05372c9f06bbe62b662042a685e36e1c831e89c9
+- Authoritative phase base: a8e6b27445d3cf3e0ef199e085e5383e5fc73d69
+
+## SUMMARY
+Added schema v12 job access classes and immutable dependencies, conservative immutable-plan classification, and strictly positive startup-bound `max_project_readers` configuration with mutation validation.
+
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | `src/openmcp/database.py` | Add v12 migration, access mode storage, atomic dependency creation, and forward/reverse lookups |
+| Modify | `src/openmcp/planning.py` | Derive access mode across every target in the saved plan |
+| Modify | `src/openmcp/drivers.py` | Add conservative verified native read-only capability check |
+| Modify | `src/openmcp/config.py` | Add positive integer reader capacity with default 1 |
+| Modify | `tests/test_database.py` | Cover migration, constraints, atomic validation/insertion, and reverse lookup |
+| Modify | `tests/test_planning.py` | Cover capability and plan-derived classification safety cases |
+| Modify | `tests/test_config.py` | Cover default, positive setting, and strict type/range rejection |
+| Modify | `tests/test_config_mutation.py` | Verify global mutation validation accepts valid and rejects invalid values |
+| Modify | `docs/plans/mcp-v2-claude-code/phase-02/notes.md` | Record per-task decisions and exact RED/GREEN evidence |
+| Modify | `docs/plans/mcp-v2-claude-code/phase-02/journal.md` | Record implementation response and verification |
+
+## NOTES
+- `docs/plans/mcp-v2-claude-code/phase-02/notes.md` — Task 1, Task 2, Task 3.
+- The coordinator-owned `docs/plans/mcp-v2-claude-code/.handover.md` also appeared modified in `git status`; I did not edit it.
+
+## TESTS RUN
+- Task 1 RED: `uv run --extra dev pytest tests/test_database.py -q -k 'v11_migrates_existing_jobs_as_exclusive or create_job_with_dependencies'` -> 2 failed, 23 deselected. Failures: `assert 11 == 12`; `AttributeError: 'Database' object has no attribute 'create_job_with_dependencies'`.
+- Task 1 GREEN: same focused command -> 2 passed, 23 deselected; `uv run --extra dev pytest tests/test_database.py -q` -> 25 passed.
+- Task 2 RED: `uv run --extra dev pytest tests/test_planning.py -q -k 'verified_read_only or access_mode'` -> 6 failed, 11 deselected. Failures identified missing `DriverRegistry.supports_verified_read_only` and missing `derive_access_mode`.
+- Task 2 GREEN: `uv run --extra dev pytest tests/test_planning.py -q -k 'verified_read_only or access_mode or empty_programmatic_selection'` -> 7 passed, 10 deselected.
+- Task 3 RED: `uv run --extra dev pytest tests/test_config.py tests/test_config_mutation.py -q -k 'max_project_readers'` -> 7 failed, 132 deselected. Valid setting was rejected as unsupported; default field was absent; invalid values did not reach positive-integer validation.
+- Task 3 GREEN: same focused command -> 7 passed, 132 deselected.
+- Required phase suite: `uv run --extra dev pytest tests/test_database.py tests/test_planning.py tests/test_config.py tests/test_config_mutation.py -q` -> 184 passed in 2.38s.
+- Full suite: `uv run --extra dev pytest -q` -> 500 passed, 3 deselected in 28.65s.
+- `git diff --check` -> exit 0, no output.
+
+## SPEC COMPLIANCE
+- Meets Spec? YES — Phase 2 persistence, classification, configuration, and regression checks passed. Phase 3 consumer wiring remains out of scope; no live acceptance was performed.
+
+## CLARIFICATIONS NEEDED
+None
+
+## NEXT
+TASK_COMPLETE
+
+## Automatic Fix Cycle 1
+
+# EXTERNAL RESPONSE
+## META
+- Phase: Phase 2 — Specification/evidence fix cycle 1 of 2
+- Started: 2026-10-07 (time not recorded)
+- Finished: 2026-10-07T16:27:13+07:00
+- Plan dir: docs/plans/mcp-v2-claude-code
+- Pre-job HEAD: 05372c9f06bbe62b662042a685e36e1c831e89c9
+- Original phase base: a8e6b27445d3cf3e0ef199e085e5383e5fc73d69
+
+## SUMMARY
+Fixed transaction-boundary finding S1 and added native Pi argument evidence for S2 without changing the already-correct conservative production classification.
+
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modify | `src/openmcp/database.py` | Begin an explicit immediate transaction before dependency parent reads |
+| Modify | `tests/test_database.py` | Assert parent reads are transactional and test rollback for later invalid parent and injected link failure |
+| Modify | `tests/test_planning.py` | Cover accepted Pi export, install, and raw tool override args, round-trip, and exclusive classification |
+| Modify | `docs/plans/mcp-v2-claude-code/phase-02/notes.md` | Record corrected evidence and fix-cycle test results |
+| Modify | `docs/plans/mcp-v2-claude-code/phase-02/journal.md` | Record fix-cycle response |
+
+## NOTES
+- `phase-02/notes.md` — Review Fix Cycle 1, including exact RED/GREEN and Pi CLI evidence.
+- The pre-existing worker implementation changes and coordinator bookkeeping were preserved. The coordinator-owned `.handover.md` remains untouched.
+
+## TESTS RUN
+- S1 RED: `uv run --extra dev pytest tests/test_database.py -q -k 'create_job_with_dependencies_is_atomic_and_supports_reverse_lookup'` -> 1 failed, 24 deselected. `assert parent_read_transactions == [True, True]` observed `[False, False]`.
+- S1 GREEN: same command -> 1 passed, 24 deselected.
+- S2 characterization: `uv run --extra dev pytest tests/test_planning.py -q -k 'pi_eager_write_and_raw_tool_args'` -> 3 passed, 20 deselected on the unchanged production classifier; evidence gap confirmed, so no production change was appropriate.
+- Required phase suite: `uv run --extra dev pytest tests/test_database.py tests/test_planning.py tests/test_config.py tests/test_config_mutation.py -q` -> 187 passed in 2.31s.
+- Full suite: `uv run --extra dev pytest -q` -> 503 passed, 3 deselected in 29.74s.
+- `git diff --check` -> exit 0, no output.
+
+## SPEC COMPLIANCE
+- Meets Spec? YES — parent validation and all inserts now share an explicit transaction; the required native-argument evidence is present. No access-class semantics or invocation behavior changed.
+
+## CLARIFICATIONS NEEDED
+None
+
+## NEXT
+TASK_COMPLETE
 
 ## Coordinator Verification
 
-Pending.
+- Implementation job 4bf699e3-50a7-4b54-ac62-efcaf1fc10b9 returned TASK_COMPLETE. The first 300-second wait returned running; the approved continued wait returned succeeded.
+- HEAD remained 05372c9f06bbe62b662042a685e36e1c831e89c9. Changed paths matched the worker declaration and approved scope, plus the coordinator-owned job reference. config_mutation.py needed no edit because existing candidate-loader validation accepts the added setting; mutation tests passed.
+- The actual baseline schema version is 11, verified from the recorded source diff. Migration 12 correctly follows it. The consultation's version 8 statement was inaccurate and is not adopted.
+- Fresh focused suite: 184 passed in 2.06s. Fresh full suite: 500 passed, 3 deselected in 29.62s. git diff --check passed.
+- Blocking Spec finding S1: SQLite trace showed parent SELECT with in_transaction=False, followed by BEGIN at the job INSERT. Dependency validation and insertion therefore do not share one transaction. Require an explicit transaction before parent reads and a deterministic transaction-boundary regression.
+- Blocking evidence finding S2: the prompt explicitly requires valid export/install/raw-tool-override cases to round-trip and remain exclusive. Existing new tests cover verbose/system-prompt but not those eager-write cases. Add the missing scoped regressions without changing invocation or accepted configuration.
+- No checkpoint created before resolving these findings. Automatic fix cycle 1 of 2. Daemon PID 482030 and startup unchanged.
+- Fix job 57227d7d-027c-481c-b755-c3c3dc4e053e returned TASK_COMPLETE. Inspected final diff: explicit BEGIN IMMEDIATE precedes parent SELECTs, the trace regression asserts both parent reads are transactional, and later invalid-parent/link failures roll back. Valid export/install/raw-tool arguments round-trip unchanged and remain exclusive. S1 and S2 resolved.
+- Fresh fix verification at the unchanged implementation tree: 187 focused tests passed in 2.12s; 503 full tests passed, 3 deselected in 28.75s; git diff --check passed. Allowed worker and coordinator path ownership matched. No active project job and live daemon unchanged.
+- Optional Phase 3 background retrieval was stopped before returning any findings; it is not evidence. No source investigation ran while it was in flight. Phase 3 can use the known source/test paths at its own consultation gate.
+- Spec PASS. Independent quality review remains pending.
 
 ## Quality Review
 
@@ -75,7 +177,7 @@ Pending.
 
 ## Review Result
 
-- Spec Status: PENDING
+- Spec Status: PASS
 - Quality Status: PENDING
 - Debt: none
 

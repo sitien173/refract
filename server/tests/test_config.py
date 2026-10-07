@@ -586,6 +586,36 @@ def test_daemon_integer_types_are_strict(tmp_path, setting, value, expected) -> 
         load_config(path)
 
 
+@pytest.mark.parametrize("value", ["0", "-1", "true", "1.5", '"2"'])
+def test_max_project_readers_requires_a_strictly_positive_integer(tmp_path, value: str) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _explicit_config().replace(
+            'default_profile = "balanced"',
+            f'default_profile = "balanced"\nmax_project_readers = {value}',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="positive integer"):
+        load_config(path)
+
+
+def test_max_project_readers_defaults_to_one_and_accepts_positive_value(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config(), encoding="utf-8")
+    assert load_config(path).max_project_readers == 1
+
+    path.write_text(
+        _explicit_config().replace(
+            'default_profile = "balanced"',
+            'default_profile = "balanced"\nmax_project_readers = 3',
+        ),
+        encoding="utf-8",
+    )
+    assert load_config(path).max_project_readers == 3
+
+
 def test_notifications_config_defaults_disabled_when_absent(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(_explicit_config(), encoding="utf-8")

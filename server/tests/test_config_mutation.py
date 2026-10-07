@@ -1053,6 +1053,32 @@ def test_commit_fails_if_mode_preservation_fails(tmp_path, monkeypatch) -> None:
         runtime.database.close()
 
 
+def test_daemon_max_project_readers_is_accepted_by_global_mutation(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        initial_revision = service.source_read().revision
+        document = service.read_document(load_source(source))
+        document["daemon"]["max_project_readers"] = 3
+
+        result = service.commit_document(document, expected_revision=initial_revision)
+
+        assert result.config.max_project_readers == 3
+        assert runtime.config.max_project_readers == 1
+        assert "max_project_readers = 3" in source.read_text(encoding="utf-8")
+
+        invalid_revision = service.source_read().revision
+        invalid_document = service.read_document(load_source(source))
+        invalid_document["daemon"]["max_project_readers"] = 0
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(invalid_document, expected_revision=invalid_revision)
+        assert raised.value.code == "configuration_invalid"
+        assert service.source_read().revision == invalid_revision
+    finally:
+        runtime.database.close()
+
+
 def test_project_validation_temp_directory_cleaned_up(tmp_path, monkeypatch) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:

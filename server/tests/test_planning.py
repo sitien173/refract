@@ -97,3 +97,173 @@ consult = "primary"
         resolve_execution_plan(get_workflow("implement"), catalog, "consult-only")
     with pytest.raises(ValueError, match="does not map workflow 'other'"):
         resolve_execution_plan(get_workflow("other"), catalog, "consult-only")
+
+
+def test_native_pi_verified_read_only_capability_is_narrow() -> None:
+    from openmcp.config import TargetConfig
+    from openmcp.drivers import DriverRegistry
+
+    assert DriverRegistry.supports_verified_read_only(
+        TargetConfig(id="safe", backend="pi", isolated=True, read_only=True)
+    )
+    unsafe_targets = (
+        TargetConfig(id="writable", backend="pi", isolated=True),
+        TargetConfig(id="unisolated", backend="pi", read_only=True),
+        TargetConfig(id="advisory", backend="codex", isolated=True, read_only=True),
+        TargetConfig(id="unknown", backend="unknown", isolated=True, read_only=True),
+        TargetConfig(id="custom-arg", backend="pi", isolated=True, read_only=True, args=("--verbose",)),
+        TargetConfig(id="custom-arg-pair", backend="pi", isolated=True, read_only=True, args=("--tools", "read")),
+        TargetConfig(id="custom-system-prompt", backend="pi", isolated=True, read_only=True, args=("--system-prompt", "read only")),
+        TargetConfig(id="custom-explicit-extension", backend="pi", isolated=True, read_only=True, args=("--extension", "ignored.ts")),
+    )
+    assert all(not DriverRegistry.supports_verified_read_only(target) for target in unsafe_targets)
+
+
+@pytest.mark.parametrize("workflow", ["consult", "review", "implement", "other"])
+def test_access_mode_requires_every_saved_fallback_target_regardless_of_workflow(workflow: str) -> None:
+    from openmcp.config import TargetConfig, TargetSelection
+    from openmcp.planning import ExecutionPlan, derive_access_mode
+    from openmcp.workflows import get_workflow
+
+    safe = TargetConfig(id="safe", backend="pi", isolated=True, read_only=True)
+    unsafe = TargetConfig(id="unsafe", backend="pi", isolated=True, read_only=True, args=("--verbose",))
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow(workflow),
+        selection=TargetSelection(("safe", "unsafe"), max_attempts=1),
+        targets=(safe, unsafe),
+    )
+
+    assert derive_access_mode(plan) == "exclusive"
+
+
+def test_access_mode_with_all_qualified_fallbacks_is_parallel_read() -> None:
+    from openmcp.config import TargetConfig, TargetSelection
+    from openmcp.planning import ExecutionPlan, derive_access_mode
+    from openmcp.workflows import get_workflow
+
+    targets = (
+        TargetConfig(id="primary", backend="pi", isolated=True, read_only=True),
+        TargetConfig(id="fallback", backend="pi", isolated=True, read_only=True),
+    )
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow("review"),
+        selection=TargetSelection(("primary", "fallback"), max_attempts=1),
+        targets=targets,
+    )
+
+    assert derive_access_mode(plan) == "parallel_read"
+
+
+def test_unsafe_primary_target_derives_exclusive() -> None:
+    from openmcp.config import TargetConfig, TargetSelection
+    from openmcp.planning import ExecutionPlan, derive_access_mode
+    from openmcp.workflows import get_workflow
+
+    targets = (
+        TargetConfig(id="primary", backend="pi", isolated=True, read_only=True, args=("--verbose",)),
+        TargetConfig(id="fallback", backend="pi", isolated=True, read_only=True),
+    )
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow("consult"),
+        selection=TargetSelection(("primary", "fallback"), max_attempts=1),
+        targets=targets,
+    )
+
+    assert derive_access_mode(plan) == "exclusive"
+
+
+def test_access_mode_uses_immutable_snapshot_targets_and_round_trips(tmp_path) -> None:
+    from dataclasses import replace
+
+    from openmcp.config import TargetConfig, TargetSelection
+    from openmcp.planning import ExecutionPlan, derive_access_mode
+    from openmcp.workflows import get_workflow
+
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow("review"),
+        selection=TargetSelection(("primary",), max_attempts=1),
+        targets=(TargetConfig(id="primary", backend="pi", isolated=True, read_only=True),),
+    )
+    snapshot = parse_execution_plan(execution_plan_data(plan))
+    replacement_catalog_target = replace(snapshot.target("primary"), read_only=False)
+    replacement_catalog_plan = replace(snapshot, targets=(replacement_catalog_target,))
+
+    assert replacement_catalog_target.read_only is False
+    assert derive_access_mode(snapshot) == "parallel_read"
+    assert derive_access_mode(replacement_catalog_plan) == "exclusive"
+    assert parse_execution_plan(execution_plan_data(snapshot)) == snapshot
+
+
+def test_otherwise_valid_custom_args_round_trip_and_remain_exclusive() -> None:
+    from openmcp.config import TargetConfig, TargetSelection
+    from openmcp.planning import ExecutionPlan, derive_access_mode
+    from openmcp.workflows import get_workflow
+
+    target = TargetConfig(
+        id="native-with-custom-args",
+        backend="pi",
+        isolated=True,
+        read_only=True,
+        args=("--verbose", "--system-prompt", "advisory only"),
+    )
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow("review"),
+        selection=TargetSelection((target.id,), max_attempts=1),
+        targets=(target,),
+    )
+    restored = parse_execution_plan(execution_plan_data(plan))
+
+    assert restored.target(target.id).args == target.args
+    assert derive_access_mode(restored) == "exclusive"
+
+
+@pytest.mark.parametrize(
+    "native_args",
+    [
+        ("--export", "export.html"),
+        ("install", "example-source"),
+        ("--tools", "read,bash,edit,write"),
+    ],
+)
+def test_pi_eager_write_and_raw_tool_args_round_trip_as_exclusive(native_args: tuple[str, ...]) -> None:
+    from openmcp.config import TargetConfig, TargetSelection
+    from openmcp.planning import ExecutionPlan, derive_access_mode
+    from openmcp.workflows import get_workflow
+
+    target = TargetConfig(
+        id="pi-with-native-args",
+        backend="pi",
+        isolated=True,
+        read_only=True,
+        args=native_args,
+    )
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow("review"),
+        selection=TargetSelection((target.id,), max_attempts=1),
+        targets=(target,),
+    )
+    restored = parse_execution_plan(execution_plan_data(plan))
+
+    assert restored.target(target.id).args == native_args
+    assert derive_access_mode(restored) == "exclusive"
+
+
+def test_empty_programmatic_selection_derives_exclusive() -> None:
+    from openmcp.config import TargetSelection
+    from openmcp.planning import ExecutionPlan, derive_access_mode
+    from openmcp.workflows import get_workflow
+
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow("consult"),
+        selection=TargetSelection((), max_attempts=1),
+        targets=(),
+    )
+
+    assert derive_access_mode(plan) == "exclusive"
