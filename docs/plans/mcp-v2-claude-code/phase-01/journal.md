@@ -68,6 +68,23 @@ TASK_COMPLETE
 - GREEN: focused regression tests 11 passed / 27 deselected; server tests 38 passed; full tests 476 passed / 3 deselected.
 - Live acceptance remains pending and coordinator-owned. No service restart or OpenMCP call performed.
 
+### Review 2
+
+- Job: bf400d69-1304-46bf-a5d8-3ce449791e29
+- Range: f7adfe597d5e7a3bb6b429d123e0167e4c537560..98d0a5038a0d33bcaee20130d739d0ec5e7bd933
+- Status: PASS for fix cycle 1; no findings or debt.
+- Installed SDK 2.0.0 confirmed both blockers fixed, including accepted zero/empty-string tokens and rejected normalized invalid values.
+- Reviewer made no writes. Only the coordinator's expected handover job-reference update was present.
+
+### Coordinator Logging-Sink Finding
+
+- H1 confirmed at 2026-10-07T06:40:08Z: `_JsonFormatter` emits progress_token_present as `[REDACTED]`; `_TextFormatter` omits the field.
+- Reproduction: `uv run --extra dev python -I -c` constructs a logging record carrying progress_token_present=True and formats it with both production formatters.
+- Root cause: src/openmcp/logging_setup.py:175-177 redacts every key containing token before inspecting its boolean type; the text formatter at lines 251-256 renders context fields only.
+- The user approved adding src/openmcp/logging_setup.py and tests/test_logging.py to Phase 1 on 2026-10-07.
+- Fix cycle 2 must preserve only this exact boolean field while leaving token-value redaction intact. This blocks the mandatory live observability acceptance.
+- The user authorized waiting through normal timeouts for all jobs in this plan. Failures, unresolved questions, and review-fix bounds still stop execution.
+
 ## Coordinator Verification
 
 - Fix cycle 1, fresh coordinator run: `uv run --extra dev pytest tests/test_server.py -q` passed, 38 tests.

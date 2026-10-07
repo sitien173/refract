@@ -64,6 +64,11 @@ observability that records progress-token presence per request. Add tests in
 **Files:**
 - Modify: `src/openmcp/server.py`
 - Modify: `tests/test_server.py`
+- Modify: `src/openmcp/logging_setup.py`
+- Modify: `tests/test_logging.py`
+
+The user approved the logging-file scope extension on 2026-10-07 after a
+production-formatter reproduction showed the presence boolean was hidden.
 
 **Tasks:**
 1. Raise `_MCP_WAIT_TIMEOUT_S` to 3600. Add a module-level heartbeat interval of
@@ -76,6 +81,9 @@ observability that records progress-token presence per request. Add tests in
 3. Tests: heartbeat count over a short injected interval with a job that
    finishes after several intervals; immediate return for a terminal job;
    timeout returns the current non-terminal job; token presence logged both ways.
+4. Preserve only the exact boolean `progress_token_present` field in production
+   JSON and text log output. Keep token values and non-boolean values redacted.
+   Add formatter regression coverage for both boolean values and redaction.
 
 **Acceptance Criteria:**
 - Tests prove progress is emitted at the injected interval until terminal.
@@ -95,7 +103,7 @@ observability that records progress-token presence per request. Add tests in
 - The token value is never logged.
 
 **Verification Checks:**
-- `uv run --extra dev pytest tests/test_server.py -q`
+- `uv run --extra dev pytest tests/test_server.py tests/test_logging.py -q`
 - `uv run --extra dev pytest -q`
 
 ---
