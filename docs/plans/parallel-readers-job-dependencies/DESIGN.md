@@ -1,6 +1,6 @@
 # Parallel Readers and Job Dependencies Design
 
-**Status:** Confirmed 2026-10-01
+**Status:** Confirmed 2026-10-01; merged into `docs/plans/mcp-v2-claude-code/DESIGN.md` on 2026-10-07
 **Consultation:** Read-only external consultation succeeded through the `consult` profile.
 
 ## Purpose
