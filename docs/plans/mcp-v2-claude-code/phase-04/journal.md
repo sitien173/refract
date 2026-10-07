@@ -67,7 +67,7 @@ Pending.
 
 ## Final Checkpoint
 
-- Phase base ref: refs/plans/mcp-v2-claude-code/phase-04/base, pending until finalized consultation and prompt
+- Phase base ref: refs/plans/mcp-v2-claude-code/phase-04/base, acaca18f2cf61398d92ccc93f88b02c68e28207d; written once at the clean finalized contract checkpoint after explicit user approval
 - Phase implementation ref: refs/plans/mcp-v2-claude-code/phase-04/impl, pending
 - Plan commit ref: pending
-- State checkpoint: final Gate 1 contract and scope approved; pending Phase 4 base anchor and implementation
+- State checkpoint: approved Gate 1 contract and Phase 4 base anchored; implementation pending
