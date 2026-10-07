@@ -43,6 +43,14 @@
 - Reuse _dashboard_job, runtime.waiting_metadata, database.dependencies_for_job, and the shared JobDetails. Effective reader capacity is scheduler.max_project_readers; reloaded catalog values may be pending, so do not report catalog values as already effective.
 - Phase 7 read-only documentation research verifies fresh print-mode stream-json output, verbose, no-session-persistence, and forwarding subagent text. Tool approvals do not create availability. Optional PostToolUse duration_ms may supplement daemon request timestamps; whole-session elapsed time is not six-minute tool-call evidence. Existing Phase 1 evidence requires a 450-second or longer probe timer. No fresh session or probe was run in Phase 4.
 
+## User Approval and Finalized Gate 1
+
+- The final AskUserQuestion was answered: Can I apply the recorded recommendations and continue the remaining phases? Answer: Approve recommendations (Recommended). This is an explicit user selection, unlike earlier timed-out questions or automated feedback.
+- Approved: invalid_request JSON schema errors; adaptive result pages and explicit response_too_large for unpageable metadata; only the editable OpenMCP uv.lock version sync; Phase 5 Projects.jsx and its matching test. No list/guidance paging, dependency upgrade, or live configuration change.
+- DESIGN.md, PLAN.md, and the Phase 4 prompt now record the chosen contract and exact file scope. The conservative complete-response budget is below 9000 UTF-8 bytes and 30000 characters, with at most 24000 code points in a candidate result page. Oversized unpageable metadata is an explicit error; overflow after a mutation must identify that applied outcome and retain the root ID.
+- Fresh reconciliation after approval: main is attached and clean at c39c1883a9d098eeaa3fdde02b08c30c936bccfe; no active project job; plan base and Phase 3 impl resolve. Daemon PID 482030 and startup Wed 2026-10-07 14:01:37 +07 unchanged. The earlier block is resolved. Phase 4 guidance remains the saved consult/implement/review routes and is not re-requested.
+- Checkpoint the final coordination files and anchor Phase 4 before implementation. Worker still owns only the declared source/test paths and phase notes/journal.
+
 ## Implementation Response
 
 Pending.
@@ -62,4 +70,4 @@ Pending.
 - Phase base ref: refs/plans/mcp-v2-claude-code/phase-04/base, pending until finalized consultation and prompt
 - Phase implementation ref: refs/plans/mcp-v2-claude-code/phase-04/impl, pending
 - Plan commit ref: pending
-- State checkpoint: BLOCKED at Gate 1 on unanswered design and scope decisions; no implementation, Phase 4 base, or Phase 4 implementation checkpoint
+- State checkpoint: final Gate 1 contract and scope approved; pending Phase 4 base anchor and implementation

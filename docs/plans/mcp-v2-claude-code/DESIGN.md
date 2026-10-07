@@ -126,12 +126,18 @@ project_resolve -> task_guide -> job_submit -> job_wait
 The SDK sends progress only when the request carries a progress token; see `_streamable_http_modern.py:114` in `mcp` 2.0.0.
 Phase 0 must confirm Claude Code sends one. See Risks.
 
-### Result paging
+### Result paging and response bounds
 
-- Page size is 24,000 characters.
-- `result.next_offset` is `null` when the text is complete, otherwise the next character offset.
+- 24,000 Unicode code points is the maximum candidate result page, not a fixed page size. Shrink the page against the complete serialized tool result so escaping and non-ASCII content cannot exceed the response budget.
+- Use one compact JSON text content with structured output disabled. No duplicate structured copy is emitted.
+- Every complete tool result is under 30,000 serialized characters and under a conservative 9,000-byte UTF-8 budget. This leaves headroom below the 10k-token client warning without adding a tokenizer dependency.
+- `result.next_offset` is `null` when the text is complete, otherwise the next Unicode code-point offset. Advance by the actual page length, preserving every character.
 - `job_wait(job_id, timeout_s=0, result_offset=n)` returns that page immediately.
-- Paging applies only to terminal jobs; non-terminal jobs return empty `text`.
+- Paging applies only to terminal jobs; non-terminal jobs return empty `text` and do not advance the offset.
+- Keep the seven tool signatures unchanged. Non-pageable metadata that cannot fit returns `response_too_large` with `isError` and an actionable `next_action`, never a silently truncated success. This includes active lists, guidance, dependency and cancellation arrays, and summary fields.
+- If a mutating operation has already applied before an overflow is detected, the error must state that outcome and retain the root job or project ID in its message or next action. Never imply that blind resubmission is safe.
+
+The user approved adaptive result pages and explicit overflow errors on the Phase 4 approval question. List and guidance pagination are not part of this release.
 
 ### Dependencies
 
@@ -234,7 +240,11 @@ No stack trace or provider detail reaches the client.
 | `invalid_state` | `job_retry` on a job that is not failed, cancelled, or interrupted | Message names the state; call `job_wait` or submit a new job |
 | `config_invalid` | Daemon configuration fails to load | Fix it in the dashboard; message names the source path |
 | `daemon_stopping` | Daemon shutting down | Wait, then call `project_resolve` again |
+| `invalid_request` | Malformed, missing, or out-of-range tool arguments | Correct the arguments using the tool schema and call the tool again |
+| `response_too_large` | Non-pageable metadata exceeds the response budget | Use the dashboard to inspect or reduce the oversized data before retrying; do not blindly repeat an already-applied mutation |
 | `internal_error` | Any unexpected exception | Retry once, then report the request ID |
+
+The user approved `invalid_request` and `response_too_large` in the Phase 4 approval question. Schema validation failures are model-visible JSON errors, not protocol-only exceptions. Expected errors use the SDK ToolError seam; request middleware normalizes only recognizable OpenMCP JSON payloads from SDK prefixes and covers pre-handler validation. Cancellation propagates unchanged.
 
 ### Non-errors
 

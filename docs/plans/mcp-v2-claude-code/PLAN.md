@@ -249,6 +249,7 @@ ID so desktop notifications keep working.
 - Modify: `src/openmcp/runtime.py`
 - Modify: `src/openmcp/execution.py`
 - Modify: `pyproject.toml`
+- Modify: `uv.lock`, only the editable OpenMCP package version metadata from 1.2.0 to 2.0.0, approved in the Phase 4 approval question
 - Modify: `README.md`
 - Modify: `tests/test_server.py`
 - Modify: `tests/test_runtime.py`
@@ -265,8 +266,14 @@ ID so desktop notifications keep working.
    `job_list`, `job_cancel`, and `job_retry` with the design's parameters,
    return shapes, titles, and annotations. Set `instructions` from the design
    and server title `OpenMCP job queue`. `job_wait` keeps the Phase 1
-   heartbeat, adds `result_offset` paging at 24,000 characters, and returns
+   heartbeat, adds `result_offset` paging up to 24,000 Unicode code points,
+   shrunk to the complete serialized response budget, and returns
    `next_action` on timeout. `job_cancel` on a terminal job returns its summary.
+   The approved `invalid_request` and `response_too_large` codes cover schema
+   validation and unpageable metadata. Emit one compact JSON text content
+   without structured duplication, under 30,000 characters and 9,000 UTF-8 bytes.
+   Never silently truncate. An overflow after an applied mutation must name
+   that outcome and retain the root ID rather than encouraging resubmission.
 3. `Runtime.resolve_project`: canonical path match returns the stored project;
    otherwise create it. Default alias is the directory name; when that alias is
    taken, append `-2`, `-3`, and so on. An explicit alias that is taken raises
@@ -322,6 +329,7 @@ keeps target and provider detail.
 - Modify: `web/src/screens/Jobs.jsx`
 - Modify: `web/src/screens/JobDetail.jsx`
 - Modify: `web/src/screens/ProjectDetail.jsx`
+- Modify: `web/src/screens/Projects.jsx` and its matching test, approved in the Phase 4 approval question because it also consumes the changed job-list shape
 - Modify: `web/src/screens/RuntimeSettings.jsx`
 - Modify: `web/src/screens/Overview.jsx`
 - Modify: `web/src/screens/ConfigHealth.jsx`
