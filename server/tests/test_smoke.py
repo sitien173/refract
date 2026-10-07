@@ -34,6 +34,37 @@ def test_shell_stream_reports_nonzero_exit_after_output() -> None:
         next(stream)
 
 
+def test_v1_server_facades_and_resource_uri_model_are_removed() -> None:
+    import importlib.util
+
+    import openmcp.models as models
+    import openmcp.server as server
+
+    assert not hasattr(server, "run")
+    assert not hasattr(server, "project_register")
+    assert not hasattr(server, "status")
+    assert not hasattr(server, "subscription_bus")
+    assert not hasattr(server, "publish_job_resource")
+    assert not hasattr(models, "job_resource_uri")
+    assert not hasattr(models, "JOB_RESOURCE_URI_TEMPLATE")
+    assert "resource_uri" not in models.SubmissionResult.model_fields
+    assert importlib.util.find_spec("openmcp.backend_runner") is None
+
+
+def test_openmcp_version_is_2_and_lock_matches_without_dependency_changes() -> None:
+    import tomllib
+
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    locked_openmcp = next(package for package in lock["package"] if package["name"] == "openmcp")
+
+    assert project["project"]["version"] == "2.0.0"
+    assert locked_openmcp["version"] == "2.0.0"
+
+
 def test_imports() -> None:
     import openmcp.server  # noqa: F401
     import openmcp.cli  # noqa: F401
@@ -330,73 +361,6 @@ def test_agy_continuation_propagates_failure(monkeypatch, tmp_path) -> None:
     assert out.outcome == "FATAL"
     assert out.error_class == "execution_error"
     assert out.agent_messages == "first reply\n\npartial continuation"
-
-
-@pytest.mark.asyncio
-async def test_backend_runner_dispatches_claude_without_pi_fallback(monkeypatch, tmp_path) -> None:
-    from openmcp.backend_runner import run
-
-    captured = {}
-
-    async def fake_claude(params):
-        captured["params"] = params
-        return BackendResult(
-            outcome="OK",
-            SESSION_ID="claude-session",
-            agent_messages="PONG",
-            error="",
-            error_class="",
-        )
-
-    async def fail_pi(params):
-        pytest.fail("claude must not fall through to pi")
-
-    out = await run(
-        "claude",
-        "prompt",
-        str(tmp_path),
-        "input-session",
-        42,
-        pi_executor=fail_pi,
-        claude_executor=fake_claude,
-    )
-
-    assert isinstance(captured["params"], ClaudeParams)
-    assert captured["params"].PROMPT == "prompt"
-    assert captured["params"].cd == tmp_path
-    assert captured["params"].SESSION_ID == "input-session"
-    assert captured["params"].timeout_s == 42
-    assert captured["params"].args == ()
-    assert out == {
-        "success": True,
-        "SESSION_ID": "claude-session",
-        "agent_messages": "PONG",
-        "error": "",
-    }
-
-
-@pytest.mark.asyncio
-async def test_backend_runner_rejects_unknown_backend_without_pi_fallback(tmp_path) -> None:
-    from typing import cast
-
-    from openmcp.backend_runner import BackendName, run
-
-    async def fail_pi(params):
-        pytest.fail("unknown backend must not fall through to pi")
-
-    # Deliberately outside BackendName: guards callers that bypass the literal.
-    out = await run(cast(BackendName, "unknown"), "prompt", str(tmp_path), pi_executor=fail_pi)
-
-    assert out["success"] is False
-    assert "unknown" in out["error"]
-
-
-def test_tool_signature() -> None:
-    from openmcp.server import run
-
-    sig = inspect.signature(run)
-    params = list(sig.parameters.keys())
-    assert params == ["backend", "PROMPT", "cd", "SESSION_ID", "timeout_s"]
 
 
 @pytest.mark.asyncio
@@ -1425,61 +1389,6 @@ async def test_driver_rejects_unsafe_programmatic_isolated_pi_target(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_server_dispatches_pi_without_implicit_model(monkeypatch, tmp_path) -> None:
-    import openmcp.server as srv
-
-    captured = {}
-
-    async def fake(params):
-        captured["params"] = params
-        return BackendResult(outcome="OK", SESSION_ID="pi-session", agent_messages="PONG", error="", error_class="")
-
-    monkeypatch.setattr(srv, "pi_execute", fake)
-    out = await srv.run(backend="pi", PROMPT="x", cd=str(tmp_path))
-
-    assert captured["params"].args == ("--approve",)
-    assert out == {"success": True, "SESSION_ID": "pi-session", "agent_messages": "PONG", "error": ""}
-
-
-@pytest.mark.asyncio
-async def test_response_shape_success(monkeypatch) -> None:
-    import openmcp.server as srv
-
-    async def fake(params):
-        return BackendResult(
-            outcome="OK",
-            SESSION_ID="sess-x",
-            agent_messages="lots of text",
-            error="",
-            error_class="",
-        )
-
-    monkeypatch.setattr(srv, "agy_execute", fake)
-    out = await srv.run(backend="agy", PROMPT="x", cd=Path("."))
-    assert set(out.keys()) == {"success", "SESSION_ID", "agent_messages", "error"}
-    assert out == {"success": True, "SESSION_ID": "sess-x", "agent_messages": "lots of text", "error": ""}
-
-
-@pytest.mark.asyncio
-async def test_response_shape_failure(monkeypatch) -> None:
-    import openmcp.server as srv
-
-    async def fake(params):
-        return BackendResult(
-            outcome="FATAL",
-            SESSION_ID="",
-            agent_messages="",
-            error="boom",
-            error_class="fatal_backend",
-        )
-
-    monkeypatch.setattr(srv, "codex_execute", fake)
-    out = await srv.run(backend="codex", PROMPT="x", cd=Path("."))
-    assert set(out.keys()) == {"success", "SESSION_ID", "agent_messages", "error"}
-    assert out == {"success": False, "SESSION_ID": "", "agent_messages": "", "error": "boom"}
-
-
-@pytest.mark.asyncio
 async def test_driver_compiles_agy_and_codex_target_configuration(monkeypatch, tmp_path) -> None:
     import openmcp.drivers as drivers_module
     from openmcp.config import TargetConfig
@@ -1535,36 +1444,3 @@ async def test_driver_compiles_agy_and_codex_target_configuration(monkeypatch, t
         "-c", 'model="gpt-5-mini"',
         "-c", "model_reasoning_effort=high",
     )
-
-
-@pytest.mark.asyncio
-async def test_direct_run_ignores_legacy_environment_and_plugin_config(
-    monkeypatch, tmp_path
-) -> None:
-    import openmcp.server as srv
-
-    captured = {}
-
-    async def fake(params):
-        captured["args"] = params.args
-        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
-
-    config = {
-        "mcpServers": {
-            "openmcp": {
-                "env": {
-                    "OPENMCP_CODEX_MODEL_DEFAULT": "plugin-model",
-                    "OPENMCP_CODEX_PROFILE_DEFAULT": "plugin-profile",
-                }
-            }
-        }
-    }
-    (tmp_path / "mcp_config.json").write_text(json.dumps(config), encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENMCP_CODEX_MODEL_DEFAULT", "environment-model")
-    monkeypatch.setenv("OPENMCP_CODEX_PROFILE_DEFAULT", "environment-profile")
-    monkeypatch.setattr(srv, "codex_execute", fake)
-
-    await srv.run(backend="codex", PROMPT="x", cd=Path("."))
-
-    assert captured == {"args": ()}

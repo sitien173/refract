@@ -514,3 +514,96 @@ async def test_stream_historical_fallback_for_jobs_without_events(tmp_path) -> N
     assert job is not None
     assert job.result.text == "authoritative historical result"
     await runtime.close()
+
+
+def test_resolve_project_is_canonical_idempotent_and_handles_alias_collisions(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    first_root = tmp_path / "one" / "shared"
+    second_root = tmp_path / "two" / "shared"
+    first_root.mkdir(parents=True)
+    second_root.mkdir(parents=True)
+    try:
+        first = runtime.resolve_project(str(first_root))
+        symlink_root = tmp_path / "shared-link"
+        symlink_root.symlink_to(first_root, target_is_directory=True)
+        repeated = runtime.resolve_project(str(symlink_root), alias="ignored-alias")
+        second = runtime.resolve_project(str(second_root))
+
+        assert repeated.id == first.id
+        assert repeated.alias == first.alias == "shared"
+        assert repeated.root == first_root.resolve().as_posix()
+        assert second.alias == "shared-2"
+
+        explicit_root = tmp_path / "explicit"
+        explicit_root.mkdir()
+        with pytest.raises(OrchestrationError) as raised:
+            runtime.resolve_project(str(explicit_root), alias="shared")
+        assert raised.value.code == "alias_taken"
+    finally:
+        runtime.database.close()
+
+
+def test_resolve_project_rereads_concurrent_root_winner(tmp_path, monkeypatch) -> None:
+    import sqlite3
+
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "raced-root"
+    root.mkdir()
+    original_upsert = runtime.database.upsert_project
+    simulated_race = False
+
+    def race_on_root(**kwargs):
+        nonlocal simulated_race
+        if kwargs["root"] == root.resolve().as_posix() and not simulated_race:
+            simulated_race = True
+            winner = original_upsert(
+                project_id="concurrent-winner",
+                alias=kwargs["alias"],
+                root=kwargs["root"],
+            )
+            raise sqlite3.IntegrityError("UNIQUE constraint failed: projects.root")
+        return original_upsert(**kwargs)
+
+    monkeypatch.setattr(runtime.database, "upsert_project", race_on_root)
+    try:
+        project = runtime.resolve_project(str(root))
+        assert project.id == "concurrent-winner"
+        assert runtime.database.project("concurrent-winner").root == root.resolve().as_posix()
+    finally:
+        runtime.database.close()
+
+
+def test_resolve_project_preserves_alias_of_concurrent_canonical_winner(tmp_path, monkeypatch) -> None:
+    from openmcp.database import Database
+
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    other = Database(runtime.config.database_path)
+    root = tmp_path / "real-race"
+    root.mkdir()
+    original_projects = runtime.database.projects
+    inserted = False
+
+    def insert_winner_after_stale_read():
+        nonlocal inserted
+        rows = original_projects()
+        if not inserted:
+            inserted = True
+            other.upsert_project(project_id="race-winner", alias="winner", root=root.resolve().as_posix())
+        return rows
+
+    monkeypatch.setattr(runtime.database, "projects", insert_winner_after_stale_read)
+    try:
+        resolved = runtime.resolve_project(str(root), alias="loser")
+        stored = other.project("race-winner")
+        assert resolved.id == "race-winner"
+        assert resolved.alias == "winner"
+        assert stored is not None and stored.alias == "winner"
+    finally:
+        other.close()
+        runtime.database.close()

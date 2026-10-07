@@ -523,7 +523,7 @@ async def test_retry_rejects_dependent_with_unsuccessful_parent_without_reset(tm
         )
         original_events = runtime.database.events(child.job_id)
 
-        with pytest.raises(OrchestrationError, match="dependenc"):
+        with pytest.raises(OrchestrationError, match="Dependency"):
             await runtime.retry(child.job_id)
 
         assert runtime.database.job(child.job_id).state == "cancelled"
@@ -893,14 +893,15 @@ async def test_dependency_waiting_consumes_no_worker_and_releases_after_all_pare
 
 
 @pytest.mark.asyncio
-async def test_submission_result_includes_exact_job_resource_uri(tmp_path) -> None:
+async def test_submission_result_has_no_resource_uri(tmp_path) -> None:
     root = repository(tmp_path)
     runtime = Runtime(config(tmp_path / "home"))
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
         submission = await runtime.submit(project.id, "implement", "inspect")
-        assert submission.resource_uri == f"openmcp://jobs/{submission.job_id}"
+        assert submission.job_id
+        assert "resource_uri" not in submission.model_dump()
     finally:
         await runtime.close()
 
@@ -920,7 +921,7 @@ async def test_job_state_transitions_notify_after_persistence(tmp_path) -> None:
         project = runtime.register_project(str(root))
         submission = await runtime.submit(project.id, "implement", "inspect")
         await runtime.wait(submission.job_id, 10)
-        assert notifications == [submission.resource_uri] * 3
+        assert notifications == [submission.job_id] * 3
         assert runtime.database.job(submission.job_id).state == "succeeded"
     finally:
         await runtime.close()
@@ -1130,9 +1131,9 @@ async def test_retry_transition_notifies_the_same_job_resource(tmp_path) -> None
         submission = await runtime.submit(project.id, "implement", "retry")
         assert (await runtime.wait(submission.job_id, 10)).state == "failed"
         retried = await runtime.retry(submission.job_id)
-        assert retried.resource_uri == submission.resource_uri
+        assert retried.job_id == submission.job_id
         assert (await runtime.wait(retried.job_id, 10)).state == "failed"
-        assert notifications == [submission.resource_uri] * 6
+        assert notifications == [submission.job_id] * 6
     finally:
         await runtime.close()
 
@@ -1191,8 +1192,8 @@ async def test_queued_and_running_cancellation(tmp_path) -> None:
         assert running_cancel.cancelled_dependents == []
         assert (await runtime.wait(first.job_id, 10)).state == "cancelled"
         assert (await runtime.wait(second.job_id, 10)).state == "cancelled"
-        assert [uri for uri in notifications if uri == first.resource_uri] == [first.resource_uri] * 3
-        assert [uri for uri in notifications if uri == second.resource_uri] == [second.resource_uri] * 2
+        assert [job_id for job_id in notifications if job_id == first.job_id] == [first.job_id] * 3
+        assert [job_id for job_id in notifications if job_id == second.job_id] == [second.job_id] * 2
     finally:
         await runtime.close()
 
@@ -1329,7 +1330,7 @@ async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) 
     try:
         interrupted = runtime.database.job("running")
         assert interrupted and interrupted.state == "interrupted"
-        assert notifications == ["openmcp://jobs/running"]
+        assert notifications == ["running"]
         assert (root / "partial.txt").read_text(encoding="utf-8") == "partial\n"
     finally:
         await runtime.close()
@@ -4073,8 +4074,8 @@ async def test_terminal_desktop_notifications_failure_isolation(
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     notifications: list[str] = []
 
-    async def notify(uri: str) -> None:
-        notifications.append(uri)
+    async def notify(job_id: str) -> None:
+        notifications.append(job_id)
 
     mock_send_false = MagicMock(return_value=False)
     monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send_false)
@@ -4088,7 +4089,7 @@ async def test_terminal_desktop_notifications_failure_isolation(
         sub1 = await runtime.submit(project.id, "implement", "inspect")
         job1 = await runtime.wait(sub1.job_id, 10)
         assert job1.state == "succeeded"
-        assert notifications == [sub1.resource_uri] * 3
+        assert notifications == [sub1.job_id] * 3
         failed_records = [
             r for r in caplog.records
             if getattr(r, "event", None) == "job.desktop_notification_failed"
@@ -4104,7 +4105,7 @@ async def test_terminal_desktop_notifications_failure_isolation(
         sub2 = await runtime.submit(project.id, "implement", "inspect2")
         job2 = await runtime.wait(sub2.job_id, 10)
         assert job2.state == "succeeded"
-        assert notifications == [sub2.resource_uri] * 3
+        assert notifications == [sub2.job_id] * 3
         failed_records2 = [
             r for r in caplog.records
             if getattr(r, "event", None) == "job.desktop_notification_failed"
@@ -4173,7 +4174,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
     release_first_publish = asyncio.Event()
     paused_once = False
 
-    async def pausing_notifier(uri: str) -> None:
+    async def pausing_notifier(job_id: str) -> None:
         nonlocal paused_once
         if not paused_once:
             paused_once = True
@@ -4183,7 +4184,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
     runtime = Runtime(catalog, notifier=pausing_notifier)
     try:
         publish_task = asyncio.create_task(
-            runtime._notify_job_resource("openmcp://jobs/failed-1")
+            runtime._notify_job("failed-1")
         )
         await first_publish_entered.wait()
 
@@ -4210,8 +4211,8 @@ async def test_terminal_desktop_notifications_snapshot_lookup_failure_warning_on
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     notifications: list[str] = []
 
-    async def notify(uri: str) -> None:
-        notifications.append(uri)
+    async def notify(job_id: str) -> None:
+        notifications.append(job_id)
 
     runtime = Runtime(catalog, notifier=notify)
     try:
@@ -4223,9 +4224,9 @@ async def test_terminal_desktop_notifications_snapshot_lookup_failure_warning_on
         )
 
         caplog.clear()
-        await runtime._notify_job_resource("openmcp://jobs/job-snapshot-err")
+        await runtime._notify_job("job-snapshot-err")
 
-        assert notifications == ["openmcp://jobs/job-snapshot-err"]
+        assert notifications == ["job-snapshot-err"]
         failed_records = [
             r for r in caplog.records
             if getattr(r, "event", None) == "job.desktop_notification_failed"
@@ -4248,16 +4249,16 @@ async def test_terminal_desktop_notifications_disabled_does_not_lookup_job(
     catalog = config(tmp_path / "home")
     notifications: list[str] = []
 
-    async def notify(uri: str) -> None:
-        notifications.append(uri)
+    async def notify(job_id: str) -> None:
+        notifications.append(job_id)
 
     runtime = Runtime(catalog, notifier=notify)
     try:
         mock_job = MagicMock(side_effect=AssertionError("database.job should not be called when disabled"))
         monkeypatch.setattr(runtime.database, "job", mock_job)
 
-        await runtime._notify_job_resource("openmcp://jobs/job-disabled")
-        assert notifications == ["openmcp://jobs/job-disabled"]
+        await runtime._notify_job("job-disabled")
+        assert notifications == ["job-disabled"]
         mock_job.assert_not_called()
     finally:
         await runtime.close()

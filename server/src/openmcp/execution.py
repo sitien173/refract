@@ -17,7 +17,7 @@ from openmcp.config import DaemonConfig, TargetConfig
 from openmcp.database import Database
 from openmcp.drivers import DriverRegistry, DriverResult, StreamBridge
 from openmcp.logging_setup import get_logger, log_context
-from openmcp.models import ProjectView, TargetView, job_resource_uri
+from openmcp.models import ProjectView, TargetView
 from openmcp.planning import ExecutionPlan, parse_execution_plan, target_execution_key
 from openmcp.streaming import StreamRecorder
 
@@ -489,7 +489,7 @@ class JobRunner:
 
     async def _notify(self, job_id: str) -> None:
         try:
-            await self.notifier(job_resource_uri(job_id))
+            await self.notifier(job_id)
         except Exception:
             log.warning(
                 "Job resource notification failed",

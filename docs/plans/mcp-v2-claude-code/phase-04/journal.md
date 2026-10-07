@@ -9,10 +9,10 @@
 - Consultation Profile: consult
 - Review Profile: review
 - Consultation Job: 944810ff-2093-41f0-acfc-e644f4d5dedd
-- Implementation Job: pending
+- Implementation Job: preserved cancelled/failed records; fresh recovery implementation completed in this working tree
 - Review Job: pending
 - Started: 2026-10-07
-- Finished: pending
+- Finished: 2026-10-08T03:48:39+07:00
 
 ## Setup and Guidance
 
@@ -53,7 +53,115 @@
 
 ## Implementation Response
 
-Pending.
+# EXTERNAL RESPONSE
+## META
+- Phase: 4 — MCP v2 tool surface
+- Started: 2026-10-07 (continued preserved implementation; not a phase replay)
+- Finished: 2026-10-08T03:48:39+07:00
+- Plan dir: docs/plans/mcp-v2-claude-code
+## SUMMARY
+Completed the preserved Phase 4 MCP v2 implementation, compatibility fixes, documentation/version updates, notes, and bounded verification without changing dependencies or the daemon.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Updated | README.md | Documented seven-tool v2 surface, durable jobs, paging/errors; removed stale subscription/direct-run claims. |
+| Added | docs/plans/mcp-v2-claude-code/phase-04/notes.md | Recorded per-task decisions, root causes, RED/GREEN evidence, and fresh checks. |
+| Updated | docs/plans/mcp-v2-claude-code/phase-04/journal.md | Preserved all prior approvals and both failure records; appended this ERP and fresh evidence. |
+| Updated | pyproject.toml | Bumped OpenMCP version to 2.0.0. |
+| Deleted | src/openmcp/backend_runner.py | Removed obsolete direct-run facade after confirming no source/test import remains. |
+| Updated | src/openmcp/execution.py | Notify with job IDs rather than resource URIs. |
+| Updated | src/openmcp/models.py | Removed resource URI fields/helpers and exposed the v2 public summary model. |
+| Updated | src/openmcp/runtime.py | Added canonical project resolution and ID-keyed notifications while preserving scheduler behavior. |
+| Updated | src/openmcp/server.py | Implemented seven tools, sanitized JSON errors, bounded outputs, terminal paging, and middleware validation. |
+| Updated | tests/test_execution.py | Covered job-ID notification contract and corrected stale test assertions. |
+| Updated | tests/test_runtime.py | Covered canonical/idempotent resolution, alias collision, and concurrent insert recovery. |
+| Updated | tests/test_server.py | Covered the v2 MCP surface, errors, paging/bounds, and client workflow; completed runtime doubles. |
+| Updated | tests/test_smoke.py | Covered facade removal/version metadata and corrected EOF whitespace. |
+| Updated | uv.lock | Changed only editable OpenMCP version metadata to 2.0.0; dependencies unchanged. |
+## NOTES
+- docs/plans/mcp-v2-claude-code/phase-04/notes.md (## Task 1–4; preserved original RED evidence and fresh GREEN/full checks).
+- Fresh focused pytest: `timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_server.py tests/test_runtime.py tests/test_execution.py tests/test_smoke.py tests/test_notifications.py -q` -> exit 0, 225 passed.
+- Fresh full pytest: `timeout --kill-after=5s 180s uv run --extra dev pytest -q` -> exit 0, 529 passed, 3 deselected.
+- Existing SDK 2.0.0 actual-client regressions -> exit 0, 3 passed. Existing SDK 2.3.0 in-process actual-client check -> exit 0; exact seven tools, invalid-request JSON, and unknown-job JSON verified. Both SDK commands were bounded at 180s; no dependency installation or environment change was made.
+- `git diff --check` -> exit 0. Fresh working tree remains uncommitted; no Git writes, service restart, or OpenMCP calls occurred.
+- Prior original cancellation and recovery-context failure remain separate, preserved records; neither is reported as successful. Runtime notifications keep desktop behavior; tests/test_notifications.py was not modified.
+## SPEC COMPLIANCE
+- Meets Spec? YES — the required focused/full suites, both SDK client checks, and whitespace check passed; required v2 surface, bounds, paging, runtime resolution, notifications, compatibility, version, and README criteria are covered.
+## CLARIFICATIONS NEEDED
+None.
+## NEXT
+TASK_COMPLETE
+
+## Specification Fix Cycle 1 — Worker Response
+
+# EXTERNAL RESPONSE
+## META
+- Phase: 4 — MCP v2 tool surface, specification fix cycle 1
+- Started: 2026-10-08 (continued preserved implementation; no reset or replay)
+- Finished: 2026-10-08T04:22:57+07:00
+- Plan dir: docs/plans/mcp-v2-claude-code
+## SUMMARY
+Fixed strict raw-argument validation, terminal page forward progress, and atomic alias-preserving project resolution; completed the missing contract evidence.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Updated | src/openmcp/server.py | Reject SDK-coerced argument types before dispatch; return explicit bounded response_too_large when remaining terminal text cannot fit one code point. |
+| Updated | src/openmcp/runtime.py | Serialize final canonical-root/alias check and insertion to preserve a concurrent winner's alias. |
+| Updated | tests/test_server.py | Added coercion, paging-boundary, per-code errors, privacy, annotation/description, request-ID, mutation-overflow, structured-output, and dependency/cancellation regressions. |
+| Updated | tests/test_runtime.py | Added real two-connection SQLite alias-race regression. |
+| Updated | docs/plans/mcp-v2-claude-code/phase-04/notes.md | Appended fix-cycle RED/GREEN and fresh verification evidence. |
+| Updated | docs/plans/mcp-v2-claude-code/phase-04/journal.md | Appended this cycle's ERP; all prior consultation, approval, failure, and coordinator records retained. |
+## NOTES
+- docs/plans/mcp-v2-claude-code/phase-04/notes.md — Fix cycle 1 sections B1–B4, in addition to original Task 1–4 evidence.
+- RED: `timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_server.py::test_actual_client_rejects_sdk_coercions_before_dispatch tests/test_server.py::test_terminal_page_with_tight_metadata_advances_or_errors tests/test_runtime.py::test_resolve_project_preserves_alias_of_concurrent_canonical_winner -q` -> 3 failed. Boolean timeout was coerced through and returned unknown_job; the initial local page fixture was incomplete (the exact stall was independently reproduced by the preserved coordinator probe under both SDKs); actual SQLite insertion's winner alias was overwritten.
+- Fresh focused original command: `timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_server.py tests/test_runtime.py tests/test_execution.py tests/test_smoke.py tests/test_notifications.py -q` -> exit 0, 232 passed.
+- Fresh full original command: `timeout --kill-after=5s 180s uv run --extra dev pytest -q` -> exit 0, 536 passed, 3 deselected.
+- SDK 2.0.0 actual-client regressions: `timeout --kill-after=5s 180s /home/ngosi/projects/openmcp/.venv/bin/python -m pytest` with the eight named B1–B4 server/runtime cases recorded in notes.md -> exit 0, 8 passed.
+- SDK 2.3.0 actual-client probe: `PYTHONPATH=/home/ngosi/projects/openmcp/src timeout --kill-after=5s 180s /home/ngosi/.local/share/pipx/venvs/openmcp/bin/python -` with an isolated notification-disabled temporary config and MCP memory streams -> exit 0. Verified exact tools, Boolean/string timeout and offset plus numeric/string fresh_session rejection without mutation, actual SQLite alias winner preservation, terminal paging progress or explicit response_too_large, and sanitized internal_error with request ID.
+- Per-code actual-client coverage includes unknown_project, invalid_path, alias_taken, unknown_job, unknown_profile, invalid_dependency, dependency_failed, invalid_state, config_invalid, daemon_stopping, invalid_request, response_too_large, and internal_error. All seven successful tool payloads and errors from all seven tools are recursively privacy-scanned; annotations, parameter descriptions, one text item/no structured duplicate, bounded errors, and submit/retry/cancel applied-overflow IDs were checked.
+- `git diff --check` -> exit 0. No dependency/environment change, Git write, daemon restart, OpenMCP call, or live/global state read occurred. Existing successful original checks and all Coordinator-owned records remain preserved.
+## SPEC COMPLIANCE
+- Meets Spec? YES — blockers B1–B3 are fixed and reproduced as passing under actual clients; B4 contract evidence is complete; focused/full tests and diff check passed.
+## CLARIFICATIONS NEEDED
+None.
+## NEXT
+TASK_COMPLETE
+
+## Coordinator Recovery 1
+
+- Original implementation job abc25b26-d8a7-4c1d-8939-3db92c872cc8 was cancelled at 2026-10-07T20:20:49.703566+00:00 after its server-test command had no completion event for over three hours. The terminal result contains no ERP and result.error is cancelled. Preserve the cancellation record; the original job did not succeed.
+- Bounded output inspection identified the last worker command: uv run --extra dev pytest tests/test_server.py -q, started 2026-10-07T17:02:39.802160+00:00. Its recorded timeout argument was 120000; the shell tool's units were not verified. No job-state polling occurred during an in-flight wait. Diagnostic output was kept outside the repository and execution identities were omitted from the filtered evidence.
+- Cancellation preserved all partial changes. Fresh reconciliation: no active or queued job; attached main remains at 8ada4a3cfe76137dc2c6943282a65a12522fe234. Changed implementation paths remain in Phase 4 scope: execution.py, models.py, runtime.py, server.py, test_execution.py, test_runtime.py, test_server.py, test_smoke.py. Handover is separate Coordinator bookkeeping. No matching orphaned server-test process remained. No checkpoint or daemon restart occurred.
+- Fresh diagnostic command: timeout --kill-after=5s 90s uv run --extra dev pytest tests/test_server.py -vv -x -o faulthandler_timeout=20. Exit 1, 12 passed and 1 failed in 1.74s. The first page-shape test stub lacks database.job_record; the v2 summary also requires dependencies_for_job.
+- Fresh full server diagnostic with the same deadline and without -x exited 124. It logged 13 passed and 6 failed before test_job_wait_cancellation_cleanup hung. There is no completed suite summary. Logs: /tmp/mcp-v2-phase4-server-hang.log and /tmp/mcp-v2-phase4-server-full-diagnostic.log.
+- H1 confirmed: the cancellation-test Runtime lacks waiting_metadata, which server.py calls before runtime.wait. job_wait raises internal_error while the test waits indefinitely for wait_started. A one-variable service-independent reproduction gave wait_started=false and a completed internal_error without the method; adding it gave wait_started=true and successful wait cancellation; removing it restored the failure. Fix the test doubles and surface premature task failure, rather than weakening production metadata.
+- Original RED and focused GREEN command records were recovered into /tmp/mcp-v2-phase4-recovery-evidence.tzGQYW/test-evidence.json. They are not fresh completion evidence. Worker notes remain incomplete; backfill only verifiable evidence.
+- git diff --check failed on the introduced new blank line at EOF in tests/test_smoke.py:1447. The recovery must correct it. Existing SDKs freshly verified: project interpreter SDK 2.0.0; installed pipx interpreter SDK 2.3.0. Neither environment was changed.
+- recovery-01.md is the Coordinator-owned continuation delta. The original approved contract and exact source scope are unchanged. Dispatch one resumed implement job with bounded commands, complete every original criterion, then fresh validation, checkpoint, Spec review, and independent Quality review. No blind replay or reset of partial changes.
+
+## Fresh-context Recovery 2
+
+- Resumed recovery implementation job 8417c4ce-bd26-44fe-ba2a-212686f15ff3 failed at 2026-10-07T20:40:15.130773+00:00 because its resumed execution context exceeded the context limit. The terminal result has no ERP. Keep this failure distinct from the original cancelled job.
+- Fresh reconciliation: no active or queued job; main remains attached at 8ada4a3cfe76137dc2c6943282a65a12522fe234. The recovery added changes to README.md, pyproject.toml, uv.lock, and test_server.py within the approved Phase 4 scope. All prior implementation and Coordinator bookkeeping remain preserved. There is no complete worker ERP or notes update, fresh full validation, checkpoint, review, or daemon restart.
+- An unchanged retry would preserve the resumed context that failed. Recovery 2 therefore uses a fresh implementation session on the same saved implement/implement route and plan context_key, with the full worker contract pointer set. It continues the existing filesystem state and reads recovery-02.md, recovery-01.md, and prompt.md. The original file scope and contract remain unchanged.
+
+## Coordinator Specification Review and Fix 1
+
+- Fresh validation of the terminal b965cd9f-d535-4b21-97c1-0dc6aa9cd7d2 implementation: focused 225 passed in 62.09s; full 529 passed, 3 deselected in 35.47s; git diff --check passed. Both existing SDK actual clients passed exact seven-tool discovery, invalid negative-timeout JSON, and unknown-job JSON. uv.lock changes only the editable OpenMCP version. Implementation changes match the approved paths; recovery/handover bookkeeping is Coordinator-owned.
+- Spec FAIL, Quality PENDING. Additional service-independent probes under SDK 2.0.0 and 2.3.0 confirmed three blockers: SDK coercion accepts Boolean timeout/offset and string timeout; a metadata-heavy terminal page returns empty text with next_offset=0 despite remaining text; canonical resolution overwrites a competing insertion's stored alias because upsert_project updates existing roots instead of raising the assumed uniqueness error.
+- Probe script: /tmp/mcp-v2-phase4-spec-probes.py. Each interpreter returned the same observations. For the fixture's two-emoji result, context_key length 8470 produced the non-advancing page. A second real Database insertion with alias winner was overwritten by alias loser.
+- Declared evidence also remains incomplete for every error family, all annotations/parameter descriptions, per-tool recursive output privacy, and submit/retry/cancel applied-overflow semantics. These evidence gaps join the same bounded fix batch.
+- fix-01.md collects B1-B4. Allowed fix paths are server.py, runtime.py, test_server.py, test_runtime.py, and worker-owned notes/journal only. No scope expansion or scheduler/database change is authorized. This is automatic review-fix cycle 1 of at most 2.
+- No implementation checkpoint, independent quality review, daemon restart, or dependency/environment upgrade occurred. Attached main remains at 8ada4a3cfe76137dc2c6943282a65a12522fe234. Preserve the passing original checks and the newly failing specification evidence distinctly.
+
+## Coordinator Fix 1 Validation
+
+- Fix job 15e0358d-acb7-4a49-8d87-c2dbc60549fa returned full ERP with NEXT TASK_COMPLETE. Its declared fix paths match server.py, runtime.py, test_server.py, test_runtime.py, and worker-owned notes/journal. The original phase files and Coordinator recovery records remain preserved.
+- Fresh Coordinator commands: original focused command passed 232 tests in 27.65s; original full command passed 536 tests, 3 deselected, in 26.90s; git diff --check passed. Captured outputs: /tmp/mcp-v2-phase4-coordinator-focused.log and /tmp/mcp-v2-phase4-coordinator-full.log.
+- Independent actual-client command `/tmp/mcp-v2-phase4-spec-green.py /home/ngosi/projects/openmcp/src` passed under both existing interpreters, SDK 2.0.0 and 2.3.0. It verified seven tools, pure bounded JSON errors, five strict argument cases without mutation, explicit error at the terminal paging boundary, retention of the canonical winner's alias, and a sanitized unexpected error with an actual request ID.
+- The original race probe attempted a competing insertion inside the new write transaction and therefore failed with database locked. The adapted probe preserves the meaningful stale-snapshot interleaving using a second real connection before the final write transaction. It returned and stored winner under both SDKs. Do not report the original injected probe as a passing command.
+- Specification review: PASS. B1-B3 are corrected with recorded RED/GREEN; B4 is covered by the added actual-client error-family, privacy, annotation, description, mutation-overflow, and complete dependent-cancellation tests. Legacy production symbols are absent, facade deletion is supported, version/lock changes are limited correctly, and all original checks pass.
+- Live status after validation: running, active_jobs=0, queued_jobs=0. The daemon was not restarted. No dependencies or SDK environments were upgraded. Independent quality review remains pending.
 
 ## Quality Review
 
@@ -61,7 +169,7 @@ Pending.
 
 ## Review Result
 
-- Spec Status: PENDING
+- Spec Status: PASS, fresh Fix 1 and both existing-SDK actual-client evidence recorded
 - Quality Status: PENDING
 - Debt: none
 

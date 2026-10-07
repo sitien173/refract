@@ -5,11 +5,11 @@ It exposes AI agent workflows through Model Context Protocol tools.
 
 ## Key Features
 
-- Direct repository execution with automatic git commits on success.
-- Per-project FIFO job scheduling with multi-project concurrency.
+- Durable direct-directory jobs; OpenMCP does not create worktrees or make Git commits.
+- Project reader/writer admission with immutable dependencies and multi-project concurrency.
 - Immutable execution plan snapshots for every job.
 - Multi-provider support for Antigravity, Codex, Pi, and Claude Code backends.
-- Real-time job status updates via MCP subscriptions.
+- Seven self-describing MCP tools for project resolution, guidance, and durable job management.
 - Isolated and read-only execution modes for sensitive tasks.
 - Per-project, per-workflow context instructions injected into every backend.
 
@@ -25,7 +25,7 @@ It exposes AI agent workflows through Model Context Protocol tools.
 [Runtime Facade] ──► [SQLite Database]
         │
         ▼
-[Project Scheduler] (FIFO Worker Pool)
+[Project Scheduler] (Reader/Writer Admission and Dependencies)
         │
         ▼
 [Job Runner & Target Executor]
@@ -308,7 +308,7 @@ The daemon listens at `http://127.0.0.1:8765/mcp`.
 
 OpenMCP provides four built-in workflows:
 
-- `implement`: Runs coding prompt. Commits changes on success.
+- `implement`: Runs a coding prompt in the registered project directory. Worker changes remain in that directory; OpenMCP does not auto-commit.
 - `review`: Inspects codebase. Generates review output without committing.
 - `consult`: Answers architectural questions without committing.
 - `other`: Single execution task without automatic commits.
@@ -329,52 +329,23 @@ reference.
 
 ## MCP Tool Surface
 
-OpenMCP exposes seven core tools:
+OpenMCP exposes seven tools and no MCP resources:
 
 | Tool | Purpose |
 | --- | --- |
-| `status()` | Returns daemon health and running jobs. |
-| `project_register(path, alias)` | Registers local directory for jobs. |
-| `task_guide(project_id)` | Loads workflow and profile guidance. |
-| `job_submit(project_id, workflow, prompt, context_key, profile, fresh_session)` | Enqueues work for execution. |
-| `job_wait(job_id, timeout_s)` | Waits for job completion up to 300 seconds. |
-| `job_cancel(job_id)` | Cancels queued or running job. |
-| `job_retry(job_id)` | Retries non-terminal or failed job. |
+| `project_resolve(path, alias="")` | Resolve an existing Git root to a stable project ID. |
+| `task_guide(project_id)` | Load available workflows, profiles, and project guidance. |
+| `job_submit(project_id, workflow, prompt, profile="", context_key="", fresh_session=false, depends_on=[])` | Queue a durable job; dependencies reference existing jobs in the same project. |
+| `job_wait(job_id, timeout_s=3600, result_offset=0)` | Wait with progress, or read a terminal result page. Timeouts are normal; repeat with the same job ID. |
+| `job_list(project_id)` | List active jobs and the 10 most recently updated terminal jobs. |
+| `job_cancel(job_id)` | Cancel a queued or running job and report descendants cancelled in that call. |
+| `job_retry(job_id)` | Retry a failed, cancelled, or interrupted job after its dependencies succeed. |
 
-### Submitting a Job
+The standard cycle is `project_resolve` → `task_guide` → `job_submit` → `job_wait` (four calls). Prompts must be self-contained. Use `depends_on` to chain existing same-project jobs without waiting between submissions. The summary reports `access_mode`, dependencies, and current waiting information without exposing provider or target identity.
 
-```json
-{
-  "project_id": "project-uuid",
-  "workflow": "implement",
-  "prompt": "Add validation for empty names and run focused tests.",
-  "context_key": "validation/implement",
-  "profile": "balanced",
-  "fresh_session": false
-}
-```
+`job_wait` supports timeouts from 0 to 3600 seconds. `timeout_s=0` reads immediately. A terminal result is paged by Unicode character offset; continue with the returned `next_offset`. Nonterminal timeouts return the current summary and an action to call `job_wait` again. Errors are compact JSON containing `code`, `message`, `next_action`, and `retryable` and are delivered as MCP tool errors.
 
-Setting `fresh_session` to `true` starts a fresh backend session.
-
-## Real-Time Job Subscriptions
-
-`job_submit` and `job_retry` return a `resource_uri` using `openmcp://jobs/{job_id}`.
-
-Clients supporting MCP subscriptions can monitor job status live:
-1. Submit job and save `resource_uri`.
-2. Subscribe to `openmcp://jobs/{job_id}` using `subscriptions/listen`.
-3. Perform an initial read to fetch current state.
-4. Re-read resource when `notifications/resources/updated` fires.
-
-## Python API Compatibility
-
-Direct Python invocation bypasses target configurations:
-
-```python
-from openmcp.server import run
-
-result = await run("codex", "Summarize repository.", "/absolute/project/path")
-```
+MCP tool results are bounded. Terminal result text adapts to the serialized response budget without losing characters. Oversized non-pageable metadata returns `response_too_large`; for operations already applied, the error identifies the created or affected ID. Use the dashboard to inspect oversized metadata rather than blindly repeating a mutation.
 
 ## Admin Configuration Dashboard
 

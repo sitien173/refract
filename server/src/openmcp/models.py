@@ -13,13 +13,6 @@ JobState = Literal[
 TERMINAL_STATES: frozenset[str] = frozenset(
     {"succeeded", "failed", "cancelled", "interrupted"}
 )
-JOB_RESOURCE_URI_TEMPLATE = "openmcp://jobs/{job_id}"
-
-
-def job_resource_uri(job_id: str) -> str:
-    return JOB_RESOURCE_URI_TEMPLATE.format(job_id=job_id)
-
-
 class ProjectView(BaseModel):
     id: str
     alias: str
@@ -117,11 +110,17 @@ class JobView(BaseModel):
 
 class JobSummary(BaseModel):
     id: str
+    project_id: str
     workflow: str
     profile: str
     state: JobState
     context_key: str
     attempts: int = 0
+    access_mode: Literal["parallel_read", "exclusive"] = "exclusive"
+    depends_on: list[str] = Field(default_factory=list)
+    waiting_on: list[str] = Field(default_factory=list)
+    waiting_reason: str = ""
+    created_at: str
     updated_at: str
 
 
@@ -148,7 +147,6 @@ class ContextStreamView(BaseModel):
 class SubmissionResult(BaseModel):
     job_id: str
     state: JobState
-    resource_uri: str
 
 
 class ActionResult(BaseModel):
@@ -421,7 +419,6 @@ __all__ = [
     "JobState",
     "JobStreamEvent",
     "JobSummary",
-    "JOB_RESOURCE_URI_TEMPLATE",
     "ProfileDeleteResponse",
     "ProfileEditorData",
     "ProfileEditorResponse",
