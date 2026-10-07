@@ -129,11 +129,14 @@ TASK_COMPLETE
 - Client: Claude Code 2.1.292.
 - Pre-restart service state: active; MainPID 2443; started Tue 2026-10-06 11:22:10 +07.
 - Dashboard preflight: `npm --prefix web test` passed, 196 tests in 18 files. Pre-existing React act warnings were emitted; no dashboard edit was made.
-- Daemon restart: pending after independent review and no active jobs.
+- Daemon restart: completed with no global active or queued jobs. Service active; MainPID 482030; started Wed 2026-10-07 14:01:37 +07.
 - Main-conversation six-minute wait: pending.
 - Subagent six-minute wait: pending.
-- Progress token log: pending.
-- Unknown job error received by Claude Code: pending.
+- Progress token log: true for Claude Code request_id 35 at 2026-10-07T07:01:45.188Z, daemon PID 482030, in /home/ngosi/.openmcp/openmcp.log lines 11320-11321.
+- Unknown job call: `job_wait(job_id="mcp-v2-phase-01-unknown-job", timeout_s=0)`.
+- Exact error received by Claude Code: `Error executing tool job_wait`.
+- Daemon request log classified the error as ValueError. The tool response did not include the underlying message; Phase 4 must verify actual SDK error-delivery behavior rather than assuming an ordinary exception exposes its string.
+- Probe route: other with profile base, selected from the saved task guide's catch-all recommendation. Workers must run a 370-second standard-library timer without repository changes. Mapping rejection blocks this route; no silent substitution is permitted.
 
 ## Final Checkpoint
 
