@@ -603,6 +603,149 @@ async def test_job_cancel_reports_complete_cancelled_dependents(tmp_path, monkey
         assert runtime.database.job("cancel-child").state == "cancelled"
 
 
+@pytest.mark.asyncio
+async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_record(tmp_path, monkeypatch) -> None:
+    from openmcp.drivers import DriverResult
+
+    marker = "provider-secret-model-backend-detail-" + "private-diagnostic-" * 700
+
+    class PrivateFailureDrivers:
+        @staticmethod
+        def available(_target):
+            return True
+
+        async def execute(self, **_kwargs):
+            return DriverResult("TARGET_FATAL", "", "", marker, "backend_failure")
+
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        root = tmp_path / "private-failure-project"
+        root.mkdir()
+        project = runtime.register_project(str(root), "private-failure")
+        runtime.drivers = PrivateFailureDrivers()
+        submitted = await client.call_tool("job_submit", {
+            "project_id": project.id, "workflow": "implement", "prompt": "fail safely",
+        })
+        job_id = json.loads(submitted.content[0].text)["job"]["id"]
+        response = await client.call_tool("job_wait", {"job_id": job_id, "timeout_s": 10})
+        assert not response.is_error
+        payload = json.loads(response.content[0].text)
+        assert payload["result"]["error"]
+        assert marker not in response.content[0].text
+        assert "provider-secret-model-backend-detail" not in response.content[0].text
+        envelope = json.dumps(response.model_dump(by_alias=True, mode="json", exclude_none=True), separators=(",", ":"))
+        assert len(envelope) < 30000 and len(envelope.encode("utf-8")) < 9000
+        stored = runtime.database.job(job_id)
+        assert stored is not None and stored.result.error == marker
+
+
+@pytest.mark.asyncio
+async def test_public_terminal_error_preserves_only_exact_validated_dependency_cause(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        root = tmp_path / "safe-dependency-error"
+        root.mkdir()
+        project = runtime.register_project(str(root), "safe-dependency-error")
+        runtime.database.create_job(
+            job_id="safe-parent", project_id=project.id, workflow="review", profile="balanced",
+            prompt="parent", execution_plan_json="{}", context_key="parent",
+        )
+        runtime.database.finish_job("safe-parent", "failed")
+        runtime.database.create_job_with_dependencies(
+            job_id="safe-child", project_id=project.id, workflow="review", profile="balanced",
+            prompt="child", execution_plan_json="{}", context_key="child", access_mode="exclusive",
+            depends_on=["safe-parent"],
+        )
+        runtime._cancel_queued_dependent("safe-child", "safe-parent", "failed")
+        safe = await client.call_tool("job_wait", {"job_id": "safe-child", "timeout_s": 0})
+        safe_error = json.loads(safe.content[0].text)["result"]["error"]
+        assert safe_error == "Dependency safe-parent ended in state failed"
+
+        runtime.database.create_job_with_dependencies(
+            job_id="forged-child", project_id=project.id, workflow="review", profile="balanced",
+            prompt="child", execution_plan_json="{}", context_key="forged", access_mode="exclusive",
+            depends_on=["safe-parent"],
+        )
+        forged = "Dependency safe-parent ended in state failed; provider-private-suffix"
+        runtime.database.finish_job("forged-child", "cancelled", error=forged)
+        rejected = await client.call_tool("job_wait", {"job_id": "forged-child", "timeout_s": 0})
+        rejected_text = rejected.content[0].text
+        rejected_error = json.loads(rejected_text)["result"]["error"]
+        assert rejected_error != forged
+        assert "provider-private-suffix" not in rejected_text
+
+        runtime.database.create_job(
+            job_id="cancel-cause", project_id=project.id, workflow="review", profile="balanced",
+            prompt="cancelled", execution_plan_json="{}", context_key="cancel-cause",
+        )
+        runtime.database.finish_job("cancel-cause", "cancelled", error="execution task cancelled")
+        cancellation = await client.call_tool("job_wait", {"job_id": "cancel-cause", "timeout_s": 0})
+        assert json.loads(cancellation.content[0].text)["result"]["error"] == "execution task cancelled"
+
+
+@pytest.mark.asyncio
+async def test_empty_and_eof_result_metadata_overflow_is_bounded(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        root = tmp_path / "empty-eof-overflow"
+        root.mkdir()
+        project = runtime.register_project(str(root), "empty-eof-overflow")
+        runtime.database.create_job(
+            job_id="empty-output", project_id=project.id, workflow="review", profile="balanced",
+            prompt="empty", execution_plan_json="{}", context_key="e" * 10000,
+        )
+        runtime.database.finish_job("empty-output", "succeeded", text="")
+        runtime.database.create_job(
+            job_id="eof-output", project_id=project.id, workflow="review", profile="balanced",
+            prompt="eof", execution_plan_json="{}", context_key="f" * 10000,
+        )
+        runtime.database.finish_job("eof-output", "succeeded", text="done")
+        for job_id, offset in (("empty-output", 0), ("eof-output", 4)):
+            response = await client.call_tool("job_wait", {
+                "job_id": job_id, "timeout_s": 0, "result_offset": offset,
+            })
+            assert response.is_error
+            assert json.loads(response.content[0].text)["code"] == "response_too_large"
+            envelope = json.dumps(response.model_dump(by_alias=True, mode="json", exclude_none=True), separators=(",", ":"))
+            assert len(envelope) < 30000 and len(envelope.encode("utf-8")) < 9000
+
+        runtime.database.create_job(
+            job_id="empty-fitting", project_id=project.id, workflow="review", profile="balanced",
+            prompt="empty", execution_plan_json="{}", context_key="short",
+        )
+        runtime.database.finish_job("empty-fitting", "succeeded", text="")
+        empty_ok = await client.call_tool("job_wait", {"job_id": "empty-fitting", "timeout_s": 0})
+        assert not empty_ok.is_error
+        assert json.loads(empty_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None}
+
+        runtime.database.create_job(
+            job_id="eof-fitting", project_id=project.id, workflow="review", profile="balanced",
+            prompt="eof", execution_plan_json="{}", context_key="short-eof",
+        )
+        runtime.database.finish_job("eof-fitting", "succeeded", text="done")
+        eof_ok = await client.call_tool("job_wait", {"job_id": "eof-fitting", "timeout_s": 0, "result_offset": 4})
+        assert not eof_ok.is_error
+        assert json.loads(eof_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None}
+
+
+@pytest.mark.parametrize(("result_text", "offset"), [("", 0), ("done", 4)])
+def test_empty_or_eof_page_fit_loop_has_finite_sentinel(monkeypatch, result_text, offset) -> None:
+    from openmcp import server
+
+    job = _job_view("succeeded")
+    job.result = JobResult(text=result_text)
+    calls = 0
+
+    def bounded_never_fits(_text, *, is_error=False):
+        nonlocal calls
+        calls += 1
+        if calls > 8:
+            raise AssertionError("page fit loop failed to terminate")
+        return False
+
+    monkeypatch.setattr(server, "_fits_response", bounded_never_fits)
+    with pytest.raises(server.OpenMCPError) as raised:
+        server._page_terminal_result(job, {"id": job.id}, offset)
+    assert raised.value.code == "response_too_large"
+
+
 def _job_view(state: str) -> JobView:
     return JobView(
         id="job-1",

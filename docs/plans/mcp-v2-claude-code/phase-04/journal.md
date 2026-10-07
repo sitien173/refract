@@ -9,10 +9,10 @@
 - Consultation Profile: consult
 - Review Profile: review
 - Consultation Job: 944810ff-2093-41f0-acfc-e644f4d5dedd
-- Implementation Job: preserved cancelled/failed records; fresh recovery implementation completed in this working tree
-- Review Job: pending
+- Implementation Job: 6609b43c-fe6d-4900-8d0c-5c10f162fee5, final fix terminal
+- Review Job: initial 70e346a2-de8d-4b51-9940-361821a9de7a failed; final re-review pending
 - Started: 2026-10-07
-- Finished: 2026-10-08T03:48:39+07:00
+- Finished: pending independent re-review
 
 ## Setup and Guidance
 
@@ -165,12 +165,27 @@ TASK_COMPLETE
 
 ## Quality Review
 
-Pending.
+- Job: 70e346a2-de8d-4b51-9940-361821a9de7a, review/review on the plan context_key.
+- Pinned range: refs/plans/mcp-v2-claude-code/phase-04/base..0e52035e2915e2c3356117138525190e8cacec1b.
+- ERP: Meets Spec NO; Quality FAIL; FILES MODIFIED none; NEXT FIX_REQUIRED; debt none.
+- P1 at server.py:168: terminal job_wait exposes raw persisted execution diagnostics. The reviewer traced execution.py:551,583 to the public result field and reproduced secret_exposed=true with an isolated private diagnostic marker. Forbidden-key filtering does not protect string contents. Public terminal errors must be derived safely while the operator database retains full detail and validated dependency causes remain available.
+- P1 at server.py:175-181: a failed fit with start == end == len(result_text) repeats a zero interval forever. Empty output plus oversized metadata and oversized EOF metadata can hang the request in a synchronous loop. The reviewer confirmed non-termination with a deadline-bound reproduction. Every failed-fit iteration must raise or shrink.
+- Verified remainder: seven tools and described/annotated schemas; no resources/templates/facade; structured output disabled; strict raw coercion rejection; canonical alias winner preservation; job-ID notifications; compact summaries; applied-mutation IDs; version-only lock update; conditional facade deletion. Independent focused verification passed 232 in 27.97s. git diff --check passed.
+- Coordinator verified the post-review HEAD is still 0e52035e2915e2c3356117138525190e8cacec1b and the root is clean. Live status is running with active_jobs=0, queued_jobs=0. The frozen review receipt is /tmp/mcp-v2-phase04-review-receipt.json. No daemon restart occurred.
+- fix-02.md batches both blockers. This is automatic fix cycle 2 of at most 2. Only server.py, test_server.py, and worker-owned notes/journal are writable. Oversized raw private diagnostics may fit after safe public conversion; oversized public metadata must error immediately. Re-review the fix delta after fresh validation and checkpoint. Remaining blockers after this cycle must be reported, not waived.
+
+## Coordinator Final Fix Validation
+
+- Terminal implementation 6609b43c-fe6d-4900-8d0c-5c10f162fee5 returned full ERP with NEXT TASK_COMPLETE. Worker changes match server.py, test_server.py, and worker-owned notes/journal. Other dirt is the declared Coordinator handover and fix-02.md. HEAD remains 0e52035e2915e2c3356117138525190e8cacec1b before the fix checkpoint.
+- Fresh Coordinator focused verification passed 237 tests in 27.16s. Fresh full verification passed 541 tests, 3 deselected, in 28.08s. Both original commands used timeout --kill-after=5s 180s. git diff --check passed.
+- Independent isolated actual-client command: timeout --kill-after=5s 180s <existing interpreter> -I /tmp/mcp-v2-phase04-fix02-sdk-check.py /home/ngosi/projects/openmcp/src. Both existing SDK 2.0.0 and 2.3.0 interpreters returned exit 0 with seven_tools, diagnostics_hidden_and_retained, validated_dependency_causes, empty_and_eof_terminate, and complete_response_bounds all true. No package/environment upgrade or live configuration read occurred.
+- Specification PASS after the two final fixes. Arbitrary persisted errors no longer enter public terminal diagnostics; exact validated causes remain readable and private details remain in storage. A zero/one-length failed-fit candidate raises response_too_large, and larger candidates strictly shrink. Normal empty and EOF reads still succeed. Existing successful contract evidence remains applicable.
+- Independent quality re-review of the fix delta remains required. No daemon restart occurred. Do not treat the worker's Phase 4 completion sentence as plan or gate completion.
 
 ## Review Result
 
-- Spec Status: PASS, fresh Fix 1 and both existing-SDK actual-client evidence recorded
-- Quality Status: PENDING
+- Spec Status: PASS, fresh final fix validation and both existing-SDK actual clients
+- Quality Status: PENDING, final fix delta requires independent re-review
 - Debt: none
 
 ## Final Checkpoint
@@ -179,3 +194,35 @@ Pending.
 - Phase implementation ref: refs/plans/mcp-v2-claude-code/phase-04/impl, pending
 - Plan commit ref: pending
 - State checkpoint: approved Gate 1 contract and Phase 4 base anchored; implementation pending
+
+## Specification Fix Cycle 2 — Worker Response
+
+# EXTERNAL RESPONSE
+## META
+- Phase: 4 — MCP v2 tool surface, final automatic fix cycle 2
+- Started: 2026-10-08 (continued checkpoint; no reset or replay)
+- Finished: 2026-10-08T05:40:26+07:00
+- Plan dir: docs/plans/mcp-v2-claude-code
+## SUMMARY
+Sanitized terminal execution errors at the MCP boundary and made all page-fit failures terminate while preserving valid dependency/cancellation causes and operator diagnostics.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Updated | src/openmcp/server.py | Derive safe public terminal error text; validate dependency causes exactly against persisted dependencies/states; ensure failed-fit paging shrinks or returns bounded response_too_large. |
+| Updated | tests/test_server.py | Added actual-client private failed-driver, persisted-diagnostic, dependency-cause/suffix, oversized diagnostic, empty/EOF overflow, normal empty/EOF, and finite-sentinel regressions. |
+| Updated | docs/plans/mcp-v2-claude-code/phase-04/notes.md | Appended final-cycle RED/GREEN and fresh test/SDK evidence. |
+| Updated | docs/plans/mcp-v2-claude-code/phase-04/journal.md | Appended this ERP without replacing prior records. |
+## NOTES
+- docs/plans/mcp-v2-claude-code/phase-04/notes.md — Fix cycle 2 evidence, preserving original Task 1–4 and Fix cycle 1 records.
+- RED: the combined bounded run with the oversized diagnostic exited 124 due to the reproduced zero-interval page loop. With a short marker isolating privacy, the finite-sentinel bounded run exited 1 with 4 failures: raw provider detail and a forged dependency suffix were exposed; empty and EOF interval tests hit the finite iteration sentinel.
+- Fresh focused original command: `timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_server.py tests/test_runtime.py tests/test_execution.py tests/test_smoke.py tests/test_notifications.py -q` -> exit 0, 237 passed.
+- Fresh full original command: `timeout --kill-after=5s 180s uv run --extra dev pytest -q` -> exit 0, 541 passed, 3 deselected.
+- SDK 2.0.0 actual-client regressions: bounded pytest command and exact test list in notes.md -> exit 0, 6 passed. Covers failed-driver privacy/operator persistence, exact dependency cause and suffix rejection, empty/EOF metadata errors and fitting reads, finite loop sentinel, and Unicode result paging.
+- SDK 2.3.0 actual-client probe: `PYTHONPATH=/home/ngosi/projects/openmcp/src timeout --kill-after=5s 180s /home/ngosi/.local/share/pipx/venvs/openmcp/bin/python -` using isolated notification-disabled temporary configuration and MCP memory streams -> exit 0. Verified oversized private diagnostics are hidden from the client but retained in storage; valid dependency cause is exact and forged suffix is hidden; oversized empty/EOF results return bounded errors and ordinary empty/EOF reads succeed.
+- Final `git diff --check` -> exit 0. HEAD/checkpoint was preserved; no Git writes, daemon restart, OpenMCP calls, installs, environment changes, or live/global reads occurred. Post-fix independent review/checkpoint remains Coordinator-owned and has not been claimed as complete.
+## SPEC COMPLIANCE
+- Meets Spec? YES — both final blockers have focused RED/GREEN evidence; original focused/full suites and both existing-SDK actual-client checks passed.
+## CLARIFICATIONS NEEDED
+None.
+## NEXT
+TASK_COMPLETE

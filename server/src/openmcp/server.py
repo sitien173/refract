@@ -155,7 +155,37 @@ def _render_payload(
     )
 
 
-def _page_terminal_result(job: JobView, summary: dict[str, Any], offset: int) -> str:
+def _public_terminal_error(runtime: Runtime, job: JobView) -> str:
+    detail = job.result.error
+    if not detail:
+        return ""
+    if job.state in {"cancelled", "interrupted"}:
+        cancellation_causes = {
+            "cancelled": "cancelled",
+            "cancelled before execution": "cancelled before execution",
+            "execution task cancelled": "execution task cancelled",
+        }
+        if detail in cancellation_causes:
+            return cancellation_causes[detail]
+        allowed_states = {"failed", "cancelled", "interrupted"}
+        if job.state == "cancelled":
+            for dependency_id in runtime.database.dependencies_for_job(job.id):
+                dependency = runtime.database.job_record(dependency_id)
+                if dependency is None or dependency.get("state") not in allowed_states:
+                    continue
+                safe_cause = f"Dependency {dependency_id} ended in state {dependency['state']}"
+                if detail == safe_cause:
+                    return safe_cause
+    return "Job execution failed. Detailed diagnostics are available in the dashboard."
+
+
+def _page_terminal_result(
+    job: JobView,
+    summary: dict[str, Any],
+    offset: int,
+    *,
+    public_error: str = "",
+) -> str:
     result_text = job.result.text
     start = min(offset, len(result_text))
     end = min(len(result_text), start + _MAX_RESULT_PAGE)
@@ -165,20 +195,28 @@ def _page_terminal_result(job: JobView, summary: dict[str, Any], offset: int) ->
             "job": summary,
             "result": {
                 "text": page_text,
-                "error": job.result.error,
+                "error": public_error,
                 "next_offset": end if end < len(result_text) else None,
             },
         }
         serialized = json.dumps(_public_data(payload), ensure_ascii=False, separators=(",", ":"))
         if _fits_response(serialized):
             return serialized
-        if end - start <= 1 and start < len(result_text):
+        candidate_length = end - start
+        if candidate_length <= 1:
             raise OpenMCPError(
                 "response_too_large",
                 f"Result metadata for job {job.id} exceeds the supported size limit.",
                 f"Use the dashboard to inspect job {job.id}; do not resubmit it.",
             )
-        end = start + (end - start) // 2
+        reduced_end = start + candidate_length // 2
+        if reduced_end >= end:
+            raise OpenMCPError(
+                "response_too_large",
+                f"Result metadata for job {job.id} exceeds the supported size limit.",
+                f"Use the dashboard to inspect job {job.id}; do not resubmit it.",
+            )
+        end = reduced_end
 
 
 def _valid_openmcp_error(value: Any) -> dict[str, Any] | None:
@@ -729,7 +767,12 @@ async def job_wait(
             "result": {"text": "", "error": "", "next_offset": None},
             "next_action": "Call job_wait again with the same job_id.",
         })
-    return _page_terminal_result(current, summary, result_offset)
+    return _page_terminal_result(
+        current,
+        summary,
+        result_offset,
+        public_error=_public_terminal_error(runtime, current),
+    )
 
 
 @mcp.tool(
