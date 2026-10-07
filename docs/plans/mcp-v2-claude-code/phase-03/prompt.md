@@ -26,7 +26,7 @@ Independent verified readers overlap safely. Writers remain exclusive. Dependent
 - Recovery interrupts running jobs and propagates cancellation before admitting remaining queued jobs. Every completion, cancellation, exception, and shutdown releases reservations and waiters.
 - Current Runtime operations await resource notifications around enqueue/cancel/retry; the consultation must verify the ordering needed to prevent races. URI/notifier surface removal belongs to Phase 4, not this phase.
 - Existing ProjectScheduler(max_jobs, run_job) and default capacity 1 FIFO/cross-project tests remain compatible. New tests use deterministic events, not timing sleeps. Existing tests must not be rewritten to hide regressions.
-- Models remain Phase 4 scope. Derive waiting metadata through an appropriate runtime/scheduler API without changing current MCP output. The consultation must identify if returning cancellation IDs requires a genuine extra-file scope decision rather than inventing an incompatible API.
+- Models otherwise remain Phase 4 scope. The user explicitly approved only `ActionResult.cancelled_dependents: list[str] = Field(default_factory=list)` in models.py. Preserve its existing fields and return type. Derive waiting metadata through `Runtime.waiting_metadata(job_id)` returning waiting_on and waiting_reason; keep JobView and current tool/resource names unchanged until Phase 4. The approved additive cancellation field may appear in the existing ActionResult wire shape. Running cancellation returns only IDs actually cancelled during the call; do not predict its later cascade.
 - Live daemon is an editable install still running reviewed Phase 1 code. No restart before Phase 7. Never access live/global daemon configuration, database, authentication, or session stores.
 
 ## Files
@@ -35,6 +35,7 @@ Allowed production and tests, relative to /home/ngosi/projects/openmcp:
 - src/openmcp/scheduler.py
 - src/openmcp/runtime.py
 - src/openmcp/execution.py
+- src/openmcp/models.py, only the approved ActionResult.cancelled_dependents field
 - tests/test_scheduler.py
 - tests/test_runtime.py
 - tests/test_execution.py
@@ -63,7 +64,20 @@ All other paths are read-only context. The coordinator owns prompt.md, PLAN.md, 
 
 ## Consultation Findings
 
-Pending. Read-only consultation must verify minimum scope, admission synchronization, reverse-link cancellation ordering, waiter signaling, retry/recovery races, worker exception/shutdown handling, and deterministic coverage before implementation.
+Consultation job 76fa8d6d-760c-49ef-9fd0-20ad8194a886 succeeded and returned one bounded scope blocker. The user explicitly approved the single ActionResult field and actual-current-call cancellation semantics; no unresolved product decision remains. The read-only root and daemon were unchanged. Adopt the following minimum recommendations:
+
+- Preserve ProjectScheduler(max_jobs, run_job) and existing two-argument enqueue defaults. Add only needed keyword-only reader capacity, synchronous readiness callback, and per-job admission metadata with exclusive defaults. Runtime supplies startup config.max_project_readers, not its refreshed catalog.
+- In one synchronous no-await event-loop section, select a concrete ready candidate and reserve global/project/session capacity before dispatch. Count reserved but not yet running work. Workers never dequeue blocked dependencies. Queue scan skips unfinished dependencies; the earliest ready exclusive job bars later readers even when waiting for earlier readers or session occupancy.
+- Persist submission and links, then synchronously evaluate parents. Cancel immediately against an unsuccessful parent; otherwise install queue entry and completion event before any notifier await. Retain causal parent ID/state/reason in errors and events.
+- Add a small synchronous terminal callback to JobRunner, invoked after every terminal commit, including missing-project failure, before notification. Walk only reverse links to cancel queued descendants transitively; commit the entire causal cascade before any await or upstream retry. After persistence, remove cancelled entries and release their waiters. Terminal changes reevaluate admission without polling.
+- Retry checks parents before reset, keeps ID/links and existing causal events, queues behind unfinished parents, and never resets children. A retry submitted while the old terminal notifier is paused must not disappear because the same ID is still dispatched. Capture completion and reservation handles per dispatch so old cleanup cannot signal or remove the new retry.
+- Recovery interrupts running records and reconciles queued dependents against interrupted and already-terminal unsuccessful parents before scheduler admission or notification awaits. Cover a crash between terminal parent commit and cascade.
+- Preserve worker service after an ordinary execution callback exception. Scheduler finally releases every reservation and waiter. JobRunner handles task cancellation explicitly, persists the appropriate cancelled/interrupted outcome and cascade before re-raising, but never rewrites an already committed terminal outcome because its notification was cancelled.
+- TargetExecutor protects the acquired semaphore immediately, including attempt persistence, capability/recorder setup, invocation, and cleanup failures. An outermost finally releases target capacity even when recorder cleanup fails. Keep target identities, limits, and existing cancellation-aware acquisition unchanged; no dependency polling.
+- Shutdown stops admission first, signals active work, handles reserved-undispatched jobs, drains execution and releases reservations/waiters before database close. Unstarted queued records remain durable.
+- Deterministic coverage must include same-workflow distinct scopes; fresh/default scope serialization; saved enforcement policy through dispatch/fallback; reader/writer and writer/writer exclusion; ready and newly-ready writer fairness; multiple parents; blocked same/cross-project progress; all unsuccessful parent states and three-level/diamond cascades; immediate cancellation and waiter release; retry/notifier race; restart interrupted and already-failed parent recovery; combined global/project/target limits and target-wait cancellation; invalid Runtime.submit links; historical exclusive/default FIFO behavior; every derived waiting reason and empty nonqueued metadata; causal-event retention; setup/cleanup/runner/task-cancellation/shutdown/notification fault injections. Preserve existing tests and Phase 2 enforcement evidence. A nonmutating fake alone is not proof of native write denial; use the existing enforced policy evidence and report any genuine missing acceptance evidence rather than inventing it.
+
+Exact existing seams: scheduler.py admission and worker cleanup; runtime.py submit/cancel/retry/start notifier ordering; execution.py acquired-target cleanup and JobRunner terminal notifications. Read the complete consultation record through the coordinator-provided findings, not through OpenMCP calls. No extra schema migration or models change beyond the approved one field.
 
 ## SKILLS
 

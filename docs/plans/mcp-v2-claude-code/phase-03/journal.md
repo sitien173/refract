@@ -26,7 +26,14 @@
 
 ## Consultation
 
-Pending. No production edits or phase base exist yet.
+- Job 76fa8d6d-760c-49ef-9fd0-20ad8194a886 succeeded. Advice returned BLOCKED only for a bounded models.py edit-scope decision.
+- Source evidence: Runtime.cancel returns ActionResult, whose declared fields cannot carry cascaded IDs. The minimum fix is ActionResult.cancelled_dependents: list[str] = Field(default_factory=list). No subclass, tuple, dynamic attribute, or unchecked model update is warranted.
+- The user explicitly approved that single field through AskUserQuestion. Running cancellation reports only IDs actually cancelled in the current call, not eventual outcomes. Waiting metadata requires no JobView edit and stays in Runtime.waiting_metadata until Phase 4. The approved additive ActionResult field can appear in the existing v1 wire shape; tool/resource names remain unchanged.
+- The scope blocker is resolved. PLAN.md and prompt.md record the single-field extension. Other models.py changes remain out of scope. Consultation recommendations are adopted in prompt.md; no remaining product decision is reported.
+- Recommendations cover concrete ready-candidate reservations in one synchronous no-await boundary; startup reader capacity; ready-writer barrier; same-scope serialization; persist/queue before notifier awaits; reverse-link causal cascade before retries; per-dispatch completion handles for terminal-notifier retry race; recovery of interrupted and already-unsuccessful parents before admission; worker survival and task cancellation; immediate target semaphore protection and unconditional release even on recorder failure; orderly shutdown and waiter release.
+- Deterministic regression matrix spans every adopted Testing row plus setup, recorder cleanup, terminal notifier, and shutdown fault paths. Existing native enforcement evidence remains required, not a nonmutating-fake claim.
+- Read-only reconciliation passed at 130b9b03fc5ede6b1ce7c9be14fc6879d32fa44d: only coordinator-owned handover reference differed, no source or artifact reviewer edits. Daemon PID 482030 and start timestamp unchanged. No consult command or test ran. Known-path Read was sufficient despite unavailable custom search tools.
+- Phase 3 base is not written until the finalized prompt is checkpointed.
 
 ## Implementation Response
 

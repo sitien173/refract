@@ -186,6 +186,7 @@ are released for cascaded cancellations. No MCP surface change.
 - Modify: `src/openmcp/scheduler.py`
 - Modify: `src/openmcp/runtime.py`
 - Modify: `src/openmcp/execution.py`
+- Modify: `src/openmcp/models.py`, only `ActionResult.cancelled_dependents`, approved by the user on 2026-10-07
 - Modify: `tests/test_scheduler.py`
 - Modify: `tests/test_runtime.py`
 - Modify: `tests/test_execution.py`
