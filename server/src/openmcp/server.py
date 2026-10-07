@@ -121,21 +121,12 @@ def _progress_token_present(context: Any) -> bool:
         return False
     try:
         req_ctx = getattr(context, "request_context", None)
-        if req_ctx is None:
+        params = getattr(req_ctx, "params", None) if req_ctx is not None else None
+        meta = params.get("_meta") if isinstance(params, Mapping) else None
+        if not isinstance(meta, Mapping):
             return False
-        meta = getattr(req_ctx, "meta", None)
-        if meta is None:
-            return False
-        token = None
-        if isinstance(meta, Mapping):
-            token = meta.get("progress_token")
-            if token is None:
-                token = meta.get("progressToken")
-        else:
-            token = getattr(meta, "progress_token", None)
-            if token is None:
-                token = getattr(meta, "progressToken", None)
-        return token is not None and not isinstance(token, bool)
+        token = meta.get("progressToken")
+        return type(token) in (str, int)
     except Exception:
         return False
 
@@ -216,12 +207,13 @@ async def job_wait(job_id: str, ctx: Context, timeout_s: int = _MCP_WAIT_TIMEOUT
     job = runtime.database.job(job_id)
     if job is None:
         raise ValueError(f"Unknown job: {job_id}")
-    await ctx.report_progress(progress=1.0 if job.state in TERMINAL_STATES else 0.0, total=1.0, message=job.state)
+    await ctx.report_progress(progress=0.0, total=None, message=job.state)
     if job.state in TERMINAL_STATES:
         return job
 
     interval = float(_MCP_HEARTBEAT_INTERVAL_S) if _MCP_HEARTBEAT_INTERVAL_S > 0 else 30.0
     wait_task = asyncio.create_task(runtime.wait(job_id, timeout_s))
+    heartbeat_progress = 0.0
     try:
         while not wait_task.done():
             try:
@@ -233,9 +225,10 @@ async def job_wait(job_id: str, ctx: Context, timeout_s: int = _MCP_WAIT_TIMEOUT
                     raise ValueError(f"Unknown job: {job_id}")
                 if refreshed.state in TERMINAL_STATES:
                     break
+                heartbeat_progress += 1.0
                 await ctx.report_progress(
-                    progress=0.0,
-                    total=1.0,
+                    progress=heartbeat_progress,
+                    total=None,
                     message=refreshed.state,
                 )
     finally:

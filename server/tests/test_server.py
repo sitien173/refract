@@ -372,7 +372,7 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
     monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     current_job = _job_view("running")
     done_event = asyncio.Event()
-    progress_messages: list[str] = []
+    progress_reports: list[tuple[float, float | None, str]] = []
 
     class Database:
         def job(self, job_id: str) -> JobView:
@@ -386,9 +386,9 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
             await done_event.wait()
             return current_job
 
-    async def report_progress(*, progress: float, total: float, message: str) -> None:
-        progress_messages.append(message)
-        if len(progress_messages) == 3:
+    async def report_progress(*, progress: float, total: float | None, message: str) -> None:
+        progress_reports.append((progress, total, message))
+        if len(progress_reports) == 3:
             current_job.state = "succeeded"
             done_event.set()
 
@@ -399,7 +399,11 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
 
     result = await job_wait(current_job.id, ctx, timeout_s=3600)
     assert result.state == "succeeded"
-    assert progress_messages == ["running", "running", "running"]
+    assert progress_reports == [
+        (0.0, None, "running"),
+        (1.0, None, "running"),
+        (2.0, None, "running"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -519,16 +523,23 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("meta", "expected_present"),
+    ("wire_meta", "expected_present"),
     [
-        ({"progress_token": "secret-token-123"}, True),
-        ({"progressToken": "secret-token-456"}, True),
+        ({"progressToken": "secret-token-123"}, True),
+        ({"progressToken": ""}, True),
+        ({"progressToken": 0}, True),
+        ({"progressToken": 12}, True),
+        ({"progressToken": True}, False),
+        ({"progressToken": False}, False),
+        ({"progressToken": 1.5}, False),
+        ({"progress_token": "secret-token-456"}, False),
         ({}, False),
         (None, False),
     ],
 )
-async def test_job_wait_logs_progress_token_presence(caplog, meta, expected_present) -> None:
+async def test_job_wait_logs_progress_token_presence(caplog, wire_meta, expected_present) -> None:
     import logging
+    from mcp.server.runner import _extract_meta
 
     terminal = _job_view("succeeded")
 
@@ -540,8 +551,23 @@ async def test_job_wait_logs_progress_token_presence(caplog, meta, expected_pres
     class Runtime:
         database = Database()
 
+    params = {"_meta": wire_meta} if wire_meta is not None else {}
+    sdk_meta = _extract_meta(params)
+    if wire_meta and "progressToken" in wire_meta:
+        if type(wire_meta["progressToken"]) is bool:
+            assert sdk_meta == {"progress_token": int(wire_meta["progressToken"])}
+        elif type(wire_meta["progressToken"]) is float:
+            assert sdk_meta is None
+        else:
+            assert sdk_meta == {"progress_token": wire_meta["progressToken"]}
+    if wire_meta and "progress_token" in wire_meta:
+        assert sdk_meta == {"progress_token": wire_meta["progress_token"]}
     ctx = SimpleNamespace(
-        request_context=SimpleNamespace(lifespan_context=Runtime(), meta=meta),
+        request_context=SimpleNamespace(
+            lifespan_context=Runtime(),
+            meta=sdk_meta,
+            params=params,
+        ),
         report_progress=lambda **kwargs: asyncio.sleep(0),
     )
 

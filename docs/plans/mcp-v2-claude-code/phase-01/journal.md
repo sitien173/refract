@@ -57,6 +57,25 @@ TASK_COMPLETE
 - No reviewer writes. The handover difference is the coordinator's post-submission job-reference update.
 - V1 shapes, timeout cap, immediate return, and cancellation cleanup were preserved.
 
+### Review 1 Remediation: Fix Cycle 1
+
+- Started: Not recorded
+- Finished: 2026-10-07T13:29:15+07:00
+- Status: Implemented and locally verified; independent re-review pending.
+- P1: Heartbeat progress now begins consistently at 0 with no total and increments by 1 for each running heartbeat. Focused test asserts exact values and omitted total.
+- P2: Token-presence logging now checks raw request params for the exact `progressToken` wire key and `str`/`int` types, excluding bool. Tests exercise SDK `_extract_meta` normalization and raw values: string/integer including empty string/zero; bool, float, snake-case-only, and absent metadata.
+- RED: focused command produced 3 failed / 7 passed. Precise failure lines are recorded in `notes.md` under Review Fix Cycle 1.
+- GREEN: focused regression tests 11 passed / 27 deselected; server tests 38 passed; full tests 476 passed / 3 deselected.
+- Live acceptance remains pending and coordinator-owned. No service restart or OpenMCP call performed.
+
+## Coordinator Verification
+
+- Fix cycle 1, fresh coordinator run: `uv run --extra dev pytest tests/test_server.py -q` passed, 38 tests.
+- Fix cycle 1, fresh coordinator run: `uv run --extra dev pytest -q` passed, 476 tests, 3 deselected.
+- `git diff --check` passed.
+- No active project job after the fix. Changed paths match the declared implementation files plus coordinator-owned handover metadata.
+- Independent re-review and live acceptance remain pending.
+
 ## Review Result
 
 - Spec Status: PENDING
@@ -65,6 +84,9 @@ TASK_COMPLETE
 
 ## Live Acceptance
 
+- Client: Claude Code 2.1.292.
+- Pre-restart service state: active; MainPID 2443; started Tue 2026-10-06 11:22:10 +07.
+- Dashboard preflight: `npm --prefix web test` passed, 196 tests in 18 files. Pre-existing React act warnings were emitted; no dashboard edit was made.
 - Daemon restart: pending after independent review and no active jobs.
 - Main-conversation six-minute wait: pending.
 - Subagent six-minute wait: pending.
