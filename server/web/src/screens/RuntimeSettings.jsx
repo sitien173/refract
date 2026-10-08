@@ -8,8 +8,10 @@ import { useEffect, useRef, useState } from 'react'
 
 export default function RuntimeSettings() {
   const [readerDraft, setReaderDraft] = useState('')
-  const [readerDirty, setReaderDirty] = useState(false)
+  const [readerRevision, setReaderRevision] = useState('')
+  const [readerSettingsSnapshot, setReaderSettingsSnapshot] = useState(null)
   const readerDirtyRef = useRef(false)
+  const lastSettingsRef = useRef(null)
   const [readerSaving, setReaderSaving] = useState(false)
   const [readerReloading, setReaderReloading] = useState(false)
   const [readerConflict, setReaderConflict] = useState(false)
@@ -33,14 +35,19 @@ export default function RuntimeSettings() {
   const isConfigValid = configHealth ? Boolean(configHealth.valid) : true
   const lastKnownGoodRevision = configHealth?.last_known_good_revision || ''
 
-  const daemon = settings?.daemon || {}
-  const logging = settings?.logging || {}
+  const settingsView = readerSettingsSnapshot || settings
+  const daemon = settingsView?.daemon || {}
+  const logging = settingsView?.logging || {}
 
   useEffect(() => {
-    if (settings && !readerDirtyRef.current) {
+    if (!settings || settings === lastSettingsRef.current) return
+    lastSettingsRef.current = settings
+    setReaderSettingsSnapshot(null)
+    if (!readerDirtyRef.current) {
       setReaderDraft(String(settings.daemon?.max_project_readers ?? ''))
+      setReaderRevision(settings.revision || '')
     }
-  }, [settings, readerDirty])
+  }, [settings])
 
   async function saveReaderCapacity(event) {
     event.preventDefault()
@@ -55,10 +62,11 @@ export default function RuntimeSettings() {
     setReaderError('')
     setReaderSaved(false)
     try {
-      const updated = await updateMaxProjectReaders(value, settings?.revision)
+      const updated = await updateMaxProjectReaders(value, readerRevision)
+      setReaderSettingsSnapshot(updated)
       setReaderDraft(String(updated.daemon.max_project_readers))
+      setReaderRevision(updated.revision || '')
       readerDirtyRef.current = false
-      setReaderDirty(false)
       setReaderConflict(false)
       setReaderSaved(true)
       await refreshSettings()
@@ -78,10 +86,10 @@ export default function RuntimeSettings() {
     setReaderReloading(true)
     try {
       const latest = await getSettings()
-      await refreshSettings()
+      setReaderSettingsSnapshot(latest)
       setReaderDraft(String(latest.daemon.max_project_readers))
+      setReaderRevision(latest.revision || '')
       readerDirtyRef.current = false
-      setReaderDirty(false)
       setReaderConflict(false)
       setReaderError('')
       setReaderSaved(false)
@@ -134,7 +142,7 @@ export default function RuntimeSettings() {
     {
       id: 'project_readers',
       setting: 'Project reader capacity',
-      value: `Configured ${daemon.max_project_readers ?? 1}; effective ${settings?.effective?.max_project_readers ?? 1}`,
+      value: `Configured ${daemon.max_project_readers ?? 1}; effective ${settingsView?.effective?.max_project_readers ?? 1}`,
       behavior: 'Restart required',
       details: 'Configured capacity is pending until daemon restart; active scheduler capacity remains unchanged',
     },
@@ -325,12 +333,12 @@ export default function RuntimeSettings() {
         </Alert>
       )}
 
-      {settingsError && !settings && (
+      {settingsError && !settingsView && (
         <Alert tone="error" title="Unable to load settings">
           {settingsError.message || 'Failed to fetch runtime settings.'}
         </Alert>
       )}
-      {settingsError && settings && (
+      {settingsError && settingsView && (
         <Alert tone="warning" title="Showing previously loaded settings">
           Background refresh failed. The settings table remains unchanged; retry when the daemon is available.
         </Alert>
@@ -339,11 +347,11 @@ export default function RuntimeSettings() {
       <div className="settings-summary-panel panel">
         <div className="settings-summary-item">
           <span className="eyebrow">Source file</span>
-          <code>{settings?.source_path || 'config.toml'}</code>
+          <code>{settingsView?.source_path || 'config.toml'}</code>
         </div>
         <div className="settings-summary-item">
           <span className="eyebrow">Configuration revision</span>
-          <code>{settings?.revision || 'Revision unavailable'}</code>
+          <code>{settingsView?.revision || 'Revision unavailable'}</code>
         </div>
         <div className="settings-summary-item">
           <span className="eyebrow">Status</span>
@@ -358,7 +366,7 @@ export default function RuntimeSettings() {
         <div className="section-header">
           <h3>Project reader capacity</h3>
           <p className="caption">
-            Configured: {daemon.max_project_readers ?? '—'} (pending); effective scheduler capacity: {settings?.effective?.max_project_readers ?? '—'}. Restart required to apply a saved change.
+            Configured: {daemon.max_project_readers ?? '—'} (pending); effective scheduler capacity: {settingsView?.effective?.max_project_readers ?? '—'}. Restart required to apply a saved change.
           </p>
         </div>
         <form className="reader-capacity-form" onSubmit={saveReaderCapacity}>
@@ -374,11 +382,10 @@ export default function RuntimeSettings() {
             onChange={(event) => {
               setReaderDraft(event.target.value)
               readerDirtyRef.current = true
-              setReaderDirty(true)
               setReaderSaved(false)
             }}
           />
-          <button type="submit" className="button button-primary" disabled={readerSaving || readerConflict || !settings}>
+          <button type="submit" className="button button-primary" disabled={readerSaving || readerConflict || !settingsView}>
             {readerSaving ? 'Saving…' : 'Save reader capacity'}
           </button>
           {readerSaved && <span role="status">Saved; restart required.</span>}

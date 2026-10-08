@@ -117,3 +117,23 @@ Worker-owned. Append one task block per declared task with decisions, spec devia
 - Final generated assets: `index-BxpWJUUF.js` SHA-256 `ca39669ee270f42b4f98741612e0d47e7a567a7f9a8fb93ef9e24207902d0a30`; `index-CWP9Noen.css` SHA-256 `e7ab844b314613f72ddc0da2dba91294713695f12838ce08e7fed0c04b45bcbf`. The obsolete tracked hashed files `index-D-nShQgS.js` and `index--OvfbQj5.css` were removed; no other generated files were untracked.
 - `git diff --check` -> exit 0.
 - Baseline flake retained: before implementation, `Profiles.test.jsx` dirty-draft case failed once (1 failed, 195 passed), then the untouched suite passed (196 passed). During implementation, separate full runs also intermittently failed an unrelated Targets dirty-draft case, a project-override integration assertion (its isolated test passed), and a Profiles create assertion. These were not modified; the final full web suite passed. Existing React act warnings were not suppressed or fixed.
+
+## Specification fix cycle 1 — grouped job lists and reader-revision hypothesis
+
+### H1 RED and confirmation
+- Added a revision assertion to the existing actual App flow. In an isolated temporary frontend fixture, settings first returned capacity `1`/revision `initial-rev`; after the dirty value `5` and a completed refresh it displayed capacity `2`/revision `background-rev`. Clicking Save invoked the update with `(5, background-rev)` instead of `(5, initial-rev)`. The focused test `timeout --kill-after=5s 180s npm --prefix web test -- src/App.test.jsx -t 'keeps dirty reader drafts through refresh and requires explicit reload after conflict'` exited 1 on the exact revision mismatch. H1 is confirmed; the stale-draft write could bypass the expected 409.
+
+### H1 GREEN
+- RuntimeSettings now captures the reader draft's originating revision alongside its value. Dirty refreshes preserve both. Saving uses that captured revision. Conflict retains the input and disables retry; an explicit reload uses one settings response for the displayed value and bound revision, avoiding a second inconsistent GET. The same focused test then passed, checking `(5, initial-rev)`, forced 409 retention, explicit reload to capacity `3`/`reload-rev`, and the next save `(3, reload-rev)`.
+
+### Grouped job detail regressions
+- RED: `timeout --kill-after=5s 180s npm --prefix web test -- src/screens/Jobs.test.jsx src/screens/ProjectDetail.test.jsx -t 'concatenates active and recent groups|filters Jobs table|keeps Jobs project-selected'` -> exit 1, 2 relevant failures: complete `depends_on`/`waiting_on` ID lists were absent from both tables. Fixtures include multiple completed and waiting dependencies; the runtime waiting_reason still intentionally describes the first blocker only.
+- GREEN: the same bounded command -> exit 0, 3 passed (including the no-project Jobs route guard). Both tables now render the complete lists alongside waiting_reason. Jobs' no-project data placeholder is the exact grouped empty shape without a global request or array fallback.
+- Polling regression test-harness iteration: an initial focused ProjectDetail polling test timed out after 5s because fake timers were enabled after the polling timer was scheduled. Moving fake-timer setup before the tab activation made the finite test pass; production source was unchanged for this test-harness correction.
+
+### Fresh checks for fix cycle 1
+- `timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_dashboard.py -q` -> exit 0, 46 passed.
+- `timeout --kill-after=5s 180s npm --prefix web test` -> exit 0, 18 files and 203 tests passed.
+- `timeout --kill-after=5s 180s uv run --extra dev pytest -q` -> exit 0, 546 passed, 3 deselected.
+- Both bounded `npm --prefix web run build` invocations exited 0 (65 modules each). Full snapshot `/tmp/openmcp-phase5-fix01-assets.qdgyHW/dashboard_static` matched the repeated build via `diff -r` (exit 0, no differences). New bundle `index-D1wsrB8z.js` SHA-256: `206fa6401c47bcf8272ddf64369c95a1fb7165b6fae7391e26fc5a1393fa58d2`; `index-CWP9Noen.css` retained SHA-256 `e7ab844b314613f72ddc0da2dba91294713695f12838ce08e7fed0c04b45bcbf`. Obsolete `index-BxpWJUUF.js` was removed; all other fonts/logo and CSS remained unchanged.
+- Final `git diff --check` -> exit 0. No API helpers, backend/shared source, Coordinator artifacts, dependencies, environment, or daemon were changed.

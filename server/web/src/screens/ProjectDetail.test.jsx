@@ -921,6 +921,8 @@ describe('ProjectDetail screen', () => {
         profile: 'balanced',
         state: 'running',
         target_id: 'worker-1',
+        depends_on: ['completed-parent-a', 'completed-parent-b'],
+        waiting_on: ['waiting-parent-a', 'waiting-parent-b'],
         created_at: '2026-09-04 15:00:00',
       },
       {
@@ -929,6 +931,8 @@ describe('ProjectDetail screen', () => {
         profile: 'balanced',
         state: 'succeeded',
         target_id: 'worker-2',
+        depends_on: ['finished-parent-a', 'finished-parent-b'],
+        waiting_on: [],
         created_at: '2026-09-04 15:05:00',
       },
     ], recent: [], more_recent: 5 })
@@ -942,6 +946,9 @@ describe('ProjectDetail screen', () => {
     expect(screen.getByText('job-beta')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: /Jobs 7/i })).toBeInTheDocument()
     expect(screen.getByText(/5 older terminal jobs omitted/i)).toBeInTheDocument()
+    expect(screen.getByText('completed-parent-a, completed-parent-b')).toBeInTheDocument()
+    expect(screen.getByText('waiting-parent-a, waiting-parent-b')).toBeInTheDocument()
+    expect(screen.getByText('finished-parent-a, finished-parent-b')).toBeInTheDocument()
 
     // Filter by search
     const searchInput = screen.getByLabelText(/Search jobs/i)

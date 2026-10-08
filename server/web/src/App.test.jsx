@@ -97,10 +97,12 @@ describe('runtime settings reader capacity form', () => {
       .mockResolvedValueOnce(setting(2, 'background-rev'))
       .mockResolvedValueOnce(setting(3, 'reload-rev'))
       .mockResolvedValueOnce(setting(3, 'reload-rev'))
-    vi.mocked(updateMaxProjectReaders).mockRejectedValueOnce(Object.assign(
-      new Error('Configuration conflict'),
-      { status: 409, payload: { code: 'configuration_conflict' } },
-    ))
+    vi.mocked(updateMaxProjectReaders)
+      .mockRejectedValueOnce(Object.assign(
+        new Error('Configuration conflict'),
+        { status: 409, payload: { code: 'configuration_conflict' } },
+      ))
+      .mockResolvedValueOnce(setting(3, 'saved-rev'))
     render(<App />)
 
     const input = await screen.findByLabelText(/Maximum project readers/i)
@@ -108,9 +110,11 @@ describe('runtime settings reader capacity form', () => {
     fireEvent.change(input, { target: { value: '5' } })
     fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }))
     await waitFor(() => expect(getSettings).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText(/Configured: 2 \(pending\)/)).toBeInTheDocument()
     expect(input).toHaveValue(5)
 
     fireEvent.click(screen.getByRole('button', { name: /Save reader capacity/i }))
+    await waitFor(() => expect(updateMaxProjectReaders).toHaveBeenCalledWith(5, 'initial-rev'))
     expect(await screen.findByText(/Reload current settings before retrying/i)).toBeInTheDocument()
     expect(input).toHaveValue(5)
     expect(screen.getByRole('button', { name: /Save reader capacity/i })).toBeDisabled()
@@ -119,6 +123,8 @@ describe('runtime settings reader capacity form', () => {
     await waitFor(() => expect(input).toHaveValue(3))
     expect(screen.queryByText(/Reload current settings before retrying/i)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Save reader capacity/i })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: /Save reader capacity/i }))
+    await waitFor(() => expect(updateMaxProjectReaders).toHaveBeenLastCalledWith(3, 'reload-rev'))
   })
 })
 

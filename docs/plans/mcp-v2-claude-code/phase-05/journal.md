@@ -8,10 +8,10 @@
 - Implementation Profile: implement
 - Consultation Profile: consult
 - Review Profile: review
-- Implementation Job: f623d7fe-14b3-456d-b999-61255fe8155a
+- Implementation Job: 70bebc94-5500-407b-a04e-1eb45ff83669, latest fix; initial implementation preserved below
 - Review Job: pending
 - Started: 2026-10-07T23:24:22Z
-- Finished: 2026-10-08T07:02:53+07:00
+- Finished: pending independent quality review
 
 ## Guidance and preparation
 
@@ -126,7 +126,7 @@ Pending. Coordinator appends the independent review response here.
 
 ## Review Result
 
-- Spec Status: FAIL, specification batch 1 pending
+- Spec Status: PASS after specification batch 1 and fresh Coordinator verification
 - Quality Status: PENDING
 - Debt: none
 
@@ -136,3 +136,67 @@ Pending. Coordinator appends the independent review response here.
 - Phase implementation ref: refs/plans/mcp-v2-claude-code/phase-05/impl
 - Plan commit ref: pending
 - State checkpoint: finalized scope 0aafdec4a328d231589dbd23918d618b347ba341; phase base was created once at this clean checkpoint. Implementation has not started at this record.
+
+## Implementation Response — Specification Fix Batch 1
+
+# EXTERNAL RESPONSE
+## META
+- Phase: 5 — Dashboard v2 vocabulary, specification fix batch 1
+- Started: 2026-10-08 (preserved validated implementation; no replay)
+- Finished: 2026-10-08T07:19:49+07:00
+- Plan dir: docs/plans/mcp-v2-claude-code
+## SUMMARY
+Fixed grouped empty-job data, rendered complete dependency/waiting IDs, and confirmed and corrected the reader draft revision bypass while preserving explicit reload semantics.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Updated | web/src/screens/Jobs.jsx | Return grouped empty placeholder with no project selected; render complete dependency and waiting IDs. |
+| Updated | web/src/screens/ProjectDetail.jsx | Render complete dependency and waiting IDs in the project jobs table. |
+| Updated | web/src/screens/RuntimeSettings.jsx | Bind saves to the reader draft's originating revision; preserve it across refresh/conflict and rebase value/revision from one explicit reload response. |
+| Updated | web/src/screens/Jobs.test.jsx | Added complete multi-ID dependency/waiting and project-selected empty-state regressions. |
+| Updated | web/src/screens/ProjectDetail.test.jsx | Added completed/waiting multi-dependency list and grouped polling regressions. |
+| Updated | web/src/App.test.jsx | Dynamically reproduced H1; asserted revision A after refresh B, forced conflict retention, and explicit reload value/revision pairing. |
+| Updated | src/openmcp/dashboard_static/index.html | Updated generated bundle reference. |
+| Deleted | src/openmcp/dashboard_static/assets/index-BxpWJUUF.js | Removed prior phase-5 bundle. |
+| Added | src/openmcp/dashboard_static/assets/index-D1wsrB8z.js | Regenerated bundle; SHA-256 `206fa6401c47bcf8272ddf64369c95a1fb7165b6fae7391e26fc5a1393fa58d2`. |
+| Updated | docs/plans/mcp-v2-claude-code/phase-05/notes.md | Appended fix-cycle RED/GREEN, dynamic hypothesis outcome, checks, asset comparison and baseline records. |
+| Updated | docs/plans/mcp-v2-claude-code/phase-05/journal.md | Appended this ERP; preserved prior ERP and Coordinator evidence. |
+## NOTES
+- docs/plans/mcp-v2-claude-code/phase-05/notes.md — Task 1–5 and Fix cycle 1 evidence.
+- RED for grouped tables: `timeout --kill-after=5s 180s npm --prefix web test -- src/screens/Jobs.test.jsx src/screens/ProjectDetail.test.jsx -t 'concatenates active and recent groups|filters Jobs table|keeps Jobs project-selected'` -> exit 1, two failures for missing full dependency/waiting ID lists; project-selected behavior passed.
+- H1 confirmed dynamically before changing reader source: settings returned value 1/revision A, a dirty value 5 survived refresh to value 2/revision B, and Save actually sent `(5, B)`. The forced conflict had not been asserting this revision. The regression was changed to require `(5, A)` after refresh; explicit reload then binds value 3 and revision R from the same response, and the subsequent save sends `(3, R)`.
+- H1 RED command: `timeout --kill-after=5s 180s npm --prefix web test -- src/App.test.jsx -t 'keeps dirty reader drafts through refresh and requires explicit reload after conflict'` -> exit 1, expected initial revision but observed the refreshed revision.
+- Grouped GREEN command -> exit 0, 3 passed (29 deselected). H1 GREEN command -> exit 0, 1 passed (6 skipped).
+- Focused backend: `timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_dashboard.py -q` -> exit 0, 46 passed. Full backend: `timeout --kill-after=5s 180s uv run --extra dev pytest -q` -> exit 0, 546 passed, 3 deselected.
+- Full frontend: `timeout --kill-after=5s 180s npm --prefix web test` -> exit 0, 18 files and 203 tests passed. Existing unrelated act warnings remain.
+- Both bounded `timeout --kill-after=5s 180s npm --prefix web run build` commands exited 0, transforming 65 modules. Snapshot: `/tmp/openmcp-phase5-fix01-assets.qdgyHW/dashboard_static`; second build plus `diff -r` exited 0 with no difference. New JS hash is above; CSS hash remains `e7ab844b314613f72ddc0da2dba91294713695f12838ce08e7fed0c04b45bcbf`; prior JS bundle `index-BxpWJUUF.js` was removed.
+- `git diff --check` -> exit 0. Phase base and attached HEAD were preserved. Only fix-01 allowlisted caller/test/assets/notes/journal paths changed. No Git writes, backend/shared/API-helper edits, Coordinator edits, service calls/restart, or dependency/environment changes occurred.
+- The untouched Profiles dirty-draft baseline failure-then-pass and later intermittent unrelated failures remain separately recorded in notes.md; no Profiles/Targets behavior or act warnings were changed.
+## SPEC COMPLIANCE
+- Meets Spec? YES — H1 is confirmed and corrected with revision-bound drafts; complete ID lists and grouped empty placeholder regressions pass; all fresh bounded original checks, builds, and asset comparison passed.
+## CLARIFICATIONS NEEDED
+None.
+## NEXT
+TASK_COMPLETE
+
+## Coordinator validation after specification fix batch 1
+
+- Owned fix job70bebc94-5500-407b-a04e-1eb45ff83669 returned succeeded with full ERP and NEXT TASK_COMPLETE. The worker's statement that Phase5 is completed is implementation self-report only; independent quality review remains required. The persisted ERP above and actual returned ERP agree on the change set and outcomes.
+- The prior wait finished with running; the subsequent terminal response was obtained with no concurrent wait. Fresh daemon status reports running, zero active and zero queued jobs. The private submission receipt is /tmp/mcp-v2-phase05-fix01-receipt.json. Its historical active_wait_task is not a current wait.
+- Reconciled attached main at unchanged45f267cd88747bcfb0b1f0e60d262160731c6f29. All eleven changed or new paths match fix-01 scope and ERP, including the deleted old bundle and untracked new hash. Phase base resolves to0aafdec4a328d231589dbd23918d618b347ba341, exists and is an ancestor; plans remain tracked. No out-of-scope change or restart.
+- Fresh Coordinator dashboard check:46passed in1.08s. Fresh frontend check:18files/203tests passed in13.83s; output /tmp/mcp-v2-phase05-fix01-coordinator-web.log. Fresh full backend:546passed,3deselected in34.47s. Both bounded builds passed65modules in1.65s and1.68s. Full generated-directory snapshot comparison and git diff --check exited0 with no output. HEAD stayed fixed. Earlier failing baseline and intermittent unrelated UI outcomes remain preserved, not relabelled as passes.
+- H1 was dynamically confirmed before reader production edits, then corrected. The changed App test now asserts original revision after a committed background refresh, conflict retains the draft and prevents another save, and explicit reload pairs fetched value/revision for the next save. The reader save source uses readerRevision rather than the refreshed settings revision.
+
+### Specification acceptance
+
+| Criterion | Verified evidence | Outcome |
+|---|---|---|
+| Immutable operator metadata and dependency waiting | _dashboard_job preserves target/plan/prompt/result while mapping persisted access, database dependencies and waiting tuple; dashboard metadata regression and shared/list tests passed | met |
+| Grouping, all active jobs, integer omitted count and every caller | Backend partitions before limiting; regression uses13active/15terminal plus empty and isolation cases; all three audited callers use grouped payloads; exact grouped empty placeholder and complete ID regressions passed | met |
+| Effective/pending positive-integer reader capacity | Strict one-key model and existing mutation lock/transaction; invalid, stale, unauthorized, unrelated-TOML and pending-only tests passed; source confirms config revision equals source revision | met |
+| Dirty draft and conflict semantics | Confirmed H1 RED/GREEN, original-revision assertion, conflict retention, explicit reload and paired next-save assertion passed | met |
+| Exact route decisions and protections | Only confirmed config and five project-profile aliases removed; valid-fixture JSON404 regression passed; status/overview, canonical routes, CSRF, loopback and API-before-SPA tests remained green | met |
+| Generated assets | Two complete builds and full-directory comparison identical; only generated hashes changed | met |
+| Unrelated behavior and scope | All fresh suites passed; previous failures remain recorded; no scheduler/runtime/database/MCP/manifest/lockfile or unrelated editor change | met |
+
+- Specification Status: PASS. Independent Quality Status: PENDING. Fix cycles used:1of2. Debt:none. Next: checkpoint the validated source and submit read-only independent review/review on the saved route. Phase5 is not closed.

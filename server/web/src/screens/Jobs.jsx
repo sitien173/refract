@@ -58,7 +58,9 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
     isLoading,
     refresh,
   } = useDashboardQuery(
-    () => (activeProjectId ? getProjectJobs(activeProjectId) : Promise.resolve([])),
+    () => (activeProjectId
+      ? getProjectJobs(activeProjectId)
+      : Promise.resolve({ active: [], recent: [], more_recent: 0 })),
     { deps: [activeProjectId] }
   )
 
@@ -185,6 +187,26 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
       width: '140px',
       minWidth: '110px',
       render: (row) => <span>{row.access_mode || 'exclusive'}</span>,
+    },
+    {
+      key: 'depends_on',
+      header: 'Dependencies',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => (row.depends_on || []).join(', '),
+      width: '220px',
+      minWidth: '150px',
+      render: (row) => <span>{row.depends_on?.length ? row.depends_on.join(', ') : '—'}</span>,
+    },
+    {
+      key: 'waiting_on',
+      header: 'Waiting on',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => (row.waiting_on || []).join(', '),
+      width: '220px',
+      minWidth: '150px',
+      render: (row) => <span>{row.waiting_on?.length ? row.waiting_on.join(', ') : '—'}</span>,
     },
     {
       key: 'waiting_reason',
