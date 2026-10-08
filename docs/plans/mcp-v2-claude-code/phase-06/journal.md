@@ -45,8 +45,12 @@ Pending.
 ## Final Checkpoint
 
 - Companion plan base: refs/plans/mcp-v2-claude-code/base
-- Companion phase base: refs/plans/mcp-v2-claude-code/phase-06/base, pending
+- Companion phase base: refs/plans/mcp-v2-claude-code/phase-06/base, resolved85283559ec9c8241a32d10557fa6b1ba49b57d5c
 - Companion phase impl: refs/plans/mcp-v2-claude-code/phase-06/impl, pending
-- Primary evidence bridge refs: pending
+- Primary evidence bridge base: refs/plans/mcp-v2-claude-code/phase-06/base, to be set from the finalized clean metadata checkpoint
+- Prior consultation checkpoint: 17c3352dde5ccc80656f27bace0555cf8497fa73
+- Primary evidence bridge impl: refs/plans/mcp-v2-claude-code/phase-06/impl, pending
+
+The phase_base cache in the primary handover refers to companion source8528355; its phase_base_ref is resolved in the companion root. The same-named primary ref retains only this evidence bridge. Prompt finalized after successful consultation, no source edit or implementation job yet.
 
 The daemon remains on Phase1 code. Native v2 acceptance and both-root consolidation remain pending.
