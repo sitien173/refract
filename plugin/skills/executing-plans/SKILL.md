@@ -1,7 +1,7 @@
 ---
 name: executing-plans
 description: "Use when the user asks to run, continue, or resume a plan or its next phase, even without naming the plan. Runs one phase of a folder-layout plan under docs/plans/ through consult, implement, and review, then stops."
-compatibility: Requires git and a running OpenMCP server.
+compatibility: Requires git and a running Refract server.
 ---
 
 # Executing Plans
@@ -9,7 +9,7 @@ compatibility: Requires git and a running OpenMCP server.
 ## Role
 
 This skill owns only the folder-plan phase procedure. Load
-`coordinating-multi-model-work` first; it owns OpenMCP lifecycle, routing,
+`coordinating-multi-model-work` first; it owns Refract lifecycle, routing,
 review, Git, and handover.
 
 ## Constraints

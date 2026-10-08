@@ -5,7 +5,7 @@ export default defineConfig({
   base: '/dashboard/',
   plugins: [react()],
   build: {
-    outDir: '../src/openmcp/dashboard_static',
+    outDir: '../src/refract/dashboard_static',
     emptyOutDir: true,
     rollupOptions: {
       output: {

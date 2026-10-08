@@ -31,12 +31,12 @@ export default function Overview({ onNavigate }) {
   if (error && !overview) {
     return (
       <div className="page">
-        <PageHeader title="Overview" description="A live view of the local OpenMCP daemon." />
+        <PageHeader title="Overview" description="A live view of the local Refract daemon." />
         <Alert tone="error" title="Dashboard unavailable">
           {error.message || 'Unable to load dashboard data.'}
         </Alert>
         <div className="panel recovery-panel">
-          <p>Verify that the OpenMCP daemon is running locally on the configured port.</p>
+          <p>Verify that the Refract daemon is running locally on the configured port.</p>
           <button type="button" className="button button-secondary" onClick={() => refresh()}>
             Retry connection
           </button>
@@ -53,7 +53,7 @@ export default function Overview({ onNavigate }) {
     <div className="page">
       <PageHeader
         title="Overview"
-        description="A live view of the local OpenMCP daemon."
+        description="A live view of the local Refract daemon."
         actions={
           <button
             type="button"

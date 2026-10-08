@@ -6,9 +6,9 @@ export default function Topbar({ title, project, onMenu }) {
       <button type="button" className="menu-button" aria-label="Open navigation" onClick={onMenu}>
         <span aria-hidden="true">≡</span>
       </button>
-      <a className="brand" href="/dashboard/" aria-label="OpenMCP dashboard home">
+      <a className="brand" href="/dashboard/" aria-label="Refract dashboard home">
         <img src={logoUrl} alt="FlowForge" />
-        <span>OpenMCP</span>
+        <span>Refract</span>
       </a>
       <span className="topbar-divider" aria-hidden="true" />
       <h1>{title}</h1>

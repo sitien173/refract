@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-import openmcp.logging_setup as logging_setup
-from openmcp.config import LoggingConfig, load_config
-from openmcp.logging_setup import (
+import refract.logging_setup as logging_setup
+from refract.config import LoggingConfig, load_config
+from refract.logging_setup import (
     configure,
     get_logger,
     log_context,
@@ -44,7 +44,7 @@ def _close_test_logging():
     shutdown()
 
 
-def test_logging_config_loads_relative_to_openmcp_home(tmp_path, monkeypatch) -> None:
+def test_logging_config_loads_relative_to_refract_home(tmp_path, monkeypatch) -> None:
     home = tmp_path / "state"
     home.mkdir()
     path = home / "config.toml"
@@ -62,7 +62,7 @@ capture_warnings = false
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setenv("REFRACT_HOME", str(home))
 
     settings = load_config(path).logging
 
@@ -76,12 +76,12 @@ capture_warnings = false
 
 
 def test_logging_environment_overrides_configuration(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENMCP_LOG_LEVEL", "ERROR")
-    monkeypatch.setenv("OPENMCP_LOG_FORMAT", "json")
-    monkeypatch.setenv("OPENMCP_LOG_FILE", "off")
-    monkeypatch.setenv("OPENMCP_LOG_CONSOLE", "yes")
-    monkeypatch.setenv("OPENMCP_LOG_MAX_BYTES", "1234")
-    monkeypatch.setenv("OPENMCP_LOG_BACKUP_COUNT", "2")
+    monkeypatch.setenv("REFRACT_LOG_LEVEL", "ERROR")
+    monkeypatch.setenv("REFRACT_LOG_FORMAT", "json")
+    monkeypatch.setenv("REFRACT_LOG_FILE", "off")
+    monkeypatch.setenv("REFRACT_LOG_CONSOLE", "yes")
+    monkeypatch.setenv("REFRACT_LOG_MAX_BYTES", "1234")
+    monkeypatch.setenv("REFRACT_LOG_BACKUP_COUNT", "2")
     options = LoggingConfig(file=tmp_path / "ignored.log")
 
     settings = resolve_config(options)
@@ -94,13 +94,13 @@ def test_logging_environment_overrides_configuration(tmp_path, monkeypatch) -> N
     assert settings.backup_count == 2
 
 
-def test_relative_environment_log_file_uses_openmcp_home(
+def test_relative_environment_log_file_uses_refract_home(
     tmp_path,
     monkeypatch,
 ) -> None:
     home = tmp_path / "state"
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
-    monkeypatch.setenv("OPENMCP_LOG_FILE", "logs/application.log")
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+    monkeypatch.setenv("REFRACT_LOG_FILE", "logs/application.log")
 
     settings = resolve_config(LoggingConfig(file=tmp_path / "configured.log"))
 
@@ -134,7 +134,7 @@ def test_json_logging_has_context_structure_and_redaction(tmp_path) -> None:
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     record = next(item for item in records if item.get("event") == "test.failed")
     assert record["timestamp"].endswith("Z")
-    assert record["logger"] == "openmcp.test"
+    assert record["logger"] == "refract.test"
     assert record["project_id"] == "project-1"
     assert record["job_id"] == "job-1"
     assert record["stage_id"] == "review"
@@ -215,7 +215,7 @@ def test_invalid_logging_configuration_is_rejected(tmp_path, monkeypatch) -> Non
     home.mkdir()
     path = home / "config.toml"
     path.write_text(_strict_config("format = 'xml'"), encoding="utf-8")
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setenv("REFRACT_HOME", str(home))
 
     with pytest.raises(ValueError, match="format"):
         load_config(path)

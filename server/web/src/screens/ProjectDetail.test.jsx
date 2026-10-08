@@ -34,7 +34,7 @@ describe('ProjectDetail screen', () => {
     vi.mocked(api.getConfiguration).mockResolvedValue({ valid: true })
     vi.mocked(api.getProjectProfileOverrides).mockResolvedValue({
       revision: 'rev-proj-001',
-      source_path: '/home/user/workspace/demo/.openmcp/config.toml',
+      source_path: '/home/user/workspace/demo/.refract/config.toml',
       global_default_profile: 'default',
       project_default_profile: 'custom-profile',
       available_targets: ['worker-1', 'worker-2'],
@@ -334,7 +334,7 @@ describe('ProjectDetail screen', () => {
 
   it('displays error alert on project configuration load failure', async () => {
     const error = new Error('Invalid project configuration TOML')
-    error.payload = { source_path: '/path/to/.openmcp/config.toml' }
+    error.payload = { source_path: '/path/to/.refract/config.toml' }
     vi.mocked(api.getProject).mockRejectedValue(error)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
     vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
@@ -343,7 +343,7 @@ describe('ProjectDetail screen', () => {
 
     expect(await screen.findByText('Configuration error')).toBeInTheDocument()
     expect(screen.getByText('Invalid project configuration TOML')).toBeInTheDocument()
-    expect(screen.getByText('/path/to/.openmcp/config.toml')).toBeInTheDocument()
+    expect(screen.getByText('/path/to/.refract/config.toml')).toBeInTheDocument()
   })
 
   it('renders invalid configuration health banner and last-known-good revision while project details remain visible', async () => {
@@ -396,7 +396,7 @@ describe('ProjectDetail screen', () => {
     vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
     vi.mocked(api.createProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-002',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       override: { id: 'new-override', extends: 'base-profile' },
     })
 
@@ -440,7 +440,7 @@ describe('ProjectDetail screen', () => {
     vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
     vi.mocked(api.getProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-001',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       override: {
         id: 'custom-profile',
         extends: 'base-profile',
@@ -456,7 +456,7 @@ describe('ProjectDetail screen', () => {
     })
     vi.mocked(api.updateProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-003',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       override: { id: 'custom-profile' },
     })
 
@@ -491,7 +491,7 @@ describe('ProjectDetail screen', () => {
     vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
     vi.mocked(api.deleteProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-004',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       deleted: 'custom-profile',
       fallback: { id: 'custom-profile' },
     })
@@ -587,7 +587,7 @@ describe('ProjectDetail screen', () => {
     vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
     vi.mocked(api.getProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-001',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       override: {
         id: 'custom-profile',
         extends: 'base-profile',
@@ -640,7 +640,7 @@ describe('ProjectDetail screen', () => {
     // Simulate external reload
     vi.mocked(api.getProjectProfileOverrides).mockResolvedValueOnce({
       revision: 'rev-proj-002',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       global_default_profile: 'default',
       project_default_profile: 'custom-profile',
       available_targets: ['worker-1', 'worker-2', 'worker-external-v2'],
@@ -679,7 +679,7 @@ describe('ProjectDetail screen', () => {
 
     vi.mocked(api.updateProjectProfileOverride).mockResolvedValueOnce({
       revision: 'rev-proj-003',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       override: { id: 'custom-profile' },
     })
 
@@ -723,7 +723,7 @@ describe('ProjectDetail screen', () => {
     vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
     vi.mocked(api.getProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-001',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       override: {
         id: 'custom-profile',
         extends: 'base-profile',
@@ -771,7 +771,7 @@ describe('ProjectDetail screen', () => {
     // 1. Reload returns missing entity (e.g. override was deleted on server)
     vi.mocked(api.getProjectProfileOverrides).mockResolvedValueOnce({
       revision: 'rev-proj-002',
-      source_path: '/path/to/.openmcp/config.toml',
+      source_path: '/path/to/.refract/config.toml',
       overrides: [],
     })
     fireEvent.click(reloadBtn)

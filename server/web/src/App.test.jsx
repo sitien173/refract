@@ -147,8 +147,8 @@ describe('dashboard API boundary', () => {
     await expect(updateConfigurationTarget('target', { backend: 'codex' }, 'rev')).resolves.toEqual({ id: 'updated' })
 
     expect(fetchMock).toHaveBeenCalledTimes(4)
-    expect(fetchMock.mock.calls[1][1].headers['X-OpenMCP-CSRF']).toBe('first-token')
-    expect(fetchMock.mock.calls[3][1].headers['X-OpenMCP-CSRF']).toBe('second-token')
+    expect(fetchMock.mock.calls[1][1].headers['X-Refract-CSRF']).toBe('first-token')
+    expect(fetchMock.mock.calls[3][1].headers['X-Refract-CSRF']).toBe('second-token')
     expect(fetchMock.mock.calls[4]).toBeUndefined()
     expect(fetchMock.mock.calls[1][1].credentials).toBeUndefined()
   })

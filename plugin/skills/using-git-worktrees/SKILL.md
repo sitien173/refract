@@ -9,7 +9,7 @@ description: "Use when starting feature work that should not touch the current c
 
 This skill owns workspace isolation. It ends with a ready workspace on an
 attached branch. `coordinating-multi-model-work` owns everything after that,
-including OpenMCP registration.
+including Refract registration.
 
 Order of preference: detect existing isolation, then use a native worktree
 tool, then fall back to `git worktree`. Never fight the harness.
@@ -120,7 +120,7 @@ target, or the README instruction. When none is found, ask.
 ## Step 4: Hand Off
 
 When the work is coordinated, return to the Coordinator's setup. It registers
-this worktree root with OpenMCP, so the worktree gets its own `project_id` and
+this worktree root with Refract, so the worktree gets its own `project_id` and
 job queue. Plan anchors under `refs/plans/` live in the shared `.git` directory
 and resolve from every worktree. In `untracked` plan mode, a new worktree starts
 without `docs/plans/`; copy the plan directory in before resuming there.

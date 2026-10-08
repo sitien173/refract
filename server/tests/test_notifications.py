@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openmcp.models import JobResult, JobView
-from openmcp.notifications import send_job_notification
+from refract.models import JobResult, JobView
+from refract.notifications import send_job_notification
 
 
 def _make_job(
@@ -36,15 +36,15 @@ def test_send_job_notification_success(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_notify_instance = MagicMock()
     mock_notify_instance.send.return_value = True
     mock_notify_cls = MagicMock(return_value=mock_notify_instance)
-    monkeypatch.setattr("openmcp.notifications.Notify", mock_notify_cls)
+    monkeypatch.setattr("refract.notifications.Notify", mock_notify_cls)
 
     job = _make_job(state="succeeded", context_key="auth", workflow="implement", target_id="codex-1")
     result = send_job_notification(job, "web-app")
 
     assert result is True
     mock_notify_cls.assert_called_once_with()
-    assert mock_notify_instance.application_name == "OpenMCP"
-    assert mock_notify_instance.title == "OpenMCP job succeeded"
+    assert mock_notify_instance.application_name == "Refract"
+    assert mock_notify_instance.title == "Refract job succeeded"
     assert mock_notify_instance.message == "web-app / auth / implement / codex-1"
     mock_notify_instance.send.assert_called_once_with(block=True)
 
@@ -52,20 +52,20 @@ def test_send_job_notification_success(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_send_job_notification_empty_target_renders_dash(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_notify_instance = MagicMock()
     mock_notify_instance.send.return_value = True
-    monkeypatch.setattr("openmcp.notifications.Notify", MagicMock(return_value=mock_notify_instance))
+    monkeypatch.setattr("refract.notifications.Notify", MagicMock(return_value=mock_notify_instance))
 
     job = _make_job(state="cancelled", context_key="feature", workflow="review", target_id="")
     result = send_job_notification(job, "cli-tool")
 
     assert result is True
-    assert mock_notify_instance.title == "OpenMCP job cancelled"
+    assert mock_notify_instance.title == "Refract job cancelled"
     assert mock_notify_instance.message == "cli-tool / feature / review / -"
 
 
 def test_send_job_notification_omits_sensitive_content(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_notify_instance = MagicMock()
     mock_notify_instance.send.return_value = True
-    monkeypatch.setattr("openmcp.notifications.Notify", MagicMock(return_value=mock_notify_instance))
+    monkeypatch.setattr("refract.notifications.Notify", MagicMock(return_value=mock_notify_instance))
 
     secret_text = "SECRET_PASSWORD_12345"
     secret_error = "FAILED_AUTHENTICATION_TOKEN_XYZ"
@@ -95,7 +95,7 @@ def test_send_job_notification_converts_result_to_bool(
 ) -> None:
     mock_notify_instance = MagicMock()
     mock_notify_instance.send.return_value = raw_return
-    monkeypatch.setattr("openmcp.notifications.Notify", MagicMock(return_value=mock_notify_instance))
+    monkeypatch.setattr("refract.notifications.Notify", MagicMock(return_value=mock_notify_instance))
 
     job = _make_job()
     assert send_job_notification(job, "proj") is expected

@@ -1,6 +1,6 @@
-# OpenMCP v2 Tool Contract
+# Refract v2 Tool Contract
 
-Default endpoint is `http://127.0.0.1:8765/mcp`; set `OPENMCP_URL` before Claude Code starts.
+Default endpoint is `http://127.0.0.1:8765/mcp`; set `REFRACT_URL` before Claude Code starts.
 
 ## Seven tools
 
@@ -20,7 +20,7 @@ Use only these signatures; client names may be prefixed. Capture `project.id` an
 
 `task_guide(project_id)` returns public `workflows`, `profiles.default`, `profiles.available`, and `guidance`; it has no phase-request argument. Put the complete request in self-contained `job_submit.prompt`. Profiles may be partial. `other` requires an explicit mapping and never falls back. Validate public names only; handle unsupported mappings through actual guidance/errors, never invent a replacement.
 
-Keep provider, model, configured target, and native session identity private; native identity is not client input. Use a configured read-only target for `consult` and `review`: workflow names do not enforce write safety. Workers edit only declared scope. Coordinator owns Git, anchors, gates, review, and handover; OpenMCP/workflows do not commit, reset, restore, stash, clean, integrate, or call back into Git.
+Keep provider, model, configured target, and native session identity private; native identity is not client input. Use a configured read-only target for `consult` and `review`: workflow names do not enforce write safety. Workers edit only declared scope. Coordinator owns Git, anchors, gates, review, and handover; Refract/workflows do not commit, reset, restore, stash, clean, integrate, or call back into Git.
 
 ## Summaries and listing
 

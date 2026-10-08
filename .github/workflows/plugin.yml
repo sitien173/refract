@@ -1,0 +1,19 @@
+name: Validate
+
+on:
+  push:
+    paths: ["plugin/**", ".claude-plugin/**", ".github/workflows/plugin.yml"]
+  pull_request:
+    paths: ["plugin/**", ".claude-plugin/**", ".github/workflows/plugin.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run contract tests
+        run: plugin/tests/run.sh

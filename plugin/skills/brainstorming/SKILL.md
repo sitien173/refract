@@ -8,7 +8,7 @@ description: "Use when the user wants to build, add, or change something and the
 ## Role
 
 This skill owns design dialogue. Load `coordinating-multi-model-work` first; it
-owns OpenMCP mechanics, Git anchors, and the plan slug. `writing-plans` owns
+owns Refract mechanics, Git anchors, and the plan slug. `writing-plans` owns
 implementation planning.
 
 ## Constraints
@@ -50,7 +50,7 @@ Each step ends on its stated completion criterion.
 
 ## Edge Cases
 
-- **Direct scope.** The request is direct under `using-superpowers`: say so and
+- **Direct scope.** The request is direct under `using-refract`: say so and
   leave this skill.
 - **Design waived.** The user wants to skip design: confirm once, write a
   `DESIGN.md` whose status is `Waived by user`, and offer `writing-plans`.

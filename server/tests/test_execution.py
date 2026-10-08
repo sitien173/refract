@@ -12,12 +12,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openmcp.config import NotificationsConfig, TargetConfig, TargetSelection
-from openmcp.database import Database
-from openmcp.drivers import DriverResult
-from openmcp.planning import execution_plan_data, resolve_execution_plan, target_execution_key
-from openmcp.runtime import OrchestrationError, Runtime
-from openmcp.workflows import get_workflow
+from refract.config import NotificationsConfig, TargetConfig, TargetSelection
+from refract.database import Database
+from refract.drivers import DriverResult
+from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key
+from refract.runtime import OrchestrationError, Runtime
+from refract.workflows import get_workflow
 from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, git, repository
 
 
@@ -63,7 +63,7 @@ async def test_global_project_and_target_capacities_apply_together(tmp_path) -> 
         runtime_value = runtime_holder.get("runtime")
         if runtime_value is None or not second_job_id:
             return
-        job_id = uri.removeprefix("openmcp://jobs/")
+        job_id = uri.removeprefix("refract://jobs/")
         record = runtime_value.database.job_record(job_id)
         if record and record["state"] == "running":
             running_job_ids.add(job_id)
@@ -208,7 +208,7 @@ def test_runtime_reader_capacity_is_fixed_at_startup(tmp_path) -> None:
 
 
 def test_action_result_cancellation_dependents_defaults_empty() -> None:
-    from openmcp.models import ActionResult
+    from refract.models import ActionResult
 
     result = ActionResult(success=True, job_id="job", state="cancelled")
 
@@ -415,7 +415,7 @@ async def test_submit_with_failed_parent_returns_cancelled_job_and_cause(tmp_pat
 
 @pytest.mark.asyncio
 async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) -> None:
-    from openmcp.execution import JobRunner
+    from refract.execution import JobRunner
 
     root = repository(tmp_path)
     catalog = config(tmp_path / "home")
@@ -594,7 +594,7 @@ async def test_cancel_reserved_unstarted_parent_cascades_and_retry_uses_new_disp
         runtime = runtime_holder.get("runtime")
         if runtime is None:
             return
-        job_id = uri.removeprefix("openmcp://jobs/")
+        job_id = uri.removeprefix("refract://jobs/")
         record = runtime.database.job_record(job_id)
         if job_id == blocker_job_id and record and record["state"] == "succeeded":
             blocker_notice_entered.set()
@@ -684,7 +684,7 @@ async def test_retry_is_not_lost_while_terminal_notifier_is_paused(tmp_path) -> 
         runtime = runtime_holder.get("runtime")
         if runtime is None:
             return
-        job_id = uri.removeprefix("openmcp://jobs/")
+        job_id = uri.removeprefix("refract://jobs/")
         record = runtime.database.job_record(job_id)
         if record and record["state"] == "failed" and not terminal_notice_entered.is_set():
             terminal_notice_entered.set()
@@ -773,7 +773,7 @@ async def test_startup_cascades_interrupted_and_failed_parents_before_admission(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["attempt_persistence", "capability_probe", "recorder_setup", "recorder_close"])
 async def test_target_semaphore_released_after_post_acquire_failures(tmp_path, monkeypatch, failure: str) -> None:
-    from openmcp import execution as execution_module
+    from refract import execution as execution_module
 
     root = repository(tmp_path)
     catalog = config(tmp_path / "home")
@@ -1101,7 +1101,7 @@ async def test_retries_reuse_targets_after_each_failover_pass(tmp_path, monkeypa
     )
     runtime = Runtime(catalog)
     runtime.drivers = RetryDrivers()
-    monkeypatch.setattr("openmcp.execution.random.uniform", lambda _a, _b: 0)
+    monkeypatch.setattr("refract.execution.random.uniform", lambda _a, _b: 0)
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
@@ -1369,7 +1369,7 @@ async def test_plain_directory_execution_spawns_no_git(monkeypatch, tmp_path) ->
 
     def fail_git_spawn(command, *args, **kwargs):
         if command and command[0] == "git":
-            raise AssertionError("OpenMCP spawned Git")
+            raise AssertionError("Refract spawned Git")
         return original_run(command, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", fail_git_spawn)
@@ -1454,7 +1454,7 @@ consult = "primary"
 """,
         encoding="utf-8",
     )
-    from openmcp.config import load_config
+    from refract.config import load_config
     runtime = Runtime(load_config(path))
     runtime.drivers = FakeDrivers()
     await runtime.start()
@@ -2028,7 +2028,7 @@ async def test_fresh_job_failure_updating_state_to_succeeded_preserves_old_sessi
 @pytest.mark.asyncio
 async def test_stream_bridge_blocking_backpressure_and_sentinel_drain(tmp_path) -> None:
     """Queue capacity of 256 blocks producer until consumer drains."""
-    from openmcp.drivers import StreamBridge
+    from refract.drivers import StreamBridge
 
     bridge = StreamBridge(queue_capacity=256)
     producer_threads: set[int] = set()
@@ -2056,7 +2056,7 @@ async def test_stream_bridge_blocking_backpressure_and_sentinel_drain(tmp_path) 
 
 @pytest.mark.asyncio
 async def test_stream_bridge_event_loop_close_drains_accepted_events() -> None:
-    from openmcp.drivers import StreamBridge
+    from refract.drivers import StreamBridge
 
     bridge = StreamBridge(queue_capacity=256)
     await bridge.queue.put({
@@ -2075,7 +2075,7 @@ async def test_stream_bridge_event_loop_close_drains_accepted_events() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_bridge_cancellation_drains_accepted_events(tmp_path) -> None:
-    from openmcp.drivers import StreamBridge
+    from refract.drivers import StreamBridge
 
     bridge = StreamBridge(queue_capacity=256)
 
@@ -2097,7 +2097,7 @@ async def test_stream_bridge_cancellation_drains_accepted_events(tmp_path) -> No
 
 @pytest.mark.asyncio
 async def test_stream_bridge_tool_activity_tracking() -> None:
-    from openmcp.drivers import StreamBridge
+    from refract.drivers import StreamBridge
 
     bridge = StreamBridge(queue_capacity=256)
     # 1. New bridge reports no activity
@@ -2137,7 +2137,7 @@ async def test_stream_bridge_tool_activity_tracking() -> None:
 @pytest.mark.asyncio
 async def test_stream_bridge_thread_ownership_no_sqlite_on_provider_thread(tmp_path) -> None:
     """Assert provider threads never touch the SQLite database."""
-    from openmcp.drivers import StreamBridge
+    from refract.drivers import StreamBridge
     root = repository(tmp_path)
     cat = config(tmp_path / "home")
     runtime = Runtime(cat)
@@ -2294,7 +2294,7 @@ async def test_attempt_finished_records_cancelled_status_when_cancel_event_set(t
 
 @pytest.mark.asyncio
 async def test_execution_exact_quota_boundary_retains_finish_marker(tmp_path, monkeypatch) -> None:
-    from openmcp.streaming import StreamRecorder
+    from refract.streaming import StreamRecorder
 
     orig_init = StreamRecorder.__init__
     def custom_init(self, *args, **kwargs):
@@ -2446,7 +2446,7 @@ async def test_attempt_finished_does_not_reuse_prior_attempt_on_exception(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_agy_continuations_stay_one_openmcp_attempt(tmp_path) -> None:
+async def test_agy_continuations_stay_one_refract_attempt(tmp_path) -> None:
     """Agy continuations within one attempt must remain attempt=1."""
     root = repository(tmp_path)
     cat = config(
@@ -2487,7 +2487,7 @@ async def test_agy_continuations_stay_one_openmcp_attempt(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_capability_check_before_submission_with_final_only_fallback(tmp_path, monkeypatch) -> None:
     """Structured mode capability check happens before prompt submission with final-only fallback."""
-    from openmcp.drivers import DriverRegistry
+    from refract.drivers import DriverRegistry
 
     registry = DriverRegistry()
     target_old = TargetConfig(id="target-old", backend="claude-old")
@@ -2555,7 +2555,7 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
 
 def test_detect_structured_mode_invokes_help_probe_and_detects_support(tmp_path, monkeypatch) -> None:
     """Default capability probe invokes configured --help command and detects supported structured mode."""
-    from openmcp.drivers import DriverRegistry
+    from refract.drivers import DriverRegistry
 
     marker = tmp_path / "probe_invoked.txt"
     fake_cli = tmp_path / "fake-claude"
@@ -2584,7 +2584,7 @@ def test_detect_structured_mode_invokes_help_probe_and_detects_support(tmp_path,
 
 def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
     """Codex capability probe must run 'codex exec --help' rather than top-level 'codex --help'."""
-    from openmcp.drivers import DriverRegistry
+    from refract.drivers import DriverRegistry
 
     invocations: list[str] = []
     fake_codex = tmp_path / "fake-codex"
@@ -2729,7 +2729,7 @@ async def test_execution_retries_across_runtime_reload(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_execution_truncation_limits_preserve_final_result(tmp_path, monkeypatch) -> None:
     """Stream truncation marks stream.truncated while keeping job.result.text authoritative."""
-    from openmcp.streaming import StreamRecorder
+    from refract.streaming import StreamRecorder
 
     orig_init = StreamRecorder.__init__
     def custom_init(self, *args, **kwargs):
@@ -2855,8 +2855,8 @@ async def test_execution_security_regression_fixtures_strip_forbidden_content(tm
 @pytest.mark.asyncio
 async def test_agy_never_promotes_log_text_to_agent_messages_on_empty_stdout(tmp_path, monkeypatch) -> None:
     """Empty stdout with diagnostic/secret log text extracts session ID but never promotes log text."""
-    from openmcp.backends import agy as agy_backend
-    from openmcp.backends.agy import AgyParams
+    from refract.backends import agy as agy_backend
+    from refract.backends.agy import AgyParams
 
     secret_diagnostic = "DIAGNOSTIC_SECRET_TRACE_TOKEN_NEVER_PROMOTE_777"
     session_id = "11111111-2222-3333-4444-555555555555"
@@ -2884,8 +2884,8 @@ async def test_agy_never_promotes_log_text_to_agent_messages_on_empty_stdout(tmp
 
 def test_agy_execute_sync_post_submission_type_error_single_invocation(tmp_path, monkeypatch) -> None:
     """Post-submission TypeError in _execute_once raises immediately with exactly one invocation."""
-    from openmcp.backends import agy as agy_backend
-    from openmcp.backends.agy import AgyParams
+    from refract.backends import agy as agy_backend
+    from refract.backends.agy import AgyParams
 
     call_count = 0
 
@@ -2904,8 +2904,8 @@ def test_agy_execute_sync_post_submission_type_error_single_invocation(tmp_path,
 
 def test_agy_continuation_post_submission_type_error_single_invocation(tmp_path, monkeypatch) -> None:
     """Post-submission TypeError during continuation raises immediately with exactly one continuation invocation."""
-    from openmcp.backends import agy as agy_backend
-    from openmcp.backends.agy import AgyParams, BackendResult
+    from refract.backends import agy as agy_backend
+    from refract.backends.agy import AgyParams, BackendResult
 
     initial_called = 0
     continuation_called = 0
@@ -2931,10 +2931,10 @@ def test_agy_continuation_post_submission_type_error_single_invocation(tmp_path,
 @pytest.mark.asyncio
 async def test_execution_all_provider_fixtures_persistence_and_authoritative_results(tmp_path, monkeypatch) -> None:
     """Exercise sanitized Claude, Codex, Pi, and Agy fixtures through execution flow."""
-    from openmcp.backends.claude import ClaudeParams, _execute_sync as claude_sync
-    from openmcp.backends.codex import CodexParams, _execute_sync as codex_sync
-    from openmcp.backends.pi import PiParams, _execute_sync as pi_sync
-    from openmcp.backends.agy import AgyParams, _execute_once as agy_execute_once
+    from refract.backends.claude import ClaudeParams, _execute_sync as claude_sync
+    from refract.backends.codex import CodexParams, _execute_sync as codex_sync
+    from refract.backends.pi import PiParams, _execute_sync as pi_sync
+    from refract.backends.agy import AgyParams, _execute_once as agy_execute_once
 
     root = repository(tmp_path)
     cfg = config(tmp_path / "home")
@@ -2992,16 +2992,16 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             lines = dirty_streams[self.backend_name]
             def run_adapter():
                 if self.backend_name == "claude":
-                    monkeypatch.setattr("openmcp.backends.claude.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *args, **kw: (l for l in lines))
                     return claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=emitter))
                 elif self.backend_name == "codex":
-                    monkeypatch.setattr("openmcp.backends.codex.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *args, **kw: (l for l in lines))
                     return codex_sync(CodexParams(PROMPT="p", cd=tmp_path, emitter=emitter))
                 elif self.backend_name == "pi":
-                    monkeypatch.setattr("openmcp.backends.pi.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *args, **kw: (l for l in lines))
                     return pi_sync(PiParams(PROMPT="p", cd=tmp_path, emitter=emitter))
                 else:
-                    monkeypatch.setattr("openmcp.backends.agy.run_shell_command", lambda *args, **kw: (l for l in lines))
+                    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *args, **kw: (l for l in lines))
                     return agy_execute_once(AgyParams(PROMPT="p", cd=tmp_path, emitter=emitter))
 
             res = await asyncio.to_thread(run_adapter)
@@ -3590,7 +3590,7 @@ async def test_recovery_original_prompt_and_completed_turn_stored_exactly_once(t
 
 def test_with_history_returns_original_prompt_when_all_turns_exceed_history_bytes(tmp_path) -> None:
     """Bounded history must not fabricate an empty wrapper when every turn is excluded."""
-    from openmcp.execution import TargetExecutor
+    from refract.execution import TargetExecutor
 
     catalog = replace(config(tmp_path / "home"), history_bytes=1)
     database = Database(catalog.database_path)
@@ -3925,7 +3925,7 @@ async def test_terminal_desktop_notifications_succeeded_and_failed(
     root = repository(tmp_path)
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
 
     runtime = Runtime(catalog)
     runtime.drivers = FakeDrivers()
@@ -3962,7 +3962,7 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
     root = repository(tmp_path)
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
 
     drivers = BlockingDrivers()
     runtime = Runtime(catalog)
@@ -4025,7 +4025,7 @@ async def test_terminal_desktop_notifications_disabled_by_default(
 ) -> None:
     root = repository(tmp_path)
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
 
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FakeDrivers()
@@ -4046,7 +4046,7 @@ async def test_terminal_desktop_notifications_no_call_on_queued_running_retry(
     root = repository(tmp_path)
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
 
     runtime = Runtime(catalog)
     runtime.drivers = RetryDrivers()
@@ -4078,7 +4078,7 @@ async def test_terminal_desktop_notifications_failure_isolation(
         notifications.append(job_id)
 
     mock_send_false = MagicMock(return_value=False)
-    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send_false)
+    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send_false)
 
     runtime = Runtime(catalog, notifier=notify)
     runtime.drivers = FakeDrivers()
@@ -4098,7 +4098,7 @@ async def test_terminal_desktop_notifications_failure_isolation(
         assert failed_records[0].job_id == sub1.job_id
 
         mock_send_raise = MagicMock(side_effect=RuntimeError("notification daemon down"))
-        monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send_raise)
+        monkeypatch.setattr("refract.runtime.send_job_notification", mock_send_raise)
         notifications.clear()
         caplog.clear()
 
@@ -4122,7 +4122,7 @@ async def test_terminal_desktop_notifications_live_catalog_toggle(
 ) -> None:
     root = repository(tmp_path)
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
 
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FakeDrivers()
@@ -4153,7 +4153,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
     root = repository(tmp_path)
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("openmcp.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
 
     database = Database(catalog.database_path)
     project = database.upsert_project(project_id="proj-1", alias="retry-project", root=root.as_posix())

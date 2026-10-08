@@ -4,8 +4,8 @@ import hashlib
 
 import pytest
 
-from openmcp.config import load_config
-from openmcp.config_inspection import sanitize_config_error, sha256_bytes
+from refract.config import load_config
+from refract.config_inspection import sanitize_config_error, sha256_bytes
 
 
 def _config() -> str:

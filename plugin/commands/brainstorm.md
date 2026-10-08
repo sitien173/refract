@@ -3,6 +3,6 @@ description: Clarify intent and trade-offs, confirm a design, and write the desi
 argument-hint: [idea or feature to explore]
 ---
 
-Invoke `superpowers-ccg:brainstorming`.
+Invoke `refract:brainstorming`.
 
 Idea: $ARGUMENTS

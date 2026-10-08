@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from openmcp.config import load_config
-from openmcp.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
-from openmcp.workflows import get_workflow
+from refract.config import load_config
+from refract.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
+from refract.workflows import get_workflow
 from tests.orchestration_helpers import config
 
 
@@ -100,8 +100,8 @@ consult = "primary"
 
 
 def test_native_pi_verified_read_only_capability_is_narrow() -> None:
-    from openmcp.config import TargetConfig
-    from openmcp.drivers import DriverRegistry
+    from refract.config import TargetConfig
+    from refract.drivers import DriverRegistry
 
     assert DriverRegistry.supports_verified_read_only(
         TargetConfig(id="safe", backend="pi", isolated=True, read_only=True)
@@ -121,9 +121,9 @@ def test_native_pi_verified_read_only_capability_is_narrow() -> None:
 
 @pytest.mark.parametrize("workflow", ["consult", "review", "implement", "other"])
 def test_access_mode_requires_every_saved_fallback_target_regardless_of_workflow(workflow: str) -> None:
-    from openmcp.config import TargetConfig, TargetSelection
-    from openmcp.planning import ExecutionPlan, derive_access_mode
-    from openmcp.workflows import get_workflow
+    from refract.config import TargetConfig, TargetSelection
+    from refract.planning import ExecutionPlan, derive_access_mode
+    from refract.workflows import get_workflow
 
     safe = TargetConfig(id="safe", backend="pi", isolated=True, read_only=True)
     unsafe = TargetConfig(id="unsafe", backend="pi", isolated=True, read_only=True, args=("--verbose",))
@@ -138,9 +138,9 @@ def test_access_mode_requires_every_saved_fallback_target_regardless_of_workflow
 
 
 def test_access_mode_with_all_qualified_fallbacks_is_parallel_read() -> None:
-    from openmcp.config import TargetConfig, TargetSelection
-    from openmcp.planning import ExecutionPlan, derive_access_mode
-    from openmcp.workflows import get_workflow
+    from refract.config import TargetConfig, TargetSelection
+    from refract.planning import ExecutionPlan, derive_access_mode
+    from refract.workflows import get_workflow
 
     targets = (
         TargetConfig(id="primary", backend="pi", isolated=True, read_only=True),
@@ -157,9 +157,9 @@ def test_access_mode_with_all_qualified_fallbacks_is_parallel_read() -> None:
 
 
 def test_unsafe_primary_target_derives_exclusive() -> None:
-    from openmcp.config import TargetConfig, TargetSelection
-    from openmcp.planning import ExecutionPlan, derive_access_mode
-    from openmcp.workflows import get_workflow
+    from refract.config import TargetConfig, TargetSelection
+    from refract.planning import ExecutionPlan, derive_access_mode
+    from refract.workflows import get_workflow
 
     targets = (
         TargetConfig(id="primary", backend="pi", isolated=True, read_only=True, args=("--verbose",)),
@@ -178,9 +178,9 @@ def test_unsafe_primary_target_derives_exclusive() -> None:
 def test_access_mode_uses_immutable_snapshot_targets_and_round_trips(tmp_path) -> None:
     from dataclasses import replace
 
-    from openmcp.config import TargetConfig, TargetSelection
-    from openmcp.planning import ExecutionPlan, derive_access_mode
-    from openmcp.workflows import get_workflow
+    from refract.config import TargetConfig, TargetSelection
+    from refract.planning import ExecutionPlan, derive_access_mode
+    from refract.workflows import get_workflow
 
     plan = ExecutionPlan(
         profile="balanced",
@@ -199,9 +199,9 @@ def test_access_mode_uses_immutable_snapshot_targets_and_round_trips(tmp_path) -
 
 
 def test_otherwise_valid_custom_args_round_trip_and_remain_exclusive() -> None:
-    from openmcp.config import TargetConfig, TargetSelection
-    from openmcp.planning import ExecutionPlan, derive_access_mode
-    from openmcp.workflows import get_workflow
+    from refract.config import TargetConfig, TargetSelection
+    from refract.planning import ExecutionPlan, derive_access_mode
+    from refract.workflows import get_workflow
 
     target = TargetConfig(
         id="native-with-custom-args",
@@ -231,9 +231,9 @@ def test_otherwise_valid_custom_args_round_trip_and_remain_exclusive() -> None:
     ],
 )
 def test_pi_eager_write_and_raw_tool_args_round_trip_as_exclusive(native_args: tuple[str, ...]) -> None:
-    from openmcp.config import TargetConfig, TargetSelection
-    from openmcp.planning import ExecutionPlan, derive_access_mode
-    from openmcp.workflows import get_workflow
+    from refract.config import TargetConfig, TargetSelection
+    from refract.planning import ExecutionPlan, derive_access_mode
+    from refract.workflows import get_workflow
 
     target = TargetConfig(
         id="pi-with-native-args",
@@ -255,9 +255,9 @@ def test_pi_eager_write_and_raw_tool_args_round_trip_as_exclusive(native_args: t
 
 
 def test_empty_programmatic_selection_derives_exclusive() -> None:
-    from openmcp.config import TargetSelection
-    from openmcp.planning import ExecutionPlan, derive_access_mode
-    from openmcp.workflows import get_workflow
+    from refract.config import TargetSelection
+    from refract.planning import ExecutionPlan, derive_access_mode
+    from refract.workflows import get_workflow
 
     plan = ExecutionPlan(
         profile="balanced",

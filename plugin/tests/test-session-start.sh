@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-hook="${repo_root}/hooks/superpowers-ccg-session-start.sh"
+hook="${repo_root}/hooks/refract-session-start.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -29,7 +29,7 @@ test -z "$(ls -A "$tmp/repo")"
 plugin_with_spaces="$tmp/plugin root"
 mkdir -p "$plugin_with_spaces/hooks" "$plugin_with_spaces/shared"
 cp "$hook" "$plugin_with_spaces/hooks/"
-output="$("$plugin_with_spaces/hooks/superpowers-ccg-session-start.sh")"
+output="$("$plugin_with_spaces/hooks/refract-session-start.sh")"
 validate_output "$output" "$plugin_with_spaces"
 
 printf 'session-start tests passed\n'

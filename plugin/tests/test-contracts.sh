@@ -5,7 +5,14 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-bash -n hooks/superpowers-ccg-session-start.sh
+if grep -R -n -i -E 'openmcp|superpowers|ccg' \
+    commands hooks shared skills .claude-plugin .codex-plugin .mcp.json \
+    ../.claude-plugin/marketplace.json; then
+    printf 'legacy product name found in plugin surfaces\n' >&2
+    exit 1
+fi
+
+bash -n hooks/refract-session-start.sh
 
 python3 - <<'PY'
 import json
@@ -15,7 +22,7 @@ import re
 root = pathlib.Path.cwd()
 paths = [
     root / ".claude-plugin/plugin.json",
-    root / ".claude-plugin/marketplace.json",
+    root.parent / ".claude-plugin/marketplace.json",
     root / ".codex-plugin/plugin.json",
     root / ".mcp.json",
     root / "hooks/hooks.json",
@@ -23,7 +30,7 @@ paths = [
 documents = {path: json.loads(path.read_text()) for path in paths}
 
 plugin_version = documents[root / ".claude-plugin/plugin.json"]["version"]
-market_version = documents[root / ".claude-plugin/marketplace.json"]["plugins"][0]["version"]
+market_version = documents[root.parent / ".claude-plugin/marketplace.json"]["plugins"][0]["version"]
 codex_version = documents[root / ".codex-plugin/plugin.json"]["version"]
 assert plugin_version == market_version == codex_version
 
@@ -54,7 +61,7 @@ for detail in ("isError", "retryable", "next_action", "request ID"):
     assert detail in " ".join(error_section.split()), detail
 assert "root job or project ID" in contract_flat
 assert "project_register" not in contract
-assert plugin_version == market_version == codex_version == "12.0.0"
+assert plugin_version == market_version == codex_version == "1.0.0"
 
 coordinator = (root / "skills/coordinating-multi-model-work/SKILL.md").read_text()
 setup = coordinator.split("## Setup and Resume", 1)[1].split("### Plan-Artifact Tracking", 1)[0]
@@ -70,15 +77,15 @@ plugin_description = documents[root / ".claude-plugin/plugin.json"]["description
 codex_description = documents[root / ".codex-plugin/plugin.json"]["description"]
 assert plugin_description == codex_description
 
-mcp = documents[root / ".mcp.json"]["mcpServers"]["openmcp"]
+mcp = documents[root / ".mcp.json"]["mcpServers"]["refract"]
 assert mcp == {
     "type": "http",
-    "url": "${OPENMCP_URL:-http://127.0.0.1:8765/mcp}",
+    "url": "${REFRACT_URL:-http://127.0.0.1:8765/mcp}",
 }
 assert "/home/" not in json.dumps(mcp)
 
 for path in (root / "shared").glob("*.md"):
-    match = re.search(r"ccg-shared-version:\s*([^\s>]+)", path.read_text())
+    match = re.search(r"refract-shared-version:\s*([^\s>]+)", path.read_text())
     assert match and match.group(1) == plugin_version, path
 PY
 
@@ -101,7 +108,7 @@ if grep -R -E '\b(Forge|Canvas|Sage|Sentinel)\b|forge-write|canvas-write|sage-re
 fi
 
 if grep -R -E 'task_route|routing_profile|routing-profile|routing profile|execution_role|setup_instruction|openmcp://models|openmcp://routing-profiles|\.openmcp/workflows' "${workflow_files[@]}"; then
-    printf 'obsolete OpenMCP contract found\n' >&2
+    printf 'obsolete Refract contract found\n' >&2
     exit 1
 fi
 
@@ -123,7 +130,7 @@ grep -q '^## Review Result$' shared/journal-template.md
 grep -q '^## Final Checkpoint$' shared/journal-template.md
 
 for skill in skills/*/SKILL.md; do
-    if [[ "$skill" != "skills/using-superpowers/SKILL.md" ]]; then
+    if [[ "$skill" != "skills/using-refract/SKILL.md" ]]; then
         grep -qi 'owns' "$skill"
     fi
     if [[ "$skill" != "skills/coordinating-multi-model-work/SKILL.md" && "$skill" != "skills/using-git-worktrees/SKILL.md" ]]; then
@@ -139,7 +146,7 @@ test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 100
 if grep -R -E 'project_resolve|task_guide|job_submit|job_wait|job_list|job_cancel|job_retry|project_register|openmcp://' \
     skills/brainstorming skills/systematic-debugging \
     skills/test-driven-development skills/verifying-before-completion; then
-    printf 'OpenMCP mechanics leaked into a policy skill\n' >&2
+    printf 'Refract mechanics leaked into a policy skill\n' >&2
     exit 1
 fi
 
@@ -154,14 +161,14 @@ grep -q 'confirmed design and completed implementation plan' skills/writing-plan
 grep -q '`phase-<NN>/prompt.md`, `notes.md`, and `journal.md`' skills/writing-plans/SKILL.md
 grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
 
-grep -q 'OpenMCP provides four fixed workflows' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Refract provides four fixed workflows' skills/coordinating-multi-model-work/SKILL.md
 grep -q '`consult`, `implement`, `other`, and' skills/coordinating-multi-model-work/SKILL.md
 grep -q '^`review`\. Canonical gates' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Profiles may be' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q 'task_guide' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -R -E '^[[:space:]]*capabilities[[:space:]]*=' \
     commands hooks shared skills; then
-    printf 'Removed OpenMCP target capabilities remain documented\n' >&2
+    printf 'Removed Refract target capabilities remain documented\n' >&2
     exit 1
 fi
 grep -q 'project_resolve' skills/coordinating-multi-model-work/SKILL.md
@@ -192,7 +199,7 @@ grep -qF 'git cat-file -e <sha>^{commit}' "$anchors"
 grep -qF 'git merge-base --is-ancestor <sha> HEAD' "$anchors"
 grep -q 'STALE_ANCHOR' "$anchors"
 grep -q 'STALE_ANCHOR' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'ccg.plans.tracking' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'refract.plans.tracking' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'git ls-files docs/plans' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'git check-ignore -q docs/plans' skills/coordinating-multi-model-work/SKILL.md
 test "$(wc -l < "$anchors")" -le 120

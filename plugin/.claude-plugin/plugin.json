@@ -1,19 +1,19 @@
 {
-  "name": "superpowers-ccg",
-  "description": "Superpowers-CCG: 3-gate (Plan → Execute → Review) workflow.",
-  "version": "12.0.0",
+  "name": "refract",
+  "description": "Refract: 3-gate (Plan → Execute → Review) workflow.",
+  "version": "1.0.0",
   "author": {
     "name": "sitien173"
   },
-  "homepage": "https://github.com/sitien173/superpowers-ccg",
-  "repository": "https://github.com/sitien173/superpowers-ccg",
+  "homepage": "https://github.com/sitien173/refract",
+  "repository": "https://github.com/sitien173/refract",
   "license": "MIT",
   "keywords": [
     "skills",
     "tdd",
     "debugging",
     "multi-agent",
-    "openmcp-profiles",
+    "refract-profiles",
     "isolated-review",
     "collaboration",
     "workflows"

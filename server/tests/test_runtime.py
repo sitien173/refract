@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from openmcp.config import load_config
-from openmcp.runtime import OrchestrationError, Runtime
+from refract.config import load_config
+from refract.runtime import OrchestrationError, Runtime
 
 
 def _config(path) -> None:
@@ -177,7 +177,7 @@ def test_config_mutation_service_exposes_shared_lock(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_project_override_runtime_activation_and_plan_preservation(tmp_path) -> None:
-    from openmcp.models import ProfileEditorData, WorkflowPolicyData
+    from refract.models import ProfileEditorData, WorkflowPolicyData
 
     home = tmp_path / "home"
     home.mkdir()
@@ -376,7 +376,7 @@ async def test_stream_durable_reload_reconstructs_cursor_and_events(tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_stream_truncation_marker_durable_across_reload(tmp_path) -> None:
-    from openmcp.streaming import StreamRecorder
+    from refract.streaming import StreamRecorder
 
     home = tmp_path / "home"
     home.mkdir()
@@ -434,7 +434,7 @@ async def test_stream_truncation_marker_durable_across_reload(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_stream_persistence_failure_retains_prior_events(tmp_path) -> None:
-    from openmcp.streaming import StreamRecorder
+    from refract.streaming import StreamRecorder
 
     home = tmp_path / "home"
     home.mkdir()
@@ -578,7 +578,7 @@ def test_resolve_project_rereads_concurrent_root_winner(tmp_path, monkeypatch) -
 
 
 def test_resolve_project_preserves_alias_of_concurrent_canonical_winner(tmp_path, monkeypatch) -> None:
-    from openmcp.database import Database
+    from refract.database import Database
 
     config_path = tmp_path / "config.toml"
     _config(config_path)

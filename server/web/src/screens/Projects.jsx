@@ -223,7 +223,7 @@ export default function Projects({ onNavigate }) {
               Clear filter
             </button>
           ) : (
-            <p className="caption">Register a workspace with <code>openmcp register &lt;path&gt;</code> to begin.</p>
+            <p className="caption">Register a workspace with <code>refract register &lt;path&gt;</code> to begin.</p>
           )
         }
         ariaLabel="Projects table"

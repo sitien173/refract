@@ -9,15 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from openmcp.backends import BackendResult
-from openmcp.backends.agy import AgyParams, execute as agy_execute
-from openmcp.backends.claude import ClaudeParams
-from openmcp.backends.codex import CodexParams, execute as codex_execute
-from openmcp.backends.pi import PiParams
+from refract.backends import BackendResult
+from refract.backends.agy import AgyParams, execute as agy_execute
+from refract.backends.claude import ClaudeParams
+from refract.backends.codex import CodexParams, execute as codex_execute
+from refract.backends.pi import PiParams
 
 
 def test_shell_stream_reports_nonzero_exit_after_output() -> None:
-    from openmcp.backends._shell import ShellCommandFailed, stream_shell_command_lines
+    from refract.backends._shell import ShellCommandFailed, stream_shell_command_lines
 
     executable_name = Path(sys.executable).name
     command = [sys.executable, "-c", "print('unknown option'); raise SystemExit(2)"]
@@ -37,8 +37,8 @@ def test_shell_stream_reports_nonzero_exit_after_output() -> None:
 def test_v1_server_facades_and_resource_uri_model_are_removed() -> None:
     import importlib.util
 
-    import openmcp.models as models
-    import openmcp.server as server
+    import refract.models as models
+    import refract.server as server
 
     assert not hasattr(server, "run")
     assert not hasattr(server, "project_register")
@@ -48,10 +48,10 @@ def test_v1_server_facades_and_resource_uri_model_are_removed() -> None:
     assert not hasattr(models, "job_resource_uri")
     assert not hasattr(models, "JOB_RESOURCE_URI_TEMPLATE")
     assert "resource_uri" not in models.SubmissionResult.model_fields
-    assert importlib.util.find_spec("openmcp.backend_runner") is None
+    assert importlib.util.find_spec("refract.backend_runner") is None
 
 
-def test_openmcp_version_is_2_and_lock_matches_without_dependency_changes() -> None:
+def test_refract_version_is_1_and_lock_matches_without_dependency_changes() -> None:
     import tomllib
 
     from pathlib import Path
@@ -59,19 +59,19 @@ def test_openmcp_version_is_2_and_lock_matches_without_dependency_changes() -> N
     root = Path(__file__).resolve().parents[1]
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
-    locked_openmcp = next(package for package in lock["package"] if package["name"] == "openmcp")
+    locked_refract = next(package for package in lock["package"] if package["name"] == "refract")
 
-    assert project["project"]["version"] == "2.0.0"
-    assert locked_openmcp["version"] == "2.0.0"
+    assert project["project"]["version"] == "1.0.0"
+    assert locked_refract["version"] == "1.0.0"
 
 
 def test_imports() -> None:
-    import openmcp.server  # noqa: F401
-    import openmcp.cli  # noqa: F401
-    import openmcp.backends.agy  # noqa: F401
-    import openmcp.backends.claude  # noqa: F401
-    import openmcp.backends.codex  # noqa: F401
-    import openmcp.backends.pi  # noqa: F401
+    import refract.server  # noqa: F401
+    import refract.cli  # noqa: F401
+    import refract.backends.agy  # noqa: F401
+    import refract.backends.claude  # noqa: F401
+    import refract.backends.codex  # noqa: F401
+    import refract.backends.pi  # noqa: F401
 
 
 def test_backend_params_are_transport_only() -> None:
@@ -89,9 +89,9 @@ def test_backend_params_are_transport_only() -> None:
 def test_doctor_checks_prerequisites_and_accepts_partial_profiles(
     monkeypatch, tmp_path, capsys, home_writable, executable, exit_code
 ) -> None:
-    from openmcp.cli import main
+    from refract.cli import main
 
-    home = tmp_path / "openmcp"
+    home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
         """[daemon]
@@ -106,9 +106,9 @@ implement = "primary"
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
-    monkeypatch.setattr("openmcp.cli.os.access", lambda *_: home_writable)
-    monkeypatch.setattr("openmcp.cli.shutil.which", lambda _: executable)
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+    monkeypatch.setattr("refract.cli.os.access", lambda *_: home_writable)
+    monkeypatch.setattr("refract.cli.shutil.which", lambda _: executable)
 
     with pytest.raises(SystemExit) as raised:
         main(["doctor"])
@@ -119,9 +119,9 @@ implement = "primary"
 
 
 def test_serve_reports_configuration_errors(monkeypatch, tmp_path, capsys) -> None:
-    from openmcp.cli import main
+    from refract.cli import main
 
-    monkeypatch.setenv("OPENMCP_HOME", str(tmp_path / "missing-home"))
+    monkeypatch.setenv("REFRACT_HOME", str(tmp_path / "missing-home"))
 
     with pytest.raises(SystemExit) as raised:
         main(["serve"])
@@ -133,12 +133,12 @@ def test_serve_reports_configuration_errors(monkeypatch, tmp_path, capsys) -> No
 
 
 def test_serve_reports_invalid_configuration(monkeypatch, tmp_path, capsys) -> None:
-    from openmcp.cli import main
+    from refract.cli import main
 
-    home = tmp_path / "openmcp"
+    home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text("[daemon]\ndefault_profile = 'balanced'\n", encoding="utf-8")
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setenv("REFRACT_HOME", str(home))
 
     with pytest.raises(SystemExit) as raised:
         main(["serve"])
@@ -150,7 +150,7 @@ def test_serve_reports_invalid_configuration(monkeypatch, tmp_path, capsys) -> N
 
 
 def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
-    from openmcp.backends.codex import _extract_session_id_from_latest_session
+    from refract.backends.codex import _extract_session_id_from_latest_session
 
     session_id = "019e532a-2d92-7281-8bd1-0110af0a34aa"
     sessions_dir = tmp_path / "codex-home" / "sessions" / "2026" / "05" / "23"
@@ -181,7 +181,7 @@ def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
 
 
 def test_codex_session_file_fallback_without_prompt_match(monkeypatch, tmp_path) -> None:
-    from openmcp.backends.codex import _extract_session_id_from_latest_session
+    from refract.backends.codex import _extract_session_id_from_latest_session
 
     session_id = "019e532a-2d92-7281-8bd1-0110af0a34aa"
     sessions_dir = tmp_path / "codex-home" / "sessions" / "2026" / "05" / "23"
@@ -213,7 +213,7 @@ def test_codex_session_file_fallback_without_prompt_match(monkeypatch, tmp_path)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["Created", "Streaming"])
 async def test_agy_extracts_session_id_from_conversation_log(monkeypatch, tmp_path, prefix) -> None:
-    from openmcp.backends import agy as agy_backend
+    from refract.backends import agy as agy_backend
 
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
 
@@ -238,7 +238,7 @@ async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
     tmp_path,
     tmp_path_factory,
 ) -> None:
-    from openmcp.backends import agy as agy_backend
+    from refract.backends import agy as agy_backend
 
     home = tmp_path_factory.mktemp("agy-home")
     stale_id = "d597e994-7312-49ec-9317-ce9ae59b38bc"
@@ -281,7 +281,7 @@ async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
 
 @pytest.mark.asyncio
 async def test_agy_prefers_stdout_reply_over_noisy_log_file(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
+    from refract.backends import agy as agy_backend
 
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
     captured = {}
@@ -317,7 +317,7 @@ async def test_agy_prefers_stdout_reply_over_noisy_log_file(monkeypatch, tmp_pat
 
 @pytest.mark.asyncio
 async def test_agy_timeout_with_partial_output_is_fatal(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
+    from refract.backends import agy as agy_backend
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield "partial reply"
@@ -333,7 +333,7 @@ async def test_agy_timeout_with_partial_output_is_fatal(monkeypatch, tmp_path) -
 
 
 def test_agy_continuation_propagates_failure(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import agy as agy_backend
+    from refract.backends import agy as agy_backend
 
     results = iter(
         [
@@ -381,7 +381,7 @@ async def test_bad_cd_codex_fatal() -> None:
 
 @pytest.mark.asyncio
 async def test_codex_uses_input_session_id_when_no_extraction_sources_match(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import codex as codex_backend
+    from refract.backends import codex as codex_backend
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield "PONG"
@@ -402,7 +402,7 @@ def test_codex_session_resolution_skips_filesystem_when_stdout_has_id(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from openmcp.backends import codex as codex_backend
+    from refract.backends import codex as codex_backend
 
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
 
@@ -427,8 +427,8 @@ async def test_codex_nonzero_exit_is_fatal_despite_diagnostic_output(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from openmcp.backends import codex as codex_backend
-    from openmcp.backends._shell import ShellCommandFailed
+    from refract.backends import codex as codex_backend
+    from refract.backends._shell import ShellCommandFailed
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield "error: unknown option"
@@ -450,7 +450,7 @@ async def test_codex_nonzero_exit_is_fatal_despite_diagnostic_output(
 
 @pytest.mark.asyncio
 async def test_claude_json_result_uses_last_result_and_transport_argv(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import claude as claude_backend
+    from refract.backends import claude as claude_backend
 
     captured = {}
     first_session = "first-session"
@@ -490,7 +490,7 @@ async def test_claude_json_result_uses_last_result_and_transport_argv(monkeypatc
 
 @pytest.mark.asyncio
 async def test_claude_new_session_argv_omits_resume(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import claude as claude_backend
+    from refract.backends import claude as claude_backend
 
     captured = {}
 
@@ -515,7 +515,7 @@ async def test_claude_new_session_argv_omits_resume(monkeypatch, tmp_path) -> No
 
 @pytest.mark.asyncio
 async def test_claude_error_result_is_fatal(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import claude as claude_backend
+    from refract.backends import claude as claude_backend
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps({
@@ -539,7 +539,7 @@ async def test_claude_error_result_is_fatal(monkeypatch, tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_claude_result_falls_back_to_input_session_id(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import claude as claude_backend
+    from refract.backends import claude as claude_backend
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps({"type": "result", "subtype": "success", "result": "PONG"})
@@ -557,8 +557,8 @@ async def test_claude_result_falls_back_to_input_session_id(monkeypatch, tmp_pat
 
 @pytest.mark.asyncio
 async def test_claude_nonzero_exit_is_fatal_despite_agent_output(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import claude as claude_backend
-    from openmcp.backends._shell import ShellCommandFailed
+    from refract.backends import claude as claude_backend
+    from refract.backends._shell import ShellCommandFailed
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps({"type": "result", "subtype": "success", "session_id": "session", "result": "partial"})
@@ -576,8 +576,8 @@ async def test_claude_nonzero_exit_is_fatal_despite_agent_output(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_claude_timeout_and_cancel_are_mapped(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import claude as claude_backend
-    from openmcp.backends._shell import ShellCommandCancelled
+    from refract.backends import claude as claude_backend
+    from refract.backends._shell import ShellCommandCancelled
 
     def timeout_run(cmd, cwd=None, **kwargs):
         yield "partial"
@@ -601,7 +601,7 @@ async def test_claude_timeout_and_cancel_are_mapped(monkeypatch, tmp_path) -> No
 
 @pytest.mark.asyncio
 async def test_missing_claude_cli_is_fatal(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import claude as claude_backend
+    from refract.backends import claude as claude_backend
 
     monkeypatch.setattr(claude_backend.shutil, "which", lambda name: None)
 
@@ -613,7 +613,7 @@ async def test_missing_claude_cli_is_fatal(monkeypatch, tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_bad_cd_claude_fatal() -> None:
-    from openmcp.backends import claude as claude_backend
+    from refract.backends import claude as claude_backend
 
     out = await claude_backend.execute(
         ClaudeParams(PROMPT="x", cd=Path("C:/definitely/not/real/path"))
@@ -628,8 +628,8 @@ async def test_pi_nonzero_exit_is_fatal_despite_agent_output(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from openmcp.backends import pi as pi_backend
-    from openmcp.backends._shell import ShellCommandFailed
+    from refract.backends import pi as pi_backend
+    from refract.backends._shell import ShellCommandFailed
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps(
@@ -651,7 +651,7 @@ async def test_pi_nonzero_exit_is_fatal_despite_agent_output(
 
 @pytest.mark.asyncio
 async def test_pi_server_error_auth_unavailable_is_fatal(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps(
@@ -691,7 +691,7 @@ PI_CONTEXT_OVERFLOW_TRACE_FIXTURE = [
 
 @pytest.mark.asyncio
 async def test_pi_context_overflow_real_trace(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     monkeypatch.setattr(pi_backend.shutil, "which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(
@@ -712,7 +712,7 @@ async def test_pi_structured_assistant_error_with_partial_content_is_fatal(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     fixture = [
         json.dumps({"type": "session", "id": "pi-sess-1"}),
@@ -750,7 +750,7 @@ async def test_pi_close_negative_overflow_cases_not_classified_as_overflow(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     cases = [
         "too long",
@@ -787,7 +787,7 @@ async def test_pi_close_negative_overflow_cases_not_classified_as_overflow(
 
 
 def test_pi_is_context_overflow_boundary_and_case() -> None:
-    from openmcp.backends.pi import _is_context_overflow
+    from refract.backends.pi import _is_context_overflow
 
     assert _is_context_overflow('{"code":"context_length_exceeded"}') is True
     assert _is_context_overflow("error: context_length_exceeded") is True
@@ -803,7 +803,7 @@ async def test_pi_boundary_and_case_negative_overflow_cases(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     cases = [
         "prefix_context_length_exceeded_suffix",
@@ -845,7 +845,7 @@ async def test_pi_assistant_prose_containing_overflow_token_is_not_overflow(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     fixture = [
         json.dumps({"type": "session", "id": "pi-sess-1"}),
@@ -876,7 +876,7 @@ async def test_pi_assistant_prose_containing_overflow_token_is_not_overflow(
 
 @pytest.mark.asyncio
 async def test_pi_cancellation_precedence_over_overflow(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     cancel_evt = threading.Event()
     cancel_evt.set()
@@ -899,8 +899,8 @@ async def test_pi_overflow_overrides_nonzero_exit_and_partial_output(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from openmcp.backends import pi as pi_backend
-    from openmcp.backends._shell import ShellCommandFailed
+    from refract.backends import pi as pi_backend
+    from refract.backends._shell import ShellCommandFailed
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps({"type": "session", "id": "pi-sess-1"})
@@ -928,7 +928,7 @@ async def test_pi_overflow_overrides_nonzero_exit_and_partial_output(
 
 @pytest.mark.asyncio
 async def test_pi_stderr_overflow_detected(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps({"type": "session", "id": "pi-sess-1"})
@@ -944,7 +944,7 @@ async def test_pi_stderr_overflow_detected(monkeypatch, tmp_path) -> None:
 
 
 def test_pi_driver_normalizes_context_overflow_to_retryable() -> None:
-    from openmcp.drivers import _normalize
+    from refract.drivers import _normalize
 
     res = BackendResult(
         outcome="FATAL",
@@ -961,7 +961,7 @@ def test_pi_driver_normalizes_context_overflow_to_retryable() -> None:
 
 @pytest.mark.asyncio
 async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import codex as codex_backend
+    from refract.backends import codex as codex_backend
 
     captured = {}
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
@@ -1006,7 +1006,7 @@ async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path
 
 @pytest.mark.asyncio
 async def test_pi_json_mode_extracts_reply_session_and_cli_options(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     captured = {}
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
@@ -1051,7 +1051,7 @@ async def test_pi_json_mode_extracts_reply_session_and_cli_options(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkeypatch, tmp_path) -> None:
-    from openmcp.backends import pi as pi_backend
+    from refract.backends import pi as pi_backend
 
     captured = {}
 
@@ -1105,8 +1105,8 @@ async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkey
 
 @pytest.mark.asyncio
 async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path) -> None:
-    import openmcp.drivers as drivers_module
-    from openmcp.config import TargetConfig
+    import refract.drivers as drivers_module
+    from refract.config import TargetConfig
 
     captured = {}
 
@@ -1161,8 +1161,8 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
 
 @pytest.mark.asyncio
 async def test_driver_compiles_claude_isolated_target_args(monkeypatch, tmp_path) -> None:
-    import openmcp.drivers as drivers_module
-    from openmcp.config import TargetConfig
+    import refract.drivers as drivers_module
+    from refract.config import TargetConfig
 
     captured = {}
 
@@ -1206,8 +1206,8 @@ async def test_driver_compiles_claude_isolated_target_args(monkeypatch, tmp_path
 
 @pytest.mark.asyncio
 async def test_driver_compiles_claude_read_only_args(monkeypatch, tmp_path) -> None:
-    import openmcp.drivers as drivers_module
-    from openmcp.config import TargetConfig
+    import refract.drivers as drivers_module
+    from refract.config import TargetConfig
 
     captured = {}
 
@@ -1230,8 +1230,8 @@ async def test_driver_compiles_claude_read_only_args(monkeypatch, tmp_path) -> N
 
 @pytest.mark.asyncio
 async def test_driver_compiles_claude_model_and_reasoning_args(monkeypatch, tmp_path) -> None:
-    import openmcp.drivers as drivers_module
-    from openmcp.config import TargetConfig
+    import refract.drivers as drivers_module
+    from refract.config import TargetConfig
 
     captured = {}
 
@@ -1259,8 +1259,8 @@ async def test_driver_compiles_claude_model_and_reasoning_args(monkeypatch, tmp_
 
 @pytest.mark.asyncio
 async def test_driver_dispatches_claude_instead_of_pi(monkeypatch, tmp_path) -> None:
-    import openmcp.drivers as drivers_module
-    from openmcp.config import TargetConfig
+    import refract.drivers as drivers_module
+    from refract.config import TargetConfig
 
     calls = []
 
@@ -1290,8 +1290,8 @@ async def test_driver_dispatches_claude_instead_of_pi(monkeypatch, tmp_path) -> 
 
 @pytest.mark.asyncio
 async def test_driver_rejects_unrecognized_backend_without_fallthrough(tmp_path) -> None:
-    import openmcp.drivers as drivers_module
-    from openmcp.config import TargetConfig
+    import refract.drivers as drivers_module
+    from refract.config import TargetConfig
 
     result = await drivers_module.DriverRegistry().execute(
         target=TargetConfig(id="unknown", backend="unknown"),
@@ -1308,8 +1308,8 @@ async def test_driver_rejects_unrecognized_backend_without_fallthrough(tmp_path)
 
 @pytest.mark.asyncio
 async def test_driver_enforces_approval_after_normal_pi_target_args(monkeypatch, tmp_path) -> None:
-    import openmcp.drivers as drivers_module
-    from openmcp.config import TargetConfig
+    import refract.drivers as drivers_module
+    from refract.config import TargetConfig
 
     captured = {}
 
@@ -1349,8 +1349,8 @@ async def test_driver_enforces_approval_after_normal_pi_target_args(monkeypatch,
     ],
 )
 async def test_driver_rejects_programmatic_reserved_target_args(tmp_path, target) -> None:
-    from openmcp.config import TargetConfig
-    from openmcp.drivers import DriverRegistry
+    from refract.config import TargetConfig
+    from refract.drivers import DriverRegistry
 
     result = await DriverRegistry().execute(
         target=TargetConfig(**target),
@@ -1367,8 +1367,8 @@ async def test_driver_rejects_programmatic_reserved_target_args(tmp_path, target
 
 @pytest.mark.asyncio
 async def test_driver_rejects_unsafe_programmatic_isolated_pi_target(tmp_path) -> None:
-    from openmcp.config import TargetConfig
-    from openmcp.drivers import DriverRegistry
+    from refract.config import TargetConfig
+    from refract.drivers import DriverRegistry
 
     result = await DriverRegistry().execute(
         target=TargetConfig(
@@ -1390,8 +1390,8 @@ async def test_driver_rejects_unsafe_programmatic_isolated_pi_target(tmp_path) -
 
 @pytest.mark.asyncio
 async def test_driver_compiles_agy_and_codex_target_configuration(monkeypatch, tmp_path) -> None:
-    import openmcp.drivers as drivers_module
-    from openmcp.config import TargetConfig
+    import refract.drivers as drivers_module
+    from refract.config import TargetConfig
 
     captured = {}
 

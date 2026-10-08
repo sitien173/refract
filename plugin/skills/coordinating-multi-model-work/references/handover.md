@@ -9,7 +9,7 @@ status: ACTIVE | BLOCKED | STALE_ANCHOR | DONE
 topic: <one-line topic>
 current_phase: <N>
 next_action: "Execute Phase <N>"
-project_id: <OpenMCP project UUID|null>
+project_id: <Refract project UUID|null>
 plan_base_ref: <refs/plans/<slug>/base|null>
 plan_impl_ref: <refs/plans/<slug>/impl|null>
 phase_base: <commit|null>

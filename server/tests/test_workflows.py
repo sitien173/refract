@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from openmcp.workflows import BUILTIN_WORKFLOWS, get_workflow, validate_request
+from refract.workflows import BUILTIN_WORKFLOWS, get_workflow, validate_request
 
 
 def test_fixed_workflows_are_validated_strings() -> None:

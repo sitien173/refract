@@ -4,8 +4,8 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from openmcp.config import DaemonConfig, ProfileDeclaration, TargetConfig, TargetSelection
-from openmcp.drivers import DriverResult
+from refract.config import DaemonConfig, ProfileDeclaration, TargetConfig, TargetSelection
+from refract.drivers import DriverResult
 
 
 def git(path: Path, *args: str) -> str:
@@ -17,8 +17,8 @@ def repository(tmp_path: Path) -> Path:
     root = tmp_path / "project"
     root.mkdir()
     git(root, "init")
-    git(root, "config", "user.name", "OpenMCP Tests")
-    git(root, "config", "user.email", "openmcp@example.invalid")
+    git(root, "config", "user.name", "Refract Tests")
+    git(root, "config", "user.email", "refract@example.invalid")
     (root / "README.md").write_text("baseline\n", encoding="utf-8")
     git(root, "add", "README.md")
     git(root, "commit", "-m", "baseline")

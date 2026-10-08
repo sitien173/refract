@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 12.0.0 -->
+<!-- refract-shared-version: 1.0.0 -->
 
 # Phase <N> — Journal: <phase title>
 
@@ -15,8 +15,8 @@ sections.
 - Implementation Profile: <name or default>
 - Consultation Profile: <name, default, or n/a>
 - Review Profile: <name or default>
-- Implementation Job: <OpenMCP job ID or n/a>
-- Review Job: <OpenMCP job ID or n/a>
+- Implementation Job: <Refract job ID or n/a>
+- Review Job: <Refract job ID or n/a>
 - Started: <ISO timestamp>
 - Finished: <ISO timestamp>
 

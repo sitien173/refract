@@ -115,7 +115,7 @@ export async function mutateWithCsrf(path, { method = 'POST', body, expectedRevi
   if (!csrfToken) await getBootstrap()
   const headers = {
     Accept: 'application/json',
-    'X-OpenMCP-CSRF': csrfToken,
+    'X-Refract-CSRF': csrfToken,
   }
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -132,7 +132,7 @@ export async function mutateWithCsrf(path, { method = 'POST', body, expectedRevi
       method,
       headers: {
         ...headers,
-        'X-OpenMCP-CSRF': csrfToken,
+        'X-Refract-CSRF': csrfToken,
       },
       body: payloadBody,
     })

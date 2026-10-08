@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from openmcp.models import JobResult, JobSummary, JobView, SubmissionResult
-from openmcp.server import job_wait, mcp
+from refract.models import JobResult, JobSummary, JobView, SubmissionResult
+from refract.server import job_wait, mcp
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -36,13 +36,13 @@ other = "primary"
 async def _connected_client(tmp_path, monkeypatch):
     from mcp.client.session import ClientSession
     from mcp.shared.memory import create_client_server_memory_streams
-    from openmcp import server
+    from refract import server
 
-    home = tmp_path / "openmcp-home"
+    home = tmp_path / "refract-home"
     home.mkdir()
     config_path = home / "config.toml"
     config_path.write_text(_serve_config(), encoding="utf-8")
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setenv("REFRACT_HOME", str(home))
     monkeypatch.setattr(server, "configure_logging", lambda _settings: None)
     monkeypatch.setattr(server, "_DAEMON_CONFIG", server.load_config(config_path))
     lowlevel = server.mcp._lowlevel_server
@@ -76,21 +76,21 @@ async def test_v2_tool_surface_lists_exact_contract() -> None:
     assert {name: set(tool.input_schema["properties"]) for name, tool in tools.items()} == expected
     assert await mcp.list_resources() == []
     assert await mcp.list_resource_templates() == []
-    assert mcp.title == "OpenMCP job queue"
+    assert mcp.title == "Refract job queue"
     assert mcp.instructions and len(mcp.instructions) <= 2048
     assert all(name in mcp.instructions for name in expected)
     for tool in tools.values():
         assert tool.title
         assert tool.description and len(tool.description) <= 2048
-        assert "openmcp://" not in tool.description
+        assert "refract://" not in tool.description
         assert tool.output_schema is None
 
 
 def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
     env = os.environ.copy()
-    env["OPENMCP_HOME"] = str(tmp_path / "missing-home")
+    env["REFRACT_HOME"] = str(tmp_path / "missing-home")
     completed = subprocess.run(
-        [sys.executable, "-c", "import openmcp.server"],
+        [sys.executable, "-c", "import refract.server"],
         env=env,
         capture_output=True,
         text=True,
@@ -100,13 +100,13 @@ def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
 
 
 def test_serve_uses_configured_transport(tmp_path, monkeypatch) -> None:
-    from openmcp import cli, server
+    from refract import cli, server
     import uvicorn
 
-    home = tmp_path / "openmcp"
+    home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(_serve_config("127.0.0.2", 9123), encoding="utf-8")
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setenv("REFRACT_HOME", str(home))
     captured: dict[str, object] = {}
 
     def fake_application(*, host: str) -> str:
@@ -132,13 +132,13 @@ def test_serve_uses_configured_transport(tmp_path, monkeypatch) -> None:
 
 
 def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
-    from openmcp import cli, server
+    from refract import cli, server
     import uvicorn
 
-    home = tmp_path / "openmcp"
+    home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(_serve_config("127.0.0.2", 9123), encoding="utf-8")
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setenv("REFRACT_HOME", str(home))
     captured: dict[str, object] = {}
 
     def fake_application(*, host: str) -> str:
@@ -395,7 +395,7 @@ async def test_actual_client_rejects_sdk_coercions_before_dispatch(tmp_path, mon
 
 
 def test_terminal_page_with_tight_metadata_advances_or_errors() -> None:
-    from openmcp.server import OpenMCPError, _page_terminal_result
+    from refract.server import RefractError, _page_terminal_result
 
     job = _job_view("succeeded")
     job.result = JobResult(text="😀😀")
@@ -410,9 +410,9 @@ def test_terminal_page_with_tight_metadata_advances_or_errors() -> None:
         {"job": summary, "result": {"text": "", "error": "", "next_offset": 0}},
         ensure_ascii=False, separators=(",", ":"),
     )
-    from openmcp.server import _fits_response
+    from refract.server import _fits_response
     assert _fits_response(empty_page)
-    with pytest.raises(OpenMCPError) as raised:
+    with pytest.raises(RefractError) as raised:
         _page_terminal_result(job, summary, 0)
     assert raised.value.code == "response_too_large"
 
@@ -605,7 +605,7 @@ async def test_job_cancel_reports_complete_cancelled_dependents(tmp_path, monkey
 
 @pytest.mark.asyncio
 async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_record(tmp_path, monkeypatch) -> None:
-    from openmcp.drivers import DriverResult
+    from refract.drivers import DriverResult
 
     marker = "provider-secret-model-backend-detail-" + "private-diagnostic-" * 700
 
@@ -727,7 +727,7 @@ async def test_empty_and_eof_result_metadata_overflow_is_bounded(tmp_path, monke
 
 @pytest.mark.parametrize(("result_text", "offset"), [("", 0), ("done", 4)])
 def test_empty_or_eof_page_fit_loop_has_finite_sentinel(monkeypatch, result_text, offset) -> None:
-    from openmcp import server
+    from refract import server
 
     job = _job_view("succeeded")
     job.result = JobResult(text=result_text)
@@ -741,7 +741,7 @@ def test_empty_or_eof_page_fit_loop_has_finite_sentinel(monkeypatch, result_text
         return False
 
     monkeypatch.setattr(server, "_fits_response", bounded_never_fits)
-    with pytest.raises(server.OpenMCPError) as raised:
+    with pytest.raises(server.RefractError) as raised:
         server._page_terminal_result(job, {"id": job.id}, offset)
     assert raised.value.code == "response_too_large"
 
@@ -768,7 +768,7 @@ def _stub_job_dependencies(_job_id: str) -> list[str]:
 
 
 def test_job_wait_constants() -> None:
-    from openmcp import server
+    from refract import server
 
     assert server._MCP_WAIT_TIMEOUT_S == 3600
     assert server._MCP_HEARTBEAT_INTERVAL_S == 30
@@ -820,7 +820,7 @@ async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -
 
 @pytest.mark.asyncio
 async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypatch) -> None:
-    from openmcp import server
+    from refract import server
 
     monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     current_job = _job_view("running")
@@ -882,7 +882,7 @@ async def test_job_wait_rejects_negative_timeout_before_job_lookup() -> None:
 
 @pytest.mark.asyncio
 async def test_job_wait_non_terminal_timeout(monkeypatch) -> None:
-    from openmcp import server
+    from refract import server
 
     monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     current_job = _job_view("running")
@@ -1059,7 +1059,7 @@ async def test_job_wait_logs_progress_token_presence(caplog, wire_meta, expected
         report_progress=lambda **kwargs: asyncio.sleep(0),
     )
 
-    with caplog.at_level(logging.INFO, logger="openmcp.server"):
+    with caplog.at_level(logging.INFO, logger="refract.server"):
         result = json.loads(await job_wait(terminal.id, ctx))
 
     assert result["job"]["state"] == "succeeded"
@@ -1080,7 +1080,7 @@ async def test_job_wait_logs_progress_token_presence(caplog, wire_meta, expected
 
 @pytest.mark.asyncio
 async def test_application_lifespan_shares_runtime_across_sessions(monkeypatch) -> None:
-    import openmcp.server as server
+    import refract.server as server
 
     config = SimpleNamespace(logging=object())
     events: list[str] = []
@@ -1110,7 +1110,7 @@ async def test_application_lifespan_shares_runtime_across_sessions(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_application_lifespan_cleans_up_after_start_failure(monkeypatch) -> None:
-    import openmcp.server as server
+    import refract.server as server
 
     config = SimpleNamespace(logging=object())
     events: list[str] = []
@@ -1140,7 +1140,7 @@ async def test_application_lifespan_cleans_up_after_start_failure(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_application_lifespan_clears_state_when_runtime_close_fails(monkeypatch) -> None:
-    import openmcp.server as server
+    import refract.server as server
 
     config = SimpleNamespace(logging=object())
 

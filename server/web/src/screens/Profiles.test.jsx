@@ -25,7 +25,7 @@ describe('Profiles screen', () => {
 
   const mockProfilesConfig = {
     revision: 'rev-prof-001',
-    source_path: '/etc/openmcp/config.toml',
+    source_path: '/etc/refract/config.toml',
     default_profile: 'default',
     available_targets: ['target-a', 'target-b', 'target-c'],
     profiles: [
@@ -140,7 +140,7 @@ describe('Profiles screen', () => {
   it('opens profile editor in create mode and submits new profile with declared workflows and targets', async () => {
     vi.mocked(api.createConfigurationProfile).mockResolvedValue({
       revision: 'rev-prof-002',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
       default_profile: 'default',
       available_targets: ['target-a', 'target-b', 'target-c'],
       profile: {
@@ -223,7 +223,7 @@ describe('Profiles screen', () => {
   it('opens profile editor in edit mode with immutable identifier and preserves inherited policies', async () => {
     vi.mocked(api.updateConfigurationProfile).mockResolvedValue({
       revision: 'rev-prof-003',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
       default_profile: 'default',
       available_targets: ['target-a', 'target-b', 'target-c'],
       profile: {
@@ -473,7 +473,7 @@ describe('Profiles screen', () => {
     // Simulate external update fetched on reload
     vi.mocked(api.getConfigurationProfile).mockResolvedValueOnce({
       revision: 'rev-prof-002',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
       default_profile: 'default',
       available_targets: ['target-a', 'target-b', 'target-c'],
       profile: {

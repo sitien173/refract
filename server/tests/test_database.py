@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from openmcp.database import Database
+from refract.database import Database
 
 
 def create_legacy_database(path) -> None:
@@ -23,7 +23,7 @@ def create_legacy_database(path) -> None:
     """)
     connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?)", ("project", "project", "/project", "base-sha", 1, "2026-01-01"))
     inputs = json.dumps({"prompt": "legacy", "commit_message": "feat: legacy"})
-    connection.executemany("""INSERT INTO jobs(id, project_id, workflow, profile, workflow_json, execution_plan_json, result_stage, inputs_json, context_key, parent_job_id, state, base_commit, integration_base, branch, worktree, created_at, updated_at, result_commit, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", [("completed", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "integrated", "base-sha", "base-sha", "openmcp/completed", "/worktree/completed", "2026-01-01", "2026-01-01", "result-sha", ""), ("running", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "running", "base-sha", "base-sha", "openmcp/running", "/worktree/running", "2026-01-01", "2026-01-01", "", ""), ("queued", "project", "review", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "queued", "base-sha", "base-sha", "openmcp/queued", "/worktree/queued", "2026-01-01", "2026-01-01", "", ""), ("conflict", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "integration_conflict", "base-sha", "base-sha", "openmcp/conflict", "/worktree/conflict", "2026-01-01", "2026-01-01", "", "conflict")])
+    connection.executemany("""INSERT INTO jobs(id, project_id, workflow, profile, workflow_json, execution_plan_json, result_stage, inputs_json, context_key, parent_job_id, state, base_commit, integration_base, branch, worktree, created_at, updated_at, result_commit, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", [("completed", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "integrated", "base-sha", "base-sha", "refract/completed", "/worktree/completed", "2026-01-01", "2026-01-01", "result-sha", ""), ("running", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "running", "base-sha", "base-sha", "refract/running", "/worktree/running", "2026-01-01", "2026-01-01", "", ""), ("queued", "project", "review", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "queued", "base-sha", "base-sha", "refract/queued", "/worktree/queued", "2026-01-01", "2026-01-01", "", ""), ("conflict", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "integration_conflict", "base-sha", "base-sha", "refract/conflict", "/worktree/conflict", "2026-01-01", "2026-01-01", "", "conflict")])
     connection.executemany("INSERT INTO stages(job_id, id, ordinal, mode, state, attempts, target_id, text, commit_sha) VALUES (?, 'execute', 0, 'write', ?, ?, ?, ?, ?)", [("completed", "succeeded", 2, "legacy-target", "legacy response", "result-sha"), ("running", "running", 1, "legacy-target", "", ""), ("queued", "pending", 0, "", "", ""), ("conflict", "succeeded", 1, "legacy-target", "", "result-sha")])
     connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", ("completed", "2026-01-01", "legacy.event", "{}"))
     connection.execute("INSERT INTO context_turns(project_id, context_key, role, target_id, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", ("project", "legacy", "implement", "legacy-target", "legacy prompt", "legacy response", "2026-01-01"))
@@ -123,7 +123,7 @@ def table_columns(database: Database, table: str) -> set[str]:
 
 
 def test_fresh_database_uses_v12_schema(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
@@ -134,7 +134,7 @@ def test_fresh_database_uses_v12_schema(tmp_path) -> None:
 
 
 def test_v6_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     create_v6_database(path)
     database = Database(path)
     assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -154,7 +154,7 @@ def test_v6_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
 
 
 def test_v5_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     create_v5_database(path)
     database = Database(path)
     assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -173,7 +173,7 @@ def test_v5_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
 
 
 def test_reopening_v12_is_a_noop(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     first = Database(path)
     first.close()
     second = Database(path)
@@ -182,7 +182,7 @@ def test_reopening_v12_is_a_noop(tmp_path) -> None:
 
 
 def test_v9_migrates_to_v12_adding_fresh_session_column(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     create_v9_database(path)
     database = Database(path)
     assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -194,7 +194,7 @@ def test_v9_migrates_to_v12_adding_fresh_session_column(tmp_path) -> None:
 
 
 def test_v8_migrates_to_v12_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     create_v8_database(path)
 
     database = Database(path)
@@ -210,7 +210,7 @@ def test_v8_migrates_to_v12_dropping_context_instructions_and_adding_fresh_sessi
 
 
 def test_create_job_persists_fresh_session_flag(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="proj", alias="proj", root="/proj")
     database.create_job(
         job_id="standard-job",
@@ -239,7 +239,7 @@ def test_create_job_persists_fresh_session_flag(tmp_path) -> None:
 
 
 def test_v5_migration_rolls_back_on_integrity_failure(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     create_v5_database(path, invalid_foreign_key=True)
     with pytest.raises(sqlite3.IntegrityError):
         Database(path)
@@ -251,7 +251,7 @@ def test_v5_migration_rolls_back_on_integrity_failure(tmp_path) -> None:
 
 
 def test_legacy_jobs_collapse_to_historical_results(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     create_legacy_database(path)
     database = Database(path)
     completed, interrupted, queued, conflict = (database.job(value) for value in ("completed", "running", "queued", "conflict"))
@@ -267,7 +267,7 @@ def test_legacy_jobs_collapse_to_historical_results(tmp_path) -> None:
 
 
 def test_job_revision_survives_retry_without_plan_changes(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="project", alias="project", root="/project")
     database.create_job(
         job_id="job",
@@ -289,7 +289,7 @@ def test_job_revision_survives_retry_without_plan_changes(tmp_path) -> None:
 
 
 def test_jobs_load_with_one_query(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(
         project_id="project", alias="project", root="/project"
     )
@@ -315,7 +315,7 @@ def test_jobs_load_with_one_query(tmp_path) -> None:
 
 
 def test_context_includes_sessionless_turns_with_fixed_query_count(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(
         project_id="project", alias="project", root="/project"
     )
@@ -355,7 +355,7 @@ def test_context_includes_sessionless_turns_with_fixed_query_count(tmp_path) -> 
 
 
 def test_append_turn_atomic_rollback_preserves_sessions(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="project", alias="project", root="/project")
     database.append_turn(
         project_id=project.id,
@@ -394,7 +394,7 @@ def test_append_turn_atomic_rollback_preserves_sessions(tmp_path) -> None:
 
 
 def test_append_turn_clear_sessions_clears_multiple_stale_and_preserves_unrelated(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="project", alias="project", root="/project")
 
     database.append_turn(
@@ -483,7 +483,7 @@ def create_v10_database(path) -> None:
 
 
 def test_v10_migrates_to_v12_adding_stream_events_table(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     create_v10_database(path)
     database = Database(path)
     assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -502,7 +502,7 @@ def test_v10_migrates_to_v12_adding_stream_events_table(tmp_path) -> None:
 
 
 def test_append_stream_events_persists_batch_transactionally(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     database.create_job(
         job_id="job-1",
@@ -551,7 +551,7 @@ def test_append_stream_events_persists_batch_transactionally(tmp_path) -> None:
 
 
 def test_stream_events_returns_ascending_cursor_pages(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     database.create_job(
         job_id="job-1",
@@ -592,7 +592,7 @@ def test_stream_events_returns_ascending_cursor_pages(tmp_path) -> None:
 
 
 def test_stream_high_water_and_retained_from_lookups(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     database.create_job(
         job_id="job-1",
@@ -625,7 +625,7 @@ def test_stream_high_water_and_retained_from_lookups(tmp_path) -> None:
 
 
 def test_stream_events_cascade_delete_on_job_deletion(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     database.create_job(
         job_id="job-1",
@@ -655,7 +655,7 @@ def test_stream_events_cascade_delete_on_job_deletion(tmp_path) -> None:
 
 
 def test_database_reopen_preserves_stream_events_and_cursors(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     database = Database(path)
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     database.create_job(
@@ -691,7 +691,7 @@ def test_database_reopen_preserves_stream_events_and_cursors(tmp_path) -> None:
 
 
 def test_stream_totals_computes_event_count_and_bytes(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     database.create_job(
         job_id="job-1",
@@ -736,7 +736,7 @@ def test_stream_totals_computes_event_count_and_bytes(tmp_path) -> None:
 
 
 def test_prune_terminal_stream_events_removes_only_terminal_before_cutoff(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
 
     # job-old-term: terminal, updated long ago
@@ -811,7 +811,7 @@ def test_prune_terminal_stream_events_removes_only_terminal_before_cutoff(tmp_pa
 
 
 def test_stream_is_truncated_lookup(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     database.create_job(
         job_id="job-1",
@@ -849,7 +849,7 @@ def test_stream_is_truncated_lookup(tmp_path) -> None:
 
 
 def test_v11_migrates_existing_jobs_as_exclusive_without_dependencies(tmp_path) -> None:
-    path = tmp_path / "openmcp.db"
+    path = tmp_path / "refract.db"
     connection = sqlite3.connect(path)
     connection.executescript("""
         CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
@@ -870,7 +870,7 @@ def test_v11_migrates_existing_jobs_as_exclusive_without_dependencies(tmp_path) 
 
 
 def test_create_job_with_dependencies_is_atomic_and_supports_reverse_lookup(tmp_path) -> None:
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     first_project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     second_project = database.upsert_project(project_id="p2", alias="p2", root="/p2")
     database.create_job(

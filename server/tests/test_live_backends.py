@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from openmcp.backends.agy import AgyParams, execute as agy_execute
-from openmcp.backends.claude import ClaudeParams, execute as claude_execute
-from openmcp.backends.codex import CodexParams, execute as codex_execute
+from refract.backends.agy import AgyParams, execute as agy_execute
+from refract.backends.claude import ClaudeParams, execute as claude_execute
+from refract.backends.codex import CodexParams, execute as codex_execute
 
 
 PROMPT = "Reply with exactly the word PONG and nothing else."

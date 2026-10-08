@@ -9,11 +9,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openmcp.backends import classify_tool_activity
-from openmcp.backends.agy import AgyParams, _execute_once, _execute_sync as agy_sync
-from openmcp.backends.claude import ClaudeParams, _execute_sync as claude_sync
-from openmcp.backends.codex import CodexParams, _execute_sync as codex_sync
-from openmcp.backends.pi import PiParams, _execute_sync as pi_sync
+from refract.backends import classify_tool_activity
+from refract.backends.agy import AgyParams, _execute_once, _execute_sync as agy_sync
+from refract.backends.claude import ClaudeParams, _execute_sync as claude_sync
+from refract.backends.codex import CodexParams, _execute_sync as codex_sync
+from refract.backends.pi import PiParams, _execute_sync as pi_sync
 
 
 # --- Fixture Payloads ---
@@ -211,7 +211,7 @@ def test_claude_streaming_normalization(tmp_path, monkeypatch):
         events.append(event)
 
     monkeypatch.setattr(
-        "openmcp.backends.claude.run_shell_command",
+        "refract.backends.claude.run_shell_command",
         lambda *args, **kwargs: (line for line in CLAUDE_STREAM_JSON_FIXTURE),
     )
 
@@ -290,7 +290,7 @@ def test_claude_streaming_bash_activity_command(tmp_path, monkeypatch):
     ]
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.claude.run_shell_command",
+        "refract.backends.claude.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
@@ -380,7 +380,7 @@ def test_claude_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
 
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.claude.run_shell_command",
+        "refract.backends.claude.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
@@ -444,7 +444,7 @@ def test_claude_streaming_content_block_stop_output_ignored(tmp_path, monkeypatc
 
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.claude.run_shell_command",
+        "refract.backends.claude.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
@@ -478,7 +478,7 @@ def test_codex_streaming_normalization(tmp_path, monkeypatch):
         events.append(event)
 
     monkeypatch.setattr(
-        "openmcp.backends.codex.run_shell_command",
+        "refract.backends.codex.run_shell_command",
         lambda *args, **kwargs: (line for line in CODEX_JSONL_FIXTURE),
     )
 
@@ -542,7 +542,7 @@ def test_codex_streaming_non_bash_tool_activity_tool_call(tmp_path, monkeypatch)
     ]
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.codex.run_shell_command",
+        "refract.backends.codex.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
@@ -605,7 +605,7 @@ def test_codex_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
 
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.codex.run_shell_command",
+        "refract.backends.codex.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
@@ -646,7 +646,7 @@ def test_pi_streaming_normalization(tmp_path, monkeypatch):
         events.append(event)
 
     monkeypatch.setattr(
-        "openmcp.backends.pi.run_shell_command",
+        "refract.backends.pi.run_shell_command",
         lambda *args, **kwargs: (line for line in PI_JSON_FIXTURE),
     )
 
@@ -736,7 +736,7 @@ def test_pi_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
 
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.pi.run_shell_command",
+        "refract.backends.pi.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
@@ -779,11 +779,11 @@ def test_agy_streaming_normalization(tmp_path, monkeypatch):
         events.append(event)
 
     monkeypatch.setattr(
-        "openmcp.backends.agy.run_shell_command",
+        "refract.backends.agy.run_shell_command",
         lambda *args, **kwargs: (line for line in AGY_STREAM_JSON_FIXTURE),
     )
     monkeypatch.setattr(
-        "openmcp.backends.agy._agy_has_pending_tasks",
+        "refract.backends.agy._agy_has_pending_tasks",
         lambda *args, **kwargs: False,
     )
 
@@ -885,7 +885,7 @@ def test_agy_current_stream_json_protocol(tmp_path, monkeypatch):
     ]
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.agy.run_shell_command",
+        "refract.backends.agy.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
@@ -993,11 +993,11 @@ def test_agy_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
 
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.agy.run_shell_command",
+        "refract.backends.agy.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
     monkeypatch.setattr(
-        "openmcp.backends.agy._agy_has_pending_tasks",
+        "refract.backends.agy._agy_has_pending_tasks",
         lambda *args, **kwargs: False,
     )
 
@@ -1060,10 +1060,10 @@ def test_agy_continuations_unique_synthetic_entities(tmp_path, monkeypatch):
             f"Done {call_count}",
         ])
 
-    monkeypatch.setattr("openmcp.backends.agy.run_shell_command", fake_run_shell)
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", fake_run_shell)
     pending_checks = [True, False]
     monkeypatch.setattr(
-        "openmcp.backends.agy._agy_has_pending_tasks",
+        "refract.backends.agy._agy_has_pending_tasks",
         lambda *args, **kwargs: pending_checks.pop(0) if pending_checks else False,
     )
 
@@ -1123,7 +1123,7 @@ def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, m
 
     claude_events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.claude.run_shell_command",
+        "refract.backends.claude.run_shell_command",
         lambda *args, **kwargs: (line for line in claude_stream),
     )
     res_claude = claude_sync(ClaudeParams(PROMPT="test", cd=workspace, emitter=claude_events.append))
@@ -1157,7 +1157,7 @@ def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, m
         ])
     codex_events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.codex.run_shell_command",
+        "refract.backends.codex.run_shell_command",
         lambda *args, **kwargs: (line for line in codex_stream),
     )
     res_codex = codex_sync(CodexParams(PROMPT="test", cd=workspace, emitter=codex_events.append))
@@ -1195,7 +1195,7 @@ def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, m
     )
     pi_events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.pi.run_shell_command",
+        "refract.backends.pi.run_shell_command",
         lambda *args, **kwargs: (line for line in pi_stream),
     )
     res_pi = pi_sync(PiParams(PROMPT="test", cd=workspace, emitter=pi_events.append))
@@ -1238,11 +1238,11 @@ def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, m
     )
     agy_events: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "openmcp.backends.agy.run_shell_command",
+        "refract.backends.agy.run_shell_command",
         lambda *args, **kwargs: (line for line in agy_stream),
     )
     monkeypatch.setattr(
-        "openmcp.backends.agy._agy_has_pending_tasks",
+        "refract.backends.agy._agy_has_pending_tasks",
         lambda *args, **kwargs: False,
     )
     res_agy = _execute_once(AgyParams(PROMPT="test", cd=workspace, emitter=agy_events.append))
@@ -1290,7 +1290,7 @@ def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
         }),
     ]
     claude_evts: list[dict[str, Any]] = []
-    monkeypatch.setattr("openmcp.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
     c_res = claude_sync(ClaudeParams(PROMPT="test", cd=workspace, emitter=claude_evts.append))
     assert c_res.outcome == "OK"
     assert cot_secret not in json.dumps(claude_evts)
@@ -1327,7 +1327,7 @@ def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
         }),
     ]
     codex_evts: list[dict[str, Any]] = []
-    monkeypatch.setattr("openmcp.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
     cdx_res = codex_sync(CodexParams(PROMPT="test", cd=workspace, emitter=codex_evts.append))
     assert cdx_res.outcome == "OK"
     assert cot_secret not in json.dumps(codex_evts)
@@ -1343,7 +1343,7 @@ def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
         json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "Clean response"}]}}),
     ]
     pi_evts: list[dict[str, Any]] = []
-    monkeypatch.setattr("openmcp.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
     p_res = pi_sync(PiParams(PROMPT="test", cd=workspace, emitter=pi_evts.append))
     assert p_res.outcome == "OK"
     assert cot_secret not in json.dumps(pi_evts)
@@ -1391,8 +1391,8 @@ def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
         }),
     ]
     agy_evts: list[dict[str, Any]] = []
-    monkeypatch.setattr("openmcp.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
-    monkeypatch.setattr("openmcp.backends.agy._agy_has_pending_tasks", lambda *a, **k: False)
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
+    monkeypatch.setattr("refract.backends.agy._agy_has_pending_tasks", lambda *a, **k: False)
     a_res = _execute_once(AgyParams(PROMPT="test", cd=workspace, emitter=agy_evts.append))
     assert a_res.outcome == "OK"
     assert cot_secret not in json.dumps(agy_evts)

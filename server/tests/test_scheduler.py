@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from openmcp.scheduler import ProjectScheduler
+from refract.scheduler import ProjectScheduler
 
 
 @pytest.mark.asyncio

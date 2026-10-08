@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from openmcp.backends._shell import ShellCommandCancelled, stream_shell_command_lines
+from refract.backends._shell import ShellCommandCancelled, stream_shell_command_lines
 
 
 def test_shell_command_rejects_cancelled_start(tmp_path) -> None:

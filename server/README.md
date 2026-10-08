@@ -1,11 +1,13 @@
-# OpenMCP
+# Refract
 
-OpenMCP is a loopback HTTP orchestration daemon for durable coding jobs.
+Version 1.0.0 · [Repository](https://github.com/sitien173/refract)
+
+Refract is a loopback HTTP orchestration daemon for durable coding jobs.
 It exposes AI agent workflows through Model Context Protocol tools.
 
 ## Key Features
 
-- Durable direct-directory jobs; OpenMCP does not create worktrees or make Git commits.
+- Durable direct-directory jobs; Refract does not create worktrees or make Git commits.
 - Project reader/writer admission with immutable dependencies and multi-project concurrency.
 - Immutable execution plan snapshots for every job.
 - Multi-provider support for Antigravity, Codex, Pi, and Claude Code backends.
@@ -43,9 +45,9 @@ It exposes AI agent workflows through Model Context Protocol tools.
 ```
 
 Visual diagrams are available in `docs/diagrams/`:
-- [System Architecture Diagram](docs/diagrams/openmcp_system_architecture.drawio.png)
-- [C4 Model Diagrams](docs/diagrams/openmcp_c4_model.svg)
-- [Data Flow Diagram](docs/diagrams/openmcp_data_flow_diagram.drawio.png)
+- [System Architecture Diagram](../docs/diagrams/refract_system_architecture.drawio.png)
+- [C4 Model Diagrams](../docs/diagrams/refract_c4_model.svg)
+- [Data Flow Diagram](../docs/diagrams/refract_data_flow_diagram.drawio.png)
 
 ## Quick Start
 
@@ -64,7 +66,7 @@ uv sync --all-extras
 
 ### Configuration
 
-Create `~/.openmcp/config.toml` before starting the daemon.
+Create `~/.refract/config.toml` before starting the daemon. Set `REFRACT_HOME` to use another state directory; when unset, Refract uses `~/.refract`. The database and default log are `refract.db` and `refract.log` in that directory.
 
 ```toml
 [daemon]
@@ -78,7 +80,7 @@ default_profile = "base"
 [logging]
 level = "INFO"
 format = "json"
-file = "openmcp.log"
+file = "refract.log"
 console = true
 max_bytes = 10485760
 backup_count = 5
@@ -298,17 +300,17 @@ review = ["claude-sonnet-medium-review"]
 Verify configuration and start the daemon:
 
 ```bash
-uv run openmcp doctor
-uv run openmcp serve
+uv run refract doctor
+uv run refract serve
 ```
 
-The daemon listens at `http://127.0.0.1:8765/mcp`.
+The daemon listens at `http://127.0.0.1:8765/mcp`. `REFRACT_LOG_LEVEL`, `REFRACT_LOG_FORMAT`, `REFRACT_LOG_FILE`, `REFRACT_LOG_CONSOLE`, `REFRACT_LOG_MAX_BYTES`, `REFRACT_LOG_BACKUP_COUNT`, and `REFRACT_LOG_CAPTURE_WARNINGS` override logging settings. Relative log paths resolve under `REFRACT_HOME` (or `~/.refract`).
 
 ## Workflows and Policy
 
-OpenMCP provides four built-in workflows:
+Refract provides four built-in workflows:
 
-- `implement`: Runs a coding prompt in the registered project directory. Worker changes remain in that directory; OpenMCP does not auto-commit.
+- `implement`: Runs a coding prompt in the registered project directory. Worker changes remain in that directory; Refract does not auto-commit.
 - `review`: Inspects codebase. Generates review output without committing.
 - `consult`: Answers architectural questions without committing.
 - `other`: Single execution task without automatic commits.
@@ -329,7 +331,7 @@ reference.
 
 ## MCP Tool Surface
 
-OpenMCP exposes seven tools and no MCP resources:
+Refract exposes seven tools and no MCP resources:
 
 | Tool | Purpose |
 | --- | --- |
@@ -349,14 +351,14 @@ MCP tool results are bounded. Terminal result text adapts to the serialized resp
 
 ## Admin Configuration Dashboard
 
-OpenMCP provides a local administration dashboard served at `/dashboard/`.
+Refract provides a local administration dashboard served at `/dashboard/`.
 
 ### Access and Scope
 
 The dashboard operates strictly on the local loopback interface (`127.0.0.1` or `localhost`). It is intended solely for local operator observability and safe context management:
 
 - **Loopback scope:** Dashboard bootstrap and mutation endpoints require a loopback client and Host, a matching same-origin Origin, and a CSRF header. Read-only views expose no mutation surface.
-- **No remote administration support:** OpenMCP does not support remote administration, public network access, or credentials authentication. Remote management is excluded by design.
+- **No remote administration support:** Refract does not support remote administration, public network access, or credentials authentication. Remote management is excluded by design.
 
 ### Configuration Boundaries
 
@@ -384,6 +386,6 @@ The dashboard renders live transcripts for running jobs.
 ```bash
 uv run pytest
 uv run pytest -m live
-uv run openmcp doctor
+uv run refract doctor
 uv build
 ```

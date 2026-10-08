@@ -1,25 +1,25 @@
 ---
 name: coordinating-multi-model-work
-description: "Use for coordinated work: multi-phase or multi-component changes, risky or design-dependent work, or any request for a plan. Load it before any Plan, Execute, or Review action and when resuming an interrupted plan. Covers OpenMCP setup, routing, job lifecycle, independent review, Git checkpoints, and handover. Skip it for direct work."
-compatibility: Requires git and a running OpenMCP server.
+description: "Use for coordinated work: multi-phase or multi-component changes, risky or design-dependent work, or any request for a plan. Load it before any Plan, Execute, or Review action and when resuming an interrupted plan. Covers Refract setup, routing, job lifecycle, independent review, Git checkpoints, and handover. Skip it for direct work."
+compatibility: Requires git and a running Refract server.
 ---
 
 # Coordinating Multi-Model Work
 
 ## Role
 
-You are Coordinator. You own OpenMCP orchestration, phase boundaries,
+You are Coordinator. You own Refract orchestration, phase boundaries,
 specification review, Git, and handover. Workers edit files. You judge,
 commit, and report.
 
-Apply each neighbouring policy from its owner: scope from `using-superpowers`,
+Apply each neighbouring policy from its owner: scope from `using-refract`,
 design from `brainstorming`, plan format from `writing-plans`, the phase
 procedure from `executing-plans`, root cause from `systematic-debugging`, test
 order from `test-driven-development`, evidence from
 `verifying-before-completion`, and isolation from `using-git-worktrees`.
 
 Read [references/tool-contract.md](references/tool-contract.md) before the
-first OpenMCP call in a session. When `using-superpowers` classified the
+first Refract call in a session. When `using-refract` classified the
 request as direct, leave this skill and do the work with your own tools.
 
 ## Terms
@@ -34,12 +34,12 @@ request as direct, leave this skill and do the work with your own tools.
   current `phase-<NN>/` files. These are the only files you edit during a plan.
 - **Phase validation**: every command under the phase `Verification Checks`.
 
-## OpenMCP Contract
+## Refract Contract
 
-OpenMCP provides four fixed workflows: `consult`, `implement`, `other`, and
+Refract provides four fixed workflows: `consult`, `implement`, `other`, and
 `review`. Canonical gates use `consult`, `implement`, and `review`; use `other`
 only when task guidance selects its explicit profile mapping. Jobs run in the
-registered directory; OpenMCP never touches Git. Admission is reader/writer/session-fair; identical sessions serialize.
+registered directory; Refract never touches Git. Admission is reader/writer/session-fair; identical sessions serialize.
 
 Keep provider, model, configured target and native session identities private;
 select only public workflows/profiles; native identity is not input. Require configured read-only targets for `consult`/`review`.
@@ -58,7 +58,7 @@ its own resumed session.
 
 ## Git Ownership
 
-You own the entire Git lifecycle. OpenMCP never checks cleanliness, commits,
+You own the entire Git lifecycle. Refract never checks cleanliness, commits,
 resets, or restores. Assume it did none of these.
 
 - Require an attached branch before every job. On detached HEAD, stop and ask
@@ -82,7 +82,7 @@ resets, or restores. Assume it did none of these.
 1. When the user wants an isolated workspace, run `using-git-worktrees` first
    and use that worktree's actual Git root.
 2. Pass the actual Git root to `project_resolve(path=...)`; it must exist and
-   OpenMCP does not walk up to find a Git root. Retain the returned project ID.
+   Refract does not walk up to find a Git root. Retain the returned project ID.
    If unavailable, report it once: planning continues and records a skipped
    consult reason; Execute and Review stop until service is available.
 3. Resolve plan-artifact tracking as described below.
@@ -102,7 +102,7 @@ only in the working tree.
 
 ### Plan-Artifact Tracking
 
-`ccg.plans.tracking` holds `tracked` or `untracked` and decides whether anything
+`refract.plans.tracking` holds `tracked` or `untracked` and decides whether anything
 under `docs/plans` is committed. Read and write it with `git config --local`, so
 no global or system value leaks across repositories. It lives in `.git/config`,
 which is never pushed, survives history rewriting and `git clean`, and so cannot
@@ -147,7 +147,7 @@ An active phase keeps its saved guidance.
 1. Confirm scope, acceptance criteria, risks, and fresh verification commands.
 2. Split work that one implementation job cannot safely own.
 3. Consult when the work is unclear, architectural, cross-component,
-   high-impact, or tradeoff-heavy and OpenMCP is running. Otherwise record the
+   high-impact, or tradeoff-heavy and Refract is running. Otherwise record the
    skipped consult under `Reason`.
 4. To consult: reach a clean root with coordination files checkpointed under
    `tracked`, submit one narrow `consult` job, wait under the waiting rule, and

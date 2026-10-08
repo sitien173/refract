@@ -13,7 +13,7 @@ describe('ConfigHealth screen', () => {
     vi.mocked(api.getConfiguration).mockResolvedValue({
       valid: true,
       revision: 'sha256-abcdef1234567890',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
       attempted_at: '2026-09-04T12:00:00Z',
       successful_at: '2026-09-04T12:00:00Z',
       modification_time: '2026-09-04T11:55:00Z',
@@ -31,7 +31,7 @@ describe('ConfigHealth screen', () => {
 
     expect(await screen.findByText('Configuration is healthy')).toBeInTheDocument()
     expect(screen.getAllByText('sha256-abcdef1234567890').length).toBeGreaterThan(0)
-    expect(screen.getByText('/etc/openmcp/config.toml')).toBeInTheDocument()
+    expect(screen.getByText('/etc/refract/config.toml')).toBeInTheDocument()
     expect(screen.getByText('Daemon running')).toBeInTheDocument()
     expect(screen.getByText('Submissions open')).toBeInTheDocument()
   })
@@ -40,7 +40,7 @@ describe('ConfigHealth screen', () => {
     vi.mocked(api.getConfiguration).mockResolvedValue({
       valid: false,
       revision: 'sha256-broken',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
       attempted_at: '2026-09-04T12:15:00Z',
       successful_at: '2026-09-04T12:00:00Z',
       modification_time: '2026-09-04T12:14:00Z',

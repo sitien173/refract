@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openmcp.database import Database
-from openmcp.models import JobStreamEvent
-from openmcp.streaming import (
+from refract.database import Database
+from refract.models import JobStreamEvent
+from refract.streaming import (
     FLUSH_INTERVAL_SECONDS,
     MAX_BATCH_BYTES,
     MAX_BATCH_EVENTS,
@@ -23,7 +23,7 @@ from openmcp.streaming import (
 
 @pytest.fixture
 def db(tmp_path):
-    database = Database(tmp_path / "openmcp.db")
+    database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
     database.create_job(
         job_id="job-stream",
@@ -149,7 +149,7 @@ async def test_recorder_64kib_batch_flush(db):
 
 @pytest.mark.asyncio
 async def test_recorder_reconstructs_durable_truncation_across_instances_and_reopen(tmp_path):
-    db_path = tmp_path / "openmcp.db"
+    db_path = tmp_path / "refract.db"
     db1 = Database(db_path)
     proj = db1.upsert_project(project_id="p1", alias="p1", root="/p1")
     db1.create_job(

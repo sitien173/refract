@@ -1,13 +1,13 @@
 {
-  "name": "superpowers-ccg",
-  "version": "12.0.0",
-  "description": "Superpowers-CCG: 3-gate (Plan → Execute → Review) workflow.",
+  "name": "refract",
+  "version": "1.0.0",
+  "description": "Refract: 3-gate (Plan → Execute → Review) workflow.",
   "author": {
     "name": "sitien173",
     "url": "https://github.com/sitien173"
   },
-  "homepage": "https://github.com/sitien173/superpowers-ccg",
-  "repository": "https://github.com/sitien173/superpowers-ccg",
+  "homepage": "https://github.com/sitien173/refract",
+  "repository": "https://github.com/sitien173/refract",
   "license": "MIT",
   "keywords": [
     "skills",
@@ -19,7 +19,7 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Superpowers CCG",
+    "displayName": "Refract",
     "shortDescription": "Plan, execute, and review coding workflow.",
     "longDescription": "A three-gate workflow for planning, executing, and independently reviewing multi-agent coding tasks.",
     "developerName": "sitien173",
@@ -28,7 +28,7 @@
       "Skills",
       "MCP"
     ],
-    "websiteURL": "https://github.com/sitien173/superpowers-ccg",
+    "websiteURL": "https://github.com/sitien173/refract",
     "defaultPrompt": [
       "Brainstorm a feature before planning it.",
       "Write a phase-based implementation plan.",

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from openmcp.config import load_config
-from openmcp.planning import execution_plan_data, resolve_execution_plan
-from openmcp.runtime import Runtime
-from openmcp.server import create_application
+from refract.config import load_config
+from refract.planning import execution_plan_data, resolve_execution_plan
+from refract.runtime import Runtime
+from refract.server import create_application
 from tests.orchestration_helpers import config
 
 
@@ -92,7 +92,7 @@ other = "primary"
     )
     runtime = Runtime(load_config(cfg_file))
     runtime.register_project(str(tmp_path), "project")
-    from openmcp import server
+    from refract import server
     server._DASHBOARD_STATE.runtime = runtime
     server._DASHBOARD_STATE.csrf_token = "test-token"
     try:
@@ -105,14 +105,14 @@ other = "primary"
 
 @pytest.mark.asyncio
 async def test_dashboard_reads_fail_closed_without_runtime() -> None:
-    from openmcp import server
+    from refract import server
     server._DASHBOARD_STATE.runtime = None
     app = create_application()
 
     status, _, body = await request(app, "/dashboard/api/overview")
 
     assert status == 503
-    assert json.loads(body)["error"] == "OpenMCP runtime is not active"
+    assert json.loads(body)["error"] == "Refract runtime is not active"
 
 
 @pytest.mark.asyncio
@@ -169,8 +169,8 @@ async def test_dashboard_project_source_attribution_shows_project_override(activ
     project_root = tmp_path / "project-config"
     project_root.mkdir()
     project = active_runtime.register_project(str(project_root), "project-config")
-    (project_root / ".openmcp").mkdir()
-    (project_root / ".openmcp" / "config.toml").write_text(
+    (project_root / ".refract").mkdir()
+    (project_root / ".refract" / "config.toml").write_text(
         '[profiles.balanced]\nconsult = "primary"\n', encoding="utf-8"
     )
     app = create_application()
@@ -191,8 +191,8 @@ async def test_dashboard_identical_project_override_reports_project_source(activ
     project_root = tmp_path / "identical-project"
     project_root.mkdir()
     project = active_runtime.register_project(str(project_root), "identical-project")
-    (project_root / ".openmcp").mkdir()
-    (project_root / ".openmcp" / "config.toml").write_text(
+    (project_root / ".refract").mkdir()
+    (project_root / ".refract" / "config.toml").write_text(
         """[profiles.balanced]
 implement = "primary"
 review = "primary"
@@ -215,8 +215,8 @@ async def test_dashboard_project_self_extension_reports_global_inheritance(activ
     project_root = tmp_path / "self-project"
     project_root.mkdir()
     project = active_runtime.register_project(str(project_root), "self-project")
-    (project_root / ".openmcp").mkdir()
-    (project_root / ".openmcp" / "config.toml").write_text(
+    (project_root / ".refract").mkdir()
+    (project_root / ".refract" / "config.toml").write_text(
         '[profiles.balanced]\nextends = "balanced"\nconsult = "primary"\n',
         encoding="utf-8",
     )
@@ -315,13 +315,13 @@ async def test_dashboard_job_detail_empty_prompt(active_runtime) -> None:
 
 def make_static(root: Path) -> None:
     (root / "assets").mkdir(parents=True)
-    (root / "index.html").write_text("<!doctype html><title>OpenMCP</title>", encoding="utf-8")
+    (root / "index.html").write_text("<!doctype html><title>Refract</title>", encoding="utf-8")
     (root / "assets" / "app.js").write_text("console.log('ok')", encoding="utf-8")
 
 
 @pytest.mark.asyncio
 async def test_spa_routes_and_api_guard_are_ordered(monkeypatch, tmp_path) -> None:
-    from openmcp import dashboard
+    from refract import dashboard
 
     make_static(tmp_path)
     monkeypatch.setattr(dashboard, "_STATIC_DIR", tmp_path)
@@ -345,7 +345,7 @@ async def test_spa_routes_and_api_guard_are_ordered(monkeypatch, tmp_path) -> No
 
 @pytest.mark.asyncio
 async def test_missing_frontend_build_does_not_break_application(monkeypatch, tmp_path) -> None:
-    from openmcp import dashboard
+    from refract import dashboard
 
     monkeypatch.setattr(dashboard, "_STATIC_DIR", tmp_path / "missing-dashboard")
     app = create_application()
@@ -359,7 +359,7 @@ async def test_missing_frontend_build_does_not_break_application(monkeypatch, tm
 
 
 def test_builtin_workflows_contract() -> None:
-    from openmcp.workflows import BUILTIN_WORKFLOWS
+    from refract.workflows import BUILTIN_WORKFLOWS
 
     assert BUILTIN_WORKFLOWS == ("consult", "implement", "other", "review")
 
@@ -487,7 +487,7 @@ async def test_configuration_target_update_and_delete_accept_slash_id(active_run
     headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{revision}"'),
     )
     target_id = "cc/opus-consult-reasoning"
@@ -529,7 +529,7 @@ async def test_configuration_target_mutations_require_security_headers(active_ru
     for method, path, body in endpoints:
         st, _, bd = await request(
             app, path, method=method, body=body,
-            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-OpenMCP-CSRF", "test-token"), ("If-Match", '"123"')),
+            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-Refract-CSRF", "test-token"), ("If-Match", '"123"')),
             client_host="192.0.2.1",
         )
         assert st == 403
@@ -537,7 +537,7 @@ async def test_configuration_target_mutations_require_security_headers(active_ru
 
         st, _, bd = await request(
             app, path, method=method, body=body,
-            headers=(("Host", "127.0.0.1"), ("Origin", "http://evil.com"), ("X-OpenMCP-CSRF", "test-token"), ("If-Match", '"123"')),
+            headers=(("Host", "127.0.0.1"), ("Origin", "http://evil.com"), ("X-Refract-CSRF", "test-token"), ("If-Match", '"123"')),
         )
         assert st == 403
         assert json.loads(bd)["code"] == "forbidden"
@@ -551,7 +551,7 @@ async def test_configuration_target_mutations_require_security_headers(active_ru
 
         st, _, bd = await request(
             app, path, method=method, body=body,
-            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-OpenMCP-CSRF", "test-token")),
+            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-Refract-CSRF", "test-token")),
         )
         assert st == 428
         assert json.loads(bd)["code"] == "revision_required"
@@ -566,7 +566,7 @@ async def test_configuration_target_create_route(active_runtime) -> None:
     headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev}"'),
     )
 
@@ -591,7 +591,7 @@ async def test_configuration_target_create_route(active_runtime) -> None:
     dup_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{new_rev}"'),
     )
     dup_status, _, dup_body = await request(
@@ -614,7 +614,7 @@ async def test_configuration_target_create_route(active_runtime) -> None:
     stale_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", '"stale-revision"'),
     )
     fresh_data = {"id": "fresh", "backend": "codex"}
@@ -636,7 +636,7 @@ async def test_configuration_target_update_route(active_runtime) -> None:
     headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev}"'),
     )
 
@@ -661,7 +661,7 @@ async def test_configuration_target_update_route(active_runtime) -> None:
     rename_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{new_rev}"'),
     )
     rename_data = dict(update_data, id="renamed")
@@ -681,7 +681,7 @@ async def test_configuration_target_update_route(active_runtime) -> None:
     stale_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev}"'),
     )
     stale_status, _, stale_body = await request(
@@ -700,7 +700,7 @@ async def test_configuration_target_delete_route(active_runtime) -> None:
     headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev}"'),
     )
     create_status, _, create_body = await request(
@@ -714,7 +714,7 @@ async def test_configuration_target_delete_route(active_runtime) -> None:
     del_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev2}"'),
     )
     del_status, del_headers_res, del_body = await request(
@@ -728,7 +728,7 @@ async def test_configuration_target_delete_route(active_runtime) -> None:
     ref_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev3}"'),
     )
     ref_status, _, ref_body = await request(
@@ -756,7 +756,7 @@ async def test_configuration_target_error_redaction(active_runtime) -> None:
     headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev}"'),
     )
 
@@ -841,7 +841,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     bad_csrf_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "wrong-token"),
+        ("X-Refract-CSRF", "wrong-token"),
         ("If-Match", f'"{rev}"'),
     )
     status, _, _ = await request(
@@ -857,7 +857,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     no_match_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
     )
     status, _, body = await request(
         app,
@@ -873,7 +873,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     stale_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", '"stale-rev"'),
     )
     status, _, body = await request(
@@ -890,7 +890,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev}"'),
     )
     payload = {
@@ -932,7 +932,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     update_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{new_rev}"'),
     )
     rename_data = dict(payload, id="renamed")
@@ -973,7 +973,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     del_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{updated_rev}"'),
     )
     status, _, body = await request(
@@ -1006,7 +1006,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     del_q_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev_after_child}"'),
     )
     status, _, body = await request(
@@ -1034,7 +1034,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     del_q2_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev_after_child_del}"'),
     )
     status, _, body = await request(
@@ -1079,7 +1079,7 @@ async def test_project_profile_override_routes_crud_and_fallback(active_runtime)
     create_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev}"'),
     )
     override_payload = {
@@ -1117,7 +1117,7 @@ async def test_project_profile_override_routes_crud_and_fallback(active_runtime)
     update_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev2}"'),
     )
     update_payload = {
@@ -1140,7 +1140,7 @@ async def test_project_profile_override_routes_crud_and_fallback(active_runtime)
     del_headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{rev3}"'),
     )
     status, del_h, body = await request(
@@ -1192,7 +1192,7 @@ async def test_project_profile_override_conflict_and_validation(active_runtime) 
         headers=(
             ("Host", "127.0.0.1"),
             ("Origin", "http://127.0.0.1"),
-            ("X-OpenMCP-CSRF", "test-token"),
+            ("X-Refract-CSRF", "test-token"),
         ),
     )
     assert status == 428
@@ -1207,7 +1207,7 @@ async def test_project_profile_override_conflict_and_validation(active_runtime) 
         headers=(
             ("Host", "127.0.0.1"),
             ("Origin", "http://127.0.0.1"),
-            ("X-OpenMCP-CSRF", "test-token"),
+            ("X-Refract-CSRF", "test-token"),
             ("If-Match", '"non-existent-rev"'),
         ),
     )
@@ -1223,7 +1223,7 @@ async def test_project_profile_override_conflict_and_validation(active_runtime) 
         headers=(
             ("Host", "127.0.0.1"),
             ("Origin", "http://127.0.0.1"),
-            ("X-OpenMCP-CSRF", "test-token"),
+            ("X-Refract-CSRF", "test-token"),
             ("If-Match", '""'),
         ),
     )
@@ -1243,7 +1243,7 @@ async def test_project_profile_override_conflict_and_validation(active_runtime) 
         headers=(
             ("Host", "127.0.0.1"),
             ("Origin", "http://127.0.0.1"),
-            ("X-OpenMCP-CSRF", "test-token"),
+            ("X-Refract-CSRF", "test-token"),
             ("If-Match", '""'),
         ),
     )
@@ -1265,7 +1265,7 @@ async def test_project_profile_override_conflict_and_validation(active_runtime) 
         headers=(
             ("Host", "127.0.0.1"),
             ("Origin", "http://127.0.0.1"),
-            ("X-OpenMCP-CSRF", "test-token"),
+            ("X-Refract-CSRF", "test-token"),
             ("If-Match", '"stale-revision-value"'),
         ),
     )
@@ -1287,7 +1287,7 @@ async def test_project_profile_override_conflict_and_validation(active_runtime) 
         headers=(
             ("Host", "127.0.0.1"),
             ("Origin", "http://127.0.0.1"),
-            ("X-OpenMCP-CSRF", "test-token"),
+            ("X-Refract-CSRF", "test-token"),
             ("If-Match", f'"{new_rev}"'),
         ),
     )
@@ -1696,7 +1696,7 @@ async def test_sse_disconnect_cleans_up_subscription(active_runtime) -> None:
 
 @pytest.mark.asyncio
 async def test_sse_keepalive_emission(active_runtime, monkeypatch) -> None:
-    import openmcp.dashboard as d_mod
+    import refract.dashboard as d_mod
     monkeypatch.setattr(d_mod, "SSE_KEEPALIVE_INTERVAL_S", 0.05)
     runtime = active_runtime
     project = runtime.database.project("project")
@@ -1790,7 +1790,7 @@ async def test_dashboard_job_metadata_uses_persisted_access_and_real_waiting_rea
 
 @pytest.mark.asyncio
 async def test_settings_exposes_effective_and_pending_readers_and_put_is_strict(active_runtime) -> None:
-    from openmcp.config_mutation import load_source
+    from refract.config_mutation import load_source
 
     runtime = active_runtime
     app = create_application()
@@ -1807,7 +1807,7 @@ async def test_settings_exposes_effective_and_pending_readers_and_put_is_strict(
     headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{revision}"'),
     )
     status, response_headers, body = await request(
@@ -1829,7 +1829,7 @@ async def test_settings_exposes_effective_and_pending_readers_and_put_is_strict(
 
 @pytest.mark.asyncio
 async def test_settings_reader_mutation_rejects_invalid_stale_and_unauthorized_requests(active_runtime) -> None:
-    from openmcp.config_mutation import load_source
+    from refract.config_mutation import load_source
 
     runtime = active_runtime
     app = create_application()
@@ -1839,7 +1839,7 @@ async def test_settings_reader_mutation_rejects_invalid_stale_and_unauthorized_r
     headers = (
         ("Host", "127.0.0.1"),
         ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"),
+        ("X-Refract-CSRF", "test-token"),
         ("If-Match", f'"{revision}"'),
     )
     for value in (True, "3", 3.0, 0, -1):
@@ -1878,7 +1878,7 @@ async def test_confirmed_removed_api_aliases_return_json_not_found(active_runtim
     project_root = tmp_path / "alias-project"
     project_root.mkdir()
     project = runtime.register_project(str(project_root), "alias-project")
-    config_dir = project_root / ".openmcp"
+    config_dir = project_root / ".refract"
     config_dir.mkdir()
     project_config = config_dir / "config.toml"
     project_config.write_text(
@@ -1889,7 +1889,7 @@ async def test_confirmed_removed_api_aliases_return_json_not_found(active_runtim
     app = create_application()
     read_headers = (
         ("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"),
-        ("X-OpenMCP-CSRF", "test-token"), ("If-Match", f'"{source_read.revision}"'),
+        ("X-Refract-CSRF", "test-token"), ("If-Match", f'"{source_read.revision}"'),
     )
     mutation_headers = read_headers
     valid_body = json.dumps({"id": "balanced", "extends": "balanced", "implement": {"targets": ["fallback"]}}).encode()
@@ -2066,10 +2066,10 @@ async def test_job_output_historical_fallback_preserves_authoritative_result(act
 async def test_security_regressions_forbidden_provider_content_not_in_dashboard_or_db(
     active_runtime, monkeypatch, tmp_path
 ) -> None:
-    from openmcp.backends.claude import ClaudeParams, _execute_sync as claude_sync
-    from openmcp.backends.codex import CodexParams, _execute_sync as codex_sync
-    from openmcp.backends.pi import PiParams, _execute_sync as pi_sync
-    from openmcp.backends.agy import AgyParams, _execute_once as agy_execute_once
+    from refract.backends.claude import ClaudeParams, _execute_sync as claude_sync
+    from refract.backends.codex import CodexParams, _execute_sync as codex_sync
+    from refract.backends.pi import PiParams, _execute_sync as pi_sync
+    from refract.backends.agy import AgyParams, _execute_once as agy_execute_once
 
     runtime = active_runtime
     project = runtime.database.project("project")
@@ -2224,10 +2224,10 @@ async def test_security_regressions_forbidden_provider_content_not_in_dashboard_
     app = create_application()
 
     providers = [
-        ("claude", "job-security-claude", "openmcp.backends.claude.run_shell_command", lambda e: claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_claude_stream, "Safe public response."),
-        ("codex", "job-security-codex", "openmcp.backends.codex.run_shell_command", lambda e: codex_sync(CodexParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_codex_stream, "Safe Codex response."),
-        ("pi", "job-security-pi", "openmcp.backends.pi.run_shell_command", lambda e: pi_sync(PiParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_pi_stream, "Safe Pi response."),
-        ("agy", "job-security-agy", "openmcp.backends.agy.run_shell_command", lambda e: agy_execute_once(AgyParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_agy_stream, "Safe Agy response."),
+        ("claude", "job-security-claude", "refract.backends.claude.run_shell_command", lambda e: claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_claude_stream, "Safe public response."),
+        ("codex", "job-security-codex", "refract.backends.codex.run_shell_command", lambda e: codex_sync(CodexParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_codex_stream, "Safe Codex response."),
+        ("pi", "job-security-pi", "refract.backends.pi.run_shell_command", lambda e: pi_sync(PiParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_pi_stream, "Safe Pi response."),
+        ("agy", "job-security-agy", "refract.backends.agy.run_shell_command", lambda e: agy_execute_once(AgyParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_agy_stream, "Safe Agy response."),
     ]
 
     for name, job_id, patch_target, runner, stream_lines, safe_text in providers:

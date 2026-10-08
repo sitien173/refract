@@ -158,7 +158,7 @@ export default function ConfigHealth() {
               Review the error diagnostic above and fix any TOML syntax or structural errors (e.g., duplicate keys, invalid profile references, missing target definitions).
             </li>
             <li>
-              Save the file. The OpenMCP daemon will automatically attempt reload on the next job submission or when you click <strong>Refresh</strong> above.
+              Save the file. The Refract daemon will automatically attempt reload on the next job submission or when you click <strong>Refresh</strong> above.
             </li>
           </ol>
         </section>

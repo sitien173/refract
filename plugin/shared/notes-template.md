@@ -1,4 +1,4 @@
-<!-- ccg-shared-version: 12.0.0 -->
+<!-- refract-shared-version: 1.0.0 -->
 
 # Phase <N> — Decision Notes
 

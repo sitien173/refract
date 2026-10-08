@@ -1,5 +1,7 @@
 # Non-interactive backend CLI arguments
 
+Refract 1.0.0 · [Repository](https://github.com/sitien173/refract)
+
 Research performed on Windows on 2026-07-18 with:
 
 - Antigravity CLI (`agy`) 1.1.4
@@ -13,16 +15,22 @@ CLI flags can change between releases. Re-run `agy --help`, `codex exec --help`,
 `codex exec resume --help`, `pi --help`, and `claude --help` after upgrading a
 backend.
 
-OpenMCP launches argv directly with `shell=False`. On Windows, npm `.cmd`
+Refract launches argv directly with `shell=False`. On Windows, npm `.cmd`
 launchers are resolved through their matching PowerShell shim with
 `-NonInteractive`; values in target `args` are individual argv tokens, not a
 shell command and not a shell-quoted string.
 
 ## Daemon configuration
 
-`~/.openmcp/config.toml` is required. It must contain non-empty `targets` and
+`~/.refract/config.toml` is required. It must contain non-empty `targets` and
 `profiles` sections. `[daemon].default_profile` is also required and must name
-one configured profile. OpenMCP does not fabricate configuration entries.
+one configured profile. Refract does not fabricate configuration entries.
+
+`REFRACT_HOME` overrides the state directory; otherwise it defaults to
+`~/.refract`. `REFRACT_LOG_LEVEL`, `REFRACT_LOG_FORMAT`, `REFRACT_LOG_FILE`,
+`REFRACT_LOG_CONSOLE`, `REFRACT_LOG_MAX_BYTES`,
+`REFRACT_LOG_BACKUP_COUNT`, and `REFRACT_LOG_CAPTURE_WARNINGS` override logging
+settings. Relative log paths resolve under the state directory.
 
 Profiles may declare one explicit parent with `extends`. A profile can map only
 some workflows. Missing workflow mappings fail during execution-plan
@@ -71,17 +79,17 @@ Do not put API keys or other credentials in `args`: target configuration is
 snapshotted into job records. Use each CLI's credential store or environment
 variables instead.
 
-OpenMCP still owns the non-interactive transport, workspace, prompt, output
+Refract still owns the non-interactive transport, workspace, prompt, output
 capture, and durable session argument. The driver translates first-class target
 fields such as `model`, `backend_profile`, `reasoning`, `system_prompt`,
 `isolated`, and `read_only` into CLI arguments before calling a transport-only
 backend. Avoid duplicating those fields or transport-owned options in `args`; target arguments
-should be options only because OpenMCP supplies the final prompt. The reserved
+should be options only because Refract supplies the final prompt. The reserved
 end-of-options token `--` is rejected for every backend. Codex `--cd`, `-C`, and
 their attached-value forms are also rejected so a target cannot leave its
 isolated worktree. Isolated Pi targets cannot explicitly load extensions,
 skills, or prompt templates. Options such as Codex `--ephemeral` and Pi
-`--no-session` disable persistence and therefore prevent OpenMCP from resuming
+`--no-session` disable persistence and therefore prevent Refract from resuming
 that backend context on a later job. These checks apply both when loading TOML
 and when a target is constructed programmatically.
 
@@ -95,7 +103,7 @@ Available flags:
 | `--agent` | Agent for this CLI session |
 | `-c`, `--continue` | Continue the most recent conversation |
 | `--conversation` | Resume a conversation ID |
-| `--dangerously-skip-permissions` | Auto-approve tool permission requests; OpenMCP-owned |
+| `--dangerously-skip-permissions` | Auto-approve tool permission requests; Refract-owned |
 | `-i`, `--prompt-interactive` | Initial prompt followed by an interactive session |
 | `--log-file` | Override internal log path |
 | `--mode` | `accept-edits` or `plan` |
@@ -111,7 +119,7 @@ subcommands, not execution options. `agy models` listed Gemini 3.5 Flash,
 Gemini 3.1 Pro, Claude Sonnet/Opus 4.6 Thinking, and GPT-OSS 120B variants on the
 research machine.
 
-OpenMCP owns `--print`, its prompt, `--conversation`, `--log-file`, and
+Refract owns `--print`, its prompt, `--conversation`, `--log-file`, and
 `--dangerously-skip-permissions` for non-interactive execution. New sessions
 (no stored conversation ID) are created with `--new-project`, so agy registers
 the working directory as a project and loads its project context files from
@@ -137,7 +145,7 @@ Available `exec` options:
 | `-p`, `--profile` | Layer a named Codex configuration profile |
 | `-s`, `--sandbox` | `read-only`, `workspace-write`, or `danger-full-access` |
 | `--dangerously-bypass-approvals-and-sandbox` | Disable approvals and sandboxing |
-| `--yolo` | Non-interactive approval/bypass mode; OpenMCP-owned |
+| `--yolo` | Non-interactive approval/bypass mode; Refract-owned |
 | `--dangerously-bypass-hook-trust` | Bypass hook trust |
 | `-C`, `--cd` | Working root |
 | `--add-dir` | Additional writable directory |
@@ -153,11 +161,11 @@ Available `exec` options:
 `codex exec resume` additionally accepts `--last` and `--all`; its documented
 subset also includes config/feature flags, image, model, bypass flags,
 skip-check, ephemeral, ignore-config/rules, output schema, JSON, and final
-message output. OpenMCP supplies a specific session ID and does not use
+message output. Refract supplies a specific session ID and does not use
 `--last`.
 
-OpenMCP owns `exec`, `--cd`, `--json`, `--output-last-message`, the resume
-subcommand/session ID, the `--` prompt boundary, and the prompt. OpenMCP always
+Refract owns `exec`, `--cd`, `--json`, `--output-last-message`, the resume
+subcommand/session ID, the `--` prompt boundary, and the prompt. Refract always
 enables `--yolo` for non-interactive execution. Everything else uses the Codex
 CLI default unless selected by target fields or `args`. The driver translates
 `backend_profile`, `model`, and `reasoning` to their CLI equivalents; arbitrary
@@ -181,16 +189,16 @@ Available execution options:
 
 The built-in tool names are `read`, `bash`, `edit`, `write`, `grep`, `find`, and
 `ls`. Pi also supports `@file` message arguments, but target `args` should
-contain options only because OpenMCP supplies the final prompt.
+contain options only because Refract supplies the final prompt.
 
-OpenMCP owns `--mode json`, the prompt, and `--session`. Direct runs and normal
+Refract owns `--mode json`, the prompt, and `--session`. Direct runs and normal
 targets append `--approve` after configurable arguments so it cannot be
 overridden. For `isolated = true`, the driver instead adds `--no-approve`,
 `--no-context-files`, `--no-extensions`, `--no-skills`, and
 `--no-prompt-templates`; explicit extension, skill, and prompt-template args
 (including `--extension=...` forms) are rejected. `read_only = true` adds
 `--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become
-`--system-prompt`, `--model`, and `--thinking` respectively. OpenMCP places
+`--system-prompt`, `--model`, and `--thinking` respectively. Refract places
 `--mode json` after target arguments so output parsing cannot be replaced.
 
 ## Claude Code (`claude -p`)
@@ -216,10 +224,10 @@ Available execution options:
 `xhigh`, and `max`.
 
 Claude Code has no working-root flag. The workspace comes from the subprocess
-working directory, which OpenMCP sets.
+working directory, which Refract sets.
 
-OpenMCP owns `-p`, `--output-format json`, `--resume`, the `--` prompt boundary,
-and the prompt. OpenMCP always enables `--permission-mode bypassPermissions` for
+Refract owns `-p`, `--output-format json`, `--resume`, the `--` prompt boundary,
+and the prompt. Refract always enables `--permission-mode bypassPermissions` for
 non-interactive execution. Transport flags are appended after target arguments so
 a target cannot replace `--output-format`. The compiled argv is:
 
@@ -255,10 +263,10 @@ the existing treatment of Codex `--ephemeral` and Pi `--no-session`:
 
 | Argument | Reason |
 |---|---|
-| `--no-session-persistence` | Sessions are never written to disk, so OpenMCP cannot resume the context on a later job. |
+| `--no-session-persistence` | Sessions are never written to disk, so Refract cannot resume the context on a later job. |
 | `--fork-session` | Resuming allocates a new session ID instead of reusing the original, breaking durable session continuity. |
 | `--bg`, `--background` | Returns immediately as a background agent, so there is no result to capture. |
-| `-w`, `--worktree` | Creates its own git worktree, which conflicts with the workspace OpenMCP assigns. |
+| `-w`, `--worktree` | Creates its own git worktree, which conflicts with the workspace Refract assigns. |
 | `--bare` | Restricts Anthropic authentication to `ANTHROPIC_API_KEY` or `apiKeyHelper` and never reads OAuth or the keychain, so subscription logins fail. Use `--safe-mode` for isolation instead. |
 
 `validate_target_args` adds no Claude-specific rule. The reserved `--` token and

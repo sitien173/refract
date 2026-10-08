@@ -165,7 +165,7 @@ describe('Dashboard integrated user flows', () => {
 
     vi.mocked(api.getConfigurationProfiles).mockResolvedValue({
       revision: 'rev-prof-flow-001',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
       default_profile: 'default',
       available_targets: ['worker-1', 'worker-2'],
       profiles: [
@@ -198,7 +198,7 @@ describe('Dashboard integrated user flows', () => {
 
     vi.mocked(api.getConfigurationProfile).mockImplementation(async (id) => ({
       revision: 'rev-prof-flow-001',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
       default_profile: 'default',
       available_targets: ['worker-1', 'worker-2'],
       profile: {
@@ -213,7 +213,7 @@ describe('Dashboard integrated user flows', () => {
 
     vi.mocked(api.getProjectProfileOverrides).mockResolvedValue({
       revision: 'rev-flow-proj-001',
-      source_path: '/srv/alpha/.openmcp/config.toml',
+      source_path: '/srv/alpha/.refract/config.toml',
       global_default_profile: 'balanced',
       project_default_profile: 'balanced',
       available_targets: ['worker-1', 'worker-2'],
@@ -402,7 +402,7 @@ describe('Dashboard integrated user flows', () => {
   it('manages profiles through creation, inspection, and deletion workflows', async () => {
     vi.mocked(api.createConfigurationProfile).mockResolvedValue({
       revision: 'rev-prof-flow-002',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
       default_profile: 'default',
       available_targets: ['worker-1', 'worker-2'],
       profile: {
@@ -419,7 +419,7 @@ describe('Dashboard integrated user flows', () => {
     vi.mocked(api.deleteConfigurationProfile).mockResolvedValue({
       deleted: 'fast-dev',
       revision: 'rev-prof-flow-003',
-      source_path: '/etc/openmcp/config.toml',
+      source_path: '/etc/refract/config.toml',
     })
 
     const { container } = render(<App />)
@@ -499,13 +499,13 @@ describe('Dashboard integrated user flows', () => {
   it('manages project profile overrides through creation and removal workflows', async () => {
     vi.mocked(api.createProjectProfileOverride).mockResolvedValue({
       revision: 'rev-flow-proj-002',
-      source_path: '/srv/alpha/.openmcp/config.toml',
+      source_path: '/srv/alpha/.refract/config.toml',
       override: { id: 'custom-override', extends: 'balanced' },
     })
 
     vi.mocked(api.deleteProjectProfileOverride).mockResolvedValue({
       revision: 'rev-flow-proj-003',
-      source_path: '/srv/alpha/.openmcp/config.toml',
+      source_path: '/srv/alpha/.refract/config.toml',
       deleted: 'balanced',
       fallback: {
         id: 'balanced',

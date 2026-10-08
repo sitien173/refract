@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from openmcp.config import (
+from refract.config import (
     NotificationsConfig,
     TargetConfig,
     _notifications_config,
@@ -13,8 +13,8 @@ from openmcp.config import (
     load_task_guide,
     validate_target_args,
 )
-from openmcp.planning import resolve_execution_plan
-from openmcp.workflows import get_workflow
+from refract.planning import resolve_execution_plan
+from refract.workflows import get_workflow
 from tests.orchestration_helpers import config
 
 
@@ -39,8 +39,8 @@ def test_task_guide_prefers_project_then_global(tmp_path) -> None:
     home.mkdir()
     (home / "task_guide.json").write_text(json.dumps({"scope": "global"}), encoding="utf-8")
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "task_guide.json").write_text(json.dumps({"scope": "project"}), encoding="utf-8")
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "task_guide.json").write_text(json.dumps({"scope": "project"}), encoding="utf-8")
     assert load_task_guide(home, root) == {"scope": "project"}
     assert load_task_guide(home) == {"scope": "global"}
 
@@ -128,9 +128,9 @@ def test_removed_global_profile_aliases_are_rejected(tmp_path) -> None:
 
 def test_removed_project_profile_aliases_are_rejected(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
+    (root / ".refract").mkdir(parents=True)
     legacy_profiles = "routing_" + "profiles"
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract" / "config.toml").write_text(
         f"[{legacy_profiles}.quality]\nimplement = \"primary\"\n",
         encoding="utf-8",
     )
@@ -141,8 +141,8 @@ def test_removed_project_profile_aliases_are_rejected(tmp_path) -> None:
 
 def test_project_config_overlays_profiles(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text("""[project]
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text("""[project]
 default_profile = "quality"
 [profiles.quality]
 implement = "primary"
@@ -347,8 +347,8 @@ def test_consult_only_profile_is_partial(tmp_path) -> None:
 
 def test_project_profile_replaces_same_name_base_profile(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text(
         """[profiles.shadow]
 review = "primary"
 """,
@@ -364,8 +364,8 @@ review = "primary"
 
 def test_project_profile_extends_base_profile_across_layers(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text(
         """[profiles.child]
 extends = "base"
 consult = "primary"
@@ -381,8 +381,8 @@ consult = "primary"
 
 def test_project_self_extends_uses_shadowed_base_snapshot(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text(
         """[profiles.base]
 extends = "base"
 consult = "primary"
@@ -398,8 +398,8 @@ consult = "primary"
 
 def test_project_self_extends_without_base_parent_is_unknown(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text(
         """[profiles.missing]
 extends = "missing"
 consult = "primary"
@@ -414,8 +414,8 @@ consult = "primary"
 
 def test_project_child_inherits_project_shadow_not_base_snapshot(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text(
         """[profiles.base]
 consult = "primary"
 
@@ -471,8 +471,8 @@ consult = "primary"
 
 def test_project_cycles_remain_cycles_with_base_snapshots(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text(
         """[profiles.a]
 extends = "b"
 
@@ -489,8 +489,8 @@ extends = "a"
 
 def test_project_load_does_not_mutate_base_declarations(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text(
         """[profiles.child]
 extends = "base"
 """,
@@ -535,7 +535,7 @@ review = "primary"
 consult = "primary"
 other = "primary"
 """, encoding="utf-8")
-    monkeypatch.setenv("OPENMCP_HOME", str(home))
+    monkeypatch.setenv("REFRACT_HOME", str(home))
     catalog = load_config(home / "config.toml")
     assert not hasattr(TargetConfig(id="primary", backend="codex"), "capabilities")
     assert all(resolve_execution_plan(get_workflow(name), catalog, "balanced").selection.targets == ("primary",) for name in ("implement", "review", "consult", "other"))
@@ -669,8 +669,8 @@ def test_notifications_config_strict_validation(tmp_path, content) -> None:
 
 def test_project_config_rejects_notifications(tmp_path) -> None:
     root = tmp_path / "project"
-    (root / ".openmcp").mkdir(parents=True)
-    (root / ".openmcp" / "config.toml").write_text(
+    (root / ".refract").mkdir(parents=True)
+    (root / ".refract" / "config.toml").write_text(
         "[notifications]\nenabled = true\n",
         encoding="utf-8",
     )

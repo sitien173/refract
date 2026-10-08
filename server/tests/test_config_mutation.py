@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 import tomlkit
 
-import openmcp.config_mutation
+import refract.config_mutation
 
-from openmcp.config import load_config
-from openmcp.config_mutation import (
+from refract.config import load_config
+from refract.config_mutation import (
     ConfigurationMutationError,
     ConfigurationMutationService,
     commit_bytes,
@@ -24,8 +24,8 @@ from openmcp.config_mutation import (
     load_source,
     target_to_editor_data,
 )
-from openmcp.models import TargetEditorData, TargetReference
-from openmcp.runtime import Runtime
+from refract.models import TargetEditorData, TargetReference
+from refract.runtime import Runtime
 from tests.orchestration_helpers import config as make_config
 
 # ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ def test_temp_files_land_in_source_directory(tmp_path, monkeypatch) -> None:
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        import openmcp.config_mutation as module
+        import refract.config_mutation as module
         observed: list[Path] = []
         real_tempfile = __import__("tempfile").NamedTemporaryFile
 
@@ -444,7 +444,7 @@ def test_commit_rechecks_revision_immediately_before_replace(tmp_path, monkeypat
                 path.write_bytes(path.read_bytes() + b"\n# race\n")
             return real_commit(path, candidate, expected_revision=expected_revision, mode=mode)
 
-        monkeypatch.setattr("openmcp.config_mutation.commit_bytes", racing_commit)
+        monkeypatch.setattr("refract.config_mutation.commit_bytes", racing_commit)
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
         assert raised.value.code == "configuration_conflict"
@@ -454,7 +454,7 @@ def test_commit_rechecks_revision_immediately_before_replace(tmp_path, monkeypat
 
 
 def test_create_bytes_is_exclusive(tmp_path) -> None:
-    path = tmp_path / ".openmcp" / "config.toml"
+    path = tmp_path / ".refract" / "config.toml"
     candidate = b"[profiles.quality]\nconsult = \"primary\"\n"
     created = create_bytes(path, candidate)
     assert path.exists()
@@ -537,8 +537,8 @@ def test_global_commit_requires_registered_project_compatibility(tmp_path) -> No
     runtime = Runtime(load_config(source))
     try:
         project_root = tmp_path / "project"
-        (project_root / ".openmcp").mkdir(parents=True)
-        (project_root / ".openmcp" / "config.toml").write_text(
+        (project_root / ".refract").mkdir(parents=True)
+        (project_root / ".refract" / "config.toml").write_text(
             """[project]
 default_profile = "fast"
 
@@ -582,7 +582,7 @@ consult = "special"
 def test_project_create_minimal_file_is_validated_and_published(tmp_path) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
         service = runtime.mutations
         doc = _empty_project_document()
 
@@ -617,7 +617,7 @@ def test_project_create_rejects_invalid_minimal_file(tmp_path) -> None:
         with pytest.raises(ConfigurationMutationError) as raised:
             service.create_project_document(doc, project_root=project_root)
         assert raised.value.code == "configuration_invalid"
-        assert not (project_root / ".openmcp" / "config.toml").exists()
+        assert not (project_root / ".refract" / "config.toml").exists()
     finally:
         runtime.database.close()
 
@@ -625,7 +625,7 @@ def test_project_create_rejects_invalid_minimal_file(tmp_path) -> None:
 def test_project_create_conflicts_when_file_already_exists(tmp_path) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
             "[profiles.quality]\nconsult = \"primary\"\n", encoding="utf-8"
@@ -644,7 +644,7 @@ def test_project_create_conflicts_when_file_already_exists(tmp_path) -> None:
 def test_project_edit_commits_and_publishes(tmp_path) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
             """[profiles.quality]
@@ -725,7 +725,7 @@ def test_rollback_refuses_to_overwrite_later_external_edit(tmp_path, monkeypatch
                 path.write_bytes(path.read_bytes() + b"\n# external\n")
             return result
 
-        monkeypatch.setattr("openmcp.config_mutation.commit_bytes", racing_commit)
+        monkeypatch.setattr("refract.config_mutation.commit_bytes", racing_commit)
 
         def failing_publish():
             raise RuntimeError("publication exploded")
@@ -745,7 +745,7 @@ def test_rollback_refuses_to_overwrite_later_external_edit(tmp_path, monkeypatch
 def test_project_publication_failure_restores_original(tmp_path, monkeypatch) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
             "[profiles.fast]\nconsult = \"primary\"\n", encoding="utf-8"
@@ -775,7 +775,7 @@ def test_project_publication_failure_restores_original(tmp_path, monkeypatch) ->
 def test_project_create_publication_failure_removes_created_file(tmp_path, monkeypatch) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
         service = runtime.mutations
 
         def failing_publish(_root):
@@ -926,7 +926,7 @@ def test_commit_rejects_external_edit_injected_after_temp_write(tmp_path, monkey
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_write_temp = openmcp.config_mutation._write_temporary
+        real_write_temp = refract.config_mutation._write_temporary
         raced = False
 
         def racing_write_temp(directory, candidate, prefix):
@@ -937,7 +937,7 @@ def test_commit_rejects_external_edit_injected_after_temp_write(tmp_path, monkey
                 source.write_bytes(source.read_bytes() + b"\n# race after temp\n")
             return temp
 
-        monkeypatch.setattr("openmcp.config_mutation._write_temporary", racing_write_temp)
+        monkeypatch.setattr("refract.config_mutation._write_temporary", racing_write_temp)
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
         assert raised.value.code == "configuration_conflict"
@@ -957,7 +957,7 @@ def test_rollback_refuses_to_overwrite_edit_injected_after_temp_write(tmp_path, 
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "boom")
 
-        real_write_temp = openmcp.config_mutation._write_temporary
+        real_write_temp = refract.config_mutation._write_temporary
         raced = False
 
         def failing_publish():
@@ -974,7 +974,7 @@ def test_rollback_refuses_to_overwrite_edit_injected_after_temp_write(tmp_path, 
                 raced = True
             return temp
 
-        monkeypatch.setattr("openmcp.config_mutation._write_temporary", racing_write_temp)
+        monkeypatch.setattr("refract.config_mutation._write_temporary", racing_write_temp)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -992,7 +992,7 @@ def test_rollback_creation_refuses_deletion_on_external_edit(tmp_path, monkeypat
     try:
         service = runtime.mutations
         document = _empty_project_document()
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
 
         def failing_publish(path):
             raise RuntimeError("publication exploded")
@@ -1111,8 +1111,8 @@ def test_global_commit_always_validates_registered_projects(tmp_path) -> None:
     runtime = Runtime(load_config(source))
     try:
         project_root = tmp_path / "project"
-        (project_root / ".openmcp").mkdir(parents=True)
-        (project_root / ".openmcp" / "config.toml").write_text(
+        (project_root / ".refract").mkdir(parents=True)
+        (project_root / ".refract" / "config.toml").write_text(
             """[project]
 default_profile = "fast"
 
@@ -1158,7 +1158,7 @@ def test_commit_rejects_external_atomic_replacement_at_publication(tmp_path, mon
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         raced = False
 
         def racing_exchange(src, dst):
@@ -1170,7 +1170,7 @@ def test_commit_rejects_external_atomic_replacement_at_publication(tmp_path, mon
                 os.replace(replacement, source)
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
         assert raised.value.code == "configuration_conflict"
@@ -1190,7 +1190,7 @@ def test_commit_rejects_external_edit_injected_before_atomic_exchange(tmp_path, 
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         raced = False
 
         def racing_exchange(src, dst):
@@ -1200,7 +1200,7 @@ def test_commit_rejects_external_edit_injected_before_atomic_exchange(tmp_path, 
                 source.write_bytes(source.read_bytes() + b"\n# gap edit before exchange\n")
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
         assert raised.value.code == "configuration_conflict"
@@ -1220,7 +1220,7 @@ def test_commit_restoration_does_not_overwrite_newer_edit(tmp_path, monkeypatch)
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         exchange_count = 0
 
         def racing_exchange(src, dst):
@@ -1235,7 +1235,7 @@ def test_commit_restoration_does_not_overwrite_newer_edit(tmp_path, monkeypatch)
                 return ret
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
         assert raised.value.code == "configuration_conflict"
@@ -1269,9 +1269,9 @@ def test_rollback_refuses_to_overwrite_external_atomic_replacement(tmp_path, mon
             commit_done = True
             return res
 
-        monkeypatch.setattr("openmcp.config_mutation.commit_bytes", tracking_commit)
+        monkeypatch.setattr("refract.config_mutation.commit_bytes", tracking_commit)
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         raced = False
 
         def restore_racing_exchange(src, dst):
@@ -1283,7 +1283,7 @@ def test_rollback_refuses_to_overwrite_external_atomic_replacement(tmp_path, mon
                 os.replace(replacement, source)
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", restore_racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", restore_racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1319,9 +1319,9 @@ def test_rollback_restore_does_not_overwrite_newer_edit(tmp_path, monkeypatch) -
             commit_done = True
             return res
 
-        monkeypatch.setattr("openmcp.config_mutation.commit_bytes", tracking_commit)
+        monkeypatch.setattr("refract.config_mutation.commit_bytes", tracking_commit)
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         exchange_count = 0
 
         def restore_racing_exchange(src, dst):
@@ -1337,7 +1337,7 @@ def test_rollback_restore_does_not_overwrite_newer_edit(tmp_path, monkeypatch) -
                     return ret
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", restore_racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", restore_racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1355,14 +1355,14 @@ def test_rollback_creation_refuses_deletion_on_external_atomic_replacement(tmp_p
     try:
         service = runtime.mutations
         document = _empty_project_document()
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
 
         def failing_publish(path):
             raise RuntimeError("publication exploded")
 
         monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         raced = False
 
         def racing_exchange(src, dst):
@@ -1374,7 +1374,7 @@ def test_rollback_creation_refuses_deletion_on_external_atomic_replacement(tmp_p
                 os.replace(replacement, config_path)
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.create_project_document(document, project_root=project_root)
@@ -1397,7 +1397,7 @@ def test_atomic_exchange_fails_closed_when_primitive_unavailable(tmp_path, monke
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        monkeypatch.setattr(openmcp.config_mutation, "_renameat2", None)
+        monkeypatch.setattr(refract.config_mutation, "_renameat2", None)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1416,10 +1416,10 @@ def test_rollback_restore_fails_closed_when_primitive_unavailable(tmp_path, monk
         expected = service.source_read().revision
         original_source = load_source(source)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_renameat2", None)
+        monkeypatch.setattr(refract.config_mutation, "_renameat2", None)
 
         with pytest.raises(ConfigurationMutationError) as raised:
-            openmcp.config_mutation.restore_bytes(
+            refract.config_mutation.restore_bytes(
                 source,
                 original_source,
                 expected_revision=expected,
@@ -1435,21 +1435,21 @@ def test_rollback_creation_fails_closed_when_primitive_unavailable(tmp_path, mon
     try:
         service = runtime.mutations
         document = _empty_project_document()
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
 
         def failing_publish(path):
             raise RuntimeError("publication exploded")
 
         monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
 
-        real_create = openmcp.config_mutation.create_bytes
+        real_create = refract.config_mutation.create_bytes
 
         def tracking_create(*args, **kwargs):
             res = real_create(*args, **kwargs)
-            monkeypatch.setattr(openmcp.config_mutation, "_renameat2", None)
+            monkeypatch.setattr(refract.config_mutation, "_renameat2", None)
             return res
 
-        monkeypatch.setattr(openmcp.config_mutation, "create_bytes", tracking_create)
+        monkeypatch.setattr(refract.config_mutation, "create_bytes", tracking_create)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.create_project_document(document, project_root=project_root)
@@ -1469,7 +1469,7 @@ def test_project_validation_cleanup_failure_not_ignored(tmp_path, monkeypatch) -
         def failing_rmtree(path, *args, **kwargs):
             raise OSError("disk cleanup error")
 
-        monkeypatch.setattr(openmcp.config_mutation.shutil, "rmtree", failing_rmtree)
+        monkeypatch.setattr(refract.config_mutation.shutil, "rmtree", failing_rmtree)
 
         with pytest.raises(OSError, match="disk cleanup error"):
             service.resolve_project_catalog(project_root, candidate)
@@ -1482,7 +1482,7 @@ def test_rollback_creation_refuses_deletion_on_replacement_after_tombstone_excha
     try:
         service = runtime.mutations
         document = _empty_project_document()
-        config_path = project_root / ".openmcp" / "config.toml"
+        config_path = project_root / ".refract" / "config.toml"
 
         def failing_publish(path):
             raise RuntimeError("publication exploded")
@@ -1493,7 +1493,7 @@ def test_rollback_creation_refuses_deletion_on_replacement_after_tombstone_excha
         tombstone_exchanged = False
         raced = False
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
 
         def tracking_exchange(src, dst):
             nonlocal tombstone_exchanged
@@ -1502,7 +1502,7 @@ def test_rollback_creation_refuses_deletion_on_replacement_after_tombstone_excha
                 tombstone_exchanged = True
             return res
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", tracking_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", tracking_exchange)
 
         def racing_replace(src, dst):
             nonlocal raced
@@ -1536,7 +1536,7 @@ def test_restore_exchanged_state_safe_against_replacement_after_validation(tmp_p
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         exchange_count = 0
 
         def racing_exchange(src, dst):
@@ -1553,7 +1553,7 @@ def test_restore_exchanged_state_safe_against_replacement_after_validation(tmp_p
                     os.replace(replacement2, source)
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1575,7 +1575,7 @@ def test_restore_exchanged_state_safe_against_replacement_during_compensation(tm
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         exchange_count = 0
 
         def racing_exchange(src, dst):
@@ -1596,7 +1596,7 @@ def test_restore_exchanged_state_safe_against_replacement_during_compensation(tm
                     os.replace(replacement3, source)
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1618,7 +1618,7 @@ def test_restore_exchanged_state_safe_against_more_than_20_compensation_replacem
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         exchange_count = 0
         total_replacements = 25
 
@@ -1632,7 +1632,7 @@ def test_restore_exchanged_state_safe_against_more_than_20_compensation_replacem
                     os.replace(replacement, source)
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1654,7 +1654,7 @@ def test_restore_exchanged_state_compensation_exchange_failure_retains_external_
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         exchange_count = 0
 
         def racing_exchange(src, dst):
@@ -1673,7 +1673,7 @@ def test_restore_exchanged_state_compensation_exchange_failure_retains_external_
                     raise OSError("Injected exchange error during compensation")
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1695,16 +1695,16 @@ def test_restore_exchanged_state_retry_bound_exhaustion_retains_external_state(t
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         exchange_count = 0
 
-        real_restore = openmcp.config_mutation._restore_exchanged_state
+        real_restore = refract.config_mutation._restore_exchanged_state
 
         def bounded_restore(*args, **kwargs):
             kwargs["max_retries"] = 2
             return real_restore(*args, **kwargs)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_restore_exchanged_state", bounded_restore)
+        monkeypatch.setattr(refract.config_mutation, "_restore_exchanged_state", bounded_restore)
 
         def racing_exchange(src, dst):
             nonlocal exchange_count
@@ -1715,7 +1715,7 @@ def test_restore_exchanged_state_retry_bound_exhaustion_retains_external_state(t
                 os.replace(replacement, source)
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1737,8 +1737,8 @@ def test_restore_exchanged_state_path_read_failure_before_compensation_retains_e
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
-        real_read = openmcp.config_mutation.read_config_source
+        real_exchange = refract.config_mutation._atomic_exchange
+        real_read = refract.config_mutation.read_config_source
         exchange_count = 0
 
         def racing_exchange(src, dst):
@@ -1756,8 +1756,8 @@ def test_restore_exchanged_state_path_read_failure_before_compensation_retains_e
                 raise OSError("Disk read error on path before compensation")
             return real_read(path_arg)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
-        monkeypatch.setattr(openmcp.config_mutation, "read_config_source", failing_read)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "read_config_source", failing_read)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1779,8 +1779,8 @@ def test_restore_exchanged_state_temporary_read_failure_before_compensation_reta
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
-        real_read = openmcp.config_mutation.read_config_source
+        real_exchange = refract.config_mutation._atomic_exchange
+        real_read = refract.config_mutation.read_config_source
         exchange_count = 0
         read_count = 0
 
@@ -1802,8 +1802,8 @@ def test_restore_exchanged_state_temporary_read_failure_before_compensation_reta
                     raise OSError("Disk read error on temporary before compensation")
             return real_read(path_arg)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
-        monkeypatch.setattr(openmcp.config_mutation, "read_config_source", failing_read)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "read_config_source", failing_read)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -1825,7 +1825,7 @@ def test_restore_exchanged_state_production_retry_budget_exhaustion_retains_exte
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
 
-        real_exchange = openmcp.config_mutation._atomic_exchange
+        real_exchange = refract.config_mutation._atomic_exchange
         exchange_count = 0
 
         def racing_exchange(src, dst):
@@ -1837,7 +1837,7 @@ def test_restore_exchanged_state_production_retry_budget_exhaustion_retains_exte
                 os.replace(replacement, source)
             return real_exchange(src, dst)
 
-        monkeypatch.setattr(openmcp.config_mutation, "_atomic_exchange", racing_exchange)
+        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
 
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(document, expected_revision=expected)
@@ -2054,7 +2054,7 @@ def test_delete_target_blocked_by_global_and_project_declarations_ignores_jobs(t
         service = runtime.mutations
         source = service._resolve_source(None)
 
-        proj_config = project_root / ".openmcp" / "config.toml"
+        proj_config = project_root / ".refract" / "config.toml"
         proj_config.parent.mkdir(parents=True, exist_ok=True)
         proj_config.write_text(
             """[profiles.quality]
@@ -2112,7 +2112,7 @@ def test_read_targets_and_get_target_single_source_read(tmp_path, monkeypatch) -
     runtime = Runtime(load_config(source))
     try:
         service = runtime.mutations
-        import openmcp.config_mutation as cm
+        import refract.config_mutation as cm
 
         read_count = 0
         original_regular_source = cm._regular_source
@@ -2239,7 +2239,7 @@ extends = "target_x"
 
 def test_phase3_profile_editor_models() -> None:
     from pydantic import ValidationError
-    from openmcp.models import (
+    from refract.models import (
         ProfileEditorData,
         ProfileEditorResponse,
         ProfileReference,
@@ -2315,7 +2315,7 @@ def test_global_profile_crud_and_references(tmp_path) -> None:
         assert any(r["relationship"] == "default_profile" for r in raised.value.references)
 
         # 3. Create new profile 'custom' with shorthand workflow
-        from openmcp.models import ProfileEditorData, WorkflowPolicyData
+        from refract.models import ProfileEditorData, WorkflowPolicyData
         new_prof = ProfileEditorData(
             id="custom",
             extends=None,
@@ -2378,7 +2378,7 @@ def test_project_override_crud_and_missing_file_creation(tmp_path) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:
         service = runtime.mutations
-        proj_cfg_path = project_root / ".openmcp" / "config.toml"
+        proj_cfg_path = project_root / ".refract" / "config.toml"
         assert not proj_cfg_path.exists()
 
         # 1. Read overrides when absent
@@ -2389,7 +2389,7 @@ def test_project_override_crud_and_missing_file_creation(tmp_path) -> None:
         assert p_def == "balanced"
 
         # 2. Create override when file absent -> creates minimal file
-        from openmcp.models import ProfileEditorData, WorkflowPolicyData
+        from refract.models import ProfileEditorData, WorkflowPolicyData
         override_data = ProfileEditorData(
             id="balanced",
             extends=None,
