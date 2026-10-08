@@ -42,13 +42,17 @@ Specification FAIL despite green tests. The reference invents thirteen uppercase
 
 Provenance: original ERP Started2026-10-08T01:17:02Z predates actual job creation2026-10-08T01:42:35.250145+00:00. Preserve original report; its Started value is not actual worker-start or tool-duration evidence. Source defects are direct source/design comparisons, not inferred from that metadata. H1 confirmed: tests enforce invented names rather than the approved error family; all thirteen approved names are absent from the reference.
 
+## Fix Batch 1 Dispatch
+
+Resumed implementation `f43e482a-b23f-4ec3-ae7e-9943158423e8` was submitted from clean attached companion main2b499ab3a345d0e6cac09bf405e9feec54a43002 and primary main45f086de53e58a6fbfb8501cfdeb7f0c04b4cabe. Authoritative source phasebase remains85283559ec9c8241a32d10557fa6b1ba49b57d5c. Same context_key/workflow/profile; fresh_session omitted. Thin prompt points to exact fix and phase files. Three source paths plus append-only companion notes/journal, no broadened scope. This is automatic batch1 of2. Companion root is frozen. One3600-second heartbeat wait is recorded outside-root; no short repeated polling. Hydrate companion handover only after terminal. No restart.
+
 ## Quality Review
 
 Pending. Specification failures block independent quality review.
 
 ## Review Result
 
-- Spec Status: FAIL, initial implementation; fix batch1 pending
+- Spec Status: PASS, validated candidate after fix batch1; initial failure is preserved above
 - Quality Status: PENDING
 - Debt: none
 
@@ -65,3 +69,13 @@ Pending. Specification failures block independent quality review.
 The phase_base cache in the primary handover refers to companion source8528355; its phase_base_ref is resolved in the companion root. The same-named primary ref retains only this evidence bridge. Prompt finalized after successful consultation, no source edit or implementation job yet.
 
 The daemon remains on Phase1 code. Native v2 acceptance and both-root consolidation remain pending.
+
+## Fix Batch 1 Validation
+
+Fix f43e482a-b23f-4ec3-ae7e-9943158423e8 succeeded with creation2026-10-08T02:08:02.455790+00:00 and terminal update2026-10-08T02:20:57.668590+00:00. Its 3600-second wait kimfmawhq completed terminal, with no replacement. These are lifecycle timestamps, not native acceptance duration. Full exact terminal result.text is retained in implementation-fix-01.md,3135UTF-8bytes, without private v1 job fields. ERP NEXT is CONTINUE_CONTEXT and the matching continuing line is present; success alone is not phase completion.
+
+Exactly the three authorized fix sources changed from2b499ab: coordinator SKILL, tool-contract reference and tests/test-contracts.sh. Companion notes/journal were appended and all prior content preserved. Source inspection matched the seven signatures/envelopes, all13 approved errors and safe handling, defaults/ranges/paging/bounds, worktree-before-resolve and unavailable-service behavior, read-only/private/session semantics and restored guards. Task2 to Task5 notes now exist. Semantic RED before production failed at the newly asserted alias signature; GREEN includes exact error-set, setup-order and preserved policy tests. Original faulty metadata remains preserved with provenance correction, not silently rewritten.
+
+Fresh full verification passed: timeout --kill-after=5s 120s bash tests/run.sh, session-start and contract tests plus marketplace validation, exit0; timeout --kill-after=5s 30s bash -n tests/test-contracts.sh, exit0; git diff --check, exit0; tgrep prohibited-pattern audit, no matches and expected exit1. Historical diff confirms only three manifest version values, four shared markers and minimal prompt compression changed in those files. No source scope expansion, deadline timeout or new debt.
+
+Spec Status: PASS for the validated candidate; Quality Status: PENDING. Source checkpoint fe7fee0fb68d6f26b76827f2995b134117c318e6 is clean and preserves initial checkpoint2b499ab. No phase impl anchor or closure yet. Follow CONTINUE_CONTEXT with one resumed Continue Phase06 job, continuation1 of2, then fresh validation and first fresh independent review. The live interface remains the planned pre-restart interface until Phase7; current session skill cache is not proof of fresh v12 loading. CLI-only preparation is /tmp/mcp-v2-phase7-docs-20261008-085455/phase7-preparation.md; installed2.1.293 flags were verified but no live cutover probe ran.
