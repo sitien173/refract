@@ -30,15 +30,25 @@ The finalized prompt carries six corrections: project-only guidance with full re
 
 ## Implementation Response
 
-Pending. Coordinator will copy the returned full ERP and completed evidence after terminal state.
+Fresh implementation `1a8cb683-4101-499f-9f2f-be0422a3eec7` was submitted from companion clean attached main85283559ec9c8241a32d10557fa6b1ba49b57d5c and primary clean attached maind9a10cb9a3e8b4ee88f5e2aa1061f3d2a4d856fd. Full absolute bundled role/ERP/notes/journal pointers were supplied. Saved implement workflow/profile and shared context_key were used with fresh_session true. The fourteen-source-path boundary and append-only companion notes/journal are unchanged. Companion root is frozen until terminal; its handover is intentionally not hydrated while the job is active. Outside-root receipt: `/tmp/mcp-v2-phase06-live-receipt.json`. Coordinator will retain full returned ERP and completed evidence after terminal state. No restart or source checkpoint is authorized while running.
+
+## Initial Implementation Validation
+
+Implementation `1a8cb683-4101-499f-9f2f-be0422a3eec7` succeeded at2026-10-08T01:46:19.514883+00:00. Waitkn9s6kq4q completed terminal; no replacement wait is active. Full terminal result.text is retained unchanged in `phase-06/implementation-01.md`,3362UTF-8bytes, copied without private v1 metadata. Eleven source paths match ERP and the fourteen-path allowlist; primary changes are Coordinator bridge files only.
+
+Fresh checks: `timeout --kill-after=5s 120s bash tests/run.sh` passed session-start tests, contract tests and marketplace validation, exit0. `timeout --kill-after=5s 30s bash -n tests/test-contracts.sh` and `git diff --check` passed; chained tgrep prohibited-pattern audit reached its expected exit1 with no matches. No deadline timed out.
+
+Specification FAIL despite green tests. The reference invents thirteen uppercase error names and omits approved lower-case codes, alias, defaults/ranges and return envelopes. Exact approved-code audit returned exit1, no matches. Its tests assert invented CAPACITY_EXCEEDED, remove unchanged freeze/checkpoint and explicit-other guards, and omit new mechanics from policy separation. Setup resolves before requested worktree creation and loses unavailable-service behavior. Contract loses read-only enforcement and changes the resume-key concept. Worker notes contain only Task1 despite five tasks. Full actionable batch is `phase-06/fix-01.md`; independent quality remains blocked. This is automatic fix cycle1 of2.
+
+Provenance: original ERP Started2026-10-08T01:17:02Z predates actual job creation2026-10-08T01:42:35.250145+00:00. Preserve original report; its Started value is not actual worker-start or tool-duration evidence. Source defects are direct source/design comparisons, not inferred from that metadata. H1 confirmed: tests enforce invented names rather than the approved error family; all thirteen approved names are absent from the reference.
 
 ## Quality Review
 
-Pending.
+Pending. Specification failures block independent quality review.
 
 ## Review Result
 
-- Spec Status: PENDING
+- Spec Status: FAIL, initial implementation; fix batch1 pending
 - Quality Status: PENDING
 - Debt: none
 
@@ -46,6 +56,7 @@ Pending.
 
 - Companion plan base: refs/plans/mcp-v2-claude-code/base
 - Companion phase base: refs/plans/mcp-v2-claude-code/phase-06/base, resolved85283559ec9c8241a32d10557fa6b1ba49b57d5c
+- Companion initial implementation checkpoint: 2b499ab3a345d0e6cac09bf405e9feec54a43002, declared checks passed; specification FAIL, not phase closure
 - Companion phase impl: refs/plans/mcp-v2-claude-code/phase-06/impl, pending
 - Primary evidence bridge base: refs/plans/mcp-v2-claude-code/phase-06/base, to be set from the finalized clean metadata checkpoint
 - Prior consultation checkpoint: 17c3352dde5ccc80656f27bace0555cf8497fa73
