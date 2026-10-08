@@ -40,7 +40,7 @@ OpenMCP provides four fixed workflows: `consult`, `implement`, `other`, and
 `review`. Canonical gates use `consult`, `implement`, and `review`. Use `other`
 only when task guidance selects its explicit profile mapping. Every submission
 creates one job in the registered directory. OpenMCP never touches Git.
-Same-project jobs run FIFO.
+Admission uses reader/writer/session-fair semantics; identical sessions serialize.
 
 Keep provider, model, target, and native session identities private. Select only
 workflows and profiles.
@@ -80,16 +80,12 @@ resets, or restores. Assume it did none of these.
 
 ## Setup and Resume
 
-1. Call `status`; require `status="running"`. If unavailable, report it once.
-   Brainstorming and plan authoring continue and record the skipped consult.
-   Execute and Review stop until it is running.
+1. Resolve the canonical Git root with `project_resolve`; retain its project ID.
 2. When the user wants an isolated workspace, run `using-git-worktrees` first,
-   so the worktree root is the path that gets registered.
-3. Resolve the Git root and read `openmcp://projects`. Register an absent root
-   with `project_register` and save its `project_id` in handover.
-4. Resolve plan-artifact tracking as described below.
-5. Reconcile. Read `active` from `openmcp://projects/<project_id>/jobs`,
-   compare it with handover `job_refs` and Git, and act on the first match:
+   so the worktree root is resolved.
+3. Resolve plan-artifact tracking as described below.
+4. Reconcile with `job_list(project_id)`, handover `job_refs`, and Git; act on
+   the first match:
 
 | Handover | Jobs | Git | Action |
 |---|---|---|---|
@@ -99,8 +95,8 @@ resets, or restores. Assume it did none of these.
 | Any | Active job absent from handover | Any | Stop. Report the job ID and ask. |
 | Any other combination | | | Stop. Report all three states and ask. |
 
-Fetch a job resource only when you need its full result. Job records own job
-state. Git state lives only in the working tree.
+Use `job_wait` for the full result. Job records own job state; Git state lives
+only in the working tree.
 
 ### Plan-Artifact Tracking
 
@@ -130,18 +126,17 @@ are written in both modes, and the clean-root requirement is identical in both.
 
 ## Task Guidance
 
-For each new phase, call `task_guide` once with the complete phase request and
-`project_id`:
+For each new phase, call `task_guide(project_id)` once. Put the complete phase
+request in self-contained `job_submit.prompt`:
 
 - repository change → `implement`
 - code-quality review → `review`
 - analysis or advice → `consult`
 - other explicitly supported work → `other`
 
-Use the recommended optional profile, or omit it for the configured default.
-Validate via `openmcp://projects/<project_id>/profiles` and `openmcp://workflows/<project_id>`.
-On an unavailable or mismatched route, stop and report it; never substitute a
-different profile.
+Use a recommended profile or omit it for the default. Validate public names
+only; use actual guidance/errors for unsupported mappings and never invent
+fields or substitute an unapproved route.
 
 An active phase keeps its saved guidance.
 
@@ -154,7 +149,7 @@ An active phase keeps its saved guidance.
    skipped consult under `Reason`.
 4. To consult: reach a clean root with coordination files checkpointed under
    `tracked`, submit one narrow `consult` job, wait under the waiting rule, and
-   read `result.text`. Copy relevant findings into the implementation prompt.
+   read the result in the wait response. Copy relevant findings into the implementation prompt.
 5. After the consult, confirm the root is unchanged. A changed root or a failed
    consult goes into `Reason`; ask the user whether to proceed without it.
 
@@ -172,11 +167,13 @@ Emit:
 
 ## Waiting Rule
 
-Call `job_wait` once per job, as a background task. NEVER poll it: no repeat
-calls, `sleep`, or job-resource loops. Do other work that leaves the root
-untouched, or end your reply; you are woken with its output. A timeout is not a
-failure: report the job ID and state, leave the job running, and ask the user
-whether to keep waiting or `job_cancel`. Submit nothing else for that phase.
+Start one sequential `job_wait` per job with the default 3600-second heartbeat;
+never poll, sleep, use a short hardcoded timeout, or overlap replacement waits.
+Repeat only after nonterminal output; after disconnect reuse the same ID. A
+timeout is normal, not failure. Terminal paging uses `result.next_offset` as
+`result_offset`, `timeout_s=0`, until null, preserving all text. A saved job
+missing from the ten terminal entries requires `job_wait(saved_id, timeout_s=0)`
+before it can be called unknown; absence never permits duplicate submission.
 
 ## Gate 2: Execute
 
@@ -184,8 +181,8 @@ For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch wit
 [implementer-prompt.md](../executing-plans/implementer-prompt.md).
 
 1. Submit one prompt-only `implement` job with the saved route.
-2. Wait with `timeout_s: 300` under the waiting rule. Read `result.text` on
-   success or `result.error` on failure.
+2. Wait using the default heartbeat rule. Read the complete result from the
+   wait response.
 3. Diff the working tree against the recorded HEAD. Compare it with ERP
    `FILES MODIFIED` and the phase file set. An undeclared or out-of-scope path
    is a specification failure for Gate 3.

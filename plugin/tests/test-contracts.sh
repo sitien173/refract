@@ -27,6 +27,14 @@ market_version = documents[root / ".claude-plugin/marketplace.json"]["plugins"][
 codex_version = documents[root / ".codex-plugin/plugin.json"]["version"]
 assert plugin_version == market_version == codex_version
 
+contract = (root / "skills/coordinating-multi-model-work/references/tool-contract.md").read_text()
+assert all(f"`{tool}`" in contract for tool in (
+    "project_resolve", "task_guide", "job_submit", "job_wait",
+    "job_list", "job_cancel", "job_retry",
+))
+assert "project_register" not in contract
+assert plugin_version == market_version == codex_version == "12.0.0"
+
 plugin_description = documents[root / ".claude-plugin/plugin.json"]["description"]
 codex_description = documents[root / ".codex-plugin/plugin.json"]["description"]
 assert plugin_description == codex_description
@@ -118,25 +126,25 @@ grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
 grep -q 'OpenMCP provides four fixed workflows' skills/coordinating-multi-model-work/SKILL.md
 grep -q '`consult`, `implement`, `other`, and' skills/coordinating-multi-model-work/SKILL.md
 grep -q '^`review`\. Canonical gates' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Profiles may be partial' skills/coordinating-multi-model-work/references/tool-contract.md
-grep -q '`other` requires an explicit mapping' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'Profiles may be' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'task_guide' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -R -E '^[[:space:]]*capabilities[[:space:]]*=' \
     commands hooks shared skills; then
     printf 'Removed OpenMCP target capabilities remain documented\n' >&2
     exit 1
 fi
-grep -q 'openmcp://workflows/<project_id>' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'After submission, do not edit the root' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Call `status`; require' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'project_register' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'task_guide' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'result.text' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'temporary checkpoint commit' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'project_resolve' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'job_list(project_id)' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'task_guide(project_id)' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'default 3600-second heartbeat' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You own the entire Git lifecycle' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'openmcp://projects/<project_id>/jobs' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'openmcp://projects/<project_id>/profiles' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'Same-project jobs run FIFO' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'reader/writer/session-fair' skills/coordinating-multi-model-work/SKILL.md
+
+grep -q 'more_recent' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'cancelled_dependents' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'result_offset' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'CAPACITY_EXCEEDED' skills/coordinating-multi-model-work/references/tool-contract.md
 
 anchors=skills/coordinating-multi-model-work/references/git-anchors.md
 grep -qF 'refs/plans/<slug>/base' "$anchors"

@@ -1,7 +1,6 @@
 # Implementer Prompt Template
 
-This file owns the Gate 2 worker payload. The coordinating skill owns submission,
-waiting, recovery, and review. The worker edits files directly in the working repository and returns the ERP response. The coordinating skill reads the ERP response and updates the journal. The worker contract defines the stable execution process; the phase prompt defines the tasks, context, and acceptance criteria.
+This file owns the Gate 2 payload; the coordinating skill owns submission, waiting, recovery, and review. Workers edit and return ERP; the coordinator updates the journal. The worker contract defines process; the phase prompt defines tasks, context, and criteria.
 
 ## First submission (fresh worker session)
 
