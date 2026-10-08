@@ -22,7 +22,11 @@ Only companion Phase6 source is implemented. Companion anchors retain that sourc
 
 ## Consultation Response
 
-Pending.
+Consultation `c5dd27b3-9548-4fc8-baa8-18564d3ab39c` succeeded at `2026-10-08T01:17:02.631244+00:00`. Initial wait `kjgndatwz` completed running; replacement returned terminal success synchronously. No wait remains active. Both roots stayed clean at companion85283559ec9c8241a32d10557fa6b1ba49b57d5c and primary18e352e5b33bf5ad3bdbaefeb464d55027534788.
+
+Full original ERP: `phase-06/consultation.md`, exactly21840UTF-8bytes, copied from terminal result.text without v1 private job metadata. Consultation found no scope expansion or blocking question. It verified public signatures, DTOs, task-guide limits, waits/paging/errors/bounds from source; dependency/admission behavior came from the confirmed design, not fresh runtime proof. No implementation or independent quality sign-off.
+
+The finalized prompt carries six corrections: project-only guidance with full request in submission; recover a saved job missing from recent by zero-timeout wait; four-call standard cycle distinct from resume/page/recovery; one outstanding wait, same-ID reconnect and full terminal paging; immutable dependencies preserve sequential gates; new v2 RED precedes the baseline cap failure, with fourteen paths a permission boundary rather than mandatory edits.
 
 ## Implementation Response
 
