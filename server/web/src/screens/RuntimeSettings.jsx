@@ -1,11 +1,20 @@
-import { getConfiguration, getSettings } from '../api'
+import { getConfiguration, getSettings, updateMaxProjectReaders } from '../api'
 import Alert from '../components/Alert'
 import DataGrid from '../components/DataGrid'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+import { useEffect, useRef, useState } from 'react'
 
 export default function RuntimeSettings() {
+  const [readerDraft, setReaderDraft] = useState('')
+  const [readerDirty, setReaderDirty] = useState(false)
+  const readerDirtyRef = useRef(false)
+  const [readerSaving, setReaderSaving] = useState(false)
+  const [readerReloading, setReaderReloading] = useState(false)
+  const [readerConflict, setReaderConflict] = useState(false)
+  const [readerError, setReaderError] = useState('')
+  const [readerSaved, setReaderSaved] = useState(false)
   const {
     data: settings,
     error: settingsError,
@@ -26,6 +35,62 @@ export default function RuntimeSettings() {
 
   const daemon = settings?.daemon || {}
   const logging = settings?.logging || {}
+
+  useEffect(() => {
+    if (settings && !readerDirtyRef.current) {
+      setReaderDraft(String(settings.daemon?.max_project_readers ?? ''))
+    }
+  }, [settings, readerDirty])
+
+  async function saveReaderCapacity(event) {
+    event.preventDefault()
+    const value = Number(readerDraft)
+    if (!Number.isSafeInteger(value) || value < 1) {
+      setReaderError('Enter a positive whole number of project readers.')
+      setReaderSaved(false)
+      return
+    }
+    if (readerConflict) return
+    setReaderSaving(true)
+    setReaderError('')
+    setReaderSaved(false)
+    try {
+      const updated = await updateMaxProjectReaders(value, settings?.revision)
+      setReaderDraft(String(updated.daemon.max_project_readers))
+      readerDirtyRef.current = false
+      setReaderDirty(false)
+      setReaderConflict(false)
+      setReaderSaved(true)
+      await refreshSettings()
+    } catch (err) {
+      if (err.status === 409 || err.payload?.code === 'configuration_conflict') {
+        setReaderConflict(true)
+        setReaderError('Configuration changed. Reload current settings before retrying.')
+      } else {
+        setReaderError(err.message || 'Unable to save reader capacity.')
+      }
+    } finally {
+      setReaderSaving(false)
+    }
+  }
+
+  async function reloadReaderCapacity() {
+    setReaderReloading(true)
+    try {
+      const latest = await getSettings()
+      await refreshSettings()
+      setReaderDraft(String(latest.daemon.max_project_readers))
+      readerDirtyRef.current = false
+      setReaderDirty(false)
+      setReaderConflict(false)
+      setReaderError('')
+      setReaderSaved(false)
+    } catch (err) {
+      setReaderError(err.message || 'Unable to reload settings.')
+    } finally {
+      setReaderReloading(false)
+    }
+  }
 
   const liveRows = [
     {
@@ -65,6 +130,13 @@ export default function RuntimeSettings() {
       value: daemon.port ?? 8000,
       behavior: 'Restart required',
       details: 'Daemon listening port',
+    },
+    {
+      id: 'project_readers',
+      setting: 'Project reader capacity',
+      value: `Configured ${daemon.max_project_readers ?? 1}; effective ${settings?.effective?.max_project_readers ?? 1}`,
+      behavior: 'Restart required',
+      details: 'Configured capacity is pending until daemon restart; active scheduler capacity remains unchanged',
     },
     {
       id: 'workers',
@@ -139,7 +211,7 @@ export default function RuntimeSettings() {
   ]
 
   // Identify any unclassified top-level or child keys
-  const knownDaemonKeys = new Set(['host', 'port', 'max_jobs', 'history_turns', 'history_bytes', 'default_profile'])
+  const knownDaemonKeys = new Set(['host', 'port', 'max_jobs', 'max_project_readers', 'history_turns', 'history_bytes', 'default_profile'])
   const knownLoggingKeys = new Set(['level', 'format', 'file', 'console', 'max_bytes', 'backup_count', 'capture_warnings'])
   const unclassifiedRows = []
 
@@ -281,6 +353,47 @@ export default function RuntimeSettings() {
           />
         </div>
       </div>
+
+      <section className="settings-section">
+        <div className="section-header">
+          <h3>Project reader capacity</h3>
+          <p className="caption">
+            Configured: {daemon.max_project_readers ?? '—'} (pending); effective scheduler capacity: {settings?.effective?.max_project_readers ?? '—'}. Restart required to apply a saved change.
+          </p>
+        </div>
+        <form className="reader-capacity-form" onSubmit={saveReaderCapacity}>
+          <label htmlFor="max-project-readers">Maximum project readers</label>
+          <input
+            id="max-project-readers"
+            name="max_project_readers"
+            type="number"
+            min="1"
+            step="1"
+            required
+            value={readerDraft}
+            onChange={(event) => {
+              setReaderDraft(event.target.value)
+              readerDirtyRef.current = true
+              setReaderDirty(true)
+              setReaderSaved(false)
+            }}
+          />
+          <button type="submit" className="button button-primary" disabled={readerSaving || readerConflict || !settings}>
+            {readerSaving ? 'Saving…' : 'Save reader capacity'}
+          </button>
+          {readerSaved && <span role="status">Saved; restart required.</span>}
+          {readerError && (
+            <Alert tone="error" title={readerConflict ? 'Configuration conflict' : 'Unable to save reader capacity'}>
+              {readerError}
+              {readerConflict && (
+                <button type="button" className="button button-secondary button-sm" onClick={reloadReaderCapacity} disabled={readerReloading}>
+                  {readerReloading ? 'Reloading…' : 'Reload current settings'}
+                </button>
+              )}
+            </Alert>
+          )}
+        </form>
+      </section>
 
       <section className="settings-section">
         <div className="section-header">

@@ -31,7 +31,7 @@ describe('Projects screen', () => {
       project: { id, alias: id, root: `/workspace/${id}` },
       configuration: { project_default_profile: 'default' },
     }))
-    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
   })
 
   it('renders registered projects list with hydration', async () => {
@@ -41,6 +41,22 @@ describe('Projects screen', () => {
     expect(screen.getByText('/workspace/alpha')).toBeInTheDocument()
     expect(screen.getByText('Beta Workspace')).toBeInTheDocument()
     expect(screen.getByText('/workspace/beta')).toBeInTheDocument()
+  })
+
+  it('uses only active jobs for project activity while retaining project selection', async () => {
+    vi.mocked(api.getProjectJobs).mockResolvedValue({
+      active: [
+        { id: 'queued', state: 'queued' },
+        { id: 'running', state: 'running' },
+      ],
+      recent: [{ id: 'terminal', state: 'succeeded' }],
+      more_recent: 12,
+    })
+
+    render(<Projects />)
+
+    expect((await screen.findAllByText('2 active')).length).toBe(2)
+    expect(api.getProjectJobs).toHaveBeenCalledWith('proj-alpha')
   })
 
   it('renders invalid configuration health banner and last-known-good revision while cached projects remain visible', async () => {

@@ -13,6 +13,10 @@ describe('JobDetails component', () => {
     state: 'running',
     target_id: 'target-node-1',
     context_key: 'ctx-abc-999',
+    access_mode: 'parallel_read',
+    depends_on: ['parent-1'],
+    waiting_on: ['parent-1'],
+    waiting_reason: 'waiting on dependency parent-1',
     attempts: 2,
     config_revision: 'rev-sha256-abcdef1234567890',
     created_at: '2026-09-08 10:00:00',
@@ -54,6 +58,9 @@ describe('JobDetails component', () => {
     expect(screen.getAllByText('strict-review').length).toBeGreaterThan(0)
     expect(screen.getAllByText('target-node-1').length).toBeGreaterThan(0)
     expect(screen.getByText('ctx-abc-999')).toBeInTheDocument()
+    expect(screen.getByText('parallel_read')).toBeInTheDocument()
+    expect(screen.getAllByText('parent-1').length).toBeGreaterThan(0)
+    expect(screen.getByText('waiting on dependency parent-1')).toBeInTheDocument()
     expect(screen.getByText('2')).toBeInTheDocument()
     expect(screen.getByText('2026-09-08 10:00:00')).toBeInTheDocument()
     expect(screen.getByText('2026-09-08 10:05:00')).toBeInTheDocument()

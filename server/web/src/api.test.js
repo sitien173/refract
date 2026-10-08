@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { clearCsrfToken, deleteConfigurationTarget, updateConfigurationTarget } from './api'
+import { clearCsrfToken, deleteConfigurationTarget, updateConfigurationTarget, updateMaxProjectReaders } from './api'
 
 function response(status, payload) {
   return {
@@ -10,6 +10,20 @@ function response(status, payload) {
 }
 
 describe('dashboard API mutation retry boundary', () => {
+  it('submits reader capacity through the protected settings mutation with its revision', async () => {
+    clearCsrfToken()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { csrf_token: 'settings-token' }))
+      .mockResolvedValueOnce(response(200, { daemon: { max_project_readers: 4 } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(updateMaxProjectReaders(4, 'settings-rev')).resolves.toEqual({ daemon: { max_project_readers: 4 } })
+    expect(fetchMock.mock.calls[1][0]).toBe('/dashboard/api/settings')
+    expect(fetchMock.mock.calls[1][1].method).toBe('PUT')
+    expect(fetchMock.mock.calls[1][1].headers['If-Match']).toBe('"settings-rev"')
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ max_project_readers: 4 })
+  })
+
   it('does not retry an unstructured forbidden response', async () => {
     clearCsrfToken()
     const fetchMock = vi.fn()

@@ -202,8 +202,11 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
   )
 
   // Poll project jobs list while at least one listed job is non-terminal
-  const allJobsTerminal =
-    Array.isArray(jobsData) && jobsData.length > 0 && jobsData.every((j) => TERMINAL_STATES.has(j.state))
+  const activeJobs = jobsData?.active ?? []
+  const recentJobs = jobsData?.recent ?? []
+  const projectJobsList = [...activeJobs, ...recentJobs]
+  const allJobsTerminal = Boolean(jobsData) && activeJobs.length === 0
+  const totalProjectJobs = activeJobs.length + recentJobs.length + (jobsData?.more_recent ?? 0)
   usePolling(refreshJobs, 5000, {
     enabled: Boolean(projectId && activeTab === 'jobs' && !selectedJobId && !allJobsTerminal),
     isTerminal: allJobsTerminal,
@@ -756,6 +759,26 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
       ),
     },
     {
+      key: 'access_mode',
+      header: 'Admission',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.access_mode || 'exclusive',
+      width: '140px',
+      minWidth: '110px',
+      render: (row) => <span>{row.access_mode || 'exclusive'}</span>,
+    },
+    {
+      key: 'waiting_reason',
+      header: 'Waiting',
+      priority: 'optional',
+      sortable: true,
+      sortAccessor: (row) => row.waiting_reason || '',
+      width: '220px',
+      minWidth: '150px',
+      render: (row) => <span>{row.waiting_reason || '—'}</span>,
+    },
+    {
       key: 'created_at',
       header: 'Created at',
       priority: 'tertiary',
@@ -772,7 +795,7 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
     { id: 'effective', label: 'Effective configuration' },
     { id: 'profiles', label: 'Profile resolution', count: profiles.length },
     { id: 'guidance', label: 'Task guidance' },
-    { id: 'jobs', label: 'Jobs', count: Array.isArray(jobsData) ? jobsData.length : undefined },
+    { id: 'jobs', label: 'Jobs', count: jobsData ? totalProjectJobs : undefined },
   ]
 
   const hasParent = Boolean(activeProfile.parent && activeProfile.parent.value)
@@ -1052,11 +1075,16 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
                         Background refresh failed. The jobs table remains unchanged; retry when the daemon is available.
                       </Alert>
                     )}
+                    {jobsData?.more_recent > 0 && (
+                      <p className="caption" role="status">
+                        {jobsData.more_recent} older terminal jobs omitted from recent history.
+                      </p>
+                    )}
 
                     <DataGrid
                       columns={jobsColumns}
                       rows={
-                        (jobsData || []).filter((j) => {
+                        projectJobsList.filter((j) => {
                           if (jobStateFilter !== 'all' && j.state !== jobStateFilter) return false
                           if (jobWorkflowFilter !== 'all' && j.workflow !== jobWorkflowFilter) return false
                           if (jobSearchTerm.trim()) {

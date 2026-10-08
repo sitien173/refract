@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
 import StatusBadge from './components/StatusBadge'
@@ -8,6 +8,14 @@ const appStyles = readFileSync(resolve(process.cwd(), 'src/styles/app.css'), 'ut
 const flowforgeTokens = readFileSync(resolve(process.cwd(), 'src/styles/colors_and_type.css'), 'utf8')
 
 vi.mock('./api', () => ({
+  getSettings: vi.fn().mockResolvedValue({
+    source_path: '/tmp/config.toml', revision: 'settings-revision',
+    daemon: { host: '127.0.0.1', port: 8765, max_project_readers: 1, max_jobs: 2 },
+    effective: { max_project_readers: 1 }, logging: {},
+  }),
+  getConfiguration: vi.fn().mockResolvedValue({ valid: true }),
+  mutateWithCsrf: vi.fn(),
+  updateMaxProjectReaders: vi.fn(),
   getOverview: vi.fn().mockResolvedValue({
     daemon: { status: 'running', workers: 1, active_jobs: 0, queued_jobs: 0 },
     configuration: { valid: true, revision: '' },
@@ -43,6 +51,74 @@ describe('dashboard shell', () => {
 
   it('does not use gradients in application styles', () => {
     expect(appStyles.toLowerCase()).not.toContain('gradient')
+  })
+})
+
+describe('runtime settings reader capacity form', () => {
+  it('submits a strict numeric reader count with the current revision and reports restart-required save', async () => {
+    window.history.replaceState({}, '', '/dashboard/settings')
+    const { updateMaxProjectReaders } = await import('./api')
+    vi.mocked(updateMaxProjectReaders).mockResolvedValue({
+      source_path: '/tmp/config.toml', revision: 'next-revision',
+      daemon: { max_project_readers: 4 }, effective: { max_project_readers: 1 },
+      logging: {},
+    })
+    render(<App />)
+
+    const input = await screen.findByLabelText(/Maximum project readers/i)
+    await waitFor(() => expect(input).toHaveValue(1))
+    expect(input).toHaveAttribute('type', 'number')
+    expect(input).toHaveAttribute('min', '1')
+    expect(input).toHaveAttribute('step', '1')
+    expect(input).toBeRequired()
+    fireEvent.change(input, { target: { value: '4.5' } })
+    fireEvent.submit(input.closest('form'))
+    expect(updateMaxProjectReaders).not.toHaveBeenCalled()
+    expect(screen.getByText(/positive whole number/i)).toBeInTheDocument()
+    fireEvent.change(input, { target: { value: '4' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save reader capacity/i }))
+
+    await waitFor(() => expect(updateMaxProjectReaders).toHaveBeenCalledWith(4, 'settings-revision'))
+    expect(await screen.findByText(/Saved; restart required/i)).toBeInTheDocument()
+  })
+
+  it('keeps dirty reader drafts through refresh and requires explicit reload after conflict', async () => {
+    window.history.replaceState({}, '', '/dashboard/settings')
+    const { getSettings, updateMaxProjectReaders } = await import('./api')
+    const setting = (value, revision) => ({
+      source_path: '/tmp/config.toml', revision,
+      daemon: { max_project_readers: value, max_jobs: 2 },
+      effective: { max_project_readers: 1 }, logging: {},
+    })
+    vi.mocked(getSettings).mockClear()
+    vi.mocked(updateMaxProjectReaders).mockClear()
+    vi.mocked(getSettings)
+      .mockResolvedValueOnce(setting(1, 'initial-rev'))
+      .mockResolvedValueOnce(setting(2, 'background-rev'))
+      .mockResolvedValueOnce(setting(3, 'reload-rev'))
+      .mockResolvedValueOnce(setting(3, 'reload-rev'))
+    vi.mocked(updateMaxProjectReaders).mockRejectedValueOnce(Object.assign(
+      new Error('Configuration conflict'),
+      { status: 409, payload: { code: 'configuration_conflict' } },
+    ))
+    render(<App />)
+
+    const input = await screen.findByLabelText(/Maximum project readers/i)
+    await waitFor(() => expect(input).toHaveValue(1))
+    fireEvent.change(input, { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }))
+    await waitFor(() => expect(getSettings).toHaveBeenCalledTimes(2))
+    expect(input).toHaveValue(5)
+
+    fireEvent.click(screen.getByRole('button', { name: /Save reader capacity/i }))
+    expect(await screen.findByText(/Reload current settings before retrying/i)).toBeInTheDocument()
+    expect(input).toHaveValue(5)
+    expect(screen.getByRole('button', { name: /Save reader capacity/i })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Reload current settings/i }))
+    await waitFor(() => expect(input).toHaveValue(3))
+    expect(screen.queryByText(/Reload current settings before retrying/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Save reader capacity/i })).toBeEnabled()
   })
 })
 

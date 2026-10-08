@@ -7,8 +7,6 @@ import StatusBadge from '../components/StatusBadge'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
 import { usePolling } from '../hooks/usePolling'
 
-const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted'])
-
 export default function Jobs({ projectId: propProjectId, onNavigate }) {
   const [selectedProjectId, setSelectedProjectId] = useState(propProjectId || '')
   const [projectsList, setProjectsList] = useState([])
@@ -64,14 +62,16 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
     { deps: [activeProjectId] }
   )
 
-  const jobsList = Array.isArray(jobsData) ? jobsData : []
-  const allTerminal = Array.isArray(jobsData) && jobsList.every((j) => TERMINAL_STATES.has(j.state))
+  const activeJobs = jobsData?.active ?? []
+  const recentJobs = jobsData?.recent ?? []
+  const jobsList = [...activeJobs, ...recentJobs]
+  const noActiveJobs = Boolean(jobsData) && activeJobs.length === 0
 
-  // Poll active jobs every 5 seconds; stop when all displayed jobs are terminal or unmounted
+  // The API returns every active job separately from its bounded terminal history.
   usePolling(refresh, 5000, {
     enabled: Boolean(activeProjectId),
-    isTerminal: allTerminal,
-    deps: [activeProjectId, allTerminal],
+    isTerminal: noActiveJobs,
+    deps: [activeProjectId, noActiveJobs],
   })
 
   function handleProjectChange(newId) {
@@ -177,6 +177,26 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
       ),
     },
     {
+      key: 'access_mode',
+      header: 'Admission',
+      priority: 'secondary',
+      sortable: true,
+      sortAccessor: (row) => row.access_mode || 'exclusive',
+      width: '140px',
+      minWidth: '110px',
+      render: (row) => <span>{row.access_mode || 'exclusive'}</span>,
+    },
+    {
+      key: 'waiting_reason',
+      header: 'Waiting',
+      priority: 'optional',
+      sortable: true,
+      sortAccessor: (row) => row.waiting_reason || '',
+      width: '220px',
+      minWidth: '150px',
+      render: (row) => <span>{row.waiting_reason || '—'}</span>,
+    },
+    {
       key: 'created_at',
       header: 'Created at',
       priority: 'tertiary',
@@ -234,6 +254,12 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
         <Alert tone="warning" title="Showing previously loaded jobs">
           Background refresh failed. Displayed jobs remain unchanged; retry when the daemon is available.
         </Alert>
+      )}
+
+      {jobsData?.more_recent > 0 && (
+        <p className="caption" role="status">
+          {jobsData.more_recent} older terminal jobs omitted from recent history.
+        </p>
       )}
 
       <DataGrid

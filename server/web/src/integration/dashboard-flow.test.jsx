@@ -77,7 +77,7 @@ describe('Dashboard integrated user flows', () => {
       },
     })
 
-    vi.mocked(api.getProjectJobs).mockResolvedValue([
+    vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [
       {
         id: 'job-999',
         workflow: 'implement',
@@ -87,7 +87,7 @@ describe('Dashboard integrated user flows', () => {
         config_revision: 'rev-overall-001',
         created_at: '2026-09-04 15:00:00',
       },
-    ])
+    ], more_recent: 0 })
 
     vi.mocked(api.getJob).mockResolvedValue({
       id: 'job-999',

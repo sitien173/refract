@@ -53,10 +53,8 @@ export default function Projects({ onNavigate }) {
 
       try {
         const jobs = await getProjectJobs(p.id)
-        if (Array.isArray(jobs)) {
-          const activeCount = jobs.filter((j) => j.state === 'running' || j.state === 'queued').length
-          activity = activeCount > 0 ? `${activeCount} active` : 'Idle'
-        }
+        const activeCount = jobs.active.length
+        activity = activeCount > 0 ? `${activeCount} active` : 'Idle'
       } catch {
         // Leave activity as Idle if jobs call fails
       }

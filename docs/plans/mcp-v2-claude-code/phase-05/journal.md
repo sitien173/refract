@@ -8,10 +8,10 @@
 - Implementation Profile: implement
 - Consultation Profile: consult
 - Review Profile: review
-- Implementation Job: pending
+- Implementation Job: f623d7fe-14b3-456d-b999-61255fe8155a
 - Review Job: pending
 - Started: 2026-10-07T23:24:22Z
-- Finished: pending
+- Finished: 2026-10-08T07:02:53+07:00
 
 ## Guidance and preparation
 
@@ -59,7 +59,66 @@
 
 ## Implementation Response
 
-Pending. Worker appends the full EXTERNAL RESPONSE block here.
+# EXTERNAL RESPONSE
+## META
+- Phase: 5 — Dashboard v2 vocabulary
+- Started: 2026-10-08 (fresh implementation context; preserved Phase 1–4)
+- Finished: 2026-10-08T07:02:53+07:00
+- Plan dir: docs/plans/mcp-v2-claude-code
+## SUMMARY
+Implemented dashboard v2 job metadata/grouping, strict startup-bound reader-capacity settings, confirmed route removals, updated callers, and reproducible bundled assets.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Updated | src/openmcp/dashboard.py | Exposed dashboard job metadata; grouped active/recent project jobs; added strict settings GET/PUT via existing revision/CSRF mutation transaction; removed only confirmed aliases. |
+| Updated | src/openmcp/models.py | Added dashboard job metadata and strict reader-capacity update model. |
+| Updated | tests/test_dashboard.py | Added grouping, metadata, reader setting, concurrency/effective capacity, and valid-fixture removed-route regressions. |
+| Updated | web/src/api.js | Added CSRF/revision-protected reader-capacity update API. |
+| Updated | web/src/screens/Jobs.jsx | Concatenated grouped active/recent jobs, polls based on active group, displays omitted history and admission/waiting metadata. |
+| Updated | web/src/screens/ProjectDetail.jsx | Consumes grouped jobs in polling/filtering/rows/counts and displays omitted history and metadata. |
+| Updated | web/src/screens/Projects.jsx | Uses `active.length` for activity. |
+| Updated | web/src/components/JobDetails.jsx | Renders access mode, dependencies, waiting IDs, and waiting reason. |
+| Updated | web/src/screens/RuntimeSettings.jsx | Added strict numeric reader-capacity form, effective/pending display, CSRF/revision save, dirty-draft preservation, conflict reload and restart notice. |
+| Updated | web/src/App.test.jsx | Covered settings form save, integer-only input, refresh draft preservation, conflict, and explicit reload. |
+| Updated | web/src/api.test.js | Covered protected settings PUT method/body/revision. |
+| Updated | web/src/components/JobDetails.test.jsx | Covered shared job metadata rendering. |
+| Updated | web/src/screens/Jobs.test.jsx | Covered grouped rows/history and active-group polling. |
+| Updated | web/src/screens/ProjectDetail.test.jsx | Updated grouped API mocks; covered total/omitted counts and active-group polling. |
+| Updated | web/src/screens/Projects.test.jsx | Updated grouped mocks; confirmed activity counts active jobs only. |
+| Updated | web/src/integration/dashboard-flow.test.jsx | Updated project-job mock to grouped response. |
+| Updated | src/openmcp/dashboard_static/index.html | Regenerated asset references. |
+| Deleted | src/openmcp/dashboard_static/assets/index-D-nShQgS.js | Removed obsolete hashed bundle. |
+| Deleted | src/openmcp/dashboard_static/assets/index--OvfbQj5.css | Removed obsolete hashed stylesheet. |
+| Added | src/openmcp/dashboard_static/assets/index-BxpWJUUF.js | Generated v2 dashboard bundle; SHA-256 `ca39669ee270f42b4f98741612e0d47e7a567a7f9a8fb93ef9e24207902d0a30`. |
+| Added | src/openmcp/dashboard_static/assets/index-CWP9Noen.css | Generated dashboard stylesheet; SHA-256 `e7ab844b314613f72ddc0da2dba91294713695f12838ce08e7fed0c04b45bcbf`. |
+| Added | docs/plans/mcp-v2-claude-code/phase-05/notes.md | Recorded per-task RED/GREEN, route decisions, asset hashes/reproducibility, and baseline flake evidence. |
+| Updated | docs/plans/mcp-v2-claude-code/phase-05/journal.md | Recorded route decisions and appended this ERP; preserved preparation/baseline evidence. |
+## NOTES
+- docs/plans/mcp-v2-claude-code/phase-05/notes.md — Task 1–5 evidence.
+- RED backend command: `timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_dashboard.py::test_project_jobs_are_grouped_bounded_and_keep_all_active tests/test_dashboard.py::test_dashboard_job_metadata_uses_persisted_access_and_real_waiting_reason tests/test_dashboard.py::test_settings_exposes_effective_and_pending_readers_and_put_is_strict tests/test_dashboard.py::test_settings_reader_mutation_rejects_invalid_stale_and_unauthorized_requests tests/test_dashboard.py::test_confirmed_removed_api_aliases_return_json_not_found -q` -> exit 1, 5 failed.
+- RED frontend command: `timeout --kill-after=5s 180s npm --prefix web test -- src/screens/Jobs.test.jsx src/screens/ProjectDetail.test.jsx src/screens/Projects.test.jsx src/components/JobDetails.test.jsx src/App.test.jsx src/api.test.js` -> exit 1, 6 files failed, 10 failed, 54 passed. This exposed the old job-array consumers and missing strict settings form/API. The reader form also caught an initial-query draft race during GREEN and now preserves dirty drafts.
+- GREEN backend focused: `timeout --kill-after=5s 180s uv run --extra dev pytest tests/test_dashboard.py -q` -> exit 0, 46 passed.
+- Full backend: `timeout --kill-after=5s 180s uv run --extra dev pytest -q` -> exit 0, 546 passed, 3 deselected.
+- Full frontend: `timeout --kill-after=5s 180s npm --prefix web test` -> exit 0, 18 files and 202 tests passed. Existing act warnings remain. Earlier full-suite runs exposed an intermittent Targets dirty-draft failure, project-profile-override integration failure (its isolated command passed), and Profiles create failure; all were untouched and a later complete full run passed. The pre-implementation Profiles dirty-draft failure-then-pass baseline remains separately preserved in Baseline checks.
+- Both bounded `npm --prefix web run build` commands exited 0 (65 modules each). After snapshot `/tmp/openmcp-phase5-assets-final.jR8CW1/dashboard_static`, `timeout --kill-after=5s 180s npm --prefix web run build && diff -r /tmp/openmcp-phase5-assets-final.jR8CW1/dashboard_static src/openmcp/dashboard_static` exited 0 with no differences. New untracked bundle hashes and removed old hashed asset names are in FILES MODIFIED; other bundled fonts/logo retained their hashes.
+- `git diff --check` -> exit 0. No Git writes, daemon restart, OpenMCP calls, dependency/environment changes, live/global state reads, or Coordinator handover/prompt edits. Phases 1–4 and the phase-base checkpoint were preserved.
+## SPEC COMPLIANCE
+- Meets Spec? YES — backend/frontend acceptance tests, settings safeguards, exact route removals, builds, full-directory reproducibility comparison, full pytest, and diff check passed. The documented pre-existing/intermittent Profiles-related baseline outcome and unchanged act warnings are reported separately.
+## CLARIFICATIONS NEEDED
+None.
+## NEXT
+TASK_COMPLETE
+
+## Coordinator validation and specification batch 1
+
+- Actual implementation job f623d7fe-14b3-456d-b999-61255fe8155a returned succeeded and ERP NEXT TASK_COMPLETE. This was coordinated OpenMCP implementation, not direct work. Coordinator corrected the inaccurate META line without rewriting the worker ERP. The worker's notes.md action is Updated, not Added, because preparation had already created the file.
+- Waits kc6xe7453, k851tijt5, kpqztsyfj returned running; only after each completion was the next single wait started. kig40lrt8 returned succeeded. Private submission receipt remains /tmp/mcp-v2-phase05-implementation-receipt.json. No poll, duplicate job, concurrent wait, daemon restart, or Coordinator root edit occurred while active.
+- Terminal reconciliation: attached main still 0ace49fe533c2f59b2d801660155ac8e5104664c. All actual changed paths and the two untracked generated hashes matched the phase allowlist and ERP path set. Worker left no out-of-scope source changes.
+- Fresh Coordinator checks: dashboard46passed1.30s; frontend18files/202tests passed13.42s; full backend546passed3deselected36.73s; two bounded builds each succeeded65modules1.60s; full generated-directory diff was empty; diff check passed. Captured frontend output: /tmp/mcp-v2-phase05-coordinator-web.log. HEAD remained unchanged. Existing baseline failures remain recorded separately.
+- Source delta inspection confirmed operator metadata mapping, active/recent/integer count partitioning, pending/effective reader fields and strict one-key model, existing lock/transaction/CSRF/revision reuse, exact route removals, all three callers and generated asset scope.
+- Spec is FAIL pending batch1: Jobs' no-project placeholder still returns an array instead of grouped empty shape; both table renderers omit complete depends_on/waiting_on IDs, while the reason supplies only the first dependency. Shared detail is correct.
+- H1: reader dirty draft survives refresh but submission uses the newest settings revision. Predict initialA/draft5/refreshB submits5,B and bypasses the draft conflict. Existing test forces409 without asserting the post-refresh revision. This is a source-supported hypothesis, not yet dynamically confirmed. fix-01.md requires a regression before any reader source correction and forbids speculative handling if refuted.
+- First automatic fix cycle is prescribed in fix-01.md. No independent quality review has started. The initial validated implementation will be preserved as a temporary checkpoint before the fix; phase implementation anchor remains pending.
 
 ## Quality Review
 
@@ -67,7 +126,7 @@ Pending. Coordinator appends the independent review response here.
 
 ## Review Result
 
-- Spec Status: PENDING
+- Spec Status: FAIL, specification batch 1 pending
 - Quality Status: PENDING
 - Debt: none
 

@@ -24,7 +24,7 @@ describe('Jobs screen and JobDetail screen', () => {
   })
 
   it('renders scoped project jobs table with configuration revision and states', async () => {
-    vi.mocked(api.getProjectJobs).mockResolvedValue([
+    vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [
       {
         id: 'job-101',
         workflow: 'implement',
@@ -34,6 +34,7 @@ describe('Jobs screen and JobDetail screen', () => {
         config_revision: 'abc123def456789012345678',
         created_at: '2026-09-04 14:00:00',
       },
+    ], recent: [
       {
         id: 'job-102',
         workflow: 'review',
@@ -43,7 +44,7 @@ describe('Jobs screen and JobDetail screen', () => {
         config_revision: '',
         created_at: '2026-09-04 14:05:00',
       },
-    ])
+    ], more_recent: 0 })
 
     render(<Jobs projectId="proj-1" />)
 
@@ -73,8 +74,22 @@ describe('Jobs screen and JobDetail screen', () => {
     expect(rows[1]).toHaveTextContent('job-101')
   })
 
+  it('concatenates active and recent groups and reports omitted terminal history', async () => {
+    vi.mocked(api.getProjectJobs).mockResolvedValue({
+      active: [{ id: 'active-kept', workflow: 'implement', profile: 'balanced', state: 'running' }],
+      recent: [{ id: 'recent-kept', workflow: 'review', profile: 'balanced', state: 'succeeded' }],
+      more_recent: 4,
+    })
+
+    render(<Jobs projectId="proj-1" />)
+
+    expect(await screen.findByText('active-kept')).toBeInTheDocument()
+    expect(screen.getByText('recent-kept')).toBeInTheDocument()
+    expect(screen.getByText(/4 older terminal jobs omitted/i)).toBeInTheDocument()
+  })
+
   it('stops polling after an empty project result', async () => {
-    vi.mocked(api.getProjectJobs).mockResolvedValue([])
+    vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
 
     render(<Jobs projectId="proj-1" />)
     await waitFor(() => expect(api.getProjectJobs).toHaveBeenCalledTimes(1))
@@ -85,7 +100,7 @@ describe('Jobs screen and JobDetail screen', () => {
   })
 
   it('stops polling when all jobs are in terminal states', async () => {
-    vi.mocked(api.getProjectJobs).mockResolvedValue([
+    vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [
       {
         id: 'job-terminal-1',
         workflow: 'consult',
@@ -95,7 +110,7 @@ describe('Jobs screen and JobDetail screen', () => {
         config_revision: 'rev1',
         created_at: '2026-09-04 14:00:00',
       },
-    ])
+    ], more_recent: 0 })
 
     render(<Jobs projectId="proj-1" />)
     expect(await screen.findByText('job-terminal-1')).toBeInTheDocument()
@@ -109,7 +124,7 @@ describe('Jobs screen and JobDetail screen', () => {
   })
 
   it('cleans up polling timer and stops requests after unmount', async () => {
-    vi.mocked(api.getProjectJobs).mockResolvedValue([
+    vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [
       {
         id: 'job-running-1',
         workflow: 'implement',
@@ -119,7 +134,7 @@ describe('Jobs screen and JobDetail screen', () => {
         config_revision: 'rev1',
         created_at: '2026-09-04 14:00:00',
       },
-    ])
+    ], recent: [], more_recent: 0 })
 
     const { unmount } = render(<Jobs projectId="proj-1" />)
     expect(await screen.findByText('job-running-1')).toBeInTheDocument()

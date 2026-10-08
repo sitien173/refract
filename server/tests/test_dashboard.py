@@ -1722,6 +1722,204 @@ async def test_sse_keepalive_emission(active_runtime, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_project_jobs_are_grouped_bounded_and_keep_all_active(active_runtime, tmp_path) -> None:
+    runtime = active_runtime
+    project = runtime.database.project("project")
+    for index in range(13):
+        job_id = f"active-{index}"
+        runtime.database.create_job(
+            job_id=job_id, project_id=project.id, workflow="review", profile="balanced",
+            prompt=job_id, execution_plan_json="{}", context_key=job_id,
+        )
+    for index in range(15):
+        job_id = f"terminal-{index}"
+        runtime.database.create_job(
+            job_id=job_id, project_id=project.id, workflow="review", profile="balanced",
+            prompt=job_id, execution_plan_json="{}", context_key=job_id,
+        )
+        runtime.database.finish_job(job_id, "succeeded")
+
+    app = create_application()
+    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}/jobs")
+    payload = json.loads(body)
+    ordered = runtime.database.jobs(project.id)
+    expected_recent = [job.id for job in ordered if job.state in {"succeeded", "failed", "cancelled", "interrupted"}][:10]
+    assert status == 200
+    assert set(payload) == {"active", "recent", "more_recent"}
+    assert len(payload["active"]) == 13
+    assert {job["id"] for job in payload["active"]} == {f"active-{i}" for i in range(13)}
+    assert [job["id"] for job in payload["recent"]] == expected_recent
+    assert payload["more_recent"] == 5 and type(payload["more_recent"]) is int
+
+    empty_root = tmp_path / "empty-jobs-project"
+    empty_root.mkdir()
+    empty_project = runtime.register_project(str(empty_root), "empty-jobs")
+    status, _, body = await request(app, f"/dashboard/api/projects/{empty_project.id}/jobs")
+    assert status == 200
+    assert json.loads(body) == {"active": [], "recent": [], "more_recent": 0}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_job_metadata_uses_persisted_access_and_real_waiting_reason(active_runtime) -> None:
+    runtime = active_runtime
+    project = runtime.database.project("project")
+    runtime.database.create_job(
+        job_id="metadata-parent", project_id=project.id, workflow="review", profile="balanced",
+        prompt="parent prompt", execution_plan_json="{}", context_key="parent",
+    )
+    runtime.database.create_job_with_dependencies(
+        job_id="metadata-child", project_id=project.id, workflow="review", profile="balanced",
+        prompt="child prompt", execution_plan_json="{}", context_key="child", access_mode="parallel_read",
+        depends_on=["metadata-parent"],
+    )
+    config_path = runtime.config.config_path
+    config_path.write_text(config_path.read_text(encoding="utf-8").replace("read_only = false", "read_only = true"), encoding="utf-8")
+    runtime.reload_configuration()
+    assert runtime.catalog.targets[0].read_only is True
+    app = create_application()
+    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}/jobs")
+    child = next(job for job in json.loads(body)["active"] if job["id"] == "metadata-child")
+    assert status == 200
+    assert child["access_mode"] == "parallel_read"
+    assert child["depends_on"] == ["metadata-parent"]
+    assert child["waiting_on"] == ["metadata-parent"]
+    assert child["waiting_reason"] == "waiting on dependency metadata-parent"
+    assert child["prompt"] == "child prompt"
+    assert "target_id" in child and "execution_plan" in child
+
+
+@pytest.mark.asyncio
+async def test_settings_exposes_effective_and_pending_readers_and_put_is_strict(active_runtime) -> None:
+    from openmcp.config_mutation import load_source
+
+    runtime = active_runtime
+    app = create_application()
+    runtime.scheduler.max_project_readers = 2
+    status, _, body = await request(app, "/dashboard/api/settings")
+    settings = json.loads(body)
+    assert status == 200
+    assert settings["daemon"]["max_project_readers"] == runtime.catalog.max_project_readers
+    assert settings["effective"]["max_project_readers"] == 2
+
+    source_path = runtime.config.config_path
+    original = source_path.read_bytes()
+    revision = load_source(source_path).revision
+    headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{revision}"'),
+    )
+    status, response_headers, body = await request(
+        app, "/dashboard/api/settings", method="PUT",
+        body=json.dumps({"max_project_readers": 3}).encode(), headers=headers,
+    )
+    saved = json.loads(body)
+    assert status == 200
+    assert saved["daemon"]["max_project_readers"] == 3
+    assert saved["effective"]["max_project_readers"] == 2
+    assert response_headers[b"etag"] == f'"{saved["revision"]}"'.encode()
+    assert runtime.scheduler.max_project_readers == 2
+    assert runtime.catalog.max_project_readers == 3
+    contents = source_path.read_text(encoding="utf-8")
+    assert "# operator comment" in contents and 'system_prompt = "act safe"' in contents
+    assert "max_project_readers = 3" in contents
+    assert "max_jobs = 2" in contents
+
+
+@pytest.mark.asyncio
+async def test_settings_reader_mutation_rejects_invalid_stale_and_unauthorized_requests(active_runtime) -> None:
+    from openmcp.config_mutation import load_source
+
+    runtime = active_runtime
+    app = create_application()
+    source_path = runtime.config.config_path
+    original = source_path.read_bytes()
+    revision = load_source(source_path).revision
+    headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"),
+        ("If-Match", f'"{revision}"'),
+    )
+    for value in (True, "3", 3.0, 0, -1):
+        status, _, body = await request(
+            app, "/dashboard/api/settings", method="PUT",
+            body=json.dumps({"max_project_readers": value}).encode(), headers=headers,
+        )
+        assert status == 422 and json.loads(body)["code"] == "configuration_invalid"
+        assert source_path.read_bytes() == original
+    for payload in ({"max_project_readers": 2, "extra": 1}, {"extra": 1}):
+        status, _, _ = await request(
+            app, "/dashboard/api/settings", method="PUT",
+            body=json.dumps(payload).encode(), headers=headers,
+        )
+        assert status == 422 and source_path.read_bytes() == original
+
+    denied = await request(
+        app, "/dashboard/api/settings", method="PUT",
+        body=b'{"max_project_readers":4}', headers=(("Host", "127.0.0.1"),),
+    )
+    assert denied[0] == 403 and source_path.read_bytes() == original
+
+    source_path.write_bytes(original + b"\n# revision changed\n")
+    stale_headers = (*headers[:-1], ("If-Match", f'"{revision}"'))
+    status, _, body = await request(
+        app, "/dashboard/api/settings", method="PUT",
+        body=b'{"max_project_readers":4}', headers=stale_headers,
+    )
+    assert status == 409 and json.loads(body)["code"] == "configuration_conflict"
+    assert b"max_project_readers = 4" not in source_path.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_removed_api_aliases_return_json_not_found(active_runtime, tmp_path) -> None:
+    runtime = active_runtime
+    project_root = tmp_path / "alias-project"
+    project_root.mkdir()
+    project = runtime.register_project(str(project_root), "alias-project")
+    config_dir = project_root / ".openmcp"
+    config_dir.mkdir()
+    project_config = config_dir / "config.toml"
+    project_config.write_text(
+        '[profiles.balanced]\nextends = "balanced"\nimplement = "fallback"\n',
+        encoding="utf-8",
+    )
+    source_read, _, _, _, _ = runtime.mutations.read_project_overrides(project_root)
+    app = create_application()
+    read_headers = (
+        ("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"),
+        ("X-OpenMCP-CSRF", "test-token"), ("If-Match", f'"{source_read.revision}"'),
+    )
+    mutation_headers = read_headers
+    valid_body = json.dumps({"id": "balanced", "extends": "balanced", "implement": {"targets": ["fallback"]}}).encode()
+    requests = [
+        ("GET", f"/dashboard/api/projects/{project.id}/configuration/profiles", read_headers, b""),
+        ("POST", f"/dashboard/api/projects/{project.id}/configuration/profiles", mutation_headers, valid_body),
+        ("GET", f"/dashboard/api/projects/{project.id}/configuration/profiles/balanced", read_headers, b""),
+        ("PUT", f"/dashboard/api/projects/{project.id}/configuration/profiles/balanced", mutation_headers, valid_body),
+        ("DELETE", f"/dashboard/api/projects/{project.id}/configuration/profiles/balanced", mutation_headers, b""),
+    ]
+    for method, path, headers, body in requests:
+        status, response_headers, response_body = await request(app, path, method=method, headers=headers, body=body)
+        payload = json.loads(response_body)
+        assert status == 404
+        assert response_headers[b"content-type"].startswith(b"application/json")
+        assert payload["error"] == "Dashboard API route not found"
+    for path in (
+        "/dashboard/api/config",
+    ):
+        status, _, body = await request(app, path, headers=read_headers)
+        assert status == 404 and json.loads(body)["error"] == "Dashboard API route not found"
+    for path in (
+        "/dashboard/api/configuration", "/dashboard/api/config/health",
+        "/dashboard/api/status", "/dashboard/api/overview",
+    ):
+        status, _, _ = await request(app, path, headers=read_headers)
+        assert status == 200
+
+
+@pytest.mark.asyncio
 async def test_rest_to_subscription_race_resolved_by_initial_cursor(active_runtime) -> None:
     runtime = active_runtime
     project = runtime.database.project("project")

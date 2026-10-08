@@ -166,6 +166,22 @@ export default function JobDetails({
               <code className="cell-code">{job.context_key || '—'}</code>
             </div>
             <div className="meta-row">
+              <span className="eyebrow">Admission mode</span>
+              <code>{job.access_mode || 'exclusive'}</code>
+            </div>
+            <div className="meta-row">
+              <span className="eyebrow">Dependencies</span>
+              <span>{Array.isArray(job.depends_on) && job.depends_on.length ? job.depends_on.join(', ') : 'None'}</span>
+            </div>
+            <div className="meta-row">
+              <span className="eyebrow">Waiting on</span>
+              <span>{Array.isArray(job.waiting_on) && job.waiting_on.length ? job.waiting_on.join(', ') : 'None'}</span>
+            </div>
+            <div className="meta-row">
+              <span className="eyebrow">Waiting reason</span>
+              <span>{job.waiting_reason || '—'}</span>
+            </div>
+            <div className="meta-row">
               <span className="eyebrow">Attempts</span>
               <span>{job.attempts}</span>
             </div>

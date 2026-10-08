@@ -16,16 +16,18 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+import tomlkit
 from pydantic import ValidationError
 
 from openmcp.config import DaemonConfig, ProfileDeclaration, TargetSelection, load_task_guide
 from openmcp.config_inspection import sanitize_config_error
-from openmcp.config_mutation import ConfigurationMutationError
+from openmcp.config_mutation import ConfigurationMutationError, load_source
 from openmcp.models import (
     DashboardBootstrap,
     DashboardError,
     DashboardJob,
     DashboardOverview,
+    DashboardReaderCapacityUpdate,
     JobOutputResponse,
     ProfileDeleteResponse,
     ProfileEditorData,
@@ -281,6 +283,36 @@ def _safe_execution_plan(raw: Any) -> dict[str, Any]:
     }
 
 
+def _settings_payload(runtime: Any) -> dict[str, Any]:
+    cfg = runtime.catalog
+    logging = cfg.logging
+    return {
+        "source_path": cfg.config_path.as_posix() if cfg.config_path else "",
+        "revision": cfg.config_revision,
+        "daemon": {
+            "host": cfg.host,
+            "port": cfg.port,
+            "max_jobs": cfg.max_jobs,
+            "max_project_readers": cfg.max_project_readers,
+            "history_turns": cfg.history_turns,
+            "history_bytes": cfg.history_bytes,
+            "default_profile": cfg.default_profile,
+        },
+        "effective": {
+            "max_project_readers": runtime.scheduler.max_project_readers,
+        },
+        "logging": {
+            "level": logging.level,
+            "format": logging.format,
+            "file": logging.file.as_posix() if logging.file else False,
+            "console": logging.console,
+            "max_bytes": logging.max_bytes,
+            "backup_count": logging.backup_count,
+            "capture_warnings": logging.capture_warnings,
+        },
+    }
+
+
 def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
     job = runtime.database.job(job_id)
     if job is None:
@@ -290,6 +322,7 @@ def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
         raw_plan = json.loads(record.get("execution_plan_json", ""))
     except (TypeError, json.JSONDecodeError):
         raw_plan = None
+    waiting_on, waiting_reason = runtime.waiting_metadata(job_id)
     return DashboardJob(
         id=job.id,
         project_id=job.project_id,
@@ -298,6 +331,10 @@ def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
         prompt=str(record.get("prompt") or ""),
         state=job.state,
         context_key=job.context_key,
+        access_mode=record.get("access_mode", "exclusive"),
+        depends_on=runtime.database.dependencies_for_job(job_id),
+        waiting_on=waiting_on,
+        waiting_reason=waiting_reason,
         config_revision=job.config_revision,
         target_id=job.target_id,
         attempts=job.attempts,
@@ -464,35 +501,69 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
             return _runtime_error()
 
     async def settings(request: Request) -> Response:
+        if request.method == "PUT":
+            if not _authorized_mutation(request, state):
+                return _forbidden()
         try:
             runtime = _runtime(state)
-            cfg = runtime.catalog
-            logging = cfg.logging
-            return _json_response(
-                {
-                    "source_path": cfg.config_path.as_posix() if cfg.config_path else "",
-                    "revision": cfg.config_revision,
-                    "daemon": {
-                        "host": cfg.host,
-                        "port": cfg.port,
-                        "max_jobs": cfg.max_jobs,
-                        "history_turns": cfg.history_turns,
-                        "history_bytes": cfg.history_bytes,
-                        "default_profile": cfg.default_profile,
-                    },
-                    "logging": {
-                        "level": logging.level,
-                        "format": logging.format,
-                        "file": logging.file.as_posix() if logging.file else False,
-                        "console": logging.console,
-                        "max_bytes": logging.max_bytes,
-                        "backup_count": logging.backup_count,
-                        "capture_warnings": logging.capture_warnings,
-                    },
-                }
-            )
         except RuntimeError:
             return _runtime_error()
+
+        if request.method == "GET":
+            response = _json_response(_settings_payload(runtime))
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{runtime.catalog.config_revision}"'
+            return response
+
+        source_path = runtime.catalog.config_path
+        if source_path is None:
+            return _error(
+                "No global configuration source is configured.", 422,
+                code="configuration_invalid", unchanged="No configuration was changed.",
+                recovery="Configure a global TOML source before editing runtime settings.",
+            )
+        expected_revision = _parse_if_match(request)
+        if expected_revision is None:
+            return _error(
+                "An expected source revision is required before any file change.",
+                428, code="revision_required", unchanged="No configuration file was changed.",
+                recovery="Reload the current settings and retry the edit.",
+                source_path=source_path.as_posix(),
+            )
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error(
+                "Invalid JSON body", 422, code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Provide a valid JSON request body and retry.",
+                source_path=source_path.as_posix(),
+            )
+        try:
+            update = DashboardReaderCapacityUpdate.model_validate(payload)
+        except (ValidationError, ValueError) as exc:
+            return _error(
+                sanitize_config_error(exc), 422, code="configuration_invalid",
+                unchanged="No configuration file was changed.",
+                recovery="Set max_project_readers to a positive integer and retry.",
+                source_path=source_path.as_posix(),
+            )
+        try:
+            with runtime.mutations.lock:
+                source = load_source(source_path)
+                document = runtime.mutations.read_document(source)
+                if "daemon" not in document:
+                    document["daemon"] = tomlkit.table()
+                document["daemon"]["max_project_readers"] = update.max_project_readers
+                result = runtime.mutations.commit_document(
+                    document, expected_revision=expected_revision,
+                )
+            response = _json_response(_settings_payload(runtime))
+            response.headers["cache-control"] = "no-store"
+            response.headers["etag"] = f'"{result.revision}"'
+            return response
+        except ConfigurationMutationError as exc:
+            return _handle_mutation_error(exc)
 
     async def config_targets_get(request: Request) -> Response:
         if not _authorized_editor_read(request):
@@ -1272,7 +1343,14 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
                 _dashboard_job(runtime, job.id)
                 for job in runtime.database.jobs(project_view.id)
             ]
-            return _json_response([job for job in jobs if job is not None])
+            loaded = [job for job in jobs if job is not None]
+            active = [job for job in loaded if job.state not in TERMINAL_STATES]
+            terminal = [job for job in loaded if job.state in TERMINAL_STATES]
+            return _json_response({
+                "active": active,
+                "recent": terminal[:10],
+                "more_recent": max(0, len(terminal) - 10),
+            })
         except RuntimeError:
             return _runtime_error()
 
@@ -1443,9 +1521,8 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         Route("/dashboard/api/overview", overview, methods=["GET"]),
         Route("/dashboard/api/status", status, methods=["GET"]),
         Route("/dashboard/api/configuration", configuration, methods=["GET"]),
-        Route("/dashboard/api/config", configuration, methods=["GET"]),
         Route("/dashboard/api/config/health", configuration, methods=["GET"]),
-        Route("/dashboard/api/settings", settings, methods=["GET"]),
+        Route("/dashboard/api/settings", settings, methods=["GET", "PUT"]),
         Route("/dashboard/api/configuration/targets", config_targets_get, methods=["GET"]),
         Route("/dashboard/api/configuration/targets", config_target_create, methods=["POST"]),
         Route("/dashboard/api/configuration/targets/{target_id:path}", config_target_get, methods=["GET"]),
@@ -1461,11 +1538,6 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_get, methods=["GET"]),
         Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_update, methods=["PUT"]),
         Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_delete, methods=["DELETE"]),
-        Route("/dashboard/api/projects/{project_id}/configuration/profiles", project_profile_overrides_get, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/configuration/profiles", project_profile_override_create, methods=["POST"]),
-        Route("/dashboard/api/projects/{project_id}/configuration/profiles/{profile_id}", project_profile_override_get, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/configuration/profiles/{profile_id}", project_profile_override_update, methods=["PUT"]),
-        Route("/dashboard/api/projects/{project_id}/configuration/profiles/{profile_id}", project_profile_override_delete, methods=["DELETE"]),
         Route("/dashboard/api/targets", targets, methods=["GET"]),
         Route("/dashboard/api/profiles", profiles, methods=["GET"]),
         Route("/dashboard/api/projects", projects, methods=["GET"]),
