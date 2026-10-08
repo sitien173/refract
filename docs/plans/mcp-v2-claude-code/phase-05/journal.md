@@ -9,9 +9,9 @@
 - Consultation Profile: consult
 - Review Profile: review
 - Implementation Job: 70bebc94-5500-407b-a04e-1eb45ff83669, latest fix; initial implementation preserved below
-- Review Job: pending
+- Review Job: 404c74d4-a321-43e0-b0bf-d060a114b544
 - Started: 2026-10-07T23:24:22Z
-- Finished: pending independent quality review
+- Finished: 2026-10-08
 
 ## Guidance and preparation
 
@@ -122,20 +122,163 @@ TASK_COMPLETE
 
 ## Quality Review
 
-Pending. Coordinator appends the independent review response here.
+- Job: 404c74d4-a321-43e0-b0bf-d060a114b544, review/review, succeeded.
+- Reviewed revision: 3dbb0c3287ab170ffe07cd941957c213fbb82cfb.
+- Exact returned review follows. This is independent quality evidence, not a user approval.
+
+# EXTERNAL RESPONSE
+
+## MEETS SPEC
+
+**YES — Phase 5 meets the approved specification.**
+
+**Quality Status: PASS**
+
+Independent read-only review completed for:
+
+```
+refs/plans/mcp-v2-claude-code/phase-05/base
+..
+3dbb0c3287ab170ffe07cd941957c213fbb82cfb
+```
+
+The review covered the declared Phase 5 implementation and tests. Previously reviewed, unrelated code was excluded.
+
+## VERIFIED FINDINGS
+
+**No verified Phase 5 correctness or security blockers.**
+
+### 1\. Dashboard job metadata — PASS
+
+src/openmcp/dashboard.py and src/openmcp/models.py
+
+Verified that dashboard job responses:
+
+- Include persisted access\_mode and dependency metadata.
+- Expose actual waiting\_on IDs and waiting reasons.
+- Preserve operator-only target, execution-plan, prompt, and result information.
+- Do not derive immutable admission metadata from subsequently reloaded configuration.
+
+Both job tables and the shared details component display complete dependency and waiting-ID lists.
+
+### 2\. Project job grouping — PASS
+
+src/openmcp/dashboard.py, Jobs.jsx, ProjectDetail.jsx, Projects.jsx
+
+Verified:
+
+- Every active job is retained.
+- Terminal history is limited to the newest 10 records.
+- more\_recent is an integer.
+- Empty projects return the correct grouped structure.
+- Project isolation, polling, filtering, and job counts use the new contract.
+- The Jobs screen remains project-selected.
+
+The previously identified missing multi-dependency displays and empty-state mismatch are corrected.
+
+### 3\. Reader capacity and concurrency — PASS
+
+src/openmcp/dashboard.py, src/openmcp/models.py, RuntimeSettings.jsx
+
+Verified:
+
+- Strict positive-integer validation and rejection of additional fields.
+- Existing CSRF, loopback, origin, revision, and mutation-lock protections.
+- Atomic configuration updates preserving unrelated TOML.
+- Separate configured/pending and effective scheduler capacities.
+- No unintended live scheduler-capacity change.
+
+The dirty-draft fix also preserves the draft's **original revision** across refreshes. Conflicts retain the draft and require explicit reload before another save. Reload binds the fetched value and revision together.
+
+### 4\. Route compatibility — PASS
+
+Only the approved aliases were removed.
+
+Distinct status and overview resources remain available, alongside the canonical configuration and project-profile routes.
+
+Valid-fixture regressions confirm removed routes return JSON 404 responses. API routing and browser deep-link behavior remain covered.
+
+### 5\. Generated assets — PASS
+
+Verified the generated index references the expected hashed JavaScript and CSS files.
+
+Both asset SHA-256 hashes match the recorded build artifacts. Coordinator evidence records two reproducible builds and an identical full-directory comparison.
+
+**Limitation:** I did not rebuild assets independently because this review prohibited repository writes.
+
+## INDEPENDENT TEST RESULTS
+
+| Verification | Result |
+| --- | --- |
+| Dashboard tests | **46 passed** |
+| Full backend tests | **546 passed, 3 deselected** |
+| Frontend full run 1 | **202 passed, 1 failed** |
+| Frontend integration isolation | **8 passed** |
+| Frontend full run 2 | **203 passed, 18 files** |
+| Generated asset hashes | **PASS** |
+| git diff --check | **PASS** |
+| Final working tree | **Clean** |
+
+All executed test commands used the required 180-second deadline.
+
+### Intermittent frontend failure
+
+The first frontend run failed at:
+
+web/src/integration/dashboard-flow.test.jsx:692
+
+The assertion expected getJobOutput to have been called, but observed zero calls at that point.
+
+The same integration suite subsequently passed all eight tests, followed by a complete frontend run passing all 203 tests.
+
+This recurrence is consistent with the previously recorded intermittent UI-test behavior. No Phase 5 regression was verified from it.
+
+The failure is preserved here rather than omitted from the review results. Existing React act(...) warnings also remain unchanged.
+
+## SCOPE VERIFICATION
+
+The implementation delta contains the declared backend, frontend, test, and generated-asset changes.
+
+Coordination records were treated as evidence, not production modifications.
+
+The reviewed HEAD and phase base match the requested revisions.
+
+No unexpected production files were modified.
+
+## DEBT
+
+**No new Phase 5 debt identified.**
+
+The intermittent frontend-test behavior remains a separately recorded, pre-existing testing concern. It is not assigned as newly introduced Phase 5 debt.
+
+## FILES MODIFIED
+
+**None.**
+
+The review was read-only. No commits, source edits, asset builds, daemon restarts, dependency changes, live-state access, or OpenMCP calls were performed.
+
+## NEXT
+
+**QUALITY\_PASS**
+
+Phase 5 is ready for Coordinator finalization.
+
+The Coordinator can record the independent quality approval, complete the Phase 5 checkpoint, and proceed to Phase 6.
+
+**No additional Phase 5 fix cycle is required based on the verified findings.**
 
 ## Review Result
 
 - Spec Status: PASS after specification batch 1 and fresh Coordinator verification
-- Quality Status: PENDING
-- Debt: none
+- Quality Status: PASS, independent review404c74d4-a321-43e0-b0bf-d060a114b544
+- Debt: none introduced by Phase 5; intermittent frontend testing concern preserved separately
 
 ## Final Checkpoint
 
 - Phase base ref: refs/plans/mcp-v2-claude-code/phase-05/base
 - Phase implementation ref: refs/plans/mcp-v2-claude-code/phase-05/impl
 - Plan commit ref: pending
-- State checkpoint: finalized scope 0aafdec4a328d231589dbd23918d618b347ba341; phase base was created once at this clean checkpoint. Implementation has not started at this record.
+- State checkpoint: clean reviewed source3dbb0c3287ab170ffe07cd941957c213fbb82cfb; final coordination checkpoint is resolved through the phase implementation ref. Phase base remains0aafdec4a328d231589dbd23918d618b347ba341.
 
 ## Implementation Response — Specification Fix Batch 1
 
@@ -200,3 +343,12 @@ TASK_COMPLETE
 | Unrelated behavior and scope | All fresh suites passed; previous failures remain recorded; no scheduler/runtime/database/MCP/manifest/lockfile or unrelated editor change | met |
 
 - Specification Status: PASS. Independent Quality Status: PENDING. Fix cycles used:1of2. Debt:none. Next: checkpoint the validated source and submit read-only independent review/review on the saved route. Phase5 is not closed.
+
+## Coordinator closeout
+
+- Independent review404c74d4-a321-43e0-b0bf-d060a114b544 returned succeeded and NEXT QUALITY_PASS. Waitkx6i4cybw finished with running; only then replacementkvfigs9ma began, and it returned the terminal review. Ownership is preserved in /tmp/mcp-v2-phase05-review01-receipt.json and the two wait receipts. No concurrent wait, polling, duplicate job, or root edit occurred while the review was active.
+- Terminal reconciliation found attached main unchanged at3dbb0c3287ab170ffe07cd941957c213fbb82cfb and clean. Fresh status confirmed running with zero active and zero queued jobs. The review modified no files.
+- Independent findings: none introduced by Phase5. Dashboard46 and full backend546 with3deselected passed. Frontend run1 had202pass/1fail at integration/dashboard-flow.test.jsx:692; isolation then passed8 and full run2 passed203 across18files. All outcomes are retained above. This does not establish frontend-test stability; no Phase5 regression was verified. Asset hashes passed; independent rebuild was deliberately not run because review was read-only. Coordinator had already performed the reproducible builds at this exact reviewed source.
+- At reviewed3dbb0c3287ab170ffe07cd941957c213fbb82cfb, Coordinator fresh checks passed dashboard46 in0.99s, frontend203 across18files in14.02s, backend546 with3deselected in27.47s; two builds65modules in1.54s and1.55s were identical by complete directory comparison. Captured frontend output: /tmp/mcp-v2-phase05-review-base-web.log. Both clean-state and same-HEAD checks passed after all commands.
+- Final gates: Specification PASS, independent Quality PASS. One of two fix cycles used. No new Phase5 debt. Preserve the separately documented baseline and intermittent failures without unrelated source changes.
+- Phase5 is closed by the final coordination checkpoint and refs/plans/mcp-v2-claude-code/phase-05/impl. Reviewed source remains3dbb0c3287ab170ffe07cd941957c213fbb82cfb. Next: prepare Phase6 in /home/ngosi/projects/superpowers-ccg with fresh root/project/guidance reconciliation and its own anchors. Keep the daemon on reviewed Phase1 code until Phase7.
