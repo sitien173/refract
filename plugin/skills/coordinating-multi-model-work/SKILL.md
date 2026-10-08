@@ -37,13 +37,12 @@ request as direct, leave this skill and do the work with your own tools.
 ## OpenMCP Contract
 
 OpenMCP provides four fixed workflows: `consult`, `implement`, `other`, and
-`review`. Canonical gates use `consult`, `implement`, and `review`. Use `other`
-only when task guidance selects its explicit profile mapping. Every submission
-creates one job in the registered directory. OpenMCP never touches Git.
-Admission uses reader/writer/session-fair semantics; identical sessions serialize.
+`review`. Canonical gates use `consult`, `implement`, and `review`; use `other`
+only when task guidance selects its explicit profile mapping. Jobs run in the
+registered directory; OpenMCP never touches Git. Admission is reader/writer/session-fair; identical sessions serialize.
 
-Keep provider, model, target, and native session identities private. Select only
-workflows and profiles.
+Keep provider, model, configured target and native session identities private;
+select only public workflows/profiles; native identity is not input. Require configured read-only targets for `consult`/`review`.
 
 ## Session Resume Key
 
@@ -80,9 +79,12 @@ resets, or restores. Assume it did none of these.
 
 ## Setup and Resume
 
-1. Resolve the canonical Git root with `project_resolve`; retain its project ID.
-2. When the user wants an isolated workspace, run `using-git-worktrees` first,
-   so the worktree root is resolved.
+1. When the user wants an isolated workspace, run `using-git-worktrees` first
+   and use that worktree's actual Git root.
+2. Pass the actual Git root to `project_resolve(path=...)`; it must exist and
+   OpenMCP does not walk up to find a Git root. Retain the returned project ID.
+   If unavailable, report it once: planning continues and records a skipped
+   consult reason; Execute and Review stop until service is available.
 3. Resolve plan-artifact tracking as described below.
 4. Reconcile with `job_list(project_id)`, handover `job_refs`, and Git; act on
    the first match:

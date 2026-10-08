@@ -28,12 +28,43 @@ codex_version = documents[root / ".codex-plugin/plugin.json"]["version"]
 assert plugin_version == market_version == codex_version
 
 contract = (root / "skills/coordinating-multi-model-work/references/tool-contract.md").read_text()
-assert all(f"`{tool}`" in contract for tool in (
-    "project_resolve", "task_guide", "job_submit", "job_wait",
-    "job_list", "job_cancel", "job_retry",
-))
+contract_flat = " ".join(contract.split())
+tool_table = contract.split("## Seven tools", 1)[1].split("## ", 1)[0]
+tools = re.findall(r"^\| `([a-z_]+)` \|", tool_table, re.M)
+assert tools == ["project_resolve", "task_guide", "job_submit", "job_wait", "job_list", "job_cancel", "job_retry"]
+for detail in (
+    "`path`, `alias=\"\"`", "{project:{id, alias, path}}",
+    "{workflows, profiles:{default, available}, guidance}",
+    "{job:summary}", "{job:summary, result:{text, error, next_offset}}",
+    "{active, recent, more_recent}", "{job:summary, cancelled_dependents:[id]}",
+    "`timeout_s=3600`", "`result_offset=0`", "0..3600",
+    "Capture `project.id` and `job.id` from returned envelopes.",
+):
+    assert detail in contract_flat, detail
+approved_errors = {
+    "unknown_project", "invalid_path", "alias_taken", "unknown_job",
+    "unknown_profile", "invalid_dependency", "dependency_failed",
+    "invalid_state", "config_invalid", "daemon_stopping", "invalid_request",
+    "response_too_large", "internal_error",
+}
+error_section = contract.split("## Errors", 1)[1].split("## ", 1)[0]
+error_codes = set(re.findall(r"^\| `([a-z_]+)` \|", error_section, re.M))
+assert error_codes == approved_errors, error_codes
+for detail in ("isError", "retryable", "next_action", "request ID"):
+    assert detail in " ".join(error_section.split()), detail
+assert "root job or project ID" in contract_flat
 assert "project_register" not in contract
 assert plugin_version == market_version == codex_version == "12.0.0"
+
+coordinator = (root / "skills/coordinating-multi-model-work/SKILL.md").read_text()
+setup = coordinator.split("## Setup and Resume", 1)[1].split("### Plan-Artifact Tracking", 1)[0]
+assert setup.index("using-git-worktrees") < setup.index("project_resolve")
+assert "If unavailable, report it once" in setup
+assert "planning continues" in setup and "Execute and Review stop" in setup
+assert coordinator.index("After submission, do not edit the root") >= 0
+assert "temporary checkpoint commit only after it passes" in coordinator
+assert "`other` requires an explicit mapping" in contract
+assert "read-only target" in contract and "workflow names do not enforce write safety" in contract
 
 plugin_description = documents[root / ".claude-plugin/plugin.json"]["description"]
 codex_description = documents[root / ".codex-plugin/plugin.json"]["description"]
@@ -105,7 +136,7 @@ test "$(wc -l < skills/coordinating-multi-model-work/references/tool-contract.md
 test "$(wc -l < skills/coordinating-multi-model-work/references/review.md)" -le 100
 test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 100
 
-if grep -R -E 'job_submit|job_wait|job_retry|job_cancel|project_register|openmcp://' \
+if grep -R -E 'project_resolve|task_guide|job_submit|job_wait|job_list|job_cancel|job_retry|project_register|openmcp://' \
     skills/brainstorming skills/systematic-debugging \
     skills/test-driven-development skills/verifying-before-completion; then
     printf 'OpenMCP mechanics leaked into a policy skill\n' >&2
@@ -144,7 +175,10 @@ grep -q 'reader/writer/session-fair' skills/coordinating-multi-model-work/SKILL.
 grep -q 'more_recent' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q 'cancelled_dependents' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q 'result_offset' skills/coordinating-multi-model-work/references/tool-contract.md
-grep -q 'CAPACITY_EXCEEDED' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q '`other` requires an explicit mapping' skills/coordinating-multi-model-work/references/tool-contract.md
+# Preserve source-freeze and temporary-checkpoint policy guards.
+grep -q 'After submission, do not edit the root until that job is terminal.' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Create a temporary checkpoint commit only after it passes.' skills/coordinating-multi-model-work/SKILL.md
 
 anchors=skills/coordinating-multi-model-work/references/git-anchors.md
 grep -qF 'refs/plans/<slug>/base' "$anchors"
