@@ -1,0 +1,9 @@
+.worktrees/
+.private-journal/
+.claude/
+*.DS_Store
+.ace-tool/
+.antigravitycli/
+.tgrep/
+.ogrep/
+node_modules/
