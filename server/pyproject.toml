@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openmcp"
+version = "2.0.0"
+description = "Durable local orchestration for coding-agent CLI backends."
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "mcp[cli]>=2,<3",
+    "pydantic>=2",
+    "starlette>=1.3.1",
+    "uvicorn>=0.49.0",
+    "tomlkit>=0.12.0",
+    "notify-py>=0.3.43,<0.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+[project.scripts]
+openmcp = "openmcp.cli:main"
+
+[tool.hatch.build.targets.sdist]
+artifacts = ["src/openmcp/dashboard_static/**"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openmcp"]
+artifacts = ["src/openmcp/dashboard_static/**"]
+
+[tool.uv]
+package = true
+exclude-newer = "7 days"
+
+[tool.pytest.ini_options]
+addopts = "-m 'not live'"
+markers = [
+    "live: marks tests that require live backend CLIs",
+]

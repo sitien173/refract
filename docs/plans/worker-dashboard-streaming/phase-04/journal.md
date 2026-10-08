@@ -1,0 +1,96 @@
+<!-- ccg-shared-version: 10.5.0 -->
+
+# Phase 4 — Journal: Virtualized live transcript interface
+
+## META
+
+- Plan: docs/plans/worker-dashboard-streaming/PLAN.md
+- Implementation Profile: implement
+- Consultation Profile: n/a
+- Review Profile: review
+- Implementation Job: af1f112c-2d79-486b-b522-4ca7ae976b72; fixes 61f8f40b-a01d-4e07-83c7-eb5c9774a9ac, e94ea11e-9b60-43e7-bdcc-343785fd9d2e, 3e2dcc27-b7fc-42f8-8c2d-28b08a178266
+- Review Job: 61f12ce8-af7a-4f95-a075-49773264134e; final fix review 3ec367a6-f3f2-4835-9246-44f9ebc671ef
+- Started: 2026-09-11T08:35:39Z
+- Finished: 2026-09-11T09:47:42Z
+
+## Implementation Response
+
+### Phase Goal
+Render a virtualized live transcript in dashboard job details.
+
+### Actions Taken
+- Task 1 (RED): Added `@tanstack/react-virtual` to `web/package.json`. Added tests in `web/src/hooks/useJobStream.test.jsx` for initial cursor replay, cursor pagination, SSE invalidation notifications, reconnecting state, deduplication, fallback 5-second polling, unmount cleanup, and job switching.
+- Task 2 (GREEN): Added `getJobOutput` to `web/src/api.js`. Implemented `useJobStream` and `reduceTranscriptEvents` in `web/src/hooks/useJobStream.js` using cursor replay and EventSource invalidation with stale fetch cancellation.
+- Task 3 (RED): Added reducer and component tests in `web/src/components/JobTranscript.test.jsx` covering attempt grouping, assistant text streaming, tool status cards with redaction of tool args and results, truncation banners, and error notices. Added tests in `web/src/components/JobDetails.test.jsx` for duplicate result suppression and authoritative fallback.
+- Task 4 (GREEN): Implemented `web/src/components/JobTranscript.jsx` with `@tanstack/react-virtual`, polite live announcements, scroll position tracking, and "New activity" follow button. Integrated into `web/src/components/JobDetails.jsx`. Styled in `web/src/styles/app.css`. Updated integration test mocks in `web/src/integration/dashboard-flow.test.jsx`. Built production assets.
+- Review Fix (RED/GREEN): Updated `reduceTranscriptEvents` to support the durable public contract: `attempt.started`, `attempt.finished`, `assistant.message.started`, `assistant.text.delta`, `assistant.message.completed`, `tool.started`, and `tool.completed`. Extracted safe tool attributes while strictly excluding arguments and results. Fixed `useJobStream` concurrency locking and stale-fetch cancellation so pending old fetches never block new job initial fetches or mutate new transcripts.
+- Hook Order Fix (RED/GREEN): Moved `useJobStream` and `useMemo` above all early returns in `JobDetails.jsx`. Preserved zero network activity when job is absent. Added loading-to-job transition and absent-job regression coverage in `JobDetails.test.jsx`. Eliminated React static-flag errors.
+- Result Equality and Bounded Measurement Fix (RED/GREEN): Removed trimming from duplicate result check in `JobDetails.jsx` to enforce original-string exact equality, with whitespace-difference regression test. Replaced unmeasured fallback in `JobTranscript.jsx` with a bounded initial window (max 20 items) to guarantee bounded DOM before measurement, with large-transcript regression test.
+
+### Verification Evidence
+- `npm --prefix web test -- --run src/hooks/useJobStream.test.jsx src/components/JobTranscript.test.jsx src/components/JobDetails.test.jsx src/integration/dashboard-flow.test.jsx`: 40 passed in 8.46s with zero React errors.
+- `npm --prefix web run build`: Built cleanly with vite.
+- `git diff --check`: Clean, zero whitespace issues.
+
+# EXTERNAL RESPONSE
+## META
+- Phase: 4
+- Started: 2026-09-11T08:35:39Z
+- Finished: 2026-09-11T09:41:00Z
+- Plan dir: docs/plans/worker-dashboard-streaming/phase-04
+## SUMMARY
+Rendered virtualized live transcript in dashboard job details with exact string equality duplicate suppression, bounded initial virtual DOM, durable public contract normalization, reliable job-switch cancellation, and scroll follow.
+## FILES MODIFIED
+| Action | Path | Change |
+| --- | --- | --- |
+| Modified | web/package.json | Added @tanstack/react-virtual dependency. |
+| Modified | web/package-lock.json | Locked @tanstack/react-virtual. |
+| Modified | web/src/api.js | Added getJobOutput endpoint helper. |
+| Created | web/src/hooks/useJobStream.js | Added useJobStream hook and durable transcript reducer. |
+| Created | web/src/hooks/useJobStream.test.jsx | Added unit and regression tests for replay, cursor paging, SSE, and job-switch cancellation. |
+| Created | web/src/components/JobTranscript.jsx | Added virtualized transcript component with bounded initial window. |
+| Created | web/src/components/JobTranscript.test.jsx | Added tests for transcript rendering, durable events, bounded DOM, and redaction. |
+| Modified | web/src/components/JobDetails.jsx | Moved hooks above early returns, enforced untrimmed exact equality for duplicate suppression. |
+| Modified | web/src/components/JobDetails.test.jsx | Added JobDetails transcript integration, hook-order, and whitespace difference tests. |
+| Modified | web/src/styles/app.css | Added styling for transcript cards and scroll controls. |
+| Modified | web/src/integration/dashboard-flow.test.jsx | Added getJobOutput to integration API mocks and resilient locator. |
+| Modified | src/openmcp/dashboard_static/index.html | Updated production static bundle entrypoint. |
+| Created | src/openmcp/dashboard_static/assets/index-BF-D9UdR.css | Generated production stylesheet. |
+| Created | src/openmcp/dashboard_static/assets/index-Y2LUibKP.js | Generated production bundle. |
+| Deleted | src/openmcp/dashboard_static/assets/index-B1zoUkmE.css | Removed obsolete stylesheet bundle. |
+| Deleted | src/openmcp/dashboard_static/assets/index-DRAbwKN1.js | Removed obsolete javascript bundle. |
+| Modified | docs/plans/worker-dashboard-streaming/phase-04/notes.md | Recorded task decisions, review fixes, and test evidence. |
+| Modified | docs/plans/worker-dashboard-streaming/phase-04/journal.md | Recorded implementation response. |
+## NOTES
+- docs/plans/worker-dashboard-streaming/phase-04/notes.md, Tasks 1 through 4, Review Findings Fix, Hook Order Fix, and Result Equality and Bounded Measurement Fix
+## SPEC COMPLIANCE
+- Meets Spec? YES - All Phase 4 acceptance criteria and review findings verified.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+## Quality Review
+
+# CODE QUALITY REVIEW
+
+- Status: PASS
+- Findings: None.
+- Scope checked: `cd419038fd58793247450dc37f847e4215339943..8b523e0742da9f763a60324233639c72519d63bb`
+
+# REVIEW
+
+- Spec Status: PASS
+- Quality Status: PASS
+- Findings: None.
+- Verified exact final-result equality and bounded initial virtual rendering.
+
+## Review Result
+
+- Spec Status: PASS
+- Debt: none
+
+## Final Commit
+
+- Implementation: 8b523e0742da9f763a60324233639c72519d63bb
+- State record: this journal update's commit
