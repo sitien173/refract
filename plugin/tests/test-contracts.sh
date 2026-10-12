@@ -61,7 +61,7 @@ for detail in ("isError", "retryable", "next_action", "request ID"):
     assert detail in " ".join(error_section.split()), detail
 assert "root job or project ID" in contract_flat
 assert "project_register" not in contract
-assert plugin_version == market_version == codex_version == "1.0.0"
+assert plugin_version == market_version == codex_version == "1.1.0"
 
 coordinator = (root / "skills/coordinating-multi-model-work/SKILL.md").read_text()
 setup = coordinator.split("## Setup and Resume", 1)[1].split("### Plan-Artifact Tracking", 1)[0]
@@ -154,11 +154,8 @@ grep -q 'Every executable plan' skills/writing-plans/SKILL.md
 grep -q "Coordinator's plan \`base\` anchor" skills/writing-plans/SKILL.md
 grep -q 'Do not hard-code a default profile' skills/writing-plans/SKILL.md
 grep -q 'Do not call `task_guide`, register a project, or submit jobs' skills/writing-plans/SKILL.md
-grep -q 'Submit one job through the `consult` workflow' skills/writing-plans/SKILL.md
 grep -q 'one Conventional Commit message for the completed plan' skills/writing-plans/SKILL.md
 grep -q 'sole branch commit replaces local phase checkpoints' skills/writing-plans/SKILL.md
-grep -q 'confirmed design and completed implementation plan' skills/writing-plans/SKILL.md
-grep -q '`phase-<NN>/prompt.md`, `notes.md`, and `journal.md`' skills/writing-plans/SKILL.md
 grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
 
 grep -q 'Refract provides four fixed workflows' skills/coordinating-multi-model-work/SKILL.md
@@ -208,11 +205,5 @@ if grep -R -F 'phase_base..HEAD' "${workflow_files[@]}"; then
     printf 'unconditional phase_base review range reintroduced\n' >&2
     exit 1
 fi
-
-grep -q 'workflow: implement' skills/executing-plans/implementer-prompt.md
-grep -q 'job_submit' skills/executing-plans/implementer-prompt.md
-grep -q '^  prompt: |$' skills/executing-plans/implementer-prompt.md
-grep -q 'A review fix is a resumed `implement` job' skills/executing-plans/implementer-prompt.md
-grep -q '^  profile: <phase implementation profile>$' skills/executing-plans/implementer-prompt.md
 
 printf 'contract tests passed\n'

@@ -1,6 +1,6 @@
 ---
 name: executing-plans
-description: "Use when the user asks to run, continue, or resume a plan or its next phase, even without naming the plan. Runs one phase of a folder-layout plan under docs/plans/ through consult, implement, and review, then stops."
+description: "Use when the user asks to run, continue, or resume a plan or its next phase, even without naming the plan. Runs one phase of a folder-layout plan under docs/plans/ through implement and review, emits a phase report, then stops. Without a plan, use `writing-plans` first."
 compatibility: Requires git and a running Refract server.
 ---
 
@@ -46,17 +46,15 @@ review, Git, and handover.
    templates. Under `tracked`, checkpoint coordination files only; any other
    change blocks execution until the user resolves it. Under `untracked`, leave
    plan artifacts excluded.
-7. **Consult** when routed. Copy relevant findings into `prompt.md` and
-   checkpoint it under `tracked`.
-8. **Anchor.** Set `refs/plans/<slug>/phase-<NN>/base` to the clean checkpoint
+7. **Anchor.** Set `refs/plans/<slug>/phase-<NN>/base` to the clean checkpoint
    HEAD and record that HEAD as the `phase_base` cache. See
    [git-anchors.md](../coordinating-multi-model-work/references/git-anchors.md).
-9. **Execute and review.** Run Gate 2 with `implementer-prompt.md`, then Gate
-   3 with its bounded review-fix loop.
-10. **Finalize phase** per the Coordinator review procedure. Set handover
+8. **Execute and review.** Emit the Gate 1 route, run Gate 2 with
+   `implementer-prompt.md`, then Gate 3 with its bounded review-fix loop.
+9. **Finalize phase** per the Coordinator review procedure. Set handover
     `current_phase` and `next_action` to the next phase, emit the phase report,
     and stop.
-11. **Finalize plan** after the final phase: write final coordination state,
+10. **Finalize plan** after the final phase: write final coordination state,
     consolidate every checkpoint into the sole plan commit, set the plan `impl`
     anchor, then invoke `verifying-before-completion`.
 

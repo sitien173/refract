@@ -38,25 +38,14 @@ first; it owns routing, execution, anchors, and Git.
 6. **Commit.** Specify one Conventional Commit message for the completed plan.
 7. **Write.** Create `PLAN.md` and `.handover.md`. Under `tracked`, checkpoint
    the plan artifacts.
-8. **Confirm.** Ask the user to approve the plan before phase detailing.
-
-## Recommended Next Step
-
-After plan authoring, suggest a separate phase-detailing step:
-
-1. Submit one job through the `consult` workflow.
-2. Base it on the confirmed design and completed implementation plan.
-3. Ask it for implementation detail on every phase without changing scope.
-4. Materialize each result in `phase-<NN>/prompt.md`, `notes.md`, and `journal.md`.
-   Write the detail to `prompt.md`; scaffold the others from bundled templates.
-   Then offer `executing-plans`.
+8. **Confirm.** Ask the user to approve the plan before execution.
 
 ## Storage
 
 Every executable plan uses `docs/plans/<slug>/` holding `PLAN.md`, `DESIGN.md`,
 and `.handover.md`. Initialize handover with the canonical schema: `ACTIVE`,
 phase zero, null project and job fields, and empty lists. Create phase
-directories, never empty, only during phase detailing or execution.
+directories, never empty, only during execution.
 A documentation-only plan may use `docs/plans/<slug>-plan.md`. Convert a flat
 implementation plan to folder layout before execution.
 

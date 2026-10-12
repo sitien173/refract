@@ -37,8 +37,9 @@ request as direct, leave this skill and do the work with your own tools.
 ## Refract Contract
 
 Refract provides four fixed workflows: `consult`, `implement`, `other`, and
-`review`. Canonical gates use `consult`, `implement`, and `review`; use `other`
-only when task guidance selects its explicit profile mapping. Jobs run in the
+`review`. Canonical gates use `implement` and `review`; `brainstorming` uses
+`consult`. Use `other` only when task guidance selects its explicit profile
+mapping. Jobs run in the
 registered directory; Refract never touches Git. Admission is reader/writer/session-fair; identical sessions serialize.
 
 Keep provider, model, configured target and native session identities private;
@@ -51,7 +52,8 @@ Use the plan slug as `context_key` for every phase and job. Each workflow keeps
 its own resumed session.
 
 - The first `implement` job and the first `review` job of a plan use
-  `fresh_session: true` and carry their full role contracts.
+  `fresh_session: true` and carry their full role contracts. An `implement`
+  job's contract comes from the phase prompt `Rules`.
 - Later jobs on the same workflow omit `fresh_session`, resume that session,
   and send only the delta plus the phase prompt path.
 - A retry keeps its setting, so a fresh-job retry starts fresh again.
@@ -83,8 +85,8 @@ resets, or restores. Assume it did none of these.
    and use that worktree's actual Git root.
 2. Pass the actual Git root to `project_resolve(path=...)`; it must exist and
    Refract does not walk up to find a Git root. Retain the returned project ID.
-   If unavailable, report it once: planning continues and records a skipped
-   consult reason; Execute and Review stop until service is available.
+   If unavailable, report it once: planning continues; Execute and Review stop
+   until service is available.
 3. Resolve plan-artifact tracking as described below.
 4. Reconcile with `job_list(project_id)`, handover `job_refs`, and Git; act on
    the first match:
@@ -146,22 +148,13 @@ An active phase keeps its saved guidance.
 
 1. Confirm scope, acceptance criteria, risks, and fresh verification commands.
 2. Split work that one implementation job cannot safely own.
-3. Consult when the work is unclear, architectural, cross-component,
-   high-impact, or tradeoff-heavy and Refract is running. Otherwise record the
-   skipped consult under `Reason`.
-4. To consult: reach a clean root with coordination files checkpointed under
-   `tracked`, submit one narrow `consult` job, wait under the waiting rule, and
-   read the result in the wait response. Copy relevant findings into the implementation prompt.
-5. After the consult, confirm the root is unchanged. A changed root or a failed
-   consult goes into `Reason`; ask the user whether to proceed without it.
 
 Emit:
 
 ```text
 # ROUTE
-- Sequence: consult? -> implement -> review
+- Sequence: implement -> review
 - Implement Profile: <name | default>
-- Consult Profile: <name | default | none>
 - Review Profile: <name | default>
 - Reason: <one line>
 - Done When: <fresh checks>
@@ -182,7 +175,8 @@ before it can be called unknown; absence never permits duplicate submission.
 For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch with
 [implementer-prompt.md](../executing-plans/implementer-prompt.md).
 
-1. Submit one prompt-only `implement` job with the saved route.
+1. Submit one prompt-only `implement` job with the saved route. Its prompt
+   names the absolute `phase-<NN>/prompt.md` path.
 2. Wait using the default heartbeat rule. Read the complete result from the
    wait response.
 3. Diff the working tree against the recorded HEAD. Compare it with ERP

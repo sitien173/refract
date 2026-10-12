@@ -17,9 +17,8 @@ phase_base_ref: <refs/plans/...|null>
 context_key: <plan-slug>
 guidance:
   implement: { workflow: implement, profile: <name|null> }
-  consult: { workflow: consult, profile: <name|null> }
   review: { workflow: review, profile: <name|null> }
-job_refs: { phase: <N>, latest_consult: <id|null>, latest_implementation: <id|null>, latest_review: <id|null> }
+job_refs: { phase: <N>, latest_implementation: <id|null>, latest_review: <id|null> }
 read_first: [<file>, ...]
 completed_tasks: [{ phase, task, summary }, ...]
 completed_phases: [{ phase, base_ref, impl_ref, summary }, ...]
