@@ -2,6 +2,7 @@
 .worktrees/
 .private-journal/
 .claude/
+.pi/
 .agents/
 .codex/
 .ace-tool/

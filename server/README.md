@@ -343,7 +343,7 @@ Refract exposes seven tools and no MCP resources:
 | `job_cancel(job_id)` | Cancel a queued or running job and report descendants cancelled in that call. |
 | `job_retry(job_id)` | Retry a failed, cancelled, or interrupted job after its dependencies succeed. |
 
-The standard cycle is `project_resolve` → `task_guide` → `job_submit` → `job_wait` (four calls). Prompts must be self-contained. Use `depends_on` to chain existing same-project jobs without waiting between submissions. The summary reports `access_mode`, dependencies, and current waiting information without exposing provider or target identity.
+The standard cycle is `project_resolve` → `task_guide` → `job_submit` → `job_wait` (four calls). Prompts must be self-contained. Use `depends_on` to chain existing same-project jobs without waiting between submissions. The summary reports dependencies and current waiting information without exposing access mode, provider, or target identity.
 
 `job_wait` supports timeouts from 0 to 3600 seconds. `timeout_s=0` reads immediately. A terminal result is paged by Unicode character offset; continue with the returned `next_offset`. Nonterminal timeouts return the current summary and an action to call `job_wait` again. Errors are compact JSON containing `code`, `message`, `next_action`, and `retryable` and are delivered as MCP tool errors.
 

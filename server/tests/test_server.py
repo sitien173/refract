@@ -204,7 +204,7 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
         assert all(prop.get("description") for prop in tools[name].input_schema["properties"].values())
     assert set(JobSummary.model_fields) == {
         "id", "project_id", "workflow", "profile", "state", "context_key",
-        "attempts", "access_mode", "depends_on", "waiting_on", "waiting_reason",
+        "attempts", "depends_on", "waiting_on", "waiting_reason",
         "created_at", "updated_at",
     }
     assert "resource_uri" not in SubmissionResult.model_fields
@@ -399,10 +399,10 @@ def test_terminal_page_with_tight_metadata_advances_or_errors() -> None:
 
     job = _job_view("succeeded")
     job.result = JobResult(text="😀😀")
-    job.context_key = "x" * 8510
+    job.context_key = "x" * 8540
     summary = JobSummary(
         id=job.id, project_id=job.project_id, workflow=job.workflow, profile=job.profile,
-        state=job.state, context_key=job.context_key, access_mode="exclusive",
+        state=job.state, context_key=job.context_key,
         depends_on=[], waiting_on=[], waiting_reason="", attempts=0,
         created_at=job.created_at, updated_at=job.updated_at,
     ).model_dump(mode="json")
@@ -519,7 +519,7 @@ async def test_all_tool_success_payloads_are_private_and_single_text_content(tmp
         runtime.database.finish_job("privacy-retry", "failed")
         responses.append(await client.call_tool("job_retry", {"job_id": "privacy-retry"}))
 
-        forbidden = {"target_id", "backend", "model", "resource_uri", "config_revision"}
+        forbidden = {"access_mode", "target_id", "backend", "model", "resource_uri", "config_revision"}
         def visit(value):
             if isinstance(value, dict):
                 assert forbidden.isdisjoint(key.casefold() for key in value)

@@ -116,7 +116,6 @@ class JobSummary(BaseModel):
     state: JobState
     context_key: str
     attempts: int = 0
-    access_mode: Literal["parallel_read", "exclusive"] = "exclusive"
     depends_on: list[str] = Field(default_factory=list)
     waiting_on: list[str] = Field(default_factory=list)
     waiting_reason: str = ""

@@ -24,11 +24,11 @@ Keep provider, model, configured target, and native session identity private; na
 
 ## Summaries and listing
 
-Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, access_mode, depends_on, waiting_on, waiting_reason, created_at, updated_at`. `job_list` returns every active job, newest ten terminal jobs, and integer `more_recent` (a count, not cursor). If a saved job is absent, call `job_wait(saved_id, timeout_s=0)` before concluding it is unknown. Absence never authorizes duplicate submission.
+Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, depends_on, waiting_on, waiting_reason, created_at, updated_at`. `job_list` returns every active job, newest ten terminal jobs, and integer `more_recent` (a count, not cursor). If a saved job is absent, call `job_wait(saved_id, timeout_s=0)` before concluding it is unknown. Absence never authorizes duplicate submission.
 
 ## Dependencies and admission
 
-`depends_on` is immutable caller input; `access_mode`, `waiting_on`, and `waiting_reason` are derived. Failed/cancelled/interrupted dependencies cancel queued descendants; `job_cancel` returns their IDs as `cancelled_dependents`. Parent retry does not revive descendants. Verified readers may overlap within capacity; exclusive jobs are barriers; identical sessions serialize under reader/writer/session-fair admission. This does not permit concurrent gated Coordinator implementation/review in one root.
+`depends_on` is immutable caller input; `waiting_on` and `waiting_reason` are derived. Access mode remains internal to scheduling and is visible in the operator dashboard, not MCP responses. Failed/cancelled/interrupted dependencies cancel queued descendants; `job_cancel` returns their IDs as `cancelled_dependents`. Parent retry does not revive descendants. Verified readers may overlap within capacity; exclusive jobs are barriers; identical sessions serialize under reader/writer/session-fair admission. This does not permit concurrent gated Coordinator implementation/review in one root.
 
 ## Waiting, paging, and bounds
 

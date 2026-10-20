@@ -484,7 +484,6 @@ def _runtime(ctx: Context) -> Runtime:
 
 
 def _summary(runtime: Runtime, job: JobView) -> dict[str, Any]:
-    record = runtime.database.job_record(job.id) or {}
     waiting_on, waiting_reason = runtime.waiting_metadata(job.id)
     return JobSummary(
         id=job.id,
@@ -494,7 +493,6 @@ def _summary(runtime: Runtime, job: JobView) -> dict[str, Any]:
         state=job.state,
         context_key=job.context_key,
         attempts=job.attempts,
-        access_mode=record.get("access_mode", "exclusive"),
         depends_on=runtime.database.dependencies_for_job(job.id),
         waiting_on=waiting_on,
         waiting_reason=waiting_reason,

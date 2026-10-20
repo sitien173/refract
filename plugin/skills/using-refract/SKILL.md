@@ -25,8 +25,8 @@ Skip a skill workflow only when the user explicitly says to.
    request, and every skill the user names.
 2. **Order.** Process skills run first and set the approach. Implementation
    skills carry it out.
-   - "Let's build X" → `refract:brainstorming`, then implementation skills.
-   - "Fix this bug" → `refract:systematic-debugging`, then domain skills.
+   - "Let's build X" → `brainstorming`, then implementation skills.
+   - "Fix this bug" → `systematic-debugging`, then domain skills.
    - Before plan mode on coordinated work, run `brainstorming` unless a
      confirmed design already exists.
 3. **Announce.** Say "Using <skill> to <purpose>."

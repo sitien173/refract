@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 - 2026-10-12
+## 1.2.0 - 2026-10-12
 
 - `executing-plans`: removed the consult step and the first, resumed, and fix submission templates from `implementer-prompt.md`; phase prompts drop the `SKILLS` section and use minimal rules.
 - `writing-plans`: removed the recommended phase-detailing consult step.

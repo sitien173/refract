@@ -61,7 +61,7 @@ for detail in ("isError", "retryable", "next_action", "request ID"):
     assert detail in " ".join(error_section.split()), detail
 assert "root job or project ID" in contract_flat
 assert "project_register" not in contract
-assert plugin_version == market_version == codex_version == "1.1.0"
+assert plugin_version == market_version == codex_version == "1.2.0"
 
 coordinator = (root / "skills/coordinating-multi-model-work/SKILL.md").read_text()
 setup = coordinator.split("## Setup and Resume", 1)[1].split("### Plan-Artifact Tracking", 1)[0]
