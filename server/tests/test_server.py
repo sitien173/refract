@@ -65,7 +65,7 @@ async def test_v2_tool_surface_lists_exact_contract() -> None:
     expected = {
         "project_resolve": {"path", "alias"},
         "task_guide": {"project_id"},
-        "job_submit": {"project_id", "workflow", "prompt", "profile", "context_key", "fresh_session", "depends_on"},
+        "job_submit": {"project_id", "workflow", "prompt", "profile", "context_key", "fresh_session", "depends_on", "next_target"},
         "job_wait": {"job_id", "timeout_s", "result_offset"},
         "job_list": {"project_id"},
         "job_cancel": {"job_id"},
@@ -84,6 +84,16 @@ async def test_v2_tool_surface_lists_exact_contract() -> None:
         assert tool.description and len(tool.description) <= 2048
         assert "refract://" not in tool.description
         assert tool.output_schema is None
+
+
+def test_targets_unavailable_error_schema_carries_retry_delay_only_for_that_code() -> None:
+    from refract.server import RefractError, _valid_refract_error
+
+    payload = RefractError("targets_unavailable", "open", "wait", True, 8).to_payload()
+    assert payload["retry_after_s"] == 8
+    assert _valid_refract_error(payload) == payload
+    assert _valid_refract_error({**payload, "retry_after_s": True}) is None
+    assert _valid_refract_error({"code": "invalid_request", "message": "x", "next_action": "x", "retryable": False, "retry_after_s": 8}) is None
 
 
 def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
@@ -407,11 +417,11 @@ def test_terminal_page_with_tight_metadata_advances_or_errors() -> None:
         created_at=job.created_at, updated_at=job.updated_at,
     ).model_dump(mode="json")
     empty_page = json.dumps(
-        {"job": summary, "result": {"text": "", "error": "", "next_offset": 0}},
+        {"job": summary, "result": {"text": "", "error": "", "next_offset": 0, "metadata": {}}},
         ensure_ascii=False, separators=(",", ":"),
     )
     from refract.server import _fits_response
-    assert _fits_response(empty_page)
+    assert not _fits_response(empty_page)
     with pytest.raises(RefractError) as raised:
         _page_terminal_result(job, summary, 0)
     assert raised.value.code == "response_too_large"
@@ -486,6 +496,60 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
         runtime._closing = True
         await check("job_submit", {"project_id": project.id, "workflow": "implement", "prompt": "stopping"}, "daemon_stopping")
         runtime._closing = False
+
+
+@pytest.mark.asyncio
+async def test_mcp_job_submit_all_open_returns_retry_delay(tmp_path, monkeypatch) -> None:
+    from refract.planning import target_execution_key
+
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        root = tmp_path / "submit-all-open"
+        root.mkdir()
+        project = runtime.register_project(str(root), "submit-all-open")
+        target = runtime.catalog.targets[0]
+        runtime.database._connection.execute(
+            "INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')",
+            (target_execution_key(target),),
+        )
+        response = await client.call_tool("job_submit", {"project_id": project.id, "workflow": "consult", "prompt": "blocked"})
+        assert response.is_error
+        payload = json.loads(response.content[0].text)
+        assert payload["code"] == "targets_unavailable"
+        assert payload["retryable"] is True and type(payload["retry_after_s"]) is int
+        assert runtime.database.jobs(project.id) == []
+
+
+@pytest.mark.asyncio
+async def test_multipage_terminal_wait_has_metadata_and_stays_private_and_bounded(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        root = tmp_path / "multipage-terminal"
+        root.mkdir()
+        project = runtime.register_project(str(root), "multipage-terminal")
+        runtime.database.create_job(job_id="multi-terminal", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json="{}", context_key="multi")
+        runtime.database.finish_job("multi-terminal", "succeeded", text="z" * 40_000)
+        offset = 0
+        pages = 0
+        forbidden = {"target_id", "backend", "model"}
+        while True:
+            response = await client.call_tool("job_wait", {"job_id": "multi-terminal", "timeout_s": 0, "result_offset": offset})
+            assert not response.is_error
+            wire = response.model_dump(by_alias=True, mode="json", exclude_none=True)
+            serialized = json.dumps(wire, ensure_ascii=False, separators=(",", ":"))
+            assert len(serialized.encode("utf-8")) < 9000
+            payload = json.loads(response.content[0].text)
+            assert set(payload["result"]["metadata"]) == {"model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target"}
+            def inspect_private(value):
+                if isinstance(value, dict):
+                    assert forbidden.isdisjoint(key.casefold() for key in value)
+                    for item in value.values(): inspect_private(item)
+                elif isinstance(value, list):
+                    for item in value: inspect_private(item)
+            inspect_private(payload)
+            pages += 1
+            next_offset = payload["result"]["next_offset"]
+            if next_offset is None: break
+            offset = next_offset
+        assert pages > 1
 
 
 @pytest.mark.asyncio
@@ -713,7 +777,7 @@ async def test_empty_and_eof_result_metadata_overflow_is_bounded(tmp_path, monke
         runtime.database.finish_job("empty-fitting", "succeeded", text="")
         empty_ok = await client.call_tool("job_wait", {"job_id": "empty-fitting", "timeout_s": 0})
         assert not empty_ok.is_error
-        assert json.loads(empty_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None}
+        assert json.loads(empty_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None, "metadata": dict.fromkeys(("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target"))}
 
         runtime.database.create_job(
             job_id="eof-fitting", project_id=project.id, workflow="review", profile="balanced",
@@ -722,7 +786,7 @@ async def test_empty_and_eof_result_metadata_overflow_is_bounded(tmp_path, monke
         runtime.database.finish_job("eof-fitting", "succeeded", text="done")
         eof_ok = await client.call_tool("job_wait", {"job_id": "eof-fitting", "timeout_s": 0, "result_offset": 4})
         assert not eof_ok.is_error
-        assert json.loads(eof_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None}
+        assert json.loads(eof_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None, "metadata": dict.fromkeys(("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target"))}
 
 
 @pytest.mark.parametrize(("result_text", "offset"), [("", 0), ("done", 4)])
@@ -796,6 +860,9 @@ async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -
         def waiting_metadata(self, job_id: str):
             return [], ""
 
+        def live_result_metadata(self, job: JobView):
+            return job.result.metadata
+
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
             waits.append((job_id, timeout_s))
             state["job"] = latest
@@ -814,7 +881,7 @@ async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -
 
     assert waits == ([] if timeout_s == 0 else [(initial.id, timeout_s)])
     assert result["job"]["state"] == ("running" if timeout_s == 0 else "succeeded")
-    assert result["result"] == {"text": "", "error": "", "next_offset": None}
+    assert result["result"] == ({"text": "", "error": "", "next_offset": None} if timeout_s == 0 else {"text": "", "error": "", "next_offset": None, "metadata": {}})
     assert json.loads(progress_messages[0]) == {"state": "running", "waiting_reason": ""}
 
 
@@ -840,6 +907,9 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
 
         def waiting_metadata(self, job_id: str):
             return [], ""
+
+        def live_result_metadata(self, job: JobView):
+            return job.result.metadata
 
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
             await done_event.wait()
@@ -903,6 +973,9 @@ async def test_job_wait_non_terminal_timeout(monkeypatch) -> None:
         def waiting_metadata(self, job_id: str):
             return [], ""
 
+        def live_result_metadata(self, job: JobView):
+            return job.result.metadata
+
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
             await timeout_event.wait()
             return current_job
@@ -944,6 +1017,9 @@ async def test_job_wait_cancellation_cleanup() -> None:
         def waiting_metadata(self, job_id: str):
             return [], ""
 
+        def live_result_metadata(self, job: JobView):
+            return job.result.metadata
+
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
             wait_started.set()
             try:
@@ -984,6 +1060,9 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
 
         def waiting_metadata(self, job_id: str):
             return [], ""
+
+        def live_result_metadata(self, job: JobView):
+            return job.result.metadata
 
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
             waits.append(job_id)
@@ -1038,6 +1117,9 @@ async def test_job_wait_logs_progress_token_presence(caplog, wire_meta, expected
 
         def waiting_metadata(self, job_id: str):
             return [], ""
+
+        def live_result_metadata(self, job: JobView):
+            return job.result.metadata
 
     params = {"_meta": wire_meta} if wire_meta is not None else {}
     sdk_meta = _extract_meta(params)

@@ -1432,3 +1432,173 @@ def test_classify_tool_activity_unit():
     # Unknown provider
     assert classify_tool_activity("unknown", "bash") == "tool_call"
     assert classify_tool_activity("", "") == "tool_call"
+
+
+def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from refract.drivers import _normalize
+
+    fixtures_dir = Path(__file__).parent / "fixtures" / "usage"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # 1. Claude
+    claude_lines = (fixtures_dir / "claude.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
+    c_res = claude_sync(ClaudeParams(PROMPT="test", cd=workspace))
+    assert c_res.outcome == "OK"
+    assert c_res.usage == {
+        "model_name": "claude-opus-5-5",
+        "input_tokens": 4286,
+        "output_tokens": 4,
+        "cached_input_tokens": 27855,
+        "context_window_max": 200000,
+        "context_window_used": None,
+    }
+    c_drv = _normalize(c_res)
+    assert c_drv.usage == c_res.usage
+
+    # Claude with usage removed
+    c_lines_no_usage = [
+        json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "OK", "session_id": "sess"})
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines_no_usage))
+    c_res_empty = claude_sync(ClaudeParams(PROMPT="test", cd=workspace))
+    assert c_res_empty.outcome == "OK"
+    assert c_res_empty.usage == {
+        "model_name": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cached_input_tokens": None,
+        "context_window_max": None,
+        "context_window_used": None,
+    }
+
+    # 2. Codex
+    codex_lines = (fixtures_dir / "codex.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
+    cdx_res = codex_sync(CodexParams(PROMPT="test", cd=workspace))
+    assert cdx_res.outcome == "OK"
+    assert cdx_res.usage == {
+        "model_name": None,
+        "input_tokens": 15184,
+        "output_tokens": 5,
+        "cached_input_tokens": 0,
+        "context_window_max": None,
+        "context_window_used": None,
+    }
+    cdx_drv = _normalize(cdx_res)
+    assert cdx_drv.usage == cdx_res.usage
+
+    # Codex with usage removed
+    cdx_lines_no_usage = [
+        json.dumps({"type": "thread.started", "thread_id": "00000000-0000-0000-0000-000000000000"}),
+        json.dumps({"type": "turn.completed"}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines_no_usage))
+    cdx_res_empty = codex_sync(CodexParams(PROMPT="test", cd=workspace))
+    assert cdx_res_empty.outcome == "OK"
+    assert cdx_res_empty.usage == {
+        "model_name": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cached_input_tokens": None,
+        "context_window_max": None,
+        "context_window_used": None,
+    }
+
+    # 3. Pi
+    pi_lines = (fixtures_dir / "pi.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
+    p_res = pi_sync(PiParams(PROMPT="test", cd=workspace))
+    assert p_res.outcome == "OK"
+    assert p_res.usage == {
+        "model_name": "gpt-6.1-sol",
+        "input_tokens": 718,
+        "output_tokens": 5,
+        "cached_input_tokens": 11904,
+        "context_window_max": None,
+        "context_window_used": None,
+    }
+    p_drv = _normalize(p_res)
+    assert p_drv.usage == p_res.usage
+
+    # Pi with usage removed
+    p_lines_no_usage = [
+        json.dumps({"type": "session", "id": "00000000-0000-0000-0000-000000000000"}),
+        json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "OK"}]}}),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines_no_usage))
+    p_res_empty = pi_sync(PiParams(PROMPT="test", cd=workspace))
+    assert p_res_empty.outcome == "OK"
+    assert p_res_empty.usage == {
+        "model_name": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cached_input_tokens": None,
+        "context_window_max": None,
+        "context_window_used": None,
+    }
+
+    # 4. Agy
+    agy_lines = (fixtures_dir / "agy.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
+    monkeypatch.setattr("refract.backends.agy._agy_has_pending_tasks", lambda *a, **k: False)
+    a_res = agy_sync(AgyParams(PROMPT="test", cd=workspace))
+    assert a_res.outcome == "OK"
+    assert a_res.usage == {
+        "model_name": None,
+        "input_tokens": 9072,
+        "output_tokens": 118,
+        "cached_input_tokens": 0,
+        "context_window_max": None,
+        "context_window_used": None,
+    }
+    a_drv = _normalize(a_res)
+    assert a_drv.usage == a_res.usage
+
+    # Agy with usage removed
+    a_lines_no_usage = [
+        json.dumps({"event": "result", "result": {"conversation_id": "00000000-0000-0000-0000-000000000000", "status": "SUCCESS", "response": "OK\n"}}),
+    ]
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in a_lines_no_usage))
+    monkeypatch.setattr("refract.backends.agy._agy_has_pending_tasks", lambda *a, **k: False)
+    a_res_empty = agy_sync(AgyParams(PROMPT="test", cd=workspace))
+    assert a_res_empty.outcome == "OK"
+    assert a_res_empty.usage == {
+        "model_name": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cached_input_tokens": None,
+        "context_window_max": None,
+        "context_window_used": None,
+    }
+
+
+def test_malformed_usage_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Corrupted / invalid usage types in Claude
+    c_lines = [
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "OK",
+            "session_id": "sess",
+            "usage": {"input_tokens": "not_an_int", "output_tokens": []},
+            "modelUsage": "not_a_dict",
+        })
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
+    c_res = claude_sync(ClaudeParams(PROMPT="test", cd=workspace))
+    assert c_res.outcome == "OK"
+    assert c_res.usage == {
+        "model_name": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cached_input_tokens": None,
+        "context_window_max": None,
+        "context_window_used": None,
+    }
+

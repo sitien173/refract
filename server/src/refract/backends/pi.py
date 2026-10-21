@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import BackendResult, classify_backend_output, classify_tool_activity
+from . import BackendResult, _usage_dict, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from refract.logging_setup import get_logger
 
@@ -267,6 +267,16 @@ def _execute_sync(params: PiParams) -> BackendResult:
         log.error("pi: unexpected error during stream type=%s", type(exc).__name__)
 
     agent_messages, extracted_session_id, diagnostics, structured_error = _extract_output(lines)
+    usage_values: dict[str, Any] = {}
+    for line in lines:
+        try:
+            event = json.loads(line)
+            msg = event.get("message") if isinstance(event, dict) else None
+            u = msg.get("usage") if isinstance(msg, dict) else None
+            if isinstance(msg, dict) and isinstance(u, dict) and msg.get("role") == "assistant":
+                usage_values = {"model_name": msg.get("model"), "input_tokens": u.get("input"), "output_tokens": u.get("output"), "cached_input_tokens": u.get("cacheRead")}
+        except (json.JSONDecodeError, TypeError):
+            continue
     session_id = extracted_session_id or params.SESSION_ID
     error_text = "\n".join(part for part in (command_error, diagnostics) if part).strip()
     result = classify_backend_output(
@@ -276,6 +286,7 @@ def _execute_sync(params: PiParams) -> BackendResult:
         error_text=error_text,
     )
 
+    result.usage = _usage_dict(**usage_values)
     is_overflow = _is_context_overflow(error_text)
 
     # Precedence 1: Cancellation remains cancelled

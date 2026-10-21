@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
@@ -21,7 +21,7 @@ from refract.models import (
 
 
 log = get_logger("database")
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 13
 
 
 def utc_now() -> str:
@@ -76,6 +76,7 @@ class Database:
             self._migrate_v9_to_v10()
             self._migrate_v10_to_v11()
             self._migrate_v11_to_v12()
+            self._migrate_v12_to_v13()
         log.debug(
             "Database schema is current",
             extra={"event": "database.migrated", "schema_version": _SCHEMA_VERSION},
@@ -185,6 +186,24 @@ class Database:
             self._connection.rollback()
             raise
 
+    def _migrate_v12_to_v13(self) -> None:
+        version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if version >= 13:
+            return
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            if "cooldown_s" not in self._columns("target_health"):
+                self._connection.execute("ALTER TABLE target_health ADD COLUMN cooldown_s INTEGER NOT NULL DEFAULT 0")
+            if "probe_job_id" not in self._columns("target_health"):
+                self._connection.execute("ALTER TABLE target_health ADD COLUMN probe_job_id TEXT NOT NULL DEFAULT ''")
+            if "result_metadata_json" not in self._columns("jobs"):
+                self._connection.execute("ALTER TABLE jobs ADD COLUMN result_metadata_json TEXT NOT NULL DEFAULT '{}'")
+            self._connection.execute("PRAGMA user_version=13")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
     def _tables(self) -> set[str]:
         return {
             row["name"]
@@ -199,6 +218,7 @@ class Database:
             "projects": "PRAGMA table_info(projects)",
             "context_sessions": "PRAGMA table_info(context_sessions)",
             "job_stream_events": "PRAGMA table_info(job_stream_events)",
+            "target_health": "PRAGMA table_info(target_health)",
         }
 
         try:
@@ -235,6 +255,7 @@ class Database:
                 config_revision TEXT NOT NULL DEFAULT '',
                 fresh_session INTEGER NOT NULL DEFAULT 0,
                 access_mode TEXT NOT NULL DEFAULT 'exclusive',
+                result_metadata_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -290,7 +311,9 @@ class Database:
                 target_id TEXT PRIMARY KEY,
                 consecutive_failures INTEGER NOT NULL DEFAULT 0,
                 circuit_open_until TEXT NOT NULL DEFAULT '',
-                last_success_at TEXT NOT NULL DEFAULT ''
+                last_success_at TEXT NOT NULL DEFAULT '',
+                cooldown_s INTEGER NOT NULL DEFAULT 0,
+                probe_job_id TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS jobs_state_idx ON jobs(state, created_at);
             CREATE INDEX IF NOT EXISTS events_job_idx ON events(job_id, id);
@@ -711,13 +734,16 @@ class Database:
         with self._connection:
             self._connection.execute("UPDATE jobs SET target_id=?, attempts=attempts+1, updated_at=? WHERE id=?", (target_id, utc_now(), job_id))
 
-    def finish_job(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "") -> None:
+    def finish_job(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "", metadata: dict[str, Any] | None = None) -> None:
         with self._connection:
             self._connection.execute(
                 """UPDATE jobs SET state=?, result_text=?,
-                   target_id=CASE WHEN ?='' THEN target_id ELSE ? END, error=?, updated_at=?
+                   target_id=CASE WHEN ?='' THEN target_id ELSE ? END, error=?,
+                   result_metadata_json=COALESCE(?, result_metadata_json), updated_at=?
                    WHERE id=?""",
-                (state, text, target_id, target_id, error, utc_now(), job_id),
+                (state, text, target_id, target_id, error,
+                 json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
+                 utc_now(), job_id),
             )
         self.event(job_id, f"job.{state}", {"error": error} if error else {})
 
@@ -734,6 +760,7 @@ class Database:
         session_id: str,
         prompt: str,
         response: str,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         now = utc_now()
         with self._connection:
@@ -755,9 +782,12 @@ class Database:
             )
             self._connection.execute(
                 """UPDATE jobs SET state='succeeded', result_text=?,
-                   target_id=CASE WHEN ?='' THEN target_id ELSE ? END, error='', updated_at=?
+                   target_id=CASE WHEN ?='' THEN target_id ELSE ? END, error='',
+                   result_metadata_json=COALESCE(?, result_metadata_json), updated_at=?
                    WHERE id=?""",
-                (response, target_id, target_id, now, job_id),
+                (response, target_id, target_id,
+                 json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
+                 now, job_id),
             )
             self._connection.execute(
                 "INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, 'job.succeeded', '{}')",
@@ -796,7 +826,13 @@ class Database:
 
     @staticmethod
     def _job_view(row: sqlite3.Row) -> JobView:
-        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], config_revision=row["config_revision"], state=row["state"], context_key=row["context_key"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], error=row["error"]))
+        try:
+            metadata = json.loads(row["result_metadata_json"] or "{}")
+            if not isinstance(metadata, dict):
+                metadata = {}
+        except (json.JSONDecodeError, TypeError):
+            metadata = {}
+        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], config_revision=row["config_revision"], state=row["state"], context_key=row["context_key"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], error=row["error"], metadata=metadata))
 
     def session(self, project_id: str, context_key: str, role: str, target_key: str, lane: str = "") -> str:
         row = self._connection.execute("SELECT session_id FROM context_sessions WHERE project_id=? AND context_key=? AND role=? AND target_key=? AND lane=?", (project_id, context_key, role, target_key, lane)).fetchone()
@@ -839,18 +875,46 @@ class Database:
 
     def target_health(self, target_id: str) -> dict[str, Any]:
         row = self._connection.execute("SELECT * FROM target_health WHERE target_id=?", (target_id,)).fetchone()
-        return dict(row) if row else {"target_id": target_id, "consecutive_failures": 0, "circuit_open_until": "", "last_success_at": ""}
+        return dict(row) if row else {"target_id": target_id, "consecutive_failures": 0, "circuit_open_until": "", "last_success_at": "", "cooldown_s": 0, "probe_job_id": ""}
 
-    def record_target_success(self, target_id: str) -> None:
+    def claim_target_probe(self, target_id: str, job_id: str, now: str) -> bool:
         with self._connection:
-            self._connection.execute("""INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, last_success_at) VALUES (?, 0, '', ?)
-                ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=0, circuit_open_until='', last_success_at=excluded.last_success_at""", (target_id, utc_now()))
+            cursor = self._connection.execute(
+                "UPDATE target_health SET probe_job_id=:job WHERE target_id=:key AND circuit_open_until<>'' AND circuit_open_until<=:now AND probe_job_id=''",
+                {"job": job_id, "key": target_id, "now": now},
+            )
+        return cursor.rowcount == 1
 
-    def record_target_failure(self, target_id: str, circuit_open_until: str = "") -> int:
-        failures = int(self.target_health(target_id)["consecutive_failures"]) + 1
+    def release_target_probe(self, target_id: str, job_id: str = "") -> None:
         with self._connection:
-            self._connection.execute("""INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until) VALUES (?, ?, ?)
-                ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures, circuit_open_until=excluded.circuit_open_until""", (target_id, failures, circuit_open_until))
+            if job_id:
+                self._connection.execute("UPDATE target_health SET probe_job_id='' WHERE target_id=? AND probe_job_id=?", (target_id, job_id))
+            else:
+                self._connection.execute("UPDATE target_health SET probe_job_id='' WHERE target_id=?", (target_id,))
+
+    def reset_orphaned_target_probes(self, now: str | None = None) -> int:
+        with self._connection:
+            cursor = self._connection.execute("UPDATE target_health SET probe_job_id='', circuit_open_until=? WHERE probe_job_id<>''", (now or utc_now(),))
+        return cursor.rowcount
+
+    def record_target_success(self, target_id: str, base_cooldown_s: int = 60) -> None:
+        with self._connection:
+            self._connection.execute("""INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, last_success_at, cooldown_s, probe_job_id) VALUES (?, 0, '', ?, ?, '')
+                ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=0, circuit_open_until='', last_success_at=excluded.last_success_at, cooldown_s=excluded.cooldown_s, probe_job_id=''""", (target_id, utc_now(), base_cooldown_s))
+
+    def record_target_failure(self, target_id: str, circuit_open_until: str = "", *, threshold: int = 3, base_cooldown_s: int = 60, max_cooldown_s: int = 900, failed_probe: bool = False, immediate: bool = False) -> int:
+        with self._connection:
+            row = self._connection.execute("SELECT consecutive_failures, cooldown_s FROM target_health WHERE target_id=?", (target_id,)).fetchone()
+            failures = (int(row["consecutive_failures"]) if row else 0) + 1
+            cooldown = int(row["cooldown_s"] or 0) if row else 0
+            if cooldown == 0:
+                cooldown = base_cooldown_s
+            if failed_probe:
+                cooldown = min(max_cooldown_s, cooldown * 2)
+            opened = immediate or failed_probe or failures >= threshold
+            until = circuit_open_until or ((datetime.now(timezone.utc) + timedelta(seconds=cooldown)).isoformat() if opened else "")
+            self._connection.execute("""INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, ?, ?, ?, '')
+                ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures, circuit_open_until=excluded.circuit_open_until, cooldown_s=excluded.cooldown_s, probe_job_id=''""", (target_id, failures, until, cooldown))
         return failures
 
     def append_stream_events(

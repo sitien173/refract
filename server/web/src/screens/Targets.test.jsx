@@ -74,6 +74,128 @@ describe('Targets screen', () => {
     expect(screen.getByText('Unhealthy')).toBeInTheDocument()
   })
 
+  it('renders half-open and probing targets distinctly from open and closed targets', async () => {
+    const targetsWithBreakerStates = [
+      {
+        id: 'target-closed-healthy',
+        backend: 'claude',
+        model: 'claude-3-7-sonnet',
+        isolated: true,
+        read_only: false,
+        max_concurrency: 4,
+        active: 0,
+        healthy: true,
+        circuit_open_until: '',
+        breaker_state: 'closed',
+        cooldown_s: 60,
+        probing: false,
+      },
+      {
+        id: 'target-open',
+        backend: 'gemini',
+        model: 'gemini-2.5-pro',
+        isolated: false,
+        read_only: true,
+        max_concurrency: 2,
+        active: 0,
+        healthy: false,
+        circuit_open_until: '2099-09-04T13:00:00Z',
+        breaker_state: 'open',
+        cooldown_s: 120,
+        probing: false,
+      },
+      {
+        id: 'target-half-open',
+        backend: 'codex',
+        model: 'gpt-4o',
+        isolated: false,
+        read_only: false,
+        max_concurrency: 1,
+        active: 0,
+        healthy: true,
+        circuit_open_until: '2026-10-22T00:00:00Z',
+        breaker_state: 'half_open',
+        cooldown_s: 60,
+        probing: false,
+      },
+      {
+        id: 'target-probing',
+        backend: 'pi',
+        model: 'pi-1',
+        isolated: true,
+        read_only: false,
+        max_concurrency: 1,
+        active: 1,
+        healthy: true,
+        circuit_open_until: '2026-10-22T00:00:00Z',
+        breaker_state: 'half_open',
+        cooldown_s: 60,
+        probing: true,
+      },
+      {
+        id: 'target-unhealthy',
+        backend: 'local',
+        model: 'llama-3',
+        isolated: true,
+        read_only: false,
+        max_concurrency: 1,
+        active: 0,
+        healthy: false,
+        circuit_open_until: '',
+        breaker_state: 'closed',
+        cooldown_s: 60,
+        probing: false,
+      },
+    ]
+
+    vi.mocked(api.getTargets).mockResolvedValue(targetsWithBreakerStates)
+
+    render(<Targets />)
+
+    expect(await screen.findByText('target-closed-healthy')).toBeInTheDocument()
+    expect(screen.getByText('target-open')).toBeInTheDocument()
+    expect(screen.getByText('target-half-open')).toBeInTheDocument()
+    expect(screen.getByText('target-probing')).toBeInTheDocument()
+    expect(screen.getByText('target-unhealthy')).toBeInTheDocument()
+
+    // Assert distinct status badges
+    expect(screen.getAllByText('Healthy').length).toBeGreaterThan(0)
+    expect(screen.getByText('Circuit open')).toBeInTheDocument()
+    expect(screen.getByText('Half-open')).toBeInTheDocument()
+    expect(screen.getByText('Probing')).toBeInTheDocument()
+    expect(screen.getByText('Unhealthy')).toBeInTheDocument()
+
+    // Inspector shows breaker metadata when selecting half-open target
+    fireEvent.click(screen.getByText('target-half-open').closest('tr'))
+    expect(screen.getByRole('complementary', { name: /Inspector: Target: target-half-open/i })).toBeInTheDocument()
+    expect(screen.getByText('half_open')).toBeInTheDocument()
+    expect(screen.getByText('60s')).toBeInTheDocument()
+
+    // Selecting probing target shows probing in inspector
+    fireEvent.click(screen.getByText('target-probing').closest('tr'))
+    expect(screen.getByRole('complementary', { name: /Inspector: Target: target-probing/i })).toBeInTheDocument()
+    expect(screen.getByText('Active')).toBeInTheDocument()
+
+    // Filter by needing attention includes open, half-open, probing, unhealthy, but not healthy
+    const table = screen.getByRole('table')
+    const attentionBtn = screen.getByRole('button', { name: /Needing attention/i })
+    fireEvent.click(attentionBtn)
+    expect(within(table).queryByText('target-closed-healthy')).not.toBeInTheDocument()
+    expect(within(table).getByText('target-open')).toBeInTheDocument()
+    expect(within(table).getByText('target-half-open')).toBeInTheDocument()
+    expect(within(table).getByText('target-probing')).toBeInTheDocument()
+    expect(within(table).getByText('target-unhealthy')).toBeInTheDocument()
+
+    // Filter by healthy includes only closed healthy
+    const healthyBtn = screen.getByRole('button', { name: /Healthy/i })
+    fireEvent.click(healthyBtn)
+    expect(within(table).getByText('target-closed-healthy')).toBeInTheDocument()
+    expect(within(table).queryByText('target-open')).not.toBeInTheDocument()
+    expect(within(table).queryByText('target-half-open')).not.toBeInTheDocument()
+    expect(within(table).queryByText('target-probing')).not.toBeInTheDocument()
+    expect(within(table).queryByText('target-unhealthy')).not.toBeInTheDocument()
+  })
+
   it('treats an expired circuit timestamp as healthy', async () => {
     vi.mocked(api.getTargets).mockResolvedValue([{
       ...mockTargets[0],

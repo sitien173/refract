@@ -186,10 +186,31 @@ def target_execution_key(target: TargetConfig) -> str:
     return f"{target.id}:{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 
+def next_target_token(
+    config_revision: str, project_id: str, profile: str, workflow: str, target: TargetConfig
+) -> str:
+    value = json.dumps(
+        [config_revision, project_id, profile, workflow, target_execution_key(target)],
+        separators=(",", ":"),
+    )
+    return "nt_" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def resolve_next_target(
+    token: str, config_revision: str, project_id: str, plan: ExecutionPlan
+) -> TargetConfig | None:
+    for target in plan.targets:
+        if token == next_target_token(config_revision, project_id, plan.profile, plan.workflow, target):
+            return target
+    return None
+
+
 __all__ = [
     "ExecutionPlan",
     "execution_plan_data",
     "parse_execution_plan",
     "resolve_execution_plan",
     "target_execution_key",
+    "next_target_token",
+    "resolve_next_target",
 ]

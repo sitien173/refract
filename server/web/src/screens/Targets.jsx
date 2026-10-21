@@ -23,6 +23,22 @@ function isCircuitOpenUntil(value, now = Date.now()) {
   return Number.isFinite(timestamp) && timestamp > now
 }
 
+function getTargetStatus(target, now = Date.now()) {
+  if (target?.probing) {
+    return { status: 'probing', label: 'Probing' }
+  }
+  if (target?.breaker_state === 'half_open') {
+    return { status: 'half-open', label: 'Half-open' }
+  }
+  if (target?.breaker_state === 'open' || isCircuitOpenUntil(target?.circuit_open_until, now)) {
+    return { status: 'circuit-open', label: 'Circuit open' }
+  }
+  if (!target?.healthy) {
+    return { status: 'unhealthy', label: 'Unhealthy' }
+  }
+  return { status: 'healthy', label: 'Healthy' }
+}
+
 function readStatusFilterFromUrl() {
   const params = new URLSearchParams(window.location.search)
   const statusParam = params.get('status')
@@ -79,8 +95,8 @@ export default function Targets() {
   const rawList = Array.isArray(targets) ? targets : []
 
   const filteredTargets = rawList.filter((target) => {
-    const isCircuitOpen = isCircuitOpenUntil(target.circuit_open_until)
-    const isHealthy = Boolean(target.healthy) && !isCircuitOpen
+    const targetStatus = getTargetStatus(target)
+    const isHealthy = targetStatus.status === 'healthy'
 
     if (statusFilter === 'attention') {
       if (isHealthy) return false
@@ -176,32 +192,20 @@ export default function Targets() {
       header: 'Health',
       priority: 'primary',
       sortable: true,
-      sortAccessor: (row) =>
-        isCircuitOpenUntil(row.circuit_open_until)
-          ? 'circuit-open'
-          : row.healthy
-            ? 'healthy'
-            : 'unhealthy',
+      sortAccessor: (row) => getTargetStatus(row).status,
       width: '160px',
       minWidth: '130px',
       render: (row) => {
-        let status = 'healthy'
-        let label = 'Healthy'
-        if (isCircuitOpenUntil(row.circuit_open_until)) {
-          status = 'circuit-open'
-          label = 'Circuit open'
-        } else if (!row.healthy) {
-          status = 'unhealthy'
-          label = 'Unhealthy'
-        }
+        const { status, label } = getTargetStatus(row)
         return <StatusBadge status={status} label={label} />
       },
     },
   ]
 
-  const attentionCount = rawList.filter((t) => !t.healthy || isCircuitOpenUntil(t.circuit_open_until)).length
-  const healthyCount = rawList.filter((t) => t.healthy && !isCircuitOpenUntil(t.circuit_open_until)).length
+  const attentionCount = rawList.filter((t) => getTargetStatus(t).status !== 'healthy').length
+  const healthyCount = rawList.filter((t) => getTargetStatus(t).status === 'healthy').length
   const selectedCircuitOpen = selectedTarget && isCircuitOpenUntil(selectedTarget.circuit_open_until)
+  const selectedTargetStatus = selectedTarget ? getTargetStatus(selectedTarget) : null
 
   async function handleOpenCreate() {
     setEditorError(null)
@@ -467,26 +471,32 @@ export default function Targets() {
               <InspectorRow label="Active jobs" value={selectedTarget.active} />
               <InspectorRow label="Status">
                 <StatusBadge
-                  status={
-                    selectedCircuitOpen
-                      ? 'circuit-open'
-                      : selectedTarget.healthy
-                        ? 'healthy'
-                        : 'unhealthy'
-                  }
-                  label={
-                    selectedCircuitOpen
-                      ? 'Circuit open'
-                      : selectedTarget.healthy
-                        ? 'Healthy'
-                        : 'Unhealthy'
-                  }
+                  status={selectedTargetStatus.status}
+                  label={selectedTargetStatus.label}
                 />
               </InspectorRow>
+              {selectedTarget.breaker_state && (
+                <InspectorRow
+                  label="Breaker state"
+                  value={selectedTarget.breaker_state}
+                />
+              )}
               {selectedCircuitOpen && (
                 <InspectorRow
                   label="Circuit open until"
                   value={selectedTarget.circuit_open_until}
+                />
+              )}
+              {selectedTarget.cooldown_s != null && selectedTarget.cooldown_s > 0 && (
+                <InspectorRow
+                  label="Cooldown"
+                  value={`${selectedTarget.cooldown_s}s`}
+                />
+              )}
+              {selectedTarget.probing && (
+                <InspectorRow
+                  label="Probing"
+                  value="Active"
                 />
               )}
 

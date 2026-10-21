@@ -616,6 +616,24 @@ def test_max_project_readers_defaults_to_one_and_accepts_positive_value(tmp_path
     assert load_config(path).max_project_readers == 3
 
 
+def test_breaker_config_defaults_and_deprecated_max_attempts_warning(tmp_path, caplog) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config().replace('implement = "primary"', 'implement = { targets = ["primary"], max_attempts = 2 }'), encoding="utf-8")
+    catalog = load_config(path)
+    assert catalog.breaker_failure_threshold == 3
+    assert catalog.breaker_base_cooldown_s == 60
+    assert catalog.breaker_max_cooldown_s == 900
+    assert catalog.profiles["balanced"]["implement"].max_attempts == 2
+    assert sum(getattr(record, "event", None) == "config.deprecated_key" for record in caplog.records) == 1
+
+
+def test_breaker_max_cooldown_must_not_be_below_base(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config().replace('default_profile = "balanced"', 'default_profile = "balanced"\nbreaker_base_cooldown_s = 80\nbreaker_max_cooldown_s = 60'), encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid configuration"):
+        load_config(path)
+
+
 def test_notifications_config_defaults_disabled_when_absent(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(_explicit_config(), encoding="utf-8")

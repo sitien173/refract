@@ -182,7 +182,6 @@ consult = { targets = ["primary"], max_attempts = 2, timeout_s = 60 }
         profile,
         "consult",
         targets=["fallback", "primary"],
-        max_attempts=3,
         timeout_s=90,
     )
 
@@ -193,10 +192,53 @@ consult = { targets = ["primary"], max_attempts = 2, timeout_s = 60 }
     # Untouched array shorthand keeps its form.
     assert 'review = ["primary", "fallback"]' in serialized
     # The edited inline policy remains a single-line inline table.
-    assert (
-        "consult = { targets = [\"fallback\", \"primary\"], max_attempts = 3, "
-        "timeout_s = 90 }" in serialized
+    assert "consult = { targets = [\"fallback\", \"primary\"], max_attempts = 2, timeout_s = 90 }" in serialized
+
+
+def test_new_timeout_policy_omits_max_attempts(tmp_path) -> None:
+    from refract.config_mutation import _apply_workflow_policy
+    from refract.models import WorkflowPolicyData
+
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[profiles.balanced]
+review = "primary"
+""",
+        encoding="utf-8",
     )
+    service = ConfigurationMutationService(object())
+    document = service.read_document(load_source(path))
+    profile = service.find_profile(document, "balanced")
+    assert profile is not None
+
+    _apply_workflow_policy(
+        service,
+        profile,
+        "implement",
+        WorkflowPolicyData(targets=["primary"], timeout_s=45),
+    )
+    implement_policy = profile["implement"]
+    assert list(implement_policy["targets"]) == ["primary"]
+    assert implement_policy["timeout_s"] == 45
+    assert "max_attempts" not in implement_policy
+
+    _apply_workflow_policy(
+        service,
+        profile,
+        "review",
+        WorkflowPolicyData(targets=["primary"], timeout_s=30),
+    )
+    review_policy = profile["review"]
+    assert list(review_policy["targets"]) == ["primary"]
+    assert review_policy["timeout_s"] == 30
+    assert "max_attempts" not in review_policy
 
 
 def test_edited_shorthand_expands_only_the_edited_workflow(tmp_path) -> None:
@@ -219,24 +261,20 @@ consult = { targets = ["primary"], max_attempts = 2, timeout_s = 60 }
     service = ConfigurationMutationService(object())
     document = service.read_document(load_source(path))
     profile = service.find_profile(document, "balanced")
-    # The implement shorthand must become an inline policy because the edit
-    # adds max_attempts; the untouched review shorthand must remain a string.
-    service.set_workflow_policy(
-        profile, "implement", targets=["primary"], max_attempts=3, timeout_s=30
+    # Zero timeout keeps the edited shorthand; the untouched review shorthand remains a string.
+    from refract.config_mutation import _apply_workflow_policy
+    from refract.models import WorkflowPolicyData
+
+    _apply_workflow_policy(
+        service, profile, "implement",
+        WorkflowPolicyData(targets=["primary"], max_attempts=3, timeout_s=0),
     )
 
     serialized = service.candidate_bytes(document).decode("utf-8")
 
-    # Inline table renders without extra spaces by default; accept either form.
-    assert (
-        "implement = {targets = [\"primary\"], max_attempts = 3, timeout_s = 30}"
-        in serialized
-        or (
-            "implement = { targets = [\"primary\"], max_attempts = 3, "
-            "timeout_s = 30 }" in serialized
-        )
-    )
+    assert 'implement = "primary"' in serialized
     assert 'review = "primary"' in serialized
+    assert 'implement = {targets = ["primary"], max_attempts' not in serialized
 
 
 def test_new_target_uses_backend_profile_only(tmp_path) -> None:

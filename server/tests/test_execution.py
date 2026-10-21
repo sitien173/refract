@@ -6,6 +6,7 @@ import inspect
 import json
 import subprocess
 import threading
+from datetime import datetime, timezone
 from dataclasses import dataclass, replace
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -17,8 +18,292 @@ from refract.database import Database
 from refract.drivers import DriverResult
 from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key
 from refract.runtime import OrchestrationError, Runtime
+from refract.execution import TargetExecutor
 from refract.workflows import get_workflow
 from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, git, repository
+
+
+RESULT_METADATA_KEYS = {
+    "model_name", "context_window_max", "context_window_used", "input_tokens",
+    "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind",
+    "retryable", "next_target",
+}
+
+
+async def _dispatch_claimed_probe(tmp_path, drivers, runtime_holder=None):
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    if runtime_holder is not None:
+        runtime_holder["runtime"] = runtime
+    runtime.drivers = drivers
+    target = catalog.targets[0]
+    key = target_execution_key(target)
+    project = runtime.register_project(str(root))
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    job_id = "probe-job"
+    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", context_key="probe")
+    with runtime.database._connection:
+        runtime.database._connection.execute(
+            "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 77)",
+            (key,),
+        )
+    result = await runtime.target_executor.execute(
+        job_id=job_id, project=project, workflow="implement", context_key="probe", plan=plan,
+        prompt="probe", cwd=root, cancel_event=threading.Event(),
+    )
+    return runtime, key, result
+
+
+@pytest.mark.asyncio
+async def test_driver_exception_releases_claimed_probe(tmp_path):
+    class Exploding(FakeDrivers):
+        async def execute(self, **kwargs):
+            raise RuntimeError("backend exploded")
+
+    runtime = Runtime(config(tmp_path / "home"))
+    root = repository(tmp_path)
+    project = runtime.register_project(str(root))
+    catalog = runtime.config
+    key = target_execution_key(catalog.targets[0])
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", context_key="probe")
+    with runtime.database._connection:
+        runtime.database._connection.execute("INSERT INTO target_health(target_id,circuit_open_until,cooldown_s) VALUES (?, '2000-01-01T00:00:00+00:00', 77)", (key,))
+    runtime.drivers = Exploding()
+    with pytest.raises(RuntimeError, match="backend exploded"):
+        await runtime.target_executor.execute(job_id="probe-job", project=project, workflow="implement", context_key="probe", plan=plan, prompt="probe", cwd=root, cancel_event=threading.Event())
+    assert runtime.database.target_health(key)["probe_job_id"] == ""
+    runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_capacity_acquire_cancellation_releases_claimed_probe(tmp_path):
+    runtime = Runtime(config(tmp_path / "home"))
+    root = repository(tmp_path)
+    project = runtime.register_project(str(root))
+    key = target_execution_key(runtime.config.targets[0])
+    plan = resolve_execution_plan(get_workflow("implement"), runtime.config, "balanced")
+    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", context_key="probe")
+    with runtime.database._connection:
+        runtime.database._connection.execute("INSERT INTO target_health(target_id,circuit_open_until,cooldown_s) VALUES (?, '2000-01-01T00:00:00+00:00', 77)", (key,))
+
+    async def cancelled_acquire(*args):
+        raise asyncio.CancelledError()
+
+    runtime.target_executor._acquire_target = cancelled_acquire
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.target_executor.execute(job_id="probe-job", project=project, workflow="implement", context_key="probe", plan=plan, prompt="probe", cwd=root, cancel_event=threading.Event())
+    assert runtime.database.target_health(key)["probe_job_id"] == ""
+    runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_recorder_close_failure_releases_claimed_probe(tmp_path, monkeypatch):
+    from refract import execution as execution_module
+
+    class BrokenRecorder:
+        def __init__(self, **kwargs): pass
+        async def record(self, *args, **kwargs): pass
+        async def flush(self): pass
+        async def close(self): raise RuntimeError("recorder close failed")
+
+    monkeypatch.setattr(execution_module, "StreamRecorder", BrokenRecorder)
+    holder = {}
+    with pytest.raises(RuntimeError, match="recorder close failed"):
+        await _dispatch_claimed_probe(tmp_path, FakeDrivers(), holder)
+    runtime = holder["runtime"]
+    key = target_execution_key(runtime.config.targets[0])
+    assert runtime.database.target_health(key)["probe_job_id"] == ""
+    runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_target_fatal_probe_does_not_double_cooldown(tmp_path):
+    runtime, key, result = await _dispatch_claimed_probe(tmp_path, FakeDrivers({"primary": "TARGET_FATAL"}))
+    health = runtime.database.target_health(key)
+    assert result.result.outcome == "TARGET_FATAL"
+    assert health["circuit_open_until"]
+    assert health["cooldown_s"] == 77
+    assert health["probe_job_id"] == ""
+    runtime.database.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [
+    DriverResult("RETRYABLE", "", "", "overflow", "context_overflow"),
+    DriverResult("CANCELLED", "", "", "cancelled", "cancelled"),
+    DriverResult("REQUEST_FATAL", "", "", "request failure", "request_error"),
+])
+async def test_noncounted_probe_outcomes_release_probe(tmp_path, result) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class OneResultDrivers(FakeDrivers):
+        async def execute(self, **kwargs) -> DriverResult:
+            return result
+
+    runtime = Runtime(catalog)
+    runtime.drivers = OneResultDrivers()
+    target_key = target_execution_key(catalog.targets[0])
+    await runtime.start()
+    try:
+        with runtime.database._connection:
+            runtime.database._connection.execute(
+                "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s) VALUES (?, 2, '2000-01-01T00:00:00+00:00', 60)",
+                (target_key,),
+            )
+        project = runtime.register_project(str(root))
+        submitted = await runtime.submit(project.id, "implement", "probe")
+        await runtime.wait(submitted.job_id, 5)
+        health = runtime.database.target_health(target_key)
+        assert health["consecutive_failures"] == 2
+        assert health["probe_job_id"] == ""
+        assert health["circuit_open_until"] == "2000-01-01T00:00:00+00:00"
+    finally:
+        await runtime.close()
+
+
+def test_half_open_probe_claim_is_not_leaked_when_target_at_capacity(tmp_path) -> None:
+    targets = (TargetConfig(id="probe", backend="codex"), TargetConfig(id="closed", backend="codex"))
+    catalog = config(tmp_path / "home", targets)
+    database = Database(catalog.database_path)
+    executor = TargetExecutor(catalog, database, FakeDrivers())
+    probe_key = target_execution_key(targets[0])
+    with database._connection:
+        database._connection.execute(
+            "INSERT INTO target_health(target_id, circuit_open_until, cooldown_s) VALUES (?, '2000-01-01T00:00:00+00:00', 60)",
+            (probe_key,),
+        )
+    executor._target_active[probe_key] = targets[0].max_concurrency
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+
+    selected = executor._select_target(plan.selection.targets, plan, "probe-job")
+
+    assert selected is targets[1]
+    assert database.target_health(probe_key)["probe_job_id"] == ""
+    database.close()
+
+
+@pytest.mark.asyncio
+async def test_retryable_failure_runs_one_target_and_persists_result_metadata(tmp_path) -> None:
+    root = repository(tmp_path)
+    targets = (TargetConfig(id="one", backend="codex", model="public-model-a"), TargetConfig(id="two", backend="codex", model="public-model-b"))
+    catalog = config(tmp_path / "home", targets)
+
+    class RetryDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.called = []
+
+        async def execute(self, *, target, **kwargs):
+            self.called.append(target.id)
+            return DriverResult("RETRYABLE", "", "", "transient", "backend_failure", usage={"input_tokens": 7})
+
+    drivers = RetryDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        job = await runtime.wait((await runtime.submit(project.id, "implement", "fail once")).job_id, 5)
+        metadata = job.result.metadata
+        assert drivers.called == ["one"]
+        assert job.state == "failed"
+        assert metadata["failure_kind"] == "retryable"
+        assert metadata["retryable"] is False
+        assert metadata["model_name"] == "public-model-a"
+        assert metadata["input_tokens"] == 7
+        assert isinstance(metadata["duration_ms"], int)
+        assert metadata["next_target"] is None
+        assert set(metadata) == {"model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target"}
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_overwrites_previous_run_metadata_after_driver_exception(tmp_path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home", (TargetConfig(id="primary", backend="codex", model="configured-model"),))
+
+    class FailThenRaise(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+        async def execute(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return DriverResult("RETRYABLE", "", "", "transient", "backend_failure", usage={"model_name": "old-model", "input_tokens": 222})
+            raise RuntimeError("retry backend failure")
+
+    runtime = Runtime(catalog)
+    drivers = FailThenRaise()
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        submission = await runtime.submit(project.id, "implement", "retry")
+        first = await runtime.wait(submission.job_id, 5)
+        assert first.result.metadata["model_name"] == "old-model"
+        assert first.result.metadata["input_tokens"] == 222
+        await runtime.retry(submission.job_id)
+        second = await runtime.wait(submission.job_id, 5)
+        assert second.state == "failed"
+        assert set(second.result.metadata) == RESULT_METADATA_KEYS
+        assert second.result.metadata["failure_kind"] == "request_fatal"
+        assert second.result.metadata["model_name"] == "configured-model"
+        assert second.result.metadata["input_tokens"] is None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_all_open_targets_fail_dispatch_without_counting_or_invoking_driver(tmp_path) -> None:
+    root = repository(tmp_path)
+    targets = (TargetConfig(id="one", backend="codex"), TargetConfig(id="two", backend="codex"))
+    catalog = config(tmp_path / "home", targets)
+
+    class CountingDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+        async def execute(self, **kwargs):
+            self.calls += 1
+            return DriverResult("SUCCESS", "", "unexpected", "", "")
+
+    drivers = CountingDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = runtime.register_project(str(root))
+        for target in targets:
+            key = target_execution_key(target)
+            with runtime.database._connection:
+                runtime.database._connection.execute(
+                    "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s) VALUES (?, 2, '2999-01-01T00:00:00+00:00', 60)",
+                    (key,),
+                )
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        job_id = "dispatch-all-open"
+        runtime.database.create_job(
+            job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
+            prompt="blocked", execution_plan_json=json.dumps(execution_plan_data(plan)),
+            context_key="implement",
+        )
+        outcome = await runtime.target_executor.execute(
+            job_id=job_id, project=project, workflow="implement", context_key="implement",
+            plan=plan, prompt="blocked", cwd=root, cancel_event=threading.Event(),
+        )
+        runtime.database.finish_job(job_id, "failed", error="circuit_open", metadata=outcome.metadata)
+        job = runtime.database.job(job_id)
+        assert drivers.calls == 0
+        assert job.state == "failed"
+        assert job.result.metadata["failure_kind"] == "circuit_open"
+        assert job.result.metadata["duration_ms"] is None
+        assert all(runtime.database.target_health(target_execution_key(target))["consecutive_failures"] == 2 for target in targets)
+    finally:
+        await runtime.close()
 
 
 def test_runtime_submit_signature_omits_commit_message() -> None:
@@ -383,7 +668,7 @@ async def test_submit_with_failed_parent_returns_cancelled_job_and_cause(tmp_pat
 
     class FailedDrivers(FakeDrivers):
         async def execute(self, **kwargs) -> DriverResult:
-            return DriverResult("TARGET_FATAL", "", "", "failed", "backend_failure")
+            return DriverResult(outcome="REQUEST_FATAL", session_id="", text="", error="failed", error_code="request_error")
 
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FailedDrivers()
@@ -418,7 +703,7 @@ async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) ->
     from refract.execution import JobRunner
 
     root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
+    catalog = config(tmp_path / "home", (TargetConfig(id="primary", backend="codex", model="cancel-model"),))
     runtime = Runtime(catalog)
     project = runtime.register_project(str(root))
     plan = resolve_execution_plan(get_workflow("consult"), catalog, "balanced")
@@ -449,7 +734,13 @@ async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) ->
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert runtime.database.job("runner-cancel").state == "cancelled"
+    cancelled_job = runtime.database.job("runner-cancel")
+    assert cancelled_job.state == "cancelled"
+    assert set(cancelled_job.result.metadata) == RESULT_METADATA_KEYS
+    assert cancelled_job.result.metadata["failure_kind"] == "cancelled"
+    assert cancelled_job.result.metadata["retryable"] is False
+    assert cancelled_job.result.metadata["model_name"] == "cancel-model"
+    assert isinstance(cancelled_job.result.metadata["duration_ms"], int)
     runtime.database.close()
 
 
@@ -509,7 +800,7 @@ async def test_retry_rejects_dependent_with_unsuccessful_parent_without_reset(tm
 
     class FailedDrivers(FakeDrivers):
         async def execute(self, **kwargs) -> DriverResult:
-            return DriverResult("TARGET_FATAL", "", "", "failed", "backend_failure")
+            return DriverResult(outcome="REQUEST_FATAL", session_id="", text="", error="failed", error_code="request_error")
 
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FailedDrivers()
@@ -545,7 +836,7 @@ async def test_retrying_parent_does_not_revive_cancelled_descendant(tmp_path) ->
         async def execute(self, **kwargs) -> DriverResult:
             self.calls += 1
             if self.calls == 1:
-                return DriverResult("TARGET_FATAL", "", "", "failed", "backend_failure")
+                return DriverResult("REQUEST_FATAL", "", "", "failed", "request_error")
             return DriverResult("SUCCESS", "", "recovered", "", "")
 
     runtime = Runtime(config(tmp_path / "home"))
@@ -677,7 +968,7 @@ async def test_retry_is_not_lost_while_terminal_notifier_is_paused(tmp_path) -> 
             if self.calls == 1:
                 driver_started.set()
                 await allow_first_failure.wait()
-                return DriverResult("TARGET_FATAL", "", "", "failed", "backend_failure")
+                return DriverResult("REQUEST_FATAL", "", "", "failed", "request_error")
             return DriverResult("SUCCESS", "", "retried", "", "")
 
     async def notify(uri: str) -> None:
@@ -1086,7 +1377,7 @@ async def test_failed_execution_leaves_changes_and_preserves_dirty_preflight(tmp
 
 
 @pytest.mark.asyncio
-async def test_retries_reuse_targets_after_each_failover_pass(tmp_path, monkeypatch) -> None:
+async def test_transient_failure_does_not_schedule_another_attempt(tmp_path) -> None:
     root = repository(tmp_path)
     selection = TargetSelection(("primary",), 2)
     catalog = replace(
@@ -1101,7 +1392,6 @@ async def test_retries_reuse_targets_after_each_failover_pass(tmp_path, monkeypa
     )
     runtime = Runtime(catalog)
     runtime.drivers = RetryDrivers()
-    monkeypatch.setattr("refract.execution.random.uniform", lambda _a, _b: 0)
     await runtime.start()
     try:
         project = runtime.register_project(str(root))
@@ -1110,7 +1400,8 @@ async def test_retries_reuse_targets_after_each_failover_pass(tmp_path, monkeypa
             10,
         )
         assert job.state == "failed"
-        assert job.attempts == 2
+        assert job.attempts == 1
+        assert runtime.drivers.calls == 1
     finally:
         await runtime.close()
 
@@ -1139,7 +1430,7 @@ async def test_retry_transition_notifies_the_same_job_resource(tmp_path) -> None
 
 
 @pytest.mark.asyncio
-async def test_cancellation_interrupts_retry_backoff(tmp_path) -> None:
+async def test_transient_failure_returns_without_retry_backoff(tmp_path) -> None:
     root = repository(tmp_path)
     selection = TargetSelection(("primary",), 2)
     catalog = replace(
@@ -1159,9 +1450,7 @@ async def test_cancellation_interrupts_retry_backoff(tmp_path) -> None:
     try:
         project = runtime.register_project(str(root))
         submitted = await runtime.submit(project.id, "implement", "retry")
-        await drivers.started.wait()
-        await runtime.cancel(submitted.job_id)
-        assert (await runtime.wait(submitted.job_id, 0.5)).state == "cancelled"
+        assert (await runtime.wait(submitted.job_id, 5)).state == "failed"
         assert drivers.calls == 1
     finally:
         await runtime.close()
@@ -1196,6 +1485,31 @@ async def test_queued_and_running_cancellation(tmp_path) -> None:
         assert [job_id for job_id in notifications if job_id == second.job_id] == [second.job_id] * 2
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_releases_orphaned_probe_to_half_open(tmp_path) -> None:
+    catalog = config(tmp_path / "home")
+    key = target_execution_key(catalog.targets[0])
+    runtime = Runtime(catalog)
+    await runtime.start()
+    with runtime.database._connection:
+        runtime.database._connection.execute(
+            "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 60, 'dead-job')",
+            (key,),
+        )
+    await runtime.close()
+
+    restarted = Runtime(catalog)
+    await restarted.start()
+    try:
+        health = restarted.database.target_health(key)
+        assert health["probe_job_id"] == ""
+        assert not restarted.target_executor._is_open(
+            health["circuit_open_until"], datetime.now(timezone.utc)
+        )
+    finally:
+        await restarted.close()
 
 
 @pytest.mark.asyncio
@@ -1421,8 +1735,8 @@ async def test_retry_attempts_recompile_argv_per_backend(tmp_path) -> None:
         project = runtime.register_project(str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "retry")).job_id, 10)
         assert job.state == "failed"
-        assert job.attempts == 2
-        assert compiled == ["claude-target", "pi-target"]
+        assert job.attempts == 1
+        assert compiled == ["claude-target"]
     finally:
         await runtime.close()
 
@@ -1587,7 +1901,7 @@ async def test_fresh_job_bypasses_session_and_history_and_clears_prior_sessions(
 
 
 @pytest.mark.asyncio
-async def test_fresh_job_failover_preserves_freshness(tmp_path) -> None:
+async def test_fresh_job_failure_preserves_freshness_without_fallback(tmp_path) -> None:
     root = repository(tmp_path)
     catalog = config(
         tmp_path / "home",
@@ -1640,15 +1954,12 @@ async def test_fresh_job_failover_preserves_freshness(tmp_path) -> None:
             fresh_session=True,
         )
         job = await runtime.wait(submitted.job_id, 10)
-        assert job.state == "succeeded"
-        assert job.attempts == 2
+        assert job.state == "failed"
+        assert job.attempts == 1
 
-        assert drivers.attempts == [
-            ("primary", "", "failover prompt"),
-            ("secondary", "", "failover prompt"),
-        ]
-        assert runtime.database.session(project.id, "stream", "implement", primary_key) == ""
-        assert runtime.database.session(project.id, "stream", "implement", secondary_key) == "secondary-session"
+        assert drivers.attempts == [("primary", "", "failover prompt")]
+        assert runtime.database.session(project.id, "stream", "implement", primary_key) == "old-primary-session"
+        assert runtime.database.session(project.id, "stream", "implement", secondary_key) == "old-secondary-session"
     finally:
         await runtime.close()
 
@@ -1670,7 +1981,7 @@ async def test_fresh_job_retry_survives_and_runs_fresh(tmp_path) -> None:
             self.recorded_sessions.append(session_id)
             self.recorded_prompts.append(prompt)
             if self.calls == 1:
-                return DriverResult("TARGET_FATAL", "", "", "fatal error", "backend_failure")
+                return DriverResult("REQUEST_FATAL", "", "", "fatal error", "request_error")
             return DriverResult("SUCCESS", "retry-session", "ok", "", "")
 
     drivers = OnceFailingDrivers()
@@ -2335,8 +2646,8 @@ async def test_execution_exact_quota_boundary_retains_finish_marker(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_failed_attempts_retain_attempt_labels(tmp_path) -> None:
-    """Failed attempt transcripts must retain their attempt number and separate from successful attempts."""
+async def test_single_failed_attempt_transcript_uses_attempt_one(tmp_path) -> None:
+    """A single failed target run records its transcript under attempt one."""
     root = repository(tmp_path)
     selection = TargetSelection(("primary",), 2)
     cat = replace(
@@ -2366,44 +2677,28 @@ async def test_failed_attempts_retain_attempt_labels(tmp_path) -> None:
         project = runtime.register_project(str(root))
         sub = await runtime.submit(project.id, "implement", "do attempts")
         job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-        assert job.attempts == 2
-
+        assert job.state == "failed"
+        assert job.attempts == 1
         events = runtime.database.stream_events(sub.job_id, after=0)
-        attempt_1_events = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
-        attempt_2_events = [e for e in events if e.attempt == 2 and e.kind == "assistant.text.delta"]
-        assert len(attempt_1_events) == 1
-        assert attempt_1_events[0].data["text"] == "attempt-1"
-        assert len(attempt_2_events) == 1
-        assert attempt_2_events[0].data["text"] == "attempt-2"
-
-        a1_all = [e for e in events if e.attempt == 1]
-        a2_all = [e for e in events if e.attempt == 2]
-        assert [e.kind for e in a1_all] == ["assistant.text.delta", "attempt.finished"]
-        assert a1_all[1].data["status"] == "failed"
-        assert a1_all[1].data["outcome"] == "RETRYABLE"
-        assert a1_all[1].data["error_code"] == "backend_failure"
-
-        assert [e.kind for e in a2_all] == ["assistant.text.delta", "attempt.finished"]
-        assert a2_all[1].data["status"] == "succeeded"
-        assert a2_all[1].data["outcome"] == "SUCCESS"
-        assert a2_all[1].data["error_code"] == ""
-
-        # Authoritative result is ONLY the successful one
-        assert job.result.text == "final success"
+        deltas = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
+        assert len(deltas) == 1
+        assert deltas[0].data["text"] == "attempt-1"
+        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].attempt == 1
+        assert finished[0].data["status"] == "failed"
+        assert finished[0].data["outcome"] == "RETRYABLE"
+        assert finished[0].data["error_code"] == "backend_failure"
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_attempt_finished_does_not_reuse_prior_attempt_on_exception(tmp_path) -> None:
-    """If drivers.execute raises an exception, the recorder must not reuse the prior attempt's DriverResult."""
+async def test_attempt_finished_records_driver_exception_as_request_failure(tmp_path) -> None:
+    """A driver exception produces one failed recorder event rather than retrying."""
     root = repository(tmp_path)
     selection = TargetSelection(("primary",), 2)
-    cat = replace(
-        config(tmp_path / "home"),
-        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
-    )
+    cat = config(tmp_path / "home", (TargetConfig(id="primary", backend="codex", model="configured-model"),))
 
     class CrashingDrivers(FakeDrivers):
         def __init__(self):
@@ -2416,9 +2711,7 @@ async def test_attempt_finished_does_not_reuse_prior_attempt_on_exception(tmp_pa
                 def worker(c):
                     emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
                 await asyncio.to_thread(worker, self.call_count)
-            if self.call_count == 1:
-                return DriverResult("RETRYABLE", "", "", "first attempt failed", "backend_failure")
-            raise RuntimeError("driver crash on attempt 2")
+            raise RuntimeError("driver crash")
 
     runtime = Runtime(cat)
     runtime.drivers = CrashingDrivers()
@@ -2428,19 +2721,19 @@ async def test_attempt_finished_does_not_reuse_prior_attempt_on_exception(tmp_pa
         sub = await runtime.submit(project.id, "implement", "do crashing attempt")
         job = await runtime.wait(sub.job_id, 5)
         assert job.state == "failed"
+        metadata = job.result.metadata
+        assert set(metadata) == RESULT_METADATA_KEYS
+        assert metadata["failure_kind"] == "request_fatal"
+        assert metadata["retryable"] is False
+        assert metadata["model_name"] == "configured-model"
+        assert isinstance(metadata["duration_ms"], int)
 
         events = runtime.database.stream_events(sub.job_id, after=0)
-        a1_finished = [e for e in events if e.attempt == 1 and e.kind == "attempt.finished"]
-        a2_finished = [e for e in events if e.attempt == 2 and e.kind == "attempt.finished"]
-        assert len(a1_finished) == 1
-        assert a1_finished[0].data["status"] == "failed"
-        assert a1_finished[0].data["outcome"] == "RETRYABLE"
-        assert a1_finished[0].data["error_code"] == "backend_failure"
-
-        assert len(a2_finished) == 1
-        assert a2_finished[0].data["status"] == "failed"
-        assert a2_finished[0].data["outcome"] != "RETRYABLE"
-        assert a2_finished[0].data["error_code"] == "execution_error"
+        finished = [e for e in events if e.attempt == 1 and e.kind == "attempt.finished"]
+        assert len(finished) == 1
+        assert finished[0].data["status"] == "failed"
+        assert finished[0].data["outcome"] == "REQUEST_FATAL"
+        assert finished[0].data["error_code"] == "execution_error"
     finally:
         await runtime.close()
 
@@ -2675,8 +2968,8 @@ async def test_execution_durable_reload_preserves_streaming_and_authoritative_re
 
 
 @pytest.mark.asyncio
-async def test_execution_retries_across_runtime_reload(tmp_path) -> None:
-    """Failed attempt transcripts and retry attempts survive daemon restart with correct labels."""
+async def test_single_failed_execution_metadata_survives_runtime_reload(tmp_path) -> None:
+    """The single failed target's transcript and metadata survive daemon restart."""
     root = repository(tmp_path)
     selection = TargetSelection(("primary",), 2)
     cfg = replace(
@@ -2706,22 +2999,21 @@ async def test_execution_retries_across_runtime_reload(tmp_path) -> None:
         project = runtime1.register_project(str(root))
         sub = await runtime1.submit(project.id, "implement", "retry test")
         job = await runtime1.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-        assert job.attempts == 2
+        assert job.state == "failed"
+        assert job.attempts == 1
+        assert job.result.metadata["failure_kind"] == "retryable"
     finally:
         await runtime1.close()
 
     runtime2 = Runtime(cfg)
     try:
         events = runtime2.database.stream_events(sub.job_id, after=0)
-        a1 = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
-        a2 = [e for e in events if e.attempt == 2 and e.kind == "assistant.text.delta"]
-        assert len(a1) == 1
-        assert a1[0].data["text"] == "attempt-1-text"
-        assert len(a2) == 1
-        assert a2[0].data["text"] == "attempt-2-text"
+        deltas = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
+        assert len(deltas) == 1
+        assert deltas[0].data["text"] == "attempt-1-text"
         reloaded_job = runtime2.database.job(sub.job_id)
-        assert reloaded_job.result.text == "successful second attempt"
+        assert reloaded_job.result.metadata["failure_kind"] == "retryable"
+        assert reloaded_job.result.metadata["retryable"] is False
     finally:
         await runtime2.close()
 
@@ -3369,7 +3661,7 @@ async def test_recovery_tool_activity_during_reconstruction(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovery_ordinary_failure_followed_by_normal_failover(tmp_path) -> None:
+async def test_recovery_ordinary_failure_stops_without_cross_target_fallback(tmp_path) -> None:
     root = repository(tmp_path)
     catalog = config(
         tmp_path / "home",
@@ -3400,22 +3692,18 @@ async def test_recovery_ordinary_failure_followed_by_normal_failover(tmp_path) -
         )
         sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
         job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
+        assert job.state == "failed"
 
-        assert len(drivers.calls) == 3
-        assert drivers.calls[0].target_id == "primary"
-        assert drivers.calls[1].target_id == "primary"
-        assert drivers.calls[2].target_id == "secondary"
-
-        # Ordinary failure increments consecutive_failures for primary
+        assert len(drivers.calls) == 2
+        assert [call.target_id for call in drivers.calls] == ["primary", "primary"]
         assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 1
-        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == "sec-sess"
+        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == ""
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_recovery_all_bounded_calls_overflowing_before_normal_failover(tmp_path) -> None:
+async def test_recovery_overflow_repair_stays_on_selected_target_without_fallback(tmp_path) -> None:
     root = repository(tmp_path)
     catalog = config(
         tmp_path / "home",
@@ -3447,14 +3735,14 @@ async def test_recovery_all_bounded_calls_overflowing_before_normal_failover(tmp
         )
         sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
         job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
+        assert job.state == "failed"
 
-        assert len(drivers.calls) == 4
-        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary", "secondary"]
+        assert len(drivers.calls) == 3
+        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary"]
 
         # Overflow is health-neutral: primary failures remain 0
         assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 0
-        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == "sec-sess"
+        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == ""
     finally:
         await runtime.close()
 
@@ -3795,7 +4083,7 @@ async def test_recovery_max_attempts_one_stays_on_selected_target(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_recovery_target_fatal_uses_normal_health_and_failover(tmp_path) -> None:
+async def test_recovery_target_fatal_opens_breaker_without_cross_target_fallback(tmp_path) -> None:
     root = repository(tmp_path)
     catalog = config(
         tmp_path / "home",
@@ -3826,12 +4114,11 @@ async def test_recovery_target_fatal_uses_normal_health_and_failover(tmp_path) -
         )
         sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
         job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
+        assert job.state == "failed"
 
-        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "secondary"]
-        # Genuine recovery failure retains normal health accounting and failover.
+        assert [c.target_id for c in drivers.calls] == ["primary", "primary"]
         assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 1
-        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == "sec-sess"
+        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == ""
     finally:
         await runtime.close()
 
@@ -3878,7 +4165,7 @@ async def test_recovery_request_fatal_stops_recovery_and_failover(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_recovery_internal_calls_count_one_selected_target_attempt(tmp_path) -> None:
+async def test_recovery_internal_calls_count_one_selected_target_attempt_without_fallback(tmp_path) -> None:
     root = repository(tmp_path)
     catalog = config(
         tmp_path / "home",
@@ -3909,11 +4196,11 @@ async def test_recovery_internal_calls_count_one_selected_target_attempt(tmp_pat
         )
         sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
         job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
+        assert job.state == "failed"
 
-        # Three internal calls on primary plus one failover to secondary count as two selected targets.
-        assert job.attempts == 2
-        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary", "secondary"]
+        # Same-target overflow repair calls still represent one selected attempt.
+        assert job.attempts == 1
+        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary"]
     finally:
         await runtime.close()
 

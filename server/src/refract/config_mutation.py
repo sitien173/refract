@@ -907,14 +907,13 @@ def _apply_workflow_policy(
     policy: WorkflowPolicyData,
 ) -> None:
     targets = list(policy.targets)
-    requires_expansion = policy.timeout_s > 0 or policy.max_attempts != len(targets)
+    requires_expansion = policy.timeout_s > 0
     kind = service.workflow_kind(profile_table, workflow)
     if requires_expansion:
         service.set_workflow_policy(
             profile_table,
             workflow,
             targets=targets,
-            max_attempts=policy.max_attempts or len(targets),
             timeout_s=policy.timeout_s,
         )
     elif kind in ("inline", "table"):
@@ -922,7 +921,6 @@ def _apply_workflow_policy(
             profile_table,
             workflow,
             targets=targets,
-            max_attempts=policy.max_attempts or len(targets),
             timeout_s=policy.timeout_s,
         )
     else:
@@ -1534,7 +1532,6 @@ class ConfigurationMutationService:
         workflow: str,
         *,
         targets: list[str],
-        max_attempts: int,
         timeout_s: int,
     ) -> None:
         """Write a complete workflow policy.
@@ -1546,17 +1543,14 @@ class ConfigurationMutationService:
         existing = profile.get(workflow)
         if isinstance(existing, InlineTable):
             existing["targets"] = _string_array(targets)
-            existing["max_attempts"] = max_attempts
             existing["timeout_s"] = timeout_s
             return
         if isinstance(existing, Table):
             existing["targets"] = _string_array(targets)
-            existing["max_attempts"] = max_attempts
             existing["timeout_s"] = timeout_s
             return
         policy = tomlkit.inline_table()
         policy["targets"] = _string_array(targets)
-        policy["max_attempts"] = max_attempts
         policy["timeout_s"] = timeout_s
         profile[workflow] = policy
 

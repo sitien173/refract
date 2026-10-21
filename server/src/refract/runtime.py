@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import sqlite3
 from collections import deque
+from dataclasses import replace
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,7 +30,7 @@ from refract.models import (
     TargetView,
 )
 from refract.notifications import send_job_notification
-from refract.planning import derive_access_mode, execution_plan_data, resolve_execution_plan
+from refract.planning import (ExecutionPlan, derive_access_mode, execution_plan_data, parse_execution_plan, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target)
 from refract.scheduler import ProjectScheduler
 from refract.streaming import DEFAULT_RETENTION_DAYS, JobStreamHub
 from refract.workflows import get_workflow, validate_request
@@ -45,11 +47,13 @@ class OrchestrationError(ValueError):
         code: str = "internal_error",
         next_action: str = "Retry once, then report the request ID.",
         retryable: bool = False,
+        retry_after_s: int | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.next_action = next_action
         self.retryable = retryable
+        self.retry_after_s = retry_after_s
 
 
 async def _noop_notifier(_: str) -> None:
@@ -161,6 +165,7 @@ class Runtime:
     async def start(self) -> None:
         self._closing = False
         self.prune_retained_transcripts()
+        self.database.reset_orphaned_target_probes()
         interrupted = self.database.interrupt_active_jobs()
         changed_terminal_ids: list[str] = [str(job["id"]) for job in interrupted]
         for job in interrupted:
@@ -384,7 +389,7 @@ class Runtime:
                 message = "Project registration violates a database constraint"
             raise OrchestrationError(message) from exc
 
-    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False, depends_on: list[str] | tuple[str, ...] = ()) -> SubmissionResult:
+    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False, depends_on: list[str] | tuple[str, ...] = (), next_target: str = "") -> SubmissionResult:
         if self._closing:
             raise OrchestrationError(
                 "The daemon is stopping.",
@@ -413,6 +418,14 @@ class Runtime:
                 catalog = load_project_config(Path(project.root), self._reload_catalog_locked())
                 selected_profile = profile.strip() or catalog.default_profile
                 plan = resolve_execution_plan(workflow, catalog, selected_profile)
+                if next_target:
+                    target = resolve_next_target(next_target, catalog.config_revision, project.id, plan)
+                    if target is None:
+                        raise OrchestrationError("The next_target token is invalid or stale.", code="invalid_request", next_action="Resubmit without next_target.")
+                    plan = replace(plan, selection=replace(plan.selection, targets=(target.id,)), targets=(target,))
+                self._ensure_candidates_available(plan)
+        except OrchestrationError:
+            raise
         except ValueError as exc:
             code = "unknown_profile" if "Unknown profile" in str(exc) else "config_invalid"
             action = (
@@ -457,6 +470,36 @@ class Runtime:
         await self._notify_job(job_id)
         log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})
         return SubmissionResult(job_id=job_id, state=state)
+
+    def live_result_metadata(self, job: JobView) -> dict[str, object]:
+        keys = ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target")
+        stored = job.result.metadata
+        if not stored:
+            return dict.fromkeys(keys)
+        metadata = {key: stored.get(key) for key in keys}
+        if job.state == "succeeded":
+            metadata["next_target"] = metadata["retryable"] = None
+            return metadata
+        if metadata.get("failure_kind") in {"retryable", "target_fatal", "circuit_open", "cancelled"}:
+            next_token = None
+            try:
+                project = self.database.project(job.project_id)
+                if project:
+                    catalog = self.catalog_for_project(job.project_id)
+                    plan = resolve_execution_plan(job.workflow, catalog, job.profile)
+                    ids = [target.id for target in plan.targets]
+                    start = ids.index(job.target_id) + 1 if job.target_id in ids else 0
+                    now = datetime.now(timezone.utc)
+                    for target in plan.targets[start:]:
+                        health = self.database.target_health(target_execution_key(target))
+                        if not self.target_executor._is_open(health.get("circuit_open_until", ""), now, health.get("probe_job_id", "")):
+                            next_token = next_target_token(catalog.config_revision, project.id, job.profile, job.workflow, target)
+                            break
+            except (OrchestrationError, ValueError):
+                next_token = None
+            metadata["next_target"] = next_token
+            metadata["retryable"] = next_token is not None
+        return metadata
 
     async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:
         job = self.database.job(job_id)
@@ -506,6 +549,25 @@ class Runtime:
             return ActionResult(success=True, job_id=job_id, state="running")
         return ActionResult(success=False, job_id=job_id, state=job.state, error=f"Job cannot be cancelled from {job.state}")
 
+    def _ensure_candidates_available(self, plan: ExecutionPlan) -> None:
+        now = datetime.now(timezone.utc)
+        opened = []
+        for target in plan.targets:
+            health = self.database.target_health(target_execution_key(target))
+            if self.target_executor._is_open(health.get("circuit_open_until", ""), now, health.get("probe_job_id", "")):
+                opened.append(health)
+        if len(opened) != len(plan.targets):
+            return
+        delays = []
+        for health in opened:
+            until = health.get("circuit_open_until", "")
+            try:
+                delay = max(1, math.ceil((datetime.fromisoformat(until) - now).total_seconds())) if until and datetime.fromisoformat(until) > now else self._catalog.breaker_base_cooldown_s
+            except ValueError:
+                delay = self._catalog.breaker_base_cooldown_s
+            delays.append(delay)
+        raise OrchestrationError("All candidate targets are temporarily unavailable.", code="targets_unavailable", next_action="Wait for a target to recover, then retry.", retryable=True, retry_after_s=min(delays))
+
     async def retry(self, job_id: str) -> SubmissionResult:
         job = self.database.job(job_id)
         if job is None:
@@ -528,6 +590,14 @@ class Runtime:
                 code="dependency_failed",
                 next_action=f"Retry dependency {dependency_id} first, then retry this job.",
             )
+        record = self.database.job_record(job_id)
+        if record is not None:
+            try:
+                stored_plan = parse_execution_plan(json.loads(record["execution_plan_json"]))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                stored_plan = None
+            if stored_plan is not None:
+                self._ensure_candidates_available(stored_plan)
         self.database.reset_retry(job_id)
         self._enqueue_record(job_id)
         await self._notify_job(job_id)

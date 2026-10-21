@@ -15,7 +15,7 @@ from typing import Any
 
 from refract.logging_setup import get_logger
 
-from . import BackendResult, classify_backend_output, classify_tool_activity
+from . import BackendResult, _usage_dict, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 
 log = get_logger("claude")
@@ -232,6 +232,19 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
         log.error("claude: unexpected error during stream type=%s", type(exc).__name__)
 
     agent_messages, extracted_session_id, diagnostics, result_error = _extract_output(lines)
+    usage_values: dict[str, Any] = {}
+    for line in lines:
+        try:
+            event = json.loads(line)
+            if isinstance(event, dict) and event.get("type") == "result":
+                model_usage = event.get("modelUsage")
+                model = next(iter(model_usage)) if isinstance(model_usage, dict) and model_usage else None
+                stats = model_usage.get(model, {}) if model else {}
+                usage = event.get("usage")
+                usage = usage if isinstance(usage, dict) else {}
+                usage_values = {"model_name": model, "input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens"), "cached_input_tokens": usage.get("cache_read_input_tokens"), "context_window_max": stats.get("contextWindow") if isinstance(stats, dict) else None}
+        except (json.JSONDecodeError, TypeError):
+            continue
     session_id = extracted_session_id or params.SESSION_ID
     error_text = "\n".join(
         part for part in (command_error, diagnostics, result_error) if part
@@ -243,6 +256,7 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
         error_text=error_text,
     )
 
+    result.usage = _usage_dict(**usage_values)
     if result_error and not command_error:
         result.outcome = "FATAL"
         if result.error_class in {"", "warning", "no_agent_messages"}:

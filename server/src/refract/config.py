@@ -9,12 +9,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from refract.logging_setup import get_logger
+
 from refract.config_inspection import (
     ConfigurationLoadError,
     read_config_source,
     sanitize_config_error,
 )
 from refract.workflows import get_workflow
+
+log = get_logger("config")
 
 
 @dataclass(slots=True, frozen=True)
@@ -90,6 +94,9 @@ class DaemonConfig:
     config_loaded_at: str = ""
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    breaker_failure_threshold: int = 3
+    breaker_base_cooldown_s: int = 60
+    breaker_max_cooldown_s: int = 900
 
     @property
     def database_path(self) -> Path:
@@ -233,6 +240,11 @@ def _target_selection(
         max_attempts = _positive_int(
             raw.get("max_attempts"), len(selected), "max_attempts"
         )
+        if "max_attempts" in raw:
+            log.warning(
+                "Deprecated profile workflow key max_attempts",
+                extra={"event": "config.deprecated_key", "profile": profile_id, "workflow": workflow, "key": "max_attempts"},
+            )
         raw_timeout = raw.get("timeout_s", 0)
         if (
             isinstance(raw_timeout, bool)
@@ -602,6 +614,9 @@ def _load_config_values(
         "history_turns",
         "history_bytes",
         "default_profile",
+        "breaker_failure_threshold",
+        "breaker_base_cooldown_s",
+        "breaker_max_cooldown_s",
     }
     if unsupported_daemon:
         raise ValueError(f"Unsupported daemon settings: {sorted(unsupported_daemon)}")
@@ -625,6 +640,10 @@ def _load_config_values(
     port = _positive_int(daemon.get("port"), 8765, "[daemon].port")
     if port > 65535:
         raise ValueError("[daemon].port must not exceed 65535")
+    breaker_base = _positive_int(daemon.get("breaker_base_cooldown_s"), 60, "[daemon].breaker_base_cooldown_s")
+    breaker_max = _positive_int(daemon.get("breaker_max_cooldown_s"), 900, "[daemon].breaker_max_cooldown_s")
+    if breaker_max < breaker_base:
+        raise ValueError("[daemon].breaker_max_cooldown_s must be >= breaker_base_cooldown_s")
     return DaemonConfig(
         home=home,
         config_path=config_path,
@@ -651,6 +670,9 @@ def _load_config_values(
         profile_declarations=profile_declarations,
         logging=_logging_config(raw.get("logging"), home),
         notifications=_notifications_config(raw.get("notifications")),
+        breaker_failure_threshold=_positive_int(daemon.get("breaker_failure_threshold"), 3, "[daemon].breaker_failure_threshold"),
+        breaker_base_cooldown_s=breaker_base,
+        breaker_max_cooldown_s=breaker_max,
     )
 
 

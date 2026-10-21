@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -122,24 +123,24 @@ def table_columns(database: Database, table: str) -> set[str]:
     return database._columns(table)
 
 
-def test_fresh_database_uses_v12_schema(tmp_path) -> None:
+def test_fresh_database_uses_v13_schema(tmp_path) -> None:
     database = Database(tmp_path / "refract.db")
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "result_metadata_json", "created_at", "updated_at"}
     assert "job_stream_events" in tables
     assert "stages" not in tables and "artifacts" not in tables
     database.close()
 
 
-def test_v6_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v6_migrates_to_v13_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v6_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "result_metadata_json", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
@@ -153,13 +154,13 @@ def test_v6_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_v5_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v5_migrates_to_v13_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v5_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "result_metadata_json", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
@@ -172,20 +173,20 @@ def test_v5_migrates_to_v12_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_reopening_v12_is_a_noop(tmp_path) -> None:
+def test_reopening_v13_is_a_noop(tmp_path) -> None:
     path = tmp_path / "refract.db"
     first = Database(path)
     first.close()
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 13
     second.close()
 
 
-def test_v9_migrates_to_v12_adding_fresh_session_column(tmp_path) -> None:
+def test_v9_migrates_to_v13_adding_fresh_session_column(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v9_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert "fresh_session" in table_columns(database, "jobs")
     assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     record = database.job_record("job")
@@ -193,14 +194,14 @@ def test_v9_migrates_to_v12_adding_fresh_session_column(tmp_path) -> None:
     database.close()
 
 
-def test_v8_migrates_to_v12_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
+def test_v8_migrates_to_v13_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v8_database(path)
 
     database = Database(path)
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "context_instructions" not in tables
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert "fresh_session" in table_columns(database, "jobs")
     assert "job_stream_events" in tables
     record = database.job_record("job")
@@ -482,11 +483,11 @@ def create_v10_database(path) -> None:
     connection.close()
 
 
-def test_v10_migrates_to_v12_adding_stream_events_table(tmp_path) -> None:
+def test_v10_migrates_to_v13_adding_stream_events_table(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v10_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     expected_cols = {
         "id", "job_id", "created_at", "attempt", "target_id",
@@ -680,7 +681,7 @@ def test_database_reopen_preserves_stream_events_and_cursors(tmp_path) -> None:
     database.close()
 
     reopened = Database(path)
-    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 13
     assert reopened.stream_high_water("job-1") == event_id
     assert reopened.stream_retained_from("job-1") == event_id
     events = reopened.stream_events("job-1", after=0)
@@ -862,11 +863,78 @@ def test_v11_migrates_existing_jobs_as_exclusive_without_dependencies(tmp_path) 
 
     database = Database(path)
 
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert "result_metadata_json" in table_columns(database, "jobs")
     assert "access_mode" in table_columns(database, "jobs")
     assert database.job_record("old")["access_mode"] == "exclusive"
     assert database._connection.execute("SELECT COUNT(*) FROM job_dependencies").fetchone()[0] == 0
     database.close()
+
+
+def test_v12_to_v13_migration_preserves_rows(tmp_path) -> None:
+    path = tmp_path / "refract.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p", alias="p", root="/p")
+    db.create_job(job_id="existing", project_id=project.id, workflow="consult", profile="p", prompt="x", execution_plan_json="{}", context_key="k")
+    with db._connection:
+        db._connection.execute("INSERT INTO target_health(target_id, consecutive_failures) VALUES ('target', 2)")
+    db.close()
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE target_health DROP COLUMN probe_job_id")
+    conn.execute("ALTER TABLE target_health DROP COLUMN cooldown_s")
+    conn.execute("ALTER TABLE jobs DROP COLUMN result_metadata_json")
+    conn.execute("PRAGMA user_version=12")
+    conn.commit()
+    conn.close()
+    migrated = Database(path)
+    assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert migrated.job_record("existing")["prompt"] == "x"
+    assert migrated.job_record("existing")["result_metadata_json"] == "{}"
+    assert migrated.target_health("target")["consecutive_failures"] == 2
+    migrated.close()
+
+
+def test_probe_claim_is_atomic_and_failure_cooldown_caps(tmp_path) -> None:
+    path = tmp_path / "refract.db"
+    db = Database(path)
+    expired = "2000-01-01T00:00:00+00:00"
+    with db._connection:
+        db._connection.execute("INSERT INTO target_health(target_id,circuit_open_until,cooldown_s) VALUES ('t',?,60)", (expired,))
+    db.close()
+
+    def claim(job: int) -> bool:
+        connection = Database(path)
+        try:
+            return connection.claim_target_probe("t", str(job), "2026-01-01T00:00:00+00:00")
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        claims = list(pool.map(claim, range(20)))
+    assert sum(claims) == 1
+    db = Database(path)
+    assert db.target_health("t")["probe_job_id"] in {str(i) for i in range(20)}
+    db.record_target_failure("t", threshold=3, base_cooldown_s=60, max_cooldown_s=100, failed_probe=True)
+    assert db.target_health("t")["cooldown_s"] == 100
+    db.record_target_success("t", base_cooldown_s=60)
+    health = db.target_health("t")
+    assert health["consecutive_failures"] == 0
+    assert health["circuit_open_until"] == ""
+    assert health["probe_job_id"] == ""
+    assert health["cooldown_s"] == 60
+    db.close()
+
+
+def test_failure_threshold_and_immediate_open(tmp_path) -> None:
+    db = Database(tmp_path / "refract.db")
+    for _ in range(2):
+        assert db.record_target_failure("retry", threshold=3, base_cooldown_s=60, max_cooldown_s=300) < 3
+    assert db.target_health("retry")["circuit_open_until"] == ""
+    db.record_target_failure("retry", threshold=3, base_cooldown_s=60, max_cooldown_s=300)
+    assert db.target_health("retry")["circuit_open_until"]
+    db.record_target_failure("fatal", threshold=3, base_cooldown_s=60, max_cooldown_s=300, immediate=True)
+    assert db.target_health("fatal")["circuit_open_until"]
+    db.close()
 
 
 def test_create_job_with_dependencies_is_atomic_and_supports_reverse_lookup(tmp_path) -> None:

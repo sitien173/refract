@@ -184,10 +184,7 @@ describe('Profiles screen', () => {
     const moveUpBtn = within(dialog).getByRole('button', { name: /Move consult target 2 up/i })
     fireEvent.click(moveUpBtn)
 
-    // Set max attempts and timeout
-    const maxAttemptsInput = within(dialog).getByRole('spinbutton', { name: /^consult max attempts$/i })
-    fireEvent.change(maxAttemptsInput, { target: { value: '2' } })
-
+    // Set timeout
     const timeoutInput = within(dialog).getByRole('spinbutton', { name: /^consult timeout in seconds$/i })
     fireEvent.change(timeoutInput, { target: { value: '45' } })
 
@@ -203,7 +200,6 @@ describe('Profiles screen', () => {
           workflows: {
             consult: {
               targets: ['target-b', 'target-a'],
-              max_attempts: 2,
               timeout_s: 45,
             },
             implement: null,
@@ -214,10 +210,56 @@ describe('Profiles screen', () => {
         'rev-prof-001'
       )
     })
+    const createPayload = vi.mocked(api.createConfigurationProfile).mock.calls[0][0]
+    expect(createPayload.workflows.consult).not.toHaveProperty('max_attempts')
 
     await vi.waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
+  })
+
+  it('omits max_attempts from profile editor save payloads and does not render max_attempts input', async () => {
+    vi.mocked(api.createConfigurationProfile).mockResolvedValue({
+      revision: 'rev-prof-002',
+      profile: { id: 'no-max-profile', extends: null },
+    })
+
+    render(<Profiles />)
+    expect(await screen.findByText('default')).toBeInTheDocument()
+
+    const createBtn = screen.getByRole('button', { name: /^Create profile$/i })
+    fireEvent.click(createBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Create profile/i })
+
+    // Assert max_attempts input is absent
+    expect(within(dialog).queryByLabelText(/max attempts/i)).not.toBeInTheDocument()
+
+    // Fill profile id
+    fireEvent.change(within(dialog).getByLabelText(/Profile identifier/i), { target: { value: 'no-max-profile' } })
+
+    // Declare consult workflow
+    const consultToggle = within(dialog).getByRole('checkbox', { name: /Declare custom policy for consult workflow/i })
+    fireEvent.click(consultToggle)
+
+    // Set timeout
+    const timeoutInput = within(dialog).getByRole('spinbutton', { name: /^consult timeout in seconds$/i })
+    fireEvent.change(timeoutInput, { target: { value: '30' } })
+
+    // Submit form
+    const submitBtn = within(dialog).getByRole('button', { name: /^Create profile$/i })
+    fireEvent.click(submitBtn)
+
+    await vi.waitFor(() => {
+      expect(api.createConfigurationProfile).toHaveBeenCalled()
+    })
+
+    const submittedPayload = vi.mocked(api.createConfigurationProfile).mock.calls[0][0]
+    expect(submittedPayload.workflows.consult).toEqual({
+      targets: ['target-a'],
+      timeout_s: 30,
+    })
+    expect(submittedPayload.workflows.consult).not.toHaveProperty('max_attempts')
   })
 
   it('opens profile editor in edit mode with immutable identifier and preserves inherited policies', async () => {

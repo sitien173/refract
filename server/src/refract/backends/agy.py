@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import BackendResult, classify_backend_output, classify_tool_activity
+from . import BackendResult, _usage_dict, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from refract.logging_setup import get_logger
 
@@ -411,7 +411,18 @@ def _execute_once(params: AgyParams, entity_state: dict[str, int] | None = None)
             error_class="timeout",
         )
 
+    usage_values: dict[str, Any] = {}
+    for line in stdout_lines:
+        try:
+            event = json.loads(line)
+            payload = event.get("result") if isinstance(event, dict) and event.get("event") == "result" else None
+            u = payload.get("usage") if isinstance(payload, dict) else None
+            if isinstance(u, dict):
+                usage_values = {"input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"), "cached_input_tokens": u.get("cache_read_tokens")}
+        except (json.JSONDecodeError, TypeError):
+            continue
     result = _classify_output(agent_messages, extracted_session_id, error_text)
+    result.usage = _usage_dict(**usage_values)
     log.info(
         "agy.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",
         result.outcome,

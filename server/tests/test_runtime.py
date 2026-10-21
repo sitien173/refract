@@ -7,6 +7,198 @@ import pytest
 
 from refract.config import load_config
 from refract.runtime import OrchestrationError, Runtime
+from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target
+
+
+@pytest.mark.asyncio
+async def test_submit_pins_valid_token_and_prechecks_all_open_targets(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('''[daemon]\ndefault_profile = "balanced"\nbreaker_base_cooldown_s = 7\n\n[[targets]]\nid = "a"\nbackend = "codex"\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[profiles.balanced]\nconsult = ["a", "b"]\n''', encoding="utf-8")
+    runtime = Runtime(load_config(path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = runtime.register_project(str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", plan.targets[1])
+    try:
+        first = await runtime.submit(project.id, "consult", "hello", next_target=token)
+        stored = runtime.database.job_record(first.job_id)
+        assert json.loads(stored["execution_plan_json"])["selection"]["targets"] == ["b"]
+        assert len(runtime.database.jobs(project.id)) == 1
+        for target in plan.targets:
+            runtime.database.record_target_failure(target_execution_key(target), immediate=True, base_cooldown_s=7)
+        with pytest.raises(OrchestrationError) as raised:
+            await runtime.submit(project.id, "consult", "no row")
+        assert raised.value.code == "targets_unavailable"
+        assert raised.value.retryable is True and type(raised.value.retry_after_s) is int
+        assert len(runtime.database.jobs(project.id)) == 1
+    finally:
+        await runtime.close()
+
+
+def test_next_target_token_is_bound_to_revision_project_profile_workflow_and_candidate(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    _config(path)
+    config = load_config(path)
+    plan = resolve_execution_plan("consult", config, "balanced")
+    first = plan.targets[0]
+    token = next_target_token(config.config_revision, "project", plan.profile, plan.workflow, first)
+
+    expected = "nt_" + hashlib.sha256(json.dumps([config.config_revision, "project", plan.profile, plan.workflow, target_execution_key(first)], separators=(",", ":")).encode()).hexdigest()[:16]
+    assert token == expected
+    assert token.startswith("nt_") and len(token) == 19
+    assert resolve_next_target(token, config.config_revision, "project", plan) == first
+    assert resolve_next_target(token, "changed-revision", "project", plan) is None
+    assert resolve_next_target(token, config.config_revision, "other-project", plan) is None
+
+
+@pytest.mark.asyncio
+async def test_live_metadata_routes_after_failure_without_persisting_hint(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = runtime.register_project(str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    metadata = {key: None for key in ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms")}
+    metadata.update(failure_kind="retryable", retryable=False, next_target=None)
+    try:
+        for target_b_open in (False, True):
+            job_id = "live-route-open" if target_b_open else "live-route-closed"
+            runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="fail", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
+            runtime.database.finish_job(job_id, "failed", target_id="a", metadata=metadata)
+            if target_b_open:
+                runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(plan.targets[1]),))
+            else:
+                runtime.database.record_target_success(target_execution_key(plan.targets[1]))
+            view = runtime.database.job(job_id)
+            result = runtime.live_result_metadata(view)
+            assert (result["next_target"].startswith("nt_") and result["retryable"] is True) if not target_b_open else (result["next_target"] is None and result["retryable"] is False)
+            assert json.loads(runtime.database.job_record(job_id)["result_metadata_json"])["next_target"] is None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_foreign_profile_and_stale_revision_tokens_without_insert(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = runtime.register_project(str(root), "project")
+    original = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", original.targets[1])
+    try:
+        for selected_profile in ("alternate",):
+            with pytest.raises(OrchestrationError) as raised:
+                await runtime.submit(project.id, "consult", "x", profile=selected_profile, next_target=token)
+            assert raised.value.code == "invalid_request"
+            assert raised.value.next_action == "Resubmit without next_target."
+            assert runtime.database.jobs(project.id) == []
+        config_path.write_text(config_path.read_text(encoding="utf-8").replace('backend = "claude"', 'backend = "claude"\nmodel = "changed"'), encoding="utf-8")
+        with pytest.raises(OrchestrationError) as raised:
+            await runtime.submit(project.id, "consult", "x", next_target=token)
+        assert raised.value.code == "invalid_request"
+        assert raised.value.next_action == "Resubmit without next_target."
+        assert runtime.database.jobs(project.id) == []
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_all_open_leaves_failed_job_untouched(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = runtime.register_project(str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    job_id = "retry-open"
+    metadata = {key: None for key in ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms")}
+    metadata.update(failure_kind="retryable", retryable=False, next_target=None)
+    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="retry-open")
+    runtime.database.record_job_attempt(job_id, "a")
+    runtime.database.finish_job(job_id, "failed", target_id="a", metadata=metadata)
+    for target in plan.targets:
+        runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(target),))
+    prior = runtime.database.job_record(job_id)
+    events = runtime.database.events(job_id)
+    try:
+        with pytest.raises(OrchestrationError) as raised:
+            await runtime.retry(job_id)
+        assert raised.value.code == "targets_unavailable"
+        assert raised.value.retryable is True and type(raised.value.retry_after_s) is int
+        after = runtime.database.job_record(job_id)
+        assert after["state"] == prior["state"] == "failed"
+        assert after["attempts"] == prior["attempts"]
+        assert runtime.database.events(job_id) == events
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_after_uses_reloaded_cooldown_for_held_probes(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    content = config_path.read_text(encoding="utf-8").replace('default_profile = "balanced"', 'default_profile = "balanced"\nbreaker_base_cooldown_s = 7')
+    config_path.write_text(content, encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = runtime.register_project(str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    job_id = "retry-reloaded-cooldown"
+    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
+    runtime.database.finish_job(job_id, "failed")
+    changed = config_path.read_text(encoding="utf-8").replace("breaker_base_cooldown_s = 7", "breaker_base_cooldown_s = 23")
+    config_path.write_text(changed, encoding="utf-8")
+    runtime.reload_configuration()
+    for target in plan.targets:
+        runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '', 0, 'held-probe')", (target_execution_key(target),))
+    try:
+        with pytest.raises(OrchestrationError) as raised:
+            await runtime.retry(job_id)
+        assert raised.value.code == "targets_unavailable"
+        assert raised.value.retry_after_s == 23
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_submit_with_next_target_executes_second_candidate(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = runtime.register_project(str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", plan.targets[1])
+    executed = []
+    class Drivers:
+        @staticmethod
+        def available(_target): return True
+        async def execute(self, *, target, **kwargs):
+            executed.append(target.id)
+            from refract.drivers import DriverResult
+            return DriverResult("SUCCESS", "session-b", "done", "", "")
+    runtime.drivers = Drivers()
+    await runtime.start()
+    try:
+        submitted = await runtime.submit(project.id, "consult", "run b", next_target=token)
+        job = await runtime.wait(submitted.job_id, 5)
+        assert job.state == "succeeded"
+        assert executed == ["b"]
+        assert runtime.database.job_record(job.id)["target_id"] == "b"
+    finally:
+        await runtime.close()
+
+
+def _two_target_config(path) -> None:
+    path.write_text('''[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "a"\nbackend = "codex"\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[profiles.balanced]\nconsult = ["a", "b"]\nreview = ["a", "b"]\n\n[profiles.alternate]\nconsult = ["a", "b"]\nreview = ["a", "b"]\n''', encoding="utf-8")
 
 
 def _config(path) -> None:
@@ -207,7 +399,7 @@ async def test_project_override_runtime_activation_and_plan_preservation(tmp_pat
 
     # Runtime activation: project catalog immediately reflects the override
     proj_catalog = runtime.catalog_for_project_cached(project.id)
-    assert proj_catalog.profiles["balanced"]["consult"].max_attempts == 3
+    assert proj_catalog.profiles["balanced"]["consult"].max_attempts == 1
     assert proj_catalog.profiles["balanced"]["consult"].timeout_s == 99
 
     # Submit job 2 under updated override

@@ -378,6 +378,63 @@ def test_readme_documents_dashboard_boundaries() -> None:
 
 
 @pytest.mark.asyncio
+async def test_target_views_report_all_breaker_states(active_runtime) -> None:
+    from dataclasses import replace
+    from datetime import datetime, timedelta, timezone
+
+    from refract.planning import target_execution_key
+
+    base = active_runtime.catalog.targets[0]
+    targets = tuple(replace(base, id=name) for name in ("closed", "open", "half_open", "probing"))
+    now = datetime.now(timezone.utc)
+    health = {
+        "closed": {"circuit_open_until": "", "cooldown_s": 0, "probe_job_id": ""},
+        "open": {
+            "circuit_open_until": (now + timedelta(seconds=60)).isoformat(),
+            "cooldown_s": 60,
+            "probe_job_id": "",
+        },
+        "half_open": {
+            "circuit_open_until": (now - timedelta(seconds=1)).isoformat(),
+            "cooldown_s": 120,
+            "probe_job_id": "",
+        },
+        "probing": {
+            "circuit_open_until": (now - timedelta(seconds=1)).isoformat(),
+            "cooldown_s": 240,
+            "probe_job_id": "job-probe",
+        },
+    }
+    for target in targets:
+        row = health[target.id]
+        key = target_execution_key(target)
+        active_runtime.database._connection.execute(
+            "INSERT OR REPLACE INTO target_health (target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, ?, ?, ?)",
+            (key, row["circuit_open_until"], row["cooldown_s"], row["probe_job_id"]),
+        )
+
+    views = active_runtime.target_executor.views(targets)
+
+    closed_view, open_view, half_open_view, probing_view = views
+
+    assert closed_view.breaker_state == "closed"
+    assert closed_view.probing is False
+    assert closed_view.cooldown_s == 0
+
+    assert open_view.breaker_state == "open"
+    assert open_view.probing is False
+    assert open_view.cooldown_s == 60
+
+    assert half_open_view.breaker_state == "half_open"
+    assert half_open_view.probing is False
+    assert half_open_view.cooldown_s == 120
+
+    assert probing_view.breaker_state == "half_open"
+    assert probing_view.probing is True
+    assert probing_view.cooldown_s == 240
+
+
+@pytest.mark.asyncio
 async def test_runtime_targets_endpoint_remains_unchanged(active_runtime) -> None:
     app = create_application()
     status, headers, body = await request(app, "/dashboard/api/targets")
@@ -389,6 +446,7 @@ async def test_runtime_targets_endpoint_remains_unchanged(active_runtime) -> Non
         assert set(target.keys()) <= {
             "id", "model", "backend", "isolated", "read_only",
             "max_concurrency", "active", "healthy", "circuit_open_until",
+            "breaker_state", "cooldown_s", "probing",
         }
         assert "system_prompt" not in target
         assert "args" not in target

@@ -31,6 +31,7 @@ vi.mock('../api', () => {
 
 describe('ProjectDetail screen', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.mocked(api.getConfiguration).mockResolvedValue({ valid: true })
     vi.mocked(api.getProjectProfileOverrides).mockResolvedValue({
       revision: 'rev-proj-001',
@@ -418,20 +419,23 @@ describe('ProjectDetail screen', () => {
     fireEvent.click(consultCheckbox)
 
     const submitBtn = within(dialog).getByRole('button', { name: /^Create override$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
-    expect(api.createProjectProfileOverride).toHaveBeenCalledWith(
-      'proj-demo',
-      expect.objectContaining({
-        id: 'new-override',
-        workflows: expect.objectContaining({
-          consult: expect.objectContaining({
-            targets: expect.any(Array),
+    await waitFor(() => {
+      expect(api.createProjectProfileOverride).toHaveBeenCalledWith(
+        'proj-demo',
+        expect.objectContaining({
+          id: 'new-override',
+          workflows: expect.objectContaining({
+            consult: expect.objectContaining({
+              targets: expect.any(Array),
+            }),
           }),
         }),
-      }),
-      'rev-proj-001'
-    )
+        'rev-proj-001'
+      )
+    })
   })
 
   it('opens profile editor to edit an existing project override with prefilled data', async () => {
@@ -477,12 +481,14 @@ describe('ProjectDetail screen', () => {
     const submitBtn = within(dialog).getByRole('button', { name: /^Save override$/i })
     fireEvent.click(submitBtn)
 
-    expect(api.updateProjectProfileOverride).toHaveBeenCalledWith(
-      'proj-demo',
-      'custom-profile',
-      expect.objectContaining({ id: 'custom-profile' }),
-      'rev-proj-001'
-    )
+    await waitFor(() => {
+      expect(api.updateProjectProfileOverride).toHaveBeenCalledWith(
+        'proj-demo',
+        'custom-profile',
+        expect.objectContaining({ id: 'custom-profile' }),
+        'rev-proj-001'
+      )
+    })
   })
 
   it('shows remove override dialog with server-resolved global fallback preview and confirms removal with "Remove override" button', async () => {

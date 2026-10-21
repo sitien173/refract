@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import threading
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -93,6 +93,7 @@ class DriverResult:
     text: str
     error: str
     error_code: str
+    usage: dict[str, int | str | None] = field(default_factory=dict)
 
 
 def _target_args(target: TargetConfig) -> tuple[str, ...]:
@@ -181,6 +182,7 @@ def _normalize(result: BackendResult) -> DriverResult:
         text=result.agent_messages,
         error=result.error,
         error_code=result.error_class,
+        usage=dict(result.usage),
     )
 
 

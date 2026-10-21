@@ -172,6 +172,8 @@ before it can be called unknown; absence never permits duplicate submission.
 
 ## Gate 2: Execute
 
+On a failed job, read `result.metadata.failure_kind`; then resubmit with `next_target`, resubmit with `fresh_session=true` for `context_overflow`, or report.
+
 For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch with
 [implementer-prompt.md](../executing-plans/implementer-prompt.md).
 

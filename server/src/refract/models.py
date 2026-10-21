@@ -23,6 +23,7 @@ class ProjectView(BaseModel):
 class JobResult(BaseModel):
     text: str = ""
     error: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ConfigRevision(BaseModel):
@@ -133,6 +134,9 @@ class TargetView(BaseModel):
     active: int
     healthy: bool
     circuit_open_until: str = ""
+    breaker_state: Literal["closed", "open", "half_open"]
+    cooldown_s: int
+    probing: bool
 
 
 class ContextStreamView(BaseModel):

@@ -57,6 +57,7 @@ _ERROR_CODES = frozenset(
         "invalid_request",
         "response_too_large",
         "internal_error",
+        "targets_unavailable",
     }
 )
 _DASHBOARD_STATE = DashboardState()
@@ -71,20 +72,25 @@ class RefractError(ToolError):
         message: str,
         next_action: str,
         retryable: bool = False,
+        retry_after_s: int | None = None,
     ) -> None:
         self.code = code if code in _ERROR_CODES else "internal_error"
         self.message = message
         self.next_action = next_action
         self.retryable = bool(retryable)
+        self.retry_after_s = retry_after_s if self.code == "targets_unavailable" else None
         super().__init__(self.to_json())
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "code": self.code,
             "message": self.message,
             "next_action": self.next_action,
             "retryable": self.retryable,
         }
+        if self.code == "targets_unavailable" and self.retry_after_s is not None:
+            payload["retry_after_s"] = self.retry_after_s
+        return payload
 
     def to_json(self) -> str:
         return json.dumps(self.to_payload(), ensure_ascii=False, separators=(",", ":"))
@@ -185,6 +191,7 @@ def _page_terminal_result(
     offset: int,
     *,
     public_error: str = "",
+    metadata: Mapping[str, Any] | None = None,
 ) -> str:
     result_text = job.result.text
     start = min(offset, len(result_text))
@@ -197,6 +204,7 @@ def _page_terminal_result(
                 "text": page_text,
                 "error": public_error,
                 "next_offset": end if end < len(result_text) else None,
+                "metadata": dict(metadata if metadata is not None else job.result.metadata),
             },
         }
         serialized = json.dumps(_public_data(payload), ensure_ascii=False, separators=(",", ":"))
@@ -220,7 +228,12 @@ def _page_terminal_result(
 
 
 def _valid_refract_error(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict) or set(value) != _ERROR_FIELDS:
+    if not isinstance(value, dict):
+        return None
+    expected = _ERROR_FIELDS | ({"retry_after_s"} if value.get("code") == "targets_unavailable" else set())
+    if set(value) != expected:
+        return None
+    if "retry_after_s" in value and (type(value["retry_after_s"]) is not int or value["retry_after_s"] < 1):
         return None
     if (
         not isinstance(value["code"], str)
@@ -293,7 +306,7 @@ def _raw_argument_error(tool_name: str, arguments: Mapping[str, Any] | None) -> 
         "task_guide": {"project_id": str},
         "job_submit": {
             "project_id": str, "workflow": str, "prompt": str, "profile": str,
-            "context_key": str, "fresh_session": bool, "depends_on": list,
+            "context_key": str, "fresh_session": bool, "depends_on": list, "next_target": str,
         },
         "job_wait": {"job_id": str, "timeout_s": int, "result_offset": int},
         "job_list": {"project_id": str},
@@ -436,11 +449,11 @@ async def _lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
 
 _PROJECT_RESOLVE_DESCRIPTION = "Resolve an existing Git-root directory to a stable project ID. Use once per session. path must name an existing directory. Returns {project:{id,alias,path}}. Errors: invalid_path, alias_taken."
 _TASK_GUIDE_DESCRIPTION = "Load workflow and profile choices and project guidance before submission. Returns {workflows,profiles:{default,available},guidance}. Errors: unknown_project, config_invalid, response_too_large."
-_JOB_SUBMIT_DESCRIPTION = "Queue a durable coding job. prompt must be self-contained; depends_on lists existing same-project job IDs. Returns {job:summary}. Errors: unknown_project, invalid_request, unknown_profile, invalid_dependency, dependency_failed, config_invalid, daemon_stopping, response_too_large."
-_JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are normal; repeat with the same job_id. Terminal text uses Unicode character offsets. Returns {job:summary,result:{text,error,next_offset}}. Errors: unknown_job, invalid_request, response_too_large."
+_JOB_SUBMIT_DESCRIPTION = "Queue a durable coding job. prompt must be self-contained; optionally pass next_target from a failed job's result.metadata to pin to that candidate. Returns {job:summary}. Errors include targets_unavailable (retry_after_s), invalid_request, unknown_project, unknown_profile, invalid_dependency, dependency_failed, config_invalid, daemon_stopping, response_too_large."
+_JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are normal; repeat with the same job_id. Terminal text uses Unicode character offsets. Every terminal page returns result.metadata, including a live opaque next_target on failed or cancelled jobs. Returns {job:summary,result:{text,error,next_offset,metadata}}. Errors: unknown_job, invalid_request, response_too_large."
 _JOB_LIST_DESCRIPTION = "List all active jobs and up to 10 most recently updated terminal jobs for a project. Returns {active,recent,more_recent}. Errors: unknown_project, response_too_large."
 _JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary,cancelled_dependents:[id]}. Errors: unknown_job, response_too_large."
-_JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job. Dependencies must not have failed. Returns {job:summary}. Errors: unknown_job, invalid_state, dependency_failed, response_too_large."
+_JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job. Dependencies must not have failed; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, dependency_failed, targets_unavailable, response_too_large."
 
 
 def _tool_error(code: str, message: str, next_action: str, retryable: bool = False) -> RefractError:
@@ -462,7 +475,9 @@ Rules:
 - Reuse context_key to continue a worker session; fresh_session=true starts over.
 - On session resume, call job_list(project_id) and reconcile active jobs before submitting new ones.
 - Use job_cancel(job_id) to stop queued or running work. Use job_retry(job_id) only after checking its dependencies.
-- Errors are JSON with code, message, next_action, retryable. Follow next_action."""
+- On failed/cancelled job_wait, use result.metadata.next_target with job_submit(next_target=...) for a follow-up on the next healthy target; tokens are opaque and can expire after config changes. result.metadata.retryable reflects a live next target for routing failures.
+- targets_unavailable errors include retry_after_s; wait at least that many seconds before retrying.
+- Errors are JSON with code, message, next_action, retryable (and retry_after_s for targets_unavailable). Follow next_action."""
 
 
 mcp = MCPServer(
@@ -565,7 +580,7 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
                         },
                     )
                     raise RefractError(
-                        exc.code, str(exc), exc.next_action, exc.retryable
+                        exc.code, str(exc), exc.next_action, exc.retryable, exc.retry_after_s
                     ) from exc
                 except MCPError:
                     raise
@@ -681,11 +696,12 @@ async def job_submit(
     context_key: Annotated[str, Field(description="Session/history scope; empty uses the workflow name.")] = "",
     fresh_session: Annotated[bool, Field(description="Start a new worker session instead of reusing the context.")] = False,
     depends_on: Annotated[list[str], Field(description="Existing same-project job IDs that must succeed first.")] = Field(default_factory=list),
+    next_target: Annotated[str, Field(description="Opaque routing token from result.metadata.next_target; omit to use the profile's first available target.")] = "",
 ) -> str:
     runtime = _runtime(ctx)
     submission = await runtime.submit(
         project_id, workflow, prompt, profile=profile, context_key=context_key,
-        fresh_session=fresh_session, depends_on=depends_on,
+        fresh_session=fresh_session, depends_on=depends_on, next_target=next_target,
     )
     job = runtime.database.job(submission.job_id)
     if job is None:
@@ -770,6 +786,7 @@ async def job_wait(
         summary,
         result_offset,
         public_error=_public_terminal_error(runtime, current),
+        metadata=runtime.live_result_metadata(current),
     )
 
 

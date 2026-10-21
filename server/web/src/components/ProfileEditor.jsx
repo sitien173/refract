@@ -44,7 +44,6 @@ export default function ProfileEditor({
         workflowsState[wf] = {
           declared: true,
           targets: [...declaredWf.targets],
-          max_attempts: declaredWf.max_attempts ?? Math.max(1, declaredWf.targets.length),
           timeout_s: declaredWf.timeout_s ?? 0,
         }
       } else {
@@ -52,7 +51,6 @@ export default function ProfileEditor({
         workflowsState[wf] = {
           declared: false,
           targets: inheritedWf?.targets ? [...inheritedWf.targets] : (defaultTarget ? [defaultTarget] : []),
-          max_attempts: inheritedWf?.max_attempts ?? 1,
           timeout_s: inheritedWf?.timeout_s ?? 0,
         }
       }
@@ -123,7 +121,6 @@ export default function ProfileEditor({
             ...currentWf,
             declared,
             targets,
-            max_attempts: currentWf.max_attempts || Math.max(1, targets.length),
             timeout_s: currentWf.timeout_s ?? 0,
           },
         },
@@ -290,7 +287,6 @@ export default function ProfileEditor({
       if (wfState?.declared) {
         workflowsPayload[wf] = {
           targets: wfState.targets,
-          max_attempts: Number(wfState.max_attempts) || 1,
           timeout_s: Number(wfState.timeout_s) || 0,
         }
       } else {
@@ -638,22 +634,6 @@ export default function ProfileEditor({
 
                       <div className="profile-workflow-grid">
                         <div className="form-group">
-                          <label htmlFor={`${wf}-max-attempts`} className="form-label" style={{ fontSize: 'var(--type-text-xs-size)' }}>
-                            Max attempts
-                          </label>
-                          <input
-                            type="number"
-                            id={`${wf}-max-attempts`}
-                            className="form-input"
-                            min="1"
-                            disabled={isSubmitting}
-                            value={wfState.max_attempts}
-                            onChange={(e) => handlePolicyFieldChange(wf, 'max_attempts', e.target.value)}
-                            aria-label={`${wf} max attempts`}
-                          />
-                        </div>
-
-                        <div className="form-group">
                           <label htmlFor={`${wf}-timeout`} className="form-label" style={{ fontSize: 'var(--type-text-xs-size)' }}>
                             Timeout (seconds, 0 for none)
                           </label>
@@ -677,7 +657,7 @@ export default function ProfileEditor({
                           <span className="inherited-targets-label">Effective targets:</span>{' '}
                           <code>{inheritedWf.targets.join(', ')}</code>
                           <span className="inherited-meta">
-                            (max attempts: {inheritedWf.max_attempts ?? 1}, timeout: {inheritedWf.timeout_s ? `${inheritedWf.timeout_s}s` : 'none'})
+                            (timeout: {inheritedWf.timeout_s ? `${inheritedWf.timeout_s}s` : 'none'})
                           </span>
                         </div>
                       ) : (

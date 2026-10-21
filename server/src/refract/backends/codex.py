@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import BackendResult, classify_backend_output, classify_tool_activity
+from . import BackendResult, _usage_dict, classify_backend_output, classify_tool_activity
 from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
 from refract.logging_setup import get_logger
 
@@ -441,6 +441,16 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         result.outcome = "FATAL"
         result.error_class = "cancelled"
         result.error = "backend command cancelled"
+    usage_values: dict[str, Any] = {}
+    for line in stdout_lines:
+        try:
+            event = json.loads(line)
+            if isinstance(event, dict) and event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
+                u = event["usage"]
+                usage_values = {"input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"), "cached_input_tokens": u.get("cached_input_tokens")}
+        except (json.JSONDecodeError, TypeError):
+            continue
+    result.usage = _usage_dict(**usage_values)
     result.agent_messages = agent_messages
     log.info(
         "codex.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",

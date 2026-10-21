@@ -1,7 +1,7 @@
 """Backend interfaces for refract."""
 
-from dataclasses import dataclass
-from typing import Iterable, Literal
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Literal
 
 
 @dataclass(slots=True)
@@ -11,6 +11,25 @@ class BackendResult:
     agent_messages: str
     error: str
     error_class: str
+    usage: dict[str, int | str | None] = field(default_factory=dict)
+
+
+USAGE_KEYS = ("model_name", "input_tokens", "output_tokens", "cached_input_tokens", "context_window_max", "context_window_used")
+
+
+def _usage_value(value: Any) -> int | str | None:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return None
+    return value
+
+
+def _usage_dict(**values: Any) -> dict[str, int | str | None]:
+    result = {key: _usage_value(values.get(key)) for key in USAGE_KEYS}
+    for key in USAGE_KEYS[1:]:
+        value = result[key]
+        if isinstance(value, str) or isinstance(value, bool):
+            result[key] = None
+    return result
 
 
 _DEFAULT_FATAL_TOKENS = (
@@ -40,6 +59,7 @@ def classify_backend_output(
     error_text: str,
     fatal_tokens: Iterable[str] = _DEFAULT_FATAL_TOKENS,
     treat_missing_session_as_ok_warning: bool = True,
+    usage: dict[str, int | str | None] | None = None,
 ) -> BackendResult:
     """Shared classifier for all backends.
 
@@ -52,6 +72,7 @@ def classify_backend_output(
     error_text_stripped = (error_text or "").strip()
 
     error_lower = _normalize(error_text_stripped)
+    resolved_usage = usage if usage is not None else {}
 
     if error_text_stripped and any(token in error_lower for token in fatal_tokens):
         return BackendResult(
@@ -60,6 +81,7 @@ def classify_backend_output(
             agent_messages=agent_messages,
             error=error_text_stripped or "fatal backend/auth failure",
             error_class="fatal_backend",
+            usage=resolved_usage,
         )
 
     if not agent_messages_stripped:
@@ -70,6 +92,7 @@ def classify_backend_output(
             agent_messages=agent_messages,
             error=f"Failed to get output from the {backend_name} session.{extra}".strip(),
             error_class="no_agent_messages",
+            usage=resolved_usage,
         )
 
     if not session_id and treat_missing_session_as_ok_warning:
@@ -79,6 +102,7 @@ def classify_backend_output(
             agent_messages=agent_messages,
             error="warning: no SESSION_ID",
             error_class="warning",
+            usage=resolved_usage,
         )
 
     return BackendResult(
@@ -87,6 +111,7 @@ def classify_backend_output(
         agent_messages=agent_messages,
         error="",
         error_class="",
+        usage=resolved_usage,
     )
 
 
