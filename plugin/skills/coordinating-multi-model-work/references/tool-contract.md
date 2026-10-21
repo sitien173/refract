@@ -28,7 +28,7 @@ Summary fields are exactly `id, project_id, workflow, profile, state, context_ke
 
 ## Dependencies and admission
 
-`depends_on` is immutable caller input; `waiting_on` and `waiting_reason` are derived. Access mode remains internal to scheduling and is visible in the operator dashboard, not MCP responses. Failed/cancelled/interrupted dependencies cancel queued descendants; `job_cancel` returns their IDs as `cancelled_dependents`. Parent retry does not revive descendants. Verified readers may overlap within capacity; exclusive jobs are barriers; identical sessions serialize under reader/writer/session-fair admission. This does not permit concurrent gated Coordinator implementation/review in one root.
+`depends_on` is immutable caller input; `waiting_on` and `waiting_reason` are derived. Failed/cancelled/interrupted dependencies cancel queued descendants; `job_cancel` returns their IDs as `cancelled_dependents`. Parent retry does not revive descendants. Verified readers may overlap within capacity; exclusive jobs are barriers; identical sessions serialize under reader/writer/session-fair admission. This does not permit concurrent gated Coordinator implementation/review in one root.
 
 ## Waiting, paging, and bounds
 
