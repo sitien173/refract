@@ -1,0 +1,45 @@
+name: SonarQube
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    # Fork PRs have no access to the Sonar secret.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: server/uv.lock
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/web/package-lock.json
+      - name: Python coverage
+        working-directory: server
+        run: |
+          uv sync --all-extras --frozen
+          uv run pytest --cov --cov-report=xml
+      - name: Web coverage
+        working-directory: server/web
+        run: |
+          npm ci
+          npm run coverage
+      - uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        with:
+          args: -Dsonar.qualitygate.wait=true
