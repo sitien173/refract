@@ -188,7 +188,12 @@ class Database:
 
     def _migrate_v12_to_v13(self) -> None:
         version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
-        if version >= 13:
+        # A stashed branch once stamped v13 without these columns, so check them too.
+        if (
+            version >= 13
+            and {"cooldown_s", "probe_job_id"} <= self._columns("target_health")
+            and "result_metadata_json" in self._columns("jobs")
+        ):
             return
         self._connection.execute("BEGIN IMMEDIATE")
         try:

@@ -894,6 +894,24 @@ def test_v12_to_v13_migration_preserves_rows(tmp_path) -> None:
     migrated.close()
 
 
+def test_v13_missing_columns_are_repaired(tmp_path) -> None:
+    path = tmp_path / "refract.db"
+    Database(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE target_health DROP COLUMN probe_job_id")
+    conn.execute("ALTER TABLE target_health DROP COLUMN cooldown_s")
+    conn.execute("ALTER TABLE jobs DROP COLUMN result_metadata_json")
+    conn.execute("ALTER TABLE jobs ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]'")
+    conn.commit()
+    conn.close()
+    repaired = Database(path)
+    assert repaired._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert {"cooldown_s", "probe_job_id"} <= table_columns(repaired, "target_health")
+    assert "result_metadata_json" in table_columns(repaired, "jobs")
+    repaired.reset_orphaned_target_probes()
+    repaired.close()
+
+
 def test_probe_claim_is_atomic_and_failure_cooldown_caps(tmp_path) -> None:
     path = tmp_path / "refract.db"
     db = Database(path)
