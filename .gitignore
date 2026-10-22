@@ -41,3 +41,9 @@ dist/
 .DS_Store
 *.DS_Store
 Thumbs.db
+
+# Coverage reports
+.coverage
+coverage.xml
+coverage/
+.scannerwork/

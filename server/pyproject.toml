@@ -25,6 +25,7 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=7.1.0",
 ]
 [project.scripts]
 refract = "refract.cli:main"
@@ -45,3 +46,9 @@ addopts = "-m 'not live'"
 markers = [
     "live: marks tests that require live backend CLIs",
 ]
+
+[tool.coverage.run]
+source = ["src/refract"]
+
+[tool.coverage.xml]
+output = "coverage.xml"
