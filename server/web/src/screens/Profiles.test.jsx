@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import Profiles from './Profiles'
@@ -165,7 +165,9 @@ describe('Profiles screen', () => {
     expect(dialog).toBeInTheDocument()
 
     // Fill profile id and parent extends
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
     fireEvent.change(within(dialog).getByLabelText(/Profile identifier/i), { target: { value: 'custom-profile' } })
+    expect(within(dialog).getByLabelText(/Profile identifier/i)).toHaveValue('custom-profile')
     fireEvent.change(within(dialog).getByLabelText(/Inherits from/i), { target: { value: 'default' } })
 
     // Declare consult workflow
@@ -190,6 +192,7 @@ describe('Profiles screen', () => {
 
     // Submit form
     const submitBtn = within(dialog).getByRole('button', { name: /^Create profile$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
     await vi.waitFor(() => {
@@ -236,7 +239,9 @@ describe('Profiles screen', () => {
     expect(within(dialog).queryByLabelText(/max attempts/i)).not.toBeInTheDocument()
 
     // Fill profile id
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
     fireEvent.change(within(dialog).getByLabelText(/Profile identifier/i), { target: { value: 'no-max-profile' } })
+    expect(within(dialog).getByLabelText(/Profile identifier/i)).toHaveValue('no-max-profile')
 
     // Declare consult workflow
     const consultToggle = within(dialog).getByRole('checkbox', { name: /Declare custom policy for consult workflow/i })
@@ -248,6 +253,7 @@ describe('Profiles screen', () => {
 
     // Submit form
     const submitBtn = within(dialog).getByRole('button', { name: /^Create profile$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
     await vi.waitFor(() => {
@@ -309,6 +315,7 @@ describe('Profiles screen', () => {
     fireEvent.change(extendsSelect, { target: { value: '' } })
 
     const saveBtn = within(dialog).getByRole('button', { name: /^Save profile$/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     await vi.waitFor(() => {
@@ -341,7 +348,10 @@ describe('Profiles screen', () => {
     const dialog = await screen.findByRole('dialog', { name: /Create profile/i })
     expect(dialog).toBeInTheDocument()
 
-    fireEvent.change(within(dialog).getByLabelText(/Profile identifier/i), { target: { value: 'invalid-profile' } })
+    const idInput = within(dialog).getByLabelText(/Profile identifier/i)
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
+    fireEvent.change(idInput, { target: { value: 'invalid-profile' } })
+    expect(idInput).toHaveValue('invalid-profile')
 
     // Declare review workflow
     const reviewToggle = within(dialog).getByRole('checkbox', { name: /Declare custom policy for review workflow/i })
@@ -350,9 +360,11 @@ describe('Profiles screen', () => {
     // Remove the target
     const removeBtn = await within(dialog).findByRole('button', { name: /Remove review target 1/i })
     fireEvent.click(removeBtn)
+    await waitFor(() => expect(removeBtn).not.toBeInTheDocument())
 
     // Submit
     const submitBtn = within(dialog).getByRole('button', { name: /^Create profile$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
     expect(await within(dialog).findByText(/review workflow requires at least one target/i)).toBeInTheDocument()
@@ -368,7 +380,9 @@ describe('Profiles screen', () => {
 
     const dialog = await screen.findByRole('dialog', { name: /Create profile/i })
     const idInput = within(dialog).getByLabelText(/Profile identifier/i)
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
     fireEvent.change(idInput, { target: { value: 'my-unsaved-draft' } })
+    expect(idInput).toHaveValue('my-unsaved-draft')
 
     // Simulate background polling refresh
     vi.mocked(api.getProfiles).mockResolvedValue({
@@ -399,6 +413,7 @@ describe('Profiles screen', () => {
 
     const dialog = await screen.findByRole('dialog', { name: /Edit profile: fast-dev/i })
     const saveBtn = within(dialog).getByRole('button', { name: /^Save profile$/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()
@@ -438,7 +453,7 @@ describe('Profiles screen', () => {
 
     const checkbox = within(dialog).getByLabelText(/I confirm deleting profile fast-dev/i)
     fireEvent.click(checkbox)
-    expect(confirmBtn).not.toBeDisabled()
+    await waitFor(() => expect(confirmBtn).toBeEnabled())
 
     fireEvent.click(confirmBtn)
 
@@ -468,7 +483,9 @@ describe('Profiles screen', () => {
     const dialog2 = await screen.findByRole('dialog', { name: /Delete profile: default/i })
     const checkbox2 = within(dialog2).getByLabelText(/I confirm deleting profile default/i)
     fireEvent.click(checkbox2)
-    fireEvent.click(within(dialog2).getByRole('button', { name: /^Confirm delete$/i }))
+    const confirmBtn2 = within(dialog2).getByRole('button', { name: /^Confirm delete$/i })
+    await waitFor(() => expect(confirmBtn2).toBeEnabled())
+    fireEvent.click(confirmBtn2)
 
     expect(await screen.findByRole('dialog', { name: /Blocking references for profile default/i })).toBeInTheDocument()
     expect(screen.getByText('Profile is currently referenced')).toBeInTheDocument()
@@ -502,6 +519,7 @@ describe('Profiles screen', () => {
     fireEvent.change(extendsSelect, { target: { value: '' } })
 
     const saveBtn = within(dialog).getByRole('button', { name: /^Save profile$/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()
@@ -558,6 +576,7 @@ describe('Profiles screen', () => {
       },
     })
 
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     await vi.waitFor(() => {
@@ -611,6 +630,7 @@ describe('Profiles screen', () => {
     fireEvent.change(extendsSelect, { target: { value: '' } })
 
     const saveBtn = within(dialog).getByRole('button', { name: /^Save profile$/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()

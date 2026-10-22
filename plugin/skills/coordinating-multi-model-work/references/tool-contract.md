@@ -8,13 +8,13 @@ Default endpoint is `http://127.0.0.1:8765/mcp`; set `REFRACT_URL` before Claude
 |---|---|---|
 | `project_resolve` | `path`, `alias=""` | `{project:{id, alias, path}}` |
 | `task_guide` | `project_id` | `{workflows, profiles:{default, available}, guidance}` |
-| `job_submit` | `project_id`, `workflow`, `prompt`, `profile=""`, `context_key=""`, `fresh_session=false`, `depends_on=[]`, `next_target=""` | `{job:summary}` |
+| `job_submit` | `project_id`, `workflow`, `prompt`, `profile=""`, `context_key=""`, `fresh_session=false`, `next_target=""` | `{job:summary}` |
 | `job_wait` | `job_id`, `timeout_s=3600`, `result_offset=0` | `{job:summary, result:{text, error, next_offset, metadata}}` |
 | `job_list` | `project_id` | `{active, recent, more_recent}` |
-| `job_cancel` | `job_id` | `{job:summary, cancelled_dependents:[id]}` |
+| `job_cancel` | `job_id` | `{job:summary}` |
 | `job_retry` | `job_id` | `{job:summary}` |
 
-Use only these signatures; client names may be prefixed. Capture `project.id` and `job.id` from returned envelopes. Pass `project_resolve` the actual, existing Git-root directory: it canonicalizes that directory but never walks up to find the root. `alias` defaults to empty.
+Use only these signatures; client names may be prefixed. Unknown tool arguments return `invalid_request`. Capture `project.id` and `job.id` from returned envelopes. Pass `project_resolve` the actual, existing Git-root directory: it canonicalizes that directory but never walks up to find the root. `alias` defaults to empty.
 
 ## Guidance, routing, and privacy
 
@@ -24,11 +24,11 @@ Keep provider, model, configured target, and native session identity private; na
 
 ## Summaries and listing
 
-Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, depends_on, waiting_on, waiting_reason, created_at, updated_at`. `job_list` returns every active job, newest ten terminal jobs, and integer `more_recent` (a count, not cursor). If a saved job is absent, call `job_wait(saved_id, timeout_s=0)` before concluding it is unknown. Absence never authorizes duplicate submission.
+Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, created_at, updated_at`. `job_list` returns every active job, newest ten terminal jobs, and integer `more_recent` (a count, not cursor). If a saved job is absent, call `job_wait(saved_id, timeout_s=0)` before concluding it is unknown. Absence never authorizes duplicate submission.
 
-## Dependencies and admission
+## Admission
 
-`depends_on` is immutable caller input; `waiting_on` and `waiting_reason` are derived. Failed/cancelled/interrupted dependencies cancel queued descendants; `job_cancel` returns their IDs as `cancelled_dependents`. Parent retry does not revive descendants. Verified readers may overlap within capacity; exclusive jobs are barriers; identical sessions serialize under reader/writer/session-fair admission. This does not permit concurrent gated Coordinator implementation/review in one root.
+At most one job per project runs at a time. Jobs within each project are admitted FIFO, bounded by the global `max_jobs` capacity; jobs in different projects may run concurrently up to that capacity. This does not permit concurrent gated Coordinator implementation/review in one root.
 
 ## Waiting, paging, and bounds
 
@@ -49,8 +49,6 @@ Expected failures are compact JSON with `isError: true` and `code`, `message`, `
 | `alias_taken` | Choose a unique alias or omit it. |
 | `unknown_job` | Reconcile using `job_list`; do not blindly duplicate. |
 | `unknown_profile` | Call `task_guide`; select a listed profile. |
-| `invalid_dependency` | Correct the named `depends_on` ID. |
-| `dependency_failed` | Retry the dependency first, then this job. |
 | `invalid_state` | Inspect using `job_wait`; use a new job if appropriate. |
 | `config_invalid` | Report for correction in the dashboard. |
 | `daemon_stopping` | Wait, then resolve the Git root again. |

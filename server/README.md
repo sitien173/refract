@@ -1,6 +1,6 @@
 # Refract
 
-Version 1.0.0 · [Repository](https://github.com/sitien173/refract)
+Version 2.0.0 · [Repository](https://github.com/sitien173/refract)
 
 Refract is a loopback HTTP orchestration daemon for durable coding jobs.
 It exposes AI agent workflows through Model Context Protocol tools.
@@ -8,7 +8,7 @@ It exposes AI agent workflows through Model Context Protocol tools.
 ## Key Features
 
 - Durable direct-directory jobs; Refract does not create worktrees or make Git commits.
-- Project reader/writer admission with immutable dependencies and multi-project concurrency.
+- One-job-per-project FIFO admission with multi-project concurrency bounded by global `max_jobs`.
 - Immutable execution plan snapshots for every job.
 - Multi-provider support for Antigravity, Codex, Pi, and Claude Code backends.
 - Seven self-describing MCP tools for project resolution, guidance, and durable job management.
@@ -27,7 +27,7 @@ It exposes AI agent workflows through Model Context Protocol tools.
 [Runtime Facade] ──► [SQLite Database]
         │
         ▼
-[Project Scheduler] (Reader/Writer Admission and Dependencies)
+[Project Scheduler] (One-Job-Per-Project FIFO Admission)
         │
         ▼
 [Job Runner & Target Executor]
@@ -337,13 +337,13 @@ Refract exposes seven tools and no MCP resources:
 | --- | --- |
 | `project_resolve(path, alias="")` | Resolve an existing Git root to a stable project ID. |
 | `task_guide(project_id)` | Load available workflows, profiles, and project guidance. |
-| `job_submit(project_id, workflow, prompt, profile="", context_key="", fresh_session=false, depends_on=[])` | Queue a durable job; dependencies reference existing jobs in the same project. |
+| `job_submit(project_id, workflow, prompt, profile="", context_key="", fresh_session=false)` | Queue a durable job. |
 | `job_wait(job_id, timeout_s=3600, result_offset=0)` | Wait with progress, or read a terminal result page. Timeouts are normal; repeat with the same job ID. |
 | `job_list(project_id)` | List active jobs and the 10 most recently updated terminal jobs. |
-| `job_cancel(job_id)` | Cancel a queued or running job and report descendants cancelled in that call. |
-| `job_retry(job_id)` | Retry a failed, cancelled, or interrupted job after its dependencies succeed. |
+| `job_cancel(job_id)` | Cancel a queued or running job. |
+| `job_retry(job_id)` | Retry a failed, cancelled, or interrupted job. |
 
-The standard cycle is `project_resolve` → `task_guide` → `job_submit` → `job_wait` (four calls). Prompts must be self-contained. Use `depends_on` to chain existing same-project jobs without waiting between submissions. The summary reports dependencies and current waiting information without exposing access mode, provider, or target identity.
+The standard cycle is `project_resolve` → `task_guide` → `job_submit` → `job_wait` (four calls). Prompts must be self-contained. Jobs in a project are admitted one at a time in FIFO order; jobs in different projects can run concurrently up to global `max_jobs`. Job summaries do not expose provider or target identity.
 
 `job_wait` supports timeouts from 0 to 3600 seconds. `timeout_s=0` reads immediately. A terminal result is paged by Unicode character offset; continue with the returned `next_offset`. Nonterminal timeouts return the current summary and an action to call `job_wait` again. Errors are compact JSON containing `code`, `message`, `next_action`, and `retryable` and are delivered as MCP tool errors.
 

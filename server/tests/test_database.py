@@ -123,24 +123,88 @@ def table_columns(database: Database, table: str) -> set[str]:
     return database._columns(table)
 
 
-def test_fresh_database_uses_v13_schema(tmp_path) -> None:
+def create_v13_dependency_fixture(path) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        PRAGMA foreign_keys=ON;
+        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT UNIQUE NOT NULL, root TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+            state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, access_mode TEXT NOT NULL DEFAULT 'exclusive',
+            result_metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL
+        );
+        CREATE TABLE job_dependencies (
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            dependency_job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            PRIMARY KEY (job_id, dependency_job_id)
+        );
+        CREATE INDEX job_dependencies_dependency_idx ON job_dependencies(dependency_job_id);
+        INSERT INTO projects VALUES ('p', 'p', '/p', '2026-01-01');
+        INSERT INTO jobs(id, project_id, state, created_at, updated_at) VALUES
+            ('unfinished', 'p', 'running', '2026-01-01', '2026-01-01'),
+            ('done', 'p', 'succeeded', '2026-01-01', '2026-01-01'),
+            ('cancel-me', 'p', 'queued', '2026-01-01', '2026-01-01'),
+            ('keep-queued', 'p', 'queued', '2026-01-01', '2026-01-01');
+        INSERT INTO job_dependencies VALUES ('cancel-me', 'unfinished');
+        INSERT INTO job_dependencies VALUES ('keep-queued', 'done');
+        PRAGMA user_version=13;
+    """)
+    connection.commit()
+    connection.close()
+
+
+def test_fresh_database_uses_v14_schema(tmp_path) -> None:
     database = Database(tmp_path / "refract.db")
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "result_metadata_json", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
+    assert "job_dependencies" not in tables
     assert "job_stream_events" in tables
     assert "stages" not in tables and "artifacts" not in tables
     database.close()
 
 
-def test_v6_migrates_to_v13_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v13_to_v14_cancels_unfinished_dependents_and_is_idempotent(tmp_path) -> None:
+    path = tmp_path / "v13.db"
+    create_v13_dependency_fixture(path)
+    database = Database(path)
+
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert "access_mode" not in table_columns(database, "jobs")
+    tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "job_dependencies" not in tables
+    cancelled = database.job_record("cancel-me")
+    assert cancelled["state"] == "cancelled"
+    assert cancelled["error"] == "Dependency unfinished was removed before completion"
+    event_rows = database._connection.execute(
+        "SELECT kind, data_json FROM events WHERE job_id='cancel-me' AND kind='job.cancelled'"
+    ).fetchall()
+    assert [(row["kind"], json.loads(row["data_json"])) for row in event_rows] == [
+        ("job.cancelled", {"error": "Dependency unfinished was removed before completion"})
+    ]
+    assert database.job_record("keep-queued")["state"] == "queued"
+    before = cancelled["updated_at"]
+    database._migrate_v13_to_v14()
+    assert database.job_record("cancel-me")["updated_at"] == before
+    assert database._connection.execute(
+        "SELECT COUNT(*) FROM events WHERE job_id='cancel-me' AND kind='job.cancelled'"
+    ).fetchone()[0] == 1
+    database.close()
+
+
+def test_v6_migrates_to_v14_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v6_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "result_metadata_json", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
@@ -154,13 +218,13 @@ def test_v6_migrates_to_v13_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_v5_migrates_to_v13_preserving_rows_and_support_data(tmp_path) -> None:
+def test_v5_migrates_to_v14_preserving_rows_and_support_data(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v5_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "access_mode", "result_metadata_json", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
     assert database.project("project") and database.project("project").root == "/project"
     job = database.job("job")
     assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
@@ -173,20 +237,20 @@ def test_v5_migrates_to_v13_preserving_rows_and_support_data(tmp_path) -> None:
     database.close()
 
 
-def test_reopening_v13_is_a_noop(tmp_path) -> None:
+def test_reopening_v14_is_a_noop(tmp_path) -> None:
     path = tmp_path / "refract.db"
     first = Database(path)
     first.close()
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     second.close()
 
 
-def test_v9_migrates_to_v13_adding_fresh_session_column(tmp_path) -> None:
+def test_v9_migrates_to_v14_adding_fresh_session_column(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v9_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert "fresh_session" in table_columns(database, "jobs")
     assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     record = database.job_record("job")
@@ -194,14 +258,14 @@ def test_v9_migrates_to_v13_adding_fresh_session_column(tmp_path) -> None:
     database.close()
 
 
-def test_v8_migrates_to_v13_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
+def test_v8_migrates_to_v14_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v8_database(path)
 
     database = Database(path)
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "context_instructions" not in tables
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert "fresh_session" in table_columns(database, "jobs")
     assert "job_stream_events" in tables
     record = database.job_record("job")
@@ -483,11 +547,11 @@ def create_v10_database(path) -> None:
     connection.close()
 
 
-def test_v10_migrates_to_v13_adding_stream_events_table(tmp_path) -> None:
+def test_v10_migrates_to_v14_adding_stream_events_table(tmp_path) -> None:
     path = tmp_path / "refract.db"
     create_v10_database(path)
     database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     expected_cols = {
         "id", "job_id", "created_at", "attempt", "target_id",
@@ -681,7 +745,7 @@ def test_database_reopen_preserves_stream_events_and_cursors(tmp_path) -> None:
     database.close()
 
     reopened = Database(path)
-    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert reopened.stream_high_water("job-1") == event_id
     assert reopened.stream_retained_from("job-1") == event_id
     events = reopened.stream_events("job-1", after=0)
@@ -849,7 +913,7 @@ def test_stream_is_truncated_lookup(tmp_path) -> None:
     database.close()
 
 
-def test_v11_migrates_existing_jobs_as_exclusive_without_dependencies(tmp_path) -> None:
+def test_v11_migration_removes_dependency_and_access_schema(tmp_path) -> None:
     path = tmp_path / "refract.db"
     connection = sqlite3.connect(path)
     connection.executescript("""
@@ -863,15 +927,14 @@ def test_v11_migrates_existing_jobs_as_exclusive_without_dependencies(tmp_path) 
 
     database = Database(path)
 
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert "result_metadata_json" in table_columns(database, "jobs")
-    assert "access_mode" in table_columns(database, "jobs")
-    assert database.job_record("old")["access_mode"] == "exclusive"
-    assert database._connection.execute("SELECT COUNT(*) FROM job_dependencies").fetchone()[0] == 0
+    assert "access_mode" not in table_columns(database, "jobs")
+    assert "job_dependencies" not in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     database.close()
 
 
-def test_v12_to_v13_migration_preserves_rows(tmp_path) -> None:
+def test_v12_migration_preserves_rows_and_advances_to_v14(tmp_path) -> None:
     path = tmp_path / "refract.db"
     db = Database(path)
     project = db.upsert_project(project_id="p", alias="p", root="/p")
@@ -887,14 +950,14 @@ def test_v12_to_v13_migration_preserves_rows(tmp_path) -> None:
     conn.commit()
     conn.close()
     migrated = Database(path)
-    assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert migrated.job_record("existing")["prompt"] == "x"
     assert migrated.job_record("existing")["result_metadata_json"] == "{}"
     assert migrated.target_health("target")["consecutive_failures"] == 2
     migrated.close()
 
 
-def test_v13_missing_columns_are_repaired(tmp_path) -> None:
+def test_v13_to_v14_repairs_old_columns_and_drops_removed_schema(tmp_path) -> None:
     path = tmp_path / "refract.db"
     Database(path).close()
     conn = sqlite3.connect(path)
@@ -902,10 +965,11 @@ def test_v13_missing_columns_are_repaired(tmp_path) -> None:
     conn.execute("ALTER TABLE target_health DROP COLUMN cooldown_s")
     conn.execute("ALTER TABLE jobs DROP COLUMN result_metadata_json")
     conn.execute("ALTER TABLE jobs ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]'")
+    conn.execute("PRAGMA user_version=13")
     conn.commit()
     conn.close()
     repaired = Database(path)
-    assert repaired._connection.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert repaired._connection.execute("PRAGMA user_version").fetchone()[0] == 14
     assert {"cooldown_s", "probe_job_id"} <= table_columns(repaired, "target_health")
     assert "result_metadata_json" in table_columns(repaired, "jobs")
     repaired.reset_orphaned_target_probes()
@@ -953,93 +1017,3 @@ def test_failure_threshold_and_immediate_open(tmp_path) -> None:
     db.record_target_failure("fatal", threshold=3, base_cooldown_s=60, max_cooldown_s=300, immediate=True)
     assert db.target_health("fatal")["circuit_open_until"]
     db.close()
-
-
-def test_create_job_with_dependencies_is_atomic_and_supports_reverse_lookup(tmp_path) -> None:
-    database = Database(tmp_path / "refract.db")
-    first_project = database.upsert_project(project_id="p1", alias="p1", root="/p1")
-    second_project = database.upsert_project(project_id="p2", alias="p2", root="/p2")
-    database.create_job(
-        job_id="dependency-1", project_id=first_project.id, workflow="consult",
-        profile="balanced", prompt="first", execution_plan_json="{}", context_key="k1",
-    )
-    database.create_job(
-        job_id="dependency-2", project_id=first_project.id, workflow="consult",
-        profile="balanced", prompt="second", execution_plan_json="{}", context_key="k2",
-    )
-    database.create_job(
-        job_id="foreign-project", project_id=second_project.id, workflow="consult",
-        profile="balanced", prompt="foreign", execution_plan_json="{}", context_key="k3",
-    )
-
-    parent_read_transactions: list[bool] = []
-
-    def trace_parent_reads(statement: str) -> None:
-        if statement.lstrip().upper().startswith("SELECT PROJECT_ID FROM JOBS WHERE ID="):
-            parent_read_transactions.append(database._connection.in_transaction)
-
-    database._connection.set_trace_callback(trace_parent_reads)
-    database.create_job_with_dependencies(
-        job_id="dependent", project_id=first_project.id, workflow="review",
-        profile="balanced", prompt="review", execution_plan_json="{}", context_key="k4",
-        access_mode="parallel_read", depends_on=["dependency-1", "dependency-2"],
-    )
-    database._connection.set_trace_callback(None)
-
-    assert parent_read_transactions == [True, True]
-    assert database.job_record("dependent")["access_mode"] == "parallel_read"
-    assert database.dependencies_for_job("dependent") == ["dependency-1", "dependency-2"]
-    assert database.dependents_for_job("dependency-1") == ["dependent"]
-    assert database.dependents_for_job("dependency-2") == ["dependent"]
-    for job_id, dependencies in (
-        ("unknown", ["missing"]),
-        ("later-unknown", ["dependency-1", "missing"]),
-        ("duplicate", ["dependency-1", "dependency-1"]),
-        ("cross-project", ["foreign-project"]),
-    ):
-        with pytest.raises(ValueError, match="dependenc"):
-            database.create_job_with_dependencies(
-                job_id=job_id, project_id=first_project.id, workflow="review",
-                profile="balanced", prompt="bad", execution_plan_json="{}", context_key=job_id,
-                access_mode="exclusive", depends_on=dependencies,
-            )
-        assert database.job_record(job_id) is None
-        assert database._connection.execute(
-            "SELECT COUNT(*) FROM job_dependencies WHERE job_id=?", (job_id,)
-        ).fetchone()[0] == 0
-        assert not database._connection.in_transaction
-
-    schema = database._connection.execute("PRAGMA foreign_key_list(job_dependencies)").fetchall()
-    assert len(schema) == 2
-    assert {row["table"] for row in schema} == {"jobs"}
-    indices = {row["name"] for row in database._connection.execute("PRAGMA index_list(job_dependencies)")}
-    assert "job_dependencies_dependency_idx" in indices
-    index_columns = [
-        row["name"]
-        for row in database._connection.execute(
-            "PRAGMA index_info(job_dependencies_dependency_idx)"
-        )
-    ]
-    assert index_columns == ["dependency_job_id"]
-    with pytest.raises(sqlite3.IntegrityError):
-        with database._connection:
-            database._connection.execute(
-                "INSERT INTO job_dependencies(job_id, dependency_job_id) VALUES ('dependent', 'dependency-1')"
-            )
-
-    database._connection.execute("""
-        CREATE TRIGGER reject_dependency_insert BEFORE INSERT ON job_dependencies
-        WHEN NEW.job_id='trigger-failure'
-        BEGIN SELECT RAISE(ABORT, 'simulated link failure'); END;
-    """)
-    with pytest.raises(sqlite3.IntegrityError, match="simulated link failure"):
-        database.create_job_with_dependencies(
-            job_id="trigger-failure", project_id=first_project.id, workflow="review",
-            profile="balanced", prompt="bad", execution_plan_json="{}", context_key="trigger-failure",
-            access_mode="exclusive", depends_on=["dependency-1"],
-        )
-    assert database.job_record("trigger-failure") is None
-    assert database._connection.execute(
-        "SELECT COUNT(*) FROM events WHERE job_id='trigger-failure'"
-    ).fetchone()[0] == 0
-    database.close()

@@ -49,8 +49,6 @@ _ERROR_CODES = frozenset(
         "alias_taken",
         "unknown_job",
         "unknown_profile",
-        "invalid_dependency",
-        "dependency_failed",
         "invalid_state",
         "config_invalid",
         "daemon_stopping",
@@ -161,7 +159,7 @@ def _render_payload(
     )
 
 
-def _public_terminal_error(runtime: Runtime, job: JobView) -> str:
+def _public_terminal_error(job: JobView) -> str:
     detail = job.result.error
     if not detail:
         return ""
@@ -173,15 +171,6 @@ def _public_terminal_error(runtime: Runtime, job: JobView) -> str:
         }
         if detail in cancellation_causes:
             return cancellation_causes[detail]
-        allowed_states = {"failed", "cancelled", "interrupted"}
-        if job.state == "cancelled":
-            for dependency_id in runtime.database.dependencies_for_job(job.id):
-                dependency = runtime.database.job_record(dependency_id)
-                if dependency is None or dependency.get("state") not in allowed_states:
-                    continue
-                safe_cause = f"Dependency {dependency_id} ended in state {dependency['state']}"
-                if detail == safe_cause:
-                    return safe_cause
     return "Job execution failed. Detailed diagnostics are available in the dashboard."
 
 
@@ -306,14 +295,17 @@ def _raw_argument_error(tool_name: str, arguments: Mapping[str, Any] | None) -> 
         "task_guide": {"project_id": str},
         "job_submit": {
             "project_id": str, "workflow": str, "prompt": str, "profile": str,
-            "context_key": str, "fresh_session": bool, "depends_on": list, "next_target": str,
+            "context_key": str, "fresh_session": bool, "next_target": str,
         },
         "job_wait": {"job_id": str, "timeout_s": int, "result_offset": int},
         "job_list": {"project_id": str},
         "job_cancel": {"job_id": str},
         "job_retry": {"job_id": str},
     }
-    for name, kind in expected.get(tool_name, {}).items():
+    allowed = expected.get(tool_name)
+    if allowed is not None and any(name not in allowed for name in arguments):
+        return True
+    for name, kind in (allowed or {}).items():
         if name not in arguments:
             continue
         value = arguments[name]
@@ -324,8 +316,6 @@ def _raw_argument_error(tool_name: str, arguments: Mapping[str, Any] | None) -> 
             if type(value) is not bool:
                 return True
         elif not isinstance(value, kind):
-            return True
-        if name == "depends_on" and any(not isinstance(item, str) for item in value):
             return True
     return False
 
@@ -449,11 +439,11 @@ async def _lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
 
 _PROJECT_RESOLVE_DESCRIPTION = "Resolve an existing Git-root directory to a stable project ID. Use once per session. path must name an existing directory. Returns {project:{id,alias,path}}. Errors: invalid_path, alias_taken."
 _TASK_GUIDE_DESCRIPTION = "Load workflow and profile choices and project guidance before submission. Returns {workflows,profiles:{default,available},guidance}. Errors: unknown_project, config_invalid, response_too_large."
-_JOB_SUBMIT_DESCRIPTION = "Queue a durable coding job. prompt must be self-contained; optionally pass next_target from a failed job's result.metadata to pin to that candidate. Returns {job:summary}. Errors include targets_unavailable (retry_after_s), invalid_request, unknown_project, unknown_profile, invalid_dependency, dependency_failed, config_invalid, daemon_stopping, response_too_large."
+_JOB_SUBMIT_DESCRIPTION = "Queue a durable coding job. prompt must be self-contained; optionally pass next_target from a failed job's result.metadata to pin to that candidate. Returns {job:summary}. Errors include targets_unavailable (retry_after_s), invalid_request, unknown_project, unknown_profile, config_invalid, daemon_stopping, response_too_large."
 _JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are normal; repeat with the same job_id. Terminal text uses Unicode character offsets. Every terminal page returns result.metadata, including a live opaque next_target on failed or cancelled jobs. Returns {job:summary,result:{text,error,next_offset,metadata}}. Errors: unknown_job, invalid_request, response_too_large."
 _JOB_LIST_DESCRIPTION = "List all active jobs and up to 10 most recently updated terminal jobs for a project. Returns {active,recent,more_recent}. Errors: unknown_project, response_too_large."
-_JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary,cancelled_dependents:[id]}. Errors: unknown_job, response_too_large."
-_JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job. Dependencies must not have failed; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, dependency_failed, targets_unavailable, response_too_large."
+_JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary}. Errors: unknown_job, response_too_large."
+_JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, targets_unavailable, response_too_large."
 
 
 def _tool_error(code: str, message: str, next_action: str, retryable: bool = False) -> RefractError:
@@ -471,10 +461,9 @@ Standard cycle, 4 calls:
 Rules:
 - job_wait returning a non-terminal state is not an error. Call job_wait again.
 - A dropped connection may mean the daemon restarted. Jobs persist; call job_wait again.
-- Use depends_on=[job ids] to chain jobs without waiting between submits. A failed dependency cancels its dependents.
 - Reuse context_key to continue a worker session; fresh_session=true starts over.
 - On session resume, call job_list(project_id) and reconcile active jobs before submitting new ones.
-- Use job_cancel(job_id) to stop queued or running work. Use job_retry(job_id) only after checking its dependencies.
+- Use job_cancel(job_id) to stop queued or running work. Use job_retry(job_id) for eligible terminal jobs.
 - On failed/cancelled job_wait, use result.metadata.next_target with job_submit(next_target=...) for a follow-up on the next healthy target; tokens are opaque and can expire after config changes. result.metadata.retryable reflects a live next target for routing failures.
 - targets_unavailable errors include retry_after_s; wait at least that many seconds before retrying.
 - Errors are JSON with code, message, next_action, retryable (and retry_after_s for targets_unavailable). Follow next_action."""
@@ -499,7 +488,6 @@ def _runtime(ctx: Context) -> Runtime:
 
 
 def _summary(runtime: Runtime, job: JobView) -> dict[str, Any]:
-    waiting_on, waiting_reason = runtime.waiting_metadata(job.id)
     return JobSummary(
         id=job.id,
         project_id=job.project_id,
@@ -508,9 +496,6 @@ def _summary(runtime: Runtime, job: JobView) -> dict[str, Any]:
         state=job.state,
         context_key=job.context_key,
         attempts=job.attempts,
-        depends_on=runtime.database.dependencies_for_job(job.id),
-        waiting_on=waiting_on,
-        waiting_reason=waiting_reason,
         created_at=job.created_at,
         updated_at=job.updated_at,
     ).model_dump(mode="json")
@@ -695,13 +680,12 @@ async def job_submit(
     profile: Annotated[str, Field(description="Available profile from task_guide; empty uses the project's default.")] = "",
     context_key: Annotated[str, Field(description="Session/history scope; empty uses the workflow name.")] = "",
     fresh_session: Annotated[bool, Field(description="Start a new worker session instead of reusing the context.")] = False,
-    depends_on: Annotated[list[str], Field(description="Existing same-project job IDs that must succeed first.")] = Field(default_factory=list),
     next_target: Annotated[str, Field(description="Opaque routing token from result.metadata.next_target; omit to use the profile's first available target.")] = "",
 ) -> str:
     runtime = _runtime(ctx)
     submission = await runtime.submit(
         project_id, workflow, prompt, profile=profile, context_key=context_key,
-        fresh_session=fresh_session, depends_on=depends_on, next_target=next_target,
+        fresh_session=fresh_session, next_target=next_target,
     )
     job = runtime.database.job(submission.job_id)
     if job is None:
@@ -715,12 +699,11 @@ async def job_submit(
     )
 
 
-async def _report_progress(ctx: Context, job: JobView, runtime: Runtime, progress: float) -> None:
-    _waiting_on, waiting_reason = runtime.waiting_metadata(job.id)
+async def _report_progress(ctx: Context, job: JobView, progress: float) -> None:
     await ctx.report_progress(
         progress=progress,
         total=None,
-        message=json.dumps({"state": job.state, "waiting_reason": waiting_reason}, separators=(",", ":")),
+        message=json.dumps({"state": job.state}, separators=(",", ":")),
     )
 
 
@@ -745,7 +728,7 @@ async def job_wait(
     job = runtime.database.job(job_id)
     if job is None:
         raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
-    await _report_progress(ctx, job, runtime, 0.0)
+    await _report_progress(ctx, job, 0.0)
     if job.state not in TERMINAL_STATES and timeout_s > 0:
         interval = float(_MCP_HEARTBEAT_INTERVAL_S) if _MCP_HEARTBEAT_INTERVAL_S > 0 else 30.0
         wait_task = asyncio.create_task(runtime.wait(job_id, timeout_s))
@@ -761,7 +744,7 @@ async def job_wait(
                     if refreshed.state in TERMINAL_STATES:
                         break
                     progress += 1.0
-                    await _report_progress(ctx, refreshed, runtime, progress)
+                    await _report_progress(ctx, refreshed, progress)
         finally:
             if not wait_task.done():
                 wait_task.cancel()
@@ -785,7 +768,7 @@ async def job_wait(
         current,
         summary,
         result_offset,
-        public_error=_public_terminal_error(runtime, current),
+        public_error=_public_terminal_error(current),
         metadata=runtime.live_result_metadata(current),
     )
 
@@ -831,13 +814,13 @@ async def job_cancel(
     if job is None:
         raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
     if job.state in TERMINAL_STATES:
-        return _render_payload({"job": _summary(runtime, job), "cancelled_dependents": []})
+        return _render_payload({"job": _summary(runtime, job)})
     result = await runtime.cancel(job_id)
     current = runtime.database.job(job_id)
     if current is None:
         raise _internal_error(_request_id(ctx))
     return _render_payload(
-        {"job": _summary(runtime, current), "cancelled_dependents": result.cancelled_dependents},
+        {"job": _summary(runtime, current)},
         applied=("Job cancellation", job.id, f"Inspect job {job.id} with job_list; cancellation was applied and must not be repeated blindly."),
     )
 

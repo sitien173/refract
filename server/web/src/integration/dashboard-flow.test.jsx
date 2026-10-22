@@ -345,7 +345,9 @@ describe('Dashboard integrated user flows', () => {
     const createDialog = await screen.findByRole('dialog', { name: /Create target/i })
     expect(createDialog).toBeInTheDocument()
 
+    await waitFor(() => expect(createDialog).toContainElement(document.activeElement))
     fireEvent.change(within(createDialog).getByLabelText(/Identifier/i), { target: { value: 'worker-2' } })
+    expect(within(createDialog).getByLabelText(/Identifier/i)).toHaveValue('worker-2')
     fireEvent.change(within(createDialog).getByLabelText(/^Model$/i), { target: { value: 'gpt-4o' } })
     fireEvent.change(within(createDialog).getByLabelText(/System prompt/i), { target: { value: 'SUPER_SECRET_PROMPT_XYZ' } })
 
@@ -354,6 +356,7 @@ describe('Dashboard integrated user flows', () => {
     fireEvent.change(within(createDialog).getByRole('textbox', { name: /^Argument 1$/i }), { target: { value: '--temp' } })
 
     const submitCreateBtn = within(createDialog).getByRole('button', { name: /^Create target$/i })
+    await waitFor(() => expect(submitCreateBtn).toBeEnabled())
     fireEvent.click(submitCreateBtn)
 
     await waitFor(() => {
@@ -389,6 +392,7 @@ describe('Dashboard integrated user flows', () => {
     fireEvent.click(confirmCheckbox)
 
     const confirmDeleteBtn = within(deleteDialog).getByRole('button', { name: /^Confirm delete$/i })
+    await waitFor(() => expect(confirmDeleteBtn).toBeEnabled())
     fireEvent.click(confirmDeleteBtn)
 
     await waitFor(() => {
@@ -437,7 +441,9 @@ describe('Dashboard integrated user flows', () => {
     const createDialog = await screen.findByRole('dialog', { name: /Create profile/i })
     expect(createDialog).toBeInTheDocument()
 
+    await waitFor(() => expect(createDialog).toContainElement(document.activeElement))
     fireEvent.change(within(createDialog).getByLabelText(/Profile identifier/i), { target: { value: 'flow-profile' } })
+    expect(within(createDialog).getByLabelText(/Profile identifier/i)).toHaveValue('flow-profile')
     fireEvent.change(within(createDialog).getByLabelText(/Inherits from/i), { target: { value: 'default' } })
 
     // Declare consult workflow
@@ -448,6 +454,7 @@ describe('Dashboard integrated user flows', () => {
     fireEvent.change(targetSelect, { target: { value: 'worker-2' } })
 
     const submitCreateBtn = within(createDialog).getByRole('button', { name: /^Create profile$/i })
+    await waitFor(() => expect(submitCreateBtn).toBeEnabled())
     fireEvent.click(submitCreateBtn)
 
     await waitFor(() => {
@@ -486,6 +493,7 @@ describe('Dashboard integrated user flows', () => {
     fireEvent.click(confirmCheckbox)
 
     const confirmDeleteBtn = within(deleteDialog).getByRole('button', { name: /^Confirm delete$/i })
+    await waitFor(() => expect(confirmDeleteBtn).toBeEnabled())
     fireEvent.click(confirmDeleteBtn)
 
     await waitFor(() => {
@@ -542,9 +550,11 @@ describe('Dashboard integrated user flows', () => {
     const createDialog = await screen.findByRole('dialog', { name: /Create profile override/i })
     expect(createDialog).toBeInTheDocument()
 
+    await waitFor(() => expect(createDialog).toContainElement(document.activeElement))
     fireEvent.change(within(createDialog).getByLabelText(/Profile identifier/i), {
       target: { value: 'custom-override' },
     })
+    expect(within(createDialog).getByLabelText(/Profile identifier/i)).toHaveValue('custom-override')
 
     const consultCheckbox = within(createDialog).getByRole('checkbox', {
       name: /Declare custom policy for consult workflow/i,
@@ -552,6 +562,7 @@ describe('Dashboard integrated user flows', () => {
     fireEvent.click(consultCheckbox)
 
     const submitCreateBtn = within(createDialog).getByRole('button', { name: /^Create override$/i })
+    await waitFor(() => expect(submitCreateBtn).toBeEnabled())
     fireEvent.click(submitCreateBtn)
 
     await waitFor(() => {
@@ -589,6 +600,7 @@ describe('Dashboard integrated user flows', () => {
     fireEvent.click(confirmCheckbox)
 
     const confirmRemoveBtn = within(removeDialog).getByRole('button', { name: /^Remove override$/i })
+    await waitFor(() => expect(confirmRemoveBtn).toBeEnabled())
     fireEvent.click(confirmRemoveBtn)
 
     await waitFor(() => {
@@ -689,7 +701,9 @@ describe('Dashboard integrated user flows', () => {
     const { container } = render(<App />)
 
     expect(await screen.findByText('Job job-999')).toBeInTheDocument()
-    expect(api.getJobOutput).toHaveBeenCalledWith('job-999', expect.any(Object), expect.any(Object))
+    await waitFor(() => {
+      expect(api.getJobOutput).toHaveBeenCalledWith('job-999', expect.any(Object), expect.any(Object))
+    })
     await waitFor(() => {
       expect(container.querySelector('.transcript-status-badge')?.textContent).toBe('Transcript truncated')
     })

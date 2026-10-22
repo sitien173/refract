@@ -66,14 +66,6 @@ export async function getSettings() {
   return request('/dashboard/api/settings')
 }
 
-export async function updateMaxProjectReaders(maxProjectReaders, expectedRevision) {
-  return mutateWithCsrf('/dashboard/api/settings', {
-    method: 'PUT',
-    body: { max_project_readers: maxProjectReaders },
-    expectedRevision,
-  })
-}
-
 export async function getProfiles() {
   return request('/dashboard/api/profiles')
 }

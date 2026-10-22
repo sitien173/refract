@@ -40,7 +40,7 @@ Refract provides four fixed workflows: `consult`, `implement`, `other`, and
 `review`. Canonical gates use `implement` and `review`; `brainstorming` uses
 `consult`. Use `other` only when task guidance selects its explicit profile
 mapping. Jobs run in the
-registered directory; Refract never touches Git. Admission is reader/writer/session-fair; identical sessions serialize.
+registered directory; Refract never touches Git. Admission allows one job per project at a time, FIFO within each project.
 
 Keep provider, model, configured target and native session identities private;
 select only public workflows/profiles; native identity is not input. Require configured read-only targets for `consult`/`review`.

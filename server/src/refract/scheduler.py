@@ -1,4 +1,4 @@
-"""Global worker pool with project reader/writer and session admission."""
+"""Global worker pool with FIFO, one-job-per-project admission."""
 
 from __future__ import annotations
 
@@ -8,28 +8,17 @@ import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Literal
-
-
 RunJob = Callable[[str, threading.Event], Awaitable[None]]
-AccessMode = Literal["parallel_read", "exclusive"]
 
 
 @dataclass(slots=True, eq=False)
 class _Dispatch:
     job_id: str
     project_id: str
-    access_mode: AccessMode = "exclusive"
-    workflow: str = ""
-    context_key: str = ""
     completion: asyncio.Event = field(default_factory=asyncio.Event)
     cancel_event: threading.Event = field(default_factory=threading.Event)
     reserved: bool = False
     started: bool = False
-
-    @property
-    def session_scope(self) -> tuple[str, str, str]:
-        return (self.project_id, self.workflow, self.context_key)
 
 
 class ProjectScheduler:
@@ -39,18 +28,11 @@ class ProjectScheduler:
         self,
         max_jobs: int,
         run_job: RunJob,
-        *,
-        max_project_readers: int = 1,
-        is_ready: Callable[[str], bool] | None = None,
     ) -> None:
         if max_jobs < 1:
             raise ValueError("max_jobs must be positive")
-        if max_project_readers < 1:
-            raise ValueError("max_project_readers must be positive")
         self.max_jobs = max_jobs
-        self.max_project_readers = max_project_readers
         self._run_job = run_job
-        self._is_ready = is_ready or (lambda _job_id: True)
         self._ready: asyncio.Queue[_Dispatch | None] = asyncio.Queue()
         self._pending: deque[_Dispatch] = deque()
         self._queues: dict[str, deque[str]] = {}
@@ -93,24 +75,12 @@ class ProjectScheduler:
         self,
         job_id: str,
         project_id: str,
-        *,
-        access_mode: AccessMode = "exclusive",
-        workflow: str = "",
-        context_key: str = "",
     ) -> None:
-        """Queue one job; omitted metadata preserves exclusive FIFO behavior."""
+        """Queue one job for project-scoped FIFO admission."""
         existing = self._current.get(job_id)
         if existing is not None:
             return
-        if access_mode not in {"parallel_read", "exclusive"}:
-            raise ValueError("Invalid project access mode")
-        dispatch = _Dispatch(
-            job_id=job_id,
-            project_id=project_id,
-            access_mode=access_mode,
-            workflow=workflow,
-            context_key=context_key,
-        )
+        dispatch = _Dispatch(job_id=job_id, project_id=project_id)
         self._current[job_id] = dispatch
         self._completion_events[job_id] = dispatch.completion
         self._pending.append(dispatch)
@@ -153,10 +123,6 @@ class ProjectScheduler:
         if dispatch is not None:
             self._release(dispatch, signal=signal)
 
-    def reevaluate(self) -> None:
-        """Recheck dependency readiness after a terminal transition."""
-        self._schedule()
-
     async def close(self) -> None:
         self._closing = True
         for dispatch in tuple(self._active):
@@ -190,83 +156,14 @@ class ProjectScheduler:
         if dispatch is not None:
             self._release(dispatch)
 
-    def waiting_reason(self, job_id: str) -> str:
-        dispatch = self._current.get(job_id)
-        if dispatch is None or dispatch.reserved or dispatch not in self._pending:
-            return ""
-        if not self._is_ready(job_id):
-            return "waiting on dependency"
-        barrier = self._writer_barrier(dispatch.project_id)
-        if (
-            dispatch.access_mode == "parallel_read"
-            and barrier is not None
-            and self._position(dispatch) > self._position(barrier)
-        ):
-            return f"waiting behind exclusive job {barrier.job_id}"
-        project_active = [item for item in self._active if item.project_id == dispatch.project_id]
-        if any(item.session_scope == dispatch.session_scope for item in project_active):
-            return "waiting for project session scope"
-        if dispatch.access_mode == "exclusive":
-            if any(item.access_mode == "exclusive" for item in project_active):
-                return "waiting for project exclusive job"
-            if project_active:
-                return "waiting for project readers to finish"
-        else:
-            if any(item.access_mode == "exclusive" for item in project_active):
-                return "waiting for project write slot"
-            reader_count = sum(item.access_mode == "parallel_read" for item in project_active)
-            if reader_count >= self.max_project_readers:
-                return "waiting for project reader capacity"
-        if len(self._active) >= self.max_jobs:
-            return "waiting for global worker capacity"
-        return "waiting for admission"
-
-    def _position(self, dispatch: _Dispatch) -> int:
-        try:
-            return list(self._pending).index(dispatch)
-        except ValueError:
-            return -1
-
-    def _writer_barrier(self, project_id: str) -> _Dispatch | None:
-        for dispatch in self._pending:
-            if (
-                dispatch.project_id == project_id
-                and dispatch.access_mode == "exclusive"
-                and self._is_ready(dispatch.job_id)
-            ):
-                return dispatch
-        return None
-
     def _schedule(self) -> None:
         if self._closing or not self._started:
             return
         while len(self._active) < self.max_jobs:
-            barrier_by_project: dict[str, _Dispatch] = {}
-            for candidate in self._pending:
-                if candidate.access_mode == "exclusive" and self._is_ready(candidate.job_id):
-                    barrier_by_project.setdefault(candidate.project_id, candidate)
             selected: _Dispatch | None = None
             for candidate in self._pending:
-                if not self._is_ready(candidate.job_id):
+                if any(item.project_id == candidate.project_id for item in self._active):
                     continue
-                barrier = barrier_by_project.get(candidate.project_id)
-                if (
-                    candidate.access_mode == "parallel_read"
-                    and barrier is not None
-                    and self._position(candidate) > self._position(barrier)
-                ):
-                    continue
-                project_active = [item for item in self._active if item.project_id == candidate.project_id]
-                if any(item.session_scope == candidate.session_scope for item in project_active):
-                    continue
-                if candidate.access_mode == "exclusive":
-                    if project_active:
-                        continue
-                else:
-                    if any(item.access_mode == "exclusive" for item in project_active):
-                        continue
-                    if sum(item.access_mode == "parallel_read" for item in project_active) >= self.max_project_readers:
-                        continue
                 selected = candidate
                 break
             if selected is None:

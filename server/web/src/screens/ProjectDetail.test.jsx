@@ -413,7 +413,9 @@ describe('ProjectDetail screen', () => {
     expect(dialog).toBeInTheDocument()
 
     const idInput = screen.getByLabelText(/Profile identifier/i)
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
     fireEvent.change(idInput, { target: { value: 'new-override' } })
+    expect(idInput).toHaveValue('new-override')
 
     const consultCheckbox = screen.getByRole('checkbox', { name: /Declare custom policy for consult workflow/i })
     fireEvent.click(consultCheckbox)
@@ -479,6 +481,7 @@ describe('ProjectDetail screen', () => {
     expect(idInput).toBeDisabled()
 
     const submitBtn = within(dialog).getByRole('button', { name: /^Save override$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
     await waitFor(() => {
@@ -525,13 +528,16 @@ describe('ProjectDetail screen', () => {
     fireEvent.click(confirmCheckbox)
 
     const confirmRemoveBtn = screen.getByRole('button', { name: /^Remove override$/i })
+    await waitFor(() => expect(confirmRemoveBtn).toBeEnabled())
     fireEvent.click(confirmRemoveBtn)
 
-    expect(api.deleteProjectProfileOverride).toHaveBeenCalledWith(
-      'proj-demo',
-      'custom-profile',
-      'rev-proj-001'
-    )
+    await waitFor(() => {
+      expect(api.deleteProjectProfileOverride).toHaveBeenCalledWith(
+        'proj-demo',
+        'custom-profile',
+        'rev-proj-001'
+      )
+    })
   })
 
   it('handles referenced rejection when removing project override by displaying blocking references', async () => {
@@ -560,6 +566,7 @@ describe('ProjectDetail screen', () => {
     fireEvent.click(confirmCheckbox)
 
     const confirmRemoveBtn = screen.getByRole('button', { name: /^Remove override$/i })
+    await waitFor(() => expect(confirmRemoveBtn).toBeEnabled())
     fireEvent.click(confirmRemoveBtn)
 
     expect(await screen.findByText('Profile override is currently referenced')).toBeInTheDocument()
@@ -580,10 +587,9 @@ describe('ProjectDetail screen', () => {
     fireEvent.click(createBtn)
 
     const idInput = await screen.findByLabelText(/Profile identifier/i)
+    await waitFor(() => expect(idInput.closest('[role="dialog"]')).toContainElement(document.activeElement))
     fireEvent.change(idInput, { target: { value: 'dirty-draft-id' } })
-
-    // Input holds dirty draft
-    expect(idInput.value).toBe('dirty-draft-id')
+    expect(idInput).toHaveValue('dirty-draft-id')
   })
 
   it('does not advance revision on conflict and prevents stale draft overwrite after reload', async () => {
@@ -633,6 +639,7 @@ describe('ProjectDetail screen', () => {
     fireEvent.change(timeoutInput, { target: { value: '999' } })
 
     const submitBtn = within(dialog).getByRole('button', { name: /^Save override$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
     expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()
@@ -689,6 +696,7 @@ describe('ProjectDetail screen', () => {
       override: { id: 'custom-profile' },
     })
 
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
     await vi.waitFor(() => {
@@ -766,6 +774,7 @@ describe('ProjectDetail screen', () => {
     fireEvent.change(timeoutInput, { target: { value: '999' } })
 
     const submitBtn = within(dialog).getByRole('button', { name: /^Save override$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
     expect(await within(dialog).findByText(/Configuration conflict detected/i)).toBeInTheDocument()
@@ -927,8 +936,6 @@ describe('ProjectDetail screen', () => {
         profile: 'balanced',
         state: 'running',
         target_id: 'worker-1',
-        depends_on: ['completed-parent-a', 'completed-parent-b'],
-        waiting_on: ['waiting-parent-a', 'waiting-parent-b'],
         created_at: '2026-09-04 15:00:00',
       },
       {
@@ -937,8 +944,6 @@ describe('ProjectDetail screen', () => {
         profile: 'balanced',
         state: 'succeeded',
         target_id: 'worker-2',
-        depends_on: ['finished-parent-a', 'finished-parent-b'],
-        waiting_on: [],
         created_at: '2026-09-04 15:05:00',
       },
     ], recent: [], more_recent: 5 })
@@ -952,9 +957,6 @@ describe('ProjectDetail screen', () => {
     expect(screen.getByText('job-beta')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: /Jobs 7/i })).toBeInTheDocument()
     expect(screen.getByText(/5 older terminal jobs omitted/i)).toBeInTheDocument()
-    expect(screen.getByText('completed-parent-a, completed-parent-b')).toBeInTheDocument()
-    expect(screen.getByText('waiting-parent-a, waiting-parent-b')).toBeInTheDocument()
-    expect(screen.getByText('finished-parent-a, finished-parent-b')).toBeInTheDocument()
 
     // Filter by search
     const searchInput = screen.getByLabelText(/Search jobs/i)

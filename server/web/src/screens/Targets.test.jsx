@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import Targets from './Targets'
@@ -302,7 +302,9 @@ describe('Targets screen', () => {
     const dialog = await screen.findByRole('dialog', { name: /Create target/i })
     expect(dialog).toBeInTheDocument()
 
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
     fireEvent.change(within(dialog).getByLabelText(/Identifier/i), { target: { value: 'custom-target' } })
+    expect(within(dialog).getByLabelText(/Identifier/i)).toHaveValue('custom-target')
     fireEvent.change(within(dialog).getByLabelText(/^Model$/i), { target: { value: 'gpt-4o' } })
     fireEvent.change(within(dialog).getByLabelText(/Backend profile/i), { target: { value: 'fast' } })
     fireEvent.change(within(dialog).getByLabelText(/Reasoning effort/i), { target: { value: 'high' } })
@@ -324,6 +326,7 @@ describe('Targets screen', () => {
 
     // Submit form
     const submitBtn = within(dialog).getByRole('button', { name: /^Create target$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
     fireEvent.click(submitBtn)
 
     await vi.waitFor(() => {
@@ -384,6 +387,7 @@ describe('Targets screen', () => {
     fireEvent.change(modelInput, { target: { value: 'claude-3-5-sonnet' } })
 
     const saveBtn = within(dialog).getByRole('button', { name: /Save target/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     await vi.waitFor(() => {
@@ -410,6 +414,7 @@ describe('Targets screen', () => {
 
     const dialog = await screen.findByRole('dialog', { name: /Create target/i })
     const modelInput = within(dialog).getByLabelText(/^Model$/i)
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
     fireEvent.change(modelInput, { target: { value: 'draft-model-value' } })
     expect(modelInput.value).toBe('draft-model-value')
 
@@ -441,10 +446,14 @@ describe('Targets screen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Create target$/i }))
     const dialog = await screen.findByRole('dialog', { name: /Create target/i })
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
     fireEvent.change(within(dialog).getByLabelText(/Identifier/i), { target: { value: 'conflict-t' } })
+    expect(within(dialog).getByLabelText(/Identifier/i)).toHaveValue('conflict-t')
     fireEvent.change(within(dialog).getByLabelText(/^Model$/i), { target: { value: 'conflict-model' } })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Create target$/i }))
+    const submitBtn = within(dialog).getByRole('button', { name: /^Create target$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
+    fireEvent.click(submitBtn)
 
     expect(await screen.findByText('Configuration conflict')).toBeInTheDocument()
     expect(screen.getByText('Source changed on server.')).toBeInTheDocument()
@@ -483,7 +492,7 @@ describe('Targets screen', () => {
 
     const checkbox = screen.getByLabelText(/I confirm deleting target target-down/i)
     fireEvent.click(checkbox)
-    expect(confirmBtn).not.toBeDisabled()
+    await waitFor(() => expect(confirmBtn).toBeEnabled())
 
     fireEvent.click(confirmBtn)
 
@@ -512,7 +521,9 @@ describe('Targets screen', () => {
     expect(await screen.findByRole('dialog', { name: /Delete target: target-healthy/i })).toBeInTheDocument()
     const checkbox2 = screen.getByLabelText(/I confirm deleting target target-healthy/i)
     fireEvent.click(checkbox2)
-    fireEvent.click(screen.getByRole('button', { name: /Confirm delete/i }))
+    const confirmBtn2 = screen.getByRole('button', { name: /Confirm delete/i })
+    await waitFor(() => expect(confirmBtn2).toBeEnabled())
+    fireEvent.click(confirmBtn2)
 
     expect(await screen.findByRole('dialog', { name: /Blocking references for target target-healthy/i }, { timeout: 5000 })).toBeInTheDocument()
     expect(screen.getByText('Target is currently referenced')).toBeInTheDocument()
@@ -554,6 +565,7 @@ describe('Targets screen', () => {
     fireEvent.change(concurrencyInput, { target: { value: '4' } })
 
     const saveBtn = within(dialog).getByRole('button', { name: /^Save target$/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     expect(await within(dialog).findByText('Configuration conflict')).toBeInTheDocument()
@@ -606,6 +618,7 @@ describe('Targets screen', () => {
       },
     })
 
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     await vi.waitFor(() => {
@@ -660,6 +673,7 @@ describe('Targets screen', () => {
     fireEvent.change(concurrencyInput, { target: { value: '5' } })
 
     const saveBtn = within(dialog).getByRole('button', { name: /^Save target$/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
     fireEvent.click(saveBtn)
 
     expect(await within(dialog).findByText('Configuration conflict')).toBeInTheDocument()

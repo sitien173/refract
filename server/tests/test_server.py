@@ -65,7 +65,7 @@ async def test_v2_tool_surface_lists_exact_contract() -> None:
     expected = {
         "project_resolve": {"path", "alias"},
         "task_guide": {"project_id"},
-        "job_submit": {"project_id", "workflow", "prompt", "profile", "context_key", "fresh_session", "depends_on", "next_target"},
+        "job_submit": {"project_id", "workflow", "prompt", "profile", "context_key", "fresh_session", "next_target"},
         "job_wait": {"job_id", "timeout_s", "result_offset"},
         "job_list": {"project_id"},
         "job_cancel": {"job_id"},
@@ -214,8 +214,7 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
         assert all(prop.get("description") for prop in tools[name].input_schema["properties"].values())
     assert set(JobSummary.model_fields) == {
         "id", "project_id", "workflow", "profile", "state", "context_key",
-        "attempts", "depends_on", "waiting_on", "waiting_reason",
-        "created_at", "updated_at",
+        "attempts", "created_at", "updated_at",
     }
     assert "resource_uri" not in SubmissionResult.model_fields
 
@@ -240,6 +239,36 @@ async def test_inprocess_client_receives_compact_json_errors(tmp_path, monkeypat
         unknown_payload = json.loads(unknown.content[0].text)
         assert unknown_payload["code"] == "unknown_job"
         assert unknown_payload["next_action"]
+
+
+@pytest.mark.asyncio
+async def test_job_submit_rejects_depends_on_and_summary_has_reduced_fields(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        root = tmp_path / "reduced-summary-project"
+        root.mkdir()
+        project = runtime.register_project(str(root), "reduced-summary")
+        rejected = await client.call_tool(
+            "job_submit",
+            {"project_id": project.id, "workflow": "consult", "prompt": "x", "depends_on": []},
+        )
+        assert rejected.is_error
+        assert json.loads(rejected.content[0].text)["code"] == "invalid_request"
+
+        submitted = await client.call_tool(
+            "job_submit", {"project_id": project.id, "workflow": "consult", "prompt": "x"}
+        )
+        assert not submitted.is_error
+        summary_fields = {
+            "id", "project_id", "workflow", "profile", "state", "context_key",
+            "attempts", "created_at", "updated_at",
+        }
+        submitted_summary = json.loads(submitted.content[0].text)["job"]
+        assert set(submitted_summary) == summary_fields
+        cancelled = await client.call_tool("job_cancel", {"job_id": submitted_summary["id"]})
+        assert not cancelled.is_error
+        cancelled_payload = json.loads(cancelled.content[0].text)
+        assert set(cancelled_payload) == {"job"}
+        assert set(cancelled_payload["job"]) == summary_fields
 
 
 @pytest.mark.asyncio
@@ -409,11 +438,11 @@ def test_terminal_page_with_tight_metadata_advances_or_errors() -> None:
 
     job = _job_view("succeeded")
     job.result = JobResult(text="😀😀")
-    job.context_key = "x" * 8540
+    job.context_key = "x" * 9000
     summary = JobSummary(
         id=job.id, project_id=job.project_id, workflow=job.workflow, profile=job.profile,
         state=job.state, context_key=job.context_key,
-        depends_on=[], waiting_on=[], waiting_reason="", attempts=0,
+        attempts=0,
         created_at=job.created_at, updated_at=job.updated_at,
     ).model_dump(mode="json")
     empty_page = json.dumps(
@@ -467,20 +496,12 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
         other.mkdir()
         await check("project_resolve", {"path": str(other), "alias": "errors"}, "alias_taken")
         await check("job_submit", {"project_id": project.id, "workflow": "implement", "prompt": "x", "profile": "missing-profile"}, "unknown_profile")
-        await check("job_submit", {"project_id": project.id, "workflow": "implement", "prompt": "x", "depends_on": ["no-such-dependency"]}, "invalid_dependency")
 
         runtime.database.create_job(
             job_id="failed-parent", project_id=project.id, workflow="review", profile="balanced",
             prompt="parent", execution_plan_json="{}", context_key="parent",
         )
         runtime.database.finish_job("failed-parent", "failed")
-        runtime.database.create_job_with_dependencies(
-            job_id="cancelled-child", project_id=project.id, workflow="review", profile="balanced",
-            prompt="child", execution_plan_json="{}", context_key="child", access_mode="exclusive",
-            depends_on=["failed-parent"],
-        )
-        runtime.database.finish_job("cancelled-child", "cancelled")
-        await check("job_retry", {"job_id": "cancelled-child"}, "dependency_failed")
         await check("job_retry", {"job_id": "missing-job"}, "unknown_job")
 
         runtime.database.create_job(
@@ -641,30 +662,6 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
         assert runtime.database.job("cancel-overflow").state == "cancelled"
 
 
-@pytest.mark.asyncio
-async def test_job_cancel_reports_complete_cancelled_dependents(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        root = tmp_path / "cancel-dependencies"
-        root.mkdir()
-        project = runtime.register_project(str(root), "cancel-dependencies")
-        runtime.database.create_job(
-            job_id="cancel-parent", project_id=project.id, workflow="review", profile="balanced",
-            prompt="parent", execution_plan_json="{}", context_key="parent",
-        )
-        runtime.database.create_job_with_dependencies(
-            job_id="cancel-child", project_id=project.id, workflow="review", profile="balanced",
-            prompt="child", execution_plan_json="{}", context_key="child", access_mode="exclusive",
-            depends_on=["cancel-parent"],
-        )
-        listed = await client.call_tool("job_list", {"project_id": project.id})
-        listed_jobs = {item["id"]: item for item in json.loads(listed.content[0].text)["active"]}
-        assert listed_jobs["cancel-child"]["depends_on"] == ["cancel-parent"]
-        assert listed_jobs["cancel-child"]["waiting_on"] == ["cancel-parent"]
-        response = await client.call_tool("job_cancel", {"job_id": "cancel-parent"})
-        assert not response.is_error
-        result = json.loads(response.content[0].text)
-        assert result["cancelled_dependents"] == ["cancel-child"]
-        assert runtime.database.job("cancel-child").state == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -702,47 +699,23 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
         assert stored is not None and stored.result.error == marker
 
 
+
+
 @pytest.mark.asyncio
-async def test_public_terminal_error_preserves_only_exact_validated_dependency_cause(tmp_path, monkeypatch) -> None:
+async def test_public_terminal_error_preserves_execution_task_cancellation(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        root = tmp_path / "safe-dependency-error"
+        root = tmp_path / "cancel-error"
         root.mkdir()
-        project = runtime.register_project(str(root), "safe-dependency-error")
-        runtime.database.create_job(
-            job_id="safe-parent", project_id=project.id, workflow="review", profile="balanced",
-            prompt="parent", execution_plan_json="{}", context_key="parent",
-        )
-        runtime.database.finish_job("safe-parent", "failed")
-        runtime.database.create_job_with_dependencies(
-            job_id="safe-child", project_id=project.id, workflow="review", profile="balanced",
-            prompt="child", execution_plan_json="{}", context_key="child", access_mode="exclusive",
-            depends_on=["safe-parent"],
-        )
-        runtime._cancel_queued_dependent("safe-child", "safe-parent", "failed")
-        safe = await client.call_tool("job_wait", {"job_id": "safe-child", "timeout_s": 0})
-        safe_error = json.loads(safe.content[0].text)["result"]["error"]
-        assert safe_error == "Dependency safe-parent ended in state failed"
-
-        runtime.database.create_job_with_dependencies(
-            job_id="forged-child", project_id=project.id, workflow="review", profile="balanced",
-            prompt="child", execution_plan_json="{}", context_key="forged", access_mode="exclusive",
-            depends_on=["safe-parent"],
-        )
-        forged = "Dependency safe-parent ended in state failed; provider-private-suffix"
-        runtime.database.finish_job("forged-child", "cancelled", error=forged)
-        rejected = await client.call_tool("job_wait", {"job_id": "forged-child", "timeout_s": 0})
-        rejected_text = rejected.content[0].text
-        rejected_error = json.loads(rejected_text)["result"]["error"]
-        assert rejected_error != forged
-        assert "provider-private-suffix" not in rejected_text
-
+        project = runtime.register_project(str(root), "cancel-error")
         runtime.database.create_job(
             job_id="cancel-cause", project_id=project.id, workflow="review", profile="balanced",
             prompt="cancelled", execution_plan_json="{}", context_key="cancel-cause",
         )
         runtime.database.finish_job("cancel-cause", "cancelled", error="execution task cancelled")
-        cancellation = await client.call_tool("job_wait", {"job_id": "cancel-cause", "timeout_s": 0})
-        assert json.loads(cancellation.content[0].text)["result"]["error"] == "execution task cancelled"
+
+        response = await client.call_tool("job_wait", {"job_id": "cancel-cause", "timeout_s": 0})
+
+        assert json.loads(response.content[0].text)["result"]["error"] == "execution task cancelled"
 
 
 @pytest.mark.asyncio
@@ -824,11 +797,7 @@ def _job_view(state: str) -> JobView:
 
 
 def _stub_job_record(_job_id: str) -> dict[str, str]:
-    return {"access_mode": "exclusive"}
-
-
-def _stub_job_dependencies(_job_id: str) -> list[str]:
-    return []
+    return {}
 
 
 def test_job_wait_constants() -> None:
@@ -852,13 +821,9 @@ async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -
             return state["job"]
 
         job_record = staticmethod(_stub_job_record)
-        dependencies_for_job = staticmethod(_stub_job_dependencies)
 
     class Runtime:
         database = Database()
-
-        def waiting_metadata(self, job_id: str):
-            return [], ""
 
         def live_result_metadata(self, job: JobView):
             return job.result.metadata
@@ -882,7 +847,7 @@ async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -
     assert waits == ([] if timeout_s == 0 else [(initial.id, timeout_s)])
     assert result["job"]["state"] == ("running" if timeout_s == 0 else "succeeded")
     assert result["result"] == ({"text": "", "error": "", "next_offset": None} if timeout_s == 0 else {"text": "", "error": "", "next_offset": None, "metadata": {}})
-    assert json.loads(progress_messages[0]) == {"state": "running", "waiting_reason": ""}
+    assert json.loads(progress_messages[0]) == {"state": "running"}
 
 
 @pytest.mark.asyncio
@@ -900,13 +865,9 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
             return current_job
 
         job_record = staticmethod(_stub_job_record)
-        dependencies_for_job = staticmethod(_stub_job_dependencies)
 
     class Runtime:
         database = Database()
-
-        def waiting_metadata(self, job_id: str):
-            return [], ""
 
         def live_result_metadata(self, job: JobView):
             return job.result.metadata
@@ -933,7 +894,7 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
         (1.0, None),
         (2.0, None),
     ]
-    assert all(json.loads(message) == {"state": "running", "waiting_reason": ""} for _, _, message in progress_reports)
+    assert all(json.loads(message) == {"state": "running"} for _, _, message in progress_reports)
 
 
 @pytest.mark.asyncio
@@ -965,13 +926,9 @@ async def test_job_wait_non_terminal_timeout(monkeypatch) -> None:
             return current_job
 
         job_record = staticmethod(_stub_job_record)
-        dependencies_for_job = staticmethod(_stub_job_dependencies)
 
     class Runtime:
         database = Database()
-
-        def waiting_metadata(self, job_id: str):
-            return [], ""
 
         def live_result_metadata(self, job: JobView):
             return job.result.metadata
@@ -1009,13 +966,9 @@ async def test_job_wait_cancellation_cleanup() -> None:
             return current_job
 
         job_record = staticmethod(_stub_job_record)
-        dependencies_for_job = staticmethod(_stub_job_dependencies)
 
     class Runtime:
         database = Database()
-
-        def waiting_metadata(self, job_id: str):
-            return [], ""
 
         def live_result_metadata(self, job: JobView):
             return job.result.metadata
@@ -1053,13 +1006,9 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
             return terminal
 
         job_record = staticmethod(_stub_job_record)
-        dependencies_for_job = staticmethod(_stub_job_dependencies)
 
     class Runtime:
         database = Database()
-
-        def waiting_metadata(self, job_id: str):
-            return [], ""
 
         def live_result_metadata(self, job: JobView):
             return job.result.metadata
@@ -1079,7 +1028,7 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
     result = json.loads(await job_wait(terminal.id, ctx))
     assert result["job"]["state"] == "failed"
     assert waits == []
-    assert json.loads(progress_messages[0]) == {"state": "failed", "waiting_reason": ""}
+    assert json.loads(progress_messages[0]) == {"state": "failed"}
 
 
 @pytest.mark.asyncio
@@ -1110,13 +1059,9 @@ async def test_job_wait_logs_progress_token_presence(caplog, wire_meta, expected
             return terminal
 
         job_record = staticmethod(_stub_job_record)
-        dependencies_for_job = staticmethod(_stub_job_dependencies)
 
     class Runtime:
         database = Database()
-
-        def waiting_metadata(self, job_id: str):
-            return [], ""
 
         def live_result_metadata(self, job: JobView):
             return job.result.metadata

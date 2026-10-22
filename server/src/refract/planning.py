@@ -167,20 +167,6 @@ def resolve_execution_plan(
     )
 
 
-def derive_access_mode(plan: ExecutionPlan) -> Literal["parallel_read", "exclusive"]:
-    """Classify a saved plan using verified enforcement for every possible target."""
-    if not plan.selection.targets:
-        return "exclusive"
-    for target_id in plan.selection.targets:
-        try:
-            target = plan.target(target_id)
-        except StopIteration:
-            return "exclusive"
-        if not DriverRegistry.supports_verified_read_only(target):
-            return "exclusive"
-    return "parallel_read"
-
-
 def target_execution_key(target: TargetConfig) -> str:
     encoded = json.dumps(_target_data(target), sort_keys=True, separators=(",", ":")).encode()
     return f"{target.id}:{hashlib.sha256(encoded).hexdigest()[:16]}"

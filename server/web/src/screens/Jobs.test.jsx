@@ -78,12 +78,9 @@ describe('Jobs screen and JobDetail screen', () => {
     vi.mocked(api.getProjectJobs).mockResolvedValue({
       active: [{
         id: 'active-kept', workflow: 'implement', profile: 'balanced', state: 'running',
-        depends_on: ['completed-parent-a', 'completed-parent-b'],
-        waiting_on: ['waiting-parent-a', 'waiting-parent-b'], waiting_reason: 'waiting on dependency waiting-parent-a',
       }],
       recent: [{
         id: 'recent-kept', workflow: 'review', profile: 'balanced', state: 'succeeded',
-        depends_on: ['finished-parent-a', 'finished-parent-b'], waiting_on: [], waiting_reason: '',
       }],
       more_recent: 4,
     })
@@ -92,9 +89,6 @@ describe('Jobs screen and JobDetail screen', () => {
 
     expect(await screen.findByText('active-kept')).toBeInTheDocument()
     expect(screen.getByText('recent-kept')).toBeInTheDocument()
-    expect(screen.getByText('waiting-parent-a, waiting-parent-b')).toBeInTheDocument()
-    expect(screen.getByText('completed-parent-a, completed-parent-b')).toBeInTheDocument()
-    expect(screen.getByText('finished-parent-a, finished-parent-b')).toBeInTheDocument()
     expect(screen.getByText(/4 older terminal jobs omitted/i)).toBeInTheDocument()
   })
 

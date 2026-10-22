@@ -117,9 +117,6 @@ class JobSummary(BaseModel):
     state: JobState
     context_key: str
     attempts: int = 0
-    depends_on: list[str] = Field(default_factory=list)
-    waiting_on: list[str] = Field(default_factory=list)
-    waiting_reason: str = ""
     created_at: str
     updated_at: str
 
@@ -157,7 +154,6 @@ class ActionResult(BaseModel):
     job_id: str
     state: JobState
     error: str = ""
-    cancelled_dependents: list[str] = Field(default_factory=list)
 
 
 class TaskGuideResult(BaseModel):
@@ -351,12 +347,6 @@ class DashboardOverview(BaseModel):
     unhealthy_targets: int
 
 
-class DashboardReaderCapacityUpdate(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-
-    max_project_readers: int = Field(ge=1)
-
-
 class DashboardJob(BaseModel):
     id: str
     project_id: str
@@ -365,10 +355,6 @@ class DashboardJob(BaseModel):
     prompt: str = ""
     state: JobState
     context_key: str
-    access_mode: Literal["parallel_read", "exclusive"] = "exclusive"
-    depends_on: list[str] = Field(default_factory=list)
-    waiting_on: list[str] = Field(default_factory=list)
-    waiting_reason: str = ""
     config_revision: str = ""
     target_id: str = ""
     attempts: int = 0
@@ -422,7 +408,6 @@ __all__ = [
     "DashboardError",
     "DashboardJob",
     "DashboardOverview",
-    "DashboardReaderCapacityUpdate",
     "ConfigHealthSnapshot",
     "ConfigRevision",
     "ConfigurationHealth",

@@ -42,17 +42,20 @@ assert tools == ["project_resolve", "task_guide", "job_submit", "job_wait", "job
 for detail in (
     "`path`, `alias=\"\"`", "{project:{id, alias, path}}",
     "{workflows, profiles:{default, available}, guidance}",
-    "{job:summary}", "{job:summary, result:{text, error, next_offset}}",
-    "{active, recent, more_recent}", "{job:summary, cancelled_dependents:[id]}",
+    "{job:summary}", "{job:summary, result:{text, error, next_offset, metadata}}",
+    "{active, recent, more_recent}", "{job:summary}",
+    "Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, created_at, updated_at`.",
+    "Unknown tool arguments return `invalid_request`.",
+    "At most one job per project runs at a time. Jobs within each project are admitted FIFO, bounded by the global `max_jobs` capacity; jobs in different projects may run concurrently up to that capacity.",
     "`timeout_s=3600`", "`result_offset=0`", "0..3600",
     "Capture `project.id` and `job.id` from returned envelopes.",
 ):
     assert detail in contract_flat, detail
 approved_errors = {
     "unknown_project", "invalid_path", "alias_taken", "unknown_job",
-    "unknown_profile", "invalid_dependency", "dependency_failed",
+    "unknown_profile",
     "invalid_state", "config_invalid", "daemon_stopping", "invalid_request",
-    "response_too_large", "internal_error",
+    "targets_unavailable", "response_too_large", "internal_error",
 }
 error_section = contract.split("## Errors", 1)[1].split("## ", 1)[0]
 error_codes = set(re.findall(r"^\| `([a-z_]+)` \|", error_section, re.M))
@@ -61,7 +64,9 @@ for detail in ("isError", "retryable", "next_action", "request ID"):
     assert detail in " ".join(error_section.split()), detail
 assert "root job or project ID" in contract_flat
 assert "project_register" not in contract
-assert plugin_version == market_version == codex_version == "1.2.0"
+assert plugin_version == market_version == codex_version == "2.0.0"
+for removed in ("depends_on", "cancelled_dependents", "invalid_dependency", "dependency_failed"):
+    assert removed not in contract, removed
 
 coordinator = (root / "skills/coordinating-multi-model-work/SKILL.md").read_text()
 setup = coordinator.split("## Setup and Resume", 1)[1].split("### Plan-Artifact Tracking", 1)[0]
@@ -174,10 +179,13 @@ grep -q 'task_guide(project_id)' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'default 3600-second heartbeat' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You own the entire Git lifecycle' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'reader/writer/session-fair' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'one job per project at a time, FIFO within each project' skills/coordinating-multi-model-work/SKILL.md
 
 grep -q 'more_recent' skills/coordinating-multi-model-work/references/tool-contract.md
-grep -q 'cancelled_dependents' skills/coordinating-multi-model-work/references/tool-contract.md
+if grep -q -E 'depends_on|cancelled_dependents|invalid_dependency|dependency_failed' skills/coordinating-multi-model-work/references/tool-contract.md; then
+    printf 'removed job dependency surface remains in tool contract\n' >&2
+    exit 1
+fi
 grep -q 'result_offset' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q '`other` requires an explicit mapping' skills/coordinating-multi-model-work/references/tool-contract.md
 # Preserve source-freeze and temporary-checkpoint policy guards.

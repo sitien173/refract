@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.0 - 2026-10-22
+
+- Removed the `job_submit` `depends_on` parameter and the `job_cancel` `cancelled_dependents` return field.
+- Removed `depends_on`, `waiting_on`, and `waiting_reason` from job summaries.
+- Removed the `invalid_dependency` and `dependency_failed` error codes; unknown tool arguments now return `invalid_request`.
+- Removed the `[daemon].max_project_readers` setting and parallel-read admission; admission is now one job per project, FIFO within each project.
+- Removed `PUT /dashboard/api/settings`.
+- Schema v14 migration cancels queued jobs whose dependencies had not succeeded and drops `job_dependencies` and `jobs.access_mode`.
+- Before restarting, delete `[daemon].max_project_readers` from your configuration if present.
+
 ## 1.2.0 - 2026-10-12
 
 - `executing-plans`: removed the consult step and the first, resumed, and fix submission templates from `implementer-prompt.md`; phase prompts drop the `SKILLS` section and use minimal rules.

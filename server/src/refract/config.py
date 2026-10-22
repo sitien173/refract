@@ -78,7 +78,6 @@ class DaemonConfig:
     host: str = "127.0.0.1"
     port: int = 8765
     max_jobs: int = 4
-    max_project_readers: int = 1
     history_turns: int = 8
     history_bytes: int = 65536
     default_profile: str = ""
@@ -610,7 +609,6 @@ def _load_config_values(
         "host",
         "port",
         "max_jobs",
-        "max_project_readers",
         "history_turns",
         "history_bytes",
         "default_profile",
@@ -653,11 +651,6 @@ def _load_config_values(
         host=host.strip(),
         port=port,
         max_jobs=_positive_int(daemon.get("max_jobs"), 4, "[daemon].max_jobs"),
-        max_project_readers=_positive_int(
-            daemon.get("max_project_readers"),
-            1,
-            "[daemon].max_project_readers",
-        ),
         history_turns=_positive_int(
             daemon.get("history_turns"), 8, "[daemon].history_turns"
         ),
