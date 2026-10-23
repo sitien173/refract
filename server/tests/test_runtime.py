@@ -8,6 +8,7 @@ import pytest
 from refract.config import load_config
 from refract.runtime import OrchestrationError, Runtime
 from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target
+from tests.orchestration_helpers import register_project
 
 
 @pytest.mark.asyncio
@@ -17,7 +18,7 @@ async def test_submit_pins_valid_token_and_prechecks_all_open_targets(tmp_path) 
     runtime = Runtime(load_config(path))
     root = tmp_path / "project"
     root.mkdir()
-    project = runtime.register_project(str(root), "project")
+    project = register_project(runtime, str(root), "project")
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", plan.targets[1])
     try:
@@ -59,7 +60,7 @@ async def test_live_metadata_routes_after_failure_without_persisting_hint(tmp_pa
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = runtime.register_project(str(root), "project")
+    project = register_project(runtime, str(root), "project")
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     metadata = {key: None for key in ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms")}
     metadata.update(failure_kind="retryable", retryable=False, next_target=None)
@@ -87,7 +88,7 @@ async def test_submit_rejects_foreign_profile_and_stale_revision_tokens_without_
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = runtime.register_project(str(root), "project")
+    project = register_project(runtime, str(root), "project")
     original = resolve_execution_plan("consult", runtime.catalog, "balanced")
     token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", original.targets[1])
     try:
@@ -114,7 +115,7 @@ async def test_retry_all_open_leaves_failed_job_untouched(tmp_path) -> None:
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = runtime.register_project(str(root), "project")
+    project = register_project(runtime, str(root), "project")
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     job_id = "retry-open"
     metadata = {key: None for key in ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms")}
@@ -124,6 +125,7 @@ async def test_retry_all_open_leaves_failed_job_untouched(tmp_path) -> None:
     runtime.database.finish_job(job_id, "failed", target_id="a", metadata=metadata)
     for target in plan.targets:
         runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(target),))
+    runtime.database._connection.commit()
     prior = runtime.database.job_record(job_id)
     events = runtime.database.events(job_id)
     try:
@@ -148,16 +150,17 @@ async def test_retry_after_uses_reloaded_cooldown_for_held_probes(tmp_path) -> N
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = runtime.register_project(str(root), "project")
+    project = register_project(runtime, str(root), "project")
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     job_id = "retry-reloaded-cooldown"
     runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
     runtime.database.finish_job(job_id, "failed")
     changed = config_path.read_text(encoding="utf-8").replace("breaker_base_cooldown_s = 7", "breaker_base_cooldown_s = 23")
     config_path.write_text(changed, encoding="utf-8")
-    runtime.reload_configuration()
+    runtime.publish_configuration()
     for target in plan.targets:
         runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '', 0, 'held-probe')", (target_execution_key(target),))
+    runtime.database._connection.commit()
     try:
         with pytest.raises(OrchestrationError) as raised:
             await runtime.retry(job_id)
@@ -174,11 +177,13 @@ async def test_submit_with_next_target_executes_second_candidate(tmp_path) -> No
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = runtime.register_project(str(root), "project")
+    project = register_project(runtime, str(root), "project")
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", plan.targets[1])
     executed = []
     class Drivers:
+        @staticmethod
+        def supports_structured_streaming(_target): return True
         @staticmethod
         def available(_target): return True
         async def execute(self, *, target, **kwargs):
@@ -225,7 +230,7 @@ async def test_failed_reload_preserves_catalog_health_and_blocks_submission(tmp_
     runtime = Runtime(load_config(config_path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
     original = runtime.catalog
     original_revision = original.config_revision
 
@@ -234,7 +239,7 @@ async def test_failed_reload_preserves_catalog_health_and_blocks_submission(tmp_
         await runtime.submit(project.id, "consult", "question")
 
     assert runtime.catalog is original
-    health = runtime.configuration_health()
+    health = runtime.config_health
     assert not health.valid
     assert health.last_known_good_revision == original_revision
     assert health.revision != original_revision
@@ -252,7 +257,7 @@ async def test_configuration_error_does_not_expose_secret(tmp_path) -> None:
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
     secret = "SUPER_SECRET_CONFIGURATION_VALUE"
     path.write_text(path.read_text(encoding="utf-8").rstrip() + f'\n[logging]\nlevel = "{secret}"\n', encoding="utf-8")
 
@@ -260,7 +265,7 @@ async def test_configuration_error_does_not_expose_secret(tmp_path) -> None:
         await runtime.submit(project.id, "consult", "question")
 
     assert secret not in str(raised.value)
-    assert secret not in runtime.configuration_health().latest_error
+    assert secret not in runtime.config_health.latest_error
     await runtime.close()
 
 
@@ -274,7 +279,7 @@ async def test_configuration_identifiers_do_not_leak_from_errors(tmp_path, inval
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
     content = path.read_text(encoding="utf-8")
     if invalid_kind == "profile":
         content += '[profiles."SECRET_PROFILE"]\n'
@@ -288,7 +293,7 @@ async def test_configuration_identifiers_do_not_leak_from_errors(tmp_path, inval
         await runtime.submit(project.id, "consult", "question")
 
     assert "SECRET_" not in str(raised.value)
-    assert "SECRET_" not in runtime.configuration_health().latest_error
+    assert "SECRET_" not in runtime.config_health.latest_error
     await runtime.close()
 
 
@@ -301,7 +306,7 @@ async def test_new_job_records_global_revision(tmp_path) -> None:
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
 
     submission = await runtime.submit(project.id, "consult", "question")
 
@@ -317,7 +322,7 @@ def test_initial_health_is_seeded(tmp_path) -> None:
     _config(path)
     catalog = load_config(path)
     runtime = Runtime(catalog)
-    health = runtime.configuration_health()
+    health = runtime.config_health
     assert health.valid
     assert health.revision == hashlib.sha256(path.read_bytes()).hexdigest()
     assert health.last_known_good_revision == health.revision
@@ -344,11 +349,80 @@ def test_publish_configuration_refreshes_catalog_and_executor(tmp_path) -> None:
         runtime.publish_configuration()
         assert runtime.catalog is not previous
         assert runtime.target_executor.config is runtime.catalog
-        health = runtime.configuration_health()
+        health = runtime.config_health
         assert health.valid
         assert health.revision == hashlib.sha256(path.read_bytes()).hexdigest()
     finally:
         runtime.database.close()
+
+
+def test_catalog_reload_after_manual_edit_refreshes_executor(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "config.toml"
+    _config(path)
+    runtime = Runtime(load_config(path))
+    try:
+        path.write_text(path.read_text(encoding="utf-8") + "\n# manual edit\n", encoding="utf-8")
+        runtime.publish_configuration()
+        assert runtime.target_executor.config is runtime.catalog
+        assert runtime.target_executor.config.config_revision == hashlib.sha256(path.read_bytes()).hexdigest()
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_catalog_cache_reuses_parses_and_invalidates_on_changes(tmp_path, monkeypatch) -> None:
+    import refract.runtime as module
+
+    path = tmp_path / "config.toml"
+    _config(path)
+    runtime = Runtime(load_config(path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "project")
+    counts = {"global": 0, "project": 0}
+    global_loader = module.load_config
+    project_loader = module.load_project_config
+
+    def global_load(*args):
+        counts["global"] += 1
+        return global_loader(*args)
+
+    def project_load(*args):
+        counts["project"] += 1
+        return project_loader(*args)
+
+    monkeypatch.setattr(module, "load_config", global_load)
+    monkeypatch.setattr(module, "load_project_config", project_load)
+    try:
+        first = runtime.catalog_for_project(project.id)
+        assert runtime.catalog_for_project(project.id) is first
+        await runtime.submit(project.id, "consult", "cached")
+        assert counts == {"global": 1, "project": 1}
+        path.write_text(path.read_text() + "\n# changed\n")
+        second = runtime.catalog_for_project(project.id)
+        assert second is not first
+        assert counts == {"global": 2, "project": 2}
+        local = root / ".refract" / "config.toml"
+        local.parent.mkdir()
+        local.write_text('[profiles.balanced]\nextends = "balanced"\n')
+        third = runtime.catalog_for_project(project.id)
+        assert third is not second
+        assert runtime.catalog_for_project(project.id) is third
+        local.unlink()
+        assert runtime.catalog_for_project(project.id) is not third
+        assert counts == {"global": 2, "project": 4}
+        path.write_text("invalid TOML [")
+        for _ in range(2):
+            with pytest.raises(OrchestrationError):
+                runtime.catalog_for_project(project.id)
+        assert not runtime.config_health.valid
+        _config(path)
+        assert runtime.catalog_for_project(project.id)
+        assert runtime.config_health.valid
+    finally:
+        await runtime.close()
 
 
 def test_config_mutation_service_exposes_shared_lock(tmp_path) -> None:
@@ -361,7 +435,7 @@ def test_config_mutation_service_exposes_shared_lock(tmp_path) -> None:
         assert runtime.mutations.lock is not None
         # The lock is re-entrant so reloads inside a commit do not deadlock.
         with runtime.mutations.lock:
-            runtime.reload_configuration()
+            runtime.publish_configuration()
             runtime.publish_configuration()
     finally:
         runtime.database.close()
@@ -378,7 +452,7 @@ async def test_project_override_runtime_activation_and_plan_preservation(tmp_pat
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
 
     # Submit job 1 under initial configuration
     sub1 = await runtime.submit(project.id, "consult", "initial question")
@@ -392,14 +466,13 @@ async def test_project_override_runtime_activation_and_plan_preservation(tmp_pat
         ProfileEditorData(
             id="balanced",
             extends="balanced",
-            workflows={"consult": WorkflowPolicyData(targets=["primary"], max_attempts=3, timeout_s=99)},
+            workflows={"consult": WorkflowPolicyData(targets=["primary"], timeout_s=99)},
         ),
         expected_revision="",
     )
 
     # Runtime activation: project catalog immediately reflects the override
     proj_catalog = runtime.catalog_for_project_cached(project.id)
-    assert proj_catalog.profiles["balanced"]["consult"].max_attempts == 1
     assert proj_catalog.profiles["balanced"]["consult"].timeout_s == 99
 
     # Submit job 2 under updated override
@@ -426,7 +499,7 @@ async def test_runtime_start_prunes_expired_terminal_transcripts_without_pruning
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
 
     # 1. Expired terminal job (10 days old)
     old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
@@ -527,7 +600,7 @@ async def test_stream_durable_reload_reconstructs_cursor_and_events(tmp_path) ->
     runtime = Runtime(load_config(config_path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
     job_id = "job-reload-test"
     runtime.database.create_job(
         job_id=job_id,
@@ -577,7 +650,7 @@ async def test_stream_truncation_marker_durable_across_reload(tmp_path) -> None:
     runtime = Runtime(load_config(config_path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
     job_id = "job-trunc-reload"
     runtime.database.create_job(
         job_id=job_id,
@@ -635,7 +708,7 @@ async def test_stream_persistence_failure_retains_prior_events(tmp_path) -> None
     runtime = Runtime(load_config(config_path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
     job_id = "job-persist-fail"
     runtime.database.create_job(
         job_id=job_id,
@@ -685,7 +758,7 @@ async def test_stream_historical_fallback_for_jobs_without_events(tmp_path) -> N
     runtime = Runtime(load_config(config_path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "project")
+    project = register_project(runtime, str(project_root), "project")
     job_id = "job-legacy"
     runtime.database.create_job(
         job_id=job_id,

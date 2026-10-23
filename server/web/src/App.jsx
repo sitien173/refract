@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ConfigurationContext, useConfiguration } from './hooks/useConfiguration'
 import AppShell from './components/AppShell'
 import PageHeader from './components/PageHeader'
 import ConfigHealth from './screens/ConfigHealth'
@@ -53,6 +54,7 @@ function parseLocation() {
 
 export default function App() {
   const [route, setRoute] = useState(parseLocation)
+  const configuration = useConfiguration()
 
   useEffect(() => {
     function handlePopState() {
@@ -130,8 +132,10 @@ export default function App() {
   }
 
   return (
-    <AppShell route={activeNav} title={title} onNavigate={navigate}>
-      {content}
-    </AppShell>
+    <ConfigurationContext.Provider value={configuration}>
+      <AppShell route={activeNav} title={title} onNavigate={navigate}>
+        {content}
+      </AppShell>
+    </ConfigurationContext.Provider>
   )
 }

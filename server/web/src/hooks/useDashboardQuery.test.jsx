@@ -13,6 +13,31 @@ function deferred() {
 }
 
 describe('useDashboardQuery', () => {
+  it('pauses hidden polling and resumes immediately without overlap', async () => {
+    vi.useFakeTimers()
+    const visibility = vi.spyOn(document, 'hidden', 'get')
+    try {
+      visibility.mockReturnValue(false)
+      const pending = deferred()
+      const query = vi.fn().mockResolvedValueOnce('loaded').mockReturnValueOnce(pending.promise)
+      const { result } = renderHook(() => useDashboardQuery(query, { pollInterval: 10 }))
+      await act(async () => {})
+      visibility.mockReturnValue(true)
+      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => vi.advanceTimersByTimeAsync(100))
+      expect(query).toHaveBeenCalledTimes(1)
+      visibility.mockReturnValue(false)
+      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      expect(query).toHaveBeenCalledTimes(2)
+      await act(async () => { pending.resolve('visible'); await pending.promise })
+      expect(result.current.data).toBe('visible')
+    } finally {
+      visibility.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   it('supersedes an in-flight query when dependencies change', async () => {
     const first = deferred()
     const second = deferred()

@@ -65,6 +65,13 @@ for detail in ("isError", "retryable", "next_action", "request ID"):
 assert "root job or project ID" in contract_flat
 assert "project_register" not in contract
 assert plugin_version == market_version == codex_version == "2.0.0"
+repository = root.parent
+server_version = re.search(r'^version = "([^"]+)"', (repository / "server/pyproject.toml").read_text(), re.M).group(1)
+web_version = json.loads((repository / "server/web/package.json").read_text())["version"]
+sonar_version = re.search(r"^sonar\.projectVersion=(.+)$", (repository / "sonar-project.properties").read_text(), re.M).group(1)
+assert server_version == web_version == sonar_version == plugin_version, (server_version, web_version, sonar_version)
+assert (repository / "README.md").read_text().startswith(f"# Refract {plugin_version}\n")
+assert f"Refract {plugin_version} ·" in (repository / "server/CLI_ARGUMENTS.md").read_text()
 for removed in ("depends_on", "cancelled_dependents", "invalid_dependency", "dependency_failed"):
     assert removed not in contract, removed
 
@@ -88,6 +95,18 @@ assert mcp == {
     "url": "${REFRACT_URL:-http://127.0.0.1:8765/mcp}",
 }
 assert "/home/" not in json.dumps(mcp)
+default_port = int(re.search(
+    r"^DEFAULT_PORT = (\d+)$",
+    (repository / "server/src/refract/config.py").read_text(),
+    re.M,
+).group(1))
+default_endpoint = f"http://127.0.0.1:{default_port}/mcp"
+assert default_endpoint in mcp["url"]
+assert default_endpoint in contract
+assert f'"{default_endpoint}"' in (root / "pi/extensions/refract.ts").read_text()
+assert "dependent jobs" not in coordinator
+assert "consolidation procedure" in (root / "skills/executing-plans/SKILL.md").read_text()
+assert "consolidation procedure" in (root / "skills/coordinating-multi-model-work/references/review.md").read_text()
 
 for path in (root / "shared").glob("*.md"):
     match = re.search(r"refract-shared-version:\s*([^\s>]+)", path.read_text())
@@ -163,9 +182,9 @@ grep -q 'one Conventional Commit message for the completed plan' skills/writing-
 grep -q 'sole branch commit replaces local phase checkpoints' skills/writing-plans/SKILL.md
 grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
 
-grep -q 'Refract provides four fixed workflows' skills/coordinating-multi-model-work/SKILL.md
-grep -q '`consult`, `implement`, `other`, and' skills/coordinating-multi-model-work/SKILL.md
-grep -q '^`review`\. Canonical gates' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'owns routing, admission' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'Canonical gates use' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'sequential jobs one at a time' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Profiles may be' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q 'task_guide' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -R -E '^[[:space:]]*capabilities[[:space:]]*=' \
@@ -176,10 +195,10 @@ fi
 grep -q 'project_resolve' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'job_list(project_id)' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'task_guide(project_id)' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'default 3600-second heartbeat' skills/coordinating-multi-model-work/SKILL.md
+grep -q '3600-second heartbeat' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q 'You own the entire Git lifecycle' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'one job per project at a time, FIFO within each project' skills/coordinating-multi-model-work/SKILL.md
+grep -q 'At most one job per project runs at a time' skills/coordinating-multi-model-work/references/tool-contract.md
 
 grep -q 'more_recent' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -q -E 'depends_on|cancelled_dependents|invalid_dependency|dependency_failed' skills/coordinating-multi-model-work/references/tool-contract.md; then

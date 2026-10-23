@@ -12,6 +12,7 @@ import pytest
 
 from refract.models import JobResult, JobSummary, JobView, SubmissionResult
 from refract.server import job_wait, mcp
+from tests.orchestration_helpers import register_project
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -44,8 +45,10 @@ async def _connected_client(tmp_path, monkeypatch):
     config_path.write_text(_serve_config(), encoding="utf-8")
     monkeypatch.setenv("REFRACT_HOME", str(home))
     monkeypatch.setattr(server, "configure_logging", lambda _settings: None)
-    monkeypatch.setattr(server, "_DAEMON_CONFIG", server.load_config(config_path))
-    lowlevel = server.mcp._lowlevel_server
+    from refract.dashboard import DashboardState
+    state = DashboardState()
+    instance = server.create_mcp(server.load_config(config_path), state=state)
+    lowlevel = instance._lowlevel_server
     async with create_client_server_memory_streams() as (client_streams, server_streams):
         server_task = asyncio.create_task(
             lowlevel.run(*server_streams, lowlevel.create_initialization_options())
@@ -53,7 +56,7 @@ async def _connected_client(tmp_path, monkeypatch):
         try:
             async with ClientSession(*client_streams) as client:
                 await client.initialize()
-                yield client, server._ACTIVE_RUNTIME
+                yield client, state.runtime
         finally:
             server_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -119,7 +122,7 @@ def test_serve_uses_configured_transport(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REFRACT_HOME", str(home))
     captured: dict[str, object] = {}
 
-    def fake_application(*, host: str) -> str:
+    def fake_application(config, *, host: str, logging_overrides) -> str:
         captured["application_host"] = host
         return "application"
 
@@ -151,7 +154,7 @@ def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REFRACT_HOME", str(home))
     captured: dict[str, object] = {}
 
-    def fake_application(*, host: str) -> str:
+    def fake_application(config, *, host: str, logging_overrides) -> str:
         captured["application_host"] = host
         return "application"
 
@@ -173,6 +176,30 @@ def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
     }
 
 
+def test_serve_refuses_non_loopback_host_without_opt_in(tmp_path, monkeypatch, capsys) -> None:
+    from refract import cli, server
+    import uvicorn
+
+    home = tmp_path / "refract"
+    home.mkdir()
+    (home / "config.toml").write_text(_serve_config("0.0.0.0", 9123), encoding="utf-8")
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+    launched: list[str] = []
+    monkeypatch.setattr(server, "create_application", lambda config, *, host, logging_overrides: "application")
+    monkeypatch.setattr(uvicorn, "run", lambda application, *, host, port: launched.append(host))
+
+    with pytest.raises(SystemExit) as refused:
+        cli.main(["serve"])
+    assert refused.value.code == 2
+    assert "--allow-remote" in capsys.readouterr().err
+    assert launched == []
+
+    cli.main(["serve", "--allow-remote"])
+    cli.main(["serve", "--host", "::1"])
+    cli.main(["serve", "--host", "localhost"])
+    assert launched == ["0.0.0.0", "::1", "localhost"]
+
+
 @pytest.mark.asyncio
 async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
@@ -180,9 +207,9 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
         "project_resolve", "task_guide", "job_submit", "job_wait",
         "job_list", "job_cancel", "job_retry",
     }
-    assert tools["job_submit"].input_schema["properties"]["workflow"]["enum"] == [
-        "consult", "implement", "review", "other"
-    ]
+    from refract.workflows import BUILTIN_WORKFLOWS
+
+    assert tools["job_submit"].input_schema["properties"]["workflow"]["enum"] == list(BUILTIN_WORKFLOWS)
     assert tools["job_wait"].input_schema["properties"]["timeout_s"]["minimum"] == 0
     assert tools["job_wait"].input_schema["properties"]["timeout_s"]["maximum"] == 3600
     assert tools["job_wait"].input_schema["properties"]["result_offset"]["minimum"] == 0
@@ -206,10 +233,11 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
     for name, expected_hints in expected_annotations.items():
         annotations = tools[name].annotations
         assert annotations is not None
-        assert (
+        actual_hints = (
             annotations.read_only_hint, annotations.destructive_hint,
             annotations.idempotent_hint, annotations.open_world_hint,
-        ) == expected_hints
+        )
+        assert actual_hints == expected_hints
         assert annotations.title == tools[name].title
         assert all(prop.get("description") for prop in tools[name].input_schema["properties"].values())
     assert set(JobSummary.model_fields) == {
@@ -246,7 +274,7 @@ async def test_job_submit_rejects_depends_on_and_summary_has_reduced_fields(tmp_
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "reduced-summary-project"
         root.mkdir()
-        project = runtime.register_project(str(root), "reduced-summary")
+        project = register_project(runtime, str(root), "reduced-summary")
         rejected = await client.call_tool(
             "job_submit",
             {"project_id": project.id, "workflow": "consult", "prompt": "x", "depends_on": []},
@@ -276,13 +304,13 @@ async def test_inprocess_client_sanitizes_unexpected_tool_exception(tmp_path, mo
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "internal-error-project"
         root.mkdir()
-        project = runtime.register_project(str(root))
+        project = register_project(runtime, str(root))
         secret = "provider-secret-that-must-not-escape"
 
         def fail_listing(_project_id: str):
             raise RuntimeError(secret)
 
-        runtime.database.jobs = fail_listing
+        runtime.database.job_listing = fail_listing
         response = await client.call_tool("job_list", {"project_id": project.id})
 
         assert response.is_error
@@ -300,7 +328,7 @@ async def test_job_wait_pages_complete_text_without_loss_and_bounds_wire_envelop
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         project_root = tmp_path / "page-project"
         project_root.mkdir()
-        project = runtime.register_project(str(project_root), "pages")
+        project = register_project(runtime, str(project_root), "pages")
         runtime.database.create_job(
             job_id="paged-job", project_id=project.id, workflow="review",
             profile="balanced", prompt="large output", execution_plan_json="{}",
@@ -350,7 +378,7 @@ async def test_unpageable_guidance_overflow_returns_actionable_error(tmp_path, m
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "guide-project"
         root.mkdir()
-        project = runtime.register_project(str(root), "guide")
+        project = register_project(runtime, str(root), "guide")
         (runtime.config.home / "task_guide.json").write_text(
             json.dumps({"guidance": "g" * 12000}), encoding="utf-8"
         )
@@ -414,7 +442,7 @@ async def test_actual_client_rejects_sdk_coercions_before_dispatch(tmp_path, mon
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "coercion-project"
         root.mkdir()
-        project = runtime.register_project(str(root), "coercion")
+        project = register_project(runtime, str(root), "coercion")
         before = runtime.database.jobs(project.id)
         invalid_calls = [
             ("job_wait", {"job_id": "missing", "timeout_s": True}),
@@ -461,7 +489,7 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "errors-project"
         root.mkdir()
-        project = runtime.register_project(str(root), "errors")
+        project = register_project(runtime, str(root), "errors")
 
         forbidden = {"target_id", "backend", "model", "resource_uri", "config_revision"}
 
@@ -526,12 +554,13 @@ async def test_mcp_job_submit_all_open_returns_retry_delay(tmp_path, monkeypatch
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "submit-all-open"
         root.mkdir()
-        project = runtime.register_project(str(root), "submit-all-open")
+        project = register_project(runtime, str(root), "submit-all-open")
         target = runtime.catalog.targets[0]
         runtime.database._connection.execute(
             "INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')",
             (target_execution_key(target),),
         )
+        runtime.database._connection.commit()
         response = await client.call_tool("job_submit", {"project_id": project.id, "workflow": "consult", "prompt": "blocked"})
         assert response.is_error
         payload = json.loads(response.content[0].text)
@@ -545,7 +574,7 @@ async def test_multipage_terminal_wait_has_metadata_and_stays_private_and_bounde
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "multipage-terminal"
         root.mkdir()
-        project = runtime.register_project(str(root), "multipage-terminal")
+        project = register_project(runtime, str(root), "multipage-terminal")
         runtime.database.create_job(job_id="multi-terminal", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json="{}", context_key="multi")
         runtime.database.finish_job("multi-terminal", "succeeded", text="z" * 40_000)
         offset = 0
@@ -626,7 +655,7 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "mutation-overflow"
         root.mkdir()
-        project = runtime.register_project(str(root), "overflow")
+        project = register_project(runtime, str(root), "overflow")
 
         submitted = await client.call_tool("job_submit", {
             "project_id": project.id, "workflow": "implement", "prompt": "submit",
@@ -672,6 +701,10 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
 
     class PrivateFailureDrivers:
         @staticmethod
+        def supports_structured_streaming(_target):
+            return True
+
+        @staticmethod
         def available(_target):
             return True
 
@@ -681,7 +714,7 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "private-failure-project"
         root.mkdir()
-        project = runtime.register_project(str(root), "private-failure")
+        project = register_project(runtime, str(root), "private-failure")
         runtime.drivers = PrivateFailureDrivers()
         submitted = await client.call_tool("job_submit", {
             "project_id": project.id, "workflow": "implement", "prompt": "fail safely",
@@ -706,7 +739,7 @@ async def test_public_terminal_error_preserves_execution_task_cancellation(tmp_p
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "cancel-error"
         root.mkdir()
-        project = runtime.register_project(str(root), "cancel-error")
+        project = register_project(runtime, str(root), "cancel-error")
         runtime.database.create_job(
             job_id="cancel-cause", project_id=project.id, workflow="review", profile="balanced",
             prompt="cancelled", execution_plan_json="{}", context_key="cancel-cause",
@@ -723,7 +756,7 @@ async def test_empty_and_eof_result_metadata_overflow_is_bounded(tmp_path, monke
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "empty-eof-overflow"
         root.mkdir()
-        project = runtime.register_project(str(root), "empty-eof-overflow")
+        project = register_project(runtime, str(root), "empty-eof-overflow")
         runtime.database.create_job(
             job_id="empty-output", project_id=project.id, workflow="review", profile="balanced",
             prompt="empty", execution_plan_json="{}", context_key="e" * 10000,
@@ -898,17 +931,15 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_job_wait_rejects_negative_timeout_before_job_lookup() -> None:
-    class Database:
-        def job(self, job_id: str) -> JobView:
+async def test_job_wait_rejects_negative_timeout_before_job_lookup(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        def unexpected_lookup(job_id):
             raise AssertionError("job lookup should not happen")
 
-    runtime = SimpleNamespace(database=Database())
-    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=runtime))
-
-    with pytest.raises(Exception) as raised:
-        await job_wait("job-1", ctx, timeout_s=-1)
-    assert getattr(raised.value, "code", "") == "invalid_request"
+        monkeypatch.setattr(runtime.database, "job", unexpected_lookup)
+        result = await client.call_tool("job_wait", {"job_id": "job-1", "timeout_s": -1})
+        assert result.is_error
+        assert json.loads(result.content[0].text)["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio
@@ -992,6 +1023,50 @@ async def test_job_wait_cancellation_cleanup() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
     assert wait_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_job_wait_propagates_cancellation_during_child_cleanup(monkeypatch) -> None:
+    from refract import server
+
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    current_job = _job_view("running")
+    cleanup_started = asyncio.Event()
+
+    class Database:
+        def job(self, job_id: str) -> JobView:
+            return current_job
+
+        job_record = staticmethod(_stub_job_record)
+
+    class Runtime:
+        database = Database()
+
+        def live_result_metadata(self, job: JobView):
+            return job.result.metadata
+
+        async def wait(self, job_id: str, timeout_s: int) -> JobView:
+            current_job.state = "succeeded"
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_started.set()
+                await asyncio.Event().wait()
+                raise
+
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context=Runtime()),
+        report_progress=lambda **kwargs: asyncio.sleep(0),
+    )
+    task = asyncio.create_task(job_wait(current_job.id, ctx, timeout_s=3600))
+    try:
+        await asyncio.wait_for(cleanup_started.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -1125,14 +1200,13 @@ async def test_application_lifespan_shares_runtime_across_sessions(monkeypatch) 
 
     monkeypatch.setattr(server, "Runtime", Runtime)
     monkeypatch.setattr(server, "configure_logging", lambda _: None)
-    server._DAEMON_CONFIG = config
-
-    application = server.create_application()
+    application = server.create_application(config)
     async with application.router.lifespan_context(application):
         assert events == ["runtime.create", "runtime.start"]
-        assert server._DAEMON_CONFIG is config
+        assert application.state.runtime is application.state.refract_dashboard.runtime
     assert events == ["runtime.create", "runtime.start", "runtime.close"]
-    assert server._DAEMON_CONFIG is None
+    assert application.state.refract_dashboard.runtime is None
+    assert application.state.runtime is None
 
 
 @pytest.mark.asyncio
@@ -1155,14 +1229,13 @@ async def test_application_lifespan_cleans_up_after_start_failure(monkeypatch) -
 
     monkeypatch.setattr(server, "configure_logging", lambda _: None)
     monkeypatch.setattr(server, "Runtime", FailingRuntime)
-    server._DAEMON_CONFIG = config
-
-    application = server.create_application()
+    application = server.create_application(config)
     with pytest.raises(RuntimeError, match="start failed"):
         async with application.router.lifespan_context(application):
             pass
     assert events == ["runtime.start", "runtime.close"]
-    assert server._DAEMON_CONFIG is None
+    assert application.state.refract_dashboard.runtime is None
+    assert application.state.runtime is None
 
 
 @pytest.mark.asyncio
@@ -1183,10 +1256,9 @@ async def test_application_lifespan_clears_state_when_runtime_close_fails(monkey
 
     monkeypatch.setattr(server, "configure_logging", lambda _: None)
     monkeypatch.setattr(server, "Runtime", FailingRuntime)
-    server._DAEMON_CONFIG = config
-
-    application = server.create_application()
+    application = server.create_application(config)
     with pytest.raises(RuntimeError, match="close failed"):
         async with application.router.lifespan_context(application):
             pass
-    assert server._DAEMON_CONFIG is None
+    assert application.state.refract_dashboard.runtime is None
+    assert application.state.runtime is None

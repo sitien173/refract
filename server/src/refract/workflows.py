@@ -14,6 +14,7 @@ def get_workflow(name: str) -> str:
 
 
 def validate_request(workflow: str, prompt: str) -> str:
+    get_workflow(workflow)
     resolved_prompt = prompt.strip()
     if not resolved_prompt:
         raise ValueError("Prompt must contain text")

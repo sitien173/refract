@@ -1,9 +1,10 @@
-import { getConfiguration, getSettings } from '../api'
+import { getSettings } from '../api'
 import Alert from '../components/Alert'
 import DataGrid from '../components/DataGrid'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+import { useConfiguration } from '../hooks/useConfiguration'
 
 export default function RuntimeSettings() {
   const {
@@ -18,7 +19,7 @@ export default function RuntimeSettings() {
     error: healthError,
     isLoading: isHealthLoading,
     refresh: refreshHealth,
-  } = useDashboardQuery(getConfiguration)
+  } = useConfiguration()
 
   const isLoading = isSettingsLoading || isHealthLoading
   const isConfigValid = configHealth ? Boolean(configHealth.valid) : true

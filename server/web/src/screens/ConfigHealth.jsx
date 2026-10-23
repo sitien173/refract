@@ -1,8 +1,10 @@
-import { getConfiguration, getStatus } from '../api'
+import { getStatus } from '../api'
+import { POLL_INTERVAL_MS } from '../hooks/constants'
 import Alert from '../components/Alert'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+import { useConfiguration } from '../hooks/useConfiguration'
 
 export default function ConfigHealth() {
   const {
@@ -10,13 +12,13 @@ export default function ConfigHealth() {
     error: healthError,
     isLoading: isHealthLoading,
     refresh: refreshHealth,
-  } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
+  } = useConfiguration()
 
   const {
     data: daemonStatus,
     isLoading: isDaemonLoading,
     refresh: refreshDaemon,
-  } = useDashboardQuery(getStatus, { pollInterval: 5000 })
+  } = useDashboardQuery(getStatus, { pollInterval: POLL_INTERVAL_MS })
 
   const isLoading = isHealthLoading || isDaemonLoading
   const isConfigValid = health ? Boolean(health.valid) : true

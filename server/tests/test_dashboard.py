@@ -11,6 +11,12 @@ from refract.planning import execution_plan_data, resolve_execution_plan
 from refract.runtime import Runtime
 from refract.server import create_application
 from tests.orchestration_helpers import config
+from tests.orchestration_helpers import register_project
+
+
+def _set_job_state(database, job_id: str, state: str) -> None:
+    with database._connection:
+        database._connection.execute("UPDATE jobs SET state=? WHERE id=?", (state, job_id))
 
 
 async def request(app, path, *, method="GET", headers=(), body=b"", client_host="127.0.0.1"):
@@ -29,6 +35,9 @@ async def request(app, path, *, method="GET", headers=(), body=b"", client_host=
         sent.append(message)
 
     path_only, _, query_string = path.partition("?")
+    if not any(key.lower() == "host" for key, _ in headers):
+        # HTTP/1.1 clients always send Host; the dashboard requires a loopback one.
+        headers = (("Host", "127.0.0.1:8765"), *headers)
     scope = {
         "type": "http",
         "http_version": "1.1",
@@ -50,7 +59,7 @@ async def request(app, path, *, method="GET", headers=(), body=b"", client_host=
 
 
 @pytest.fixture
-def active_runtime(tmp_path):
+def active_runtime(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir(parents=True)
     cfg_file = home / "config.toml"
@@ -91,22 +100,21 @@ other = "primary"
         encoding="utf-8",
     )
     runtime = Runtime(load_config(cfg_file))
-    runtime.register_project(str(tmp_path), "project")
+    register_project(runtime, str(tmp_path), "project")
     from refract import server
-    server._DASHBOARD_STATE.runtime = runtime
-    server._DASHBOARD_STATE.csrf_token = "test-token"
+    from refract.dashboard import DashboardState
+    monkeypatch.setattr(
+        server, "DashboardState",
+        lambda: DashboardState(runtime=runtime, csrf_token="test-token"),
+    )
     try:
         yield runtime
     finally:
-        server._DASHBOARD_STATE.runtime = None
-        server._DASHBOARD_STATE.csrf_token = ""
         runtime.database.close()
 
 
 @pytest.mark.asyncio
 async def test_dashboard_reads_fail_closed_without_runtime() -> None:
-    from refract import server
-    server._DASHBOARD_STATE.runtime = None
     app = create_application()
 
     status, _, body = await request(app, "/dashboard/api/overview")
@@ -135,6 +143,23 @@ async def test_dashboard_bootstrap_is_loopback_only_and_not_cached(active_runtim
     assert headers[b"cache-control"] == b"no-store"
     assert json.loads(body)["csrf_token"] == "test-token"
     assert remote == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    ["/dashboard/api/status", "/dashboard/api/projects", "/dashboard/api/jobs/missing/output", "/dashboard"],
+)
+async def test_dashboard_routes_reject_rebound_host_and_remote_client(active_runtime, path) -> None:
+    app = create_application()
+
+    rebound, _, _ = await request(app, path, headers=(("Host", "attacker.example:8765"),))
+    remote, _, _ = await request(app, path, headers=(("Host", "127.0.0.1"),), client_host="192.0.2.1")
+    allowed, _, _ = await request(app, path, headers=(("Host", "127.0.0.1"),))
+
+    assert rebound == 403
+    assert remote == 403
+    assert allowed != 403
 
 
 @pytest.mark.asyncio
@@ -168,7 +193,7 @@ async def test_dashboard_project_includes_resolved_configuration(active_runtime)
 async def test_dashboard_project_source_attribution_shows_project_override(active_runtime, tmp_path) -> None:
     project_root = tmp_path / "project-config"
     project_root.mkdir()
-    project = active_runtime.register_project(str(project_root), "project-config")
+    project = register_project(active_runtime, str(project_root), "project-config")
     (project_root / ".refract").mkdir()
     (project_root / ".refract" / "config.toml").write_text(
         '[profiles.balanced]\nconsult = "primary"\n', encoding="utf-8"
@@ -176,10 +201,10 @@ async def test_dashboard_project_source_attribution_shows_project_override(activ
     app = create_application()
 
     status, _, body = await request(
-        app, f"/dashboard/api/projects/{project.id}/profiles"
+        app, f"/dashboard/api/projects/{project.id}"
     )
 
-    payload = json.loads(body)
+    payload = json.loads(body)["configuration"]
     profile = next(item for item in payload["profiles"] if item["id"] == "balanced")
     assert status == 200
     assert profile["sources"]["consult"] == "project"
@@ -190,7 +215,7 @@ async def test_dashboard_project_source_attribution_shows_project_override(activ
 async def test_dashboard_identical_project_override_reports_project_source(active_runtime, tmp_path) -> None:
     project_root = tmp_path / "identical-project"
     project_root.mkdir()
-    project = active_runtime.register_project(str(project_root), "identical-project")
+    project = register_project(active_runtime, str(project_root), "identical-project")
     (project_root / ".refract").mkdir()
     (project_root / ".refract" / "config.toml").write_text(
         """[profiles.balanced]
@@ -203,9 +228,9 @@ other = "primary"
     )
     app = create_application()
 
-    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}/profiles")
+    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}")
 
-    profile = next(item for item in json.loads(body)["profiles"] if item["id"] == "balanced")
+    profile = next(item for item in json.loads(body)["configuration"]["profiles"] if item["id"] == "balanced")
     assert status == 200
     assert profile["sources"]["consult"] == "project"
 
@@ -214,7 +239,7 @@ other = "primary"
 async def test_dashboard_project_self_extension_reports_global_inheritance(active_runtime, tmp_path) -> None:
     project_root = tmp_path / "self-project"
     project_root.mkdir()
-    project = active_runtime.register_project(str(project_root), "self-project")
+    project = register_project(active_runtime, str(project_root), "self-project")
     (project_root / ".refract").mkdir()
     (project_root / ".refract" / "config.toml").write_text(
         '[profiles.balanced]\nextends = "balanced"\nconsult = "primary"\n',
@@ -222,9 +247,9 @@ async def test_dashboard_project_self_extension_reports_global_inheritance(activ
     )
     app = create_application()
 
-    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}/profiles")
+    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}")
 
-    profile = next(item for item in json.loads(body)["profiles"] if item["id"] == "balanced")
+    profile = next(item for item in json.loads(body)["configuration"]["profiles"] if item["id"] == "balanced")
     assert status == 200
     assert profile["parent"] == {"value": "balanced", "source": "project"}
     assert set(profile["inherited"]) == {"implement", "review", "other"}
@@ -831,7 +856,31 @@ async def test_configuration_target_error_redaction(active_runtime) -> None:
     payload = json.loads(body)
     assert payload["code"] == "configuration_invalid"
     assert "SUPER_SECRET_OPERATOR_PROMPT_XYZ" not in body.decode("utf-8")
-    assert payload["error"] == "Invalid configuration"
+    assert payload["error"] == "Target args cannot contain the reserved token"
+
+
+@pytest.mark.asyncio
+async def test_configuration_mutation_error_message_reaches_client(active_runtime) -> None:
+    app = create_application()
+    _, _, list_body = await request(app, "/dashboard/api/configuration/targets")
+    rev = json.loads(list_body)["revision"]
+    headers = (
+        ("Host", "127.0.0.1"),
+        ("Origin", "http://127.0.0.1"),
+        ("X-Refract-CSRF", "test-token"),
+        ("If-Match", f'"{rev}"'),
+    )
+
+    status, _, body = await request(
+        app,
+        "/dashboard/api/configuration/targets",
+        method="POST",
+        body=json.dumps({"id": "primary", "backend": "codex"}).encode(),
+        headers=headers,
+    )
+
+    assert status == 422
+    assert json.loads(body)["error"] == "Target 'primary' already exists."
 
 
 @pytest.mark.asyncio
@@ -956,7 +1005,6 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
         "extends": "balanced",
         "implement": {
             "targets": ["fallback", "primary"],
-            "max_attempts": 2,
             "timeout_s": 30,
         },
     }
@@ -975,7 +1023,7 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
     assert q_prof["id"] == "quality"
     assert q_prof["declared"]["implement"]["targets"] == ["fallback", "primary"]
     assert q_prof["declared"]["implement"]["timeout_s"] == 30
-    assert q_prof["declared"]["implement"]["max_attempts"] == 2
+    assert "max_attempts" not in q_prof["declared"]["implement"]
     # Undeclared workflows appear as null in declared
     assert q_prof["declared"]["review"] is None
     assert q_prof["declared"]["consult"] is None
@@ -1010,7 +1058,6 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
         "extends": "balanced",
         "implement": {
             "targets": ["fallback", "primary"],
-            "max_attempts": 2,
             "timeout_s": 30,
         },
         "review": {
@@ -1229,7 +1276,7 @@ async def test_project_profile_override_routes_crud_and_fallback(active_runtime)
 
     status, _, body = await request(
         app,
-        f"/dashboard/api/projects/{project_id}/configuration",
+        f"/dashboard/api/projects/{project_id}",
         headers=(("Host", "127.0.0.1"),),
     )
     assert status == 200
@@ -1460,7 +1507,7 @@ async def test_job_output_all_stream_statuses(active_runtime) -> None:
         execution_plan_json=json.dumps(execution_plan_data(plan)),
         context_key="consult",
     )
-    runtime.database.set_job_state("job-unavailable", "succeeded")
+    _set_job_state(runtime.database, "job-unavailable", "succeeded")
     status, _, body = await request(app, "/dashboard/api/jobs/job-unavailable/output")
     assert status == 200
     assert json.loads(body)["stream_status"] == "unavailable"
@@ -1491,7 +1538,7 @@ async def test_job_output_all_stream_statuses(active_runtime) -> None:
         context_key="consult",
     )
     runtime.database.append_stream_events("job-complete", [{"kind": "assistant.text_delta", "data": {"text": "done"}}])
-    runtime.database.set_job_state("job-complete", "succeeded")
+    _set_job_state(runtime.database, "job-complete", "succeeded")
     status, _, body = await request(app, "/dashboard/api/jobs/job-complete/output")
     assert status == 200
     assert json.loads(body)["stream_status"] == "complete"
@@ -1513,7 +1560,7 @@ async def test_job_output_all_stream_statuses(active_runtime) -> None:
             {"kind": "stream.truncated", "data": {"reason": "max_job_bytes"}},
         ],
     )
-    runtime.database.set_job_state("job-truncated", "succeeded")
+    _set_job_state(runtime.database, "job-truncated", "succeeded")
     status, _, body = await request(app, "/dashboard/api/jobs/job-truncated/output")
     assert status == 200
     assert json.loads(body)["stream_status"] == "truncated"
@@ -1530,7 +1577,7 @@ async def test_job_output_all_stream_statuses(active_runtime) -> None:
     )
     runtime.database.append_stream_events("job-failed", [{"kind": "assistant.text_delta", "data": {"text": "init"}}])
     runtime.database.event("job-failed", "stream.persistence_failed", {"error": "disk full"})
-    runtime.database.set_job_state("job-failed", "failed")
+    _set_job_state(runtime.database, "job-failed", "failed")
     status, _, body = await request(app, "/dashboard/api/jobs/job-failed/output")
     assert status == 200
     assert json.loads(body)["stream_status"] == "failed"
@@ -1682,6 +1729,7 @@ async def test_sse_initial_high_water_and_committed_delivery(active_runtime) -> 
             [{"kind": "assistant.text_delta", "data": {"text": "three"}}],
         )
         hw3 = p3[0].id
+        runtime.stream_hub.publish("job-sse-stream", hw3)
 
         chunk2 = await sse.read_chunk()
         text2 = chunk2.decode("utf-8")
@@ -1719,6 +1767,7 @@ async def test_sse_capacity_one_coalescing(active_runtime) -> None:
         p2 = runtime.database.append_stream_events("job-sse-coalesce", [{"kind": "assistant.text_delta", "data": {"text": "2"}}])
         p3 = runtime.database.append_stream_events("job-sse-coalesce", [{"kind": "assistant.text_delta", "data": {"text": "3"}}])
         final_hw = p3[0].id
+        runtime.stream_hub.publish("job-sse-coalesce", final_hw)
 
         # Coalesced notification delivers latest high-water cursor
         chunk = await sse.read_chunk()
@@ -1800,8 +1849,8 @@ async def test_project_jobs_are_grouped_bounded_and_keep_all_active(active_runti
     app = create_application()
     status, _, body = await request(app, f"/dashboard/api/projects/{project.id}/jobs")
     payload = json.loads(body)
-    ordered = runtime.database.jobs(project.id)
-    expected_recent = [job.id for job in ordered if job.state in {"succeeded", "failed", "cancelled", "interrupted"}][:10]
+    terminal = [job for job in runtime.database.jobs(project.id) if job.state in {"succeeded", "failed", "cancelled", "interrupted"}]
+    expected_recent = [job.id for job in sorted(terminal, key=lambda job: (job.updated_at, job.id), reverse=True)][:10]
     assert status == 200
     assert set(payload) == {"active", "recent", "more_recent"}
     assert len(payload["active"]) == 13
@@ -1811,7 +1860,7 @@ async def test_project_jobs_are_grouped_bounded_and_keep_all_active(active_runti
 
     empty_root = tmp_path / "empty-jobs-project"
     empty_root.mkdir()
-    empty_project = runtime.register_project(str(empty_root), "empty-jobs")
+    empty_project = register_project(runtime, str(empty_root), "empty-jobs")
     status, _, body = await request(app, f"/dashboard/api/projects/{empty_project.id}/jobs")
     assert status == 200
     assert json.loads(body) == {"active": [], "recent": [], "more_recent": 0}
@@ -1831,7 +1880,7 @@ async def test_confirmed_removed_api_aliases_return_json_not_found(active_runtim
     runtime = active_runtime
     project_root = tmp_path / "alias-project"
     project_root.mkdir()
-    project = runtime.register_project(str(project_root), "alias-project")
+    project = register_project(runtime, str(project_root), "alias-project")
     config_dir = project_root / ".refract"
     config_dir.mkdir()
     project_config = config_dir / "config.toml"
@@ -1862,11 +1911,12 @@ async def test_confirmed_removed_api_aliases_return_json_not_found(active_runtim
         assert payload["error"] == "Dashboard API route not found"
     for path in (
         "/dashboard/api/config",
+        "/dashboard/api/config/health",
     ):
         status, _, body = await request(app, path, headers=read_headers)
         assert status == 404 and json.loads(body)["error"] == "Dashboard API route not found"
     for path in (
-        "/dashboard/api/configuration", "/dashboard/api/config/health",
+        "/dashboard/api/configuration",
         "/dashboard/api/status", "/dashboard/api/overview",
     ):
         status, _, _ = await request(app, path, headers=read_headers)
@@ -2020,10 +2070,11 @@ async def test_job_output_historical_fallback_preserves_authoritative_result(act
 async def test_security_regressions_forbidden_provider_content_not_in_dashboard_or_db(
     active_runtime, monkeypatch, tmp_path
 ) -> None:
-    from refract.backends.claude import ClaudeParams, _execute_sync as claude_sync
-    from refract.backends.codex import CodexParams, _execute_sync as codex_sync
-    from refract.backends.pi import PiParams, _execute_sync as pi_sync
-    from refract.backends.agy import AgyParams, _execute_once as agy_execute_once
+    from refract.backends import BackendParams
+    from refract.backends.claude import execute as claude_sync
+    from refract.backends.codex import execute as codex_sync
+    from refract.backends.pi import execute as pi_sync
+    from refract.backends.agy import execute as agy_execute_once
 
     runtime = active_runtime
     project = runtime.database.project("project")
@@ -2178,10 +2229,10 @@ async def test_security_regressions_forbidden_provider_content_not_in_dashboard_
     app = create_application()
 
     providers = [
-        ("claude", "job-security-claude", "refract.backends.claude.run_shell_command", lambda e: claude_sync(ClaudeParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_claude_stream, "Safe public response."),
-        ("codex", "job-security-codex", "refract.backends.codex.run_shell_command", lambda e: codex_sync(CodexParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_codex_stream, "Safe Codex response."),
-        ("pi", "job-security-pi", "refract.backends.pi.run_shell_command", lambda e: pi_sync(PiParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_pi_stream, "Safe Pi response."),
-        ("agy", "job-security-agy", "refract.backends.agy.run_shell_command", lambda e: agy_execute_once(AgyParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_agy_stream, "Safe Agy response."),
+        ("claude", "job-security-claude", "refract.backends.claude.run_shell_command", lambda e: claude_sync(BackendParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_claude_stream, "Safe public response."),
+        ("codex", "job-security-codex", "refract.backends.codex.run_shell_command", lambda e: codex_sync(BackendParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_codex_stream, "Safe Codex response."),
+        ("pi", "job-security-pi", "refract.backends.pi.run_shell_command", lambda e: pi_sync(BackendParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_pi_stream, "Safe Pi response."),
+        ("agy", "job-security-agy", "refract.backends.agy.run_shell_command", lambda e: agy_execute_once(BackendParams(PROMPT="p", cd=tmp_path, emitter=e)), dirty_agy_stream, "Safe Agy response."),
     ]
 
     for name, job_id, patch_target, runner, stream_lines, safe_text in providers:

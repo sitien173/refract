@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import stat
-import tempfile
 import threading
 from pathlib import Path
 
@@ -25,8 +24,9 @@ from refract.config_mutation import (
     target_to_editor_data,
 )
 from refract.models import TargetEditorData, TargetReference
-from refract.runtime import Runtime
+from refract.runtime import OrchestrationError, Runtime
 from tests.orchestration_helpers import config as make_config
+from tests.orchestration_helpers import register_project
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -87,7 +87,7 @@ def _runtime_with_project(tmp_path: Path) -> tuple[Runtime, Path]:
     runtime = _runtime_for(tmp_path)
     project_root = tmp_path / "project"
     project_root.mkdir()
-    runtime.register_project(str(project_root), "project")
+    register_project(runtime, str(project_root), "project")
     return runtime, project_root
 
 
@@ -267,7 +267,7 @@ consult = { targets = ["primary"], max_attempts = 2, timeout_s = 60 }
 
     _apply_workflow_policy(
         service, profile, "implement",
-        WorkflowPolicyData(targets=["primary"], max_attempts=3, timeout_s=0),
+        WorkflowPolicyData(targets=["primary"], timeout_s=0),
     )
 
     serialized = service.candidate_bytes(document).decode("utf-8")
@@ -491,6 +491,34 @@ def test_commit_rechecks_revision_immediately_before_replace(tmp_path, monkeypat
         runtime.database.close()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="uses fcntl")
+def test_commit_holds_sibling_lock_across_replace(tmp_path, monkeypatch) -> None:
+    import fcntl
+
+    path = tmp_path / "config.toml"
+    path.write_bytes(b"[daemon]\n")
+    expected = hashlib.sha256(path.read_bytes()).hexdigest()
+    real_replace = os.replace
+    observed: list[bool] = []
+
+    def probing_replace(src, dst):
+        with open(path.parent / f".{path.name}.lock", "a+b") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                observed.append(True)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                observed.append(False)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", probing_replace)
+    commit_bytes(path, b"[daemon]\nmax_jobs = 2\n", expected_revision=expected)
+
+    assert observed == [True]
+    assert path.read_bytes() == b"[daemon]\nmax_jobs = 2\n"
+
+
 def test_create_bytes_is_exclusive(tmp_path) -> None:
     path = tmp_path / ".refract" / "config.toml"
     candidate = b"[profiles.quality]\nconsult = \"primary\"\n"
@@ -513,7 +541,7 @@ def test_commit_leaves_no_temp_litter(tmp_path) -> None:
         document = service.read_document(load_source(source))
         service.set_target_value(service.find_target(document, "primary"), "model", "x")
         service.commit_document(document, expected_revision=expected)
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        leftovers = [p for p in source.parent.iterdir() if p.name not in (source.name, f".{source.name}.lock")]
         assert leftovers == []
     finally:
         runtime.database.close()
@@ -546,7 +574,7 @@ def test_valid_commit_publishes_catalog_executor_and_health(tmp_path) -> None:
     runtime = Runtime(load_config(source))
     project_dir = tmp_path / "unused"
     project_dir.mkdir()
-    runtime.register_project(str(project_dir), "unused")
+    register_project(runtime, str(project_dir), "unused")
     try:
         service = runtime.mutations
         expected = service.source_read().revision
@@ -560,7 +588,7 @@ def test_valid_commit_publishes_catalog_executor_and_health(tmp_path) -> None:
         assert runtime.catalog.config_revision == result.revision
         assert runtime.catalog.targets[0].model == "updated"
         assert runtime.target_executor.config is runtime.catalog
-        health = runtime.configuration_health()
+        health = runtime.config_health
         assert health.valid
         assert health.revision == result.revision
         # Project resolution now sees the new global catalog.
@@ -587,7 +615,7 @@ consult = "special"
 """,
             encoding="utf-8",
         )
-        runtime.register_project(str(project_root), "special-project")
+        register_project(runtime, str(project_root), "special-project")
 
         service = runtime.mutations
         # Adding the missing "special" target makes the project valid again.
@@ -598,7 +626,7 @@ consult = "special"
         table["backend"] = "codex"
         document["targets"].append(table)
         service.commit_document(
-            document, expected_revision=expected, validate_registered_projects=True
+            document, expected_revision=expected
         )
         resolved = runtime.catalog_for_project_cached("special-project")
         assert "fast" in resolved.profiles
@@ -609,7 +637,7 @@ consult = "special"
         document["targets"].remove(service.find_target(document, "special"))
         with pytest.raises(ConfigurationMutationError) as raised:
             service.commit_document(
-                document, expected_revision=expected, validate_registered_projects=True
+                document, expected_revision=expected
             )
         assert raised.value.code == "configuration_invalid"
         assert b'id = "special"' in source.read_bytes()
@@ -857,14 +885,12 @@ review = "primary"
     profile = service.find_profile(document, "balanced")
     assert profile is not None
     assert service.workflow_kind(profile, "implement") == "string"
-    assert service.workflow_targets(profile, "implement") == ["primary"]
 
     # Expanding a single-target shorthand into ordered failover.
     service.set_workflow_shorthand(
         profile, "implement", ["primary", "fallback"]
     )
     assert service.workflow_kind(profile, "implement") == "array"
-    assert service.workflow_targets(profile, "implement") == ["primary", "fallback"]
 
     # Removing a declared workflow key leaves it absent.
     service.remove_profile_key(profile, "review")
@@ -876,23 +902,18 @@ review = "primary"
 
 
 def test_reusable_target_primitives_edit_existing_and_new_tables(tmp_path) -> None:
-    """Task-2 primitives: locate, scalar edit, arg ordering, key removal."""
+    """Task-2 primitives: locate, scalar edit, arg ordering."""
     source = _global_source(tmp_path)
     service = ConfigurationMutationService(object())
     document = service.read_document(load_source(source))
     target = service.find_target(document, "primary")
     assert target is not None
-    service.set_target_value(target, "args", ["--strict", "run"])
-    service.set_target_argument(target, 1, "deploy")
+    service.set_target_value(target, "args", ["--strict", "deploy"])
     service.set_target_value(target, "system_prompt", "multi\nline")
-    service.remove_target_key(target, "profile")
-    service.remove_target_key(target, "max_concurrency")
 
     serialized = service.candidate_bytes(document).decode("utf-8")
 
     assert 'args = ["--strict", "deploy"]' in serialized
-    # Removing a key drops the legacy key without normalizing other fields.
-    assert "legacy-profile" not in serialized
     assert "system_prompt = \"multi\\nline\"" in serialized or "system_prompt" in serialized
 
 
@@ -980,7 +1001,7 @@ def test_commit_rejects_external_edit_injected_after_temp_write(tmp_path, monkey
             service.commit_document(document, expected_revision=expected)
         assert raised.value.code == "configuration_conflict"
         assert b"# race after temp\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        leftovers = [p for p in source.parent.iterdir() if p.name not in (source.name, f".{source.name}.lock")]
         assert leftovers == []
     finally:
         runtime.database.close()
@@ -1019,43 +1040,8 @@ def test_rollback_refuses_to_overwrite_edit_injected_after_temp_write(tmp_path, 
 
         assert raised.value.code == "configuration_commit_failed"
         assert b"# race after rollback temp\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        leftovers = [p for p in source.parent.iterdir() if p.name not in (source.name, f".{source.name}.lock")]
         assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_rollback_creation_refuses_deletion_on_external_edit(tmp_path, monkeypatch) -> None:
-    runtime, project_root = _runtime_with_project(tmp_path)
-    try:
-        service = runtime.mutations
-        document = _empty_project_document()
-        config_path = project_root / ".refract" / "config.toml"
-
-        def failing_publish(path):
-            raise RuntimeError("publication exploded")
-
-        monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
-
-        real_confirm = service._confirm_current
-        confirmed = False
-
-        def racing_confirm(path, candidate_revision):
-            nonlocal confirmed
-            result = real_confirm(path, candidate_revision)
-            if not confirmed:
-                confirmed = True
-                path.write_bytes(path.read_bytes() + b"\n# race before delete\n")
-            return result
-
-        monkeypatch.setattr(service, "_confirm_current", racing_confirm)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.create_project_document(document, project_root=project_root)
-
-        assert raised.value.code == "configuration_commit_failed"
-        assert config_path.exists()
-        assert b"# race before delete\n" in config_path.read_bytes()
     finally:
         runtime.database.close()
 
@@ -1085,37 +1071,23 @@ def test_commit_fails_if_mode_preservation_fails(tmp_path, monkeypatch) -> None:
         assert raised.value.code == "configuration_commit_failed"
         assert b"new-model" not in source.read_bytes()
         assert stat.S_IMODE(source.stat().st_mode) == 0o640
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
+        leftovers = [p for p in source.parent.iterdir() if p.name not in (source.name, f".{source.name}.lock")]
         assert leftovers == []
     finally:
         runtime.database.close()
 
 
-
-
-def test_project_validation_temp_directory_cleaned_up(tmp_path, monkeypatch) -> None:
+def test_project_validation_writes_no_files(tmp_path) -> None:
     runtime, project_root = _runtime_with_project(tmp_path)
     try:
         service = runtime.mutations
-        candidate = b"[profiles.quality]\nconsult = \"primary\"\n"
-        created_dirs: list[Path] = []
-        real_mkdtemp = tempfile.mkdtemp
-
-        def tracking_mkdtemp(*args, **kwargs):
-            res = real_mkdtemp(*args, **kwargs)
-            created_dirs.append(Path(res))
-            return res
-
-        monkeypatch.setattr("tempfile.mkdtemp", tracking_mkdtemp)
-
-        service.resolve_project_catalog(project_root, candidate)
-        assert len(created_dirs) == 1
-        assert not created_dirs[0].exists()
-
+        before = sorted(tmp_path.rglob("*"))
+        service.resolve_project_catalog(
+            project_root, b"[profiles.quality]\nconsult = \"primary\"\n"
+        )
         with pytest.raises(ConfigurationMutationError):
             service.resolve_project_catalog(project_root, b"invalid toml :::")
-        assert len(created_dirs) == 2
-        assert not created_dirs[1].exists()
+        assert sorted(tmp_path.rglob("*")) == before
     finally:
         runtime.database.close()
 
@@ -1137,7 +1109,7 @@ consult = "special"
 """,
             encoding="utf-8",
         )
-        runtime.register_project(str(project_root), "special-project")
+        register_project(runtime, str(project_root), "special-project")
 
         service = runtime.mutations
         # First add target "special" to make project valid
@@ -1149,7 +1121,7 @@ consult = "special"
         document["targets"].append(table)
         service.commit_document(document, expected_revision=expected)
 
-        # Now remove "special" WITHOUT passing validate_registered_projects.
+        # Now remove "special".
         # Global config is still valid on its own, but project config is invalidated.
         expected = service.source_read().revision
         document = service.read_document(load_source(source))
@@ -1162,706 +1134,6 @@ consult = "special"
     finally:
         runtime.database.close()
 
-
-def test_commit_rejects_external_atomic_replacement_at_publication(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        raced = False
-
-        def racing_exchange(src, dst):
-            nonlocal raced
-            if not raced and Path(dst) == source:
-                raced = True
-                replacement = source.parent / "ext_replacement.tmp"
-                replacement.write_bytes(source.read_bytes() + b"\n# atomic replacement\n")
-                os.replace(replacement, source)
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-        assert raised.value.code == "configuration_conflict"
-        assert b"# atomic replacement\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_commit_rejects_external_edit_injected_before_atomic_exchange(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        raced = False
-
-        def racing_exchange(src, dst):
-            nonlocal raced
-            if not raced and Path(dst) == source:
-                raced = True
-                source.write_bytes(source.read_bytes() + b"\n# gap edit before exchange\n")
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-        assert raised.value.code == "configuration_conflict"
-        assert b"# gap edit before exchange\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_commit_restoration_does_not_overwrite_newer_edit(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        exchange_count = 0
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            exchange_count += 1
-            if exchange_count == 1 and Path(dst) == source:
-                replacement = source.parent / "ext1.tmp"
-                replacement.write_bytes(source.read_bytes() + b"\n# first edit\n")
-                os.replace(replacement, source)
-                ret = real_exchange(src, dst)
-                source.write_bytes(source.read_bytes() + b"\n# newer edit 2\n")
-                return ret
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-        assert raised.value.code == "configuration_conflict"
-        assert b"# newer edit 2\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_rollback_refuses_to_overwrite_external_atomic_replacement(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "boom")
-
-        def failing_publish():
-            raise RuntimeError("publication exploded")
-
-        monkeypatch.setattr(runtime, "_publish_configuration_locked", failing_publish)
-
-        commit_done = False
-        real_commit = commit_bytes
-
-        def tracking_commit(*args, **kwargs):
-            nonlocal commit_done
-            res = real_commit(*args, **kwargs)
-            commit_done = True
-            return res
-
-        monkeypatch.setattr("refract.config_mutation.commit_bytes", tracking_commit)
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        raced = False
-
-        def restore_racing_exchange(src, dst):
-            nonlocal raced
-            if commit_done and not raced and Path(dst) == source:
-                raced = True
-                replacement = source.parent / "ext_rollback_replacement.tmp"
-                replacement.write_bytes(source.read_bytes() + b"\n# atomic replacement during publish\n")
-                os.replace(replacement, source)
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", restore_racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_commit_failed"
-        assert b"# atomic replacement during publish\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_rollback_restore_does_not_overwrite_newer_edit(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "boom")
-
-        def failing_publish():
-            raise RuntimeError("publication exploded")
-
-        monkeypatch.setattr(runtime, "_publish_configuration_locked", failing_publish)
-
-        commit_done = False
-        real_commit = commit_bytes
-
-        def tracking_commit(*args, **kwargs):
-            nonlocal commit_done
-            res = real_commit(*args, **kwargs)
-            commit_done = True
-            return res
-
-        monkeypatch.setattr("refract.config_mutation.commit_bytes", tracking_commit)
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        exchange_count = 0
-
-        def restore_racing_exchange(src, dst):
-            nonlocal exchange_count
-            if commit_done and Path(dst) == source:
-                exchange_count += 1
-                if exchange_count == 1:
-                    replacement = source.parent / "ext_rollback.tmp"
-                    replacement.write_bytes(source.read_bytes() + b"\n# rollback replacement\n")
-                    os.replace(replacement, source)
-                    ret = real_exchange(src, dst)
-                    source.write_bytes(source.read_bytes() + b"\n# rollback newer edit\n")
-                    return ret
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", restore_racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_commit_failed"
-        assert b"# rollback newer edit\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_rollback_creation_refuses_deletion_on_external_atomic_replacement(tmp_path, monkeypatch) -> None:
-    runtime, project_root = _runtime_with_project(tmp_path)
-    try:
-        service = runtime.mutations
-        document = _empty_project_document()
-        config_path = project_root / ".refract" / "config.toml"
-
-        def failing_publish(path):
-            raise RuntimeError("publication exploded")
-
-        monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        raced = False
-
-        def racing_exchange(src, dst):
-            nonlocal raced
-            if not raced and Path(dst) == config_path:
-                raced = True
-                replacement = config_path.parent / "ext_creation_replacement.tmp"
-                replacement.write_bytes(config_path.read_bytes() + b"\n# atomic replacement during creation publish\n")
-                os.replace(replacement, config_path)
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.create_project_document(document, project_root=project_root)
-
-        assert raised.value.code == "configuration_commit_failed"
-        assert config_path.exists()
-        assert b"# atomic replacement during creation publish\n" in config_path.read_bytes()
-        leftovers = [p for p in config_path.parent.iterdir() if p.name != config_path.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_atomic_exchange_fails_closed_when_primitive_unavailable(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        monkeypatch.setattr(refract.config_mutation, "_renameat2", None)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-        assert raised.value.code == "configuration_commit_failed"
-        assert "not supported on this platform" in str(raised.value)
-        assert service.source_read().revision == expected
-    finally:
-        runtime.database.close()
-
-
-def test_rollback_restore_fails_closed_when_primitive_unavailable(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        original_source = load_source(source)
-
-        monkeypatch.setattr(refract.config_mutation, "_renameat2", None)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            refract.config_mutation.restore_bytes(
-                source,
-                original_source,
-                expected_revision=expected,
-            )
-        assert raised.value.code == "configuration_commit_failed"
-        assert "not supported on this platform" in str(raised.value)
-    finally:
-        runtime.database.close()
-
-
-def test_rollback_creation_fails_closed_when_primitive_unavailable(tmp_path, monkeypatch) -> None:
-    runtime, project_root = _runtime_with_project(tmp_path)
-    try:
-        service = runtime.mutations
-        document = _empty_project_document()
-        config_path = project_root / ".refract" / "config.toml"
-
-        def failing_publish(path):
-            raise RuntimeError("publication exploded")
-
-        monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
-
-        real_create = refract.config_mutation.create_bytes
-
-        def tracking_create(*args, **kwargs):
-            res = real_create(*args, **kwargs)
-            monkeypatch.setattr(refract.config_mutation, "_renameat2", None)
-            return res
-
-        monkeypatch.setattr(refract.config_mutation, "create_bytes", tracking_create)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.create_project_document(document, project_root=project_root)
-
-        assert raised.value.code == "configuration_commit_failed"
-        assert config_path.exists()
-    finally:
-        runtime.database.close()
-
-
-def test_project_validation_cleanup_failure_not_ignored(tmp_path, monkeypatch) -> None:
-    runtime, project_root = _runtime_with_project(tmp_path)
-    try:
-        service = runtime.mutations
-        candidate = b"[profiles.quality]\nconsult = \"primary\"\n"
-
-        def failing_rmtree(path, *args, **kwargs):
-            raise OSError("disk cleanup error")
-
-        monkeypatch.setattr(refract.config_mutation.shutil, "rmtree", failing_rmtree)
-
-        with pytest.raises(OSError, match="disk cleanup error"):
-            service.resolve_project_catalog(project_root, candidate)
-    finally:
-        runtime.database.close()
-
-
-def test_rollback_creation_refuses_deletion_on_replacement_after_tombstone_exchange(tmp_path, monkeypatch) -> None:
-    runtime, project_root = _runtime_with_project(tmp_path)
-    try:
-        service = runtime.mutations
-        document = _empty_project_document()
-        config_path = project_root / ".refract" / "config.toml"
-
-        def failing_publish(path):
-            raise RuntimeError("publication exploded")
-
-        monkeypatch.setattr(runtime, "_publish_project_configuration_locked", failing_publish)
-
-        real_replace = os.replace
-        tombstone_exchanged = False
-        raced = False
-
-        real_exchange = refract.config_mutation._atomic_exchange
-
-        def tracking_exchange(src, dst):
-            nonlocal tombstone_exchanged
-            res = real_exchange(src, dst)
-            if Path(dst) == config_path:
-                tombstone_exchanged = True
-            return res
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", tracking_exchange)
-
-        def racing_replace(src, dst):
-            nonlocal raced
-            if tombstone_exchanged and not raced and Path(src) == config_path:
-                raced = True
-                replacement = config_path.parent / "ext_late_replacement.tmp"
-                replacement.write_bytes(b"# external replacement after tombstone exchange\n")
-                real_replace(replacement, config_path)
-            return real_replace(src, dst)
-
-        monkeypatch.setattr(os, "replace", racing_replace)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.create_project_document(document, project_root=project_root)
-
-        assert raised.value.code == "configuration_commit_failed"
-        assert config_path.exists()
-        assert b"# external replacement after tombstone exchange\n" in config_path.read_bytes()
-        leftovers = [p for p in config_path.parent.iterdir() if p.name != config_path.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_restore_exchanged_state_safe_against_replacement_after_validation(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        exchange_count = 0
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            if Path(dst) == source:
-                exchange_count += 1
-                if exchange_count == 1:
-                    replacement = source.parent / "ext1.tmp"
-                    replacement.write_bytes(source.read_bytes() + b"\n# first edit\n")
-                    os.replace(replacement, source)
-                elif exchange_count == 2:
-                    replacement2 = source.parent / "ext2.tmp"
-                    replacement2.write_bytes(source.read_bytes() + b"\n# newer edit after validation\n")
-                    os.replace(replacement2, source)
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_conflict"
-        assert b"# newer edit after validation\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_restore_exchanged_state_safe_against_replacement_during_compensation(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        exchange_count = 0
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            if Path(dst) == source:
-                exchange_count += 1
-                if exchange_count == 1:
-                    replacement1 = source.parent / "ext1.tmp"
-                    replacement1.write_bytes(source.read_bytes() + b"\n# edit 1\n")
-                    os.replace(replacement1, source)
-                elif exchange_count == 2:
-                    replacement2 = source.parent / "ext2.tmp"
-                    replacement2.write_bytes(source.read_bytes() + b"\n# edit 2\n")
-                    os.replace(replacement2, source)
-                elif exchange_count == 3:
-                    replacement3 = source.parent / "ext3.tmp"
-                    replacement3.write_bytes(source.read_bytes() + b"\n# edit 3 during compensation\n")
-                    os.replace(replacement3, source)
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_conflict"
-        assert b"# edit 3 during compensation\n" in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_restore_exchanged_state_safe_against_more_than_20_compensation_replacements(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        exchange_count = 0
-        total_replacements = 25
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            if Path(dst) == source:
-                exchange_count += 1
-                if exchange_count <= total_replacements:
-                    replacement = source.parent / f"ext{exchange_count}.tmp"
-                    replacement.write_bytes(source.read_bytes() + f"\n# edit {exchange_count}\n".encode())
-                    os.replace(replacement, source)
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_conflict"
-        assert f"\n# edit {total_replacements}\n".encode() in source.read_bytes()
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert leftovers == []
-    finally:
-        runtime.database.close()
-
-
-def test_restore_exchanged_state_compensation_exchange_failure_retains_external_state(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        exchange_count = 0
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            if Path(dst) == source:
-                exchange_count += 1
-                if exchange_count == 1:
-                    replacement1 = source.parent / "ext1.tmp"
-                    replacement1.write_bytes(source.read_bytes() + b"\n# edit 1\n")
-                    os.replace(replacement1, source)
-                elif exchange_count == 2:
-                    replacement2 = source.parent / "ext2.tmp"
-                    replacement2.write_bytes(source.read_bytes() + b"\n# trapped external edit\n")
-                    os.replace(replacement2, source)
-                elif exchange_count == 3:
-                    raise OSError("Injected exchange error during compensation")
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_commit_failed"
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert len(leftovers) >= 1
-        assert any(b"# trapped external edit\n" in p.read_bytes() for p in leftovers)
-    finally:
-        runtime.database.close()
-
-
-def test_restore_exchanged_state_retry_bound_exhaustion_retains_external_state(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        exchange_count = 0
-
-        real_restore = refract.config_mutation._restore_exchanged_state
-
-        def bounded_restore(*args, **kwargs):
-            kwargs["max_retries"] = 2
-            return real_restore(*args, **kwargs)
-
-        monkeypatch.setattr(refract.config_mutation, "_restore_exchanged_state", bounded_restore)
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            if Path(dst) == source:
-                exchange_count += 1
-                replacement = source.parent / f"ext{exchange_count}.tmp"
-                replacement.write_bytes(source.read_bytes() + f"\n# edit {exchange_count}\n".encode())
-                os.replace(replacement, source)
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_commit_failed"
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert len(leftovers) >= 1
-        assert any(b"# edit" in p.read_bytes() for p in leftovers)
-    finally:
-        runtime.database.close()
-
-
-def test_restore_exchanged_state_path_read_failure_before_compensation_retains_external_state(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        real_read = refract.config_mutation.read_config_source
-        exchange_count = 0
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            if Path(dst) == source:
-                exchange_count += 1
-                if exchange_count == 1:
-                    replacement = source.parent / "ext1.tmp"
-                    replacement.write_bytes(source.read_bytes() + b"\n# displaced external edit\n")
-                    os.replace(replacement, source)
-            return real_exchange(src, dst)
-
-        def failing_read(path_arg):
-            if Path(path_arg) == source and exchange_count == 1:
-                raise OSError("Disk read error on path before compensation")
-            return real_read(path_arg)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-        monkeypatch.setattr(refract.config_mutation, "read_config_source", failing_read)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_commit_failed"
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert len(leftovers) >= 1
-        assert any(b"# displaced external edit\n" in p.read_bytes() for p in leftovers)
-    finally:
-        runtime.database.close()
-
-
-def test_restore_exchanged_state_temporary_read_failure_before_compensation_retains_external_state(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        real_read = refract.config_mutation.read_config_source
-        exchange_count = 0
-        read_count = 0
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            if Path(dst) == source:
-                exchange_count += 1
-                if exchange_count == 1:
-                    replacement = source.parent / "ext1.tmp"
-                    replacement.write_bytes(source.read_bytes() + b"\n# displaced external edit\n")
-                    os.replace(replacement, source)
-            return real_exchange(src, dst)
-
-        def failing_read(path_arg):
-            nonlocal read_count
-            if exchange_count == 1 and Path(path_arg) != source:
-                read_count += 1
-                if read_count == 2:
-                    raise OSError("Disk read error on temporary before compensation")
-            return real_read(path_arg)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-        monkeypatch.setattr(refract.config_mutation, "read_config_source", failing_read)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_commit_failed"
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert len(leftovers) >= 1
-        assert any(b"# displaced external edit\n" in p.read_bytes() for p in leftovers)
-    finally:
-        runtime.database.close()
-
-
-def test_restore_exchanged_state_production_retry_budget_exhaustion_retains_external_state(tmp_path, monkeypatch) -> None:
-    source = _global_source(tmp_path)
-    runtime = Runtime(load_config(source))
-    try:
-        service = runtime.mutations
-        expected = service.source_read().revision
-        document = service.read_document(load_source(source))
-        service.set_target_value(service.find_target(document, "primary"), "model", "x")
-
-        real_exchange = refract.config_mutation._atomic_exchange
-        exchange_count = 0
-
-        def racing_exchange(src, dst):
-            nonlocal exchange_count
-            if Path(dst) == source:
-                exchange_count += 1
-                replacement = source.parent / f"ext{exchange_count}.tmp"
-                replacement.write_bytes(source.read_bytes() + f"\n# edit {exchange_count}\n".encode())
-                os.replace(replacement, source)
-            return real_exchange(src, dst)
-
-        monkeypatch.setattr(refract.config_mutation, "_atomic_exchange", racing_exchange)
-
-        with pytest.raises(ConfigurationMutationError) as raised:
-            service.commit_document(document, expected_revision=expected)
-
-        assert raised.value.code == "configuration_commit_failed"
-        leftovers = [p for p in source.parent.iterdir() if p.name != source.name]
-        assert len(leftovers) >= 1
-        assert any(b"# edit" in p.read_bytes() for p in leftovers)
-    finally:
-        runtime.database.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1930,6 +1202,54 @@ def test_create_target_emits_backend_profile_only_and_preserves_unrelated(tmp_pa
         assert '\nprofile = ' not in tertiary_block
 
         assert "tertiary" in [t.id for t in runtime.catalog.targets]
+    finally:
+        runtime.database.close()
+
+
+def test_create_target_appends_inline_table_to_inline_targets(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    source = home / "config.toml"
+    source.write_text(
+        'targets = [{ id = "primary", backend = "codex" }]\n\n'
+        '[profiles.balanced]\nimplement = "primary"\nreview = "primary"\n'
+        'consult = "primary"\n\n[daemon]\ndefault_profile = "balanced"\n',
+        encoding="utf-8",
+    )
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        service.create_target(
+            TargetEditorData(id="extra", backend="pi", args=["--x"]),
+            expected_revision=service.source_read().revision,
+        )
+        assert [t.id for t in load_config(source).targets] == ["primary", "extra"]
+    finally:
+        runtime.database.close()
+
+
+def test_missing_global_source_is_not_found(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        source.unlink()
+        with pytest.raises(ConfigurationMutationError) as raised:
+            runtime.mutations.delete_target("fallback", expected_revision="abc")
+        assert raised.value.code == "not_found"
+    finally:
+        runtime.database.close()
+
+
+def test_project_root_holding_global_config_is_rejected(tmp_path) -> None:
+    root = tmp_path / "user"
+    (root / ".refract").mkdir(parents=True)
+    source = root / ".refract" / "config.toml"
+    source.write_text(_global_text(), encoding="utf-8")
+    runtime = Runtime(load_config(source))
+    try:
+        with pytest.raises(OrchestrationError) as raised:
+            runtime.resolve_project(str(root))
+        assert raised.value.code == "invalid_path"
     finally:
         runtime.database.close()
 
@@ -2263,7 +1583,6 @@ def test_phase3_profile_editor_models() -> None:
 
     policy = WorkflowPolicyData(targets=["primary"])
     assert policy.targets == ["primary"]
-    assert policy.max_attempts == 1
     assert policy.timeout_s == 0
 
     with pytest.raises(ValidationError):
@@ -2274,13 +1593,13 @@ def test_phase3_profile_editor_models() -> None:
         extends="  ",
         workflows={
             "consult": None,
-            "implement": WorkflowPolicyData(targets=["primary", "fallback"], max_attempts=2, timeout_s=900),
+            "implement": WorkflowPolicyData(targets=["primary", "fallback"], timeout_s=900),
         },
     )
     assert profile_data.id == "balanced"
     assert profile_data.extends is None
     assert profile_data.workflows["consult"] is None
-    assert profile_data.workflows["implement"].max_attempts == 2
+    assert profile_data.workflows["implement"].timeout_s == 900
 
     with pytest.raises(ValidationError):
         ProfileEditorData(id="balanced", extra="disallowed")
@@ -2452,5 +1771,20 @@ def test_project_override_crud_and_missing_file_creation(tmp_path) -> None:
         assert fallback.id == "balanced"
         assert fallback.declared["implement"] is None  # undeclared in project scope now
         assert fallback.effective["implement"] is not None  # effective from global
+
+        # A project-only profile has no global fallback after removal.
+        local_data = ProfileEditorData(
+            id="project-only",
+            workflows={"implement": WorkflowPolicyData(targets=["primary"])},
+        )
+        local_result, local_profile = service.create_project_override(
+            project_root, local_data, expected_revision=result3.revision,
+        )
+        assert local_profile.id == "project-only"
+        _, deleted_id, fallback = service.delete_project_override(
+            project_root, "project-only", expected_revision=local_result.revision,
+        )
+        assert deleted_id == "project-only"
+        assert fallback is None
     finally:
         runtime.database.close()

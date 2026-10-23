@@ -2,7 +2,7 @@ name: AI PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize, ready_for_review, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -12,6 +12,8 @@ jobs:
   review:
     if: >-
       !github.event.pull_request.draft &&
+      (github.event.action != 'labeled' && github.event.action != 'unlabeled' ||
+       github.event.label.name == 'ai-review-full' || github.event.label.name == 'skip-ai-review') &&
       !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
     runs-on: ubuntu-latest
     steps:

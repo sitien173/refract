@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
-import { reduceTranscriptEvents, useJobStream } from './useJobStream'
+import { MAX_STREAM_EVENTS, reduceTranscriptEvents, useJobStream } from './useJobStream'
 
 class MockEventSource {
   static instances = []
@@ -49,6 +49,27 @@ describe('useJobStream hook', () => {
 
   afterEach(() => {
     delete window.EventSource
+  })
+
+  it('caps retained events and ignores older overlapping pages', async () => {
+    const events = Array.from({ length: MAX_STREAM_EVENTS + 50 }, (_, index) => ({
+      id: index + 1, kind: 'stream.notice', data: { text: 'notice' },
+    }))
+    vi.spyOn(api, 'getJobOutput')
+      .mockResolvedValueOnce({ events, cursor: events.length, has_more: false, retained_from: 1 })
+      .mockResolvedValueOnce({
+        events: [events[0], events.at(-1), { id: events.length + 1, kind: 'stream.notice', data: {} }],
+        cursor: events.length + 1, has_more: false,
+      })
+    const { result } = renderHook(() => useJobStream('bounded', { isTerminal: true }))
+    await waitFor(() => expect(result.current.events).toHaveLength(MAX_STREAM_EVENTS))
+    expect(result.current.events[0].id).toBe(51)
+    expect(result.current.windowTruncated).toBe(true)
+    await act(async () => result.current.refresh())
+    expect(result.current.events).toHaveLength(MAX_STREAM_EVENTS)
+    expect(result.current.events[0].id).toBe(52)
+    expect(result.current.events.at(-1).id).toBe(events.length + 1)
+    expect(result.current.cursor).toBe(events.length + 1)
   })
 
   it('fetches initial durable replay page and sets status to live', async () => {

@@ -14,7 +14,7 @@ def test_plan_snapshots_one_workflow_selection(tmp_path) -> None:
     data = execution_plan_data(plan)
     assert data["profile"] == "balanced"
     assert data["workflow"] == "implement"
-    assert data["selection"] == {"targets": ["primary"], "max_attempts": 1, "timeout_s": 0}
+    assert data["selection"] == {"targets": ["primary"], "timeout_s": 0}
     assert "capabilities" not in data["targets"][0]
     assert parse_execution_plan(data) == plan
 
@@ -113,7 +113,7 @@ def test_custom_target_args_round_trip_in_plan() -> None:
     plan = ExecutionPlan(
         profile="balanced",
         workflow=get_workflow("review"),
-        selection=TargetSelection((target.id,), max_attempts=1),
+        selection=TargetSelection((target.id,)),
         targets=(target,),
     )
     restored = parse_execution_plan(execution_plan_data(plan))
@@ -142,7 +142,7 @@ def test_pi_native_args_round_trip_in_plan(native_args: tuple[str, ...]) -> None
     plan = ExecutionPlan(
         profile="balanced",
         workflow=get_workflow("review"),
-        selection=TargetSelection((target.id,), max_attempts=1),
+        selection=TargetSelection((target.id,)),
         targets=(target,),
     )
     restored = parse_execution_plan(execution_plan_data(plan))

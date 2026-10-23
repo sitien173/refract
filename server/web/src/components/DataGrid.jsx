@@ -28,8 +28,8 @@ function compareValues(a, b) {
     return a - b
   }
 
-  const aNum = typeof a === 'string' && a.trim() !== '' ? Number(a) : NaN
-  const bNum = typeof b === 'string' && b.trim() !== '' ? Number(b) : NaN
+  const aNum = typeof a === 'string' && a.trim() !== '' ? Number(a) : Number.NaN
+  const bNum = typeof b === 'string' && b.trim() !== '' ? Number(b) : Number.NaN
   if (!Number.isNaN(aNum) && !Number.isNaN(bNum) && typeof a !== 'boolean' && typeof b !== 'boolean') {
     return aNum - bNum
   }

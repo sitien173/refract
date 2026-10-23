@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import atexit
 import copy
-import faulthandler
 import json
 import logging
 import logging.handlers
@@ -23,6 +22,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Protocol
 
 
@@ -50,7 +50,7 @@ class ResolvedLoggingConfig:
 
 
 _CONTEXT_FIELDS = ("request_id", "project_id", "job_id", "stage_id", "target_id")
-_CONTEXT: ContextVar[dict[str, str]] = ContextVar("refract_log_context", default={})
+_CONTEXT: ContextVar[Mapping[str, str]] = ContextVar("refract_log_context", default=MappingProxyType({}))
 _STANDARD_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__) | {
     "message",
     "asctime",
@@ -72,11 +72,8 @@ _LOG_QUEUE_CAPACITY = 10_000
 _LOCK = threading.RLock()
 _LISTENER: logging.handlers.QueueListener | None = None
 _QUEUE_HANDLER: logging.Handler | None = None
-_TARGET_HANDLERS: list[logging.Handler] = []
-_CRASH_FILE: Any | None = None
-_FAULT_HANDLER_OWNED = False
 _CONFIGURED_PID: int | None = None
-_FINGERPRINT: tuple[Any, ...] | None = None
+_FINGERPRINT: ResolvedLoggingConfig | None = None
 _FILE_SINK_DEGRADED = False
 _ATEXIT_REGISTERED = False
 _WARNING_STATE: tuple[list[logging.Handler], int, bool, bool] | None = None
@@ -111,36 +108,60 @@ def _integer(value: str, name: str, *, minimum: int) -> int:
     return parsed
 
 
-def resolve_config(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
-    """Resolve logging options with environment variables taking precedence."""
-    default_file = _refract_home() / "refract.log"
-    level = options.level if options is not None else "INFO"
-    log_format = options.format if options is not None else "text"
-    file = options.file if options is not None else default_file
-    console = options.console if options is not None else False
-    max_bytes = options.max_bytes if options is not None else 10 * 1024 * 1024
-    backup_count = options.backup_count if options is not None else 5
-    capture_warnings = options.capture_warnings if options is not None else True
+def _log_file_override(value: str) -> Path | None:
+    if value.strip().lower() in {"none", "off", "-"}:
+        return None
+    candidate = Path(value).expanduser()
+    return candidate if candidate.is_absolute() else _refract_home() / candidate
 
-    if value := _environment_value("REFRACT_LOG_LEVEL"):
+
+def resolve_config(
+    options: LoggingOptions | None = None,
+    *,
+    overrides: Mapping[str, str] | None = None,
+) -> ResolvedLoggingConfig:
+    """Resolve CLI overrides before environment variables and configuration."""
+    def option(name: str) -> str | None:
+        if overrides is not None and name in overrides:
+            return overrides[name]
+        return _environment_value(name)
+    defaults = options if options is not None else ResolvedLoggingConfig(
+        level="INFO", format="text", file=_refract_home() / "refract.log",
+        console=False, max_bytes=10 * 1024 * 1024, backup_count=5,
+        capture_warnings=True,
+    )
+    level = defaults.level
+    log_format = defaults.format
+    file = defaults.file
+    console = defaults.console
+    max_bytes = defaults.max_bytes
+    backup_count = defaults.backup_count
+    capture_warnings = defaults.capture_warnings
+
+    if value := option("REFRACT_LOG_LEVEL"):
         level = value
-    if value := _environment_value("REFRACT_LOG_FORMAT"):
+    if value := option("REFRACT_LOG_FORMAT"):
         log_format = value
-    if value := _environment_value("REFRACT_LOG_FILE"):
-        if value.strip().lower() in {"none", "off", "-"}:
-            file = None
-        else:
-            candidate = Path(value).expanduser()
-            file = candidate if candidate.is_absolute() else _refract_home() / candidate
-    if value := _environment_value("REFRACT_LOG_CONSOLE"):
+    if value := option("REFRACT_LOG_FILE"):
+        file = _log_file_override(value)
+    if value := option("REFRACT_LOG_CONSOLE"):
         console = _boolean(value, "REFRACT_LOG_CONSOLE")
-    if value := _environment_value("REFRACT_LOG_MAX_BYTES"):
+    if value := option("REFRACT_LOG_MAX_BYTES"):
         max_bytes = _integer(value, "REFRACT_LOG_MAX_BYTES", minimum=1)
-    if value := _environment_value("REFRACT_LOG_BACKUP_COUNT"):
+    if value := option("REFRACT_LOG_BACKUP_COUNT"):
         backup_count = _integer(value, "REFRACT_LOG_BACKUP_COUNT", minimum=0)
-    if value := _environment_value("REFRACT_LOG_CAPTURE_WARNINGS"):
+    if value := option("REFRACT_LOG_CAPTURE_WARNINGS"):
         capture_warnings = _boolean(value, "REFRACT_LOG_CAPTURE_WARNINGS")
 
+    return _resolved_logging_config(
+        level, log_format, file, console, max_bytes, backup_count, capture_warnings
+    )
+
+
+def _resolved_logging_config(
+    level: str, log_format: str, file: Path | None, console: bool,
+    max_bytes: int, backup_count: int, capture_warnings: bool,
+) -> ResolvedLoggingConfig:
     resolved_level = str(level).strip().upper()
     if resolved_level not in logging.getLevelNamesMapping() or not isinstance(
         logging.getLevelNamesMapping()[resolved_level], int
@@ -263,19 +284,10 @@ class _TextFormatter(logging.Formatter):
         return f"{rendered} [{context}]" if context else rendered
 
 
-class _SecureRotatingFileHandler(logging.handlers.RotatingFileHandler):
-    """Keep newly created files private after every rollover."""
-
-    def _secure_file(self) -> None:
-        if os.name != "nt":
-            try:
-                Path(self.baseFilename).chmod(0o600)
-            except OSError:
-                pass
-
-    def doRollover(self) -> None:
-        super().doRollover()
-        self._secure_file()
+def _rotate_private_log(source: str, destination: str) -> None:
+    """Create the next private log before the stdlib handler reopens it."""
+    os.rename(source, destination)
+    Path(source).touch(mode=0o600)
 
 
 class _BoundedQueueHandler(logging.handlers.QueueHandler):
@@ -374,8 +386,7 @@ def _secure_parent(path: Path) -> None:
 
 
 def _stop_locked() -> None:
-    global _LISTENER, _QUEUE_HANDLER, _TARGET_HANDLERS
-    global _CRASH_FILE, _FAULT_HANDLER_OWNED, _CONFIGURED_PID, _FINGERPRINT
+    global _LISTENER, _QUEUE_HANDLER, _CONFIGURED_PID, _FINGERPRINT
     global _FILE_SINK_DEGRADED, _WARNING_STATE
     logger = logging.getLogger("refract")
     if _QUEUE_HANDLER is not None:
@@ -389,19 +400,12 @@ def _stop_locked() -> None:
             _LISTENER.stop()
         except (AttributeError, RuntimeError):
             pass
-    for handler in _TARGET_HANDLERS:
-        try:
-            handler.flush()
-            handler.close()
-        except (OSError, ValueError):
-            pass
-    if _FAULT_HANDLER_OWNED and faulthandler.is_enabled():
-        faulthandler.disable()
-    if _CRASH_FILE is not None:
-        try:
-            _CRASH_FILE.close()
-        except OSError:
-            pass
+        for handler in _LISTENER.handlers:
+            try:
+                handler.flush()
+                handler.close()
+            except (OSError, ValueError):
+                pass
     if _WARNING_STATE is not None:
         handlers, level, propagate, was_captured = _WARNING_STATE
         warnings_logger = logging.getLogger("py.warnings")
@@ -415,38 +419,50 @@ def _stop_locked() -> None:
     _WARNING_STATE = None
     _LISTENER = None
     _QUEUE_HANDLER = None
-    _TARGET_HANDLERS = []
-    _CRASH_FILE = None
-    _FAULT_HANDLER_OWNED = False
     _CONFIGURED_PID = None
     _FINGERPRINT = None
     _FILE_SINK_DEGRADED = False
 
 
-def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
+def _file_log_handler(
+    settings: ResolvedLoggingConfig, formatter: logging.Formatter,
+) -> logging.handlers.RotatingFileHandler:
+    path = settings.file
+    assert path is not None
+    _secure_parent(path)
+    path.touch(mode=0o600)
+    handler = logging.handlers.RotatingFileHandler(
+        path, maxBytes=settings.max_bytes, backupCount=settings.backup_count,
+        encoding="utf-8", delay=False,
+    )
+    if os.name != "nt":
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    handler.rotator = _rotate_private_log
+    handler.setFormatter(formatter)
+    return handler
+
+
+def configure(
+    options: LoggingOptions | None = None,
+    *,
+    overrides: Mapping[str, str] | None = None,
+) -> ResolvedLoggingConfig:
     """Configure Refract's asynchronous rotating logs.
 
     Calls are idempotent for identical settings and safely replace prior
     Refract-owned handlers when settings change. The process root logger is not
     modified.
     """
-    global _LISTENER, _QUEUE_HANDLER, _TARGET_HANDLERS
-    global _CRASH_FILE, _FAULT_HANDLER_OWNED, _CONFIGURED_PID, _FINGERPRINT
+    global _LISTENER, _QUEUE_HANDLER, _CONFIGURED_PID, _FINGERPRINT
     global _ATEXIT_REGISTERED, _FILE_SINK_DEGRADED, _WARNING_STATE
 
-    settings = resolve_config(options)
-    fingerprint = (
-        settings.level,
-        settings.format,
-        os.fspath(settings.file) if settings.file else None,
-        settings.console,
-        settings.max_bytes,
-        settings.backup_count,
-        settings.capture_warnings,
-    )
+    settings = resolve_config(options, overrides=overrides)
     with _LOCK:
         if (
-            _FINGERPRINT == fingerprint
+            _FINGERPRINT == settings
             and _CONFIGURED_PID == os.getpid()
             and not _FILE_SINK_DEGRADED
         ):
@@ -459,28 +475,12 @@ def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
         file_error: OSError | None = None
         if settings.file is not None:
             try:
-                _secure_parent(settings.file)
-                file_handler = _SecureRotatingFileHandler(
-                    settings.file,
-                    maxBytes=settings.max_bytes,
-                    backupCount=settings.backup_count,
-                    encoding="utf-8",
-                    delay=False,
-                )
-                if os.name != "nt":
-                    try:
-                        settings.file.chmod(0o600)
-                    except OSError:
-                        pass
-                file_handler.setFormatter(formatter)
-                file_handler.addFilter(context_filter)
-                targets.append(file_handler)
+                targets.append(_file_log_handler(settings, formatter))
             except OSError as exc:
                 file_error = exc
         if settings.console or not targets:
             console_handler = logging.StreamHandler(sys.stderr)
             console_handler.setFormatter(formatter)
-            console_handler.addFilter(context_filter)
             targets.append(console_handler)
 
         records: queue.Queue[logging.LogRecord] = queue.Queue(
@@ -502,10 +502,9 @@ def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
         )
         listener.start()
         _QUEUE_HANDLER = queue_handler
-        _TARGET_HANDLERS = targets
         _LISTENER = listener
         _CONFIGURED_PID = os.getpid()
-        _FINGERPRINT = fingerprint
+        _FINGERPRINT = settings
         _FILE_SINK_DEGRADED = file_error is not None
 
         if settings.capture_warnings:
@@ -521,23 +520,6 @@ def configure(options: LoggingOptions | None = None) -> ResolvedLoggingConfig:
             warnings_logger.handlers[:] = [queue_handler]
             warnings_logger.setLevel(logging.getLevelNamesMapping()[settings.level])
             warnings_logger.propagate = False
-
-        if settings.file is not None and not faulthandler.is_enabled():
-            try:
-                crash_path = settings.file.with_name(
-                    f"{settings.file.stem}.crash{settings.file.suffix or '.log'}"
-                )
-                _secure_parent(crash_path)
-                _CRASH_FILE = crash_path.open("a", buffering=1, encoding="utf-8")
-                if os.name != "nt":
-                    crash_path.chmod(0o600)
-                faulthandler.enable(file=_CRASH_FILE, all_threads=True)
-                _FAULT_HANDLER_OWNED = True
-            except OSError as exc:
-                logger.warning(
-                    "Could not enable crash logging",
-                    extra={"event": "logging.crash_file_failed", "error": str(exc)},
-                )
 
         if not _ATEXIT_REGISTERED:
             atexit.register(shutdown)

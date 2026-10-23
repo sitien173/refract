@@ -10,10 +10,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from refract.backends import classify_tool_activity
-from refract.backends.agy import AgyParams, _execute_once, _execute_sync as agy_sync
-from refract.backends.claude import ClaudeParams, _execute_sync as claude_sync
-from refract.backends.codex import CodexParams, _execute_sync as codex_sync
-from refract.backends.pi import PiParams, _execute_sync as pi_sync
+from refract.backends import BackendParams
+from refract.backends.agy import execute, execute as agy_sync
+from refract.backends.claude import execute as claude_sync
+from refract.backends.codex import execute as codex_sync
+from refract.backends.pi import execute as pi_sync
 
 
 # --- Fixture Payloads ---
@@ -215,7 +216,7 @@ def test_claude_streaming_normalization(tmp_path, monkeypatch):
         lambda *args, **kwargs: (line for line in CLAUDE_STREAM_JSON_FIXTURE),
     )
 
-    params = ClaudeParams(
+    params = BackendParams(
         PROMPT="inspect",
         cd=workspace,
         emitter=emitter,
@@ -294,7 +295,7 @@ def test_claude_streaming_bash_activity_command(tmp_path, monkeypatch):
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
-    result = claude_sync(ClaudeParams(PROMPT="test", cd=workspace, emitter=events.append))
+    result = claude_sync(BackendParams(PROMPT="test", cd=workspace, emitter=events.append))
     assert result.outcome == "OK"
     started_evt = next(e for e in events if e["kind"] == "tool.started")
     assert started_evt["data"]["tool"] == "bash"
@@ -384,7 +385,7 @@ def test_claude_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
-    params = ClaudeParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    params = BackendParams(PROMPT="inspect", cd=workspace, emitter=events.append)
     result = claude_sync(params)
     assert result.outcome == "OK"
 
@@ -448,7 +449,7 @@ def test_claude_streaming_content_block_stop_output_ignored(tmp_path, monkeypatc
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
-    params = ClaudeParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    params = BackendParams(PROMPT="inspect", cd=workspace, emitter=events.append)
     result = claude_sync(params)
     assert result.outcome == "OK"
 
@@ -482,7 +483,7 @@ def test_codex_streaming_normalization(tmp_path, monkeypatch):
         lambda *args, **kwargs: (line for line in CODEX_JSONL_FIXTURE),
     )
 
-    params = CodexParams(
+    params = BackendParams(
         PROMPT="inspect",
         cd=workspace,
         emitter=emitter,
@@ -546,7 +547,7 @@ def test_codex_streaming_non_bash_tool_activity_tool_call(tmp_path, monkeypatch)
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
-    result = codex_sync(CodexParams(PROMPT="test", cd=workspace, emitter=events.append))
+    result = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=events.append))
     assert result.outcome == "OK"
     started_evt = next(e for e in events if e["kind"] == "tool.started")
     assert started_evt["data"]["tool"] == "read_file"
@@ -609,7 +610,7 @@ def test_codex_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
-    params = CodexParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    params = BackendParams(PROMPT="inspect", cd=workspace, emitter=events.append)
     result = codex_sync(params)
     assert result.outcome == "OK"
 
@@ -650,7 +651,7 @@ def test_pi_streaming_normalization(tmp_path, monkeypatch):
         lambda *args, **kwargs: (line for line in PI_JSON_FIXTURE),
     )
 
-    params = PiParams(
+    params = BackendParams(
         PROMPT="inspect",
         cd=workspace,
         emitter=emitter,
@@ -740,7 +741,7 @@ def test_pi_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
-    params = PiParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    params = BackendParams(PROMPT="inspect", cd=workspace, emitter=events.append)
     result = pi_sync(params)
     assert result.outcome == "OK"
 
@@ -782,17 +783,13 @@ def test_agy_streaming_normalization(tmp_path, monkeypatch):
         "refract.backends.agy.run_shell_command",
         lambda *args, **kwargs: (line for line in AGY_STREAM_JSON_FIXTURE),
     )
-    monkeypatch.setattr(
-        "refract.backends.agy._agy_has_pending_tasks",
-        lambda *args, **kwargs: False,
-    )
 
-    params = AgyParams(
+    params = BackendParams(
         PROMPT="inspect",
         cd=workspace,
         emitter=emitter,
     )
-    result = _execute_once(params)
+    result = execute(params)
 
     assert result.outcome == "OK"
     assert result.SESSION_ID == "12345678-1234-1234-1234-123456789abc"
@@ -889,8 +886,8 @@ def test_agy_current_stream_json_protocol(tmp_path, monkeypatch):
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
 
-    result = _execute_once(
-        AgyParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    result = execute(
+        BackendParams(PROMPT="inspect", cd=workspace, emitter=events.append)
     )
 
     assert result.outcome == "OK"
@@ -996,13 +993,9 @@ def test_agy_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
         "refract.backends.agy.run_shell_command",
         lambda *args, **kwargs: (line for line in stream_fixture),
     )
-    monkeypatch.setattr(
-        "refract.backends.agy._agy_has_pending_tasks",
-        lambda *args, **kwargs: False,
-    )
 
-    params = AgyParams(PROMPT="inspect", cd=workspace, emitter=events.append)
-    result = _execute_once(params)
+    params = BackendParams(PROMPT="inspect", cd=workspace, emitter=events.append)
+    result = execute(params)
     assert result.outcome == "OK"
 
     tool_starts = [e for e in events if e["kind"] == "tool.started"]
@@ -1034,53 +1027,6 @@ def test_agy_streaming_nested_and_missing_payloads(tmp_path, monkeypatch):
     assert "output" in tool_comps[4]["data"]
     assert tool_comps[4]["data"]["output"] is None
 
-
-
-def test_agy_continuations_unique_synthetic_entities(tmp_path, monkeypatch):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
-
-    events: list[dict[str, Any]] = []
-
-    def emitter(event: dict[str, Any]) -> None:
-        events.append(event)
-
-    call_count = 0
-
-    def fake_run_shell(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return iter([
-            "Created conversation 12345678-1234-1234-1234-123456789abc",
-            json.dumps({
-                "type": "assistant.text.delta",
-                "text": f"Continuation {call_count}",
-            }),
-            f"Done {call_count}",
-        ])
-
-    monkeypatch.setattr("refract.backends.agy.run_shell_command", fake_run_shell)
-    pending_checks = [True, False]
-    monkeypatch.setattr(
-        "refract.backends.agy._agy_has_pending_tasks",
-        lambda *args, **kwargs: pending_checks.pop(0) if pending_checks else False,
-    )
-
-    params = AgyParams(
-        PROMPT="inspect",
-        cd=workspace,
-        emitter=emitter,
-    )
-    result = agy_sync(params)
-
-    assert result.outcome == "OK"
-    deltas = [e for e in events if e.get("kind") == "assistant.text.delta"]
-    assert len(deltas) == 2
-    # Continuation events must have unique synthetic assistant entities
-    assert deltas[0]["entity_id"] != deltas[1]["entity_id"]
-    assert deltas[0]["entity_id"] == "msg-1"
-    assert deltas[1]["entity_id"] == "msg-2"
 
 
 def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, monkeypatch):
@@ -1126,7 +1072,7 @@ def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, m
         "refract.backends.claude.run_shell_command",
         lambda *args, **kwargs: (line for line in claude_stream),
     )
-    res_claude = claude_sync(ClaudeParams(PROMPT="test", cd=workspace, emitter=claude_events.append))
+    res_claude = claude_sync(BackendParams(PROMPT="test", cd=workspace, emitter=claude_events.append))
     assert res_claude.outcome == "OK"
     starts = [e for e in claude_events if e["kind"] == "tool.started"]
     assert len(starts) == len(candidate_tools)
@@ -1160,7 +1106,7 @@ def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, m
         "refract.backends.codex.run_shell_command",
         lambda *args, **kwargs: (line for line in codex_stream),
     )
-    res_codex = codex_sync(CodexParams(PROMPT="test", cd=workspace, emitter=codex_events.append))
+    res_codex = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=codex_events.append))
     assert res_codex.outcome == "OK"
     c_starts = [e for e in codex_events if e["kind"] == "tool.started"]
     assert len(c_starts) == len(candidate_tools)
@@ -1198,7 +1144,7 @@ def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, m
         "refract.backends.pi.run_shell_command",
         lambda *args, **kwargs: (line for line in pi_stream),
     )
-    res_pi = pi_sync(PiParams(PROMPT="test", cd=workspace, emitter=pi_events.append))
+    res_pi = pi_sync(BackendParams(PROMPT="test", cd=workspace, emitter=pi_events.append))
     assert res_pi.outcome == "OK"
     pi_starts = [e for e in pi_events if e["kind"] == "tool.started"]
     assert len(pi_starts) == len(candidate_tools)
@@ -1241,11 +1187,7 @@ def test_exact_command_classification_and_unsafe_substring_rejection(tmp_path, m
         "refract.backends.agy.run_shell_command",
         lambda *args, **kwargs: (line for line in agy_stream),
     )
-    monkeypatch.setattr(
-        "refract.backends.agy._agy_has_pending_tasks",
-        lambda *args, **kwargs: False,
-    )
-    res_agy = _execute_once(AgyParams(PROMPT="test", cd=workspace, emitter=agy_events.append))
+    res_agy = execute(BackendParams(PROMPT="test", cd=workspace, emitter=agy_events.append))
     assert res_agy.outcome == "OK"
     agy_starts = [e for e in agy_events if e["kind"] == "tool.started"]
     assert len(agy_starts) == len(candidate_tools)
@@ -1291,7 +1233,7 @@ def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
     ]
     claude_evts: list[dict[str, Any]] = []
     monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
-    c_res = claude_sync(ClaudeParams(PROMPT="test", cd=workspace, emitter=claude_evts.append))
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace, emitter=claude_evts.append))
     assert c_res.outcome == "OK"
     assert cot_secret not in json.dumps(claude_evts)
     assert diag_secret not in json.dumps(claude_evts)
@@ -1328,7 +1270,7 @@ def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
     ]
     codex_evts: list[dict[str, Any]] = []
     monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
-    cdx_res = codex_sync(CodexParams(PROMPT="test", cd=workspace, emitter=codex_evts.append))
+    cdx_res = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=codex_evts.append))
     assert cdx_res.outcome == "OK"
     assert cot_secret not in json.dumps(codex_evts)
     assert diag_secret not in json.dumps(codex_evts)
@@ -1344,7 +1286,7 @@ def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
     ]
     pi_evts: list[dict[str, Any]] = []
     monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
-    p_res = pi_sync(PiParams(PROMPT="test", cd=workspace, emitter=pi_evts.append))
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace, emitter=pi_evts.append))
     assert p_res.outcome == "OK"
     assert cot_secret not in json.dumps(pi_evts)
     assert diag_secret not in json.dumps(pi_evts)
@@ -1392,8 +1334,7 @@ def test_negative_reasoning_and_diagnostics_excluded(tmp_path, monkeypatch):
     ]
     agy_evts: list[dict[str, Any]] = []
     monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
-    monkeypatch.setattr("refract.backends.agy._agy_has_pending_tasks", lambda *a, **k: False)
-    a_res = _execute_once(AgyParams(PROMPT="test", cd=workspace, emitter=agy_evts.append))
+    a_res = execute(BackendParams(PROMPT="test", cd=workspace, emitter=agy_evts.append))
     assert a_res.outcome == "OK"
     assert cot_secret not in json.dumps(agy_evts)
     assert diag_secret not in json.dumps(agy_evts)
@@ -1444,7 +1385,7 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # 1. Claude
     claude_lines = (fixtures_dir / "claude.jsonl").read_text().splitlines()
     monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
-    c_res = claude_sync(ClaudeParams(PROMPT="test", cd=workspace))
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
     assert c_res.outcome == "OK"
     assert c_res.usage == {
         "model_name": "claude-opus-5-5",
@@ -1462,7 +1403,7 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "OK", "session_id": "sess"})
     ]
     monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines_no_usage))
-    c_res_empty = claude_sync(ClaudeParams(PROMPT="test", cd=workspace))
+    c_res_empty = claude_sync(BackendParams(PROMPT="test", cd=workspace))
     assert c_res_empty.outcome == "OK"
     assert c_res_empty.usage == {
         "model_name": None,
@@ -1476,7 +1417,7 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # 2. Codex
     codex_lines = (fixtures_dir / "codex.jsonl").read_text().splitlines()
     monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
-    cdx_res = codex_sync(CodexParams(PROMPT="test", cd=workspace))
+    cdx_res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert cdx_res.outcome == "OK"
     assert cdx_res.usage == {
         "model_name": None,
@@ -1495,7 +1436,7 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         json.dumps({"type": "turn.completed"}),
     ]
     monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines_no_usage))
-    cdx_res_empty = codex_sync(CodexParams(PROMPT="test", cd=workspace))
+    cdx_res_empty = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert cdx_res_empty.outcome == "OK"
     assert cdx_res_empty.usage == {
         "model_name": None,
@@ -1509,7 +1450,7 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # 3. Pi
     pi_lines = (fixtures_dir / "pi.jsonl").read_text().splitlines()
     monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
-    p_res = pi_sync(PiParams(PROMPT="test", cd=workspace))
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
     assert p_res.outcome == "OK"
     assert p_res.usage == {
         "model_name": "gpt-6.1-sol",
@@ -1528,7 +1469,7 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "OK"}]}}),
     ]
     monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines_no_usage))
-    p_res_empty = pi_sync(PiParams(PROMPT="test", cd=workspace))
+    p_res_empty = pi_sync(BackendParams(PROMPT="test", cd=workspace))
     assert p_res_empty.outcome == "OK"
     assert p_res_empty.usage == {
         "model_name": None,
@@ -1542,8 +1483,7 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # 4. Agy
     agy_lines = (fixtures_dir / "agy.jsonl").read_text().splitlines()
     monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
-    monkeypatch.setattr("refract.backends.agy._agy_has_pending_tasks", lambda *a, **k: False)
-    a_res = agy_sync(AgyParams(PROMPT="test", cd=workspace))
+    a_res = agy_sync(BackendParams(PROMPT="test", cd=workspace))
     assert a_res.outcome == "OK"
     assert a_res.usage == {
         "model_name": None,
@@ -1561,8 +1501,7 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         json.dumps({"event": "result", "result": {"conversation_id": "00000000-0000-0000-0000-000000000000", "status": "SUCCESS", "response": "OK\n"}}),
     ]
     monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in a_lines_no_usage))
-    monkeypatch.setattr("refract.backends.agy._agy_has_pending_tasks", lambda *a, **k: False)
-    a_res_empty = agy_sync(AgyParams(PROMPT="test", cd=workspace))
+    a_res_empty = agy_sync(BackendParams(PROMPT="test", cd=workspace))
     assert a_res_empty.outcome == "OK"
     assert a_res_empty.usage == {
         "model_name": None,
@@ -1591,7 +1530,7 @@ def test_malformed_usage_never_raises(tmp_path: Path, monkeypatch: pytest.Monkey
         })
     ]
     monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
-    c_res = claude_sync(ClaudeParams(PROMPT="test", cd=workspace))
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
     assert c_res.outcome == "OK"
     assert c_res.usage == {
         "model_name": None,

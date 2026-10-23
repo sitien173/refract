@@ -2,34 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import shutil
-import subprocess
 import threading
-from collections.abc import Callable, Generator
-from dataclasses import dataclass
-from pathlib import Path
+from collections.abc import Generator
 from typing import Any
 
 from refract.logging_setup import get_logger
 
-from . import BackendResult, _usage_dict, classify_backend_output, classify_tool_activity
-from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
+from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
+from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 
 log = get_logger("claude")
-
-
-@dataclass(slots=True)
-class ClaudeParams:
-    PROMPT: str
-    cd: Path
-    SESSION_ID: str = ""
-    args: tuple[str, ...] = ()
-    timeout_s: int = 0
-    cancel_event: threading.Event | None = None
-    emitter: Callable[[dict[str, Any]], None] | None = None
 
 
 def run_shell_command(
@@ -37,6 +21,7 @@ def run_shell_command(
     cwd: str | None = None,
     timeout_s: int = 0,
     cancel_event: threading.Event | None = None,
+    stdin_text: str | None = None,
 ) -> Generator[str, None, None]:
     """Run Claude and yield its combined output one line at a time."""
     yield from stream_shell_command_lines(
@@ -49,6 +34,7 @@ def run_shell_command(
         terminate_wait_s=5,
         cancel_event=cancel_event,
         check_returncode=True,
+        stdin_text=stdin_text,
     )
 
 
@@ -63,26 +49,27 @@ def _value_text(value: Any) -> str:
         return str(value)
 
 
-def _extract_output(lines: list[str]) -> tuple[str, str, str, str]:
-    """Return the final reply, session ID, diagnostics, and result error."""
+def _unwrap(event: dict[str, Any]) -> dict[str, Any]:
+    inner = event.get("event")
+    return inner if event.get("type") == "stream_event" and isinstance(inner, dict) else event
+
+
+def _final_result(stream: StreamOutcome) -> dict[str, Any] | None:
     final_result: dict[str, Any] | None = None
-    diagnostics: list[str] = []
+    for event in stream.objects():
+        event = _unwrap(event)
+        if event.get("type") == "result":
+            final_result = event
+    return final_result
 
-    for line in lines:
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            if line.strip():
-                diagnostics.append(line.strip())
-            continue
-        if isinstance(event, dict):
-            if event.get("type") == "stream_event" and isinstance(event.get("event"), dict):
-                inner = event["event"]
-                if inner.get("type") == "result":
-                    final_result = inner
-            elif event.get("type") == "result":
-                final_result = event
 
+def _extract_output(stream: StreamOutcome) -> tuple[str, str, str, str]:
+    """Return the final reply, session ID, diagnostics, and result error."""
+    diagnostics = [
+        line.strip() for line, event in zip(stream.lines, stream.events)
+        if event is None and line.strip()
+    ]
+    final_result = _final_result(stream)
     if final_result is None:
         return "", "", "\n".join(diagnostics).strip(), ""
 
@@ -102,25 +89,94 @@ def _extract_output(lines: list[str]) -> tuple[str, str, str, str]:
     return agent_messages, session_id, "\n".join(diagnostics).strip(), result_error
 
 
-def _execute_sync(params: ClaudeParams) -> BackendResult:
+def _usage_values(stream: StreamOutcome) -> dict[str, Any]:
+    final_result = _final_result(stream)
+    if final_result is None:
+        return {}
+    model_usage = final_result.get("modelUsage")
+    model = next(iter(model_usage)) if isinstance(model_usage, dict) and model_usage else None
+    stats = model_usage.get(model, {}) if model else {}
+    usage = final_result.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    return {
+        "model_name": model,
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cached_input_tokens": usage.get("cache_read_input_tokens"),
+        "context_window_max": stats.get("contextWindow") if isinstance(stats, dict) else None,
+    }
+
+
+class _EventParser:
+    """Normalize Claude content blocks while tracking the active tool."""
+
+    def __init__(self, params: BackendParams) -> None:
+        self.params = params
+        self.entity_counter = 0
+        self.active_tool_id = ""
+
+    def emit(self, event: dict[str, Any]) -> None:
+        if self.params.emitter is not None:
+            self.params.emitter(event)
+
+    def text_delta(self, event: dict[str, Any]) -> None:
+        delta = event.get("delta", {})
+        if not isinstance(delta, dict) or delta.get("type") != "text_delta":
+            return
+        text = delta.get("text", "")
+        if text:
+            self.emit({
+                "kind": "assistant.text.delta",
+                "entity_id": f"msg-{event.get('index', 0)}",
+                "data": {"text": text},
+            })
+
+    def start_tool(self, event: dict[str, Any]) -> None:
+        cb = event.get("content_block", {})
+        if not isinstance(cb, dict) or cb.get("type") != "tool_use":
+            return
+        self.entity_counter += 1
+        self.active_tool_id = f"tool-{self.entity_counter}"
+        tool_name = str(cb.get("name", ""))
+        tool_data: dict[str, Any] = {
+            "tool": tool_name,
+            "activity": classify_tool_activity("claude", tool_name),
+        }
+        if "input" in cb:
+            tool_data["input"] = cb["input"]
+        self.emit({
+            "kind": "tool.started",
+            "entity_id": self.active_tool_id,
+            "data": tool_data,
+        })
+
+    def complete_tool(self) -> None:
+        if self.active_tool_id:
+            self.emit({
+                "kind": "tool.completed",
+                "entity_id": self.active_tool_id,
+                "data": {"status": "completed"},
+            })
+            self.active_tool_id = ""
+
+    def on_event(self, raw_event: dict[str, Any]) -> None:
+        if self.params.emitter is None:
+            return
+        event = _unwrap(raw_event)
+        evt_type = event.get("type")
+        if evt_type == "content_block_delta":
+            self.text_delta(event)
+        elif evt_type == "content_block_start":
+            self.start_tool(event)
+        elif evt_type == "content_block_stop":
+            self.complete_tool()
+
+
+def execute(params: BackendParams) -> BackendResult:
     """Execute a Claude Code print-mode session and normalize its result."""
-    cd = Path(params.cd).expanduser().absolute()
-    if not cd.is_dir():
-        return BackendResult(
-            outcome="FATAL",
-            SESSION_ID="",
-            agent_messages="",
-            error=f"The workspace root directory `{cd}` does not exist or is not a directory. Please check the path and try again.",
-            error_class="bad_cd",
-        )
-    if shutil.which("claude") is None:
-        return BackendResult(
-            outcome="FATAL",
-            SESSION_ID="",
-            agent_messages="",
-            error="The `claude` CLI was not found on PATH. Please install Claude Code and ensure `claude` is available.",
-            error_class="missing_cli",
-        )
+    cd, failure = preflight(params, "claude", "Claude Code")
+    if failure is not None:
+        return failure
 
     cmd = [
         "claude",
@@ -142,7 +198,7 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
         ])
     if params.SESSION_ID:
         cmd.extend(["--resume", params.SESSION_ID])
-    cmd.extend(["--", params.PROMPT])
+    # The prompt goes on stdin: print mode reads it there when no prompt argument is given.
 
     log.info(
         "claude.execute start cwd=%s session_id=%s prompt_len=%d args=%d timeout_s=%s",
@@ -154,97 +210,13 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
     )
     log.debug("claude command prepared args=%d", len(cmd))
 
-    lines: list[str] = []
-    command_error = ""
-    command_error_class = ""
-    entity_counter = 0
-    active_tool_id = ""
-    try:
-        for line in run_shell_command(
-            cmd,
-            cwd=os.fspath(cd),
-            timeout_s=params.timeout_s,
-            cancel_event=params.cancel_event,
-        ):
-            lines.append(line)
-            if params.emitter:
-                try:
-                    raw_event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(raw_event, dict):
-                    continue
-                if raw_event.get("type") == "stream_event" and isinstance(raw_event.get("event"), dict):
-                    event = raw_event["event"]
-                else:
-                    event = raw_event
-                evt_type = event.get("type")
-                if evt_type == "content_block_delta":
-                    delta = event.get("delta", {})
-                    if isinstance(delta, dict) and delta.get("type") == "text_delta":
-                        text = delta.get("text", "")
-                        if text:
-                            params.emitter({
-                                "kind": "assistant.text.delta",
-                                "entity_id": f"msg-{event.get('index', 0)}",
-                                "data": {"text": text},
-                            })
-                elif evt_type == "content_block_start":
-                    cb = event.get("content_block", {})
-                    if isinstance(cb, dict) and cb.get("type") == "tool_use":
-                        entity_counter += 1
-                        active_tool_id = f"tool-{entity_counter}"
-                        tool_name = str(cb.get("name", ""))
-                        tool_data: dict[str, Any] = {
-                            "tool": tool_name,
-                            "activity": classify_tool_activity("claude", tool_name),
-                        }
-                        if "input" in cb:
-                            tool_data["input"] = cb["input"]
-                        params.emitter({
-                            "kind": "tool.started",
-                            "entity_id": active_tool_id,
-                            "data": tool_data,
-                        })
-                elif evt_type == "content_block_stop":
-                    if active_tool_id:
-                        params.emitter({
-                            "kind": "tool.completed",
-                            "entity_id": active_tool_id,
-                            "data": {"status": "completed"},
-                        })
-                        active_tool_id = ""
-    except ShellCommandCancelled:
-        command_error = "backend command cancelled"
-        command_error_class = "cancelled"
-        log.warning("claude subprocess cancelled")
-    except subprocess.TimeoutExpired:
-        command_error = f"claude subprocess timed out after {params.timeout_s}s"
-        command_error_class = "timeout"
-        log.warning("claude subprocess timeout after %ss", params.timeout_s)
-    except ShellCommandFailed as exc:
-        command_error = str(exc)
-        command_error_class = "execution_error"
-        log.warning("claude subprocess exited with status %d", exc.returncode)
-    except Exception as exc:  # noqa: BLE001
-        command_error = f"claude subprocess failed ({type(exc).__name__})"
-        command_error_class = "execution_error"
-        log.error("claude: unexpected error during stream type=%s", type(exc).__name__)
+    parser = _EventParser(params)
 
-    agent_messages, extracted_session_id, diagnostics, result_error = _extract_output(lines)
-    usage_values: dict[str, Any] = {}
-    for line in lines:
-        try:
-            event = json.loads(line)
-            if isinstance(event, dict) and event.get("type") == "result":
-                model_usage = event.get("modelUsage")
-                model = next(iter(model_usage)) if isinstance(model_usage, dict) and model_usage else None
-                stats = model_usage.get(model, {}) if model else {}
-                usage = event.get("usage")
-                usage = usage if isinstance(usage, dict) else {}
-                usage_values = {"model_name": model, "input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens"), "cached_input_tokens": usage.get("cache_read_input_tokens"), "context_window_max": stats.get("contextWindow") if isinstance(stats, dict) else None}
-        except (json.JSONDecodeError, TypeError):
-            continue
+    stream = consume_stream(
+        run_shell_command, cmd, params, cwd=os.fspath(cd), name="claude", on_event=parser.on_event, stdin_text=params.PROMPT,
+    )
+    command_error, command_error_class = stream.error, stream.error_class
+    agent_messages, extracted_session_id, diagnostics, result_error = _extract_output(stream)
     session_id = extracted_session_id or params.SESSION_ID
     error_text = "\n".join(
         part for part in (command_error, diagnostics, result_error) if part
@@ -256,7 +228,7 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
         error_text=error_text,
     )
 
-    result.usage = _usage_dict(**usage_values)
+    result.usage = _usage_dict(**_usage_values(stream))
     if result_error and not command_error:
         result.outcome = "FATAL"
         if result.error_class in {"", "warning", "no_agent_messages"}:
@@ -281,9 +253,4 @@ def _execute_sync(params: ClaudeParams) -> BackendResult:
     return result
 
 
-async def execute(params: ClaudeParams) -> BackendResult:
-    """Execute Claude without blocking the daemon event loop."""
-    return await asyncio.to_thread(_execute_sync, params)
-
-
-__all__ = ["ClaudeParams", "execute"]
+__all__ = ["execute", "run_shell_command"]

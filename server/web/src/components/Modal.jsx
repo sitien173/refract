@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 export default function Modal({
   isOpen,
   onClose,
+  closeDisabled = false,
   title,
   children,
   role = 'dialog',
@@ -13,6 +14,8 @@ export default function Modal({
 }) {
   const dialogRef = useRef(null)
   const previousActiveElementRef = useRef(null)
+  const closeRef = useRef(null)
+  closeRef.current = () => { if (!closeDisabled) onClose?.() }
 
   useEffect(() => {
     if (!isOpen) return
@@ -38,7 +41,7 @@ export default function Modal({
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
-        onClose?.()
+        closeRef.current?.()
         return
       }
 
@@ -70,30 +73,32 @@ export default function Modal({
       }
     }
 
+    function handleScrimClick(e) {
+      if (e.target === dialogRef.current?.parentElement) {
+        closeRef.current?.()
+      }
+    }
+
     document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('click', handleScrimClick)
 
     return () => {
       clearTimeout(timer)
       document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('click', handleScrimClick)
       if (previousActiveElementRef.current && typeof previousActiveElementRef.current.focus === 'function') {
         previousActiveElementRef.current.focus()
       }
     }
-  }, [isOpen, onClose, initialFocusRef])
+  }, [isOpen, initialFocusRef])
 
   if (!isOpen) return null
 
   const titleId = title ? 'modal-title' : undefined
   const labelledBy = ariaLabelledBy || (title ? titleId : undefined)
 
-  function handleScrimClick(e) {
-    if (e.target === e.currentTarget) {
-      onClose?.()
-    }
-  }
-
   return createPortal(
-    <div className="modal-scrim" onClick={handleScrimClick} data-testid="modal-scrim">
+    <div className="modal-scrim" data-testid="modal-scrim">
       <div
         ref={dialogRef}
         role={role}
@@ -109,7 +114,8 @@ export default function Modal({
             type="button"
             className="button button-ghost button-sm modal-close-btn"
             aria-label="Close dialog"
-            onClick={onClose}
+            onClick={() => closeRef.current?.()}
+            disabled={closeDisabled}
           >
             ✕
           </button>

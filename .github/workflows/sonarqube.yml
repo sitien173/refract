@@ -1,9 +1,7 @@
 name: SonarQube
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -17,26 +15,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.12"
-          enable-cache: true
-          cache-dependency-glob: server/uv.lock
-      - uses: actions/setup-node@v7
+          name: python-coverage
+          path: server
+      - uses: actions/download-artifact@v4
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: server/web/package-lock.json
-      - name: Python coverage
-        working-directory: server
-        run: |
-          uv sync --all-extras --frozen
-          uv run pytest --cov --cov-report=xml
-      - name: Web coverage
-        working-directory: server/web
-        run: |
-          npm ci
-          npm run coverage
+          name: web-coverage
+          path: server/web/coverage
       - uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

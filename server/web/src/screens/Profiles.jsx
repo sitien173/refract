@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
-  getConfiguration,
   getProfiles,
+  getTaskGuide,
   getConfigurationProfiles,
   getConfigurationProfile,
   deleteConfigurationProfile,
@@ -13,12 +13,16 @@ import DataGrid from '../components/DataGrid'
 import Inspector, { InspectorRow } from '../components/Inspector'
 import PageHeader from '../components/PageHeader'
 import ProfileEditor from '../components/ProfileEditor'
-import Modal from '../components/Modal'
+import ConfigurationMutationDialog from '../components/ConfigurationMutationDialog'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+import { useConfiguration } from '../hooks/useConfiguration'
 
 export default function Profiles() {
   const { data, error, isLoading, refresh } = useDashboardQuery(getProfiles)
-  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
+  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useConfiguration()
+
+  const { data: taskGuideData } = useDashboardQuery(getTaskGuide)
+  const workflows = taskGuideData?.workflows || []
 
   const [selectedProfile, setSelectedProfile] = useState(null)
   const [selectedProfileDetails, setSelectedProfileDetails] = useState(null)
@@ -123,15 +127,8 @@ export default function Profiles() {
         availableTargets: payload.available_targets || [],
         availableProfiles: profs.length > 0 ? profs : available,
       })
-    } catch {
-      setEditorState({
-        isOpen: true,
-        mode: 'create',
-        profile: null,
-        revision: '',
-        availableTargets: [],
-        availableProfiles: available,
-      })
+    } catch (err) {
+      setAnnouncement(`Failed to load profile configuration: ${err.message || 'error'}`)
     }
   }
 
@@ -254,9 +251,6 @@ export default function Profiles() {
   const deleteDialogTitle = hasDeleteReferences
     ? `Cannot delete profile: ${deleteDialogState.profileId}`
     : `Delete profile: ${deleteDialogState.profileId}`
-  const deleteAriaLabel = hasDeleteReferences
-    ? `Blocking references for profile ${deleteDialogState.profileId}`
-    : deleteDialogTitle
 
   return (
     <div className="page">
@@ -356,12 +350,13 @@ export default function Profiles() {
                 <h4 style={{ fontSize: 'var(--type-text-xs-size)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-text-subdued)', marginBottom: 'var(--space-xs)' }}>
                   Workflows
                 </h4>
-                {['consult', 'implement', 'review', 'other'].map((wf) => {
+                {workflows.map((wf) => {
                   const declared = selectedProfileDetails.declared?.[wf]
                   const inherited = selectedProfileDetails.inherited?.[wf]
                   const effective = selectedProfileDetails.effective?.[wf]
                   const source = selectedProfileDetails.sources?.[wf]
                   const targets = effective?.targets || declared?.targets || inherited?.targets || []
+                  const timeoutLabel = effective?.timeout_s ? `${effective.timeout_s}s` : 'none'
 
                   return (
                     <div key={wf} style={{ marginBottom: 'var(--space-xs)', fontSize: 'var(--type-text-xs-size)' }}>
@@ -373,7 +368,7 @@ export default function Profiles() {
                       </div>
                       <div style={{ color: 'var(--color-text-subdued)', marginTop: '2px' }}>
                         Targets: <code>{targets.join(', ') || 'None'}</code>
-                        {effective && ` (attempts: ${effective.max_attempts ?? 1}, timeout: ${effective.timeout_s ? `${effective.timeout_s}s` : 'none'})`}
+                        {effective && ` (timeout: ${timeoutLabel})`}
                       </div>
                     </div>
                   )
@@ -391,133 +386,24 @@ export default function Profiles() {
         revision={editorState.revision}
         availableTargets={editorState.availableTargets}
         availableProfiles={editorState.availableProfiles}
+        workflows={workflows}
         onClose={() => setEditorState((prev) => ({ ...prev, isOpen: false }))}
         onSaved={handleProfileSaved}
         onAnnounce={(msg) => setAnnouncement(msg)}
         onReloadRequired={handleReloadRequired}
       />
 
-      <Modal
+      <ConfigurationMutationDialog
         isOpen={deleteDialogState.isOpen}
-        onClose={() => setDeleteDialogState((prev) => ({ ...prev, isOpen: false }))}
         title={deleteDialogTitle}
-        role="dialog"
-        ariaLabel={deleteAriaLabel}
-      >
-        {hasDeleteReferences ? (
-          <div className="mutation-dialog-referenced">
-            <Alert tone="warning" title="Profile is currently referenced">
-              Profile <strong>{deleteDialogState.profileId}</strong> cannot be deleted because it is referenced by:
-            </Alert>
-
-            <div className="mutation-references-list" style={{ marginTop: 'var(--space-md)' }}>
-              <div className="data-grid-container" tabIndex={0} role="region" aria-label="Blocking references for profile">
-                <table className="data-grid-table data-table" style={{ width: '100%' }}>
-                  <thead>
-                    <tr>
-                      <th scope="col">Scope</th>
-                      <th scope="col">Reference</th>
-                      <th scope="col">Relationship</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {deleteDialogState.references.map((ref, idx) => (
-                      <tr key={idx}>
-                        <td>
-                          <span className={`source-chip ${ref.scope === 'project' ? 'source-repository' : 'source-global'}`}>
-                            {ref.scope === 'project' ? (ref.project_id ? `Project (${ref.project_id})` : 'Project') : 'Global'}
-                          </span>
-                        </td>
-                        <td>
-                          <strong>{ref.profile_id || '(daemon configuration)'}</strong>
-                        </td>
-                        <td>
-                          <code>
-                            {ref.relationship === 'default_profile'
-                              ? 'Default profile'
-                              : ref.relationship === 'extends'
-                                ? 'Parent profile (extends)'
-                                : ref.relationship || 'reference'}
-                          </code>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <p className="caption" style={{ marginTop: 'var(--space-md)' }}>
-              Update or remove these references in configuration before deleting this profile.
-            </p>
-
-            <div className="modal-actions" style={{ justifyContent: 'flex-end', marginTop: 'var(--space-lg)' }}>
-              <button
-                type="button"
-                className="button button-secondary"
-                onClick={() => setDeleteDialogState((prev) => ({ ...prev, isOpen: false }))}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (deleteDialogState.isConfirmed && !deleteDialogState.isSubmitting) {
-                handleConfirmDelete()
-              }
-            }}
-            className="mutation-dialog-confirm"
-          >
-            {deleteDialogState.error && (
-              <div style={{ marginBottom: 'var(--space-md)' }}>
-                <Alert tone="error" title="Action failed">
-                  {deleteDialogState.error}
-                </Alert>
-              </div>
-            )}
-
-            <p style={{ margin: '0 0 var(--space-md) 0' }}>
-              Are you sure you want to delete profile <strong>{deleteDialogState.profileId}</strong>? This action modifies the active configuration file.
-            </p>
-
-            <div className="confirmation-group" style={{ marginBottom: 'var(--space-md)' }}>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={deleteDialogState.isConfirmed}
-                  onChange={(e) => setDeleteDialogState((prev) => ({ ...prev, isConfirmed: e.target.checked }))}
-                  disabled={deleteDialogState.isSubmitting}
-                  aria-label={`I confirm deleting profile ${deleteDialogState.profileId}`}
-                />
-                <span>I confirm deleting profile <strong>{deleteDialogState.profileId}</strong>.</span>
-              </label>
-            </div>
-
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="button button-secondary"
-                onClick={() => setDeleteDialogState((prev) => ({ ...prev, isOpen: false }))}
-                disabled={deleteDialogState.isSubmitting}
-              >
-                Cancel
-              </button>
-              <div className="modal-actions-right">
-                <button
-                  type="submit"
-                  className="button button-destructive-outline"
-                  disabled={!deleteDialogState.isConfirmed || deleteDialogState.isSubmitting}
-                >
-                  {deleteDialogState.isSubmitting ? 'Deleting…' : 'Confirm delete'}
-                </button>
-              </div>
-            </div>
-          </form>
-        )}
-      </Modal>
+        targetId={deleteDialogState.profileId}
+        entity="profile"
+        references={deleteDialogState.references}
+        error={deleteDialogState.error}
+        isSubmitting={deleteDialogState.isSubmitting}
+        onClose={() => setDeleteDialogState((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   )
 }

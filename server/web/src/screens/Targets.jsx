@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
+import { POLL_INTERVAL_MS } from '../hooks/constants'
 import {
-  getConfiguration,
   getTargets,
   getConfigurationTargets,
   getConfigurationTarget,
@@ -16,6 +16,7 @@ import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import TargetEditor from '../components/TargetEditor'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+import { useConfiguration } from '../hooks/useConfiguration'
 
 function isCircuitOpenUntil(value, now = Date.now()) {
   if (!value) return false
@@ -49,9 +50,9 @@ function readStatusFilterFromUrl() {
 
 export default function Targets() {
   const { data: targets, error, isLoading, isRefreshing, refresh } = useDashboardQuery(getTargets, {
-    pollInterval: 5000,
+    pollInterval: POLL_INTERVAL_MS,
   })
-  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
+  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useConfiguration()
 
   const [statusFilter, setStatusFilter] = useState(readStatusFilterFromUrl)
   const [searchTerm, setSearchTerm] = useState('')

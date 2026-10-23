@@ -245,10 +245,6 @@ export default function JobDetails({
                       </code>
                     </div>
                     <div>
-                      <span className="caption">Max attempts: </span>
-                      <span>{selection.max_attempts ?? 1}</span>
-                    </div>
-                    <div>
                       <span className="caption">Timeout: </span>
                       <span>{selection.timeout_s ? `${selection.timeout_s}s` : 'None'}</span>
                     </div>
@@ -285,6 +281,12 @@ export default function JobDetails({
           )}
         </div>
       </section>
+
+      {stream?.windowTruncated && (
+        <Alert tone="warning" title="Showing recent transcript events">
+          Earlier events left the browser retention window.
+        </Alert>
+      )}
 
       {stream && (
         <JobTranscript

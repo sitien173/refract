@@ -8,8 +8,9 @@ workers through Refract, and owns every Git commit, anchor, and verification.
 ## Prerequisite: Refract
 
 Execute and Review require a running Refract server. The `.mcp.json` entry
-connects to `http://127.0.0.1:8765/mcp` by default. To use a
-different host or port, export `REFRACT_URL` before starting Claude Code:
+uses the default endpoint documented in the
+[tool contract](skills/coordinating-multi-model-work/references/tool-contract.md).
+For another host or port, export `REFRACT_URL` before starting Claude Code:
 
 ```bash
 export REFRACT_URL=http://127.0.0.1:9000/mcp
@@ -51,7 +52,6 @@ skills/     SKILL.md files and references
 shared/     worker contract, response protocol, phase templates
 hooks/      SessionStart hook that loads the coordinator context
 tests/      contract tests (`tests/run.sh`)
-docs/plans/ worked examples of the folder-plan layout, produced by this plugin
 ```
 
 ## Development

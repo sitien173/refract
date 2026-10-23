@@ -4,7 +4,6 @@ import App from '../App'
 import * as api from '../api'
 
 vi.mock('../api', () => ({
-  clearCsrfToken: vi.fn(),
   getBootstrap: vi.fn().mockResolvedValue({ csrf_token: 'secret-csrf-token' }),
   getOverview: vi.fn(),
   getProjects: vi.fn(),
@@ -26,7 +25,7 @@ vi.mock('../api', () => ({
   getProjectJobs: vi.fn(),
   getJob: vi.fn(),
   getJobOutput: vi.fn(),
-  getTaskGuide: vi.fn(),
+  getTaskGuide: vi.fn().mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {} }),
   getProjectProfileOverrides: vi.fn(),
   getProjectProfileOverride: vi.fn(),
   createProjectProfileOverride: vi.fn(),

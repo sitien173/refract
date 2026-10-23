@@ -33,9 +33,11 @@ from refract.planning import (ExecutionPlan, execution_plan_data, parse_executio
 from refract.scheduler import ProjectScheduler
 from refract.streaming import DEFAULT_RETENTION_DAYS, JobStreamHub
 from refract.workflows import get_workflow, validate_request
+from refract.workers import run_sync
 
 
 log = get_logger("runtime")
+RETENTION_INTERVAL_S = 3600
 
 
 class OrchestrationError(ValueError):
@@ -63,22 +65,20 @@ class Runtime:
     def __init__(self, config: DaemonConfig, *, notifier: JobNotifier | None = None) -> None:
         self.config = config
         self.config.home.mkdir(parents=True, exist_ok=True)
-        self.database = Database(config.database_path)
+        self.database = Database(config.database_path, history_turns=config.history_turns)
+        self._retention_task: asyncio.Task[None] | None = None
         self.stream_hub = JobStreamHub()
-        orig_append = self.database.append_stream_events
-
-        def _append_and_publish(job_id: str, events: list[Any]) -> list[JobStreamEvent]:
-            persisted = orig_append(job_id, events)
-            if persisted:
-                self.stream_hub.publish(job_id, persisted[-1].id)
-            return persisted
-
-        self.database.append_stream_events = _append_and_publish
         self._catalog = config
+        # Parsed configs keyed by file identity; parse again only on change.
+        self._catalog_stat: tuple[int, int, int] | None = None
+        self._project_catalogs: dict[Path, tuple[tuple[int, int, int] | None, DaemonConfig, DaemonConfig]] = {}
         self._config_health = self._seed_config_health(config)
         self._closing = False
+        self._loop: asyncio.AbstractEventLoop | None = None
         self.notifier = notifier or _noop_notifier
-        self.target_executor = TargetExecutor(config, self.database, DriverRegistry())
+        self.target_executor = TargetExecutor(
+            config, self.database, DriverRegistry(), on_stream_commit=self.stream_hub.publish
+        )
         self.runner = JobRunner(
             self.database,
             self.target_executor,
@@ -95,7 +95,7 @@ class Runtime:
         lookup_error: Exception | None = None
         if self._catalog.notifications.enabled:
             try:
-                job = self.database.job(job_id)
+                job = await run_sync(self.database.job, job_id)
             except Exception as exc:
                 lookup_error = exc
         try:
@@ -122,10 +122,10 @@ class Runtime:
         if job is None or job.state not in TERMINAL_STATES:
             return
         try:
-            project = self.database.project(job.project_id)
+            project = await run_sync(self.database.project, job.project_id)
             if project is None:
                 return
-            ok = await asyncio.to_thread(send_job_notification, job, project.alias)
+            ok = await run_sync(send_job_notification, job, project.alias)
             if not ok:
                 log.warning(
                     "Desktop notification failed",
@@ -149,6 +149,7 @@ class Runtime:
     def prune_retained_transcripts(self, days: int = DEFAULT_RETENTION_DAYS) -> int:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         pruned = self.database.prune_terminal_stream_events(cutoff)
+        self.database.prune_history(cutoff)
         if pruned > 0:
             log.info(
                 "Pruned expired stream transcripts",
@@ -156,23 +157,36 @@ class Runtime:
             )
         return pruned
 
+    async def _retain_history(self) -> None:
+        while True:
+            await asyncio.sleep(RETENTION_INTERVAL_S)
+            try:
+                await run_sync(self.prune_retained_transcripts)
+            except Exception:
+                log.warning("History retention failed", exc_info=True,
+                            extra={"event": "history.retention_failed"})
+
     async def start(self) -> None:
+        self._loop = asyncio.get_running_loop()
         self._closing = False
-        self.prune_retained_transcripts()
-        self.database.reset_orphaned_target_probes()
-        interrupted = self.database.interrupt_active_jobs()
+        await run_sync(self.prune_retained_transcripts)
+        await run_sync(self.database.reset_orphaned_target_probes)
+        interrupted = await run_sync(self.database.interrupt_active_jobs)
         for job in interrupted:
-            self._job_terminal(str(job["id"]), "interrupted")
+            await self._job_terminal(str(job["id"]), "interrupted")
         for job in interrupted:
             await self._notify_job(str(job["id"]))
+        for target in self._catalog.targets:
+            await run_sync(self.drivers.supports_structured_streaming, target)
         await self.scheduler.start()
-        for job_id, _project_id in self.database.queued_jobs():
-            self._enqueue_record(job_id)
+        self._retention_task = asyncio.create_task(self._retain_history(), name="refract-retention")
+        for job_id, _project_id in await run_sync(self.database.queued_jobs):
+            await self._enqueue_record(job_id)
         log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
 
 
-    def _enqueue_record(self, job_id: str) -> None:
-        record = self.database.job_record(job_id)
+    async def _enqueue_record(self, job_id: str) -> None:
+        record = await run_sync(self.database.job_record, job_id)
         if record is None or record["state"] != "queued":
             return
         self.scheduler.enqueue(
@@ -180,13 +194,18 @@ class Runtime:
             str(record["project_id"]),
         )
 
-    def _job_terminal(self, job_id: str, _state: str) -> None:
+    async def _job_terminal(self, job_id: str, _state: str) -> None:
+        self.stream_hub.publish(job_id, await run_sync(self.database.stream_high_water, job_id))
         self.scheduler.complete(job_id, signal=False)
 
     async def close(self) -> None:
         self._closing = True
+        if self._retention_task is not None:
+            self._retention_task.cancel()
+            await asyncio.gather(self._retention_task, return_exceptions=True)
+            self._retention_task = None
         await self.scheduler.close()
-        self.database.close()
+        await run_sync(self.database.close)
         log.info("Scheduler stopped", extra={"event": "scheduler.stopped"})
 
     def resolve_project(self, path: str, alias: str = "") -> ProjectView:
@@ -197,6 +216,15 @@ class Runtime:
                 "Project path must be an existing directory.",
                 code="invalid_path",
                 next_action="Pass the absolute Git root of an existing directory.",
+            )
+        config_path = getattr(self.config, "config_path", None)
+        if config_path is not None and (
+            resolved / ".refract" / "config.toml"
+        ).resolve() == Path(config_path).resolve():
+            raise OrchestrationError(
+                "Project path holds the global Refract configuration.",
+                code="invalid_path",
+                next_action="Register the project's own directory instead.",
             )
         root = resolved.as_posix()
         projects = self.database.projects()
@@ -218,46 +246,35 @@ class Runtime:
                 code="invalid_path",
                 next_action="Pass a non-empty alias for the existing directory.",
             )
-        suffix = 1
-        candidate = base_alias
-        while any(project.alias == candidate for project in projects):
-            suffix += 1
-            candidate = f"{base_alias}-{suffix}"
+        return self._register_project(root, base_alias, explicit_alias)
 
-        while True:
-            connection = self.database._connection
-            try:
-                # Serialize the final root/alias check with insertion. upsert_project
-                # updates aliases for an existing root, so it must never receive a
-                # stale candidate after a concurrent canonical insertion wins.
-                connection.execute("BEGIN IMMEDIATE")
-                projects = self.database.projects()
-                existing = next((project for project in projects if project.root == root), None)
-                if existing is not None:
-                    connection.commit()
-                    return existing
-                aliases = {project.alias for project in projects}
-                if explicit_alias and explicit_alias in aliases:
-                    connection.rollback()
-                    raise OrchestrationError(
-                        "Project alias is already in use.",
-                        code="alias_taken",
-                        next_action="Pass a unique alias or omit alias to use an available default.",
-                    )
-                candidate = explicit_alias or base_alias
-                suffix = 1
-                while candidate in aliases:
-                    suffix += 1
-                    candidate = f"{base_alias}-{suffix}"
-                project = self.database.upsert_project(
-                    project_id=str(uuid.uuid4()),
-                    alias=candidate,
-                    root=root,
+    def _upsert_project_alias(self, root: str, base_alias: str, explicit_alias: str) -> ProjectView:
+        with self.database.transaction():
+            projects = self.database.projects()
+            existing = next((project for project in projects if project.root == root), None)
+            if existing is not None:
+                return existing
+            aliases = {project.alias for project in projects}
+            if explicit_alias and explicit_alias in aliases:
+                raise OrchestrationError(
+                    "Project alias is already in use.",
+                    code="alias_taken",
+                    next_action="Pass a unique alias or omit alias to use an available default.",
                 )
-                return project
+            candidate = explicit_alias or base_alias
+            suffix = 1
+            while candidate in aliases:
+                suffix += 1
+                candidate = f"{base_alias}-{suffix}"
+            return self.database.upsert_project(
+                project_id=str(uuid.uuid4()), alias=candidate, root=root,
+            )
+
+    def _register_project(self, root: str, base_alias: str, explicit_alias: str) -> ProjectView:
+        while True:
+            try:
+                return self._upsert_project_alias(root, base_alias, explicit_alias)
             except sqlite3.IntegrityError:
-                if connection.in_transaction:
-                    connection.rollback()
                 projects = self.database.projects()
                 existing = next((project for project in projects if project.root == root), None)
                 if existing is not None:
@@ -268,33 +285,23 @@ class Runtime:
                         code="alias_taken",
                         next_action="Pass a unique alias or omit alias to use an available default.",
                     ) from None
-                suffix += 1
-                candidate = f"{base_alias}-{suffix}"
-            except BaseException:
-                if connection.in_transaction:
-                    connection.rollback()
-                raise
-
-    def register_project(self, path: str, alias: str = "") -> ProjectView:
-        resolved = Path(path).expanduser().resolve()
-        if not resolved.is_dir():
-            raise OrchestrationError(f"Project path does not exist: {resolved}")
-        resolved_alias = alias.strip() or resolved.name
-        if not resolved_alias:
-            raise OrchestrationError("Project alias cannot be empty")
-        try:
-            return self.database.upsert_project(project_id=str(uuid.uuid4()), alias=resolved_alias, root=resolved.as_posix())
-        except sqlite3.IntegrityError as exc:
-            constraint = str(exc).rsplit(":", 1)[-1].strip()
-            if constraint == "projects.alias":
-                message = f"Project alias already exists: {resolved_alias}"
-            elif constraint == "projects.root":
-                message = f"Project root already registered: {resolved.as_posix()}"
-            else:
-                message = "Project registration violates a database constraint"
-            raise OrchestrationError(message) from exc
 
     async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False, next_target: str = "") -> SubmissionResult:
+        job_id = str(uuid.uuid4())
+        try:
+            project, workflow, selected_profile = await run_sync(
+                self._prepare_submission, job_id, project_id, workflow_name, prompt,
+                context_key=context_key, profile=profile,
+                fresh_session=fresh_session, next_target=next_target,
+            )
+        finally:
+            # A cancelled request must not leave a committed job undispatched.
+            await self._enqueue_record(job_id)
+        await self._notify_job(job_id)
+        log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})
+        return SubmissionResult(job_id=job_id, state="queued")
+
+    def _prepare_submission(self, job_id: str, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False, next_target: str = "") -> tuple[ProjectView, str, str]:
         if self._closing:
             raise OrchestrationError(
                 "The daemon is stopping.",
@@ -320,7 +327,7 @@ class Runtime:
             ) from exc
         try:
             with self.mutations.lock:
-                catalog = load_project_config(Path(project.root), self._reload_catalog_locked())
+                catalog = self._project_catalog(Path(project.root), self._reload_catalog_locked())
                 selected_profile = profile.strip() or catalog.default_profile
                 plan = resolve_execution_plan(workflow, catalog, selected_profile)
                 if next_target:
@@ -341,12 +348,6 @@ class Runtime:
             raise OrchestrationError(
                 sanitize_config_error(exc), code=code, next_action=action
             ) from exc
-        job_id = str(uuid.uuid4())
-        # The atomic creation API opens its own BEGIN IMMEDIATE transaction.
-        # Preserve the former create_job connection-context behavior for any
-        # already-open caller transaction before entering that API.
-        if self.database._connection.in_transaction:
-            self.database._connection.commit()
         self.database.create_job(
             job_id=job_id,
             project_id=project.id,
@@ -358,11 +359,7 @@ class Runtime:
             config_revision=catalog.config_revision,
             fresh_session=fresh_session,
         )
-        self._enqueue_record(job_id)
-        state = "queued"
-        await self._notify_job(job_id)
-        log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})
-        return SubmissionResult(job_id=job_id, state=state)
+        return project, workflow, selected_profile
 
     def live_result_metadata(self, job: JobView) -> dict[str, object]:
         keys = ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target")
@@ -374,28 +371,31 @@ class Runtime:
             metadata["next_target"] = metadata["retryable"] = None
             return metadata
         if metadata.get("failure_kind") in {"retryable", "target_fatal", "circuit_open", "cancelled"}:
-            next_token = None
-            try:
-                project = self.database.project(job.project_id)
-                if project:
-                    catalog = self.catalog_for_project(job.project_id)
-                    plan = resolve_execution_plan(job.workflow, catalog, job.profile)
-                    ids = [target.id for target in plan.targets]
-                    start = ids.index(job.target_id) + 1 if job.target_id in ids else 0
-                    now = datetime.now(timezone.utc)
-                    for target in plan.targets[start:]:
-                        health = self.database.target_health(target_execution_key(target))
-                        if not self.target_executor._is_open(health.get("circuit_open_until", ""), now, health.get("probe_job_id", "")):
-                            next_token = next_target_token(catalog.config_revision, project.id, job.profile, job.workflow, target)
-                            break
-            except (OrchestrationError, ValueError):
-                next_token = None
+            next_token = self._next_target_token(job)
             metadata["next_target"] = next_token
             metadata["retryable"] = next_token is not None
         return metadata
 
+    def _next_target_token(self, job: JobView) -> str | None:
+        try:
+            project = self.database.project(job.project_id)
+            if not project:
+                return None
+            catalog = self.catalog_for_project(job.project_id)
+            plan = resolve_execution_plan(job.workflow, catalog, job.profile)
+            ids = [target.id for target in plan.targets]
+            start = ids.index(job.target_id) + 1 if job.target_id in ids else 0
+            now = datetime.now(timezone.utc)
+            for target in plan.targets[start:]:
+                health = self.database.target_health(target_execution_key(target))
+                if not self.target_executor.is_circuit_open(health.get("circuit_open_until", ""), now, health.get("probe_job_id", "")):
+                    return next_target_token(catalog.config_revision, project.id, job.profile, job.workflow, target)
+        except (OrchestrationError, ValueError):
+            return None
+        return None
+
     async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:
-        job = self.database.job(job_id)
+        job = await run_sync(self.database.job, job_id)
         if job is None:
             raise OrchestrationError(
                 "Job does not exist.",
@@ -404,18 +404,20 @@ class Runtime:
             )
         if job.state in TERMINAL_STATES:
             await self.scheduler.wait(job_id, timeout_s)
-            refreshed = self.database.job(job_id)
+            refreshed = await run_sync(self.database.job, job_id)
             if refreshed is None:
                 raise OrchestrationError(f"Unknown job: {job_id}")
             return refreshed
         await self.scheduler.wait(job_id, timeout_s)
-        refreshed = self.database.job(job_id)
+        refreshed = await run_sync(self.database.job, job_id)
         if refreshed is None:
             raise OrchestrationError(f"Unknown job: {job_id}")
         return refreshed
 
     async def cancel(self, job_id: str) -> ActionResult:
-        job = self.database.job(job_id)
+        # Reserve cancellation before yielding to a worker or starting dispatch.
+        location = self.scheduler.cancel(job_id)
+        job = await run_sync(self.database.job, job_id)
         if job is None:
             raise OrchestrationError(
                 "Job does not exist.",
@@ -423,17 +425,18 @@ class Runtime:
                 next_action="Call job_list for the project and use a listed job ID.",
             )
         if job.state == "queued":
-            location = self.scheduler.cancel(job_id)
             if location in {"queued", "missing"}:
-                self.database.finish_job(job_id, "cancelled")
-                self._job_terminal(job_id, "cancelled")
+                await run_sync(self.database.finish_job, job_id, "cancelled")
+                await self._job_terminal(job_id, "cancelled")
                 await self._notify_job(job_id)
                 return ActionResult(success=True, job_id=job_id, state="cancelled")
             if location == "running":
-                self.database.event(job_id, "job.cancellation_requested", {})
+                await run_sync(self.database.event, job_id, "job.cancellation_requested", {})
                 return ActionResult(success=True, job_id=job_id, state="running")
-        if job.state == "running" and self.scheduler.cancel(job_id) == "running":
-            self.database.event(job_id, "job.cancellation_requested", {})
+        if job.state == "cancelled" and location == "running":
+            return ActionResult(success=True, job_id=job_id, state="cancelled")
+        if job.state == "running" and location == "running":
+            await run_sync(self.database.event, job_id, "job.cancellation_requested", {})
             return ActionResult(success=True, job_id=job_id, state="running")
         return ActionResult(success=False, job_id=job_id, state=job.state, error=f"Job cannot be cancelled from {job.state}")
 
@@ -442,7 +445,7 @@ class Runtime:
         opened = []
         for target in plan.targets:
             health = self.database.target_health(target_execution_key(target))
-            if self.target_executor._is_open(health.get("circuit_open_until", ""), now, health.get("probe_job_id", "")):
+            if self.target_executor.is_circuit_open(health.get("circuit_open_until", ""), now, health.get("probe_job_id", "")):
                 opened.append(health)
         if len(opened) != len(plan.targets):
             return
@@ -457,6 +460,14 @@ class Runtime:
         raise OrchestrationError("All candidate targets are temporarily unavailable.", code="targets_unavailable", next_action="Wait for a target to recover, then retry.", retryable=True, retry_after_s=min(delays))
 
     async def retry(self, job_id: str) -> SubmissionResult:
+        try:
+            await run_sync(self._prepare_retry, job_id)
+        finally:
+            await self._enqueue_record(job_id)
+        await self._notify_job(job_id)
+        return SubmissionResult(job_id=job_id, state="queued")
+
+    def _prepare_retry(self, job_id: str) -> None:
         job = self.database.job(job_id)
         if job is None:
             raise OrchestrationError(
@@ -479,9 +490,6 @@ class Runtime:
             if stored_plan is not None:
                 self._ensure_candidates_available(stored_plan)
         self.database.reset_retry(job_id)
-        self._enqueue_record(job_id)
-        await self._notify_job(job_id)
-        return SubmissionResult(job_id=job_id, state="queued")
 
     def status(self) -> DaemonStatusResult:
         return DaemonStatusResult(status="stopping" if self._closing else "running", workers=self.scheduler.workers, active_jobs=self.scheduler.active_jobs, queued_jobs=self.scheduler.queued_jobs)
@@ -489,16 +497,6 @@ class Runtime:
     @property
     def catalog(self) -> DaemonConfig:
         return self._catalog
-
-    def reload_configuration(self) -> None:
-        """Reload the global catalog from disk inside the mutation lock.
-
-        Job planning and configuration reloads must use the same
-        synchronization boundary as configuration mutations so callers never
-        observe disk-new with runtime-old state.
-        """
-        with self.mutations.lock:
-            self._reload_catalog_locked()
 
     def publish_configuration(self) -> None:
         """Reload and publish the global runtime catalog from disk.
@@ -513,16 +511,12 @@ class Runtime:
 
     def _publish_configuration_locked(self) -> None:
         """Publish a reloaded catalog; the caller holds the mutation lock."""
-        catalog = self._reload_catalog_locked()
-        self.target_executor.refresh_configuration(catalog)
+        self._catalog_stat = None
+        self._reload_catalog_locked()
 
     @property
     def config_health(self) -> ConfigHealth:
         return self._config_health.model_copy()
-
-    def configuration_health(self) -> ConfigHealth:
-        """Return global configuration health, separately from daemon status."""
-        return self.config_health
 
     @staticmethod
     def _seed_config_health(config: DaemonConfig) -> ConfigHealth:
@@ -544,7 +538,7 @@ class Runtime:
             raise OrchestrationError(f"Unknown project: {project_id}")
         try:
             with self.mutations.lock:
-                return load_project_config(Path(project.root), self._reload_catalog_locked())
+                return self._project_catalog(Path(project.root), self._reload_catalog_locked())
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
 
@@ -554,24 +548,22 @@ class Runtime:
         if project is None:
             raise OrchestrationError(f"Unknown project: {project_id}")
         try:
-            return load_project_config(Path(project.root), self._catalog)
+            return self._project_catalog(Path(project.root), self._catalog)
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
 
-    def publish_project_configuration(self, project_root: Path) -> None:
-        """Invalidate and re-resolve one registered project's resolved catalog.
-
-        Project resolution is derived from the live global catalog at read
-        time, so no separate cache exists to invalidate; the method exists to
-        (a) participate in the mutation synchronization boundary and (b) fail
-        the transaction when the project file no longer resolves against the
-        current runtime catalog.
-        """
-        with self.mutations.lock:
-            self._publish_project_configuration_locked(project_root)
+    def _project_catalog(self, root: Path, base: DaemonConfig) -> DaemonConfig:
+        stat = _file_identity(root / ".refract" / "config.toml")
+        cached = self._project_catalogs.get(root)
+        if cached is not None and cached[0] == stat and cached[1] is base:
+            return cached[2]
+        catalog = load_project_config(root, base)
+        self._project_catalogs[root] = (stat, base, catalog)
+        return catalog
 
     def _publish_project_configuration_locked(self, project_root: Path) -> None:
-        load_project_config(Path(project_root), self._catalog)
+        self._project_catalogs.pop(Path(project_root), None)
+        self._project_catalog(Path(project_root), self._catalog)
 
     def targets(self) -> list[TargetView]:
         views = self.target_executor.views(self._catalog.targets)
@@ -587,21 +579,16 @@ class Runtime:
             for view in views
         ]
 
-    def _reload_catalog(self) -> DaemonConfig:
-        """Reload the global configuration source inside the mutation lock.
-
-        External callers (for example dashboard reads) use this helper so they
-        share the mutation synchronization boundary; it is re-entrant.
-        """
-        with self.mutations.lock:
-            return self._reload_catalog_locked()
-
     def _reload_catalog_locked(self) -> DaemonConfig:
         if self.config.config_path is None:
+            return self._catalog
+        stat = _file_identity(self.config.config_path)
+        if stat is not None and stat == self._catalog_stat:
             return self._catalog
         try:
             catalog = load_config(self.config.config_path)
         except ValueError as exc:
+            self._catalog_stat = None
             attempted_at = getattr(exc, "attempted_at", utc_now())
             source_path = getattr(exc, "path", self.config.config_path)
             revision = getattr(exc, "revision", "")
@@ -619,6 +606,17 @@ class Runtime:
             raise
         previous = self._config_health
         self._catalog = catalog
+        self.database.history_turns = catalog.history_turns
+        self._catalog_stat = stat
+        # Planning and execution must read the same settings after any reload.
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if self._loop is not None and self._loop is not running_loop:
+            self._loop.call_soon_threadsafe(self.target_executor.refresh_configuration, catalog)
+        else:
+            self.target_executor.refresh_configuration(catalog)
         self._config_health = ConfigHealth(
             attempted_at=catalog.config_loaded_at or utc_now(),
             successful_at=catalog.config_loaded_at or utc_now(),
@@ -631,6 +629,14 @@ class Runtime:
             or previous.last_known_good_revision,
         )
         return self._catalog
+
+
+def _file_identity(path: Path) -> tuple[int, int, int] | None:
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return (info.st_mtime_ns, info.st_size, info.st_ino)
 
 
 __all__ = ["OrchestrationError", "Runtime"]

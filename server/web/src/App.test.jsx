@@ -55,8 +55,8 @@ describe('dashboard shell', () => {
 
 describe('dashboard API boundary', () => {
   it('bootstraps CSRF and retries exactly once after a forbidden mutation', async () => {
-    const { clearCsrfToken, updateConfigurationTarget } = await vi.importActual('./api')
-    clearCsrfToken()
+    vi.resetModules()
+    const { updateConfigurationTarget } = await vi.importActual('./api')
     const response = (status, payload) => ({
       ok: status >= 200 && status < 300,
       status,

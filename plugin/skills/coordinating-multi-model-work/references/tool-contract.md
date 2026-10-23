@@ -1,4 +1,4 @@
-# Refract v2 Tool Contract
+# Refract Tool Contract
 
 Default endpoint is `http://127.0.0.1:8765/mcp`; set `REFRACT_URL` before Claude Code starts.
 

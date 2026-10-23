@@ -2,9 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from refract.backends.agy import AgyParams, execute as agy_execute
-from refract.backends.claude import ClaudeParams, execute as claude_execute
-from refract.backends.codex import CodexParams, execute as codex_execute
+from refract.backends import BackendParams
+from refract.backends.agy import execute as agy_execute
+from refract.backends.claude import execute as claude_execute
+from refract.backends.codex import execute as codex_execute
 
 
 PROMPT = "Reply with exactly the word PONG and nothing else."
@@ -25,19 +26,19 @@ def _assert_live_result(name: str, out) -> None:
 @pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_agy_execute() -> None:
-    out = await agy_execute(AgyParams(PROMPT=PROMPT, cd=Path.cwd()))
+    out = agy_execute(BackendParams(PROMPT=PROMPT, cd=Path.cwd()))
     _assert_live_result("agy", out)
 
 
 @pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_codex_execute() -> None:
-    out = await codex_execute(CodexParams(PROMPT=PROMPT, cd=Path.cwd()))
+    out = codex_execute(BackendParams(PROMPT=PROMPT, cd=Path.cwd()))
     _assert_live_result("codex", out)
 
 
 @pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_claude_execute() -> None:
-    out = await claude_execute(ClaudeParams(PROMPT=PROMPT, cd=Path.cwd()))
+    out = claude_execute(BackendParams(PROMPT=PROMPT, cd=Path.cwd()))
     _assert_live_result("claude", out)

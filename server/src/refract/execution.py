@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import inspect
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -16,9 +17,11 @@ from refract.config import DaemonConfig, TargetConfig
 from refract.database import Database
 from refract.drivers import DriverRegistry, DriverResult, StreamBridge
 from refract.logging_setup import get_logger, log_context
-from refract.models import ProjectView, TargetView
+from refract.models import ProjectView, TargetView, TERMINAL_STATES
 from refract.planning import ExecutionPlan, parse_execution_plan, target_execution_key
 from refract.streaming import StreamRecorder
+from refract.scheduler import CancelEvent
+from refract.workers import run_sync
 
 
 log = get_logger("execution")
@@ -32,320 +35,335 @@ class TargetExecutionResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class _TargetAttempt:
+    result: DriverResult | None = None
+    recovered: bool = False
+    recovery_phase: str = ""
+    replay_blocked: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class _ExecutionContext:
+    job_id: str
+    project: ProjectView
+    workflow: str
+    context_key: str
+    plan: ExecutionPlan
+    prompt: str
+    cwd: Path
+    cancel_event: CancelEvent
+    fresh_session: bool
+    target: TargetConfig
+    target_key: str
+    session_id: str
+    effective_prompt: str
+    semaphore: asyncio.Semaphore
+
+
 class TargetExecutor:
-    def __init__(self, config: DaemonConfig, database: Database, drivers: DriverRegistry) -> None:
+    def __init__(
+        self, config: DaemonConfig, database: Database, drivers: DriverRegistry,
+        *, on_stream_commit: Callable[[str, int], Any] | None = None,
+    ) -> None:
         self.config = config
         self.database = database
         self.drivers = drivers
+        self.on_stream_commit = on_stream_commit
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
+        self._target_users: dict[str, int] = {}
 
     def refresh_configuration(self, config: DaemonConfig) -> None:
-        """Adopt a published catalog without disturbing running jobs.
-
-        Capacity semaphores and active counters are keyed by the execution
-        identity of the submitted plan snapshot, so running and queued jobs
-        retain their original capacity and health state while new submissions
-        resolve against the refreshed catalog.
-        """
+        """Adopt settings; occupied capacity drains before replacing its limit."""
         self.config = config
-    async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: threading.Event, fresh_session: bool = False) -> TargetExecutionResult:
-        last_target_id = ""
+        self._target_semaphores = {
+            key: semaphore for key, semaphore in self._target_semaphores.items()
+            if self._target_users.get(key, 0)
+        }
+    async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: CancelEvent, fresh_session: bool = False) -> TargetExecutionResult:
         last = DriverResult("REQUEST_FATAL", "", "", "No admissible target", "circuit_open")
-        if plan.selection.targets:
-            if cancel_event.is_set():
-                cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-                return TargetExecutionResult(cancelled, last_target_id, metadata=self._result_metadata(cancelled, None, None))
-            target = self._select_target(plan.selection.targets, plan, job_id)
-            if target is None:
-                return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True))
-            last_target_id = target.id
-            target_key = target_execution_key(target)
-            if fresh_session:
-                session_id = ""
-                effective_prompt = prompt
-            else:
-                session_id = self.database.session(project.id, context_key, workflow, target_key)
-                effective_prompt = prompt if session_id else self._with_history(project.id, context_key, workflow, prompt)
-            self.database.event(job_id, "target.selected", {"workflow": workflow, "target": target.id, "attempt": 1})
-            semaphore = self._target_semaphores.setdefault(target_key, asyncio.Semaphore(target.max_concurrency))
-            self._target_active.setdefault(target_key, 0)
+        if not plan.selection.targets:
+            return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True))
+        if cancel_event.is_set():
+            cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+            return TargetExecutionResult(cancelled, "", metadata=self._result_metadata(cancelled, None, None))
+        target = await run_sync(self._select_target, plan.selection.targets, plan, job_id)
+        if target is None:
+            return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True))
+        target_key = target_execution_key(target)
+        session_id, effective_prompt = await self._prepare_session(
+            project, context_key, workflow, target_key, prompt, fresh_session
+        )
+        await run_sync(self.database.event, job_id, "target.selected", {"workflow": workflow, "target": target.id, "attempt": 1})
+        semaphore = self._target_semaphores.setdefault(target.id, asyncio.Semaphore(target.max_concurrency))
+        self._target_users[target.id] = self._target_users.get(target.id, 0) + 1
+        self._target_active.setdefault(target.id, 0)
+        try:
+            acquired = await self._acquire_target(semaphore, cancel_event)
+        except BaseException as exc:
+            self._release_capacity(target.id)
+            await run_sync(self.database.release_target_probe, target_key, job_id)
+            self._attach_exception_metadata(exc, None, None)
+            raise
+        if not acquired:
+            self._release_capacity(target.id)
+            await run_sync(self.database.release_target_probe, target_key, job_id)
+            cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+            return TargetExecutionResult(cancelled, target.id, target_key, self._result_metadata(cancelled, target, None))
+        return await self._execute_attempt(_ExecutionContext(
+            job_id=job_id, project=project, workflow=workflow,
+            context_key=context_key, plan=plan, prompt=prompt, cwd=cwd,
+            cancel_event=cancel_event, fresh_session=fresh_session,
+            target=target, target_key=target_key, session_id=session_id,
+            effective_prompt=effective_prompt, semaphore=semaphore,
+        ))
+
+    async def _prepare_session(
+        self, project: ProjectView, context_key: str, workflow: str,
+        target_key: str, prompt: str, fresh_session: bool,
+    ) -> tuple[str, str]:
+        if fresh_session:
+            return "", prompt
+        session_id = await run_sync(self.database.session, project.id, context_key, workflow, target_key)
+        effective_prompt = prompt if session_id else await run_sync(self._with_history, project.id, context_key, workflow, prompt)
+        return session_id, effective_prompt
+
+    async def _start_attempt(
+        self, job_id: str, target: TargetConfig, plan: ExecutionPlan,
+        workflow: str, session_id: str,
+    ) -> tuple[float, bool, StreamRecorder | None]:
+        await run_sync(self.database.record_job_attempt, job_id, target.id)
+        started_at = time.monotonic()
+        log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": 1, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
+        supports_streaming = await run_sync(self.drivers.supports_structured_streaming, target)
+        recorder = None
+        if supports_streaming:
+            on_commit = None
+            if self.on_stream_commit:
+                on_commit = lambda cursor: self.on_stream_commit(job_id, cursor)
+            recorder = await run_sync(StreamRecorder,
+                database=self.database,
+                job_id=job_id,
+                attempt=1,
+                target_id=target.id,
+                backend=target.backend,
+                on_commit=on_commit,
+            )
+        return started_at, supports_streaming, recorder
+
+    async def _execute_attempt(self, context: _ExecutionContext) -> TargetExecutionResult:
+        job_id = context.job_id
+        project = context.project
+        workflow = context.workflow
+        context_key = context.context_key
+        plan = context.plan
+        prompt = context.prompt
+        cancel_event = context.cancel_event
+        fresh_session = context.fresh_session
+        target = context.target
+        target_key = context.target_key
+        session_id = context.session_id
+        semaphore = context.semaphore
+        self._target_active[target.id] += 1
+        try:
+            started_at, supports_streaming, recorder = await self._start_attempt(
+                job_id, target, plan, workflow, session_id
+            )
+        except BaseException:
+            self._target_active[target.id] -= 1
+            semaphore.release()
+            self._release_capacity(target.id)
+            await run_sync(self.database.release_target_probe, target_key, job_id)
+            raise
+
+        attempt = _TargetAttempt()
+        driver_exc: BaseException | None = None
+        try:
+            await self._recover_session(
+                attempt=attempt, context=context, recorder=recorder,
+                supports_streaming=supports_streaming,
+            )
+        except BaseException as exc:
+            driver_exc = exc
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            await run_sync(self.database.release_target_probe, target_key, job_id)
+            self._attach_exception_metadata(exc, target, duration_ms)
+            raise
+        finally:
+            if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+                attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
             try:
-                acquired = await self._acquire_target(semaphore, cancel_event)
+                await self._finish_recorder(recorder, attempt.result, driver_exc, cancel_event)
             except BaseException as exc:
-                self.database.release_target_probe(target_key, job_id)
-                self._attach_exception_metadata(exc, None, None)
-                raise
-            if not acquired:
-                self.database.release_target_probe(target_key, job_id)
-                cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-                return TargetExecutionResult(cancelled, target.id, target_key, self._result_metadata(cancelled, target, None))
-            self._target_active[target_key] += 1
-            try:
-                self.database.record_job_attempt(job_id, target.id)
-                started_at = time.monotonic()
-                log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": 1, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
-                supports_streaming = (
-                    self.drivers.supports_structured_streaming(target)
-                    if hasattr(self.drivers, "supports_structured_streaming")
-                    else True
-                )
-                recorder = (
-                    StreamRecorder(
-                        database=self.database,
-                        job_id=job_id,
-                        attempt=1,
-                        target_id=target.id,
-                        backend=target.backend,
-                    )
-                    if supports_streaming
-                    else None
-                )
-            except BaseException:
-                self._target_active[target_key] -= 1
-                semaphore.release()
-                self.database.release_target_probe(target_key, job_id)
-                raise
-
-            attempt_result: DriverResult | None = None
-            driver_exc: BaseException | None = None
-            recovered = False
-            recovery_phase = ""
-            replay_blocked = False
-            try:
-                attempt_result, has_tool_activity = await self._run_target_invocation(
-                    target=target,
-                    prompt=effective_prompt,
-                    session_id=session_id,
-                    cwd=cwd,
-                    timeout_s=plan.selection.timeout_s,
-                    cancel_event=cancel_event,
-                    recorder=recorder,
-                    supports_streaming=supports_streaming,
-                )
-                last = attempt_result
-
-                if attempt_result.error_code == "context_overflow":
-                    self.database.event(
-                        job_id,
-                        "target.context_overflow",
-                        {
-                            "workflow": workflow,
-                            "target": target.id,
-                            "error_code": "context_overflow",
-                        },
-                    )
-
-                if has_tool_activity and attempt_result.outcome != "SUCCESS":
-                    replay_blocked = True
-
-                can_recover = (
-                    not fresh_session
-                    and bool(session_id)
-                    and attempt_result.error_code == "context_overflow"
-                    and not has_tool_activity
-                    and not cancel_event.is_set()
-                    and attempt_result.outcome not in {"CANCELLED", "REQUEST_FATAL"}
-                )
-
-                if can_recover:
-                    reconstructed_prompt = self._with_history(
-                        project.id, context_key, workflow, prompt
-                    )
-                    self.database.event(
-                        job_id,
-                        "target.session_recovery_started",
-                        {
-                            "workflow": workflow,
-                            "target": target.id,
-                            "phase": "reconstruct",
-                        },
-                    )
-                    attempt_result, has_tool_activity = await self._run_target_invocation(
-                        target=target,
-                        prompt=reconstructed_prompt,
-                        session_id="",
-                        cwd=cwd,
-                        timeout_s=plan.selection.timeout_s,
-                        cancel_event=cancel_event,
-                        recorder=recorder,
-                        supports_streaming=supports_streaming,
-                    )
-                    last = attempt_result
-                    self.database.event(
-                        job_id,
-                        "target.session_recovery_finished",
-                        {
-                            "workflow": workflow,
-                            "target": target.id,
-                            "phase": "reconstruct",
-                            "outcome": attempt_result.outcome,
-                            "error_code": attempt_result.error_code,
-                        },
-                    )
-
-                    if attempt_result.error_code == "context_overflow":
-                        self.database.event(
-                            job_id,
-                            "target.context_overflow",
-                            {
-                                "workflow": workflow,
-                                "target": target.id,
-                                "phase": "reconstruct",
-                                "error_code": "context_overflow",
-                            },
-                        )
-
-                    if has_tool_activity and attempt_result.outcome != "SUCCESS":
-                        replay_blocked = True
-
-                    if attempt_result.outcome == "SUCCESS":
-                        recovered = True
-                        recovery_phase = "reconstruct"
-                    elif (
-                        not replay_blocked
-                        and not cancel_event.is_set()
-                        and attempt_result.outcome not in {"CANCELLED", "REQUEST_FATAL"}
-                        and attempt_result.error_code == "context_overflow"
-                        and reconstructed_prompt != prompt
-                    ):
-                        self.database.event(
-                            job_id,
-                            "target.session_recovery_started",
-                            {
-                                "workflow": workflow,
-                                "target": target.id,
-                                "phase": "fresh",
-                            },
-                        )
-                        attempt_result, has_tool_activity = await self._run_target_invocation(
-                            target=target,
-                            prompt=prompt,
-                            session_id="",
-                            cwd=cwd,
-                            timeout_s=plan.selection.timeout_s,
-                            cancel_event=cancel_event,
-                            recorder=recorder,
-                            supports_streaming=supports_streaming,
-                        )
-                        last = attempt_result
-                        self.database.event(
-                            job_id,
-                            "target.session_recovery_finished",
-                            {
-                                "workflow": workflow,
-                                "target": target.id,
-                                "phase": "fresh",
-                                "outcome": attempt_result.outcome,
-                                "error_code": attempt_result.error_code,
-                            },
-                        )
-
-                        if attempt_result.error_code == "context_overflow":
-                            self.database.event(
-                                job_id,
-                                "target.context_overflow",
-                                {
-                                    "workflow": workflow,
-                                    "target": target.id,
-                                    "phase": "fresh",
-                                    "error_code": "context_overflow",
-                                },
-                            )
-
-                        if has_tool_activity and attempt_result.outcome != "SUCCESS":
-                            replay_blocked = True
-
-                        if attempt_result.outcome == "SUCCESS":
-                            recovered = True
-                            recovery_phase = "fresh"
-            except BaseException as exc:
-                driver_exc = exc
                 duration_ms = int((time.monotonic() - started_at) * 1000)
-                self.database.release_target_probe(target_key, job_id)
+                await run_sync(self.database.release_target_probe, target_key, job_id)
                 self._attach_exception_metadata(exc, target, duration_ms)
                 raise
             finally:
-                if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
-                    attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-                    last = attempt_result
-                try:
-                    if recorder:
-                        res = attempt_result
-                        if res is None:
-                            err_msg = str(driver_exc) if driver_exc else "execution_failed"
-                            res = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
-                        status = (
-                            "cancelled"
-                            if cancel_event.is_set() or res.outcome == "CANCELLED"
-                            else "succeeded"
-                            if res.outcome == "SUCCESS"
-                            else "failed"
-                        )
-                        try:
-                            await recorder.record(
-                                "attempt.finished",
-                                {
-                                    "status": status,
-                                    "outcome": res.outcome,
-                                    "error_code": res.error_code,
-                                },
-                            )
-                        finally:
-                            await recorder.close()
-                except BaseException as exc:
-                    duration_ms = int((time.monotonic() - started_at) * 1000)
-                    self.database.release_target_probe(target_key, job_id)
-                    self._attach_exception_metadata(exc, target, duration_ms)
-                    raise
-                finally:
-                    self._target_active[target_key] -= 1
-                    semaphore.release()
-            duration_ms = int((time.monotonic() - started_at) * 1000)
-            self.database.event(job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": 1, "outcome": last.outcome, "error_code": last.error_code})
-            log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": 1, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": duration_ms})
+                self._target_active[target.id] -= 1
+                semaphore.release()
+                self._release_capacity(target.id)
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        return await self._complete_attempt(
+            attempt, job_id, project, workflow, context_key, target, target_key,
+            prompt, fresh_session, duration_ms,
+        )
+
+    async def _recover_session(
+        self, *, attempt: _TargetAttempt, context: _ExecutionContext,
+        recorder: StreamRecorder | None, supports_streaming: bool,
+    ) -> None:
+        job_id = context.job_id
+        project = context.project
+        workflow = context.workflow
+        context_key = context.context_key
+        target = context.target
+        prompt = context.prompt
+        effective_prompt = context.effective_prompt
+        session_id = context.session_id
+        cwd = context.cwd
+        timeout_s = context.plan.selection.timeout_s
+        cancel_event = context.cancel_event
+        fresh_session = context.fresh_session
+        phase_prompt = effective_prompt
+        phase_session = session_id
+        for phase in ("initial", "reconstruct", "fresh"):
+            details = {"workflow": workflow, "target": target.id}
+            if phase != "initial":
+                details["phase"] = phase
+                await run_sync(self.database.event, job_id, "target.session_recovery_started", details)
+            attempt.result, has_tool_activity = await self._run_target_invocation(
+                target=target, prompt=phase_prompt, session_id=phase_session,
+                cwd=cwd, timeout_s=timeout_s, cancel_event=cancel_event,
+                recorder=recorder, supports_streaming=supports_streaming,
+            )
+            last = attempt.result
+            await self._record_recovery_result(job_id, phase, details, last)
+            attempt.replay_blocked = has_tool_activity and last.outcome != "SUCCESS"
             if last.outcome == "SUCCESS":
-                self.database.record_target_success(target_key, self.config.breaker_base_cooldown_s)
-                if not fresh_session:
-                    self.database.append_turn(
-                        project_id=project.id,
-                        context_key=context_key,
-                        role=workflow,
-                        target_id=target.id,
-                        target_key=target_key,
-                        session_id=last.session_id,
-                        prompt=prompt,
-                        response=last.text,
-                        clear_sessions=recovered,
-                    )
-                    if recovered:
-                        self.database.event(
-                            job_id,
-                            "target.session_replaced",
-                            {
-                                "workflow": workflow,
-                                "target": target.id,
-                                "phase": recovery_phase,
-                            },
-                        )
-                return TargetExecutionResult(last, target.id, target_key, self._result_metadata(last, target, duration_ms, replay_blocked=replay_blocked))
-            health = self.database.target_health(target_key)
-            held_probe = health.get("probe_job_id") == job_id
-            if last.outcome in {"CANCELLED", "REQUEST_FATAL"}:
-                if held_probe:
-                    self.database.release_target_probe(target_key, job_id)
-                return TargetExecutionResult(last, target.id, target_key, self._result_metadata(last, target, duration_ms, replay_blocked=replay_blocked))
-            if last.error_code == "context_overflow" or replay_blocked:
-                if held_probe:
-                    self.database.release_target_probe(target_key, job_id)
-            elif last.outcome == "TARGET_FATAL":
-                self._record_failure(target_key, immediate=True, failed_probe=False)
-            elif last.outcome == "RETRYABLE":
-                self._record_failure(target_key, failed_probe=held_probe)
-            elif held_probe:
-                self.database.release_target_probe(target_key, job_id)
-            return TargetExecutionResult(last, target.id, target_key, self._result_metadata(last, target, duration_ms, replay_blocked=replay_blocked))
-        return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True))
+                attempt.recovered = phase != "initial"
+                attempt.recovery_phase = phase if attempt.recovered else ""
+                break
+            if not self._can_recover(last, fresh_session, session_id, attempt.replay_blocked, cancel_event, phase):
+                break
+            if phase == "initial":
+                phase_prompt = await run_sync(self._with_history, project.id, context_key, workflow, prompt)
+                phase_session = ""
+            elif phase_prompt != prompt:
+                phase_prompt = prompt
+            else:
+                break
+
+    async def _record_recovery_result(
+        self, job_id: str, phase: str, details: dict[str, str], result: DriverResult,
+    ) -> None:
+        if phase != "initial":
+            await run_sync(self.database.event, job_id, "target.session_recovery_finished", {
+                **details, "outcome": result.outcome, "error_code": result.error_code,
+            })
+        if result.error_code == "context_overflow":
+            await run_sync(self.database.event, job_id, "target.context_overflow", {
+                **details, "error_code": "context_overflow",
+            })
+
+    @staticmethod
+    def _can_recover(
+        result: DriverResult, fresh_session: bool, session_id: str,
+        replay_blocked: bool, cancel_event: CancelEvent, phase: str,
+    ) -> bool:
+        return not (
+            fresh_session or not session_id or replay_blocked
+            or cancel_event.is_set()
+            or result.outcome in {"CANCELLED", "REQUEST_FATAL"}
+            or result.error_code != "context_overflow"
+            or phase == "fresh"
+        )
+
+    @staticmethod
+    async def _finish_recorder(
+        recorder: StreamRecorder | None, result: DriverResult | None,
+        driver_exc: BaseException | None, cancel_event: CancelEvent,
+    ) -> None:
+        if not recorder:
+            return
+        if result is None:
+            err_msg = str(driver_exc) if driver_exc else "execution_failed"
+            result = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
+        if cancel_event.is_set() or result.outcome == "CANCELLED":
+            status = "cancelled"
+        elif result.outcome == "SUCCESS":
+            status = "succeeded"
+        else:
+            status = "failed"
+        try:
+            await recorder.record({
+                "kind": "attempt.finished",
+                "data": {
+                    "status": status,
+                    "outcome": result.outcome,
+                    "error_code": result.error_code,
+                },
+            })
+        finally:
+            await recorder.close()
+
+    async def _complete_attempt(
+        self, attempt: _TargetAttempt, job_id: str, project: ProjectView,
+        workflow: str, context_key: str, target: TargetConfig, target_key: str,
+        prompt: str, fresh_session: bool, duration_ms: int,
+    ) -> TargetExecutionResult:
+        last = attempt.result
+        await run_sync(self.database.event, job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": 1, "outcome": last.outcome, "error_code": last.error_code})
+        log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": 1, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": duration_ms})
+        if last.outcome == "SUCCESS":
+            await run_sync(self.database.record_target_success, target_key, self.config.breaker_base_cooldown_s)
+            if not fresh_session:
+                await self._store_turn(attempt, job_id, project, workflow, context_key, target, target_key, prompt)
+        else:
+            await self._update_target_health(last, target_key, job_id, attempt.replay_blocked)
+        return TargetExecutionResult(last, target.id, target_key, self._result_metadata(last, target, duration_ms, replay_blocked=attempt.replay_blocked))
+
+    async def _store_turn(
+        self, attempt: _TargetAttempt, job_id: str, project: ProjectView,
+        workflow: str, context_key: str, target: TargetConfig, target_key: str, prompt: str,
+    ) -> None:
+        await run_sync(self.database.append_turn,
+            project_id=project.id,
+            context_key=context_key,
+            role=workflow,
+            target_id=target.id,
+            target_key=target_key,
+            session_id=attempt.result.session_id,
+            prompt=prompt,
+            response=attempt.result.text,
+            clear_sessions=attempt.recovered,
+        )
+        if attempt.recovered:
+            await run_sync(self.database.event,
+                job_id,
+                "target.session_replaced",
+                {"workflow": workflow, "target": target.id, "phase": attempt.recovery_phase},
+            )
+
+    async def _update_target_health(
+        self, result: DriverResult, target_key: str, job_id: str, replay_blocked: bool,
+    ) -> None:
+        health = await run_sync(self.database.target_health, target_key)
+        held_probe = health.get("probe_job_id") == job_id
+        if result.outcome in {"CANCELLED", "REQUEST_FATAL"}:
+            if held_probe:
+                await run_sync(self.database.release_target_probe, target_key, job_id)
+            return
+        if result.error_code == "context_overflow" or replay_blocked:
+            if held_probe:
+                await run_sync(self.database.release_target_probe, target_key, job_id)
+        elif result.outcome == "TARGET_FATAL":
+            await run_sync(self._record_failure, target_key, immediate=True, failed_probe=False)
+        elif result.outcome == "RETRYABLE":
+            await run_sync(self._record_failure, target_key, failed_probe=held_probe)
+        elif held_probe:
+            await run_sync(self.database.release_target_probe, target_key, job_id)
 
     @classmethod
     def _attach_exception_metadata(
@@ -462,18 +480,30 @@ class TargetExecutor:
             attempt_result = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
         return attempt_result, has_tool_activity
 
+    def _release_capacity(self, target_id: str) -> None:
+        self._target_users[target_id] -= 1
+        if not self._target_users[target_id]:
+            self._target_users.pop(target_id)
+            self._target_semaphores.pop(target_id, None)
+            self._target_active.pop(target_id, None)
+
     @staticmethod
-    async def _acquire_target(semaphore: asyncio.Semaphore, cancel_event: threading.Event) -> bool:
-        while not cancel_event.is_set():
-            try:
-                await asyncio.wait_for(semaphore.acquire(), 0.1)
-            except TimeoutError:
-                continue
-            if cancel_event.is_set():
+    async def _acquire_target(semaphore: asyncio.Semaphore, cancel_event: CancelEvent) -> bool:
+        if cancel_event.is_set():
+            return False
+        acquire = asyncio.create_task(semaphore.acquire())
+        cancelled = asyncio.create_task(cancel_event.wait_async())
+        accepted = False
+        try:
+            await asyncio.wait((acquire, cancelled), return_when=asyncio.FIRST_COMPLETED)
+            accepted = acquire.done() and not cancel_event.is_set()
+            return accepted
+        finally:
+            acquire.cancel()
+            cancelled.cancel()
+            await asyncio.gather(acquire, cancelled, return_exceptions=True)
+            if not accepted and not acquire.cancelled() and acquire.exception() is None:
                 semaphore.release()
-                return False
-            return True
-        return False
 
     def _select_target(self, target_ids: tuple[str, ...], plan: ExecutionPlan, job_id: str = "") -> TargetConfig | None:
         now = datetime.now(timezone.utc)
@@ -482,34 +512,41 @@ class TargetExecutor:
         for target_id in target_ids:
             target = plan.target(target_id)
             target_key = target_execution_key(target)
-            health = self.database.target_health(target_key)
-            open_until = str(health["circuit_open_until"])
-            probe_job = str(health.get("probe_job_id", ""))
-            try:
-                half_open = bool(open_until) and datetime.fromisoformat(open_until) <= now and not probe_job
-            except ValueError:
-                half_open = False
-            if self._is_open(open_until, now, probe_job) or not self.drivers.available(target):
+            if not self._admit_target(target, target_key, now, job_id, claimed_probes):
                 continue
-            if half_open:
-                if not job_id or not self.database.claim_target_probe(target_key, job_id, now.isoformat()):
-                    continue
-                claimed_probes.append(target_key)
             healthy.append(target)
-            if self._target_active.get(target_key, 0) < target.max_concurrency:
-                selected = target
-                for claimed_key in claimed_probes:
-                    if claimed_key != target_key:
-                        self.database.release_target_probe(claimed_key, job_id)
-                return selected
+            if self._target_active.get(target.id, 0) < target.max_concurrency:
+                self._release_unselected_probes(claimed_probes, target_key, job_id)
+                return target
         if not healthy:
             return None
         selected = healthy[0]
-        selected_key = target_execution_key(selected)
+        self._release_unselected_probes(claimed_probes, target_execution_key(selected), job_id)
+        return selected
+
+    def _admit_target(
+        self, target: TargetConfig, target_key: str, now: datetime,
+        job_id: str, claimed_probes: list[str],
+    ) -> bool:
+        health = self.database.target_health(target_key)
+        open_until = str(health["circuit_open_until"])
+        probe_job = str(health.get("probe_job_id", ""))
+        try:
+            half_open = bool(open_until) and datetime.fromisoformat(open_until) <= now and not probe_job
+        except ValueError:
+            half_open = False
+        if self.is_circuit_open(open_until, now, probe_job) or not self.drivers.available(target):
+            return False
+        if half_open:
+            if not job_id or not self.database.claim_target_probe(target_key, job_id, now.isoformat()):
+                return False
+            claimed_probes.append(target_key)
+        return True
+
+    def _release_unselected_probes(self, claimed_probes: list[str], selected_key: str, job_id: str) -> None:
         for claimed_key in claimed_probes:
             if claimed_key != selected_key:
                 self.database.release_target_probe(claimed_key, job_id)
-        return selected
 
     def _record_failure(self, target_key: str, *, immediate: bool = False, failed_probe: bool = False) -> None:
         self.database.record_target_failure(
@@ -522,7 +559,7 @@ class TargetExecutor:
         )
 
     @staticmethod
-    def _is_open(value: str, now: datetime, probe_job_id: str = "") -> bool:
+    def is_circuit_open(value: str, now: datetime, probe_job_id: str = "") -> bool:
         if probe_job_id:
             return True
         if not value:
@@ -566,11 +603,11 @@ class TargetExecutor:
                 breaker_state = "half_open"
             elif not open_until:
                 breaker_state = "closed"
-            elif self._is_open(open_until, now):
+            elif self.is_circuit_open(open_until, now):
                 breaker_state = "open"
             else:
                 breaker_state = "half_open"
-            result.append(TargetView(id=target.id, model=target.model, max_concurrency=target.max_concurrency, active=self._target_active.get(target_key, 0), healthy=self.drivers.available(target) and not self._is_open(open_until, now), circuit_open_until=open_until, breaker_state=breaker_state, cooldown_s=int(health["cooldown_s"]), probing=probing))
+            result.append(TargetView(id=target.id, model=target.model, max_concurrency=target.max_concurrency, active=self._target_active.get(target.id, 0), healthy=self.drivers.available(target) and not self.is_circuit_open(open_until, now), circuit_open_until=open_until, breaker_state=breaker_state, cooldown_s=int(health["cooldown_s"]), probing=probing))
         return result
 
 
@@ -608,35 +645,25 @@ class JobRunner:
                 exc_info=True,
             )
 
-    def _terminal(self, job_id: str, state: str) -> None:
+    async def _terminal(self, job_id: str, state: str) -> None:
         try:
-            self.on_terminal(job_id, state)
+            result = self.on_terminal(job_id, state)
+            if inspect.isawaitable(result):
+                await result
         except Exception:
             log.exception(
                 "Job terminal transition callback failed",
                 extra={"event": "job.terminal_callback_failed", "job_id": job_id, "state": state},
             )
 
-    async def run(self, job_id: str, cancel_event: threading.Event) -> None:
+    async def run(self, job_id: str, cancel_event: CancelEvent) -> None:
         started_at = time.monotonic()
-        record = self.database.job_record(job_id)
+        record = await run_sync(self.database.job_record, job_id)
         if record is None or record["state"] != "queued":
             return
         project_id = str(record["project_id"])
-        if self.is_closing():
-            # A reserved-but-undispatched queue item remains durable for restart.
-            return
-        if cancel_event.is_set():
-            state = "interrupted" if self.is_closing() else "cancelled"
-            self.database.finish_job(job_id, state, error="cancelled before execution")
-            self._terminal(job_id, state)
-            await self._notify(job_id)
-            return
-        project = self.database.project(project_id)
+        project = await self._prepare_job(job_id, project_id, cancel_event)
         if project is None:
-            self.database.finish_job(job_id, "failed", error="Project was removed")
-            self._terminal(job_id, "failed")
-            await self._notify(job_id)
             return
         root = Path(project.root)
         log.info("Job started", extra={"event": "job.started", "job_id": job_id, "project_id": project.id, "workflow": record["workflow"]})
@@ -644,7 +671,7 @@ class JobRunner:
         committed_state: str | None = None
         execution_metadata: dict[str, Any] | None = None
         try:
-            self.database.start_job(job_id)
+            await run_sync(self.database.start_job, job_id)
             await self._notify(job_id)
             plan = parse_execution_plan(json.loads(record["execution_plan_json"]))
             execution = await self.targets.execute(
@@ -660,66 +687,112 @@ class JobRunner:
             )
             execution_metadata = execution.metadata
             if execution.result.outcome != "SUCCESS" or cancel_event.is_set():
-                final_state = "interrupted" if cancel_event.is_set() and self.is_closing() else "cancelled" if cancel_event.is_set() else "failed"
-                raise RuntimeError(execution.result.error or execution.result.outcome)
-            if bool(record.get("fresh_session", 0)):
-                self.database.finish_fresh_job_success(
-                    job_id=job_id,
-                    project_id=project.id,
-                    context_key=record["context_key"],
-                    role=record["workflow"],
-                    target_id=execution.target_id,
-                    target_key=execution.target_key,
-                    session_id=execution.result.session_id,
-                    prompt=record["prompt"],
-                    response=execution.result.text,
-                    metadata=execution.metadata,
-                )
-            else:
-                self.database.finish_job(job_id, "succeeded", text=execution.result.text, target_id=execution.target_id, metadata=execution.metadata)
+                final_state = self._failure_state(cancel_event)
+                await run_sync(self.database.finish_job, job_id, final_state, error=execution.result.error or execution.result.outcome, metadata=execution_metadata)
+                committed_state = final_state
+                await self._terminal(job_id, final_state)
+                await self._notify(job_id)
+                return
+            await self._finish_success(job_id, project, record, execution)
             committed_state = "succeeded"
-            self._terminal(job_id, committed_state)
+            await self._terminal(job_id, committed_state)
             await self._notify(job_id)
         except asyncio.CancelledError as exc:
-            if committed_state is None:
-                final_state = "interrupted" if self.is_closing() else "cancelled"
-                execution_metadata = (
-                    getattr(exc, "_refract_result_metadata", None)
-                    or self.targets._result_metadata(
-                        DriverResult("CANCELLED", "", "", "cancelled", "cancelled"), None, None
-                    )
-                )
-                self.database.finish_job(job_id, final_state, error="execution task cancelled", metadata=execution_metadata)
-                committed_state = final_state
-                self._terminal(job_id, final_state)
+            await self._finish_cancelled_job(job_id, exc, committed_state)
             raise
         except Exception as exc:
-            if committed_state is None:
-                execution_metadata = (
-                    getattr(exc, "_refract_result_metadata", None)
-                    or execution_metadata
-                    or self.targets._result_metadata(
-                        DriverResult("REQUEST_FATAL", "", "", str(exc), "execution_error"), None, None
-                    )
-                )
-                if not isinstance(exc, RuntimeError):
-                    log.exception(
-                        "Unexpected job failure",
-                        extra={"event": "job.exception", "job_id": job_id},
-                    )
-                self.database.finish_job(job_id, final_state, error=str(exc), metadata=execution_metadata)
-                committed_state = final_state
-                self._terminal(job_id, final_state)
-                await self._notify(job_id)
-            else:
-                log.warning(
-                    "Post-terminal job operation failed",
-                    extra={"event": "job.post_terminal_failed", "job_id": job_id, "state": committed_state},
-                    exc_info=True,
-                )
+            await self._finish_failed_job(job_id, exc, final_state, committed_state, execution_metadata)
         finally:
-            completed = self.database.job(job_id)
+            completed = await run_sync(self.database.job, job_id)
             log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
+
+    async def _prepare_job(self, job_id: str, project_id: str, cancel_event: CancelEvent) -> ProjectView | None:
+        if self.is_closing():
+            # A reserved-but-undispatched queue item remains durable for restart.
+            return None
+        if cancel_event.is_set():
+            state = "interrupted" if self.is_closing() else "cancelled"
+            await run_sync(self.database.finish_job, job_id, state, error="cancelled before execution")
+            await self._terminal(job_id, state)
+            await self._notify(job_id)
+            return None
+        project = await run_sync(self.database.project, project_id)
+        if project is None:
+            await run_sync(self.database.finish_job, job_id, "failed", error="Project was removed")
+            await self._terminal(job_id, "failed")
+            await self._notify(job_id)
+        return project
+
+    def _failure_state(self, cancel_event: CancelEvent) -> str:
+        if cancel_event.is_set() and self.is_closing():
+            return "interrupted"
+        if cancel_event.is_set():
+            return "cancelled"
+        return "failed"
+
+    async def _finish_success(
+        self, job_id: str, project: ProjectView, record: dict[str, Any],
+        execution: TargetExecutionResult,
+    ) -> None:
+        if bool(record.get("fresh_session", 0)):
+            await run_sync(self.database.finish_fresh_job_success,
+                job_id=job_id,
+                project_id=project.id,
+                context_key=record["context_key"],
+                role=record["workflow"],
+                target_id=execution.target_id,
+                target_key=execution.target_key,
+                session_id=execution.result.session_id,
+                prompt=record["prompt"],
+                response=execution.result.text,
+                metadata=execution.metadata,
+            )
+        else:
+            await run_sync(self.database.finish_job, job_id, "succeeded", text=execution.result.text, target_id=execution.target_id, metadata=execution.metadata)
+
+    async def _finish_cancelled_job(
+        self, job_id: str, exc: asyncio.CancelledError, committed_state: str | None,
+    ) -> None:
+        completed = await run_sync(self.database.job, job_id)
+        if completed is not None and completed.state in TERMINAL_STATES:
+            committed_state = completed.state
+            await self._terminal(job_id, committed_state)
+        if committed_state is None:
+            final_state = "interrupted" if self.is_closing() else "cancelled"
+            execution_metadata = (
+                getattr(exc, "_refract_result_metadata", None)
+                or self.targets._result_metadata(
+                    DriverResult("CANCELLED", "", "", "cancelled", "cancelled"), None, None
+                )
+            )
+            await run_sync(self.database.finish_job, job_id, final_state, error="execution task cancelled", metadata=execution_metadata)
+            await self._terminal(job_id, final_state)
+
+    async def _finish_failed_job(
+        self, job_id: str, exc: Exception, final_state: str,
+        committed_state: str | None, execution_metadata: dict[str, Any] | None,
+    ) -> None:
+        if committed_state is not None:
+            log.warning(
+                "Post-terminal job operation failed",
+                extra={"event": "job.post_terminal_failed", "job_id": job_id, "state": committed_state},
+                exc_info=True,
+            )
+            return
+        execution_metadata = (
+            getattr(exc, "_refract_result_metadata", None)
+            or execution_metadata
+            or self.targets._result_metadata(
+                DriverResult("REQUEST_FATAL", "", "", str(exc), "execution_error"), None, None
+            )
+        )
+        log.exception(
+            "Unexpected job failure",
+            extra={"event": "job.exception", "job_id": job_id},
+        )
+        await run_sync(self.database.finish_job, job_id, final_state, error=str(exc), metadata=execution_metadata)
+        await self._terminal(job_id, final_state)
+        await self._notify(job_id)
 
 
 __all__ = ["JobNotifier", "JobRunner", "TargetExecutor", "TargetExecutionResult"]

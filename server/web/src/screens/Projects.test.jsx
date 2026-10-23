@@ -43,6 +43,21 @@ describe('Projects screen', () => {
     expect(screen.getByText('/workspace/beta')).toBeInTheDocument()
   })
 
+  it('reports unexpected hydration failures while retaining registered projects', async () => {
+    const project = { ...mockProjects[0] }
+    Object.defineProperty(project, 'metadata', {
+      enumerable: true,
+      get() { throw new Error('Unable to hydrate project metadata') },
+    })
+    vi.mocked(api.getProjects).mockResolvedValue([project])
+
+    render(<Projects />)
+
+    expect(await screen.findByText('Unable to load project details')).toBeInTheDocument()
+    expect(screen.getByText('Unable to hydrate project metadata')).toBeInTheDocument()
+    expect(screen.getByText('Alpha Workspace')).toBeInTheDocument()
+  })
+
   it('uses only active jobs for project activity while retaining project selection', async () => {
     vi.mocked(api.getProjectJobs).mockResolvedValue({
       active: [

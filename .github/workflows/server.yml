@@ -2,9 +2,11 @@ name: tests
 
 on:
   push:
-    paths: ["server/**", ".github/workflows/server.yml"]
+    branches: ["**"]
+    paths: ["server/**", "plugin/**", "sonar-project.properties", ".github/workflows/server.yml", ".github/workflows/sonarqube.yml"]
   pull_request:
-    paths: ["server/**", ".github/workflows/server.yml"]
+    paths: ["server/**", "plugin/**", "sonar-project.properties", ".github/workflows/server.yml", ".github/workflows/sonarqube.yml"]
+  workflow_call:
 
 permissions:
   contents: read
@@ -30,7 +32,18 @@ jobs:
           enable-cache: true
           cache-dependency-glob: server/uv.lock
       - run: uv sync --all-extras --frozen
-      - run: uv run pytest
+      - name: Python tests with coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: uv run pytest --cov --cov-report=xml
+      - name: Python compatibility tests
+        if: matrix.os != 'ubuntu-latest'
+        run: uv run pytest
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: python-coverage
+          path: server/coverage.xml
+          if-no-files-found: error
       - run: uv build
 
   web:
@@ -46,4 +59,22 @@ jobs:
           cache: npm
           cache-dependency-path: server/web/package-lock.json
       - run: npm ci
-      - run: npm test
+      - run: npm run coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage
+          path: server/web/coverage/lcov.info
+          if-no-files-found: error
+      - run: npm run build
+      - name: Check committed dashboard build is current
+        run: |
+          git diff --exit-code -- ../src/refract/dashboard_static
+          test -z "$(git status --porcelain -- ../src/refract/dashboard_static)"
+
+  sonar:
+    needs: [cross-platform, web]
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    uses: ./.github/workflows/sonarqube.yml
+    secrets: inherit

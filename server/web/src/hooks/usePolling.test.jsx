@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { usePolling } from './usePolling'
 
@@ -9,6 +9,28 @@ describe('usePolling hook', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('exposes refresh failures and clears them after recovery', async () => {
+    const error = new Error('refresh failed')
+    const callback = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce()
+    const { result } = renderHook(() => usePolling(callback, 10))
+    await act(async () => vi.advanceTimersByTimeAsync(10))
+    expect(result.current.error).toBe(error)
+    await act(async () => vi.advanceTimersByTimeAsync(10))
+    expect(result.current.error).toBeNull()
+  })
+
+  it('captures a visibility-triggered refresh failure', async () => {
+    const error = new Error('visibility refresh failed')
+    const callback = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce()
+    const { result } = renderHook(() => usePolling(callback, 10))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(result.current.error).toBe(error)
+    await act(async () => vi.advanceTimersByTimeAsync(10))
+    expect(result.current.error).toBeNull()
   })
 
   it('invokes callback at specified interval when active', async () => {

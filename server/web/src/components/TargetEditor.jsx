@@ -2,10 +2,10 @@ import { useEffect, useState, useRef } from 'react'
 import {
   createConfigurationTarget,
   updateConfigurationTarget,
-  DashboardApiError,
 } from '../api'
 import Alert from './Alert'
 import Modal from './Modal'
+import { useConfigEditor } from '../hooks/useConfigEditor'
 
 export default function TargetEditor({
   isOpen,
@@ -31,12 +31,11 @@ export default function TargetEditor({
   }
 
   const [formData, setFormData] = useState(initialForm)
-  const [currentRevision, setCurrentRevision] = useState(revision)
-  const [isDirty, setIsDirty] = useState(false)
-  const isDirtyRef = useRef(false)
-  const [saveStatus, setSaveStatus] = useState('') // '', 'saving', 'reloading', 'active'
-  const [error, setError] = useState(null)
-  const [conflictData, setConflictData] = useState(null)
+  const {
+    isDirtyRef, inFlightRef, currentRevision, setCurrentRevision,
+    saveStatus, setSaveStatus, error, setError, conflictData, setConflictData,
+    handleClose, submit, reload,
+  } = useConfigEditor({ revision, onClose, onSaved, onAnnounce })
   const initialFocusRef = useRef(null)
   const prevIsOpenRef = useRef(false)
 
@@ -45,7 +44,6 @@ export default function TargetEditor({
     if (!isOpen) {
       prevIsOpenRef.current = false
       isDirtyRef.current = false
-      setIsDirty(false)
       setSaveStatus('')
       setError(null)
       setConflictData(null)
@@ -56,7 +54,7 @@ export default function TargetEditor({
     prevIsOpenRef.current = true
 
     // If form is already dirty and was already open, do NOT overwrite the draft from external props/polling
-    if (wasOpen && isDirtyRef.current) {
+    if (wasOpen && (isDirtyRef.current || inFlightRef.current || conflictData)) {
       return
     }
 
@@ -78,7 +76,6 @@ export default function TargetEditor({
     }
     setCurrentRevision(revision)
     isDirtyRef.current = false
-    setIsDirty(false)
     setSaveStatus('')
     setError(null)
     setConflictData(null)
@@ -86,14 +83,12 @@ export default function TargetEditor({
 
   function handleFieldChange(field, value) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setError(null)
     setFormData((prev) => ({ ...prev, [field]: value }))
   }
 
   function handleAddArg() {
     isDirtyRef.current = true
-    setIsDirty(true)
     setFormData((prev) => ({
       ...prev,
       args: [...prev.args, ''],
@@ -102,7 +97,6 @@ export default function TargetEditor({
 
   function handleArgChange(index, value) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setFormData((prev) => {
       const newArgs = [...prev.args]
       newArgs[index] = value
@@ -112,7 +106,6 @@ export default function TargetEditor({
 
   function handleMoveArg(index, direction) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setFormData((prev) => {
       const newArgs = [...prev.args]
       const targetIndex = index + direction
@@ -126,7 +119,6 @@ export default function TargetEditor({
 
   function handleRemoveArg(index) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setFormData((prev) => ({
       ...prev,
       args: prev.args.filter((_, i) => i !== index),
@@ -135,12 +127,9 @@ export default function TargetEditor({
 
   async function handleSubmit(e) {
     if (e) e.preventDefault()
-    if (conflictData) return
+    if (inFlightRef.current || conflictData || !currentRevision) return
     setError(null)
     setConflictData(null)
-    setSaveStatus('saving')
-    if (onAnnounce) onAnnounce('Saving configuration…')
-
     const targetPayload = {
       id: formData.id.trim(),
       backend: formData.backend.trim(),
@@ -154,113 +143,36 @@ export default function TargetEditor({
       args: formData.args,
     }
 
-    try {
-      let result
-      if (mode === 'create') {
-        result = await createConfigurationTarget(targetPayload, currentRevision)
-      } else {
-        result = await updateConfigurationTarget(formData.id, targetPayload, currentRevision)
-      }
-
-      setSaveStatus('reloading')
-      if (onAnnounce) onAnnounce('Reloading runtime…')
-
-      // Brief transition to active
-      setSaveStatus('active')
-      if (onAnnounce) onAnnounce(`Target "${result.target?.id || formData.id}" saved and active.`)
-
-      isDirtyRef.current = false
-      setIsDirty(false)
-      onSaved?.(result)
-      onClose?.()
-    } catch (err) {
-      setSaveStatus('')
-      if (err instanceof DashboardApiError && err.status === 409) {
-        const payload = err.payload || {}
-        setConflictData({
-          unchanged: payload.unchanged || 'The configuration file changed on the server.',
-          recovery: payload.recovery || 'Reload current configuration and retry.',
-          current: payload.current || '',
-        })
-        if (onAnnounce) {
-          onAnnounce('Configuration conflict detected: source changed after editor loading.')
-        }
-      } else {
-        setError(err.payload?.error || err.message || 'Failed to save target.')
-        if (onAnnounce) {
-          onAnnounce(`Failed to save target: ${err.message || 'error'}`)
-        }
-      }
-    }
+    return submit({
+      entity: 'target',
+      savingMessage: 'Saving configuration…',
+      successMessage: (result) => `Target "${result.target?.id || formData.id}" saved and active.`,
+      save: (revision) => mode === 'create'
+        ? createConfigurationTarget(targetPayload, revision)
+        : updateConfigurationTarget(formData.id, targetPayload, revision),
+    })
   }
 
-  async function handleReloadConfiguration() {
-    setSaveStatus('reloading')
-    setError(null)
-    try {
-      let payload = null
-      if (onReloadRequired) {
-        payload = await onReloadRequired()
-      }
-      let reloadedTarget = payload?.target
-      if (!reloadedTarget && mode === 'create' && Array.isArray(payload?.targets)) {
-        reloadedTarget = payload.targets.find((t) => t.id === formData.id)
-      }
-
-      const nextRevision = payload?.revision
-      if (mode === 'edit') {
-        if (!reloadedTarget || !nextRevision) {
-          setSaveStatus('')
-          const msg = !reloadedTarget
-            ? 'Target no longer exists or could not be reloaded.'
-            : 'Reload response missing configuration revision.'
-          setError(msg)
-          if (onAnnounce) {
-            onAnnounce(msg)
-          }
-          return
-        }
-      } else if (mode === 'create') {
-        if (!nextRevision) {
-          setSaveStatus('')
-          const msg = 'Reload response missing configuration revision.'
-          setError(msg)
-          if (onAnnounce) {
-            onAnnounce(msg)
-          }
-          return
-        }
-      }
-
-      if (reloadedTarget) {
-        setFormData({
-          id: reloadedTarget.id || '',
-          backend: reloadedTarget.backend || 'codex',
-          model: reloadedTarget.model || '',
-          backend_profile: reloadedTarget.backend_profile || '',
-          reasoning: reloadedTarget.reasoning || '',
-          system_prompt: reloadedTarget.system_prompt || '',
-          isolated: Boolean(reloadedTarget.isolated),
-          read_only: Boolean(reloadedTarget.read_only),
-          max_concurrency: reloadedTarget.max_concurrency || 1,
-          args: Array.isArray(reloadedTarget.args) ? [...reloadedTarget.args] : [],
-        })
-      }
-      setCurrentRevision(nextRevision)
-      isDirtyRef.current = false
-      setIsDirty(false)
-      setConflictData(null)
-      setSaveStatus('')
-      if (onAnnounce) {
-        onAnnounce('Current configuration reloaded from server. Draft replaced.')
-      }
-    } catch (err) {
-      setSaveStatus('')
-      setError(err?.message || 'Failed to reload configuration.')
-      if (onAnnounce) {
-        onAnnounce(`Failed to reload configuration: ${err?.message || 'error'}`)
-      }
-    }
+  function handleReloadConfiguration() {
+    return reload({
+      load: onReloadRequired,
+      select: (payload) => payload?.target ||
+        (mode === 'create' ? payload?.targets?.find((t) => t.id === formData.id) : null),
+      apply: (item) => setFormData({
+        id: item.id || '',
+        backend: item.backend || 'codex',
+        model: item.model || '',
+        backend_profile: item.backend_profile || '',
+        reasoning: item.reasoning || '',
+        system_prompt: item.system_prompt || '',
+        isolated: Boolean(item.isolated),
+        read_only: Boolean(item.read_only),
+        max_concurrency: item.max_concurrency || 1,
+        args: Array.isArray(item.args) ? [...item.args] : [],
+      }),
+      mode,
+      entity: 'Target',
+    })
   }
 
   const isSubmitting = saveStatus === 'saving' || saveStatus === 'reloading'
@@ -269,15 +181,7 @@ export default function TargetEditor({
   return (
     <Modal
       isOpen={isOpen}
-      onClose={() => {
-        if (isDirty) {
-          if (window.confirm('You have unsaved changes. Discard them?')) {
-            onClose?.()
-          }
-        } else {
-          onClose?.()
-        }
-      }}
+      onClose={handleClose}
       title={title}
       role="dialog"
       ariaLabel={title}
@@ -302,6 +206,7 @@ export default function TargetEditor({
                   type="button"
                   className="button button-secondary button-sm"
                   onClick={handleReloadConfiguration}
+                  disabled={isSubmitting}
                 >
                   Reload current configuration
                 </button>
@@ -459,7 +364,7 @@ export default function TargetEditor({
 
         <div className="form-group">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <label className="form-label">Command arguments</label>
+            <span className="form-label">Command arguments</span>
             <button
               type="button"
               className="button button-ghost button-sm"
@@ -529,7 +434,7 @@ export default function TargetEditor({
           <button
             type="button"
             className="button button-secondary"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={isSubmitting}
           >
             Cancel
@@ -538,7 +443,7 @@ export default function TargetEditor({
             <button
               type="submit"
               className="button button-primary"
-              disabled={isSubmitting || Boolean(conflictData) || !formData.id.trim()}
+              disabled={isSubmitting || Boolean(conflictData) || !currentRevision || !formData.id.trim()}
             >
               {isSubmitting ? (saveStatus === 'reloading' ? 'Reloading…' : 'Saving…') : mode === 'create' ? 'Create target' : 'Save target'}
             </button>

@@ -1,6 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { POLL_INTERVAL_MS } from './constants'
 
-export function usePolling(callback, interval = 5000, { enabled = true, isTerminal = false, deps = [] } = {}) {
+export function usePolling(callback, interval = POLL_INTERVAL_MS, { enabled = true, isTerminal = false, deps = [] } = {}) {
+  const [error, setError] = useState(null)
   const callbackRef = useRef(callback)
   callbackRef.current = callback
 
@@ -9,14 +11,18 @@ export function usePolling(callback, interval = 5000, { enabled = true, isTermin
 
     let timerId = null
     let cancelled = false
+    let running = false
 
     async function tick() {
-      if (cancelled || document.hidden) return
+      if (cancelled || document.hidden || running) return
+      running = true
       try {
         await callbackRef.current()
-      } catch {
-        // preserve loaded data on failure
+        if (!cancelled) setError(null)
+      } catch (err) {
+        if (!cancelled) setError(err)
       } finally {
+        running = false
         if (!cancelled && !isTerminal) {
           timerId = setTimeout(tick, interval)
         }
@@ -26,7 +32,7 @@ export function usePolling(callback, interval = 5000, { enabled = true, isTermin
     function handleVisibilityChange() {
       if (!document.hidden && !cancelled && !isTerminal) {
         if (timerId) clearTimeout(timerId)
-        tick()
+        void tick()
       }
     }
 
@@ -39,4 +45,6 @@ export function usePolling(callback, interval = 5000, { enabled = true, isTermin
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [enabled, isTerminal, interval, ...deps])
+
+  return { error }
 }

@@ -2,35 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
-import shutil
-import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Generator
-from dataclasses import dataclass
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
-from . import BackendResult, _usage_dict, classify_backend_output, classify_tool_activity
-from ._shell import ShellCommandCancelled, ShellCommandFailed, stream_shell_command_lines
+from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
+from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
 
 log = get_logger("codex")
-
-@dataclass(slots=True)
-class CodexParams:
-    PROMPT: str
-    cd: Path
-    SESSION_ID: str = ""
-    args: tuple[str, ...] = ()
-    timeout_s: int = 0
-    cancel_event: threading.Event | None = None
-    emitter: Callable[[dict[str, Any]], None] | None = None
 
 
 def run_shell_command(
@@ -38,6 +24,7 @@ def run_shell_command(
     cwd: str | None = None,
     timeout_s: int = 0,
     cancel_event: threading.Event | None = None,
+    stdin_text: str | None = None,
 ) -> Generator[str, None, None]:
     """Execute a command and stream its stdout lines until EOF or timeout.
 
@@ -55,6 +42,7 @@ def run_shell_command(
         terminate_wait_s=5,
         cancel_event=cancel_event,
         check_returncode=True,
+        stdin_text=stdin_text,
     )
 
 
@@ -183,27 +171,156 @@ def _classify(*, agent_messages: str, session_id: str, error_text: str) -> Backe
     )
 
 
-def _execute_sync(params: CodexParams) -> BackendResult:
-    """Execute a Codex CLI session and return normalized backend result."""
-    cd = Path(params.cd).expanduser().absolute()
-    if not cd.is_dir():
-        return BackendResult(
-            outcome="FATAL",
-            SESSION_ID="",
-            agent_messages="",
-            error=f"The workspace root directory `{cd}` does not exist or is not a directory. Please check the path and try again.",
-            error_class="bad_cd",
-        )
+def _extract_output(stream: StreamOutcome) -> tuple[str, str]:
+    """Return the thread ID and the concatenated agent messages from Codex JSONL."""
+    session_id = ""
+    agent_messages = ""
+    for line, event in zip(stream.lines, stream.events):
+        if event is None:
+            if line.strip():
+                log.debug("codex: skipping non-JSON stdout line len=%d", len(line.strip()))
+            continue
+        event_type = event.get("type", "")
+        if event_type == "thread.started" and event.get("thread_id"):
+            session_id = str(event.get("thread_id"))
+            continue
+        if event_type != "item.completed":
+            continue
+        item = event.get("item", {})
+        if isinstance(item, dict) and item.get("type") == "agent_message" and item.get("text"):
+            agent_messages += str(item.get("text"))
+    return session_id, agent_messages
 
-    codex_binary = shutil.which("codex")
-    if codex_binary is None:
-        return BackendResult(
-            outcome="FATAL",
-            SESSION_ID="",
-            agent_messages="",
-            error="The `codex` CLI was not found on PATH. Please install Codex CLI and ensure `codex` is available.",
-            error_class="missing_cli",
-        )
+
+def _usage_values(stream: StreamOutcome) -> dict[str, Any]:
+    usage_values: dict[str, Any] = {}
+    for event in stream.objects():
+        if event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
+            u = event["usage"]
+            usage_values = {"input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"), "cached_input_tokens": u.get("cached_input_tokens")}
+    return usage_values
+
+
+def _read_last_message(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        log.warning("codex: could not read --output-last-message file %s: %s", path, exc)
+        return ""
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+class _EventParser:
+    """Normalize Codex item lifecycle events and correlate entity IDs."""
+
+    def __init__(self, params: BackendParams) -> None:
+        self.params = params
+        self.entity_counter = 0
+        self.raw_to_entity: dict[str, str] = {}
+
+    def emit(self, event: dict[str, Any]) -> None:
+        if self.params.emitter is not None:
+            self.params.emitter(event)
+
+    def start_item(self, item: dict[str, Any], raw_id: str) -> None:
+        item_type = item.get("type", "")
+        if item_type == "agent_message":
+            self.entity_counter += 1
+            entity_id = f"msg-{self.entity_counter}"
+            if raw_id:
+                self.raw_to_entity[raw_id] = entity_id
+            self.emit({
+                "kind": "assistant.message.started",
+                "entity_id": entity_id,
+                "data": {},
+            })
+        elif item_type == "tool_call":
+            self.entity_counter += 1
+            entity_id = f"tool-{self.entity_counter}"
+            if raw_id:
+                self.raw_to_entity[raw_id] = entity_id
+            tool_name = str(item.get("name", ""))
+            tool_data: dict[str, Any] = {
+                "tool": tool_name,
+                "activity": classify_tool_activity("codex", tool_name),
+            }
+            if "input" in item:
+                tool_data["input"] = item["input"]
+            self.emit({
+                "kind": "tool.started",
+                "entity_id": entity_id,
+                "data": tool_data,
+            })
+
+    def complete_item(self, item: dict[str, Any], raw_id: str) -> None:
+        item_type = item.get("type", "")
+        if item_type == "agent_message":
+            entity_id = self.raw_to_entity.get(raw_id) or f"msg-{self.entity_counter or 1}"
+            msg_text = str(item.get("text", ""))
+            if msg_text:
+                self.emit({
+                    "kind": "assistant.text.delta",
+                    "entity_id": entity_id,
+                    "data": {"text": msg_text},
+                })
+            self.emit({
+                "kind": "assistant.message.completed",
+                "entity_id": entity_id,
+                "data": {},
+            })
+        elif item_type == "tool_call":
+            entity_id = self.raw_to_entity.get(raw_id) or f"tool-{self.entity_counter or 1}"
+            tool_data = {"status": str(item.get("status", "completed"))}
+            if "output" in item:
+                tool_data["output"] = item["output"]
+            self.emit({
+                "kind": "tool.completed",
+                "entity_id": entity_id,
+                "data": tool_data,
+            })
+
+    def on_event(self, parsed: dict[str, Any]) -> None:
+        if self.params.emitter is None:
+            return
+        event_type = parsed.get("type", "")
+        item = parsed.get("item", {})
+        if not isinstance(item, dict):
+            return
+        raw_id = str(item.get("id", ""))
+        if event_type == "item.started":
+            self.start_item(item, raw_id)
+        elif event_type == "item.completed":
+            self.complete_item(item, raw_id)
+
+
+def _agent_messages(last_message: str, parsed_agent_messages: str, stdout_text: str) -> str:
+    last_message_text = last_message.strip()
+    parsed_agent_messages = parsed_agent_messages.strip()
+    if last_message_text:
+        agent_messages = last_message_text
+        source = "last_message_file"
+    elif parsed_agent_messages:
+        agent_messages = parsed_agent_messages
+        source = "stdout_jsonl_fallback"
+    else:
+        agent_messages = stdout_text
+        source = "stdout_fallback"
+    log.debug(
+        "codex: last_message_len=%d parsed_msg_len=%d stdout_len=%d using=%s",
+        len(last_message), len(parsed_agent_messages), len(stdout_text), source,
+    )
+    return agent_messages
+
+
+def execute(params: BackendParams) -> BackendResult:
+    """Execute a Codex CLI session and return normalized backend result."""
+    cd, failure = preflight(params, "codex", "Codex CLI")
+    if failure is not None:
+        return failure
 
     with tempfile.NamedTemporaryFile(
         prefix="refract-codex-", suffix=".txt", delete=False
@@ -226,8 +343,8 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     if params.SESSION_ID:
         cmd.extend(["resume", str(params.SESSION_ID)])
 
-    # Popen(shell=False) gets a proper argv list; do not pre-escape the prompt.
-    cmd += ["--", params.PROMPT]
+    # "-" makes codex exec read the prompt from stdin.
+    cmd.append("-")
 
     log.info(
         "codex.execute start cwd=%s session_id=%s prompt_len=%d args=%d timeout_s=%s",
@@ -239,161 +356,18 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     )
     log.debug("codex command prepared args=%d", len(cmd))
 
-    stdout_lines: list[str] = []
-    err_message = ""
     started_at = time.time()
-    timed_out = False
-    execution_failed = False
+    parser = _EventParser(params)
 
-    entity_counter = 0
-    raw_to_entity: dict[str, str] = {}
-    try:
-        for line in run_shell_command(
-            cmd,
-            cwd=os.fspath(cd),
-            timeout_s=params.timeout_s,
-            cancel_event=params.cancel_event,
-        ):
-            stdout_lines.append(line)
-            if params.emitter:
-                stripped = line.strip()
-                try:
-                    parsed = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(parsed, dict):
-                    continue
-                event_type = parsed.get("type", "")
-                item = parsed.get("item", {})
-                if not isinstance(item, dict):
-                    continue
-                item_type = item.get("type", "")
-                raw_id = str(item.get("id", ""))
-                if event_type == "item.started":
-                    if item_type == "agent_message":
-                        entity_counter += 1
-                        entity_id = f"msg-{entity_counter}"
-                        if raw_id:
-                            raw_to_entity[raw_id] = entity_id
-                        params.emitter({
-                            "kind": "assistant.message.started",
-                            "entity_id": entity_id,
-                            "data": {},
-                        })
-                    elif item_type == "tool_call":
-                        entity_counter += 1
-                        entity_id = f"tool-{entity_counter}"
-                        if raw_id:
-                            raw_to_entity[raw_id] = entity_id
-                        tool_name = str(item.get("name", ""))
-                        tool_data: dict[str, Any] = {
-                            "tool": tool_name,
-                            "activity": classify_tool_activity("codex", tool_name),
-                        }
-                        if "input" in item:
-                            tool_data["input"] = item["input"]
-                        params.emitter({
-                            "kind": "tool.started",
-                            "entity_id": entity_id,
-                            "data": tool_data,
-                        })
-                elif event_type == "item.completed":
-                    if item_type == "agent_message":
-                        entity_id = raw_to_entity.get(raw_id) or f"msg-{entity_counter or 1}"
-                        msg_text = str(item.get("text", ""))
-                        if msg_text:
-                            params.emitter({
-                                "kind": "assistant.text.delta",
-                                "entity_id": entity_id,
-                                "data": {"text": msg_text},
-                            })
-                        params.emitter({
-                            "kind": "assistant.message.completed",
-                            "entity_id": entity_id,
-                            "data": {},
-                        })
-                    elif item_type == "tool_call":
-                        entity_id = raw_to_entity.get(raw_id) or f"tool-{entity_counter or 1}"
-                        status = str(item.get("status", "completed"))
-                        tool_data = {"status": status}
-                        if "output" in item:
-                            tool_data["output"] = item["output"]
-                        params.emitter({
-                            "kind": "tool.completed",
-                            "entity_id": entity_id,
-                            "data": tool_data,
-                        })
-    except ShellCommandCancelled:
-        log.warning("codex subprocess cancelled")
-        err_message = "cancelled"
-    except subprocess.TimeoutExpired as exc:
-        log.warning("codex subprocess timeout after %ss", params.timeout_s)
-        err_message += f"\n\n[timeout] {exc}"
-        timed_out = True
-    except ShellCommandFailed as exc:
-        log.warning("codex subprocess exited with status %d", exc.returncode)
-        err_message = str(exc)
-        execution_failed = True
-    except Exception as exc:  # noqa: BLE001
-        # Subprocess exception strings can contain the complete argv, including
-        # the user prompt. Keep application logs metadata-only.
-        log.error(
-            "codex: unexpected error during stream type=%s",
-            type(exc).__name__,
-        )
-        err_message += f"\n\n[unexpected] {exc}"
-
-    stdout_text = "\n".join(stdout_lines)
-    parsed_session_id = ""
-    parsed_agent_messages = ""
-    for line in stdout_lines:
-        stripped = line.strip()
-        try:
-            parsed = json.loads(stripped)
-        except json.JSONDecodeError:
-            if stripped:
-                log.debug(
-                    "codex: skipping non-JSON stdout line len=%d",
-                    len(stripped),
-                )
-            continue
-
-        item_type = parsed.get("type", "")
-        if item_type == "thread.started" and parsed.get("thread_id"):
-            parsed_session_id = str(parsed.get("thread_id"))
-            continue
-        if item_type != "item.completed":
-            continue
-        item = parsed.get("item", {})
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "agent_message" and item.get("text"):
-            parsed_agent_messages += str(item.get("text"))
-
-    try:
-        last_message = last_message_path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        log.warning("codex: could not read --output-last-message file %s: %s", last_message_path, exc)
-        last_message = ""
-    finally:
-        try:
-            last_message_path.unlink()
-        except OSError:
-            pass
+    stream = consume_stream(
+        run_shell_command, cmd, params, cwd=os.fspath(cd), name="codex", on_event=parser.on_event, stdin_text=params.PROMPT,
+    )
+    stdout_text = "\n".join(stream.lines)
+    parsed_session_id, parsed_agent_messages = _extract_output(stream)
+    last_message = _read_last_message(last_message_path)
 
     last_message_text = last_message.strip()
-    parsed_agent_messages = parsed_agent_messages.strip()
-    if last_message_text:
-        agent_messages = last_message_text
-    elif parsed_agent_messages:
-        agent_messages = parsed_agent_messages
-    else:
-        agent_messages = stdout_text
-    log.debug(
-        "codex: last_message_len=%d parsed_msg_len=%d stdout_len=%d using=%s",
-        len(last_message), len(parsed_agent_messages), len(stdout_text),
-        "last_message_file" if last_message_text else ("stdout_jsonl_fallback" if parsed_agent_messages else "stdout_fallback"),
-    )
+    agent_messages = _agent_messages(last_message, parsed_agent_messages, stdout_text)
 
     session_id, session_id_source = _resolve_session_id(
         parsed_session_id=parsed_session_id,
@@ -417,8 +391,8 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     # error_text carries only true error signal — not the entire stdout when it
     # also happened to be the agent's message. Stdout is only surfaced when we
     # genuinely have no agent output to attribute as success.
-    error_text = err_message.strip()
-    if not agent_messages.strip() and stdout_text and not last_message.strip():
+    error_text = stream.error
+    if not agent_messages.strip() and stdout_text and not last_message_text:
         if error_text:
             error_text = f"{error_text}\n\n[stdout]\n{stdout_text}".strip()
         else:
@@ -429,28 +403,11 @@ def _execute_sync(params: CodexParams) -> BackendResult:
         session_id=session_id,
         error_text=error_text,
     )
-    if timed_out and result.outcome == "OK":
+    if stream.error:
         result.outcome = "FATAL"
-        result.error_class = "timeout"
-        result.error = err_message.strip() or "subprocess timed out"
-    if execution_failed:
-        result.outcome = "FATAL"
-        result.error_class = "execution_error"
-        result.error = err_message.strip() or "codex execution failed"
-    if params.cancel_event is not None and params.cancel_event.is_set():
-        result.outcome = "FATAL"
-        result.error_class = "cancelled"
-        result.error = "backend command cancelled"
-    usage_values: dict[str, Any] = {}
-    for line in stdout_lines:
-        try:
-            event = json.loads(line)
-            if isinstance(event, dict) and event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
-                u = event["usage"]
-                usage_values = {"input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"), "cached_input_tokens": u.get("cached_input_tokens")}
-        except (json.JSONDecodeError, TypeError):
-            continue
-    result.usage = _usage_dict(**usage_values)
+        result.error_class = stream.error_class
+        result.error = stream.error
+    result.usage = _usage_dict(**_usage_values(stream))
     result.agent_messages = agent_messages
     log.info(
         "codex.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",
@@ -468,9 +425,4 @@ def _execute_sync(params: CodexParams) -> BackendResult:
     return result
 
 
-async def execute(params: CodexParams) -> BackendResult:
-    """Execute Codex without blocking the daemon event loop."""
-    return await asyncio.to_thread(_execute_sync, params)
-
-
-__all__ = ["CodexParams", "execute"]
+__all__ = ["execute", "run_shell_command"]

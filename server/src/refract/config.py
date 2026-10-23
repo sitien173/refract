@@ -5,20 +5,23 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from refract.logging_setup import get_logger
 
 from refract.config_inspection import (
+    ConfigSource,
     ConfigurationLoadError,
     read_config_source,
-    sanitize_config_error,
+    sha256_bytes,
+    utc_now,
 )
 from refract.workflows import get_workflow
 
 log = get_logger("config")
+DEFAULT_PORT = 8765
 
 
 @dataclass(slots=True, frozen=True)
@@ -37,10 +40,9 @@ class TargetConfig:
 
 @dataclass(slots=True, frozen=True)
 class TargetSelection:
-    """Targets and retry policy for one workflow inside a profile."""
+    """Targets and timeout for one workflow inside a profile."""
 
     targets: tuple[str, ...]
-    max_attempts: int
     timeout_s: int = 0
 
 
@@ -76,7 +78,7 @@ class NotificationsConfig:
 class DaemonConfig:
     home: Path
     host: str = "127.0.0.1"
-    port: int = 8765
+    port: int = DEFAULT_PORT
     max_jobs: int = 4
     history_turns: int = 8
     history_bytes: int = 65536
@@ -205,7 +207,6 @@ def _target_selection(
     if isinstance(raw, str):
         name = raw.strip()
         selected = (name,) if name else ()
-        max_attempts = len(selected)
         timeout_s = 0
     elif isinstance(raw, list):
         if not all(isinstance(value, str) for value in raw):
@@ -214,7 +215,6 @@ def _target_selection(
                 "must contain only strings"
             )
         selected = tuple(value.strip() for value in raw)
-        max_attempts = len(selected)
         timeout_s = 0
     elif isinstance(raw, dict):
         allowed = {"targets", "max_attempts", "timeout_s"}
@@ -236,10 +236,8 @@ def _target_selection(
             selected = tuple(value.strip() for value in raw_targets)
         else:
             selected = ()
-        max_attempts = _positive_int(
-            raw.get("max_attempts"), len(selected), "max_attempts"
-        )
         if "max_attempts" in raw:
+            # Accepted so older files still load; nothing reads the value.
             log.warning(
                 "Deprecated profile workflow key max_attempts",
                 extra={"event": "config.deprecated_key", "profile": profile_id, "workflow": workflow, "key": "max_attempts"},
@@ -254,7 +252,6 @@ def _target_selection(
         timeout_s = raw_timeout
     else:
         selected = ()
-        max_attempts = 0
         timeout_s = 0
 
     unknown_targets = set(selected) - target_by_id.keys()
@@ -263,11 +260,7 @@ def _target_selection(
             f"Profile {profile_id!r} workflow {workflow!r} has invalid targets: "
             f"{sorted(unknown_targets)}"
         )
-    return TargetSelection(
-        targets=selected,
-        max_attempts=max_attempts,
-        timeout_s=timeout_s,
-    )
+    return TargetSelection(targets=selected, timeout_s=timeout_s)
 
 
 def _profile_declarations(
@@ -557,6 +550,24 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         raise ConfigurationLoadError(
             f"Unable to read config file: {config_path}", path=config_path
         ) from exc
+    return _load_config_source(config_path, home, source)
+
+
+def load_config_bytes(data: bytes, path: Path) -> DaemonConfig:
+    """Load candidate global config bytes as if they were stored at path."""
+    source = ConfigSource(
+        path=path,
+        data=data,
+        revision=sha256_bytes(data),
+        modification_time="",
+        loaded_at=utc_now(),
+    )
+    return _load_config_source(path, refract_home(), source)
+
+
+def _load_config_source(
+    config_path: Path, home: Path, source: ConfigSource
+) -> DaemonConfig:
     try:
         # Decode and parse the same buffer that was hashed above.
         raw = tomllib.loads(source.data.decode("utf-8"))
@@ -570,7 +581,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         ) from exc
     except ValueError as exc:
         raise ConfigurationLoadError(
-            sanitize_config_error(exc),
+            str(exc),
             path=config_path,
             revision=source.revision,
             modification_time=source.modification_time,
@@ -582,7 +593,7 @@ def load_config(path: Path | None = None) -> DaemonConfig:
         raise
     except ValueError as exc:
         raise ConfigurationLoadError(
-            sanitize_config_error(exc),
+            str(exc),
             path=config_path,
             revision=source.revision,
             modification_time=source.modification_time,
@@ -635,7 +646,7 @@ def _load_config_values(
     host = daemon.get("host", "127.0.0.1")
     if not isinstance(host, str) or not host.strip():
         raise ValueError("[daemon].host must be a non-empty string")
-    port = _positive_int(daemon.get("port"), 8765, "[daemon].port")
+    port = _positive_int(daemon.get("port"), DEFAULT_PORT, "[daemon].port")
     if port > 65535:
         raise ValueError("[daemon].port must not exceed 65535")
     breaker_base = _positive_int(daemon.get("breaker_base_cooldown_s"), 60, "[daemon].breaker_base_cooldown_s")
@@ -669,24 +680,31 @@ def _load_config_values(
     )
 
 
-def load_project_config(project_root: Path, base: DaemonConfig) -> DaemonConfig:
+def load_project_config(
+    project_root: Path, base: DaemonConfig, data: bytes | None = None
+) -> DaemonConfig:
+    """Load a project overlay from disk, or from candidate bytes when given."""
     try:
-        return _load_project_config_values(project_root, base)
+        return _load_project_config_values(project_root, base, data)
     except ConfigurationLoadError:
         raise
     except ValueError as exc:
         path = project_root / ".refract" / "config.toml"
         raise ConfigurationLoadError(
-            sanitize_config_error(exc), path=path
+            str(exc), path=path
         ) from exc
 
 
-def _load_project_config_values(project_root: Path, base: DaemonConfig) -> DaemonConfig:
+def _load_project_config_values(
+    project_root: Path, base: DaemonConfig, data: bytes | None
+) -> DaemonConfig:
     path = project_root / ".refract" / "config.toml"
-    try:
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return base
+    if data is None:
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            return base
+    raw = tomllib.loads(data.decode("utf-8"))
     unsupported = set(raw) - {
         "project",
         "profiles",
@@ -719,12 +737,27 @@ def _load_project_config_values(project_root: Path, base: DaemonConfig) -> Daemo
     default_profile = str(project.get("default_profile", base.default_profile)).strip()
     if default_profile not in profiles:
         raise ValueError(f"Unknown project profile: {default_profile!r}")
-    return replace(
-        base,
+    return DaemonConfig(
+        home=base.home,
+        host=base.host,
+        port=base.port,
+        max_jobs=base.max_jobs,
+        history_turns=base.history_turns,
+        history_bytes=base.history_bytes,
         default_profile=default_profile,
+        targets=base.targets,
         profiles=profiles,
         profile_declarations=profile_declarations,
         project_profile_declarations=project_declarations,
+        config_path=base.config_path,
+        config_revision=base.config_revision,
+        config_modification_time=base.config_modification_time,
+        config_loaded_at=base.config_loaded_at,
+        logging=base.logging,
+        notifications=base.notifications,
+        breaker_failure_threshold=base.breaker_failure_threshold,
+        breaker_base_cooldown_s=base.breaker_base_cooldown_s,
+        breaker_max_cooldown_s=base.breaker_max_cooldown_s,
     )
 
 

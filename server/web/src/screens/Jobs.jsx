@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { POLL_INTERVAL_MS } from '../hooks/constants'
 import { getProjectJobs, getProjects } from '../api'
 import Alert from '../components/Alert'
 import DataGrid from '../components/DataGrid'
@@ -70,7 +71,7 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
   const noActiveJobs = Boolean(jobsData) && activeJobs.length === 0
 
   // The API returns every active job separately from its bounded terminal history.
-  usePolling(refresh, 5000, {
+  usePolling(refresh, POLL_INTERVAL_MS, {
     enabled: Boolean(activeProjectId),
     isTerminal: noActiveJobs,
     deps: [activeProjectId, noActiveJobs],

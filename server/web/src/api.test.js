@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import { clearCsrfToken, deleteConfigurationTarget, updateConfigurationTarget } from './api'
 
 function response(status, payload) {
   return {
@@ -11,7 +10,8 @@ function response(status, payload) {
 
 describe('dashboard API mutation retry boundary', () => {
   it('does not retry an unstructured forbidden response', async () => {
-    clearCsrfToken()
+    vi.resetModules()
+    const { updateConfigurationTarget } = await import('./api')
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(200, { csrf_token: 'token' }))
       .mockResolvedValueOnce(response(403, { error: 'Forbidden' }))
@@ -22,7 +22,8 @@ describe('dashboard API mutation retry boundary', () => {
   })
 
   it('shares exactly one CSRF bootstrap request across concurrent mutations', async () => {
-    clearCsrfToken()
+    vi.resetModules()
+    const { deleteConfigurationTarget, updateConfigurationTarget } = await import('./api')
     let bootstrapCalls = 0
     const fetchMock = vi.fn().mockImplementation(async (url) => {
       if (url === '/dashboard/api/bootstrap') {

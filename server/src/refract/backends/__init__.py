@@ -1,7 +1,23 @@
 """Backend interfaces for refract."""
 
+import json
+import shutil
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Literal
+
+
+@dataclass(slots=True)
+class BackendParams:
+    PROMPT: str
+    cd: Path
+    SESSION_ID: str = ""
+    args: tuple[str, ...] = ()
+    timeout_s: int = 0
+    cancel_event: threading.Event | None = None
+    emitter: Callable[[dict[str, Any]], None] | None = None
 
 
 @dataclass(slots=True)
@@ -45,6 +61,37 @@ _DEFAULT_FATAL_TOKENS = (
     "login required",
     "auth_unavailable",
 )
+
+
+def preflight(params: BackendParams, executable: str, product: str) -> tuple[Path, BackendResult | None]:
+    """Resolve the workspace and report a missing workspace or CLI before launch."""
+    cd = Path(params.cd).expanduser().absolute()
+    if not cd.is_dir():
+        return cd, BackendResult(
+            outcome="FATAL",
+            SESSION_ID="",
+            agent_messages="",
+            error=f"The workspace root directory `{cd}` does not exist or is not a directory. Please check the path and try again.",
+            error_class="bad_cd",
+        )
+    if shutil.which(executable) is None:
+        return cd, BackendResult(
+            outcome="FATAL",
+            SESSION_ID="",
+            agent_messages="",
+            error=f"The `{executable}` CLI was not found on PATH. Please install {product} and ensure `{executable}` is available.",
+            error_class="missing_cli",
+        )
+    return cd, None
+
+
+def parse_json_object(line: str) -> dict[str, Any] | None:
+    """Return the line's JSON object, or None for non-JSON or non-object lines."""
+    try:
+        value = json.loads(line)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _normalize(text: str) -> str:
@@ -132,4 +179,4 @@ def classify_tool_activity(provider: str, tool_name: str) -> Literal["command", 
     return "tool_call"
 
 
-__all__ = ["BackendResult", "classify_backend_output", "classify_tool_activity"]
+__all__ = ["BackendParams", "BackendResult", "classify_backend_output", "classify_tool_activity", "parse_json_object", "preflight"]

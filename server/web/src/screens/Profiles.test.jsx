@@ -8,6 +8,7 @@ vi.mock('../api', async (importOriginal) => {
   return {
     ...actual,
     getProfiles: vi.fn(),
+    getTaskGuide: vi.fn().mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'] }),
     getConfiguration: vi.fn().mockResolvedValue({ valid: true }),
     getConfigurationProfiles: vi.fn(),
     getConfigurationProfile: vi.fn(),
@@ -135,6 +136,15 @@ describe('Profiles screen', () => {
     expect(screen.getByText('default')).toBeInTheDocument()
     expect(screen.getByText('strict-review')).toBeInTheDocument()
     expect(screen.getByText('fast-dev')).toBeInTheDocument()
+  })
+
+  it('takes workflow identifiers from the task-guide API', async () => {
+    vi.mocked(api.getTaskGuide).mockResolvedValueOnce({ workflows: ['custom-workflow'] })
+    render(<Profiles />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Create profile$/i }))
+    const dialog = await screen.findByRole('dialog', { name: /Create profile/i })
+    expect(within(dialog).getByLabelText('Declare custom policy for custom-workflow workflow')).toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('Declare custom policy for consult workflow')).not.toBeInTheDocument()
   })
 
   it('opens profile editor in create mode and submits new profile with declared workflows and targets', async () => {

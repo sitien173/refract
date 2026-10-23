@@ -56,10 +56,10 @@ export function useDashboardQuery(queryFn, { pollInterval = 0, enabled = true, d
         setIsLoading(false)
         setIsRefreshing(false)
         isRunningRef.current = false
-        if (pollInterval > 0 && enabled) {
+        if (pollInterval > 0 && enabled && !document.hidden) {
           clearPollTimer()
           timerRef.current = setTimeout(() => {
-            execute(true)
+            if (!document.hidden) execute(true)
           }, pollInterval)
         }
       }
@@ -68,9 +68,15 @@ export function useDashboardQuery(queryFn, { pollInterval = 0, enabled = true, d
 
   useEffect(() => {
     isMountedRef.current = true
-    execute(false, true)
+    if (!document.hidden) execute(false, true)
+    function handleVisibilityChange() {
+      clearPollTimer()
+      if (!document.hidden) execute(true)
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       isMountedRef.current = false
       clearPollTimer()
       requestIdRef.current += 1

@@ -26,6 +26,28 @@ function ModalDefaultFocus({ isOpen, onClose }) {
 }
 
 describe('Modal component', () => {
+  it('blocks dismissal while a mutation is in flight', () => {
+    const onClose = vi.fn()
+    const { rerender } = render(<Modal isOpen closeDisabled onClose={onClose} title="Saving" />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(screen.getByTestId('modal-scrim'))
+    fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }))
+    expect(onClose).not.toHaveBeenCalled()
+    rerender(<Modal isOpen onClose={onClose} title="Saving" />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('dismisses only backdrop clicks, not clicks inside the dialog', () => {
+    const onClose = vi.fn()
+    render(<ModalDefaultFocus isOpen onClose={onClose} />)
+    fireEvent.click(screen.getByRole('dialog'))
+    fireEvent.click(screen.getByTestId('first-input'))
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('modal-scrim'))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
   it('focuses element provided by initialFocusRef upon opening', async () => {
     render(<ModalWithInitialFocus isOpen={true} onClose={vi.fn()} />)
     const target = screen.getByTestId('target-button')

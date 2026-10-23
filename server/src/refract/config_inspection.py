@@ -21,10 +21,6 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-# Descriptive alias for callers inspecting a source without loading it.
-hash_config_bytes = sha256_bytes
-
-
 def modification_time(path: Path) -> str:
     """Return an ISO timestamp for display; it is not revision identity."""
     try:
@@ -41,15 +37,8 @@ def bound_error(error: object) -> str:
     return value
 
 
-def sanitize_config_error(error: object) -> str:
-    """Keep structural diagnostics while removing configuration values.
-
-    Validation errors are written by many small validators. Keeping an
-    allow-list here makes a future validator unable to accidentally publish a
-    prompt, argument, provider secret, or arbitrary TOML value.
-    """
-    raw_text = str(error).replace("\x00", "")
-    text = bound_error(raw_text)
+def _source_config_error(raw_text: str) -> str | None:
+    """Retain parser locations and source paths without source contents."""
     location = re.search(r"\(at line (\d+), column (\d+)\)", raw_text)
     if location:
         return (
@@ -67,6 +56,11 @@ def sanitize_config_error(error: object) -> str:
     )
     if invalid_encoding:
         return f"Invalid config file: {invalid_encoding.group(1)}: invalid UTF-8"
+    return None
+
+
+def _section_config_error(text: str) -> str | None:
+    """Recognize section diagnostics that contain no configuration values."""
     if text.startswith("Unsupported config sections"):
         return "Unsupported config sections"
     if text.startswith("Unsupported daemon settings"):
@@ -91,53 +85,87 @@ def sanitize_config_error(error: object) -> str:
         "Logging retention settings must be integers",
         "Target identifiers must be unique",
         "Invalid target declaration",
-        "Unknown workflow",
-        "Profile inheritance cycle",
-        "Profile extends unknown parent",
     }:
         return text
     if text.startswith("Unknown [daemon].default_profile"):
         return "Unknown [daemon].default_profile"
     if text.startswith("Unknown project profile"):
         return "Unknown project profile"
+    return None
+
+
+def _profile_config_error(raw_text: str, text: str) -> str | None:
+    """Remove profile and workflow identifiers from validation errors."""
     if raw_text.startswith("Unknown workflow "):
         return "Unknown workflow"
     if raw_text.startswith("Profile inheritance cycle:"):
         return "Profile inheritance cycle"
     if raw_text.startswith("Profile ") and "extends unknown parent" in raw_text:
         return "Profile extends unknown parent"
-    if text.startswith("Profile "):
-        if "declare extends or a workflow" in text:
-            return "Profile declaration must declare extends or a workflow"
-        if "non-empty string" in text:
-            return "Profile declaration must use a non-empty string"
-        if "unsupported settings" in text:
-            return "Profile workflow has unsupported settings"
-        if "invalid targets" in text:
-            return "Profile workflow has invalid targets"
-        if "targets must contain only strings" in text:
-            return "Profile workflow targets must contain only strings"
-    if text.startswith("Target ") or text.startswith("Codex target ") or text.startswith(
-        "Isolated Pi target "
-    ):
-        if "args must contain only strings" in text:
-            return "Target args must contain only strings"
-        if "args must be a list of strings" in text:
-            return "Target args must be a list of strings"
-        if "cannot contain NUL bytes" in text:
-            return "Target args cannot contain NUL bytes"
-        if "reserved '--' token" in text:
-            return "Target args cannot contain the reserved token"
-        if "override the workspace root" in text:
-            return "Codex target args cannot override the workspace root"
-        if "extensions, skills, or prompt templates" in text:
-            return "Isolated Pi target cannot explicitly load extensions, skills, or prompt templates"
-        if "settings must be strings" in text:
-            return "Target settings must be strings"
-        if "backend_profile must be a string" in text:
-            return "Target backend_profile must be a string"
-        if "positive integer" in text:
-            return "Target setting must be a positive integer"
+    if not text.startswith("Profile "):
+        return None
+    if "declare extends or a workflow" in text:
+        return "Profile declaration must declare extends or a workflow"
+    if "non-empty string" in text:
+        return "Profile declaration must use a non-empty string"
+    if "unsupported settings" in text:
+        return "Profile workflow has unsupported settings"
+    if "invalid targets" in text:
+        return "Profile workflow has invalid targets"
+    if "targets must contain only strings" in text:
+        return "Profile workflow targets must contain only strings"
+    return None
+
+
+def _target_config_error(text: str) -> str | None:
+    """Remove target identifiers and argument values from validation errors."""
+    if not text.startswith(("Target ", "Codex target ", "Isolated Pi target ")):
+        return None
+    if "args must contain only strings" in text:
+        return "Target args must contain only strings"
+    if "args must be a list of strings" in text:
+        return "Target args must be a list of strings"
+    if "cannot contain NUL bytes" in text:
+        return "Target args cannot contain NUL bytes"
+    if "reserved '--' token" in text:
+        return "Target args cannot contain the reserved token"
+    if "override the workspace root" in text:
+        return "Codex target args cannot override the workspace root"
+    if "extensions, skills, or prompt templates" in text:
+        return "Isolated Pi target cannot explicitly load extensions, skills, or prompt templates"
+    if "settings must be strings" in text:
+        return "Target settings must be strings"
+    if "backend_profile must be a string" in text:
+        return "Target backend_profile must be a string"
+    if "positive integer" in text:
+        return "Target setting must be a positive integer"
+    return None
+
+
+def sanitize_config_error(error: object) -> str:
+    """Keep structural diagnostics while removing configuration values.
+
+    Validation errors are written by many small validators. Keeping an
+    allow-list here makes a future validator unable to accidentally publish a
+    prompt, argument, provider secret, or arbitrary TOML value.
+    """
+    if isinstance(error, ConfigurationLoadError):
+        # Loader errors are sanitized once, when they are constructed.
+        return str(error)
+    raw_text = str(error).replace("\x00", "")
+    text = bound_error(raw_text)
+    source_error = _source_config_error(raw_text)
+    if source_error is not None:
+        return source_error
+    section_error = _section_config_error(text)
+    if section_error is not None:
+        return section_error
+    profile_error = _profile_config_error(raw_text, text)
+    if profile_error is not None:
+        return profile_error
+    target_error = _target_config_error(text)
+    if target_error is not None:
+        return target_error
     if text.startswith("Invalid logging level"):
         return "Invalid logging level"
     if "must be a positive integer" in text:
@@ -194,7 +222,6 @@ __all__ = [
     "ConfigurationLoadError",
     "MAX_CONFIG_ERROR_LENGTH",
     "bound_error",
-    "hash_config_bytes",
     "modification_time",
     "read_config_source",
     "sha256_bytes",

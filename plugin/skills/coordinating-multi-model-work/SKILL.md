@@ -36,27 +36,10 @@ request as direct, leave this skill and do the work with your own tools.
 
 ## Refract Contract
 
-Refract provides four fixed workflows: `consult`, `implement`, `other`, and
-`review`. Canonical gates use `implement` and `review`; `brainstorming` uses
-`consult`. Use `other` only when task guidance selects its explicit profile
-mapping. Jobs run in the
-registered directory; Refract never touches Git. Admission allows one job per project at a time, FIFO within each project.
-
-Keep provider, model, configured target and native session identities private;
-select only public workflows/profiles; native identity is not input. Require configured read-only targets for `consult`/`review`.
-
-## Session Resume Key
-
-The session key is `project_id`, `context_key`, `workflow`, and target key.
-Use the plan slug as `context_key` for every phase and job. Each workflow keeps
-its own resumed session.
-
-- The first `implement` job and the first `review` job of a plan use
-  `fresh_session: true` and carry their full role contracts. An `implement`
-  job's contract comes from the phase prompt `Rules`.
-- Later jobs on the same workflow omit `fresh_session`, resume that session,
-  and send only the delta plus the phase prompt path.
-- A retry keeps its setting, so a fresh-job retry starts fresh again.
+[tool-contract.md](references/tool-contract.md) owns routing, admission,
+privacy, session reuse, waiting, paging, and recovery rules. Apply it before
+submission or recovery. Canonical gates use `implement` and `review`;
+`brainstorming` uses `consult`. Use the plan slug as `context_key`.
 
 ## Git Ownership
 
@@ -77,7 +60,7 @@ resets, or restores. Assume it did none of these.
   After submission, do not edit the root until that job is terminal.
 - Workers see every file. Keep secrets out of prompts and name secret-bearing
   files as out of scope in the phase prompt.
-- Submit dependent jobs one at a time. Verify each result before the next.
+- Submit sequential jobs one at a time. Verify each result before the next.
 
 ## Setup and Resume
 
@@ -162,13 +145,8 @@ Emit:
 
 ## Waiting Rule
 
-Start one sequential `job_wait` per job with the default 3600-second heartbeat;
-never poll, sleep, use a short hardcoded timeout, or overlap replacement waits.
-Repeat only after nonterminal output; after disconnect reuse the same ID. A
-timeout is normal, not failure. Terminal paging uses `result.next_offset` as
-`result_offset`, `timeout_s=0`, until null, preserving all text. A saved job
-missing from the ten terminal entries requires `job_wait(saved_id, timeout_s=0)`
-before it can be called unknown; absence never permits duplicate submission.
+Apply [tool-contract.md](references/tool-contract.md#waiting-paging-and-bounds)
+for every wait, reconnect, and terminal result page.
 
 ## Gate 2: Execute
 

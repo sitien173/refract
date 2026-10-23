@@ -79,8 +79,8 @@ async def test_queued_cancel_removes_job_without_running() -> None:
     release_first.set()
     await scheduler.wait("a1", 1)
     assert calls == ["a1"]
-    assert scheduler._completion_events == {}
-    assert scheduler._queues == {}
+    assert scheduler._current == {}
+    assert scheduler._queued_projects == {}
     await scheduler.close()
 
 
@@ -99,8 +99,8 @@ async def test_completed_job_supports_multiple_and_late_waiters() -> None:
     release.set()
     await asyncio.wait_for(asyncio.gather(first, second), 1)
     await asyncio.wait_for(scheduler.wait("job"), 1)
-    assert scheduler._completion_events == {}
-    assert scheduler._queues == {}
+    assert scheduler._current == {}
+    assert scheduler._queued_projects == {}
     await scheduler.close()
 
 
@@ -122,8 +122,7 @@ async def test_close_releases_queued_waiters_and_bookkeeping() -> None:
     await scheduler.close()
 
     await asyncio.wait_for(waiter, 1)
-    assert scheduler._completion_events == {}
-    assert scheduler._queues == {}
+    assert scheduler._current == {}
     assert scheduler._queued_projects == {}
 
 

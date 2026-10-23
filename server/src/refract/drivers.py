@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from refract.backends import BackendResult
-from refract.backends.agy import AgyParams, execute as agy_execute
-from refract.backends.claude import ClaudeParams, execute as claude_execute
-from refract.backends.codex import CodexParams, execute as codex_execute
-from refract.backends.pi import PiParams, execute as pi_execute
+from refract.backends import BackendParams, BackendResult, agy, claude, codex, pi
 from refract.config import TargetConfig, validate_target_args
+from refract.logging_setup import get_logger
+
+log = get_logger("drivers")
+_BACKENDS = {"agy": agy, "claude": claude, "codex": codex, "pi": pi}
 
 _PRODUCER_SENTINEL = object()
 
@@ -45,7 +45,7 @@ class StreamBridge:
             future = asyncio.run_coroutine_threadsafe(self.queue.put(event), self.loop)
             future.result()
         except Exception:
-            pass
+            log.warning("Stream event dropped", exc_info=True)
 
     def close_producer(self) -> None:
         """Signal end of production from a provider thread."""
@@ -56,7 +56,7 @@ class StreamBridge:
             future = asyncio.run_coroutine_threadsafe(self.queue.put(_PRODUCER_SENTINEL), self.loop)
             future.result()
         except Exception:
-            pass
+            log.warning("Stream close signal dropped", exc_info=True)
 
     async def close(self) -> None:
         """Signal end of production from the event loop."""
@@ -262,55 +262,8 @@ class DriverRegistry:
                 error=str(exc),
                 error_code="invalid_args",
             )
-        if target.backend == "agy":
-            result = await agy_execute(
-                AgyParams(
-                    PROMPT=prompt,
-                    cd=cwd,
-                    SESSION_ID=session_id,
-                    args=args,
-                    timeout_s=timeout_s,
-                    cancel_event=cancel_event,
-                    emitter=emitter,
-                )
-            )
-        elif target.backend == "codex":
-            result = await codex_execute(
-                CodexParams(
-                    PROMPT=prompt,
-                    cd=cwd,
-                    SESSION_ID=session_id,
-                    args=args,
-                    timeout_s=timeout_s,
-                    cancel_event=cancel_event,
-                    emitter=emitter,
-                )
-            )
-        elif target.backend == "pi":
-            result = await pi_execute(
-                PiParams(
-                    PROMPT=prompt,
-                    cd=cwd,
-                    SESSION_ID=session_id,
-                    args=args,
-                    timeout_s=timeout_s,
-                    cancel_event=cancel_event,
-                    emitter=emitter,
-                )
-            )
-        elif target.backend == "claude":
-            result = await claude_execute(
-                ClaudeParams(
-                    PROMPT=prompt,
-                    cd=cwd,
-                    SESSION_ID=session_id,
-                    args=args,
-                    timeout_s=timeout_s,
-                    cancel_event=cancel_event,
-                    emitter=emitter,
-                )
-            )
-        else:
+        backend = _BACKENDS.get(target.backend)
+        if backend is None:
             return DriverResult(
                 outcome="TARGET_FATAL",
                 session_id=session_id,
@@ -318,6 +271,16 @@ class DriverRegistry:
                 error=f"Unsupported backend: {target.backend}",
                 error_code="invalid_args",
             )
+        params = BackendParams(
+            PROMPT=prompt,
+            cd=cwd,
+            SESSION_ID=session_id,
+            args=args,
+            timeout_s=timeout_s,
+            cancel_event=cancel_event,
+            emitter=emitter,
+        )
+        result = await asyncio.to_thread(backend.execute, params)
         return _normalize(result)
 
 

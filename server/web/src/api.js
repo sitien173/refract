@@ -45,11 +45,6 @@ export async function getBootstrap() {
   return bootstrapPromise
 }
 
-export function clearCsrfToken() {
-  csrfToken = ''
-  bootstrapPromise = null
-}
-
 export async function getOverview() {
   return request('/dashboard/api/overview')
 }
@@ -107,7 +102,6 @@ export async function mutateWithCsrf(path, { method = 'POST', body, expectedRevi
   if (!csrfToken) await getBootstrap()
   const headers = {
     Accept: 'application/json',
-    'X-Refract-CSRF': csrfToken,
   }
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'

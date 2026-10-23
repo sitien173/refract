@@ -16,7 +16,7 @@ vi.mock('../api', () => {
   return {
     getProject: vi.fn(),
     getProjectJobs: vi.fn(),
-    getTaskGuide: vi.fn(),
+    getTaskGuide: vi.fn().mockImplementation(() => Promise.resolve({ guide: {}, workflows: ['consult', 'implement', 'review', 'other'] })),
     getConfiguration: vi.fn().mockResolvedValue({ valid: true }),
     getProjectProfileOverrides: vi.fn(),
     getProjectProfileOverride: vi.fn(),
@@ -131,7 +131,7 @@ describe('ProjectDetail screen', () => {
   it('renders effective workflows without duplication and maps source names', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '/path/guide.json' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '/path/guide.json' })
 
     render(<ProjectDetail projectId="proj-demo" />)
 
@@ -154,7 +154,7 @@ describe('ProjectDetail screen', () => {
   it('exposes sortable headers and responsive priority classes on effective configuration table', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
     expect(await screen.findByText('Demo Workspace')).toBeInTheDocument()
@@ -165,8 +165,8 @@ describe('ProjectDetail screen', () => {
     const profileHeader = screen.getByRole('columnheader', { name: /Declared profile/i })
     expect(profileHeader.className).toMatch(/col-priority-secondary/)
 
-    const attemptsHeader = screen.getByRole('columnheader', { name: /Attempts/i })
-    expect(attemptsHeader.className).toMatch(/col-priority-tertiary/)
+    const timeoutHeader = screen.getByRole('columnheader', { name: /Timeout/i })
+    expect(timeoutHeader.className).toMatch(/col-priority-tertiary/)
 
     // Sort by Workflow descending
     const sortBtn = screen.getByRole('button', { name: /Sort by Workflow/i })
@@ -235,7 +235,7 @@ describe('ProjectDetail screen', () => {
 
     vi.mocked(api.getProject).mockResolvedValue(customProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
     expect(await screen.findByText('Demo Workspace')).toBeInTheDocument()
@@ -267,7 +267,7 @@ describe('ProjectDetail screen', () => {
   it('suppresses source chip when parent profile is null in profile resolution tab', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
 
@@ -289,7 +289,7 @@ describe('ProjectDetail screen', () => {
   it('opens docked inspector on workflow row click', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
 
@@ -324,7 +324,7 @@ describe('ProjectDetail screen', () => {
       },
     })
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
     const row = await screen.findByText('implement')
@@ -338,7 +338,7 @@ describe('ProjectDetail screen', () => {
     error.payload = { source_path: '/path/to/.refract/config.toml' }
     vi.mocked(api.getProject).mockRejectedValue(error)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
 
@@ -350,7 +350,7 @@ describe('ProjectDetail screen', () => {
   it('renders invalid configuration health banner and last-known-good revision while project details remain visible', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.getConfiguration).mockResolvedValue({
       valid: false,
       last_known_good_revision: 'rev-detail-lkg-004',
@@ -369,7 +369,7 @@ describe('ProjectDetail screen', () => {
   it('displays override controls in Profile resolution tab and identifies project overrides vs global profiles', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
 
@@ -394,7 +394,7 @@ describe('ProjectDetail screen', () => {
   it('opens profile editor to create a project override and submits payload with project revision', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.createProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-002',
       source_path: '/path/to/.refract/config.toml',
@@ -443,7 +443,7 @@ describe('ProjectDetail screen', () => {
   it('opens profile editor to edit an existing project override with prefilled data', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.getProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-001',
       source_path: '/path/to/.refract/config.toml',
@@ -497,7 +497,7 @@ describe('ProjectDetail screen', () => {
   it('shows remove override dialog with server-resolved global fallback preview and confirms removal with "Remove override" button', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.deleteProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-004',
       source_path: '/path/to/.refract/config.toml',
@@ -543,7 +543,7 @@ describe('ProjectDetail screen', () => {
   it('handles referenced rejection when removing project override by displaying blocking references', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     const refError = new api.DashboardApiError('Project override is referenced', 409, {
       code: 'referenced',
       references: [
@@ -576,7 +576,7 @@ describe('ProjectDetail screen', () => {
   it('preserves dirty draft in profile editor across project polling updates', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
 
@@ -596,7 +596,7 @@ describe('ProjectDetail screen', () => {
     vi.mocked(api.updateProjectProfileOverride).mockClear()
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.getProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-001',
       source_path: '/path/to/.refract/config.toml',
@@ -734,7 +734,7 @@ describe('ProjectDetail screen', () => {
     vi.mocked(api.updateProjectProfileOverride).mockClear()
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.getProjectProfileOverride).mockResolvedValue({
       revision: 'rev-proj-001',
       source_path: '/path/to/.refract/config.toml',
@@ -854,7 +854,7 @@ describe('ProjectDetail screen', () => {
         created_at: '2026-09-04 15:00:00',
       },
     ], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.getJob).mockResolvedValue({
       id: 'job-p1',
       project_id: 'proj-demo',
@@ -911,7 +911,7 @@ describe('ProjectDetail screen', () => {
   it('renders not-found when selected job belongs to another project', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.getJob).mockResolvedValue({
       id: 'job-other',
       project_id: 'proj-other',
@@ -947,7 +947,7 @@ describe('ProjectDetail screen', () => {
         created_at: '2026-09-04 15:05:00',
       },
     ], recent: [], more_recent: 5 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
     const jobsTab = await screen.findByRole('tab', { name: /Jobs/i })
@@ -988,7 +988,7 @@ describe('ProjectDetail screen', () => {
       .mockResolvedValueOnce({ active: [], recent: [{ id: 'recent-job', workflow: 'review', profile: 'balanced', state: 'succeeded' }], more_recent: 2 })
       .mockResolvedValue({ active: [], recent: [], more_recent: 0 })
     vi.mocked(api.getProjectJobs).mockClear()
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     render(<ProjectDetail projectId="proj-demo" />)
     const jobsTab = await screen.findByRole('tab', { name: /Jobs/i })
@@ -1009,7 +1009,7 @@ describe('ProjectDetail screen', () => {
   it('clears selected and full job state when projectId changes', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
     vi.mocked(api.getJob).mockResolvedValue({
       id: 'job-p1',
       project_id: 'proj-demo',
@@ -1033,7 +1033,7 @@ describe('ProjectDetail screen', () => {
   it('invalidates in-flight selected-job requests and discards response if route changes before resolution', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     let resolveJobFetch
     const delayedJobPromise = new Promise((resolve) => {
@@ -1065,7 +1065,7 @@ describe('ProjectDetail screen', () => {
   it('discards in-flight job polling update when user navigates away before poll resolves', async () => {
     vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
     vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
-    vi.mocked(api.getTaskGuide).mockResolvedValue({ guide: {}, source_path: '' })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
 
     // Initial job fetch succeeds immediately
     vi.mocked(api.getJob).mockResolvedValueOnce({

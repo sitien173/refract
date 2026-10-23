@@ -54,9 +54,8 @@ review, Git, and handover.
 9. **Finalize phase** per the Coordinator review procedure. Set handover
     `current_phase` and `next_action` to the next phase, emit the phase report,
     and stop.
-10. **Finalize plan** after the final phase: write final coordination state,
-    consolidate every checkpoint into the sole plan commit, set the plan `impl`
-    anchor, then invoke `verifying-before-completion`.
+10. **Finalize plan** after the final phase using the sole
+    [consolidation procedure](../coordinating-multi-model-work/references/git-anchors.md#consolidation).
 
 ## Gotchas
 

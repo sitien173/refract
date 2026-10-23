@@ -60,14 +60,6 @@ after final plan consolidation.
 
 ## Finalize plan
 
-After the final phase closes:
-
-1. Mark handover `DONE` and finish every journal.
-2. Checkpoint final coordination state under `tracked`.
-3. Follow [git-anchors.md](git-anchors.md) to consolidate all plan checkpoints.
-4. Use the single plan-level Conventional Commit message from `PLAN.md`.
-5. Set the plan `impl` ref and run final verification at that exact HEAD.
-6. Confirm the root is clean and HEAD equals the plan `impl` ref.
-
-The completed branch contains one commit for the plan. Phase refs retain the
-reviewable implementation and fix checkpoints.
+After the final phase closes, follow the sole
+[consolidation procedure](git-anchors.md#consolidation). That procedure owns
+final coordination state, the replacement commit, and final verification.

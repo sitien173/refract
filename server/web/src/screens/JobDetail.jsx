@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { POLL_INTERVAL_MS } from '../hooks/constants'
 import { getJob } from '../api'
 import JobDetails from '../components/JobDetails'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
@@ -19,7 +20,7 @@ export default function JobDetail({ jobId, onNavigate }) {
   const isTerminal = job ? TERMINAL_STATES.has(job.state) : true
 
   // Poll active jobs every 5 seconds; stop when terminal or unmounted
-  usePolling(refresh, 5000, {
+  usePolling(refresh, POLL_INTERVAL_MS, {
     enabled: Boolean(jobId && !isTerminal),
     isTerminal,
     deps: [jobId, isTerminal],

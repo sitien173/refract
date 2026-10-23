@@ -1,4 +1,5 @@
 import { getOverview } from '../api'
+import { POLL_INTERVAL_MS } from '../hooks/constants'
 import Alert from '../components/Alert'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
@@ -6,7 +7,7 @@ import { useDashboardQuery } from '../hooks/useDashboardQuery'
 
 export default function Overview({ onNavigate }) {
   const { data: overview, error, isLoading, isRefreshing, refresh } = useDashboardQuery(getOverview, {
-    pollInterval: 5000,
+    pollInterval: POLL_INTERVAL_MS,
   })
 
   function handleLink(e, path) {

@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import uuid
 from pathlib import Path
 
 from refract.config import DaemonConfig, ProfileDeclaration, TargetConfig, TargetSelection
 from refract.drivers import DriverResult
+from refract.models import ProjectView
 
 
 def git(path: Path, *args: str) -> str:
     completed = subprocess.run(["git", "-C", str(path), *args], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return completed.stdout.strip()
+
+
+def register_project(runtime, path: str, alias: str = "") -> ProjectView:
+    resolved = Path(path).expanduser().resolve()
+    return runtime.database.upsert_project(project_id=str(uuid.uuid4()), alias=alias or resolved.name, root=resolved.as_posix())
 
 
 def repository(tmp_path: Path) -> Path:
@@ -27,7 +34,7 @@ def repository(tmp_path: Path) -> Path:
 
 def config(home: Path, targets: tuple[TargetConfig, ...] | None = None) -> DaemonConfig:
     resolved_targets = targets or (TargetConfig(id="primary", backend="codex"),)
-    selection = TargetSelection(tuple(target.id for target in resolved_targets), len(resolved_targets))
+    selection = TargetSelection(tuple(target.id for target in resolved_targets))
     return DaemonConfig(
         home=home,
         max_jobs=2,
@@ -52,6 +59,10 @@ class FakeDrivers:
         self.outcomes = outcomes or {}
         self.mutate = mutate
         self.sessions: list[str] = []
+
+    @staticmethod
+    def supports_structured_streaming(target: TargetConfig) -> bool:
+        return True
 
     @staticmethod
     def available(target: TargetConfig) -> bool:

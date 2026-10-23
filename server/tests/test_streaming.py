@@ -240,6 +240,36 @@ async def test_recorder_timer_flush(db):
 
 
 @pytest.mark.asyncio
+async def test_recorder_retains_timer_flush_task_until_completion(db, monkeypatch):
+    recorder = StreamRecorder(db, "job-stream", 1, "t1", "claude", flush_interval_s=10.0)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_flush = recorder.flush
+
+    async def paused_flush():
+        entered.set()
+        await release.wait()
+        await original_flush()
+
+    monkeypatch.setattr(recorder, "flush", paused_flush)
+    await recorder.record({"kind": "attempt.started", "data": {}})
+    recorder._timer_handle.cancel()
+    recorder._on_timer()
+    tasks = list(recorder._flush_tasks)
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert len(tasks) == 1
+        assert not tasks[0].done()
+        assert tasks[0] in recorder._flush_tasks
+    finally:
+        release.set()
+        await asyncio.gather(*tasks)
+        await recorder.close()
+    assert not recorder._flush_tasks
+    assert db.stream_high_water("job-stream") > 0
+
+
+@pytest.mark.asyncio
 async def test_recorder_8kib_text_splitting(db):
     recorder = StreamRecorder(
         database=db,
@@ -357,14 +387,14 @@ async def test_recorder_exact_job_event_limit_retains_finish_marker_without_trun
     assert recorder.truncated is False
     assert db.stream_is_truncated("job-stream") is False
 
-    await recorder.record(
-        "attempt.finished",
-        {
+    await recorder.record({
+        "kind": "attempt.finished",
+        "data": {
             "status": "succeeded",
             "outcome": "SUCCESS",
             "error_code": "",
         },
-    )
+    })
     await recorder.close()
 
     assert recorder.truncated is False
@@ -400,14 +430,14 @@ async def test_recorder_exact_job_bytes_limit_retains_finish_marker_without_trun
     assert recorder.truncated is False
     assert db.stream_is_truncated("job-stream") is False
 
-    await recorder.record(
-        "attempt.finished",
-        {
+    await recorder.record({
+        "kind": "attempt.finished",
+        "data": {
             "status": "succeeded",
             "outcome": "SUCCESS",
             "error_code": "",
         },
-    )
+    })
     await recorder.close()
 
     assert recorder.truncated is False

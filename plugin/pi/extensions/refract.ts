@@ -8,12 +8,12 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const hook = JSON.parse(execFileSync(resolve(root, "hooks/refract-session-start.sh"), { encoding: "utf8" }));
 const context: string = hook.hookSpecificOutput.additionalContext;
 
-export default function (pi: ExtensionAPI) {
+export default function refract(pi: ExtensionAPI) {
   pi.registerMcpServer("refract", {
     url: process.env.REFRACT_URL ?? "http://127.0.0.1:8765/mcp",
     exposure: "direct",
   });
-  pi.on("before_agent_start", async (event) => ({
+  pi.on("before_agent_start", (event) => ({
     systemPrompt: event.systemPrompt + "\n\n" + context,
   }));
 }

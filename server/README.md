@@ -45,9 +45,9 @@ It exposes AI agent workflows through Model Context Protocol tools.
 ```
 
 Visual diagrams are available in `docs/diagrams/`:
-- [System Architecture Diagram](../docs/diagrams/refract_system_architecture.drawio.png)
+- [System Architecture Diagram](../docs/diagrams/refract_system_architecture.svg)
 - [C4 Model Diagrams](../docs/diagrams/refract_c4_model.svg)
-- [Data Flow Diagram](../docs/diagrams/refract_data_flow_diagram.drawio.png)
+- [Data Flow Diagram](../docs/diagrams/refract_data_flow_diagram.svg)
 
 ## Quick Start
 
@@ -295,6 +295,12 @@ implement = "claude-opus-high-code"
 review = ["claude-sonnet-medium-review"]
 ```
 
+### Database compatibility
+
+Schema v15 is the minimum and current supported database schema. New databases and empty, unversioned files initialize to v15. Existing v15 databases retain jobs, sessions, history, and stream events. Older and newer schemas fail before journal changes or schema writes. This server does not migrate them automatically.
+
+Stop the daemon and back up the complete state directory before upgrading. Upgrade a backup of an older database with a migration-capable Refract version. Use a server supporting the stored schema for newer databases. Select another state directory with `REFRACT_HOME` to start fresh without deleting the original database.
+
 ### Starting the Daemon
 
 Verify configuration and start the daemon:
@@ -305,6 +311,8 @@ uv run refract serve
 ```
 
 The daemon listens at `http://127.0.0.1:8765/mcp`. `REFRACT_LOG_LEVEL`, `REFRACT_LOG_FORMAT`, `REFRACT_LOG_FILE`, `REFRACT_LOG_CONSOLE`, `REFRACT_LOG_MAX_BYTES`, `REFRACT_LOG_BACKUP_COUNT`, and `REFRACT_LOG_CAPTURE_WARNINGS` override logging settings. Relative log paths resolve under `REFRACT_HOME` (or `~/.refract`).
+
+Application logging uses a bounded asynchronous queue and private rotating files. Exception tracebacks remain redacted. Logging does not create crash files or manage the process fault handler.
 
 ## Workflows and Policy
 

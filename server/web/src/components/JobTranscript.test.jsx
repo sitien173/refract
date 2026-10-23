@@ -755,6 +755,22 @@ describe('JobTranscript component', () => {
       expect(screen.getByRole('button', { name: /jump to live/i })).toBeInTheDocument()
     })
 
+    it.each([
+      { key: 'ArrowUp' },
+      { key: 'PageUp' },
+      { key: 'Home' },
+      { key: ' ', shiftKey: true },
+    ])('keeps the transcript keyboard-focusable for $key navigation', (key) => {
+      render(<JobTranscript entities={sampleEntities} status="live" streamStatus="active" />)
+      const region = screen.getByRole('region', { name: 'Job execution transcript' })
+      expect(region).toHaveAttribute('tabindex', '0')
+      region.focus()
+      expect(region).toHaveFocus()
+      fireEvent.keyDown(region, key)
+      fireEvent.click(screen.getByRole('button', { name: /jump to live/i }))
+      expect(screen.queryByRole('button', { name: /jump to live/i })).not.toBeInTheDocument()
+    })
+
     it('does not scroll viewport while following is disabled and keeps Jump to live visible across new content', () => {
       const { rerender } = render(
         <JobTranscript

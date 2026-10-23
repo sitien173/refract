@@ -9,8 +9,8 @@ import threading
 from typing import Any, Callable
 
 from refract.database import Database
+from refract.workers import run_sync
 from refract.logging_setup import get_logger
-from refract.models import JobStreamEvent
 
 
 log = get_logger("streaming")
@@ -83,9 +83,11 @@ class StreamRecorder:
         self.max_job_events = max_job_events
         self.max_job_bytes = max_job_bytes
 
+        self._flush_lock = asyncio.Lock()
         self._buffer: list[dict[str, Any]] = []
         self._buffer_bytes: int = 0
         self._timer_handle: asyncio.TimerHandle | None = None
+        self._flush_tasks: set[asyncio.Task[None]] = set()
         self._closed: bool = False
         self._failed: bool = False
 
@@ -123,78 +125,17 @@ class StreamRecorder:
             return "closed"
         return "active"
 
-    async def record(
-        self,
-        event_or_kind: dict[str, Any] | JobStreamEvent | str,
-        data: dict[str, Any] | None = None,
-        *,
-        entity_id: str = "",
-        parent_entity_id: str = "",
-    ) -> None:
+    async def record(self, event: dict[str, Any]) -> None:
         if self._closed or self._truncated:
             return
 
-        if isinstance(event_or_kind, JobStreamEvent):
-            kind = event_or_kind.kind
-            evt_data = dict(event_or_kind.data)
-            entity_id = event_or_kind.entity_id or entity_id
-            parent_entity_id = event_or_kind.parent_entity_id or parent_entity_id
-        elif isinstance(event_or_kind, dict):
-            kind = str(event_or_kind.get("kind", ""))
-            evt_data = dict(event_or_kind.get("data", {}))
-            entity_id = str(event_or_kind.get("entity_id", entity_id))
-            parent_entity_id = str(event_or_kind.get("parent_entity_id", parent_entity_id))
-        elif isinstance(event_or_kind, str):
-            kind = event_or_kind
-            evt_data = dict(data or {})
-        else:
-            raise TypeError(f"Unsupported event type: {type(event_or_kind)}")
+        kind = str(event.get("kind", ""))
+        evt_data = dict(event.get("data", {}))
+        entity_id = str(event.get("entity_id", ""))
+        parent_entity_id = str(event.get("parent_entity_id", ""))
 
         if kind in {"assistant.text.delta", "assistant.reasoning_summary.delta"}:
-            text = str(evt_data.get("text", ""))
-            chunks = _split_text(text, self.max_text_event_bytes)
-            if not chunks:
-                return
-            for chunk in chunks:
-                if self._truncated:
-                    return
-                if self._buffer:
-                    last = self._buffer[-1]
-                    if (
-                        last["kind"] == kind
-                        and last["entity_id"] == entity_id
-                        and last["parent_entity_id"] == parent_entity_id
-                    ):
-                        last_text = str(last["data"].get("text", ""))
-                        merged = last_text + chunk
-                        if len(merged.encode("utf-8")) <= self.max_text_event_bytes:
-                            old_bytes = len(json.dumps(last["data"], ensure_ascii=False).encode("utf-8"))
-                            new_data = {"text": merged}
-                            new_bytes = len(json.dumps(new_data, ensure_ascii=False).encode("utf-8"))
-                            diff = new_bytes - old_bytes
-                            if self._total_bytes + diff > self.max_job_bytes:
-                                await self._mark_truncated(entity_id, parent_entity_id)
-                                return
-                            last["data"] = new_data
-                            self._buffer_bytes += diff
-                            self._total_bytes += diff
-                            if (
-                                len(self._buffer) >= self.max_batch_events
-                                or self._buffer_bytes >= self.max_batch_bytes
-                            ):
-                                await self.flush()
-                            else:
-                                self._schedule_timer()
-                            continue
-                await self._push_event({
-                    "attempt": self.attempt,
-                    "target_id": self.target_id,
-                    "backend": self.backend,
-                    "kind": kind,
-                    "entity_id": entity_id,
-                    "parent_entity_id": parent_entity_id,
-                    "data": {"text": chunk},
-                })
+            await self._record_text(kind, evt_data, entity_id, parent_entity_id)
         else:
             await self._push_event({
                 "attempt": self.attempt,
@@ -206,10 +147,63 @@ class StreamRecorder:
                 "data": evt_data,
             })
 
+    async def _record_text(
+        self, kind: str, evt_data: dict[str, Any], entity_id: str, parent_entity_id: str,
+    ) -> None:
+        text = str(evt_data.get("text", ""))
+        chunks = _split_text(text, self.max_text_event_bytes)
+        if not chunks:
+            return
+        for chunk in chunks:
+            if self._truncated:
+                return
+            if await self._merge_text(kind, chunk, entity_id, parent_entity_id):
+                continue
+            await self._push_event({
+                "attempt": self.attempt,
+                "target_id": self.target_id,
+                "backend": self.backend,
+                "kind": kind,
+                "entity_id": entity_id,
+                "parent_entity_id": parent_entity_id,
+                "data": {"text": chunk},
+            })
+
+    async def _merge_text(
+        self, kind: str, chunk: str, entity_id: str, parent_entity_id: str,
+    ) -> bool:
+        if not self._buffer:
+            return False
+        last = self._buffer[-1]
+        if (
+            last["kind"] != kind
+            or last["entity_id"] != entity_id
+            or last["parent_entity_id"] != parent_entity_id
+        ):
+            return False
+        merged = str(last["data"].get("text", "")) + chunk
+        if len(merged.encode("utf-8")) > self.max_text_event_bytes:
+            return False
+        old_bytes = len(json.dumps(last["data"], ensure_ascii=False).encode("utf-8"))
+        new_data = {"text": merged}
+        new_bytes = len(json.dumps(new_data, ensure_ascii=False).encode("utf-8"))
+        diff = new_bytes - old_bytes
+        if self._total_bytes + diff > self.max_job_bytes:
+            await self._mark_truncated(entity_id, parent_entity_id)
+            return True
+        last["data"] = new_data
+        self._buffer_bytes += diff
+        self._total_bytes += diff
+        if len(self._buffer) >= self.max_batch_events or self._buffer_bytes >= self.max_batch_bytes:
+            await self.flush()
+        else:
+            self._schedule_timer()
+        return True
+
     async def _mark_truncated(self, entity_id: str, parent_entity_id: str) -> None:
         self._truncated = True
         await self.flush()
-        if not self.database.stream_is_truncated(self.job_id):
+        if not await run_sync(self.database.stream_is_truncated, self.job_id):
             trunc_evt = {
                 "attempt": self.attempt,
                 "target_id": self.target_id,
@@ -262,45 +256,52 @@ class StreamRecorder:
     def _on_timer(self) -> None:
         self._timer_handle = None
         if self._buffer and not self._closed:
-            asyncio.create_task(self.flush())
+            task = asyncio.create_task(self.flush())
+            self._flush_tasks.add(task)
+            task.add_done_callback(self._flush_tasks.discard)
 
     async def flush(self) -> None:
-        if self._timer_handle:
-            self._timer_handle.cancel()
-            self._timer_handle = None
-        if not self._buffer:
-            return
-        to_persist = list(self._buffer)
-        self._buffer.clear()
-        self._buffer_bytes = 0
+        async with self._flush_lock:
+            if self._timer_handle:
+                self._timer_handle.cancel()
+                self._timer_handle = None
+            if not self._buffer:
+                return
+            to_persist = list(self._buffer)
+            self._buffer.clear()
+            self._buffer_bytes = 0
 
-        try:
-            persisted = self.database.append_stream_events(self.job_id, to_persist)
-        except Exception as exc:
-            log.error(
-                "Stream persistence failed",
-                exc_info=True,
-                extra={"event": "stream.persistence_failed", "job_id": self.job_id, "error": str(exc)},
-            )
-            self._failed = True
             try:
-                self.database.event(self.job_id, "stream.persistence_failed", {"error": str(exc)})
-            except Exception:
-                pass
-            return
-
-        if persisted and self._on_commit:
-            high_water = persisted[-1].id
-            try:
-                res = self._on_commit(high_water)
-                if inspect.isawaitable(res):
-                    await res
-            except Exception:
-                log.warning(
-                    "Stream on_commit callback failed",
+                persisted = await run_sync(self.database.append_stream_events, self.job_id, to_persist)
+            except Exception as exc:
+                log.error(
+                    "Stream persistence failed",
                     exc_info=True,
-                    extra={"event": "stream.commit_callback_failed", "job_id": self.job_id},
+                    extra={"event": "stream.persistence_failed", "job_id": self.job_id, "error": str(exc)},
                 )
+                self._failed = True
+                try:
+                    await run_sync(self.database.event, self.job_id, "stream.persistence_failed", {"error": str(exc)})
+                except Exception:
+                    log.warning(
+                        "Stream failure event could not be persisted",
+                        exc_info=True,
+                        extra={"event": "stream.failure_event_failed", "job_id": self.job_id},
+                    )
+                return
+
+            if persisted and self._on_commit:
+                high_water = persisted[-1].id
+                try:
+                    res = self._on_commit(high_water)
+                    if inspect.isawaitable(res):
+                        await res
+                except Exception:
+                    log.warning(
+                        "Stream on_commit callback failed",
+                        exc_info=True,
+                        extra={"event": "stream.commit_callback_failed", "job_id": self.job_id},
+                    )
 
     async def close(self) -> None:
         if self._closed:

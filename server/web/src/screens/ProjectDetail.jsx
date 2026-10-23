@@ -1,16 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-import {
-  getConfiguration,
-  getJob,
-  getProject,
-  getProjectJobs,
-  getTaskGuide,
-  getProjectProfileOverrides,
-  getProjectProfileOverride,
-  deleteProjectProfileOverride,
-  getConfigurationProfile,
-  DashboardApiError,
-} from '../api'
+import { useProjectDetail } from '../hooks/useProjectDetail'
 import Alert from '../components/Alert'
 import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
 import DataGrid from '../components/DataGrid'
@@ -20,12 +8,7 @@ import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import TabbedPanel from '../components/TabbedPanel'
 import ProfileEditor from '../components/ProfileEditor'
-import Modal from '../components/Modal'
-import { useDashboardQuery } from '../hooks/useDashboardQuery'
-import { usePolling } from '../hooks/usePolling'
-
-const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted'])
-
+import ConfigurationMutationDialog from '../components/ConfigurationMutationDialog'
 export function getEffectiveTargetsSortValue(row) {
   if (!row) return ''
   if (Array.isArray(row.rawTargets)) {
@@ -34,502 +17,26 @@ export function getEffectiveTargetsSortValue(row) {
   return String(row.rawTargets ?? '')
 }
 
-export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate }) {
+export default function ProjectDetail({ projectId, jobId, onNavigate }) {
   const {
-    data: projectData,
-    error: projectError,
-    isLoading: isProjectLoading,
-    refresh: refreshProject,
-  } = useDashboardQuery(() => getProject(projectId), {
-    deps: [projectId],
-    pollInterval: 5000,
-  })
-
-  const {
-    data: projectOverridesData,
-    refresh: refreshOverrides,
-  } = useDashboardQuery(() => getProjectProfileOverrides(projectId), {
-    deps: [projectId],
-    pollInterval: 5000,
-  })
-
-  const { data: taskGuideData } = useDashboardQuery(() => getTaskGuide(projectId), {
-    deps: [projectId],
-  })
-
-  const { data: jobsData, error: jobsError, refresh: refreshJobs } = useDashboardQuery(
-    () => getProjectJobs(projectId),
-    { deps: [projectId] }
-  )
-  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
-
-  const [activeTab, setActiveTab] = useState(propJobId ? 'jobs' : 'effective')
-  const [selectedWorkflowItem, setSelectedWorkflowItem] = useState(null)
-  const [selectedProfileId, setSelectedProfileId] = useState('')
-  const [announcement, setAnnouncement] = useState('')
-  const [selectedJobId, setSelectedJobId] = useState(propJobId || '')
-  const [fullJob, setFullJob] = useState(null)
-  const [isJobLoading, setIsJobLoading] = useState(false)
-  const [jobFetchError, setJobFetchError] = useState(null)
-  const [jobRefreshError, setJobRefreshError] = useState(null)
-  const [jobSearchTerm, setJobSearchTerm] = useState('')
-  const [jobStateFilter, setJobStateFilter] = useState('all')
-  const [jobWorkflowFilter, setJobWorkflowFilter] = useState('all')
-
-  const lastFocusedJobIdRef = useRef(null)
-  const jobHeadingRef = useRef(null)
-  const activeRouteRef = useRef({ projectId, selectedJobId: propJobId || '' })
-  activeRouteRef.current = { projectId, selectedJobId }
-
-  // Clear selected/full job state when projectId changes
-  useEffect(() => {
-    setSelectedJobId(propJobId || '')
-    setFullJob(null)
-    setJobFetchError(null)
-    setJobRefreshError(null)
-    if (propJobId) {
-      setActiveTab('jobs')
-    }
-  }, [projectId])
-
-  useEffect(() => {
-    if (propJobId) {
-      setSelectedJobId(propJobId)
-      setActiveTab('jobs')
-    } else {
-      setSelectedJobId('')
-    }
-  }, [propJobId])
-
-  // Fetch full details only after selecting a job
-  useEffect(() => {
-    if (!selectedJobId) {
-      setFullJob(null)
-      setJobFetchError(null)
-      setJobRefreshError(null)
-      return
-    }
-
-    let cancelled = false
-    setIsJobLoading(true)
-    setJobFetchError(null)
-    setJobRefreshError(null)
-
-    const expectedProjectId = projectId
-    const expectedJobId = selectedJobId
-
-    getJob(selectedJobId)
-      .then((res) => {
-        if (
-          cancelled ||
-          activeRouteRef.current.projectId !== expectedProjectId ||
-          activeRouteRef.current.selectedJobId !== expectedJobId
-        ) {
-          return
-        }
-        if (!res || res.project_id !== expectedProjectId) {
-          setJobFetchError(new Error('Job not found in this project.'))
-          setFullJob(null)
-        } else {
-          setFullJob(res)
-          setJobFetchError(null)
-        }
-      })
-      .catch((err) => {
-        if (
-          cancelled ||
-          activeRouteRef.current.projectId !== expectedProjectId ||
-          activeRouteRef.current.selectedJobId !== expectedJobId
-        ) {
-          return
-        }
-        setJobFetchError(err)
-        setFullJob(null)
-      })
-      .finally(() => {
-        if (
-          !cancelled &&
-          activeRouteRef.current.projectId === expectedProjectId &&
-          activeRouteRef.current.selectedJobId === expectedJobId
-        ) {
-          setIsJobLoading(false)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [selectedJobId, projectId])
-
-  // Poll selected active job every 5 seconds until terminal
-  const isJobTerminal = fullJob ? TERMINAL_STATES.has(fullJob.state) : true
-  usePolling(
-    async () => {
-      if (!selectedJobId || isJobTerminal) return
-      const expectedProjectId = projectId
-      const expectedJobId = selectedJobId
-      try {
-        const updated = await getJob(selectedJobId)
-        if (
-          activeRouteRef.current.projectId !== expectedProjectId ||
-          activeRouteRef.current.selectedJobId !== expectedJobId
-        ) {
-          return
-        }
-        if (updated.project_id !== expectedProjectId) {
-          setJobFetchError(new Error('Job not found in this project.'))
-          setFullJob(null)
-          return
-        }
-        setFullJob(updated)
-        setJobRefreshError(null)
-      } catch (err) {
-        if (
-          activeRouteRef.current.projectId !== expectedProjectId ||
-          activeRouteRef.current.selectedJobId !== expectedJobId
-        ) {
-          return
-        }
-        setJobRefreshError(err.message || 'Background refresh failed.')
-      }
-    },
-    5000,
-    {
-      enabled: Boolean(selectedJobId && !isJobTerminal),
-      isTerminal: isJobTerminal,
-      deps: [selectedJobId, isJobTerminal, projectId],
-    }
-  )
-
-  // Poll project jobs list while at least one listed job is non-terminal
-  const activeJobs = jobsData?.active ?? []
-  const recentJobs = jobsData?.recent ?? []
-  const projectJobsList = [...activeJobs, ...recentJobs]
-  const allJobsTerminal = Boolean(jobsData) && activeJobs.length === 0
-  const totalProjectJobs = activeJobs.length + recentJobs.length + (jobsData?.more_recent ?? 0)
-  usePolling(refreshJobs, 5000, {
-    enabled: Boolean(projectId && activeTab === 'jobs' && !selectedJobId && !allJobsTerminal),
-    isTerminal: allJobsTerminal,
-    deps: [projectId, activeTab, selectedJobId, allJobsTerminal],
-  })
-
-  // Focus detail heading after navigation into details
-  useEffect(() => {
-    if (selectedJobId && (fullJob || jobFetchError)) {
-      jobHeadingRef.current?.focus()
-    }
-  }, [selectedJobId, Boolean(fullJob), Boolean(jobFetchError)])
-
-  // Return focus to originating job link when returning to jobs list
-  useEffect(() => {
-    if (!selectedJobId && lastFocusedJobIdRef.current) {
-      const targetId = lastFocusedJobIdRef.current
-      lastFocusedJobIdRef.current = null
-      setTimeout(() => {
-        const link = document.getElementById(`job-link-${targetId}`)
-        if (link) {
-          link.focus()
-        }
-      }, 0)
-    }
-  }, [selectedJobId])
-
-  function handleSelectJob(jobId) {
-    lastFocusedJobIdRef.current = jobId
-    const path = `/dashboard/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}`
-    if (onNavigate) {
-      onNavigate(path)
-    } else {
-      window.history.pushState({}, '', path)
-      window.dispatchEvent(new PopStateEvent('popstate'))
-    }
-    setSelectedJobId(jobId)
-  }
-
-  function handleBackToJobs() {
-    const path = `/dashboard/projects/${encodeURIComponent(projectId)}`
-    if (onNavigate) {
-      onNavigate(path)
-    } else {
-      window.history.pushState({}, '', path)
-      window.dispatchEvent(new PopStateEvent('popstate'))
-    }
-    setSelectedJobId('')
-    setFullJob(null)
-    setJobFetchError(null)
-    setJobRefreshError(null)
-  }
-
-  const handleRefreshSelectedJob = async () => {
-    if (!selectedJobId) return
-    const expectedProjectId = projectId
-    const expectedJobId = selectedJobId
-    setIsJobLoading(true)
-    try {
-      const updated = await getJob(selectedJobId)
-      if (
-        activeRouteRef.current.projectId !== expectedProjectId ||
-        activeRouteRef.current.selectedJobId !== expectedJobId
-      ) {
-        return
-      }
-      if (updated.project_id !== expectedProjectId) {
-        setJobFetchError(new Error('Job not found in this project.'))
-        setFullJob(null)
-      } else {
-        setFullJob(updated)
-        setJobRefreshError(null)
-        setJobFetchError(null)
-      }
-    } catch (err) {
-      if (
-        activeRouteRef.current.projectId !== expectedProjectId ||
-        activeRouteRef.current.selectedJobId !== expectedJobId
-      ) {
-        return
-      }
-      if (fullJob) {
-        setJobRefreshError(err.message || 'Background refresh failed.')
-      } else {
-        setJobFetchError(err)
-      }
-    } finally {
-      if (
-        activeRouteRef.current.projectId === expectedProjectId &&
-        activeRouteRef.current.selectedJobId === expectedJobId
-      ) {
-        setIsJobLoading(false)
-      }
-    }
-  }
-  const [editorState, setEditorState] = useState({
-    isOpen: false,
-    mode: 'create',
-    profile: null,
-    revision: '',
-    availableTargets: [],
-    availableProfiles: [],
-  })
-  const [removeDialogState, setRemoveDialogState] = useState({
-    isOpen: false,
-    profileId: '',
-    revision: '',
-    fallback: null,
-    references: null,
-    error: null,
-    isSubmitting: false,
-    isConfirmed: false,
-  })
-
-  const project = projectData?.project || { id: projectId, alias: projectId, root: '' }
-  const configData = projectData?.configuration || {}
-  const profiles = configData.profiles || []
-  const defaultProfileId =
-    configData.project_default_profile || configData.global_default_profile || (profiles[0]?.id ?? 'default')
-
-  const currentProfileId = (profiles.some((p) => p.id === selectedProfileId) ? selectedProfileId : '') || defaultProfileId
-  const activeProfile = profiles.find((p) => p.id === currentProfileId) || profiles[0] || {
-    id: currentProfileId,
-    parent: { value: null, source: 'global' },
-    declared: {},
-    inherited: {},
-    effective: {},
-    sources: {},
-  }
-
-  const overrides = projectOverridesData?.overrides || []
-  const currentOverride = overrides.find((o) => o.id === currentProfileId)
-  const isOverridden = Boolean(currentOverride) || activeProfile.parent.source === 'project' || Object.values(activeProfile.sources || {}).some((s) => s === 'project')
-
-  async function handleOpenCreateOverride(prefillProfileId = '') {
-    let rev = projectOverridesData?.revision ?? ''
-    let targets = projectOverridesData?.available_targets || []
-    let profs = profiles.map((p) => p.id)
-
-    try {
-      const overridesResp = await getProjectProfileOverrides(projectId)
-      rev = overridesResp.revision ?? ''
-      if (overridesResp.available_targets?.length) {
-        targets = overridesResp.available_targets
-      }
-    } catch {
-      // Keep fallback values
-    }
-
-    let initialProfile = null
-    if (prefillProfileId) {
-      initialProfile = {
-        id: prefillProfileId,
-        extends: prefillProfileId,
-        declared: {},
-        inherited: activeProfile?.effective || {},
-        effective: activeProfile?.effective || {},
-        sources: {},
-      }
-    }
-
-    setEditorState({
-      isOpen: true,
-      mode: 'create',
-      profile: initialProfile,
-      revision: rev,
-      availableTargets: targets,
-      availableProfiles: profs,
-    })
-  }
-
-  async function handleOpenEditOverride(profileId) {
-    try {
-      let rev = projectOverridesData?.revision ?? ''
-      let targets = projectOverridesData?.available_targets || []
-      let profs = profiles.map((p) => p.id)
-
-      const [overrideResp, overridesListResp] = await Promise.all([
-        getProjectProfileOverride(projectId, profileId),
-        getProjectProfileOverrides(projectId).catch(() => null),
-      ])
-
-      if (overridesListResp) {
-        rev = overridesListResp.revision ?? rev
-        if (overridesListResp.available_targets?.length) {
-          targets = overridesListResp.available_targets
-        }
-      }
-
-      setEditorState({
-        isOpen: true,
-        mode: 'edit',
-        profile: overrideResp.override || null,
-        revision: overrideResp.revision ?? rev,
-        availableTargets: targets,
-        availableProfiles: profs,
-      })
-    } catch (err) {
-      setAnnouncement(`Failed to load profile override: ${err.message || 'error'}`)
-    }
-  }
-
-  async function handleOpenRemoveOverride(profileId) {
-    try {
-      let fallbackProfile = null
-      try {
-        const globalProfileResp = await getConfigurationProfile(profileId)
-        fallbackProfile = globalProfileResp.profile || null
-      } catch {
-        fallbackProfile = null
-      }
-
-      let rev = projectOverridesData?.revision ?? ''
-      try {
-        const overridesResp = await getProjectProfileOverrides(projectId)
-        rev = overridesResp.revision ?? rev
-      } catch {
-        // Fall back to existing revision
-      }
-
-      setRemoveDialogState({
-        isOpen: true,
-        profileId,
-        revision: rev,
-        fallback: fallbackProfile,
-        references: null,
-        error: null,
-        isSubmitting: false,
-        isConfirmed: false,
-      })
-    } catch (err) {
-      setAnnouncement(`Failed to prepare override removal: ${err.message || 'error'}`)
-    }
-  }
-
-  async function handleConfirmRemoveOverride() {
-    setRemoveDialogState((prev) => ({ ...prev, isSubmitting: true, error: null }))
-    try {
-      await deleteProjectProfileOverride(
-        projectId,
-        removeDialogState.profileId,
-        removeDialogState.revision
-      )
-      const removedId = removeDialogState.profileId
-      setAnnouncement(`Profile override "${removedId}" removed.`)
-      setRemoveDialogState({
-        isOpen: false,
-        profileId: '',
-        revision: '',
-        fallback: null,
-        references: null,
-        error: null,
-        isSubmitting: false,
-        isConfirmed: false,
-      })
-      refreshProject()
-      refreshOverrides()
-      refreshConfigurationHealth()
-    } catch (err) {
-      if ((err instanceof DashboardApiError || err?.status === 409) && err?.payload?.code === 'referenced') {
-        setRemoveDialogState((prev) => ({
-          ...prev,
-          isSubmitting: false,
-          references: err.payload?.references || [],
-        }))
-      } else {
-        setRemoveDialogState((prev) => ({
-          ...prev,
-          isSubmitting: false,
-          error: err.payload?.error || err.message || 'Failed to remove override.',
-        }))
-      }
-    }
-  }
-
-  function handleOverrideSaved(result) {
-    const savedId = result.override?.id || result.profile?.id
-    if (savedId) {
-      setSelectedProfileId(savedId)
-    }
-    refreshProject()
-    refreshOverrides()
-    refreshConfigurationHealth()
-    setAnnouncement(`Profile override "${savedId || 'configuration'}" saved and active.`)
-  }
-
-  async function handleReloadRequired() {
-    try {
-      const overridesResp = await getProjectProfileOverrides(projectId)
-      let currentOverride = null
-      if (editorState.mode === 'edit' && editorState.profile?.id && Array.isArray(overridesResp.overrides)) {
-        currentOverride = overridesResp.overrides.find((ov) => ov.id === editorState.profile.id)
-      }
-      setEditorState((prev) => ({
-        ...prev,
-        revision: overridesResp.revision ?? '',
-        profile: currentOverride || prev.profile,
-        availableTargets: overridesResp.available_targets || prev.availableTargets,
-      }))
-      setAnnouncement('Project configuration reloaded.')
-      return {
-        ...overridesResp,
-        override: currentOverride,
-        profile: currentOverride,
-      }
-    } catch (err) {
-      setAnnouncement(`Failed to reload configuration: ${err.message || 'error'}`)
-      return null
-    }
-  }
-
-  function handleNavigate(path) {
-    if (onNavigate) {
-      onNavigate(path)
-    } else {
-      window.history.pushState({}, '', path)
-      window.dispatchEvent(new PopStateEvent('popstate'))
-    }
-  }
+    projectData, projectError, isProjectLoading, refreshProject,
+    refreshOverrides, taskGuideData, jobsData, jobsError, refreshJobs,
+    configurationHealth, refreshConfigurationHealth,
+    activeTab, setActiveTab, selectedWorkflowItem, setSelectedWorkflowItem,
+    setSelectedProfileId, announcement, setAnnouncement,
+    selectedJobId, fullJob, isJobLoading, jobFetchError, jobRefreshError, jobHeadingRef,
+    jobSearchTerm, setJobSearchTerm, jobStateFilter, setJobStateFilter,
+    jobWorkflowFilter, setJobWorkflowFilter, projectJobsList, totalProjectJobs,
+    editorState, setEditorState, removeDialogState, setRemoveDialogState,
+    project, profiles, defaultProfileId, currentProfileId, activeProfile, isOverridden,
+    handleSelectJob, handleBackToJobs, handleRefreshSelectedJob,
+    handleOpenCreateOverride, handleOpenEditOverride, handleOpenRemoveOverride,
+    handleConfirmRemoveOverride, handleOverrideSaved, handleReloadRequired, handleNavigate,
+  } = useProjectDetail({ projectId, jobId, onNavigate })
 
   // Build effective workflow rows from activeProfile.effective (never concatenate declared + inherited)
   const effectiveRows = Object.keys(activeProfile.effective || {})
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .map((workflow) => {
       const selection = activeProfile.effective[workflow] || {}
       const isInherited = Boolean(activeProfile.inherited && activeProfile.inherited[workflow])
@@ -541,7 +48,6 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
         profile: activeProfile.id,
         targets: Array.isArray(selection.targets) ? selection.targets.join(', ') : '',
         rawTargets: selection.targets || [],
-        maxAttempts: selection.max_attempts ?? 1,
         timeoutS: selection.timeout_s ?? 60,
         source,
         provenance: isDeclared ? 'Declared' : 'Inherited',
@@ -591,16 +97,6 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
       render: (row) => <SourceChip source={row.source} />,
     },
     {
-      key: 'maxAttempts',
-      header: 'Attempts',
-      priority: 'tertiary',
-      sortable: true,
-      sortAccessor: (row) => row.maxAttempts ?? 0,
-      width: '100px',
-      minWidth: '80px',
-      render: (row) => <span>{row.maxAttempts}</span>,
-    },
-    {
       key: 'timeoutS',
       header: 'Timeout',
       priority: 'tertiary',
@@ -647,16 +143,6 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
       minWidth: '160px',
       wrap: true,
       render: (row) => <code className="cell-code">{row.targets}</code>,
-    },
-    {
-      key: 'maxAttempts',
-      header: 'Attempts',
-      priority: 'tertiary',
-      sortable: true,
-      sortAccessor: (row) => row.maxAttempts ?? 0,
-      width: '100px',
-      minWidth: '80px',
-      render: (row) => <span>{row.maxAttempts}</span>,
     },
     {
       key: 'timeoutS',
@@ -1103,7 +589,6 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
               <InspectorRow label="Declared profile" value={selectedWorkflowItem.profile} />
               <InspectorRow label="Provenance" value={selectedWorkflowItem.provenance} />
               <InspectorRow label="Effective targets" value={selectedWorkflowItem.targets} />
-              <InspectorRow label="Max attempts" value={selectedWorkflowItem.maxAttempts} />
               <InspectorRow label="Timeout" value={`${selectedWorkflowItem.timeoutS} seconds`} />
               <InspectorRow label="Source origin">
                 <SourceChip source={selectedWorkflowItem.source} />
@@ -1122,170 +607,66 @@ export default function ProjectDetail({ projectId, jobId: propJobId, onNavigate 
         revision={editorState.revision}
         availableTargets={editorState.availableTargets}
         availableProfiles={editorState.availableProfiles}
+        workflows={taskGuideData?.workflows}
         onClose={() => setEditorState((prev) => ({ ...prev, isOpen: false }))}
         onSaved={handleOverrideSaved}
         onAnnounce={(msg) => setAnnouncement(msg)}
         onReloadRequired={handleReloadRequired}
       />
 
-      <Modal
+      <ConfigurationMutationDialog
         isOpen={removeDialogState.isOpen}
-        onClose={() => setRemoveDialogState((prev) => ({ ...prev, isOpen: false }))}
         title={`Remove override: ${removeDialogState.profileId}`}
-        role="dialog"
-        ariaLabel={`Remove override: ${removeDialogState.profileId}`}
+        targetId={removeDialogState.profileId}
+        entity="profile override"
+        action="remove"
+        references={removeDialogState.references}
+        error={removeDialogState.error}
+        isSubmitting={removeDialogState.isSubmitting}
+        onClose={() => setRemoveDialogState((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={handleConfirmRemoveOverride}
       >
-        {removeDialogState.references && removeDialogState.references.length > 0 ? (
-          <div className="mutation-dialog-referenced">
-            <Alert tone="warning" title="Profile override is currently referenced">
-              Project override <strong>{removeDialogState.profileId}</strong> cannot be removed because it is referenced by:
-            </Alert>
-            <div className="mutation-references-list" style={{ marginTop: 'var(--space-md)' }}>
-              <div className="data-grid-container" tabIndex={0} role="region" aria-label="Blocking references for override">
-                <table className="data-grid-table data-table" style={{ width: '100%' }}>
+        <div className="fallback-preview-panel" style={{ marginBottom: 'var(--space-md)' }}>
+          <span className="eyebrow" style={{ display: 'block', marginBottom: 'var(--space-xs)' }}>
+            Resulting global fallback policy
+          </span>
+          {removeDialogState.fallback ? (
+            <div className="fallback-preview-content">
+              <p className="caption" style={{ margin: '0 0 var(--space-xs) 0' }}>
+                Parent profile: <strong>{removeDialogState.fallback.extends || '(None - base profile)'}</strong>
+              </p>
+              <div className="data-grid-container" tabIndex={0} role="region" aria-label="Resulting global fallback policy">
+                <table className="data-grid-table data-table" style={{ width: '100%', fontSize: 'var(--type-text-xs-size)' }}>
                   <thead>
                     <tr>
-                      <th scope="col">Scope</th>
-                      <th scope="col">Profile</th>
-                      <th scope="col">Relationship</th>
+                      <th scope="col">Workflow</th>
+                      <th scope="col">Fallback targets</th>
+                      <th scope="col">Timeout</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {removeDialogState.references.map((ref, idx) => (
-                      <tr key={idx}>
-                        <td>
-                          <span className="source-chip source-repository">Project</span>
-                        </td>
-                        <td>
-                          <strong>{ref.profile_id || '(project default)'}</strong>
-                        </td>
-                        <td>
-                          <code>{ref.relationship || ref.workflow || 'reference'}</code>
-                        </td>
-                      </tr>
-                    ))}
+                    {(taskGuideData?.workflows || []).map((wf) => {
+                      const pol = removeDialogState.fallback.effective?.[wf]
+                      return (
+                        <tr key={wf}>
+                          <td><strong>{wf}</strong></td>
+                          <td><code>{pol?.targets ? pol.targets.join(', ') : '—'}</code></td>
+                          <td>{pol?.timeout_s ?? 60}s</td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
-            <p className="caption" style={{ marginTop: 'var(--space-md)' }}>
-              Update or remove these references in the project configuration before removing this override.
-            </p>
-            <div className="modal-actions" style={{ justifyContent: 'flex-end', marginTop: 'var(--space-lg)' }}>
-              <button
-                type="button"
-                className="button button-secondary"
-                onClick={() => setRemoveDialogState((prev) => ({ ...prev, isOpen: false }))}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (removeDialogState.isConfirmed && !removeDialogState.isSubmitting) {
-                handleConfirmRemoveOverride()
-              }
-            }}
-            className="mutation-dialog-confirm"
-          >
-            {removeDialogState.error && (
-              <div style={{ marginBottom: 'var(--space-md)' }}>
-                <Alert tone="error" title="Action failed">
-                  {removeDialogState.error}
-                </Alert>
-              </div>
-            )}
-
-            <p style={{ margin: '0 0 var(--space-md) 0' }}>
-              Are you sure you want to remove the project override for profile{' '}
-              <strong>{removeDialogState.profileId}</strong>?
-            </p>
-
-            <div className="fallback-preview-panel" style={{ marginBottom: 'var(--space-md)' }}>
-              <span className="eyebrow" style={{ display: 'block', marginBottom: 'var(--space-xs)' }}>
-                Resulting global fallback policy
-              </span>
-              {removeDialogState.fallback ? (
-                <div className="fallback-preview-content">
-                  <p className="caption" style={{ margin: '0 0 var(--space-xs) 0' }}>
-                    Parent profile: <strong>{removeDialogState.fallback.extends || '(None - base profile)'}</strong>
-                  </p>
-                  <div className="data-grid-container" tabIndex={0} role="region" aria-label="Resulting global fallback policy">
-                    <table className="data-grid-table data-table" style={{ width: '100%', fontSize: 'var(--type-text-xs-size)' }}>
-                      <thead>
-                        <tr>
-                          <th scope="col">Workflow</th>
-                          <th scope="col">Fallback targets</th>
-                          <th scope="col">Attempts</th>
-                          <th scope="col">Timeout</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {['consult', 'implement', 'review', 'other'].map((wf) => {
-                          const pol = removeDialogState.fallback.effective?.[wf]
-                          return (
-                            <tr key={wf}>
-                              <td><strong>{wf}</strong></td>
-                              <td><code>{pol?.targets ? pol.targets.join(', ') : '—'}</code></td>
-                              <td>{pol?.max_attempts ?? 1}</td>
-                              <td>{pol?.timeout_s ?? 60}s</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ) : (
-                <Alert tone="neutral" title="No global profile fallback">
-                  Profile <strong>{removeDialogState.profileId}</strong> does not exist in global configuration.
-                  Removing this override will completely remove the profile from this project.
-                </Alert>
-              )}
-            </div>
-
-            <div className="confirmation-group" style={{ marginBottom: 'var(--space-md)' }}>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={removeDialogState.isConfirmed}
-                  onChange={(e) =>
-                    setRemoveDialogState((prev) => ({ ...prev, isConfirmed: e.target.checked }))
-                  }
-                  disabled={removeDialogState.isSubmitting}
-                  aria-label={`I confirm removing override for profile ${removeDialogState.profileId}`}
-                />
-                <span>
-                  I confirm removing override for profile <strong>{removeDialogState.profileId}</strong>.
-                </span>
-              </label>
-            </div>
-
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="button button-secondary"
-                onClick={() => setRemoveDialogState((prev) => ({ ...prev, isOpen: false }))}
-                disabled={removeDialogState.isSubmitting}
-              >
-                Cancel
-              </button>
-              <div className="modal-actions-right">
-                <button
-                  type="submit"
-                  className="button button-destructive-outline"
-                  disabled={!removeDialogState.isConfirmed || removeDialogState.isSubmitting}
-                >
-                  {removeDialogState.isSubmitting ? 'Removing override…' : 'Remove override'}
-                </button>
-              </div>
-            </div>
-          </form>
-        )}
-      </Modal>
+          ) : (
+            <Alert tone="neutral" title="No global profile fallback">
+              Profile <strong>{removeDialogState.profileId}</strong> does not exist in global configuration.
+              Removing this override will completely remove the profile from this project.
+            </Alert>
+          )}
+        </div>
+      </ConfigurationMutationDialog>
     </div>
   )
 }

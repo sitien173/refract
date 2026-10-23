@@ -6,9 +6,40 @@ import asyncio
 import logging
 import threading
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-RunJob = Callable[[str, threading.Event], Awaitable[None]]
+from typing import Protocol, override
+
+
+class _SchedulerLifecycle(Protocol):
+    """Keep startup and shutdown awaitable for runtime lifecycle callers."""
+
+    async def start(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+class CancelEvent(threading.Event):
+    """Thread-safe cancellation with an event-loop waiter."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._async_event = asyncio.Event()
+
+    def set(self) -> None:
+        super().set()
+        if self._loop is not None and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._async_event.set)
+
+    async def wait_async(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        if self.is_set():
+            return
+        await self._async_event.wait()
+
+
+RunJob = Callable[[str, CancelEvent], Awaitable[None]]
 
 
 @dataclass(slots=True, eq=False)
@@ -16,12 +47,12 @@ class _Dispatch:
     job_id: str
     project_id: str
     completion: asyncio.Event = field(default_factory=asyncio.Event)
-    cancel_event: threading.Event = field(default_factory=threading.Event)
+    cancel_event: CancelEvent = field(default_factory=CancelEvent)
     reserved: bool = False
     started: bool = False
 
 
-class ProjectScheduler:
+class ProjectScheduler(_SchedulerLifecycle):
     """Reserve global and project admission before dispatching a job."""
 
     def __init__(
@@ -35,15 +66,11 @@ class ProjectScheduler:
         self._run_job = run_job
         self._ready: asyncio.Queue[_Dispatch | None] = asyncio.Queue()
         self._pending: deque[_Dispatch] = deque()
-        self._queues: dict[str, deque[str]] = {}
         self._queued_projects: dict[str, str] = {}
-        self._scheduled_projects: set[str] = set()
-        self._active_projects: set[str] = set()
-        self._completion_events: dict[str, asyncio.Event] = {}
-        self._cancel_events: dict[str, threading.Event] = {}
         self._current: dict[str, _Dispatch] = {}
         self._terminal_waiters: dict[str, _Dispatch] = {}
         self._active: set[_Dispatch] = set()
+        self._active_projects: set[str] = set()
         self._workers: list[asyncio.Task[None]] = []
         self._closing = False
         self._started = False
@@ -60,15 +87,14 @@ class ProjectScheduler:
     def queued_jobs(self) -> int:
         return len(self._queued_projects)
 
-    async def start(self, queued: Iterable[tuple[str, str]] = ()) -> None:
+    @override
+    async def start(self) -> None:
         self._closing = False
         self._started = True
         self._workers = [
             asyncio.create_task(self._worker(), name=f"refract-worker-{index}")
             for index in range(self.max_jobs)
         ]
-        for job_id, project_id in queued:
-            self.enqueue(job_id, project_id)
         self._schedule()
 
     def enqueue(
@@ -82,9 +108,7 @@ class ProjectScheduler:
             return
         dispatch = _Dispatch(job_id=job_id, project_id=project_id)
         self._current[job_id] = dispatch
-        self._completion_events[job_id] = dispatch.completion
         self._pending.append(dispatch)
-        self._queues.setdefault(project_id, deque()).append(job_id)
         self._queued_projects[job_id] = project_id
         self._schedule()
 
@@ -123,6 +147,7 @@ class ProjectScheduler:
         if dispatch is not None:
             self._release(dispatch, signal=signal)
 
+    @override
     async def close(self) -> None:
         self._closing = True
         for dispatch in tuple(self._active):
@@ -140,21 +165,12 @@ class ProjectScheduler:
         for dispatch in tuple(self._active):
             self._release(dispatch, schedule=False)
         self._started = False
-        self._queues.clear()
         self._pending.clear()
         self._queued_projects.clear()
-        self._scheduled_projects.clear()
-        self._active_projects.clear()
         self._current.clear()
         self._terminal_waiters.clear()
-        self._completion_events.clear()
-        self._cancel_events.clear()
         self._active.clear()
-
-    def signal(self, job_id: str) -> None:
-        dispatch = self._current.get(job_id)
-        if dispatch is not None:
-            self._release(dispatch)
+        self._active_projects.clear()
 
     def _schedule(self) -> None:
         if self._closing or not self._started:
@@ -162,7 +178,7 @@ class ProjectScheduler:
         while len(self._active) < self.max_jobs:
             selected: _Dispatch | None = None
             for candidate in self._pending:
-                if any(item.project_id == candidate.project_id for item in self._active):
+                if candidate.project_id in self._active_projects:
                     continue
                 selected = candidate
                 break
@@ -170,19 +186,9 @@ class ProjectScheduler:
                 break
             self._pending.remove(selected)
             self._queued_projects.pop(selected.job_id, None)
-            project_queue = self._queues.get(selected.project_id)
-            if project_queue is not None:
-                try:
-                    project_queue.remove(selected.job_id)
-                except ValueError:
-                    pass
-                if not project_queue:
-                    self._queues.pop(selected.project_id, None)
             selected.reserved = True
             self._active.add(selected)
             self._active_projects.add(selected.project_id)
-            self._cancel_events[selected.job_id] = selected.cancel_event
-            self._scheduled_projects.add(selected.project_id)
             self._ready.put_nowait(selected)
 
     def _release(
@@ -195,24 +201,12 @@ class ProjectScheduler:
         if dispatch in self._pending:
             self._pending.remove(dispatch)
             self._queued_projects.pop(dispatch.job_id, None)
-            project_queue = self._queues.get(dispatch.project_id)
-            if project_queue is not None:
-                try:
-                    project_queue.remove(dispatch.job_id)
-                except ValueError:
-                    pass
-                if not project_queue:
-                    self._queues.pop(dispatch.project_id, None)
         if dispatch.reserved:
             dispatch.reserved = False
             self._active.discard(dispatch)
-            self._cancel_events.pop(dispatch.job_id, None)
-            if not any(item.project_id == dispatch.project_id for item in self._active):
-                self._active_projects.discard(dispatch.project_id)
-                self._scheduled_projects.discard(dispatch.project_id)
+            self._active_projects.discard(dispatch.project_id)
         if self._current.get(dispatch.job_id) is dispatch:
             self._current.pop(dispatch.job_id, None)
-            self._completion_events.pop(dispatch.job_id, None)
             if signal:
                 dispatch.completion.set()
             else:

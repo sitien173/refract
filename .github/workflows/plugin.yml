@@ -2,9 +2,10 @@ name: Validate
 
 on:
   push:
-    paths: ["plugin/**", ".claude-plugin/**", ".github/workflows/plugin.yml"]
+    paths: ["plugin/**", ".claude-plugin/**", "server/pyproject.toml", ".github/workflows/plugin.yml"]
   pull_request:
-    paths: ["plugin/**", ".claude-plugin/**", ".github/workflows/plugin.yml"]
+    paths: ["plugin/**", ".claude-plugin/**", "server/pyproject.toml", ".github/workflows/plugin.yml"]
+  workflow_call:
 
 permissions:
   contents: read

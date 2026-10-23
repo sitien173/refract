@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import faulthandler
 import json
 import logging
+import logging.handlers
+import os
 import queue
+from contextvars import Context
 from pathlib import Path
 
 import pytest
@@ -144,10 +148,26 @@ def test_json_logging_has_context_structure_and_redaction(tmp_path) -> None:
     assert "secret-token-value" not in json.dumps(record)
 
 
+def test_log_context_default_is_immutable_and_scopes_are_restored() -> None:
+    default = Context().run(logging_setup._CONTEXT.get)
+    with pytest.raises(TypeError):
+        default["job_id"] = "leaked"
+
+    with log_context(project_id="project-1"):
+        assert logging_setup._CONTEXT.get() == {"project_id": "project-1"}
+        with log_context(job_id="job-1"):
+            assert logging_setup._CONTEXT.get() == {
+                "project_id": "project-1", "job_id": "job-1",
+            }
+        assert logging_setup._CONTEXT.get() == {"project_id": "project-1"}
+        assert Context().run(logging_setup._CONTEXT.get) == {}
+    assert logging_setup._CONTEXT.get() == {}
+
+
 def test_configure_retries_a_degraded_file_sink(tmp_path, monkeypatch) -> None:
     path = tmp_path / "recovered.log"
     options = LoggingConfig(file=path, capture_warnings=False)
-    real_handler = logging_setup._SecureRotatingFileHandler
+    real_handler = logging.handlers.RotatingFileHandler
     attempts = 0
 
     def flaky_handler(*args, **kwargs):
@@ -157,7 +177,7 @@ def test_configure_retries_a_degraded_file_sink(tmp_path, monkeypatch) -> None:
             raise OSError("transient sink failure")
         return real_handler(*args, **kwargs)
 
-    monkeypatch.setattr(logging_setup, "_SecureRotatingFileHandler", flaky_handler)
+    monkeypatch.setattr(logging.handlers, "RotatingFileHandler", flaky_handler)
 
     configure(options)
     configure(options)
@@ -208,6 +228,57 @@ def test_configure_is_idempotent_and_rotates_files(tmp_path) -> None:
         for candidate in tmp_path.glob("application.log*")
     )
     assert "rotation record" in combined
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_log_files_stay_private_across_rotation_without_changing_parent(tmp_path) -> None:
+    tmp_path.chmod(0o755)
+    path = tmp_path / "application.log"
+    configure(LoggingConfig(file=path, max_bytes=300, backup_count=2, capture_warnings=False))
+    logger = get_logger("privacy")
+    for index in range(30):
+        logger.info("private record %s %s", index, "x" * 40)
+    shutdown()
+
+    files = list(tmp_path.glob("application.log*"))
+    assert len(files) == 3
+    assert all(candidate.stat().st_mode & 0o777 == 0o600 for candidate in files)
+    assert tmp_path.stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.parametrize("log_format", ["text", "json"])
+def test_queued_exceptions_are_reported_and_redacted(tmp_path, log_format) -> None:
+    path = tmp_path / "exceptions.log"
+    configure(LoggingConfig(file=path, format=log_format, capture_warnings=False))
+    try:
+        raise ValueError("token=exception-secret")
+    except ValueError:
+        get_logger("exceptions").exception("Failed password=message-secret")
+    shutdown()
+
+    output = path.read_text(encoding="utf-8")
+    assert "ValueError" in output
+    assert "Traceback" in output
+    assert "exception-secret" not in output
+    assert "message-secret" not in output
+    if log_format == "json":
+        records = [json.loads(line) for line in output.splitlines()]
+        assert "ValueError" in records[-1]["exception"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_logging_does_not_manage_process_fault_handler(tmp_path, monkeypatch, enabled) -> None:
+    monkeypatch.setattr(faulthandler, "is_enabled", lambda: enabled)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Application logging must not manage the process fault handler")
+
+    monkeypatch.setattr(faulthandler, "enable", unexpected)
+    monkeypatch.setattr(faulthandler, "disable", unexpected)
+    configure(LoggingConfig(file=tmp_path / "application.log", capture_warnings=False))
+    shutdown()
+
+    assert not (tmp_path / "application.crash.log").exists()
 
 
 def test_invalid_logging_configuration_is_rejected(tmp_path, monkeypatch) -> None:

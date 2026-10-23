@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { getConfiguration, getProject, getProjectJobs, getProjects } from '../api'
+import { getProject, getProjectJobs, getProjects } from '../api'
 import Alert from '../components/Alert'
 import ConfigurationHealthBanner from '../components/ConfigurationHealthBanner'
 import DataGrid from '../components/DataGrid'
 import PageHeader from '../components/PageHeader'
 import StatusBadge from '../components/StatusBadge'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
+import { useConfiguration } from '../hooks/useConfiguration'
 
 async function mapConcurrent(items, limit, fn) {
   const results = new Array(items.length)
@@ -24,13 +25,15 @@ async function mapConcurrent(items, limit, fn) {
 
 export default function Projects({ onNavigate }) {
   const { data: rawProjects, error, isLoading, refresh } = useDashboardQuery(getProjects)
-  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useDashboardQuery(getConfiguration, { pollInterval: 5000 })
+  const { data: configurationHealth, refresh: refreshConfigurationHealth } = useConfiguration()
   const [hydratedProjects, setHydratedProjects] = useState([])
   const [isHydrating, setIsHydrating] = useState(false)
+  const [hydrationError, setHydrationError] = useState(null)
   const [filterText, setFilterText] = useState('')
 
   useEffect(() => {
     let mounted = true
+    setHydrationError(null)
     if (!rawProjects || rawProjects.length === 0) {
       setHydratedProjects([])
       return
@@ -68,6 +71,11 @@ export default function Projects({ onNavigate }) {
     }).then((results) => {
       if (mounted) {
         setHydratedProjects(results)
+        setIsHydrating(false)
+      }
+    }).catch((err) => {
+      if (mounted) {
+        setHydrationError(err)
         setIsHydrating(false)
       }
     })
@@ -201,6 +209,11 @@ export default function Projects({ onNavigate }) {
       {error && !rawProjects && (
         <Alert tone="error" title="Unable to load projects">
           {error.message || 'Failed to fetch registered projects.'}
+        </Alert>
+      )}
+      {hydrationError && (
+        <Alert tone="warning" title="Unable to load project details">
+          {hydrationError.message || 'Failed to load project configuration and activity.'}
         </Alert>
       )}
       <ConfigurationHealthBanner health={configurationHealth} />

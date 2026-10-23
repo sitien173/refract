@@ -26,7 +26,6 @@ def _target_data(target: TargetConfig) -> dict[str, Any]:
 def _selection_data(selection: TargetSelection) -> dict[str, Any]:
     return {
         "targets": list(selection.targets),
-        "max_attempts": selection.max_attempts,
         "timeout_s": selection.timeout_s,
     }
 
@@ -40,20 +39,16 @@ def _parse_selection(value: Any) -> TargetSelection:
     if not all(isinstance(item, str) and item for item in raw_targets):
         raise ValueError("Execution plan target identifiers must be strings")
     target_ids = tuple(raw_targets)
-    max_attempts = value.get("max_attempts", len(target_ids))
     timeout_s = value.get("timeout_s", 0)
     if (
         not target_ids
         or len(set(target_ids)) != len(target_ids)
-        or isinstance(max_attempts, bool)
-        or not isinstance(max_attempts, int)
-        or max_attempts < 1
         or isinstance(timeout_s, bool)
         or not isinstance(timeout_s, int)
         or timeout_s < 0
     ):
         raise ValueError("Execution plan has an invalid target selection")
-    return TargetSelection(target_ids, max_attempts, timeout_s)
+    return TargetSelection(target_ids, timeout_s)
 
 
 def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:

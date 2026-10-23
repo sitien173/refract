@@ -26,32 +26,6 @@ class JobResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ConfigRevision(BaseModel):
-    """Identity and display metadata for one global configuration source."""
-
-    content_hash: str = ""
-    source_path: str = ""
-    modification_time: str = ""
-    loaded_at: str = ""
-    valid: bool = False
-
-    @property
-    def revision(self) -> str:
-        return self.content_hash
-
-    @property
-    def hash(self) -> str:
-        return self.content_hash
-
-    @property
-    def path(self) -> str:
-        return self.source_path
-
-    @property
-    def mtime(self) -> str:
-        return self.modification_time
-
-
 class ConfigHealth(BaseModel):
     """Latest global configuration load evidence."""
 
@@ -156,10 +130,6 @@ class ActionResult(BaseModel):
     error: str = ""
 
 
-class TaskGuideResult(BaseModel):
-    guide: dict[str, Any]
-
-
 class DaemonStatusResult(BaseModel):
     status: Literal["running", "stopping"]
     workers: int
@@ -236,14 +206,7 @@ class WorkflowPolicyData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     targets: list[str]
-    max_attempts: int | None = None
     timeout_s: int = 0
-
-    @model_validator(mode="after")
-    def _validate_defaults(self) -> WorkflowPolicyData:
-        if self.max_attempts is None or self.max_attempts <= 0:
-            self.max_attempts = max(len(self.targets), 1) if self.targets else 1
-        return self
 
 
 class ProfileEditorData(BaseModel):
@@ -364,10 +327,6 @@ class DashboardJob(BaseModel):
     execution_plan: dict[str, Any] = Field(default_factory=dict)
 
 
-class ResourcePayload(BaseModel):
-    data: Any
-
-
 StreamStatus = Literal["unavailable", "active", "complete", "truncated", "failed"]
 
 
@@ -409,7 +368,6 @@ __all__ = [
     "DashboardJob",
     "DashboardOverview",
     "ConfigHealthSnapshot",
-    "ConfigRevision",
     "ConfigurationHealth",
     "ContextStreamView",
     "DaemonStatusResult",
@@ -428,7 +386,6 @@ __all__ = [
     "ProjectOverrideListResponse",
     "ProjectOverrideResponse",
     "ProjectView",
-    "ResourcePayload",
     "StreamStatus",
     "StreamTotals",
     "SubmissionResult",
@@ -439,6 +396,5 @@ __all__ = [
     "TargetReference",
     "TargetResponse",
     "TargetView",
-    "TaskGuideResult",
     "WorkflowPolicyData",
 ]

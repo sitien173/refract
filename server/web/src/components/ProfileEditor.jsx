@@ -4,12 +4,12 @@ import {
   updateConfigurationProfile,
   createProjectProfileOverride,
   updateProjectProfileOverride,
-  DashboardApiError,
 } from '../api'
 import Alert from './Alert'
 import Modal from './Modal'
+import { useConfigEditor } from '../hooks/useConfigEditor'
 
-const BUILTIN_WORKFLOWS = ['consult', 'implement', 'review', 'other']
+const EMPTY_LIST = []
 
 export default function ProfileEditor({
   isOpen,
@@ -18,27 +18,27 @@ export default function ProfileEditor({
   projectId = '',
   profile = null,
   revision = '',
-  availableTargets = [],
-  availableProfiles = [],
+  availableTargets = EMPTY_LIST,
+  availableProfiles = EMPTY_LIST,
+  workflows = EMPTY_LIST,
   onClose,
   onSaved,
   onAnnounce,
   onReloadRequired,
 }) {
-  const isDirtyRef = useRef(false)
-  const [isDirty, setIsDirty] = useState(false)
   const [formData, setFormData] = useState(() => getInitialFormData(profile, availableTargets))
-  const [currentRevision, setCurrentRevision] = useState(revision)
-  const [saveStatus, setSaveStatus] = useState('')
-  const [error, setError] = useState(null)
+  const {
+    isDirtyRef, inFlightRef, currentRevision, setCurrentRevision,
+    saveStatus, setSaveStatus, error, setError, conflictData, setConflictData,
+    handleClose, submit, reload,
+  } = useConfigEditor({ revision, onClose, onSaved, onAnnounce })
   const [validationErrors, setValidationErrors] = useState({})
-  const [conflictData, setConflictData] = useState(null)
 
   function getInitialFormData(prof, targetsList) {
     const defaultTarget = targetsList && targetsList.length > 0 ? targetsList[0] : ''
     const workflowsState = {}
 
-    BUILTIN_WORKFLOWS.forEach((wf) => {
+    workflows.forEach((wf) => {
       const declaredWf = prof?.declared?.[wf] || prof?.workflows?.[wf]
       if (declaredWf && Array.isArray(declaredWf.targets) && declaredWf.targets.length > 0) {
         workflowsState[wf] = {
@@ -69,7 +69,6 @@ export default function ProfileEditor({
     if (!isOpen) {
       prevIsOpenRef.current = false
       isDirtyRef.current = false
-      setIsDirty(false)
       setError(null)
       setValidationErrors({})
       setConflictData(null)
@@ -80,7 +79,7 @@ export default function ProfileEditor({
     const wasOpen = prevIsOpenRef.current
     prevIsOpenRef.current = true
 
-    if (!wasOpen || !isDirtyRef.current) {
+    if (!wasOpen || (!isDirtyRef.current && !inFlightRef.current && !conflictData)) {
       setCurrentRevision(revision)
       setFormData(getInitialFormData(profile, availableTargets))
       setError(null)
@@ -88,18 +87,16 @@ export default function ProfileEditor({
       setConflictData(null)
       setSaveStatus('')
     }
-  }, [isOpen, mode, profile, revision, availableTargets])
+  }, [isOpen, mode, profile, revision, availableTargets, workflows])
 
   function handleFieldChange(field, value) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setError(null)
     setFormData((prev) => ({ ...prev, [field]: value }))
   }
 
   function handleWorkflowToggle(wf, declared) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setError(null)
     setValidationErrors((prev) => {
       const next = { ...prev }
@@ -130,7 +127,6 @@ export default function ProfileEditor({
 
   function handleAddTarget(wf) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setError(null)
     setValidationErrors((prev) => {
       const next = { ...prev }
@@ -156,7 +152,6 @@ export default function ProfileEditor({
 
   function handleTargetChange(wf, index, value) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setError(null)
     setValidationErrors((prev) => {
       const next = { ...prev }
@@ -183,7 +178,6 @@ export default function ProfileEditor({
 
   function handleMoveTarget(wf, index, direction) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setError(null)
 
     setFormData((prev) => {
@@ -209,7 +203,6 @@ export default function ProfileEditor({
 
   function handleRemoveTarget(wf, index) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setError(null)
 
     setFormData((prev) => {
@@ -229,7 +222,6 @@ export default function ProfileEditor({
 
   function handlePolicyFieldChange(wf, field, value) {
     isDirtyRef.current = true
-    setIsDirty(true)
     setError(null)
 
     setFormData((prev) => {
@@ -249,7 +241,7 @@ export default function ProfileEditor({
 
   async function handleSubmit(e) {
     if (e) e.preventDefault()
-    if (conflictData) return
+    if (inFlightRef.current || conflictData || !currentRevision || workflows.length === 0) return
     setError(null)
     setValidationErrors({})
     setConflictData(null)
@@ -262,7 +254,7 @@ export default function ProfileEditor({
     }
 
     const errors = {}
-    BUILTIN_WORKFLOWS.forEach((wf) => {
+    workflows.forEach((wf) => {
       const wfState = formData.workflows[wf]
       if (wfState?.declared) {
         if (!wfState.targets || wfState.targets.length === 0) {
@@ -278,11 +270,8 @@ export default function ProfileEditor({
       return
     }
 
-    setSaveStatus('saving')
-    if (onAnnounce) onAnnounce('Saving profile…')
-
     const workflowsPayload = {}
-    BUILTIN_WORKFLOWS.forEach((wf) => {
+    workflows.forEach((wf) => {
       const wfState = formData.workflows[wf]
       if (wfState?.declared) {
         workflowsPayload[wf] = {
@@ -300,116 +289,36 @@ export default function ProfileEditor({
       workflows: workflowsPayload,
     }
 
-    try {
-      let result
-      if (scope === 'project') {
-        if (mode === 'create') {
-          result = await createProjectProfileOverride(projectId, payload, currentRevision)
-        } else {
-          result = await updateProjectProfileOverride(projectId, profileId, payload, currentRevision)
+    return submit({
+      entity: 'profile',
+      savingMessage: 'Saving profile…',
+      successMessage: (result) => {
+        const entityLabel = scope === 'project' ? 'Profile override' : 'Profile'
+        const savedId = result.override?.id || result.profile?.id || profileId
+        return `${entityLabel} "${savedId}" saved and active.`
+      },
+      save: (revision) => {
+        if (scope === 'project') {
+          return mode === 'create'
+            ? createProjectProfileOverride(projectId, payload, revision)
+            : updateProjectProfileOverride(projectId, profileId, payload, revision)
         }
-      } else {
-        if (mode === 'create') {
-          result = await createConfigurationProfile(payload, currentRevision)
-        } else {
-          result = await updateConfigurationProfile(profileId, payload, currentRevision)
-        }
-      }
-
-      setSaveStatus('reloading')
-      if (onAnnounce) onAnnounce('Reloading runtime…')
-
-      setSaveStatus('active')
-      const entityLabel = scope === 'project' ? 'Profile override' : 'Profile'
-      const savedId = result.override?.id || result.profile?.id || profileId
-      if (onAnnounce) onAnnounce(`${entityLabel} "${savedId}" saved and active.`)
-
-      isDirtyRef.current = false
-      setIsDirty(false)
-      onSaved?.(result)
-      onClose?.()
-    } catch (err) {
-      setSaveStatus('')
-      if (err instanceof DashboardApiError && err.status === 409) {
-        const payloadErr = err.payload || {}
-        setConflictData({
-          unchanged: payloadErr.unchanged || 'The configuration file changed on the server.',
-          recovery: payloadErr.recovery || 'Reload current configuration and retry.',
-          current: payloadErr.current || '',
-        })
-        if (onAnnounce) {
-          onAnnounce('Configuration conflict detected: source changed after editor loading.')
-        }
-      } else {
-        setError(err.payload?.error || err.message || 'Failed to save profile.')
-        if (onAnnounce) {
-          onAnnounce(`Failed to save profile: ${err.message || 'error'}`)
-        }
-      }
-    }
+        return mode === 'create'
+          ? createConfigurationProfile(payload, revision)
+          : updateConfigurationProfile(profileId, payload, revision)
+      },
+    })
   }
 
-  async function handleReloadConfiguration() {
-    setSaveStatus('reloading')
-    setError(null)
-    try {
-      let payload = null
-      if (onReloadRequired) {
-        payload = await onReloadRequired()
-      }
-      let reloadedProfile = payload?.profile || payload?.override
-      if (!reloadedProfile && mode === 'create') {
-        if (Array.isArray(payload?.profiles)) {
-          reloadedProfile = payload.profiles.find((p) => p.id === formData.id)
-        } else if (Array.isArray(payload?.overrides)) {
-          reloadedProfile = payload.overrides.find((p) => p.id === formData.id)
-        }
-      }
-
-      const nextRevision = payload?.revision
-      if (mode === 'edit') {
-        if (!reloadedProfile || !nextRevision) {
-          setSaveStatus('')
-          const entityLabel = scope === 'project' ? 'Profile override' : 'Profile'
-          const msg = !reloadedProfile
-            ? `${entityLabel} no longer exists or could not be reloaded.`
-            : 'Reload response missing configuration revision.'
-          setError(msg)
-          if (onAnnounce) {
-            onAnnounce(msg)
-          }
-          return
-        }
-      } else if (mode === 'create') {
-        if (!nextRevision) {
-          setSaveStatus('')
-          const msg = 'Reload response missing configuration revision.'
-          setError(msg)
-          if (onAnnounce) {
-            onAnnounce(msg)
-          }
-          return
-        }
-      }
-
-      if (reloadedProfile) {
-        setFormData(getInitialFormData(reloadedProfile, availableTargets))
-      }
-      setCurrentRevision(nextRevision)
-      isDirtyRef.current = false
-      setIsDirty(false)
-      setConflictData(null)
-      setSaveStatus('')
-      if (onAnnounce) {
-        onAnnounce('Current configuration reloaded from server. Draft replaced.')
-      }
-    } catch (err) {
-      setSaveStatus('')
-      setError(err?.message || 'Failed to reload configuration.')
-      if (onAnnounce) {
-        onAnnounce(`Failed to reload configuration: ${err?.message || 'error'}`)
-      }
-    }
+  function handleReloadConfiguration() {
+    return reload({
+      load: onReloadRequired,
+      select: (payload) => payload?.profile || payload?.override ||
+        (mode === 'create' ? (payload?.profiles || payload?.overrides)?.find((p) => p.id === formData.id) : null),
+      apply: (item) => setFormData(getInitialFormData(item, availableTargets)),
+      mode,
+      entity: scope === 'project' ? 'Profile override' : 'Profile',
+    })
   }
 
   const isProject = scope === 'project'
@@ -421,7 +330,7 @@ export default function ProfileEditor({
   return (
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={handleClose}
       title={dialogTitle}
       role="dialog"
       ariaLabel={dialogTitle}
@@ -464,6 +373,7 @@ export default function ProfileEditor({
                 type="button"
                 className="button button-secondary button-sm"
                 onClick={handleReloadConfiguration}
+                disabled={isSubmitting}
               >
                 Reload current configuration
               </button>
@@ -522,7 +432,7 @@ export default function ProfileEditor({
           </p>
 
           <div className="profile-workflows-list">
-            {BUILTIN_WORKFLOWS.map((wf) => {
+            {workflows.map((wf) => {
               const wfState = formData.workflows[wf] || { declared: false, targets: [] }
               const inheritedWf = profile?.inherited?.[wf]
               const source = profile?.sources?.[wf]
@@ -563,9 +473,9 @@ export default function ProfileEditor({
                   {wfState.declared ? (
                     <div className="profile-workflow-controls">
                       <div className="form-group" style={{ marginBottom: 'var(--space-sm)' }}>
-                        <label className="form-label" style={{ fontSize: 'var(--type-text-xs-size)' }}>
+                        <span className="form-label" style={{ fontSize: 'var(--type-text-xs-size)' }}>
                           Failover targets (evaluated in order)
-                        </label>
+                        </span>
                         <div className="profile-targets-ordered-list">
                           {wfState.targets.map((tgt, idx) => (
                             <div key={idx} className="profile-target-row">
@@ -677,7 +587,7 @@ export default function ProfileEditor({
           <button
             type="button"
             className="button button-secondary"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={isSubmitting}
           >
             Cancel
@@ -686,7 +596,7 @@ export default function ProfileEditor({
             <button
               type="submit"
               className="button button-primary"
-              disabled={isSubmitting || Boolean(conflictData)}
+              disabled={isSubmitting || Boolean(conflictData) || !currentRevision || workflows.length === 0}
             >
               {isSubmitting
                 ? 'Saving…'

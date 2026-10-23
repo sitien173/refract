@@ -7,6 +7,7 @@ import json
 import logging
 import secrets
 import time
+from importlib.metadata import version as package_version
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from functools import wraps
@@ -22,17 +23,16 @@ from pydantic import Field, ValidationError
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from refract.config import load_config, load_project_config, load_task_guide
+from refract.config import DaemonConfig, load_config, load_task_guide
 from refract.dashboard import DashboardState, register_dashboard_routes
 from refract.logging_setup import configure as configure_logging, get_logger, log_context
-from refract.models import ActionResult, JobSummary, JobView, ProjectView, SubmissionResult, TERMINAL_STATES
+from refract.models import JobSummary, JobView, TERMINAL_STATES
+from refract.workers import run_sync
 from refract.runtime import OrchestrationError, Runtime
 from refract.workflows import BUILTIN_WORKFLOWS
 
 
 log = get_logger("server")
-_DAEMON_CONFIG = None
-_ACTIVE_RUNTIME: Runtime | None = None
 _MCP_WAIT_TIMEOUT_S = 3600
 _MCP_HEARTBEAT_INTERVAL_S: float = 30.0
 _MAX_RESPONSE_CHARS = 30_000
@@ -58,7 +58,14 @@ _ERROR_CODES = frozenset(
         "targets_unavailable",
     }
 )
-_DASHBOARD_STATE = DashboardState()
+_TOOL_DEFINITIONS: list[tuple[Callable[..., Any], dict[str, Any]]] = []
+
+
+def _tool(**options: Any):
+    def register(function):
+        _TOOL_DEFINITIONS.append((function, options))
+        return function
+    return register
 
 
 class RefractError(ToolError):
@@ -287,155 +294,122 @@ def _raw_arguments(ctx: Any) -> Mapping[str, Any] | None:
     return arguments if isinstance(arguments, Mapping) else None
 
 
-def _raw_argument_error(tool_name: str, arguments: Mapping[str, Any] | None) -> bool:
+def _raw_argument_error(schema: Mapping[str, Any], arguments: Mapping[str, Any] | None) -> bool:
     if arguments is None:
         return False
-    expected: dict[str, dict[str, type]] = {
-        "project_resolve": {"path": str, "alias": str},
-        "task_guide": {"project_id": str},
-        "job_submit": {
-            "project_id": str, "workflow": str, "prompt": str, "profile": str,
-            "context_key": str, "fresh_session": bool, "next_target": str,
-        },
-        "job_wait": {"job_id": str, "timeout_s": int, "result_offset": int},
-        "job_list": {"project_id": str},
-        "job_cancel": {"job_id": str},
-        "job_retry": {"job_id": str},
-    }
-    allowed = expected.get(tool_name)
-    if allowed is not None and any(name not in allowed for name in arguments):
+    allowed = schema.get("properties", {})
+    if any(name not in allowed for name in arguments):
         return True
-    for name, kind in (allowed or {}).items():
-        if name not in arguments:
-            continue
-        value = arguments[name]
-        if kind is int:
-            if type(value) is not int:
-                return True
-        elif kind is bool:
-            if type(value) is not bool:
-                return True
-        elif not isinstance(value, kind):
-            return True
-    return False
+    kinds = {"string": str, "integer": int, "boolean": bool}
+    return any(
+        type(value) is not kinds[allowed[name]["type"]]
+        for name, value in arguments.items()
+        if allowed[name].get("type") in kinds
+    )
 
 
-def _error_boundary(ctx: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:
-    """Normalize SDK validation and ToolError results into compact JSON isError results."""
-    async def dispatch() -> Any:
-        if getattr(ctx, "method", "") != "tools/call":
-            return await call_next(ctx)
-        request_id = _request_id(ctx)
-        tool_name = _tool_name(ctx)
-        if _raw_argument_error(tool_name, _raw_arguments(ctx)):
-            return _refract_error_result(
-                RefractError(
-                    "invalid_request",
-                    "Tool arguments are invalid.",
-                    "Correct the arguments using the tool schema and call the tool again.",
-                )
+def _normalize_tool_error(wire_result: Mapping[str, Any], tool_name: str, request_id: str) -> CallToolResult:
+    content = wire_result.get("content", [])
+    error_text = next(
+        (
+            str(item.get("text", ""))
+            for item in content
+            if isinstance(item, Mapping) and item.get("type") == "text"
+        ),
+        "",
+    )
+    payload = _recognized_sdk_error(tool_name, error_text)
+    if payload is not None:
+        return _refract_error_result(RefractError(**payload))
+    prefix = f"Error executing tool {tool_name}: " if tool_name else ""
+    if prefix and error_text.startswith(prefix) and _validation_error_text(error_text[len(prefix) :]):
+        return _refract_error_result(
+            RefractError(
+                "invalid_request",
+                "Tool arguments are invalid.",
+                "Correct the arguments using the tool schema and call the tool again.",
             )
-        try:
-            result = await call_next(ctx)
-        except asyncio.CancelledError:
-            raise
-        except ValidationError:
-            return _refract_error_result(
-                RefractError(
-                    "invalid_request",
-                    "Tool arguments are invalid.",
-                    "Correct the arguments using the tool schema and call the tool again.",
-                )
+        )
+    if prefix and error_text.startswith(prefix) and error_text[len(prefix) :].startswith("Unknown tool"):
+        return _refract_error_result(
+            RefractError(
+                "invalid_request",
+                "The requested tool is not available.",
+                "Use one of the seven tools returned by tools/list.",
             )
-        except MCPError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "MCP request failed before tool dispatch",
-                extra={"event": "mcp.request_failed", "request_id": request_id, "error_type": type(exc).__name__},
-            )
-            return _refract_error_result(_internal_error(request_id))
+        )
+    log.warning(
+        "MCP tool returned an unrecognized error",
+        extra={"event": "mcp.tool_error_sanitized", "request_id": request_id, "tool": tool_name},
+    )
+    return _refract_error_result(_internal_error(request_id))
 
-        if isinstance(result, CallToolResult):
-            wire_result: Mapping[str, Any] = result.model_dump(by_alias=True, mode="json", exclude_none=True)
-        elif isinstance(result, Mapping):
-            wire_result = result
-        else:
-            return result
-        if wire_result.get("isError", wire_result.get("is_error", False)) is True:
-            content = wire_result.get("content", [])
-            error_text = next(
-                (
-                    str(item.get("text", ""))
-                    for item in content
-                    if isinstance(item, Mapping) and item.get("type") == "text"
-                ),
-                "",
-            )
-            payload = _recognized_sdk_error(tool_name, error_text)
-            if payload is not None:
-                return _refract_error_result(RefractError(**payload))
-            prefix = f"Error executing tool {tool_name}: " if tool_name else ""
-            if prefix and error_text.startswith(prefix) and _validation_error_text(error_text[len(prefix) :]):
-                return _refract_error_result(
-                    RefractError(
-                        "invalid_request",
-                        "Tool arguments are invalid.",
-                        "Correct the arguments using the tool schema and call the tool again.",
-                    )
-                )
-            if prefix and error_text.startswith(prefix) and error_text[len(prefix) :].startswith("Unknown tool"):
-                return _refract_error_result(
-                    RefractError(
-                        "invalid_request",
-                        "The requested tool is not available.",
-                        "Use one of the seven tools returned by tools/list.",
-                    )
-                )
-            log.warning(
-                "MCP tool returned an unrecognized error",
-                extra={"event": "mcp.tool_error_sanitized", "request_id": request_id, "tool": tool_name},
-            )
-            return _refract_error_result(_internal_error(request_id))
 
-        serialized = json.dumps(wire_result, ensure_ascii=False, separators=(",", ":"))
-        if len(serialized) >= _MAX_RESPONSE_CHARS or len(serialized.encode("utf-8")) >= _MAX_RESPONSE_BYTES:
-            return _refract_error_result(
-                RefractError(
-                    "response_too_large",
-                    "The response exceeds the supported size limit.",
-                    "Use the dashboard to inspect or reduce the oversized data before retrying.",
-                )
-            )
+def _normalize_tool_result(result: Any, tool_name: str, request_id: str) -> Any:
+    if isinstance(result, CallToolResult):
+        wire_result: Mapping[str, Any] = result.model_dump(by_alias=True, mode="json", exclude_none=True)
+    elif isinstance(result, Mapping):
+        wire_result = result
+    else:
         return result
+    if wire_result.get("isError", wire_result.get("is_error", False)) is True:
+        return _normalize_tool_error(wire_result, tool_name, request_id)
 
-    return dispatch()
+    serialized = json.dumps(wire_result, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) >= _MAX_RESPONSE_CHARS or len(serialized.encode("utf-8")) >= _MAX_RESPONSE_BYTES:
+        return _refract_error_result(
+            RefractError(
+                "response_too_large",
+                "The response exceeds the supported size limit.",
+                "Use the dashboard to inspect or reduce the oversized data before retrying.",
+            )
+        )
+    return result
 
 
-@asynccontextmanager
-async def _lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
-    global _DAEMON_CONFIG, _ACTIVE_RUNTIME
-    _DASHBOARD_STATE.runtime = None
-    _DASHBOARD_STATE.csrf_token = secrets.token_urlsafe(32)
-    runtime: Runtime | None = None
+
+async def _dispatch_tool_request(
+    ctx: Any, call_next: Callable[[Any], Awaitable[Any]], schemas: Mapping[str, Any],
+) -> Any:
+    if getattr(ctx, "method", "") != "tools/call":
+        return await call_next(ctx)
+    request_id = _request_id(ctx)
+    tool_name = _tool_name(ctx)
+    if tool_name in schemas and _raw_argument_error(schemas[tool_name], _raw_arguments(ctx)):
+        return _refract_error_result(
+            RefractError(
+                "invalid_request",
+                "Tool arguments are invalid.",
+                "Correct the arguments using the tool schema and call the tool again.",
+            )
+        )
     try:
-        config = _DAEMON_CONFIG or load_config()
-        configure_logging(config.logging)
-        runtime = Runtime(config)
-        await runtime.start()
-        _ACTIVE_RUNTIME = runtime
-        _DASHBOARD_STATE.runtime = runtime
-        yield runtime
-    finally:
-        _ACTIVE_RUNTIME = None
-        _DASHBOARD_STATE.runtime = None
-        _DASHBOARD_STATE.csrf_token = ""
-        try:
-            if runtime is not None:
-                await runtime.close()
-        finally:
-            _DAEMON_CONFIG = None
+        result = await call_next(ctx)
+    except asyncio.CancelledError:
+        raise
+    except ValidationError:
+        return _refract_error_result(
+            RefractError(
+                "invalid_request",
+                "Tool arguments are invalid.",
+                "Correct the arguments using the tool schema and call the tool again.",
+            )
+        )
+    except MCPError:
+        raise
+    except Exception as exc:
+        log.warning(
+            "MCP request failed before tool dispatch",
+            extra={"event": "mcp.request_failed", "request_id": request_id, "error_type": type(exc).__name__},
+        )
+        return _refract_error_result(_internal_error(request_id))
 
+    return _normalize_tool_result(result, tool_name, request_id)
+
+
+def _error_boundary(ctx: Any, call_next: Callable[[Any], Awaitable[Any]], schemas: Mapping[str, Any]) -> Any:
+    """Normalize SDK validation and ToolError results into compact JSON isError results."""
+    return _dispatch_tool_request(ctx, call_next, schemas)
 
 _PROJECT_RESOLVE_DESCRIPTION = "Resolve an existing Git-root directory to a stable project ID. Use once per session. path must name an existing directory. Returns {project:{id,alias,path}}. Errors: invalid_path, alias_taken."
 _TASK_GUIDE_DESCRIPTION = "Load workflow and profile choices and project guidance before submission. Returns {workflows,profiles:{default,available},guidance}. Errors: unknown_project, config_invalid, response_too_large."
@@ -444,10 +418,6 @@ _JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are
 _JOB_LIST_DESCRIPTION = "List all active jobs and up to 10 most recently updated terminal jobs for a project. Returns {active,recent,more_recent}. Errors: unknown_project, response_too_large."
 _JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary}. Errors: unknown_job, response_too_large."
 _JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, targets_unavailable, response_too_large."
-
-
-def _tool_error(code: str, message: str, next_action: str, retryable: bool = False) -> RefractError:
-    return RefractError(code, message, next_action, retryable)
 
 
 _INSTRUCTIONS = """Refract runs durable coding jobs (consult, implement, review, other) on external agents for a local project. Jobs persist across client disconnects and daemon restarts.
@@ -469,16 +439,6 @@ Rules:
 - Errors are JSON with code, message, next_action, retryable (and retry_after_s for targets_unavailable). Follow next_action."""
 
 
-mcp = MCPServer(
-    "refract",
-    title="Refract job queue",
-    instructions=_INSTRUCTIONS,
-    version="1.0.0",
-    lifespan=_lifespan,
-    middleware=[_error_boundary],
-)
-
-
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
@@ -487,7 +447,7 @@ def _runtime(ctx: Context) -> Runtime:
     return cast(Runtime, ctx.request_context.lifespan_context)
 
 
-def _summary(runtime: Runtime, job: JobView) -> dict[str, Any]:
+def _summary(job: JobView) -> dict[str, Any]:
     return JobSummary(
         id=job.id,
         project_id=job.project_id,
@@ -526,69 +486,38 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
             )
             request_id = _request_id(context)
             started_at = time.monotonic()
-            extra_started: dict[str, Any] = {"event": "mcp.request_started", "operation": operation}
+            extra: dict[str, Any] = {"operation": operation}
             if operation == "job_wait":
-                extra_started["progress_token_present"] = _progress_token_present(context)
+                extra["progress_token_present"] = _progress_token_present(context)
+            outcome = "failed"
+            error_type = ""
             with log_context(request_id=request_id):
-                log.info("MCP tool request started", extra=extra_started)
+                log.info("MCP tool request started", extra={**extra, "event": "mcp.request_started"})
                 try:
                     result = await function(*args, **kwargs)
+                    outcome = "success"
+                    return result
                 except asyncio.CancelledError:
-                    log.warning(
-                        "MCP tool request cancelled",
-                        extra={
-                            "event": "mcp.request_finished", "operation": operation,
-                            "outcome": "cancelled", "duration_ms": round((time.monotonic() - started_at) * 1000, 2),
-                            **({"progress_token_present": _progress_token_present(context)} if operation == "job_wait" else {}),
-                        },
-                    )
+                    outcome = "cancelled"
                     raise
-                except RefractError:
-                    log.warning(
-                        "MCP tool request failed",
-                        extra={
-                            "event": "mcp.request_finished", "operation": operation,
-                            "outcome": "failed", "error_type": "RefractError",
-                            "duration_ms": round((time.monotonic() - started_at) * 1000, 2),
-                            **({"progress_token_present": _progress_token_present(context)} if operation == "job_wait" else {}),
-                        },
-                    )
+                except (RefractError, MCPError) as exc:
+                    error_type = type(exc).__name__
                     raise
                 except OrchestrationError as exc:
-                    log.warning(
-                        "MCP tool request failed",
-                        extra={
-                            "event": "mcp.request_finished", "operation": operation,
-                            "outcome": "failed", "error_type": "OrchestrationError",
-                            "duration_ms": round((time.monotonic() - started_at) * 1000, 2),
-                            **({"progress_token_present": _progress_token_present(context)} if operation == "job_wait" else {}),
-                        },
-                    )
+                    error_type = type(exc).__name__
                     raise RefractError(
                         exc.code, str(exc), exc.next_action, exc.retryable, exc.retry_after_s
                     ) from exc
-                except MCPError:
-                    raise
                 except Exception as exc:
-                    log.warning(
-                        "MCP tool request failed",
-                        extra={
-                            "event": "mcp.request_finished", "operation": operation,
-                            "outcome": "failed", "error_type": type(exc).__name__,
-                            "duration_ms": round((time.monotonic() - started_at) * 1000, 2),
-                            **({"progress_token_present": _progress_token_present(context)} if operation == "job_wait" else {}),
-                        },
-                    )
+                    error_type = type(exc).__name__
                     raise _internal_error(request_id) from exc
-                log.info(
-                    "MCP tool request completed",
-                    extra={
-                        "event": "mcp.request_finished", "operation": operation,
-                        "outcome": "success", "duration_ms": round((time.monotonic() - started_at) * 1000, 2),
-                        **({"progress_token_present": _progress_token_present(context)} if operation == "job_wait" else {}),
-                    },
-                )
-                return result
+                finally:
+                    extra.update(event="mcp.request_finished", outcome=outcome,
+                                 duration_ms=round((time.monotonic() - started_at) * 1000, 2))
+                    if error_type:
+                        extra["error_type"] = error_type
+                    log.log(logging.INFO if outcome == "success" else logging.WARNING,
+                            "MCP tool request finished", extra=extra)
         return wrapped
     return decorate
 
@@ -610,7 +539,7 @@ def _annotations(
     )
 
 
-@mcp.tool(
+@_tool(
     title="Resolve Project",
     description=_PROJECT_RESOLVE_DESCRIPTION,
     annotations=_annotations("Resolve Project", read_only=False, destructive=False, idempotent=True, open_world=False),
@@ -622,7 +551,7 @@ async def project_resolve(
     ctx: Context,
     alias: Annotated[str, Field(description="Optional project alias; omit or pass an empty string for a unique default.")] = "",
 ) -> str:
-    project = _runtime(ctx).resolve_project(path, alias)
+    project = await run_sync(_runtime(ctx).resolve_project, path, alias)
     return _render_payload(
         {"project": {"id": project.id, "alias": project.alias, "path": project.root}},
         applied=(
@@ -632,7 +561,7 @@ async def project_resolve(
     )
 
 
-@mcp.tool(
+@_tool(
     title="Task Guide",
     description=_TASK_GUIDE_DESCRIPTION,
     annotations=_annotations("Task Guide", read_only=True, destructive=False, idempotent=True, open_world=False),
@@ -644,15 +573,15 @@ async def task_guide(
     ctx: Context,
 ) -> str:
     runtime = _runtime(ctx)
-    project = runtime.database.project(project_id)
+    project = await run_sync(runtime.database.project, project_id)
     if project is None:
         raise OrchestrationError(
             "Project is not registered.", code="unknown_project",
             next_action="Call project_resolve with the Git root.",
         )
     try:
-        catalog = runtime.catalog_for_project_cached(project.id)
-        guide = load_task_guide(runtime.config.home, Path(project.root))
+        catalog = await run_sync(runtime.catalog_for_project_cached, project.id)
+        guide = await run_sync(load_task_guide, runtime.config.home, Path(project.root))
     except ValueError as exc:
         raise OrchestrationError(
             "Project task guidance or configuration is unavailable.", code="config_invalid",
@@ -665,7 +594,7 @@ async def task_guide(
     })
 
 
-@mcp.tool(
+@_tool(
     title="Submit Job",
     description=_JOB_SUBMIT_DESCRIPTION,
     annotations=_annotations("Submit Job", read_only=False, destructive=True, idempotent=False, open_world=True),
@@ -674,7 +603,7 @@ async def task_guide(
 @_logged_request("job_submit")
 async def job_submit(
     project_id: Annotated[str, Field(description="Registered project ID from project_resolve.", min_length=1)],
-    workflow: Annotated[Literal["consult", "implement", "review", "other"], Field(description="Workflow selected from task_guide.")],
+    workflow: Annotated[Literal[*BUILTIN_WORKFLOWS], Field(description="Workflow selected from task_guide.")],
     prompt: Annotated[str, Field(description="Self-contained instructions visible to the worker.", min_length=1)],
     ctx: Context,
     profile: Annotated[str, Field(description="Available profile from task_guide; empty uses the project's default.")] = "",
@@ -687,11 +616,11 @@ async def job_submit(
         project_id, workflow, prompt, profile=profile, context_key=context_key,
         fresh_session=fresh_session, next_target=next_target,
     )
-    job = runtime.database.job(submission.job_id)
+    job = await run_sync(runtime.database.job, submission.job_id)
     if job is None:
         raise _internal_error(_request_id(ctx))
     return _render_payload(
-        {"job": _summary(runtime, job)},
+        {"job": _summary(job)},
         applied=(
             "Job submission", job.id,
             f"Use job ID {job.id} with job_wait or job_list; do not submit the same work again.",
@@ -707,7 +636,32 @@ async def _report_progress(ctx: Context, job: JobView, progress: float) -> None:
     )
 
 
-@mcp.tool(
+async def _wait_with_progress(runtime: Runtime, ctx: Context, job_id: str, timeout_s: int) -> None:
+    interval = float(_MCP_HEARTBEAT_INTERVAL_S) if _MCP_HEARTBEAT_INTERVAL_S > 0 else 30.0
+    wait_task = asyncio.create_task(runtime.wait(job_id, timeout_s))
+    progress = 0.0
+    try:
+        while not wait_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(wait_task), timeout=interval)
+            except TimeoutError:
+                refreshed = await run_sync(runtime.database.job, job_id)
+                if refreshed is None:
+                    raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
+                if refreshed.state in TERMINAL_STATES:
+                    break
+                progress += 1.0
+                await _report_progress(ctx, refreshed, progress)
+    finally:
+        if not wait_task.done():
+            wait_task.cancel()
+            result, = await asyncio.gather(wait_task, return_exceptions=True)
+            if isinstance(result, Exception):
+                log.warning("Job wait cleanup failed", exc_info=result,
+                            extra={"event": "job.wait_cleanup_failed", "job_id": job_id})
+
+
+@_tool(
     title="Wait for Job",
     description=_JOB_WAIT_DESCRIPTION,
     annotations=_annotations("Wait for Job", read_only=True, destructive=False, idempotent=True, open_world=False),
@@ -720,44 +674,17 @@ async def job_wait(
     timeout_s: Annotated[int, Field(description="Wait duration in seconds; zero reads immediately.", ge=0, le=3600)] = _MCP_WAIT_TIMEOUT_S,
     result_offset: Annotated[int, Field(description="Unicode character offset into terminal result text.", ge=0)] = 0,
 ) -> str:
-    if isinstance(timeout_s, bool) or not isinstance(timeout_s, int) or not 0 <= timeout_s <= _MCP_WAIT_TIMEOUT_S:
-        raise _tool_error("invalid_request", "timeout_s is outside the supported range.", "Use an integer from 0 through 3600.")
-    if isinstance(result_offset, bool) or not isinstance(result_offset, int) or result_offset < 0:
-        raise _tool_error("invalid_request", "result_offset must be a nonnegative integer.", "Use a nonnegative character offset.")
     runtime = _runtime(ctx)
-    job = runtime.database.job(job_id)
+    job = await run_sync(runtime.database.job, job_id)
     if job is None:
         raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
     await _report_progress(ctx, job, 0.0)
     if job.state not in TERMINAL_STATES and timeout_s > 0:
-        interval = float(_MCP_HEARTBEAT_INTERVAL_S) if _MCP_HEARTBEAT_INTERVAL_S > 0 else 30.0
-        wait_task = asyncio.create_task(runtime.wait(job_id, timeout_s))
-        progress = 0.0
-        try:
-            while not wait_task.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(wait_task), timeout=interval)
-                except TimeoutError:
-                    refreshed = runtime.database.job(job_id)
-                    if refreshed is None:
-                        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
-                    if refreshed.state in TERMINAL_STATES:
-                        break
-                    progress += 1.0
-                    await _report_progress(ctx, refreshed, progress)
-        finally:
-            if not wait_task.done():
-                wait_task.cancel()
-                try:
-                    await wait_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
-    current = runtime.database.job(job_id)
+        await _wait_with_progress(runtime, ctx, job_id, timeout_s)
+    current = await run_sync(runtime.database.job, job_id)
     if current is None:
         raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
-    summary = _summary(runtime, current)
+    summary = _summary(current)
     if current.state not in TERMINAL_STATES:
         return _render_payload({
             "job": summary,
@@ -769,11 +696,11 @@ async def job_wait(
         summary,
         result_offset,
         public_error=_public_terminal_error(current),
-        metadata=runtime.live_result_metadata(current),
+        metadata=await run_sync(runtime.live_result_metadata, current),
     )
 
 
-@mcp.tool(
+@_tool(
     title="List Jobs",
     description=_JOB_LIST_DESCRIPTION,
     annotations=_annotations("List Jobs", read_only=True, destructive=False, idempotent=True, open_world=False),
@@ -785,20 +712,18 @@ async def job_list(
     ctx: Context,
 ) -> str:
     runtime = _runtime(ctx)
-    project = runtime.database.project(project_id)
+    project = await run_sync(runtime.database.project, project_id)
     if project is None:
         raise OrchestrationError("Project is not registered.", code="unknown_project", next_action="Call project_resolve with the Git root.")
-    jobs = runtime.database.jobs(project.id)
-    active = [job for job in jobs if job.state not in TERMINAL_STATES]
-    terminal = sorted((job for job in jobs if job.state in TERMINAL_STATES), key=lambda job: (job.updated_at, job.id), reverse=True)
+    active, recent, more_recent = await run_sync(runtime.database.job_listing, project.id)
     return _render_payload({
-        "active": [_summary(runtime, job) for job in active],
-        "recent": [_summary(runtime, job) for job in terminal[:10]],
-        "more_recent": max(0, len(terminal) - 10),
+        "active": [_summary(runtime.database.job_view(record)) for record in active],
+        "recent": [_summary(runtime.database.job_view(record)) for record in recent],
+        "more_recent": more_recent,
     })
 
 
-@mcp.tool(
+@_tool(
     title="Cancel Job",
     description=_JOB_CANCEL_DESCRIPTION,
     annotations=_annotations("Cancel Job", read_only=False, destructive=True, idempotent=True, open_world=False),
@@ -810,22 +735,22 @@ async def job_cancel(
     ctx: Context,
 ) -> str:
     runtime = _runtime(ctx)
-    job = runtime.database.job(job_id)
+    job = await run_sync(runtime.database.job, job_id)
     if job is None:
         raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
     if job.state in TERMINAL_STATES:
-        return _render_payload({"job": _summary(runtime, job)})
-    result = await runtime.cancel(job_id)
-    current = runtime.database.job(job_id)
+        return _render_payload({"job": _summary(job)})
+    await runtime.cancel(job_id)
+    current = await run_sync(runtime.database.job, job_id)
     if current is None:
         raise _internal_error(_request_id(ctx))
     return _render_payload(
-        {"job": _summary(runtime, current)},
+        {"job": _summary(current)},
         applied=("Job cancellation", job.id, f"Inspect job {job.id} with job_list; cancellation was applied and must not be repeated blindly."),
     )
 
 
-@mcp.tool(
+@_tool(
     title="Retry Job",
     description=_JOB_RETRY_DESCRIPTION,
     annotations=_annotations("Retry Job", read_only=False, destructive=True, idempotent=False, open_world=True),
@@ -838,36 +763,99 @@ async def job_retry(
 ) -> str:
     runtime = _runtime(ctx)
     submission = await runtime.retry(job_id)
-    job = runtime.database.job(submission.job_id)
+    job = await run_sync(runtime.database.job, submission.job_id)
     if job is None:
         raise _internal_error(_request_id(ctx))
     return _render_payload(
-        {"job": _summary(runtime, job)},
+        {"job": _summary(job)},
         applied=("Job retry", job.id, f"Use job ID {job.id} with job_wait or job_list; do not retry it again blindly."),
     )
 
 
-def create_application(host: str | None = None) -> Starlette:
-    config_host = getattr(_DAEMON_CONFIG, "host", "127.0.0.1")
-    mcp_application = mcp.streamable_http_app(
+def create_mcp(
+    config: DaemonConfig | None = None,
+    *,
+    state: DashboardState | None = None,
+    logging_overrides: Mapping[str, str] | None = None,
+) -> MCPServer:
+    state = state if state is not None else DashboardState()
+
+    @asynccontextmanager
+    async def lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
+        runtime: Runtime | None = None
+        state.csrf_token = secrets.token_urlsafe(32)
+        try:
+            resolved = config if config is not None else await run_sync(load_config)
+            if logging_overrides:
+                await run_sync(configure_logging, resolved.logging, overrides=logging_overrides)
+            else:
+                await run_sync(configure_logging, resolved.logging)
+            runtime = await run_sync(Runtime, resolved)
+            await runtime.start()
+            state.runtime = runtime
+            yield runtime
+        finally:
+            state.runtime = None
+            state.csrf_token = ""
+            if runtime is not None:
+                await runtime.close()
+
+    schemas: dict[str, Any] = {}
+
+    async def error_boundary(ctx: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:
+        if not schemas:
+            schemas.update({tool.name: tool.input_schema for tool in await instance.list_tools()})
+        return await _error_boundary(ctx, call_next, schemas)
+
+    instance = MCPServer(
+        "refract",
+        title="Refract job queue",
+        instructions=_INSTRUCTIONS,
+        version=package_version("refract"),
+        lifespan=lifespan,
+        middleware=[error_boundary],
+    )
+    for function, options in _TOOL_DEFINITIONS:
+        instance.tool(**options)(function)
+    return instance
+
+
+def create_application(
+    config: DaemonConfig | None = None,
+    *,
+    host: str | None = None,
+    logging_overrides: Mapping[str, str] | None = None,
+) -> Starlette:
+    state = DashboardState()
+    instance = create_mcp(config, state=state, logging_overrides=logging_overrides)
+    config_host = getattr(config, "host", "127.0.0.1")
+    mcp_application = instance.streamable_http_app(
         streamable_http_path="/mcp",
         json_response=False,
         stateless_http=False,
         host=host or config_host,
     )
-    session_manager = mcp.session_manager
+    session_manager = instance.session_manager
 
     @asynccontextmanager
-    async def lifespan(_: Starlette) -> AsyncIterator[None]:
-        async with session_manager.run():
-            yield
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        try:
+            async with session_manager.run():
+                app.state.runtime = state.runtime
+                yield
+        finally:
+            app.state.runtime = None
 
     application = Starlette(
-        routes=[*register_dashboard_routes(_DASHBOARD_STATE), Mount("/", app=mcp_application)],
+        routes=[*register_dashboard_routes(state), Mount("/", app=mcp_application)],
         lifespan=lifespan,
     )
-    application.state.refract_dashboard = _DASHBOARD_STATE
+    application.state.refract_dashboard = state
+    application.state.mcp = instance
     return application
+
+
+mcp = create_mcp()
 
 
 __all__ = [

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { POLL_INTERVAL_MS } from './constants'
 import { getJobOutput } from '../api'
+
+export const MAX_STREAM_EVENTS = 2000
 
 const TERMINAL_STREAM_STATUSES = new Set(['complete', 'failed', 'truncated', 'unavailable'])
 
@@ -162,7 +165,7 @@ export function reduceTranscriptEvents(events = []) {
 }
 
 export function useJobStream(jobId, options = {}) {
-  const { isTerminal = false, pollIntervalMs = 5000 } = options
+  const { isTerminal = false, pollIntervalMs = POLL_INTERVAL_MS } = options
 
   const [events, setEvents] = useState([])
   const [cursor, setCursor] = useState(0)
@@ -206,15 +209,22 @@ export function useJobStream(jobId, options = {}) {
           if (response.events && response.events.length > 0) {
             setEvents((prev) => {
               if (activeJobIdRef.current !== targetJobId) return prev
-              const existingIds = new Set(prev.map((e) => e.id))
-              const newEvents = response.events.filter((e) => !existingIds.has(e.id))
-              return newEvents.length > 0 ? [...prev, ...newEvents] : prev
+              let lastId = prev.at(-1)?.id ?? 0
+              const newEvents = []
+              for (const event of response.events) {
+                if (event.id > lastId) {
+                  newEvents.push(event)
+                  lastId = event.id
+                }
+              }
+              const next = newEvents.length > 0 ? [...prev, ...newEvents] : prev
+              return next.slice(-MAX_STREAM_EVENTS)
             })
           }
 
           if (activeJobIdRef.current !== targetJobId || fetchEpochRef.current !== fetchEpoch) return
 
-          currentCursor = response.cursor ?? currentCursor
+          currentCursor = Math.max(currentCursor, response.cursor ?? 0)
           cursorRef.current = currentCursor
           setCursor(currentCursor)
           if (response.retained_from !== undefined) setRetainedFrom(response.retained_from)
@@ -305,6 +315,7 @@ export function useJobStream(jobId, options = {}) {
     setCursor(0)
     setRetainedFrom(0)
     setStatus('connecting')
+    setStreamStatus('active')
     setError(null)
     cursorRef.current = 0
     notifiedCursorRef.current = 0
@@ -345,8 +356,8 @@ export function useJobStream(jobId, options = {}) {
               drainPages(jobId, controller.signal)
             }
           }
-        } catch {
-          // ignore parse error
+        } catch (err) {
+          setError(err)
         }
       })
 
@@ -373,7 +384,7 @@ export function useJobStream(jobId, options = {}) {
     if (status !== 'reconnecting' && esRef.current !== null) return
 
     const timer = setInterval(() => {
-      if (abortControllerRef.current && !abortControllerRef.current.signal.aborted && activeJobIdRef.current === jobId) {
+      if (!document.hidden && abortControllerRef.current && !abortControllerRef.current.signal.aborted && activeJobIdRef.current === jobId) {
         drainPages(jobId, abortControllerRef.current.signal)
       }
     }, pollIntervalMs)
@@ -387,6 +398,7 @@ export function useJobStream(jobId, options = {}) {
     cursor,
     retainedFrom,
     streamStatus,
+    windowTruncated: events.length === MAX_STREAM_EVENTS && events[0].id > retainedFrom,
     status,
     error,
     isLoading,

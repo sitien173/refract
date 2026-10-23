@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import inspect
 import json
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, cast
 from urllib.parse import urlsplit
 
 from starlette.requests import Request
@@ -16,12 +17,11 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-import tomlkit
 from pydantic import ValidationError
 
 from refract.config import DaemonConfig, ProfileDeclaration, TargetSelection, load_task_guide
 from refract.config_inspection import sanitize_config_error
-from refract.config_mutation import ConfigurationMutationError, load_source
+from refract.config_mutation import ConfigurationMutationError
 from refract.models import (
     DashboardBootstrap,
     DashboardError,
@@ -44,15 +44,22 @@ from refract.models import (
     TargetResponse,
 )
 from refract.planning import parse_execution_plan
+from refract.workflows import BUILTIN_WORKFLOWS
+from refract.workers import run_sync
 
 
 _STATIC_DIR = Path(__file__).parent / "dashboard_static"
+_REFRACT_DIR = ".refract"
+_UNKNOWN_PROJECT = "Unknown project"
+_TARGET_ROUTE = "/dashboard/api/configuration/targets/{target_id:path}"
+_PROFILE_ROUTE = "/dashboard/api/configuration/profiles/{profile_id}"
+_PROJECT_OVERRIDE_ROUTE = "/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}"
 SSE_KEEPALIVE_INTERVAL_S: float = 20.0
 
 
 @dataclass
 class DashboardState:
-    """Process-owned state shared by the dashboard routes and MCP lifespan."""
+    """Application-owned state shared by dashboard routes and MCP lifespan."""
 
     runtime: Any = None
     csrf_token: str = ""
@@ -128,7 +135,6 @@ def _runtime_error() -> Response:
 def _selection_data(selection: TargetSelection) -> dict[str, Any]:
     return {
         "targets": list(selection.targets),
-        "max_attempts": selection.max_attempts,
         "timeout_s": selection.timeout_s,
     }
 
@@ -158,7 +164,6 @@ def _profile_config_data(global_catalog: DaemonConfig, project_catalog: DaemonCo
     profiles: list[dict[str, Any]] = []
     for profile_id in profile_ids:
         global_declaration = global_declarations.get(profile_id)
-        merged_declaration = merged_declarations.get(profile_id)
         project_declaration = project_declarations.get(profile_id)
         global_workflows = (
             set(global_declaration.workflows) if global_declaration else set()
@@ -296,8 +301,6 @@ def _settings_payload(runtime: Any) -> dict[str, Any]:
             "history_bytes": cfg.history_bytes,
             "default_profile": cfg.default_profile,
         },
-        "effective": {
-        },
         "logging": {
             "level": logging.level,
             "format": logging.format,
@@ -311,10 +314,12 @@ def _settings_payload(runtime: Any) -> dict[str, Any]:
 
 
 def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
-    job = runtime.database.job(job_id)
-    if job is None:
-        return None
-    record = runtime.database.job_record(job_id) or {}
+    record = runtime.database.job_record(job_id)
+    return None if record is None else _dashboard_job_from_record(runtime, record)
+
+
+def _dashboard_job_from_record(runtime: Any, record: dict[str, Any]) -> DashboardJob:
+    job = runtime.database.job_view(record)
     try:
         raw_plan = json.loads(record.get("execution_plan_json", ""))
     except (TypeError, json.JSONDecodeError):
@@ -340,7 +345,7 @@ def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
 def _source_path(runtime: Any, project_id: str) -> Path:
     project = runtime.database.project(project_id)
     if project is not None:
-        root = Path(project.root) / ".refract"
+        root = Path(project.root) / _REFRACT_DIR
         for name in ("task_guide.json", "task_routes.json"):
             if (root / name).exists():
                 return root / name
@@ -428,8 +433,10 @@ def _handle_mutation_error(exc: ConfigurationMutationError) -> Response:
         status_code = 409
     elif exc.code == "configuration_commit_failed":
         status_code = 500
+    # Service messages are written by the service itself; loader messages
+    # inside them were sanitized when the load error was raised.
     return _error(
-        sanitize_config_error(str(exc)),
+        str(exc),
         status_code,
         code=exc.code,
         unchanged=exc.unchanged,
@@ -451,10 +458,25 @@ def _authorized_mutation(request: Request, state: DashboardState) -> bool:
     )
 
 
-def register_dashboard_routes(state: DashboardState) -> list[Route]:
-    async def bootstrap(request: Request) -> Response:
-        if not _is_loopback_client(request) or not _is_loopback_host(_host_name(request)):
+def _loopback_route(path: str, endpoint: Callable[[Request], Awaitable[Response] | Response], methods: list[str]) -> Route:
+    """Serve ``endpoint`` only to loopback clients that address a loopback host.
+
+    The check blocks DNS-rebinding pages, which reach the daemon from a
+    loopback client but under a foreign Host header.
+    """
+
+    async def guarded(request: Request) -> Response:
+        if not _authorized_editor_read(request):
             return _forbidden()
+        if inspect.iscoroutinefunction(endpoint):
+            return await endpoint(request)
+        return await run_sync(cast(Callable[[Request], Response], endpoint), request)
+
+    return Route(path, guarded, methods=methods)
+
+
+def _register_status_routes(state: DashboardState) -> list[Route]:
+    async def bootstrap(request: Request) -> Response:
         try:
             _runtime(state)
         except RuntimeError:
@@ -469,11 +491,11 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except RuntimeError:
             return _runtime_error()
 
-    async def overview(request: Request) -> Response:
+    def overview(request: Request) -> Response:
         try:
             runtime = _runtime(state)
             daemon = runtime.status()
-            configuration = runtime.configuration_health()
+            configuration = runtime.config_health
             targets = runtime.targets()
             return _json_response(
                 DashboardOverview(
@@ -488,11 +510,11 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
 
     async def configuration(request: Request) -> Response:
         try:
-            return _json_response(_runtime(state).configuration_health())
+            return _json_response(_runtime(state).config_health)
         except RuntimeError:
             return _runtime_error()
 
-    async def settings(request: Request) -> Response:
+    def settings(request: Request) -> Response:
         try:
             runtime = _runtime(state)
         except RuntimeError:
@@ -504,9 +526,17 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         response.headers["etag"] = f'"{runtime.catalog.config_revision}"'
         return response
 
-    async def config_targets_get(request: Request) -> Response:
-        if not _authorized_editor_read(request):
-            return _forbidden()
+    return [
+        _loopback_route("/dashboard/api/bootstrap", bootstrap, methods=["GET"]),
+        _loopback_route("/dashboard/api/overview", overview, methods=["GET"]),
+        _loopback_route("/dashboard/api/status", status, methods=["GET"]),
+        _loopback_route("/dashboard/api/configuration", configuration, methods=["GET"]),
+        _loopback_route("/dashboard/api/settings", settings, methods=["GET"]),
+    ]
+
+
+def _register_target_configuration_routes(state: DashboardState) -> list[Route]:
+    def config_targets_get(request: Request) -> Response:
         try:
             runtime = _runtime(state)
         except RuntimeError:
@@ -526,9 +556,7 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except ConfigurationMutationError as exc:
             return _handle_mutation_error(exc)
 
-    async def config_target_get(request: Request) -> Response:
-        if not _authorized_editor_read(request):
-            return _forbidden()
+    def config_target_get(request: Request) -> Response:
         try:
             runtime = _runtime(state)
         except RuntimeError:
@@ -549,184 +577,116 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except ConfigurationMutationError as exc:
             return _handle_mutation_error(exc)
 
-    async def config_target_create(request: Request) -> Response:
+    config_target_create = _mutation_route(
+        state, TargetEditorData, "create_target", TargetResponse, "target"
+    )
+    config_target_update = _mutation_route(
+        state, TargetEditorData, "update_target", TargetResponse, "target"
+    )
+    config_target_delete = _mutation_route(
+        state, None, "delete_target", TargetDeleteResponse, "deleted", delete=True
+    )
+    return [
+        _loopback_route("/dashboard/api/configuration/targets", config_targets_get, methods=["GET"]),
+        _loopback_route("/dashboard/api/configuration/targets", config_target_create, methods=["POST"]),
+        _loopback_route(_TARGET_ROUTE, config_target_get, methods=["GET"]),
+        _loopback_route(_TARGET_ROUTE, config_target_update, methods=["PUT"]),
+        _loopback_route(_TARGET_ROUTE, config_target_delete, methods=["DELETE"]),
+    ]
+
+
+async def _mutation_scope(request: Request, runtime: Any, project_scope: bool) -> tuple[list[Any], str] | Response:
+    if not project_scope:
+        return [], runtime.config.config_path.as_posix() if runtime.config.config_path else ""
+    project_view = await run_sync(runtime.database.project, request.path_params["project_id"])
+    if project_view is None:
+        return _error(_UNKNOWN_PROJECT, 404, code="not_found")
+    root = Path(project_view.root)
+    return [root], (root / _REFRACT_DIR / "config.toml").as_posix()
+
+
+async def _mutation_payload(request: Request, model: Any, source_path: str) -> Any:
+    try:
+        payload = await request.json()
+    except Exception:
+        return _error(
+            "Invalid JSON body", 422, code="configuration_invalid",
+            unchanged="No configuration file was changed.",
+            recovery="Provide a valid JSON request body and retry.", source_path=source_path,
+        )
+    if not isinstance(payload, dict):
+        return _error(
+            "Request body must be a JSON object", 422, code="configuration_invalid",
+            unchanged="No configuration file was changed.",
+            recovery="Provide a JSON object payload and retry.", source_path=source_path,
+        )
+    try:
+        return model.model_validate(payload)
+    except (ValidationError, ValueError) as exc:
+        entity = "target" if model is TargetEditorData else "profile"
+        return _error(
+            sanitize_config_error(exc), 422, code="configuration_invalid",
+            unchanged="No configuration file was changed.",
+            recovery=f"Correct the {entity} fields and retry.", source_path=source_path,
+        )
+
+
+def _mutation_response(result, value, remaining, response_model, field) -> Response:
+    values = {"revision": result.revision, "source_path": result.source_path.as_posix()}
+    values[field] = value
+    if response_model is ProfileResponse:
+        values.update(default_profile=result.config.default_profile,
+                      available_targets=sorted(t.id for t in result.config.targets))
+    if response_model is ProjectOverrideDeleteResponse:
+        values["fallback"] = remaining[0]
+    response = _json_response(response_model(**values))
+    response.headers["cache-control"] = "no-store"
+    response.headers["etag"] = f'"{result.revision}"'
+    return response
+
+
+def _mutation_route(state, model, method, response_model, field, *, project_scope=False, delete=False):
+    async def mutate(request: Request) -> Response:
         if not _authorized_mutation(request, state):
             return _forbidden()
         try:
             runtime = _runtime(state)
         except RuntimeError:
             return _runtime_error()
-        source_path = (
-            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
-        )
+        scope = await _mutation_scope(request, runtime, project_scope)
+        if isinstance(scope, Response):
+            return scope
+        args, source_path = scope
         expected_revision = _parse_if_match(request)
         if expected_revision is None:
             return _error(
                 "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
+                428, code="revision_required",
                 unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the edit.",
+                recovery="Reload the current configuration and retry the deletion." if delete
+                else "Reload the current configuration and retry the edit.",
                 source_path=source_path,
             )
+        if not method.startswith("create_"):
+            id_key = "target_id" if "target" in method else "profile_id"
+            args.append(request.path_params[id_key])
+        if model is not None:
+            payload = await _mutation_payload(request, model, source_path)
+            if isinstance(payload, Response):
+                return payload
+            args.append(payload)
         try:
-            payload = await request.json()
-        except Exception:
-            return _error(
-                "Invalid JSON body",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a valid JSON request body and retry.",
-                source_path=source_path,
+            result, value, *remaining = await run_sync(
+                getattr(runtime.mutations, method), *args, expected_revision=expected_revision
             )
-        if not isinstance(payload, dict):
-            return _error(
-                "Request body must be a JSON object",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a JSON object payload and retry.",
-                source_path=source_path,
-            )
-        try:
-            data = TargetEditorData.model_validate(payload)
-        except (ValidationError, ValueError) as exc:
-            return _error(
-                sanitize_config_error(exc),
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Correct the target fields and retry.",
-                source_path=source_path,
-            )
-        try:
-            result, created = runtime.mutations.create_target(
-                data, expected_revision=expected_revision
-            )
-            response = _json_response(
-                TargetResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    target=created,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
+            return _mutation_response(result, value, remaining, response_model, field)
         except ConfigurationMutationError as exc:
             return _handle_mutation_error(exc)
+    return mutate
 
-    async def config_target_update(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        source_path = (
-            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
-        )
-        expected_revision = _parse_if_match(request)
-        if expected_revision is None:
-            return _error(
-                "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
-                unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the edit.",
-                source_path=source_path,
-            )
-        target_id = request.path_params["target_id"]
-        try:
-            payload = await request.json()
-        except Exception:
-            return _error(
-                "Invalid JSON body",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a valid JSON request body and retry.",
-                source_path=source_path,
-            )
-        if not isinstance(payload, dict):
-            return _error(
-                "Request body must be a JSON object",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a JSON object payload and retry.",
-                source_path=source_path,
-            )
-        try:
-            data = TargetEditorData.model_validate(payload)
-        except (ValidationError, ValueError) as exc:
-            return _error(
-                sanitize_config_error(exc),
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Correct the target fields and retry.",
-                source_path=source_path,
-            )
-        try:
-            result, updated = runtime.mutations.update_target(
-                target_id, data, expected_revision=expected_revision
-            )
-            response = _json_response(
-                TargetResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    target=updated,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
-        except ConfigurationMutationError as exc:
-            return _handle_mutation_error(exc)
 
-    async def config_target_delete(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        source_path = (
-            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
-        )
-        expected_revision = _parse_if_match(request)
-        if expected_revision is None:
-            return _error(
-                "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
-                unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the deletion.",
-                source_path=source_path,
-            )
-        target_id = request.path_params["target_id"]
-        try:
-            result, deleted_id = runtime.mutations.delete_target(
-                target_id, expected_revision=expected_revision
-            )
-            response = _json_response(
-                TargetDeleteResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    deleted=deleted_id,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
-        except ConfigurationMutationError as exc:
-            return _handle_mutation_error(exc)
-
-    async def config_profiles_get(request: Request) -> Response:
-        if not _authorized_editor_read(request):
-            return _forbidden()
+def _register_profile_configuration_routes(state: DashboardState) -> list[Route]:
+    def config_profiles_get(request: Request) -> Response:
         try:
             runtime = _runtime(state)
         except RuntimeError:
@@ -750,9 +710,7 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except ConfigurationMutationError as exc:
             return _handle_mutation_error(exc)
 
-    async def config_profile_get(request: Request) -> Response:
-        if not _authorized_editor_read(request):
-            return _forbidden()
+    def config_profile_get(request: Request) -> Response:
         try:
             runtime = _runtime(state)
         except RuntimeError:
@@ -777,195 +735,35 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except ConfigurationMutationError as exc:
             return _handle_mutation_error(exc)
 
-    async def config_profile_create(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        source_path = (
-            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
-        )
-        expected_revision = _parse_if_match(request)
-        if expected_revision is None:
-            return _error(
-                "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
-                unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the edit.",
-                source_path=source_path,
-            )
-        try:
-            payload = await request.json()
-        except Exception:
-            return _error(
-                "Invalid JSON body",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a valid JSON request body and retry.",
-                source_path=source_path,
-            )
-        if not isinstance(payload, dict):
-            return _error(
-                "Request body must be a JSON object",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a JSON object payload and retry.",
-                source_path=source_path,
-            )
-        try:
-            data = ProfileEditorData.model_validate(payload)
-        except (ValidationError, ValueError) as exc:
-            return _error(
-                sanitize_config_error(exc),
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Correct the profile fields and retry.",
-                source_path=source_path,
-            )
-        try:
-            result, created = runtime.mutations.create_profile(
-                data, expected_revision=expected_revision
-            )
-            response = _json_response(
-                ProfileResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    default_profile=result.config.default_profile,
-                    available_targets=sorted(t.id for t in result.config.targets),
-                    profile=created,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
-        except ConfigurationMutationError as exc:
-            return _handle_mutation_error(exc)
+    config_profile_create = _mutation_route(
+        state, ProfileEditorData, "create_profile", ProfileResponse, "profile"
+    )
 
-    async def config_profile_update(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        source_path = (
-            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
-        )
-        expected_revision = _parse_if_match(request)
-        if expected_revision is None:
-            return _error(
-                "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
-                unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the edit.",
-                source_path=source_path,
-            )
-        profile_id = request.path_params["profile_id"]
-        try:
-            payload = await request.json()
-        except Exception:
-            return _error(
-                "Invalid JSON body",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a valid JSON request body and retry.",
-                source_path=source_path,
-            )
-        if not isinstance(payload, dict):
-            return _error(
-                "Request body must be a JSON object",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a JSON object payload and retry.",
-                source_path=source_path,
-            )
-        try:
-            data = ProfileEditorData.model_validate(payload)
-        except (ValidationError, ValueError) as exc:
-            return _error(
-                sanitize_config_error(exc),
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Correct the profile fields and retry.",
-                source_path=source_path,
-            )
-        try:
-            result, updated = runtime.mutations.update_profile(
-                profile_id, data, expected_revision=expected_revision
-            )
-            response = _json_response(
-                ProfileResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    default_profile=result.config.default_profile,
-                    available_targets=sorted(t.id for t in result.config.targets),
-                    profile=updated,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
-        except ConfigurationMutationError as exc:
-            return _handle_mutation_error(exc)
+    config_profile_update = _mutation_route(
+        state, ProfileEditorData, "update_profile", ProfileResponse, "profile"
+    )
 
-    async def config_profile_delete(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        source_path = (
-            runtime.config.config_path.as_posix() if runtime.config.config_path else ""
-        )
-        expected_revision = _parse_if_match(request)
-        if expected_revision is None:
-            return _error(
-                "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
-                unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the deletion.",
-                source_path=source_path,
-            )
-        profile_id = request.path_params["profile_id"]
-        try:
-            result, deleted_id = runtime.mutations.delete_profile(
-                profile_id, expected_revision=expected_revision
-            )
-            response = _json_response(
-                ProfileDeleteResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    deleted=deleted_id,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
-        except ConfigurationMutationError as exc:
-            return _handle_mutation_error(exc)
+    config_profile_delete = _mutation_route(
+        state, None, "delete_profile", ProfileDeleteResponse, "deleted", delete=True
+    )
+    return [
+        _loopback_route("/dashboard/api/configuration/profiles", config_profiles_get, methods=["GET"]),
+        _loopback_route("/dashboard/api/configuration/profiles", config_profile_create, methods=["POST"]),
+        _loopback_route(_PROFILE_ROUTE, config_profile_get, methods=["GET"]),
+        _loopback_route(_PROFILE_ROUTE, config_profile_update, methods=["PUT"]),
+        _loopback_route(_PROFILE_ROUTE, config_profile_delete, methods=["DELETE"]),
+    ]
 
-    async def project_profile_overrides_get(request: Request) -> Response:
-        if not _authorized_editor_read(request):
-            return _forbidden()
+
+def _register_project_override_routes(state: DashboardState) -> list[Route]:
+    def project_profile_overrides_get(request: Request) -> Response:
         try:
             runtime = _runtime(state)
         except RuntimeError:
             return _runtime_error()
         project_view = runtime.database.project(request.path_params["project_id"])
         if project_view is None:
-            return _error("Unknown project", 404, code="not_found")
+            return _error(_UNKNOWN_PROJECT, 404, code="not_found")
         try:
             source_read, overrides, g_def, p_def, targets = (
                 runtime.mutations.read_project_overrides(Path(project_view.root))
@@ -986,16 +784,14 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except ConfigurationMutationError as exc:
             return _handle_mutation_error(exc)
 
-    async def project_profile_override_get(request: Request) -> Response:
-        if not _authorized_editor_read(request):
-            return _forbidden()
+    def project_profile_override_get(request: Request) -> Response:
         try:
             runtime = _runtime(state)
         except RuntimeError:
             return _runtime_error()
         project_view = runtime.database.project(request.path_params["project_id"])
         if project_view is None:
-            return _error("Unknown project", 404, code="not_found")
+            return _error(_UNKNOWN_PROJECT, 404, code="not_found")
         profile_id = request.path_params["profile_id"]
         try:
             source_read, override, _, _, _ = (
@@ -1014,190 +810,28 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except ConfigurationMutationError as exc:
             return _handle_mutation_error(exc)
 
-    async def project_profile_override_create(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        project_view = runtime.database.project(request.path_params["project_id"])
-        if project_view is None:
-            return _error("Unknown project", 404, code="not_found")
-        proj_root = Path(project_view.root)
-        source_path = (proj_root / ".refract" / "config.toml").as_posix()
-        expected_revision = _parse_if_match(request)
-        if expected_revision is None:
-            return _error(
-                "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
-                unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the edit.",
-                source_path=source_path,
-            )
-        try:
-            payload = await request.json()
-        except Exception:
-            return _error(
-                "Invalid JSON body",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a valid JSON request body and retry.",
-                source_path=source_path,
-            )
-        if not isinstance(payload, dict):
-            return _error(
-                "Request body must be a JSON object",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a JSON object payload and retry.",
-                source_path=source_path,
-            )
-        try:
-            data = ProfileEditorData.model_validate(payload)
-        except (ValidationError, ValueError) as exc:
-            return _error(
-                sanitize_config_error(exc),
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Correct the profile fields and retry.",
-                source_path=source_path,
-            )
-        try:
-            result, created = runtime.mutations.create_project_override(
-                proj_root, data, expected_revision=expected_revision
-            )
-            response = _json_response(
-                ProjectOverrideResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    override=created,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
-        except ConfigurationMutationError as exc:
-            return _handle_mutation_error(exc)
+    project_profile_override_create = _mutation_route(
+        state, ProfileEditorData, "create_project_override", ProjectOverrideResponse, "override", project_scope=True
+    )
 
-    async def project_profile_override_update(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        project_view = runtime.database.project(request.path_params["project_id"])
-        if project_view is None:
-            return _error("Unknown project", 404, code="not_found")
-        proj_root = Path(project_view.root)
-        source_path = (proj_root / ".refract" / "config.toml").as_posix()
-        expected_revision = _parse_if_match(request)
-        if expected_revision is None:
-            return _error(
-                "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
-                unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the edit.",
-                source_path=source_path,
-            )
-        profile_id = request.path_params["profile_id"]
-        try:
-            payload = await request.json()
-        except Exception:
-            return _error(
-                "Invalid JSON body",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a valid JSON request body and retry.",
-                source_path=source_path,
-            )
-        if not isinstance(payload, dict):
-            return _error(
-                "Request body must be a JSON object",
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Provide a JSON object payload and retry.",
-                source_path=source_path,
-            )
-        try:
-            data = ProfileEditorData.model_validate(payload)
-        except (ValidationError, ValueError) as exc:
-            return _error(
-                sanitize_config_error(exc),
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Correct the profile fields and retry.",
-                source_path=source_path,
-            )
-        try:
-            result, updated = runtime.mutations.update_project_override(
-                proj_root, profile_id, data, expected_revision=expected_revision
-            )
-            response = _json_response(
-                ProjectOverrideResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    override=updated,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
-        except ConfigurationMutationError as exc:
-            return _handle_mutation_error(exc)
+    project_profile_override_update = _mutation_route(
+        state, ProfileEditorData, "update_project_override", ProjectOverrideResponse, "override", project_scope=True
+    )
 
-    async def project_profile_override_delete(request: Request) -> Response:
-        if not _authorized_mutation(request, state):
-            return _forbidden()
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        project_view = runtime.database.project(request.path_params["project_id"])
-        if project_view is None:
-            return _error("Unknown project", 404, code="not_found")
-        proj_root = Path(project_view.root)
-        source_path = (proj_root / ".refract" / "config.toml").as_posix()
-        expected_revision = _parse_if_match(request)
-        if expected_revision is None:
-            return _error(
-                "An expected source revision is required before any file change.",
-                428,
-                code="revision_required",
-                unchanged="No configuration file was changed.",
-                recovery="Reload the current configuration and retry the deletion.",
-                source_path=source_path,
-            )
-        profile_id = request.path_params["profile_id"]
-        try:
-            result, deleted_id, fallback = runtime.mutations.delete_project_override(
-                proj_root, profile_id, expected_revision=expected_revision
-            )
-            response = _json_response(
-                ProjectOverrideDeleteResponse(
-                    revision=result.revision,
-                    source_path=result.source_path.as_posix(),
-                    deleted=deleted_id,
-                    fallback=fallback,
-                )
-            )
-            response.headers["cache-control"] = "no-store"
-            response.headers["etag"] = f'"{result.revision}"'
-            return response
-        except ConfigurationMutationError as exc:
-            return _handle_mutation_error(exc)
+    project_profile_override_delete = _mutation_route(
+        state, None, "delete_project_override", ProjectOverrideDeleteResponse, "deleted", project_scope=True, delete=True
+    )
+    return [
+        _loopback_route("/dashboard/api/projects/{project_id}/profile-overrides", project_profile_overrides_get, methods=["GET"]),
+        _loopback_route("/dashboard/api/projects/{project_id}/profile-overrides", project_profile_override_create, methods=["POST"]),
+        _loopback_route(_PROJECT_OVERRIDE_ROUTE, project_profile_override_get, methods=["GET"]),
+        _loopback_route(_PROJECT_OVERRIDE_ROUTE, project_profile_override_update, methods=["PUT"]),
+        _loopback_route(_PROJECT_OVERRIDE_ROUTE, project_profile_override_delete, methods=["DELETE"]),
+    ]
 
 
-    async def targets(request: Request) -> Response:
+def _register_catalog_routes(state: DashboardState) -> list[Route]:
+    def targets(request: Request) -> Response:
         try:
             return _json_response(_runtime(state).targets())
         except RuntimeError:
@@ -1215,18 +849,25 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except RuntimeError:
             return _runtime_error()
 
-    async def projects(request: Request) -> Response:
+    return [
+        _loopback_route("/dashboard/api/targets", targets, methods=["GET"]),
+        _loopback_route("/dashboard/api/profiles", profiles, methods=["GET"]),
+    ]
+
+
+def _register_project_routes(state: DashboardState) -> list[Route]:
+    def projects(request: Request) -> Response:
         try:
             return _json_response(_runtime(state).database.projects())
         except RuntimeError:
             return _runtime_error()
 
-    async def project(request: Request) -> Response:
+    def project(request: Request) -> Response:
         try:
             runtime = _runtime(state)
             project_view = runtime.database.project(request.path_params["project_id"])
             if project_view is None:
-                return _error("Unknown project", 404, code="not_found")
+                return _error(_UNKNOWN_PROJECT, 404, code="not_found")
             catalog = runtime.catalog_for_project_cached(project_view.id)
             return _json_response(
                 {
@@ -1243,57 +884,58 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
                 code="configuration_invalid",
                 unchanged="No configuration file was changed.",
                 recovery="Fix the project configuration file and retry.",
-                source_path=(Path(project_view.root) / ".refract" / "config.toml").as_posix(),
+                source_path=(Path(project_view.root) / _REFRACT_DIR / "config.toml").as_posix(),
             )
 
-    async def project_profiles(request: Request) -> Response:
-        response = await project(request)
-        if response.status_code != 200:
-            return response
-        payload = json.loads(response.body)
-        return _json_response(payload["configuration"])
+    return [
+        _loopback_route("/dashboard/api/projects", projects, methods=["GET"]),
+        _loopback_route("/dashboard/api/projects/{project_id}", project, methods=["GET"]),
+    ]
 
-    async def task_guide(request: Request) -> Response:
+
+def _register_task_guide_routes(state: DashboardState) -> list[Route]:
+    def task_guide(request: Request) -> Response:
         try:
             runtime = _runtime(state)
             project_id = request.query_params.get("project_id", "")
             if project_id and runtime.database.project(project_id) is None:
-                return _error("Unknown project", 404, code="not_found")
+                return _error(_UNKNOWN_PROJECT, 404, code="not_found")
             guide = load_task_guide(
                 runtime.config.home,
                 Path(runtime.database.project(project_id).root)
                 if project_id
                 else None,
             )
-            return _json_response({"guide": guide, "source_path": _source_path(runtime, project_id).as_posix()})
+            return _json_response({"guide": guide, "workflows": list(BUILTIN_WORKFLOWS),
+                                   "source_path": _source_path(runtime, project_id).as_posix()})
         except RuntimeError:
             return _runtime_error()
         except ValueError as exc:
             return _error(str(exc), 422, code="task_guide_invalid")
 
-    async def project_jobs(request: Request) -> Response:
+    return [
+        _loopback_route("/dashboard/api/task-guide", task_guide, methods=["GET"]),
+    ]
+
+
+def _register_job_routes(state: DashboardState) -> list[Route]:
+    def project_jobs(request: Request) -> Response:
         try:
             runtime = _runtime(state)
             project_id = request.path_params["project_id"]
             project_view = runtime.database.project(project_id)
             if project_view is None:
-                return _error("Unknown project", 404, code="not_found")
-            jobs = [
-                _dashboard_job(runtime, job.id)
-                for job in runtime.database.jobs(project_view.id)
-            ]
-            loaded = [job for job in jobs if job is not None]
-            active = [job for job in loaded if job.state not in TERMINAL_STATES]
-            terminal = [job for job in loaded if job.state in TERMINAL_STATES]
+                return _error(_UNKNOWN_PROJECT, 404, code="not_found")
+            active, recent, more_recent = runtime.database.job_listing(project_view.id)
             return _json_response({
-                "active": active,
-                "recent": terminal[:10],
-                "more_recent": max(0, len(terminal) - 10),
+                "active": [_dashboard_job_from_record(runtime, record) for record in active],
+                "recent": [_dashboard_job_from_record(runtime, record) for record in recent],
+                "more_recent": more_recent,
             })
         except RuntimeError:
             return _runtime_error()
 
-    async def job(request: Request) -> Response:
+    def job(request: Request) -> Response:
         try:
             runtime = _runtime(state)
             value = _dashboard_job(runtime, request.path_params["job_id"])
@@ -1303,22 +945,66 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except RuntimeError:
             return _runtime_error()
 
-    async def job_events(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            job_id = request.path_params["job_id"]
-            if _dashboard_job(runtime, job_id) is None:
-                return _error("Unknown job", 404, code="not_found")
-            return _json_response(
-                [
-                    {key: event[key] for key in ("id", "created_at", "kind")}
-                    for event in runtime.database.events(job_id)
-                ]
-            )
-        except RuntimeError:
-            return _runtime_error()
+    return [
+        _loopback_route("/dashboard/api/projects/{project_id}/jobs", project_jobs, methods=["GET"]),
+        _loopback_route("/dashboard/api/jobs/{job_id}", job, methods=["GET"]),
+    ]
 
-    async def job_output(request: Request) -> Response:
+
+def _job_stream_status(metadata: dict[str, Any], state: str) -> StreamStatus:
+    if metadata["failed"]:
+        return "failed"
+    if metadata["truncated"]:
+        return "truncated"
+    if state not in TERMINAL_STATES:
+        return "active"
+    if metadata["retained_from"] <= 0:
+        return "unavailable"
+    return "complete"
+
+
+def _output_update(cursor: int) -> bytes:
+    return (
+        f"event: output-updated\n"
+        f"id: {cursor}\n"
+        f"data: {json.dumps({'cursor': cursor})}\n\n"
+    ).encode("utf-8")
+
+
+async def _stream_output_updates(request: Request, runtime: Any, job_id: str, queue: Any, last_sent: int):
+    while True:
+        current = await run_sync(runtime.database.job, job_id)
+        if current is None or current.state in TERMINAL_STATES:
+            final_cursor = await run_sync(runtime.database.stream_high_water, job_id)
+            if final_cursor > last_sent:
+                yield _output_update(final_cursor)
+            break
+        if await request.is_disconnected():
+            break
+        try:
+            cursor = await asyncio.wait_for(
+                queue.get(), timeout=SSE_KEEPALIVE_INTERVAL_S
+            )
+            if cursor > last_sent:
+                last_sent = cursor
+                yield _output_update(cursor)
+        except asyncio.TimeoutError:
+            yield b": keepalive\n\n"
+
+
+async def _job_output_events(request: Request, runtime: Any, job_id: str):
+    queue = runtime.stream_hub.subscribe(job_id)
+    try:
+        initial_hw = await run_sync(runtime.database.stream_high_water, job_id)
+        yield _output_update(initial_hw)
+        async for event in _stream_output_updates(request, runtime, job_id, queue, initial_hw):
+            yield event
+    finally:
+        runtime.stream_hub.unsubscribe(job_id, queue)
+
+
+def _register_job_output_routes(state: DashboardState) -> list[Route]:
+    def job_output(request: Request) -> Response:
         try:
             runtime = _runtime(state)
             job_id = request.path_params["job_id"]
@@ -1335,21 +1021,12 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
                 limit = 100
             safe_limit = max(1, min(limit, 500))
 
-            high_water = runtime.database.stream_high_water(job_id)
+            metadata = runtime.database.stream_metadata(job_id)
+            high_water = metadata["high_water"]
+            retained_from = metadata["retained_from"]
             events = runtime.database.stream_events(job_id, after=after, limit=safe_limit)
-            retained_from = runtime.database.stream_retained_from(job_id)
 
-            lifecycle_events = runtime.database.events(job_id)
-            if any(event.get("kind") == "stream.persistence_failed" for event in lifecycle_events):
-                stream_status: StreamStatus = "failed"
-            elif runtime.database.stream_is_truncated(job_id):
-                stream_status = "truncated"
-            elif job.state not in TERMINAL_STATES:
-                stream_status = "active"
-            elif retained_from <= 0:
-                stream_status = "unavailable"
-            else:
-                stream_status = "complete"
+            stream_status = _job_stream_status(metadata, job.state)
 
             cursor = events[-1].id if events else after
             has_more = bool(events and events[-1].id < high_water)
@@ -1370,42 +1047,12 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         try:
             runtime = _runtime(state)
             job_id = request.path_params["job_id"]
-            job = runtime.database.job(job_id)
+            job = await run_sync(runtime.database.job, job_id)
             if job is None:
                 return _error("Unknown job", 404, code="not_found")
 
-            async def event_generator():
-                queue = runtime.stream_hub.subscribe(job_id)
-                try:
-                    initial_hw = runtime.database.stream_high_water(job_id)
-                    last_sent = initial_hw
-                    yield (
-                        f"event: output-updated\n"
-                        f"id: {initial_hw}\n"
-                        f"data: {json.dumps({'cursor': initial_hw})}\n\n"
-                    ).encode("utf-8")
-
-                    while True:
-                        if await request.is_disconnected():
-                            break
-                        try:
-                            cursor = await asyncio.wait_for(
-                                queue.get(), timeout=SSE_KEEPALIVE_INTERVAL_S
-                            )
-                            if cursor > last_sent:
-                                last_sent = cursor
-                                yield (
-                                    f"event: output-updated\n"
-                                    f"id: {cursor}\n"
-                                    f"data: {json.dumps({'cursor': cursor})}\n\n"
-                                ).encode("utf-8")
-                        except asyncio.TimeoutError:
-                            yield b": keepalive\n\n"
-                finally:
-                    runtime.stream_hub.unsubscribe(job_id, queue)
-
             response = StreamingResponse(
-                event_generator(),
+                _job_output_events(request, runtime, job_id),
                 media_type="text/event-stream",
             )
             response.headers["Cache-Control"] = "no-cache"
@@ -1415,6 +1062,13 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         except RuntimeError:
             return _runtime_error()
 
+    return [
+        _loopback_route("/dashboard/api/jobs/{job_id}/output", job_output, methods=["GET"]),
+        _loopback_route("/dashboard/api/jobs/{job_id}/output/updates", job_output_updates, methods=["GET"]),
+    ]
+
+
+def _register_asset_routes() -> list[Route]:
     async def api_not_found(request: Request) -> Response:
         return _error(
             "Dashboard API route not found",
@@ -1456,47 +1110,28 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
     )
 
     return [
-        Route("/dashboard/api/bootstrap", bootstrap, methods=["GET"]),
-        Route("/dashboard/api/overview", overview, methods=["GET"]),
-        Route("/dashboard/api/status", status, methods=["GET"]),
-        Route("/dashboard/api/configuration", configuration, methods=["GET"]),
-        Route("/dashboard/api/config/health", configuration, methods=["GET"]),
-        Route("/dashboard/api/settings", settings, methods=["GET"]),
-        Route("/dashboard/api/configuration/targets", config_targets_get, methods=["GET"]),
-        Route("/dashboard/api/configuration/targets", config_target_create, methods=["POST"]),
-        Route("/dashboard/api/configuration/targets/{target_id:path}", config_target_get, methods=["GET"]),
-        Route("/dashboard/api/configuration/targets/{target_id:path}", config_target_update, methods=["PUT"]),
-        Route("/dashboard/api/configuration/targets/{target_id:path}", config_target_delete, methods=["DELETE"]),
-        Route("/dashboard/api/configuration/profiles", config_profiles_get, methods=["GET"]),
-        Route("/dashboard/api/configuration/profiles", config_profile_create, methods=["POST"]),
-        Route("/dashboard/api/configuration/profiles/{profile_id}", config_profile_get, methods=["GET"]),
-        Route("/dashboard/api/configuration/profiles/{profile_id}", config_profile_update, methods=["PUT"]),
-        Route("/dashboard/api/configuration/profiles/{profile_id}", config_profile_delete, methods=["DELETE"]),
-        Route("/dashboard/api/projects/{project_id}/profile-overrides", project_profile_overrides_get, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/profile-overrides", project_profile_override_create, methods=["POST"]),
-        Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_get, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_update, methods=["PUT"]),
-        Route("/dashboard/api/projects/{project_id}/profile-overrides/{profile_id}", project_profile_override_delete, methods=["DELETE"]),
-        Route("/dashboard/api/targets", targets, methods=["GET"]),
-        Route("/dashboard/api/profiles", profiles, methods=["GET"]),
-        Route("/dashboard/api/projects", projects, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}", project, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/configuration", project_profiles, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/profiles", project_profiles, methods=["GET"]),
-        Route("/dashboard/api/task-guide", task_guide, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/task-guide", task_guide, methods=["GET"]),
-        Route("/dashboard/api/projects/{project_id}/jobs", project_jobs, methods=["GET"]),
-        Route("/dashboard/api/jobs/{job_id}", job, methods=["GET"]),
-        Route("/dashboard/api/jobs/{job_id}/events", job_events, methods=["GET"]),
-        Route("/dashboard/api/jobs/{job_id}/output", job_output, methods=["GET"]),
-        Route("/dashboard/api/jobs/{job_id}/output/updates", job_output_updates, methods=["GET"]),
-        Route("/dashboard/api", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
-        Route("/dashboard/api/{path:path}", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
-        Route("/dashboard/assets", missing_asset, methods=["GET"]),
+        _loopback_route("/dashboard/api", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
+        _loopback_route("/dashboard/api/{path:path}", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
+        _loopback_route("/dashboard/assets", missing_asset, methods=["GET"]),
         asset_route,
-        Route("/dashboard", dashboard_index, methods=["GET"]),
-        Route("/dashboard/", dashboard_index, methods=["GET"]),
-        Route("/dashboard/{path:path}", dashboard_deep_link, methods=["GET"]),
+        _loopback_route("/dashboard", dashboard_index, methods=["GET"]),
+        _loopback_route("/dashboard/", dashboard_index, methods=["GET"]),
+        _loopback_route("/dashboard/{path:path}", dashboard_deep_link, methods=["GET"]),
+    ]
+
+
+def register_dashboard_routes(state: DashboardState) -> list[Route]:
+    return [
+        *_register_status_routes(state),
+        *_register_target_configuration_routes(state),
+        *_register_profile_configuration_routes(state),
+        *_register_project_override_routes(state),
+        *_register_catalog_routes(state),
+        *_register_project_routes(state),
+        *_register_task_guide_routes(state),
+        *_register_job_routes(state),
+        *_register_job_output_routes(state),
+        *_register_asset_routes(),
     ]
 
 

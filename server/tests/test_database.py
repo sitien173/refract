@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -9,269 +11,181 @@ import pytest
 from refract.database import Database
 
 
-def create_legacy_database(path) -> None:
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        PRAGMA foreign_keys=ON;
-        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, head_commit TEXT NOT NULL, clean INTEGER NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '', workflow_json TEXT NOT NULL, execution_plan_json TEXT NOT NULL DEFAULT '', result_stage TEXT NOT NULL DEFAULT '', inputs_json TEXT NOT NULL, context_key TEXT NOT NULL, parent_job_id TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, base_commit TEXT NOT NULL, integration_base TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL, worktree TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, result_commit TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '');
-        CREATE TABLE stages (job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, id TEXT NOT NULL, ordinal INTEGER NOT NULL, mode TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, target_id TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '', outputs_json TEXT NOT NULL DEFAULT '[]', error TEXT NOT NULL DEFAULT '', commit_sha TEXT NOT NULL DEFAULT '', start_commit TEXT NOT NULL DEFAULT '', PRIMARY KEY(job_id, id));
-        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
-        CREATE TABLE artifacts (job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, kind TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(job_id, kind, path));
-        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
-        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
-    """)
-    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?)", ("project", "project", "/project", "base-sha", 1, "2026-01-01"))
-    inputs = json.dumps({"prompt": "legacy", "commit_message": "feat: legacy"})
-    connection.executemany("""INSERT INTO jobs(id, project_id, workflow, profile, workflow_json, execution_plan_json, result_stage, inputs_json, context_key, parent_job_id, state, base_commit, integration_base, branch, worktree, created_at, updated_at, result_commit, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", [("completed", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "integrated", "base-sha", "base-sha", "refract/completed", "/worktree/completed", "2026-01-01", "2026-01-01", "result-sha", ""), ("running", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "running", "base-sha", "base-sha", "refract/running", "/worktree/running", "2026-01-01", "2026-01-01", "", ""), ("queued", "project", "review", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "queued", "base-sha", "base-sha", "refract/queued", "/worktree/queued", "2026-01-01", "2026-01-01", "", ""), ("conflict", "project", "implement", "balanced", "{}", "{}", "execute", inputs, "legacy", "", "integration_conflict", "base-sha", "base-sha", "refract/conflict", "/worktree/conflict", "2026-01-01", "2026-01-01", "", "conflict")])
-    connection.executemany("INSERT INTO stages(job_id, id, ordinal, mode, state, attempts, target_id, text, commit_sha) VALUES (?, 'execute', 0, 'write', ?, ?, ?, ?, ?)", [("completed", "succeeded", 2, "legacy-target", "legacy response", "result-sha"), ("running", "running", 1, "legacy-target", "", ""), ("queued", "pending", 0, "", "", ""), ("conflict", "succeeded", 1, "legacy-target", "", "result-sha")])
-    connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", ("completed", "2026-01-01", "legacy.event", "{}"))
-    connection.execute("INSERT INTO context_turns(project_id, context_key, role, target_id, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", ("project", "legacy", "implement", "legacy-target", "legacy prompt", "legacy response", "2026-01-01"))
-    connection.commit()
-    connection.close()
-
-
-def create_v5_database(path, *, invalid_foreign_key: bool = False) -> None:
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        PRAGMA foreign_keys=OFF;
-        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, head_commit TEXT NOT NULL, clean INTEGER NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, commit_message TEXT NOT NULL DEFAULT '', execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, base_commit TEXT NOT NULL DEFAULT '', result_text TEXT NOT NULL DEFAULT '', result_commit TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
-        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
-        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
-        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
-    """)
-    connection.execute("PRAGMA user_version=5")
-    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?)", ("project", "project", "/project", "head", 0, "2026-01-01"))
-    project_id = "missing" if invalid_foreign_key else "project"
-    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", project_id, "consult", "balanced", "prompt", "legacy message", "{}", "consult", "succeeded", "base", "result text", "result", "target", 2, "", "2026-01-01", "2026-01-02"))
-    connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", ("job", "2026-01-01", "job.queued", "{}"))
-    connection.execute("INSERT INTO context_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ("project", "consult", "consult", "target", "target", "", "session", "2026-01-01"))
-    connection.execute("INSERT INTO context_turns(project_id, context_key, role, target_id, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", ("project", "consult", "consult", "target", "prompt", "response", "2026-01-01"))
-    connection.execute("INSERT INTO target_health VALUES (?, ?, ?, ?)", ("target", 1, "", "2026-01-01"))
-    connection.commit()
-    connection.close()
-
-
-def create_v6_database(path) -> None:
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        PRAGMA foreign_keys=ON;
-        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
-        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
-        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
-        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
-        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
-    """)
-    connection.execute("PRAGMA user_version=6")
-    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", ("project", "project", "/project", "2026-01-01"))
-    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", "project", "consult", "balanced", "prompt", "{}", "consult", "succeeded", "result text", "target", 2, "", "2026-01-01", "2026-01-02"))
-    connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", ("job", "2026-01-01", "job.queued", "{}"))
-    connection.execute("INSERT INTO context_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ("project", "consult", "consult", "target", "target", "", "session", "2026-01-01"))
-    connection.execute("INSERT INTO context_turns(project_id, context_key, role, target_id, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", ("project", "consult", "consult", "target", "prompt", "response", "2026-01-01"))
-    connection.execute("INSERT INTO target_health VALUES (?, ?, ?, ?)", ("target", 1, "", "2026-01-01"))
-    connection.commit()
-    connection.close()
-
-
-def create_v8_database(path) -> None:
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        PRAGMA foreign_keys=ON;
-        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
-        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
-        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
-        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE context_instructions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, workflow TEXT NOT NULL, instruction TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, workflow));
-        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
-        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
-        PRAGMA user_version=8;
-    """)
-    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", ("project", "project", "/project", "2026-01-01"))
-    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", "project", "consult", "balanced", "prompt", "{}", "consult", "succeeded", "result text", "target", 2, "", "rev", "2026-01-01", "2026-01-02"))
-    connection.execute("INSERT INTO context_instructions VALUES (?, ?, ?, ?)", ("project", "consult", "instruction", "2026-01-01"))
-    connection.commit()
-    connection.close()
-
-
-def create_v9_database(path) -> None:
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        PRAGMA foreign_keys=ON;
-        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
-        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
-        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
-        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
-        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
-        PRAGMA user_version=9;
-    """)
-    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", ("project", "project", "/project", "2026-01-01"))
-    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", "project", "consult", "balanced", "prompt", "{}", "consult", "succeeded", "result text", "target", 2, "", "rev", "2026-01-01", "2026-01-02"))
-    connection.commit()
-    connection.close()
-
-
 def table_columns(database: Database, table: str) -> set[str]:
-    return database._columns(table)
+    return {
+        row["name"]
+        for row in database._connection.execute("SELECT name FROM pragma_table_info(?)", (table,))
+    }
 
 
-def create_v13_dependency_fixture(path) -> None:
+@pytest.mark.parametrize("version", [-1, *range(15), 16, 99])
+def test_unsupported_schema_is_rejected_without_writes_or_connection_leaks(tmp_path, monkeypatch, version) -> None:
+    path = tmp_path / "refract.db"
     connection = sqlite3.connect(path)
-    connection.executescript("""
-        PRAGMA foreign_keys=ON;
-        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT UNIQUE NOT NULL, root TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE jobs (
-            id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
-            state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL, access_mode TEXT NOT NULL DEFAULT 'exclusive',
-            result_metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE TABLE events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-            created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL
-        );
-        CREATE TABLE job_dependencies (
-            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-            dependency_job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-            PRIMARY KEY (job_id, dependency_job_id)
-        );
-        CREATE INDEX job_dependencies_dependency_idx ON job_dependencies(dependency_job_id);
-        INSERT INTO projects VALUES ('p', 'p', '/p', '2026-01-01');
-        INSERT INTO jobs(id, project_id, state, created_at, updated_at) VALUES
-            ('unfinished', 'p', 'running', '2026-01-01', '2026-01-01'),
-            ('done', 'p', 'succeeded', '2026-01-01', '2026-01-01'),
-            ('cancel-me', 'p', 'queued', '2026-01-01', '2026-01-01'),
-            ('keep-queued', 'p', 'queued', '2026-01-01', '2026-01-01');
-        INSERT INTO job_dependencies VALUES ('cancel-me', 'unfinished');
-        INSERT INTO job_dependencies VALUES ('keep-queued', 'done');
-        PRAGMA user_version=13;
-    """)
+    connection.execute("CREATE TABLE retained (value TEXT NOT NULL)")
+    connection.execute("INSERT INTO retained VALUES ('historical data')")
+    connection.execute(f"PRAGMA user_version={version}")
     connection.commit()
     connection.close()
+    before = path.read_bytes()
+    files_before = set(tmp_path.iterdir())
+    real_connect = sqlite3.connect
+    opened = []
+    statements = []
+
+    def track_connection(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", track_connection)
+    with pytest.raises(ValueError, match=f"Unsupported database schema {version}") as error:
+        Database(path)
+
+    assert "supports schema 15 only" in str(error.value)
+    assert "not modified" in str(error.value)
+    assert str(path) in str(error.value)
+    recovery = "upgrade" if version < 15 else f"supports schema {version}"
+    assert recovery in str(error.value)
+    assert path.read_bytes() == before
+    assert set(tmp_path.iterdir()) == files_before
+    assert not any("journal_mode" in statement.lower() for statement in statements)
+    assert all(statement.startswith(("SELECT", "PRAGMA")) for statement in statements)
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        opened[0].execute("SELECT 1")
 
 
-def test_fresh_database_uses_v14_schema(tmp_path) -> None:
-    database = Database(tmp_path / "refract.db")
+@pytest.mark.parametrize("version", [14, 16])
+def test_rejected_wal_database_is_not_checkpointed(tmp_path, version) -> None:
+    path = tmp_path / "refract #?.db"
+    subprocess.run([
+        sys.executable, "-c",
+        (
+            "import os, sqlite3, sys; "
+            "connection = sqlite3.connect(sys.argv[1]); "
+            "connection.execute('PRAGMA journal_mode=WAL'); "
+            "connection.execute('CREATE TABLE retained (value TEXT)'); "
+            "connection.execute(\"INSERT INTO retained VALUES ('historical data')\"); "
+            "connection.execute('PRAGMA user_version=' + sys.argv[2]); "
+            "connection.commit(); os._exit(0)"
+        ),
+        str(path), str(version),
+    ], check=True, timeout=10)
+    wal = path.with_name(path.name + "-wal")
+    before = path.read_bytes()
+    wal_before = wal.read_bytes()
+
+    with pytest.raises(ValueError, match=f"Unsupported database schema {version}"):
+        Database(path)
+
+    assert path.read_bytes() == before
+    assert wal.read_bytes() == wal_before
+
+
+@pytest.mark.parametrize("version", [14, 15, 16])
+def test_stamped_empty_database_is_not_bootstrapped(tmp_path, version) -> None:
+    path = tmp_path / "empty.db"
+    connection = sqlite3.connect(path)
+    connection.execute(f"PRAGMA user_version={version}")
+    connection.close()
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match=f"schema {version}"):
+        Database(path)
+
+    assert path.read_bytes() == before
+    assert set(tmp_path.iterdir()) == {path}
+
+
+def test_unversioned_view_only_database_is_not_empty(tmp_path) -> None:
+    path = tmp_path / "view.db"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE VIEW retained AS SELECT 'historical data' AS value")
+    connection.close()
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="Unsupported database schema 0"):
+        Database(path)
+
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["connection", "schema"])
+def test_initialization_failure_closes_connection(tmp_path, monkeypatch, failure) -> None:
+    real_connect = sqlite3.connect
+    opened = []
+
+    class FailingConnection(sqlite3.Connection):
+        def execute(self, statement, *args, **kwargs):
+            if failure == "connection" and statement == "PRAGMA foreign_keys=ON":
+                raise sqlite3.OperationalError("connection setup failed")
+            return super().execute(statement, *args, **kwargs)
+
+    def track_connection(*args, **kwargs):
+        connection = real_connect(*args, factory=FailingConnection, **kwargs)
+        opened.append(connection)
+        return connection
+
+    def fail_schema(self):
+        raise sqlite3.OperationalError("schema setup failed")
+
+    monkeypatch.setattr(sqlite3, "connect", track_connection)
+    if failure == "schema":
+        monkeypatch.setattr(Database, "_create_schema", fail_schema)
+    with pytest.raises(sqlite3.OperationalError, match="setup failed"):
+        Database(tmp_path / "refract.db")
+
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        opened[0].execute("SELECT 1")
+
+
+@pytest.mark.parametrize("existing_empty_file", [False, True])
+def test_fresh_database_uses_v15_schema(tmp_path, existing_empty_file) -> None:
+    path = tmp_path / "refract.db"
+    if existing_empty_file:
+        path.touch()
+    database = Database(path)
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 15
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
     assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
     assert "job_dependencies" not in tables
-    assert "job_stream_events" in tables
-    assert "stages" not in tables and "artifacts" not in tables
+    assert {"projects", "jobs", "events", "context_sessions", "context_turns", "target_health", "job_stream_events"} <= tables
+    assert "stages" not in tables
+    assert "artifacts" not in tables
     database.close()
 
 
-def test_v13_to_v14_cancels_unfinished_dependents_and_is_idempotent(tmp_path) -> None:
-    path = tmp_path / "v13.db"
-    create_v13_dependency_fixture(path)
-    database = Database(path)
-
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert "access_mode" not in table_columns(database, "jobs")
-    tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert "job_dependencies" not in tables
-    cancelled = database.job_record("cancel-me")
-    assert cancelled["state"] == "cancelled"
-    assert cancelled["error"] == "Dependency unfinished was removed before completion"
-    event_rows = database._connection.execute(
-        "SELECT kind, data_json FROM events WHERE job_id='cancel-me' AND kind='job.cancelled'"
-    ).fetchall()
-    assert [(row["kind"], json.loads(row["data_json"])) for row in event_rows] == [
-        ("job.cancelled", {"error": "Dependency unfinished was removed before completion"})
-    ]
-    assert database.job_record("keep-queued")["state"] == "queued"
-    before = cancelled["updated_at"]
-    database._migrate_v13_to_v14()
-    assert database.job_record("cancel-me")["updated_at"] == before
-    assert database._connection.execute(
-        "SELECT COUNT(*) FROM events WHERE job_id='cancel-me' AND kind='job.cancelled'"
-    ).fetchone()[0] == 1
-    database.close()
-
-
-def test_v6_migrates_to_v14_preserving_rows_and_support_data(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    create_v6_database(path)
-    database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
-    assert database.project("project") and database.project("project").root == "/project"
-    job = database.job("job")
-    assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
-    assert job.config_revision == ""
-    assert database.job_record("job")["fresh_session"] == 0
-    assert database.events("job")[0]["kind"] == "job.queued"
-    assert database._connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0] == 1
-    assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
-    assert database._connection.execute("SELECT COUNT(*) FROM target_health").fetchone()[0] == 1
-    assert not {"projects_v6", "jobs_v6"} & {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    database.close()
-
-
-def test_v5_migrates_to_v14_preserving_rows_and_support_data(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    create_v5_database(path)
-    database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
-    assert database.project("project") and database.project("project").root == "/project"
-    job = database.job("job")
-    assert job and job.result.text == "result text" and job.target_id == "target" and job.attempts == 2
-    assert database.job_record("job")["fresh_session"] == 0
-    assert database.events("job")[0]["kind"] == "job.queued"
-    assert database._connection.execute("SELECT COUNT(*) FROM context_sessions").fetchone()[0] == 1
-    assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
-    assert database._connection.execute("SELECT COUNT(*) FROM target_health").fetchone()[0] == 1
-    assert not {"projects_v6", "jobs_v6"} & {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    database.close()
-
-
-def test_reopening_v14_is_a_noop(tmp_path) -> None:
+def test_reopening_v15_preserves_jobs_and_history(tmp_path) -> None:
     path = tmp_path / "refract.db"
     first = Database(path)
+    project = first.upsert_project(project_id="project", alias="project", root="/project")
+    first.create_job(
+        job_id="job", project_id=project.id, workflow="consult", profile="balanced",
+        prompt="retained prompt", execution_plan_json="{}", context_key="consult",
+    )
+    first.append_turn(
+        project_id=project.id, context_key="consult", role="consult", target_id="target",
+        target_key="target", session_id="session", prompt="retained prompt", response="retained response",
+    )
+    first.finish_job("job", "succeeded", text="retained response", target_id="target")
+    first.record_target_failure("target")
+    before = list(first._connection.iterdump())
     first.close()
+
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 15
+    assert list(second._connection.iterdump()) == before
+    job = second.job("job")
+    assert job is not None
+    assert job.result.text == "retained response"
+    assert second.session(project.id, "consult", "consult", "target") == "session"
+    assert second.recent_turns(project.id, "consult", "consult", 8)[0]["response"] == "retained response"
+    assert second.target_health("target")["consecutive_failures"] == 1
     second.close()
-
-
-def test_v9_migrates_to_v14_adding_fresh_session_column(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    create_v9_database(path)
-    database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert "fresh_session" in table_columns(database, "jobs")
-    assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    record = database.job_record("job")
-    assert record and record["fresh_session"] == 0
-    database.close()
-
-
-def test_v8_migrates_to_v14_dropping_context_instructions_and_adding_fresh_session(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    create_v8_database(path)
-
-    database = Database(path)
-    tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert "context_instructions" not in tables
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert "fresh_session" in table_columns(database, "jobs")
-    assert "job_stream_events" in tables
-    record = database.job_record("job")
-    assert record and record["fresh_session"] == 0
-    database.close()
-
 
 
 def test_create_job_persists_fresh_session_flag(tmp_path) -> None:
@@ -300,34 +214,6 @@ def test_create_job_persists_fresh_session_flag(tmp_path) -> None:
     fresh_record = database.job_record("fresh-job")
     assert standard_record and standard_record["fresh_session"] == 0
     assert fresh_record and fresh_record["fresh_session"] == 1
-    database.close()
-
-
-def test_v5_migration_rolls_back_on_integrity_failure(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    create_v5_database(path, invalid_foreign_key=True)
-    with pytest.raises(sqlite3.IntegrityError):
-        Database(path)
-    connection = sqlite3.connect(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
-    assert {row[1] for row in connection.execute("PRAGMA table_info(projects)")} == {"id", "alias", "root", "head_commit", "clean", "created_at"}
-    assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
-    connection.close()
-
-
-def test_legacy_jobs_collapse_to_historical_results(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    create_legacy_database(path)
-    database = Database(path)
-    completed, interrupted, queued, conflict = (database.job(value) for value in ("completed", "running", "queued", "conflict"))
-    assert completed and completed.state == "succeeded"
-    assert completed.result.text == "legacy response"
-    assert completed.target_id == "legacy-target" and completed.attempts == 2
-    assert interrupted and interrupted.state == "interrupted"
-    assert queued and queued.state == "interrupted"
-    assert conflict and conflict.state == "failed" and conflict.result.error == "conflict"
-    assert database.events("completed")[0]["kind"] == "legacy.event"
-    assert database._connection.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0] == 1
     database.close()
 
 
@@ -376,6 +262,30 @@ def test_jobs_load_with_one_query(tmp_path) -> None:
     database._connection.set_trace_callback(None)
     assert {job.id for job in jobs} == {"first", "second"}
     assert len([statement for statement in statements if statement.startswith("SELECT")]) == 1
+    database.close()
+
+
+def test_job_listing_bounds_terminal_jobs_and_uses_project_index(tmp_path) -> None:
+    database = Database(tmp_path / "refract.db")
+    project = database.upsert_project(project_id="project", alias="project", root="/project")
+    for index in range(14):
+        job_id = f"job-{index:02d}"
+        database.create_job(
+            job_id=job_id, project_id=project.id, workflow="consult", profile="balanced",
+            prompt=job_id, execution_plan_json="{}", context_key="consult",
+        )
+        if index >= 2:
+            database.finish_job(job_id, "succeeded")
+
+    active, recent, more_recent = database.job_listing(project.id, recent_limit=10)
+
+    assert {record["id"] for record in active} == {"job-00", "job-01"}
+    assert [record["id"] for record in recent] == [f"job-{index:02d}" for index in range(13, 3, -1)]
+    assert more_recent == 2
+    plan = database._connection.execute(
+        "EXPLAIN QUERY PLAN SELECT * FROM jobs WHERE project_id=? ORDER BY updated_at DESC", ("project",)
+    ).fetchall()
+    assert any("jobs_project_idx" in row["detail"] for row in plan)
     database.close()
 
 
@@ -522,47 +432,6 @@ def test_append_turn_clear_sessions_clears_multiple_stale_and_preserves_unrelate
     assert rows[0]["session_id"] == "replacement-sess"
 
     assert database.session(project.id, "stream-2", "review", "primary-key") == "unrelated-sess"
-    database.close()
-
-
-def create_v10_database(path) -> None:
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        PRAGMA foreign_keys=ON;
-        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
-        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '', fresh_session INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
-        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id, context_key, role, target_key, lane));
-        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '');
-        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
-        CREATE INDEX events_job_idx ON events(job_id, id);
-        CREATE INDEX context_turns_stream_idx ON context_turns(project_id, context_key, role, id);
-        PRAGMA user_version=10;
-    """)
-    connection.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", ("project", "project", "/project", "2026-01-01"))
-    connection.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("job", "project", "consult", "balanced", "prompt", "{}", "consult", "succeeded", "result text", "target", 2, "", "rev", 0, "2026-01-01", "2026-01-02"))
-    connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", ("job", "2026-01-01", "job.queued", "{}"))
-    connection.commit()
-    connection.close()
-
-
-def test_v10_migrates_to_v14_adding_stream_events_table(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    create_v10_database(path)
-    database = Database(path)
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert "job_stream_events" in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    expected_cols = {
-        "id", "job_id", "created_at", "attempt", "target_id",
-        "backend", "kind", "entity_id", "parent_entity_id",
-        "data_json", "size_bytes",
-    }
-    assert table_columns(database, "job_stream_events") == expected_cols
-    indices = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-    assert "job_stream_events_job_idx" in indices
-    job = database.job("job")
-    assert job and job.result.text == "result text"
     database.close()
 
 
@@ -745,7 +614,7 @@ def test_database_reopen_preserves_stream_events_and_cursors(tmp_path) -> None:
     database.close()
 
     reopened = Database(path)
-    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 15
     assert reopened.stream_high_water("job-1") == event_id
     assert reopened.stream_retained_from("job-1") == event_id
     events = reopened.stream_events("job-1", after=0)
@@ -911,69 +780,6 @@ def test_stream_is_truncated_lookup(tmp_path) -> None:
     }])
     assert database.stream_is_truncated("job-1") is True
     database.close()
-
-
-def test_v11_migration_removes_dependency_and_access_schema(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
-        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL, profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL, context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '', fresh_session INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        INSERT INTO projects VALUES ('p1', 'p1', '/p1', 'now');
-        INSERT INTO jobs VALUES ('old', 'p1', 'consult', 'balanced', 'prompt', '{}', 'consult', 'queued', '', '', 0, '', '', 0, 'now', 'now');
-        PRAGMA user_version=11;
-    """)
-    connection.close()
-
-    database = Database(path)
-
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert "result_metadata_json" in table_columns(database, "jobs")
-    assert "access_mode" not in table_columns(database, "jobs")
-    assert "job_dependencies" not in {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    database.close()
-
-
-def test_v12_migration_preserves_rows_and_advances_to_v14(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    db = Database(path)
-    project = db.upsert_project(project_id="p", alias="p", root="/p")
-    db.create_job(job_id="existing", project_id=project.id, workflow="consult", profile="p", prompt="x", execution_plan_json="{}", context_key="k")
-    with db._connection:
-        db._connection.execute("INSERT INTO target_health(target_id, consecutive_failures) VALUES ('target', 2)")
-    db.close()
-    conn = sqlite3.connect(path)
-    conn.execute("ALTER TABLE target_health DROP COLUMN probe_job_id")
-    conn.execute("ALTER TABLE target_health DROP COLUMN cooldown_s")
-    conn.execute("ALTER TABLE jobs DROP COLUMN result_metadata_json")
-    conn.execute("PRAGMA user_version=12")
-    conn.commit()
-    conn.close()
-    migrated = Database(path)
-    assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert migrated.job_record("existing")["prompt"] == "x"
-    assert migrated.job_record("existing")["result_metadata_json"] == "{}"
-    assert migrated.target_health("target")["consecutive_failures"] == 2
-    migrated.close()
-
-
-def test_v13_to_v14_repairs_old_columns_and_drops_removed_schema(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    Database(path).close()
-    conn = sqlite3.connect(path)
-    conn.execute("ALTER TABLE target_health DROP COLUMN probe_job_id")
-    conn.execute("ALTER TABLE target_health DROP COLUMN cooldown_s")
-    conn.execute("ALTER TABLE jobs DROP COLUMN result_metadata_json")
-    conn.execute("ALTER TABLE jobs ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]'")
-    conn.execute("PRAGMA user_version=13")
-    conn.commit()
-    conn.close()
-    repaired = Database(path)
-    assert repaired._connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    assert {"cooldown_s", "probe_job_id"} <= table_columns(repaired, "target_health")
-    assert "result_metadata_json" in table_columns(repaired, "jobs")
-    repaired.reset_orphaned_target_probes()
-    repaired.close()
 
 
 def test_probe_claim_is_atomic_and_failure_cooldown_caps(tmp_path) -> None:

@@ -449,7 +449,6 @@ implement = { targets = ["primary"], max_attempts = 1, timeout_s = 3 }
 
     catalog = load_config(path)
 
-    assert catalog.profiles["child"]["implement"].max_attempts == 1
     assert catalog.profiles["child"]["implement"].timeout_s == 3
 
 
@@ -606,7 +605,7 @@ def test_breaker_config_defaults_and_deprecated_max_attempts_warning(tmp_path, c
     assert catalog.breaker_failure_threshold == 3
     assert catalog.breaker_base_cooldown_s == 60
     assert catalog.breaker_max_cooldown_s == 900
-    assert catalog.profiles["balanced"]["implement"].max_attempts == 2
+    assert catalog.profiles["balanced"]["implement"].targets == ("primary",)
     assert sum(getattr(record, "event", None) == "config.deprecated_key" for record in caplog.records) == 1
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import shutil
@@ -21,6 +22,11 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command")
     serve = commands.add_parser("serve", help="Run the local MCP daemon")
     serve.add_argument("--host", default=None)
+    serve.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Allow binding a non-loopback host; the MCP endpoint has no authentication",
+    )
     serve.add_argument("--port", type=int, default=None)
     serve.add_argument(
         "--log-level",
@@ -91,18 +97,26 @@ def _doctor(config: DaemonConfig | None = None) -> int:
     return 0 if home_writable and all(target["executable"] for target in targets.values()) else 1
 
 
-def _apply_logging_overrides(args: argparse.Namespace) -> None:
+def _logging_overrides(args: argparse.Namespace) -> dict[str, str]:
     overrides = {
         "REFRACT_LOG_LEVEL": getattr(args, "log_level", None),
         "REFRACT_LOG_FORMAT": getattr(args, "log_format", None),
         "REFRACT_LOG_FILE": getattr(args, "log_file", None),
     }
-    for name, value in overrides.items():
-        if value is not None:
-            os.environ[name] = str(value)
+    resolved = {name: str(value) for name, value in overrides.items() if value is not None}
     console = getattr(args, "log_console", None)
     if console is not None:
-        os.environ["REFRACT_LOG_CONSOLE"] = "true" if console else "false"
+        resolved["REFRACT_LOG_CONSOLE"] = "true" if console else "false"
+    return resolved
+
+
+def _is_loopback_bind(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -113,7 +127,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.command not in {None, "serve"}:
         raise SystemExit(2)
 
-    _apply_logging_overrides(args)
+    logging_overrides = _logging_overrides(args)
     try:
         config = load_config()
     except ValueError as exc:
@@ -122,11 +136,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     # Resolve transport settings locally; MCPServer has no mutable transport config.
     host = args.host if getattr(args, "host", None) is not None else config.host
     port = args.port if getattr(args, "port", None) is not None else config.port
+    if not _is_loopback_bind(host) and not getattr(args, "allow_remote", False):
+        sys.stderr.write(
+            f"Refusing to bind non-loopback host {host!r}: the MCP endpoint has no authentication. "
+            "Pass --allow-remote to bind it anyway.\n"
+        )
+        raise SystemExit(2)
 
     # Import after configuration so startup uses the final settings.
     from refract import server
 
-    server._DAEMON_CONFIG = config
     log.info(
         "Launching HTTP transport",
         extra={"event": "cli.serve", "host": host, "port": port},
@@ -135,7 +154,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         import uvicorn
 
         uvicorn.run(
-            server.create_application(host=host),
+            server.create_application(config, host=host, logging_overrides=logging_overrides),
             host=host,
             port=port,
         )
@@ -144,8 +163,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     except Exception:
         log.exception("Daemon terminated unexpectedly", extra={"event": "cli.failed"})
         raise
-    finally:
-        server._DAEMON_CONFIG = None
 
 
 __all__ = ["main"]

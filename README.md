@@ -1,4 +1,4 @@
-# Refract 1.0.0
+# Refract 2.0.0
 
 Refract combines a Claude Code and Codex plugin with a local MCP orchestration server and dashboard. The plugin coordinates planning, implementation, and review. The server runs durable jobs through installed coding-agent CLIs.
 
@@ -37,7 +37,9 @@ uv run refract serve
 
 These steps document a manual migration from the prior product state. They have not been run by this plan.
 
-1. Stop the old daemon.
+Renaming files does not upgrade the database schema. This server accepts schema v15 only. Upgrade a backup of an older database using a migration-capable Refract version. Use a compatible server for newer databases. Select another state directory with `REFRACT_HOME` to start fresh without deleting history.
+
+1. Stop the old daemon. Back up the complete state directory, including SQLite sidecars.
 2. Move the state directory, then rename files matching `openmcp.db*` to `refract.db*` and `openmcp.log*` to `refract.log*` inside `~/.refract`. Preserve each file's suffix, including SQLite sidecars.
 
    ```bash

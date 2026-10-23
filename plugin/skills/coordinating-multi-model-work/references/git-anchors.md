@@ -37,7 +37,8 @@ consolidation. Plan `impl` captures the resulting single branch commit.
 
 ## Consolidation
 
-After every phase passes and final coordination state is ready:
+After every phase passes, finish every journal and mark handover `DONE`.
+Checkpoint this coordination state under `tracked`. Then perform these steps.
 
 1. Confirm no project job is active.
 2. Confirm every phase has `base` and `impl` refs.
@@ -46,7 +47,10 @@ After every phase passes and final coordination state is ready:
    plan `base` as parent and use `PLAN.md`'s message.
 5. Atomically move the attached branch from the checkpoint tip to that commit.
 6. Set the plan `impl` ref to the resulting HEAD.
-7. Run final verification against that exact HEAD.
+7. Invoke `verifying-before-completion` against that exact HEAD.
+8. Confirm the root is clean and HEAD equals the plan `impl` ref.
+
+Completion requires every final verification check to pass.
 
 Use Git plumbing so the working tree remains unchanged:
 
@@ -108,8 +112,7 @@ a replacement SHA or widen a range merely to make it resolve.
 
 ## Retention
 
-Anchors remain local and are never pruned automatically. Their objects are
-retained deliberately. Deletion is manual:
+Anchors retain objects locally. No automatic pruning occurs. Deletion is manual:
 
 ```text
 git update-ref -d refs/plans/<slug>/phase-<NN>/base
