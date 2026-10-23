@@ -10,3 +10,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if command -v claude >/dev/null 2>&1; then
     claude plugin validate "$repo_root"
 fi
+
+if command -v agy >/dev/null 2>&1; then
+    agy plugin validate "$repo_root"
+fi

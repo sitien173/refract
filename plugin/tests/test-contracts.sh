@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 if grep -R -n -i -E 'openmcp|superpowers|ccg' \
-    commands hooks shared skills .claude-plugin .codex-plugin .mcp.json \
+    commands hooks shared skills .antigravity-plugin .claude-plugin .codex-plugin .mcp.json mcp_config.json hooks.json \
     ../.claude-plugin/marketplace.json; then
     printf 'legacy product name found in plugin surfaces\n' >&2
     exit 1
@@ -21,18 +21,28 @@ import re
 
 root = pathlib.Path.cwd()
 paths = [
+    root / ".agents/plugins.json",
+    root / ".antigravity-plugin/plugin.json",
     root / ".claude-plugin/plugin.json",
     root.parent / ".claude-plugin/marketplace.json",
     root / ".codex-plugin/plugin.json",
+    root / "package.json",
     root / ".mcp.json",
+    root / "mcp_config.json",
     root / "hooks/hooks.json",
+    root / "hooks.json",
 ]
 documents = {path: json.loads(path.read_text()) for path in paths}
+assert documents[root / ".agents/plugins.json"] == {
+    "entries": [{"path": "..", "include_only": ["plugin"]}]
+}
 
+agy_version = documents[root / ".antigravity-plugin/plugin.json"]["version"]
 plugin_version = documents[root / ".claude-plugin/plugin.json"]["version"]
 market_version = documents[root.parent / ".claude-plugin/marketplace.json"]["plugins"][0]["version"]
 codex_version = documents[root / ".codex-plugin/plugin.json"]["version"]
-assert plugin_version == market_version == codex_version
+pi_version = documents[root / "package.json"]["version"]
+assert agy_version == plugin_version == market_version == codex_version == pi_version
 
 contract = (root / "skills/coordinating-multi-model-work/references/tool-contract.md").read_text()
 contract_flat = " ".join(contract.split())
@@ -85,9 +95,11 @@ assert "temporary checkpoint commit only after it passes" in coordinator
 assert "`other` requires an explicit mapping" in contract
 assert "read-only target" in contract and "workflow names do not enforce write safety" in contract
 
+agy_description = documents[root / ".antigravity-plugin/plugin.json"]["description"]
 plugin_description = documents[root / ".claude-plugin/plugin.json"]["description"]
 codex_description = documents[root / ".codex-plugin/plugin.json"]["description"]
-assert plugin_description == codex_description
+pi_description = documents[root / "package.json"]["description"]
+assert agy_description == plugin_description == codex_description == pi_description
 
 mcp = documents[root / ".mcp.json"]["mcpServers"]["refract"]
 assert mcp == {
@@ -102,6 +114,20 @@ default_port = int(re.search(
 ).group(1))
 default_endpoint = f"http://127.0.0.1:{default_port}/mcp"
 assert default_endpoint in mcp["url"]
+assert documents[root / "mcp_config.json"]["mcpServers"]["refract"] == {
+    "url": default_endpoint,
+}
+assert documents[root / "hooks.json"] == {
+    "refract-session-start": {
+        "SessionStart": [
+            {
+                "type": "command",
+                "command": "./hooks/refract-session-start.sh --antigravity",
+                "timeout": 10,
+            }
+        ]
+    }
+}
 assert default_endpoint in contract
 assert f'"{default_endpoint}"' in (root / "pi/extensions/refract.ts").read_text()
 assert "dependent jobs" not in coordinator

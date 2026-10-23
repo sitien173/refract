@@ -1,0 +1,21 @@
+{
+  "name": "refract",
+  "description": "Refract: 3-gate (Plan → Execute → Review) workflow.",
+  "version": "2.0.0",
+  "author": {
+    "name": "sitien173"
+  },
+  "homepage": "https://github.com/sitien173/refract",
+  "repository": "https://github.com/sitien173/refract",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "tdd",
+    "debugging",
+    "multi-agent",
+    "refract-profiles",
+    "isolated-review",
+    "collaboration",
+    "workflows"
+  ]
+}

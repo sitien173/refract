@@ -1,0 +1,11 @@
+{
+  "refract-session-start": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "./hooks/refract-session-start.sh --antigravity",
+        "timeout": 10
+      }
+    ]
+  }
+}

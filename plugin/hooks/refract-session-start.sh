@@ -37,6 +37,29 @@ escape_for_json() {
     '
 }
 
+if [[ "${1:-}" == "--antigravity" ]]; then
+    plugin_repo_root="$(dirname "$plugin_root")"
+    ANTIGRAVITY_CONTEXT="$(cat <<ENDOFANTIGRAVITY
+${COMPACT_CONTEXT}
+
+When ${plugin_root} is available in your workspace context, treat it as your own plugin directory and reference ${plugin_root} only to invoke plugin skills and read bundled contracts. Do not treat ${plugin_repo_root} or ${plugin_root} as a project to work on.
+ENDOFANTIGRAVITY
+)"
+    antigravity_escaped=$(escape_for_json "$ANTIGRAVITY_CONTEXT")
+    cat <<EOF
+{
+  "injectSteps": [
+    {
+      "systemMessage": {
+        "systemMessage": "<EXTREMELY_IMPORTANT>\n${antigravity_escaped}\n</EXTREMELY_IMPORTANT>"
+      }
+    }
+  ]
+}
+EOF
+    exit 0
+fi
+
 compact_escaped=$(escape_for_json "$COMPACT_CONTEXT")
 
 cat <<EOF

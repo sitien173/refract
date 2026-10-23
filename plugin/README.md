@@ -28,6 +28,12 @@ claude plugin marketplace add sitien173/refract
 claude plugin install refract@refract
 ```
 
+For Antigravity CLI (`agy`):
+
+```bash
+agy plugin install https://github.com/sitien173/refract
+```
+
 ## Commands
 
 | Command | Purpose |
@@ -60,11 +66,12 @@ tests/      contract tests (`tests/run.sh`)
 tests/run.sh
 ```
 
-Runs the hook and contract tests, then `claude plugin validate` when the CLI is
-available. Bump `version` in `.claude-plugin/plugin.json`,
-`.claude-plugin/marketplace.json`, `.codex-plugin/plugin.json`, and the
-`refract-shared-version` marker in every `shared/*.md` together; the tests assert
-they match.
+Runs the hook and contract tests, then `claude plugin validate` and
+`agy plugin validate` when the CLIs are available. Bump `version` in
+`.antigravity-plugin/plugin.json`, `.claude-plugin/plugin.json`,
+`.claude-plugin/marketplace.json`, `.codex-plugin/plugin.json`, `package.json`,
+and the `refract-shared-version` marker in every `shared/*.md` together; the
+tests assert they match.
 
 ## License
 

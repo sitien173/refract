@@ -4,6 +4,8 @@
 .claude/
 .pi/
 .agents/
+!plugin/.agents/
+!plugin/.agents/plugins.json
 .codex/
 .ace-tool/
 .antigravitycli/
