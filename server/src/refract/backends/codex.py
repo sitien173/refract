@@ -44,6 +44,10 @@ class _CodexRolloutCollector:
         self.file_verified = False
         self.file_dev: int | None = None
         self.file_ino: int | None = None
+        self.header_verified = False
+        self.has_verified_context = False
+        self.pending_context: tuple[int, int | None] | None = None
+        self.budget_exhausted = False
         self.offset = 0
         self.partial_buffer = ""
         self.model_name: str | None = None
@@ -56,8 +60,11 @@ class _CodexRolloutCollector:
     def set_session_id(self, session_id: str) -> None:
         sid = session_id.strip()
         if sid and sid != self.session_id:
+            if self.session_id:
+                self._emit_invalidation()
             self.session_id = sid
             self._reset_file_state()
+            self.total_bytes_read = 0
             self.missing_discovery_retries = 0
             self.is_compacted = False
 
@@ -66,10 +73,16 @@ class _CodexRolloutCollector:
         self.file_verified = False
         self.file_dev = None
         self.file_ino = None
+        self.header_verified = False
+        self.has_verified_context = False
+        self.pending_context = None
+        self.budget_exhausted = False
         self.offset = 0
         self.partial_buffer = ""
 
     def _emit_invalidation(self, is_compaction: bool = False) -> None:
+        self.pending_context = None
+        self.has_verified_context = False
         self.accumulator.invalidate_context()
         if is_compaction:
             self.is_compacted = True
@@ -80,6 +93,7 @@ class _CodexRolloutCollector:
                     "context_used_tokens": None,
                     "context_window_size": None,
                     "context_remaining_percent": None,
+                    "invalidate_context": True,
                     "source": "session",
                     "quality": "unavailable",
                 },
@@ -169,6 +183,8 @@ class _CodexRolloutCollector:
                             payload_id = str(payload.get("id") or "").strip()
                             payload_cwd = payload.get("cwd")
                             if payload_id == self.session_id and _same_path(payload_cwd, self.cwd):
+                                self.file_dev = opened.st_dev
+                                self.file_ino = opened.st_ino
                                 found_file = file_path
                                 break
                         except (OSError, json.JSONDecodeError):
@@ -200,8 +216,9 @@ class _CodexRolloutCollector:
                 return
             try:
                 st = self.session_file.stat()
-                self.file_dev = st.st_dev
-                self.file_ino = st.st_ino
+                if self.file_dev is None or self.file_ino is None:
+                    self.file_dev = st.st_dev
+                    self.file_ino = st.st_ino
                 self.file_verified = True
             except OSError:
                 self._reset_file_state()
@@ -227,11 +244,16 @@ class _CodexRolloutCollector:
             self._emit_invalidation()
             self.offset = 0
             self.partial_buffer = ""
+        elif stat.st_size > self.offset and self.has_verified_context:
+            self._emit_invalidation()
 
         if stat.st_size == self.offset and not self.partial_buffer:
             return
 
         if self.total_bytes_read >= self.max_total_bytes:
+            if not self.budget_exhausted:
+                self._emit_invalidation()
+                self.budget_exhausted = True
             return
 
         read_size = min(self.max_bytes_per_poll, self.max_total_bytes - self.total_bytes_read)
@@ -249,6 +271,24 @@ class _CodexRolloutCollector:
                     return
                 with os.fdopen(fd, "rb") as f:
                     fd = -1
+                    if not self.header_verified:
+                        first_line = f.readline(4096)
+                        try:
+                            header = json.loads(first_line)
+                            header_payload = header.get("payload") if isinstance(header, dict) else None
+                            self.header_verified = (
+                                isinstance(header, dict)
+                                and header.get("type") == "session_meta"
+                                and isinstance(header_payload, dict)
+                                and str(header_payload.get("id") or "").strip() == self.session_id
+                                and _same_path(header_payload.get("cwd"), self.cwd)
+                            )
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            self.header_verified = False
+                        if not self.header_verified:
+                            self._emit_invalidation()
+                            self._reset_file_state()
+                            return
                     f.seek(self.offset)
                     chunk = f.read(read_size)
             finally:
@@ -280,6 +320,22 @@ class _CodexRolloutCollector:
             if not isinstance(record, dict):
                 continue
             self._process_record(record)
+
+        if self.offset >= stat.st_size and not self.partial_buffer and self.pending_context is not None:
+            used, window = self.pending_context
+            if window is not None:
+                self.accumulator.record_context_snapshot(window_size=window, source="session", quality="reported")
+            self.accumulator.record_context_snapshot(used_tokens=used, source="session", quality="derived")
+            self.has_verified_context = True
+            if self.emitter is not None:
+                if window is not None:
+                    self.emitter({"kind": "telemetry.updated", "data": {"context_window_size": window, "source": "session", "quality": "reported"}})
+                self.emitter({"kind": "telemetry.updated", "data": {"context_used_tokens": used, "source": "session", "quality": "derived"}})
+            self.pending_context = None
+
+        if self.total_bytes_read >= self.max_total_bytes and stat.st_size > self.offset and not self.budget_exhausted:
+            self._emit_invalidation()
+            self.budget_exhausted = True
 
     def _process_record(self, record: dict[str, Any]) -> None:
         rec_type = record.get("type", "")
@@ -314,31 +370,7 @@ class _CodexRolloutCollector:
                 used = input_tokens + output_tokens - reasoning_tokens
                 if used < 0:
                     return
-                if window is not None:
-                    self.accumulator.record_context_snapshot(
-                        window_size=window, source="session", quality="reported"
-                    )
-                self.accumulator.record_context_snapshot(
-                    used_tokens=used, source="session", quality="derived"
-                )
-                if self.emitter is not None:
-                    if window is not None:
-                        self.emitter({
-                            "kind": "telemetry.updated",
-                            "data": {
-                                "context_window_size": window,
-                                "source": "session",
-                                "quality": "reported",
-                            },
-                        })
-                    self.emitter({
-                        "kind": "telemetry.updated",
-                        "data": {
-                            "context_used_tokens": used,
-                            "source": "session",
-                            "quality": "derived",
-                        },
-                    })
+                self.pending_context = (used, window)
             elif p_type == "context_compacted":
                 self._emit_invalidation(is_compaction=True)
             elif p_type in ("session_configured", "model_reroute"):
@@ -686,7 +718,7 @@ class _EventParser:
                                 val = norm_in + norm_out - (reasoning_out or 0)
                                 if val >= 0:
                                     ctx_used = val
-                                    if not self.collector.is_compacted:
+                                    if not self.collector.is_compacted and not self.collector.has_verified_context:
                                         self.accumulator.record_context_snapshot(
                                             used_tokens=ctx_used,
                                             source="derived",
@@ -708,7 +740,7 @@ class _EventParser:
                                     "quality": "reported",
                                 },
                             })
-                            if ctx_used is not None and not self.collector.is_compacted:
+                            if ctx_used is not None and not self.collector.is_compacted and not self.collector.has_verified_context:
                                 self.params.emitter({
                                     "kind": "telemetry.updated",
                                     "data": {

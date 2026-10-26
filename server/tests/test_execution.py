@@ -4074,6 +4074,39 @@ async def test_telemetry_updated_routes_through_execution_before_stream_recordin
 
 
 @pytest.mark.asyncio
+async def test_context_invalidation_persists_nulls_without_clearing_consumption(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+
+    class InvalidateContextDriver(FakeDrivers):
+        async def execute(self, **kwargs):
+            emit = kwargs.get("emitter")
+            emit({"kind": "telemetry.updated", "data": {
+                "context_used_tokens": 1060, "context_window_size": 64000,
+                "input_tokens": 100, "output_tokens": 20, "response_id": "turn-1",
+            }})
+            emit({"kind": "telemetry.updated", "data": {
+                "invalidate_context": True, "source": "session", "quality": "unavailable",
+            }})
+            return DriverResult("SUCCESS", "", "done", "", "")
+
+    runtime.drivers = InvalidateContextDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        job = await runtime.wait(submission.job_id, 5)
+        telemetry = job.result.metadata["telemetry"]
+        assert telemetry["context_used_tokens"]["value"] is None
+        assert telemetry["context_window_size"]["value"] is None
+        assert telemetry["context_remaining_percent"]["value"] is None
+        assert telemetry["total_input_tokens"]["value"] == 100
+        assert telemetry["total_output_tokens"]["value"] == 20
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_telemetry_survives_transcript_quota_exhaustion_in_execution(tmp_path: Path) -> None:
     root = repository(tmp_path)
     catalog = config(tmp_path / "home")

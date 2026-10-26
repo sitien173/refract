@@ -526,7 +526,9 @@ class TargetExecutor:
             quality = data.get("quality", "reported")
             observed_at = data.get("observed_at")
 
-            if "context_used_tokens" in data or "context_window_size" in data or "context_remaining_percent" in data:
+            if data.get("invalidate_context") is True:
+                accumulator.invalidate_context(observed_at=observed_at)
+            elif "context_used_tokens" in data or "context_window_size" in data or "context_remaining_percent" in data:
                 accumulator.record_context_snapshot(
                     used_tokens=data.get("context_used_tokens"),
                     window_size=data.get("context_window_size"),

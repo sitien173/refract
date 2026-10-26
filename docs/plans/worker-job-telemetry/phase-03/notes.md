@@ -120,3 +120,37 @@ Append one Task block per task using plugin/shared/notes-template.md. Preserve R
 - `cd server && uv run pytest -q tests/test_streaming_backends.py tests/test_telemetry.py tests/test_live_backends.py` -> 79 passed, 15 deselected (before final duplicate-snapshot assertion).
 - Final fresh `cd server && uv run pytest` -> 717 passed, 15 deselected.
 - Opt-in live probe not run; no model requests made.
+
+## Task 5 — Independent review blockers
+
+### Decisions made
+- Added an explicit `invalidate_context` telemetry event operation. Execution now invalidates only context measurements and immediately merges the snapshot, preserving observed consumption.
+- Session identity changes clear the collector accumulator and emit persisted invalidation; initial empty-to-known session binding does not issue an unnecessary clear.
+- Keep the exact-session rollout context as authoritative over turn-derived occupancy once a complete verified rollout snapshot is available; turn usage continues to update consumption.
+- Carry device/inode identity captured while validating the discovery descriptor into the later read. The consuming descriptor must match it and independently validate the session header.
+- Keep rollout snapshots pending until the bounded reader catches up to a complete line. If total-byte budget is exhausted with unread bytes, emit unavailable context instead of retaining a historical prefix as current. Invalidate a published snapshot when newly appended content is being reconciled.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- For rollout files beyond the hard total-byte cap, context is unavailable rather than attempting unbounded tail scanning.
+
+### Assumptions
+- A complete `token_count` at the end of the currently readable exact-session rollout is the latest available context snapshot; capacity is reported only when that record includes a valid capacity.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED: execution integration test `test_context_invalidation_persists_nulls_without_clearing_consumption` failed with `assert 1060 is None`; execution ignored the invalidation event and retained prior context.
+- RED: `test_codex_verified_rollout_context_wins_over_turn_consumption_snapshot` failed with `assert 5600 == 1060`; `turn.completed` replaced the verified response-local rollout snapshot.
+- RED: `test_codex_rollout_session_switch_invalidates_context` failed with `assert 1060 is None`; `set_session_id` retained previous session context.
+- RED: `test_codex_rollout_rejects_replacement_between_discovery_and_read` failed with `assert 200000 is None`; collector trusted the replacement path's current stat and consumed a file with no session header.
+- RED: `test_codex_rollout_budget_exhaustion_invalidates_prefix_snapshot` failed with `assert 110 is None`; a prefix token_count was published despite unread history at the byte cap.
+- GREEN: `cd server && uv run pytest -q tests/test_streaming_backends.py -k 'codex_rollout or verified_rollout_context_wins or session_switch_invalidates or rejects_replacement_between or budget_exhaustion_invalidates'` -> 17 passed, 44 deselected.
+- GREEN: `cd server && uv run pytest -q tests/test_execution.py -k 'context_invalidation_persists_nulls or telemetry_updated_routes or telemetry_survives'` -> 3 passed, 119 deselected.
+- An affected-module run initially found an extra initial-session invalidation in `test_backends_emit_derived_context_quality`; fixed so only an actual established-session switch invalidates. Final `cd server && uv run pytest -q tests/test_streaming_backends.py tests/test_execution.py` -> 183 passed.
+- Final fresh `cd server && uv run pytest` -> 722 passed, 15 deselected.
+- No live probes, model requests, credential reads, conversation reads, or transport changes.
+- Final rerun after the total-byte-budget lifecycle adjustment: affected modules 183 passed; full suite 722 passed, 15 deselected in 124.47s.

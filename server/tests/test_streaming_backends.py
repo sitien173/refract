@@ -2640,6 +2640,110 @@ def test_codex_token_count_nested_usage_enriches_latest_context(tmp_path: Path, 
     assert replaced["context_window_size"]["value"] == 32000
 
 
+def test_codex_verified_rollout_context_wins_over_turn_consumption_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    session_id = "00000000-0000-0000-0000-111111111111"
+    usage = {"input_tokens": 1000, "cached_input_tokens": 400, "output_tokens": 70, "reasoning_output_tokens": 10, "total_tokens": 1070}
+    (sessions_dir / f"rollout_{session_id}.jsonl").write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 5000, "cached_input_tokens": 2000, "output_tokens": 700, "reasoning_output_tokens": 100, "total_tokens": 5700},
+            "last_token_usage": usage, "model_context_window": 64000,
+        }}}) + "\n"
+    )
+    lines = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 5000, "output_tokens": 700, "reasoning_output_tokens": 100}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: iter(lines))
+    result = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert result.telemetry["context_used_tokens"]["value"] == 1060
+    assert result.telemetry["context_window_size"]["value"] == 64000
+    assert result.telemetry["total_input_tokens"]["value"] == 5000
+
+
+def test_codex_rollout_session_switch_invalidates_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    root = tmp_path / "codex"
+    (root / "sessions").mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(root))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    acc = TelemetryAccumulator()
+    emitted = []
+    collector = _CodexRolloutCollector(cwd=workspace, session_id="00000000-0000-0000-0000-111111111111", accumulator=acc, emitter=emitted.append)
+    acc.record_context_snapshot(used_tokens=1060, window_size=64000)
+    collector.set_session_id("00000000-0000-0000-0000-222222222222")
+    snap = acc.snapshot().model_dump(mode="json")
+    assert snap["context_used_tokens"]["value"] is None
+    assert snap["context_window_size"]["value"] is None
+    assert any(e["data"].get("invalidate_context") for e in emitted)
+
+
+def test_codex_rollout_rejects_replacement_between_discovery_and_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    root = tmp_path / "codex"
+    sessions = root / "sessions"
+    sessions.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(root))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sid = "00000000-0000-0000-0000-111111111111"
+    path = sessions / f"rollout_{sid}.jsonl"
+    path.write_text(json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": str(workspace)}}) + "\n")
+    acc = TelemetryAccumulator()
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=sid, accumulator=acc)
+    find = collector._find_exact_file
+    def replace_after_discovery():
+        found = find()
+        replacement = path.with_suffix(".replacement")
+        replacement.write_text(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "last_token_usage": {"input_tokens": 900, "output_tokens": 90, "reasoning_output_tokens": 0},
+            "model_context_window": 200000,
+        }}}) + "\n")
+        replacement.replace(path)
+        return found
+    collector._find_exact_file = replace_after_discovery
+    collector.poll()
+    assert acc.snapshot().context_window_size.value is None
+
+
+def test_codex_rollout_budget_exhaustion_invalidates_prefix_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    root = tmp_path / "codex"
+    sessions = root / "sessions"
+    sessions.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(root))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sid = "00000000-0000-0000-0000-111111111111"
+    path = sessions / f"rollout_{sid}.jsonl"
+    header = json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": str(workspace)}})
+    usage = {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10, "reasoning_output_tokens": 0, "total_tokens": 110}
+    event = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": usage, "last_token_usage": usage, "model_context_window": 64000,
+    }}})
+    path.write_text(header + "\n" + event + "\n" + (" " * 5000) + "\n")
+    acc = TelemetryAccumulator()
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=sid, accumulator=acc)
+    collector.max_bytes_per_poll = 4096
+    collector.max_total_bytes = 4096
+    collector.poll()
+    assert acc.snapshot().context_used_tokens.value is None
+    assert acc.snapshot().context_window_size.value is None
+
+
 def test_codex_rollout_refuses_mismatched_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     codex_home = tmp_path / "codex_home"
     sessions_dir = codex_home / "sessions"
