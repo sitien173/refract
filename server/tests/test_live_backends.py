@@ -182,8 +182,15 @@ async def test_live_telemetry_probe(backend: str, tmp_path: Path) -> None:
         pytest.fail(f"{backend}: execution failed ({out.error_class}): {out.error}", pytrace=False)
 
     assert out.outcome == "SUCCESS", f"{backend} probe failed: outcome={out.outcome}"
-    if out.telemetry:
-        assert isinstance(out.telemetry, dict)
-        assert "version" in out.telemetry
-        assert "completeness" in out.telemetry
+    telemetry = out.telemetry
+    assert isinstance(telemetry, dict), f"{backend}: telemetry object was not returned"
+    assert telemetry.get("version") == 1
+    assert telemetry.get("completeness") in {"complete", "partial", "unavailable"}
+    for field in ("context_used_tokens", "context_window_size", "total_input_tokens", "total_output_tokens"):
+        measurement = telemetry.get(field)
+        assert isinstance(measurement, dict) and "value" in measurement, f"{backend}: missing {field} measurement"
+    assert any(
+        telemetry[field]["value"] is not None
+        for field in ("context_used_tokens", "total_input_tokens", "total_output_tokens")
+    ), f"{backend}: probe returned no measured context or consumption"
 

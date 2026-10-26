@@ -90,3 +90,33 @@ Append one Task block per task using plugin/shared/notes-template.md. Preserve R
   - `test_agy_explicit_context_metadata_handled` passed GREEN verifying capacity extraction and remaining percentage derivation.
   - `test_pi_capacity_remains_null_offline` passed GREEN verifying Pi capacity remains unavailable null.
 - Root cause (bugfix only): Agy previously set quality="reported" on occupied context when explicit window size was provided.
+
+
+## Task 4 — Verified Codex token_count enrichment and capability correction
+
+### Decisions made
+- Used the version-matched public source at https://raw.githubusercontent.com/openai/codex/rust-v0.160.1/codex-rs/protocol/src/protocol.rs. It defines TokenUsageInfo with nested cumulative `total_token_usage`, latest `last_token_usage`, and optional `model_context_window`; TokenUsage contains input, cached input, output, reasoning output, and total counts. Verified installed CLI version with `codex --version` (`codex-cli 0.160.1`).
+- Collect only exact-session `token_count` records. Never use cumulative totals for occupied context. Derive occupied context only from latest response (`input + output - reasoning`); report supplied capacity separately as reported. Later snapshots replace earlier snapshots.
+- Open rollout reads with `O_NOFOLLOW`; verify opened descriptor device/inode and regular-file type to reject replacement/symlink targets discovered after initial path resolution.
+- Updated capability documentation with source URL, evidence levels, limits, and without user-specific package paths. Pi absence is not asserted as verified; Agy capacity/occupied values are clearly fixture-only/unverified.
+- Strengthened opt-in telemetry probe to require telemetry structure and at least one actual context/consumption measurement. Probe was not run.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- The tested `input + output - reasoning` latest-response derivation is used as the occupancy proxy; no vendor status-line reserve adjustment is reproduced.
+- Codex tagged source verifies the installed 0.160.1-compatible shape, but does not establish that every runtime rollout contains a token_count event. Runtime presence remains unverified without an authorized live probe.
+
+### Assumptions
+- `last_token_usage` is the response-local usage snapshot associated with the emitted token_count event; source struct semantics distinguish it from cumulative `total_token_usage`.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: added nested-schema regression first; it failed because `context_window_size` remained null (`assert None == 64000`), then passed after exact-session parser support. Test proves capacity is reported, occupancy uses latest usage rather than cumulative totals, and later token_count snapshots replace context values.
+- The first focused run also exposed test fixture escaping (`\\n` encoded a literal backslash); corrected fixture, then focused regression passed.
+- `cd server && uv run pytest -q tests/test_streaming_backends.py tests/test_telemetry.py tests/test_live_backends.py` -> 79 passed, 15 deselected (before final duplicate-snapshot assertion).
+- Final fresh `cd server && uv run pytest` -> 717 passed, 15 deselected.
+- Opt-in live probe not run; no model requests made.

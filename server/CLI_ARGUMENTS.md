@@ -358,9 +358,9 @@ Telemetry exposes job consumption and live context snapshots. Unsupported values
 
 | Measurement | Meaning | Codex | Claude Code | Pi | Agy |
 |---|---|---|---|---|---|
-| `context_remaining_percent` | Context remaining percentage | Unavailable null | Derived from capacity | Unavailable null | Unavailable null (derived only if explicit metadata present) |
-| `context_window_size` | Context capacity limit | Unavailable null | Observed in `modelUsage` | Unavailable null | Unavailable null (supported only if explicit metadata present) |
-| `context_used_tokens` | Current occupied context | Derived turn usage | Derived response usage | Derived response usage | Derived step usage |
+| `context_remaining_percent` | Context remaining percentage | Derived when latest rollout snapshot includes capacity | Derived from capacity | Unavailable null | Unavailable null |
+| `context_window_size` | Context capacity limit | Reported in latest rollout `token_count` when present | Observed in `modelUsage` | Unavailable null | Unavailable null |
+| `context_used_tokens` | Current occupied context | Derived from latest `token_count.last_token_usage` response | Derived response usage | Derived response usage | Derived step usage |
 | `total_input_tokens` | Normalized input tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
 | `total_output_tokens` | Normalized output tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
 | `cache_read_tokens` | Cached input read tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
@@ -371,20 +371,19 @@ Telemetry exposes job consumption and live context snapshots. Unsupported values
 Capabilities are categorized by evidence level: package/CLI documentation evidence, synthetic fixture-only testing, and runtime unverified/unavailable limitations.
 
 - Codex:
-  - Package/CLI evidence: `codex-cli 0.160.1` (`/home/ngosi/.codex/packages/standalone/releases/0.160.1-x86_64-unknown-linux-musl/bin/codex`). Stream `turn.completed.usage` records input, output, and cached input tokens. Occupied context is derived from latest turn usage (`norm_in + norm_out - reasoning_out`).
-  - Synthetic fixture-only: rollout parsing tests characterize bounded exact-session file discovery, rotation on inode change, truncation handling, and `context_compacted` event invalidation. Speculative `token_count` / `token_usage_record` schemas are unverified in package evidence and removed.
-  - Runtime unverified: context capacity limit (`context_window_size`) and remaining percent are not emitted on stdout or verified rollout events; they remain unavailable null.
-  - Baselining: fresh sessions reconcile with `thread.completed`. Resumed sessions retain invocation-local turn totals and mark partial when pre-execution baseline is unavailable.
+  - Installed CLI evidence: `codex --version` reports `codex-cli 0.160.1`; `codex exec --help` documents JSONL output. The public version-matched protocol source is [Codex `rust-v0.160.1` protocol.rs](https://raw.githubusercontent.com/openai/codex/rust-v0.160.1/codex-rs/protocol/src/protocol.rs), definitions `TokenUsageInfo`, `TokenUsage`, and `TokenCountEvent`. It defines nested `total_token_usage` and `last_token_usage` `TokenUsage` values and optional `model_context_window`; TokenUsage has input, cached input, output, reasoning output, and total counts. The `total_` record is cumulative and is never treated as occupancy.
+  - Runtime collection: only the exact known rollout session is read. Capacity is the `model_context_window` value when valid. Occupancy is derived from the latest `last_token_usage` response components (`input + output - reasoning`), not cumulative totals. `turn.completed.usage` remains invocation consumption; cached input is already included.
+  - Synthetic fixture-only: nested version-matched schema parsing, exact-session identity, bounded reads, rotation/truncation, and compaction invalidation are covered offline. No user conversations were inspected and no live probe was run; actual rollout availability and event timing remain runtime-unverified.
 - Claude Code:
   - Package/CLI evidence: `claude 2.1.296 (Claude Code)`. `result` usage provides input, output, cache reads, and cache writes. `modelUsage` exposes model `contextWindow` when model matches.
   - Runtime unverified: unmatched models in `modelUsage` leave capacity null.
 - Pi:
-  - Package/CLI evidence: `pi 1.4.0` (`@earendil-works/pi-coding-agent 1.4.0`). JSON stream `message_end` provides input, output, and cache reads. Occupied context is derived from response consumption.
-  - Runtime unverified: neither JSON stream events nor session files expose `context_window_size`. Capacity remains unavailable null without external catalog tables or an external RPC daemon.
+  - Installed CLI evidence: `pi --version` reports `1.4.0` (`@earendil-works/pi-coding-agent 1.4.0`); JSON `message_end` usage is exercised by sanitized offline fixtures. See [Pi CLI documentation](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+  - Synthetic fixture-only: response consumption and derived context behavior are tested. No installed-version session-format source has established effective model capacity; capacity remains unavailable null. This is not a verified claim that all Pi session artifacts lack capacity.
 - Antigravity:
-  - Package/CLI evidence: `agy 1.4.7` (`/home/ngosi/.local/bin/agy`). `step_update` and `result` provide input, output, and cache reads. Occupied context is derived from step usage (`norm_in + norm_out - thinking_tokens`).
-  - Synthetic fixture-only: tests verify that if explicit `model_context_window` or `context_window_size` metadata is provided in stream updates or results, capacity is reported and remaining percent derived while occupied context remains derived provenance.
-  - Runtime unverified: standard headless print mode (`agy --print`) does not emit context window capacity; capacity remains unavailable null.
+  - Installed CLI evidence: `agy --version` reports 1.4.7. Sanitized stream fixtures exercise step usage normalization; they do not establish a documented public event contract or live capability.
+  - Synthetic fixture-only: optional explicit capacity metadata is accepted in fixtures. This does not establish that the installed CLI emits it, nor does it prove that a fixture-derived occupied count is an authoritative live context snapshot.
+  - Runtime unverified: headless capacity and occupied-context semantics have not been verified; unsupported capacity remains null.
 
 ### Opt-in live telemetry probes
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat as stat_module
 import tempfile
 import threading
 import time
@@ -142,8 +143,18 @@ class _CodexRolloutCollector:
                             if stat.st_size < 10:
                                 continue
 
-                            with file_path.open("r", encoding="utf-8", errors="replace") as f:
-                                first_line = f.readline(4096)
+                            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+                            fd = os.open(file_path, flags)
+                            try:
+                                opened = os.fstat(fd)
+                                if not stat_module.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (stat.st_dev, stat.st_ino):
+                                    continue
+                                with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as f:
+                                    fd = -1
+                                    first_line = f.readline(4096)
+                            finally:
+                                if fd >= 0:
+                                    os.close(fd)
                             if not first_line:
                                 continue
 
@@ -228,10 +239,24 @@ class _CodexRolloutCollector:
             return
 
         try:
-            with self.session_file.open("rb") as f:
-                f.seek(self.offset)
-                chunk = f.read(read_size)
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+            fd = os.open(self.session_file, flags)
+            try:
+                opened = os.fstat(fd)
+                if not stat_module.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (self.file_dev, self.file_ino):
+                    self._emit_invalidation()
+                    self._reset_file_state()
+                    return
+                with os.fdopen(fd, "rb") as f:
+                    fd = -1
+                    f.seek(self.offset)
+                    chunk = f.read(read_size)
+            finally:
+                if fd >= 0:
+                    os.close(fd)
         except OSError:
+            self._emit_invalidation()
+            self._reset_file_state()
             return
 
         if not chunk:
@@ -273,7 +298,48 @@ class _CodexRolloutCollector:
 
         if rec_type == "event_msg" and isinstance(payload, dict):
             p_type = payload.get("type", "")
-            if p_type == "context_compacted":
+            if p_type == "token_count":
+                info = payload.get("info")
+                if not isinstance(info, dict):
+                    return
+                usage = info.get("last_token_usage")
+                window = _as_int(info.get("model_context_window"))
+                if not isinstance(usage, dict):
+                    return
+                input_tokens = _as_int(usage.get("input_tokens"))
+                output_tokens = _as_int(usage.get("output_tokens"))
+                reasoning_tokens = _as_int(usage.get("reasoning_output_tokens"))
+                if input_tokens is None or output_tokens is None or reasoning_tokens is None:
+                    return
+                used = input_tokens + output_tokens - reasoning_tokens
+                if used < 0:
+                    return
+                if window is not None:
+                    self.accumulator.record_context_snapshot(
+                        window_size=window, source="session", quality="reported"
+                    )
+                self.accumulator.record_context_snapshot(
+                    used_tokens=used, source="session", quality="derived"
+                )
+                if self.emitter is not None:
+                    if window is not None:
+                        self.emitter({
+                            "kind": "telemetry.updated",
+                            "data": {
+                                "context_window_size": window,
+                                "source": "session",
+                                "quality": "reported",
+                            },
+                        })
+                    self.emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "context_used_tokens": used,
+                            "source": "session",
+                            "quality": "derived",
+                        },
+                    })
+            elif p_type == "context_compacted":
                 self._emit_invalidation(is_compaction=True)
             elif p_type in ("session_configured", "model_reroute"):
                 model = payload.get("model") or payload.get("to_model")

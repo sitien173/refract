@@ -2352,7 +2352,7 @@ def test_codex_rollout_refuses_mismatched_session_identity(tmp_path: Path, monke
     session_file = sessions_dir / f"rollout_{session_id}.jsonl"
     session_file.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": wrong_id, "cwd": str(workspace)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 9999, "model_context_window": 200000}}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 9000, "cached_input_tokens": 0, "output_tokens": 999, "reasoning_output_tokens": 0, "total_tokens": 9999}, "last_token_usage": {"input_tokens": 900, "cached_input_tokens": 100, "output_tokens": 99, "reasoning_output_tokens": 9, "total_tokens": 999}, "model_context_window": 200000}}}) + "\n"
     )
 
     codex_stdout = [
@@ -2381,7 +2381,7 @@ def test_codex_rollout_never_selects_unrelated_latest_session(tmp_path: Path, mo
     unrelated_file = sessions_dir / f"rollout_{unrelated_id}.jsonl"
     unrelated_file.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": unrelated_id, "cwd": str(workspace)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 4000, "model_context_window": 128000}}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 4000, "cached_input_tokens": 0, "output_tokens": 0, "reasoning_output_tokens": 0, "total_tokens": 4000}, "last_token_usage": {"input_tokens": 4000, "cached_input_tokens": 0, "output_tokens": 0, "reasoning_output_tokens": 0, "total_tokens": 4000}, "model_context_window": 128000}}}) + "\n"
     )
 
     codex_stdout = [
@@ -2594,6 +2594,50 @@ def test_codex_rollout_bounded_reads(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert res.telemetry is not None
     assert res.telemetry["context_used_tokens"]["value"] == 1050
     assert res.telemetry["context_window_size"]["value"] is None
+
+
+def test_codex_token_count_nested_usage_enriches_latest_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    session_id = "00000000-0000-0000-0000-111111111111"
+    path = sessions_dir / f"rollout_{session_id}.jsonl"
+    records = [
+        {"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 5000, "cached_input_tokens": 2000, "output_tokens": 700, "reasoning_output_tokens": 100, "total_tokens": 5700},
+            "last_token_usage": {"input_tokens": 1000, "cached_input_tokens": 400, "output_tokens": 70, "reasoning_output_tokens": 10, "total_tokens": 1070},
+            "model_context_window": 64000,
+        }}}
+    ]
+    path.write_text("\n".join(json.dumps(x) for x in records) + "\n")
+    acc = TelemetryAccumulator()
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=session_id, accumulator=acc)
+    collector.poll()
+    result = acc.snapshot().model_dump(mode="json")
+    assert result["context_window_size"]["value"] == 64000
+    assert result["context_window_size"]["quality"] == "reported"
+    assert result["context_used_tokens"]["value"] == 1060
+    assert result["context_used_tokens"]["quality"] == "derived"
+
+    # A later valid token_count replaces the context snapshot (not cumulative usage).
+    next_record = {"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": {"input_tokens": 6000, "cached_input_tokens": 2400, "output_tokens": 800, "reasoning_output_tokens": 110, "total_tokens": 6800},
+        "last_token_usage": {"input_tokens": 300, "cached_input_tokens": 100, "output_tokens": 30, "reasoning_output_tokens": 5, "total_tokens": 330},
+        "model_context_window": 32000,
+    }}}
+    with path.open("a") as rollout:
+        rollout.write(json.dumps(next_record) + "\n")
+    collector.poll()
+    replaced = acc.snapshot().model_dump(mode="json")
+    assert replaced["context_used_tokens"]["value"] == 325
+    assert replaced["context_window_size"]["value"] == 32000
 
 
 def test_codex_rollout_refuses_mismatched_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
