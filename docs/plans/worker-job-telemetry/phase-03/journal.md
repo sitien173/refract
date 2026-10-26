@@ -39,7 +39,14 @@ Live-probe limitations are not blockers. Two automatic specification fix cycles 
 - Quality Status: FAIL
 - Phase outcome: BLOCKED
 - Debt: none. Correctness blockers cannot be accepted as debt.
-- Next: authorize additional Phase 3 fix/review cycle including narrow execution invalidation changes.
+- User authorized additional cycle with narrow execution invalidation scope.
+- Implementation `9020ee32-ac57-4dcd-a997-54a6408cbff6` returned TASK_COMPLETE, five declared files matched diff.
+- Fresh coordinator full Python check: 722 passed, 15 deselected, 124.43 seconds at tree checkpoint `22d42a0`.
+- Independent re-review `e5111532-4408-4275-89ac-cac0d2a78cc3`: FAIL, two remaining correctness blockers.
+  1. codex.py:253–257,721–725,743–750: turn.completed immediately repopulates context after budget exhaustion. Exhausted collector plus input 5000/output 700/reasoning 100 yields 5600 rather than null. Suppress fallback context and emitted observations after exhaustion; test integrated parser and persistence.
+  2. codex.py:243–246,274–291: same-inode truncation resets offset without revoking header_verified. Token-only shortened file supplies 990 used/200000 capacity without owner header. Revoke and revalidate header on truncation; regression required.
+- Reviewer confirmed persisted invalidation, normal rollout precedence, session switch, and different-inode discovery replacement are addressed.
+- Next: authorize one additional narrowly scoped fix/review cycle for these two findings.
 
 ## Final Checkpoint
 - Phase base ref: refs/plans/worker-job-telemetry/phase-03/base
