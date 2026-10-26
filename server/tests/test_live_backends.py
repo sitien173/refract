@@ -152,3 +152,38 @@ async def test_live_ask_coordinator(backend: str, read_only: bool, tmp_path: Pat
         f"listener_reached={observed}; exact_answer={exact_answer}",
         pytrace=False,
     )
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["codex", "claude", "agy", "pi"])
+async def test_live_telemetry_probe(backend: str, tmp_path: Path) -> None:
+    """Opt-in live telemetry probe. Never treats missing prerequisites as passes."""
+    if not os.environ.get("REFRACT_LIVE_TELEMETRY_OPT_IN"):
+        pytest.skip("Live telemetry probe requires explicit REFRACT_LIVE_TELEMETRY_OPT_IN=1")
+
+    codex_home = os.environ.get("CODEX_HOME")
+    if backend == "codex" and codex_home and not Path(codex_home).is_dir():
+        pytest.fail(f"{backend}: missing prerequisite (CODEX_HOME directory does not exist)", pytrace=False)
+
+    driver = DriverRegistry()
+    prompt = "Reply with exactly: PONG"
+    out = await driver.execute(
+        target=TargetConfig(id=f"{backend}-telemetry-probe", backend=backend),
+        prompt=prompt,
+        cwd=tmp_path,
+        session_id="",
+        timeout_s=90,
+        cancel_event=threading.Event(),
+    )
+    if out.outcome == "FATAL":
+        if out.error_class in {"missing_cli", "bad_cd"}:
+            pytest.fail(f"{backend}: missing prerequisite ({out.error_class}): {out.error}", pytrace=False)
+        pytest.fail(f"{backend}: execution failed ({out.error_class}): {out.error}", pytrace=False)
+
+    assert out.outcome == "SUCCESS", f"{backend} probe failed: outcome={out.outcome}"
+    if out.telemetry:
+        assert isinstance(out.telemetry, dict)
+        assert "version" in out.telemetry
+        assert "completeness" in out.telemetry
+

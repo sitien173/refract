@@ -11,6 +11,14 @@ Research performed on Windows on 2026-07-18 with:
 Claude Code research performed on Linux on 2026-08-24 with Claude Code
 (`claude`) 2.1.220.
 
+Verification performed on Linux on 2026-10-26 with:
+
+- Antigravity CLI (`agy`) 1.4.7
+- Codex CLI (`codex-cli`) 0.160.1
+- Pi coding agent (`pi`) 1.4.0 (`@earendil-works/pi-coding-agent 1.4.0`)
+- Claude Code (`claude`) 2.1.296 (Claude Code)
+
+
 CLI flags can change between releases. Re-run `agy --help`, `codex exec --help`,
 `codex exec resume --help`, `pi --help`, and `claude --help` after upgrading a
 backend.
@@ -343,3 +351,38 @@ the existing treatment of Codex `--ephemeral` and Pi `--no-session`:
 the NUL byte check already apply to every backend. Claude Code has no
 workspace-root flag to escape, so `--add-dir` is permitted for the same reason
 Codex `--add-dir` is permitted.
+
+## Worker telemetry and context measurement capabilities
+
+Telemetry exposes job consumption and live context snapshots. Unsupported values remain null.
+
+| Measurement | Meaning | Codex | Claude Code | Pi | Agy |
+|---|---|---|---|---|---|
+| `context_remaining_percent` | Context remaining percentage | Derived from capacity | Derived from capacity | Unavailable null | Unavailable null |
+| `context_window_size` | Context capacity limit | Rollout `token_count` | Observed in `modelUsage` | Unavailable null | Unavailable null |
+| `context_used_tokens` | Current occupied context | Rollout `token_count` | Derived response usage | Derived response usage | Derived step usage |
+| `total_input_tokens` | Normalized input tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
+| `total_output_tokens` | Normalized output tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
+| `cache_read_tokens` | Cached input read tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
+| `cache_write_tokens` | Cache write tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
+
+### Measurement evidence and status
+
+- Codex:
+  - Observed: stream `turn.completed.usage` records input, output, and cached tokens.
+  - Observed: rollout files contain `token_count` records with `total_token_usage` and `model_context_window`.
+  - Compaction: `context_compacted` rollout records invalidate context.
+  - Limitation: ephemeral mode or missing rollout files leave context capacity null.
+- Claude Code:
+  - Observed: `result` usage provides input, output, cache reads, and cache writes.
+  - Observed: `modelUsage` exposes model `contextWindow` when model matches.
+  - Limitation: unmatched model in `modelUsage` leaves capacity null.
+- Pi:
+  - Observed: JSON stream `message_end` provides input, output, and cache reads.
+  - Verified: neither JSON events nor session files expose `context_window_size`.
+  - Limitation: capacity remains null without external catalog or RPC process.
+- Antigravity:
+  - Observed: `step_update` and `result` provide input, output, and cache reads.
+  - Verified: headless print mode does not emit `context_window_size`.
+  - Limitation: capacity remains null unless explicit context metadata is supplied.
+

@@ -20,6 +20,279 @@ from refract.telemetry import TelemetryAccumulator
 log = get_logger("codex")
 
 
+class _CodexRolloutCollector:
+    """Bounded exact-session Codex rollout collector."""
+
+    def __init__(
+        self,
+        *,
+        cwd: Path,
+        session_id: str = "",
+        accumulator: TelemetryAccumulator,
+        emitter: Any = None,
+    ) -> None:
+        self.cwd = cwd
+        self.session_id = session_id.strip()
+        self.accumulator = accumulator
+        self.emitter = emitter
+        self.session_file: Path | None = None
+        self.file_verified = False
+        self.offset = 0
+        self.partial_buffer = ""
+        self.model_name: str | None = None
+        self.has_reported_context = False
+        self.is_compacted = False
+        self.max_bytes_per_poll = 65536
+        self.max_total_bytes = 1048576
+        self.total_bytes_read = 0
+        self.baseline_input: int | None = None
+        self.baseline_output: int | None = None
+        self.baseline_recorded = False
+        self.is_resumed = bool(self.session_id)
+        self.preflight_done = not self.is_resumed
+
+    def preflight_baseline(self) -> None:
+        if self.is_resumed:
+            self.poll()
+            self.preflight_done = True
+
+    def set_session_id(self, session_id: str) -> None:
+        sid = session_id.strip()
+        if sid and sid != self.session_id:
+            self.session_id = sid
+            self.session_file = None
+            self.file_verified = False
+            self.offset = 0
+            self.partial_buffer = ""
+
+    def _find_exact_file(self) -> Path | None:
+        if not self.session_id or not _SESSION_ID_RE.fullmatch(self.session_id):
+            return None
+        sessions_dir = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
+        if not sessions_dir.is_dir():
+            return None
+
+        try:
+            candidates = list(sessions_dir.glob(f"**/*{self.session_id}*.jsonl"))[:20]
+        except OSError:
+            return None
+
+        for path in candidates:
+            try:
+                stat = path.stat()
+                if stat.st_size < 10:
+                    continue
+                with path.open("r", encoding="utf-8", errors="replace") as f:
+                    first_line = f.readline(4096)
+                if not first_line:
+                    continue
+                parsed = json.loads(first_line)
+                if not isinstance(parsed, dict) or parsed.get("type") != "session_meta":
+                    continue
+                payload = parsed.get("payload", {})
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("id") == self.session_id and _same_path(payload.get("cwd", ""), self.cwd):
+                    return path
+            except (OSError, json.JSONDecodeError):
+                continue
+        return None
+
+    def poll(self) -> None:
+        if not self.session_id:
+            return
+        if self.session_file is None:
+            self.session_file = self._find_exact_file()
+            if self.session_file is None:
+                return
+            self.file_verified = True
+
+        if not self.file_verified or not self.session_file.is_file():
+            return
+
+        try:
+            stat = self.session_file.stat()
+        except OSError:
+            return
+
+        if stat.st_size < self.offset:
+            self.offset = 0
+            self.partial_buffer = ""
+            self.accumulator.invalidate_context()
+            self.has_reported_context = False
+
+        if stat.st_size == self.offset and not self.partial_buffer:
+            return
+
+        if self.total_bytes_read >= self.max_total_bytes:
+            return
+
+        read_size = min(self.max_bytes_per_poll, self.max_total_bytes - self.total_bytes_read)
+        if read_size <= 0:
+            return
+
+        try:
+            with self.session_file.open("rb") as f:
+                f.seek(self.offset)
+                chunk = f.read(read_size)
+        except OSError:
+            return
+
+        if not chunk:
+            return
+
+        self.offset += len(chunk)
+        self.total_bytes_read += len(chunk)
+
+        text = self.partial_buffer + chunk.decode("utf-8", errors="replace")
+        lines = text.split("\n")
+        self.partial_buffer = lines.pop()
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(record, dict):
+                continue
+            self._process_record(record)
+
+    def _process_record(self, record: dict[str, Any]) -> None:
+        rec_type = record.get("type", "")
+        payload = record.get("payload")
+
+        if rec_type == "session_meta":
+            if isinstance(payload, dict):
+                sid = payload.get("id")
+                scwd = payload.get("cwd")
+                if sid != self.session_id or not _same_path(scwd or "", self.cwd):
+                    self.file_verified = False
+            return
+
+        if not self.file_verified:
+            return
+
+        if rec_type == "event_msg" and isinstance(payload, dict):
+            p_type = payload.get("type", "")
+            if p_type == "token_count":
+                self._handle_token_count(payload)
+            elif p_type == "token_usage_record":
+                self._handle_token_usage_record(payload)
+            elif p_type == "context_compacted":
+                self.accumulator.invalidate_context()
+                self.has_reported_context = False
+                self.is_compacted = True
+                if self.emitter is not None:
+                    self.emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "context_used_tokens": None,
+                            "context_window_size": None,
+                            "context_remaining_percent": None,
+                            "source": "session",
+                            "quality": "unavailable",
+                        },
+                    })
+            elif p_type in ("session_configured", "model_reroute"):
+                model = payload.get("model") or payload.get("to_model")
+                if model:
+                    model_str = str(model)
+                    if self.model_name and self.model_name != model_str:
+                        self.accumulator.invalidate_context()
+                        self.has_reported_context = False
+                        self.is_compacted = True
+                    self.model_name = model_str
+        elif rec_type == "token_count":
+            self._handle_token_count(record)
+        elif rec_type == "token_usage_record":
+            self._handle_token_usage_record(record)
+        elif rec_type == "context_compacted":
+            self.accumulator.invalidate_context()
+            self.has_reported_context = False
+            self.is_compacted = True
+
+    def _handle_token_usage_record(self, data: dict[str, Any]) -> None:
+        info = data.get("info") if isinstance(data.get("info"), dict) else data
+        total_in = _as_int(info.get("total_input_tokens") or info.get("input_tokens"))
+        total_out = _as_int(info.get("total_output_tokens") or info.get("output_tokens"))
+        cr = _as_int(info.get("cache_read_tokens") or info.get("cached_input_tokens"))
+        cw = _as_int(info.get("cache_write_tokens"))
+
+        if total_in is None and total_out is None:
+            return
+
+        if self.is_resumed and not self.preflight_done:
+            self.baseline_input = total_in
+            self.baseline_output = total_out
+            self.baseline_recorded = True
+            return
+
+        if self.is_resumed and self.baseline_input is None:
+            self.accumulator.record_missing_contribution(attempt=1, invocation=1)
+            return
+
+        base_in = self.baseline_input or 0
+        base_out = self.baseline_output or 0
+        norm_in = max(0, (total_in or 0) - base_in) if total_in is not None else None
+        norm_out = max(0, (total_out or 0) - base_out) if total_out is not None else None
+
+        self.accumulator.reconcile_cumulative(
+            attempt=1,
+            invocation=1,
+            total_input=norm_in,
+            total_output=norm_out,
+            cache_read=cr,
+            cache_write=cw,
+            source="session",
+            quality="reported",
+        )
+        if self.emitter is not None:
+            self.emitter({
+                "kind": "telemetry.updated",
+                "data": {
+                    "total_input_tokens": norm_in,
+                    "total_output_tokens": norm_out,
+                    "cache_read_tokens": cr,
+                    "cache_write_tokens": cw,
+                    "source": "session",
+                    "quality": "reported",
+                },
+            })
+
+    def _handle_token_count(self, data: dict[str, Any]) -> None:
+        info = data.get("info") if isinstance(data.get("info"), dict) else data
+        used_tokens = _as_int(info.get("total_token_usage"))
+        window_size = _as_int(info.get("model_context_window"))
+
+        if used_tokens is not None:
+            self.has_reported_context = True
+            self.is_compacted = False
+            self.accumulator.record_context_snapshot(
+                used_tokens=used_tokens,
+                window_size=window_size,
+                source="session",
+                quality="reported",
+            )
+            if self.emitter is not None:
+                emit_data: dict[str, Any] = {
+                    "context_used_tokens": used_tokens,
+                    "source": "session",
+                    "quality": "reported",
+                }
+                if window_size is not None and window_size > 0:
+                    emit_data["context_window_size"] = window_size
+                    pct = round(max(0.0, min(100.0, (1.0 - (used_tokens / window_size)) * 100.0)), 2)
+                    emit_data["context_remaining_percent"] = pct
+                self.emitter({
+                    "kind": "telemetry.updated",
+                    "data": emit_data,
+                })
+
+
+
 def _as_int(val: Any) -> int | None:
     if isinstance(val, bool) or not isinstance(val, int) or val < 0:
         return None
@@ -226,12 +499,20 @@ def _read_last_message(path: Path) -> str:
 class _EventParser:
     """Normalize Codex item lifecycle events and correlate entity IDs."""
 
-    def __init__(self, params: BackendParams) -> None:
+    def __init__(self, params: BackendParams, cwd: Path | None = None) -> None:
         self.params = params
+        self.cwd = cwd or (params.cd if isinstance(params.cd, Path) else Path(params.cd))
         self.entity_counter = 0
         self.raw_to_entity: dict[str, str] = {}
         self.accumulator = TelemetryAccumulator()
         self.turn_counter = 0
+        self.collector = _CodexRolloutCollector(
+            cwd=self.cwd,
+            session_id=str(params.SESSION_ID or ""),
+            accumulator=self.accumulator,
+            emitter=self.params.emitter,
+        )
+        self.collector.preflight_baseline()
 
     def emit(self, event: dict[str, Any]) -> None:
         if self.params.emitter is not None:
@@ -296,6 +577,10 @@ class _EventParser:
 
     def on_event(self, parsed: dict[str, Any]) -> None:
         event_type = parsed.get("type", "")
+        if event_type == "thread.started" and parsed.get("thread_id"):
+            self.collector.set_session_id(str(parsed.get("thread_id")))
+        self.collector.poll()
+
         item = parsed.get("item", {})
         if isinstance(item, dict):
             raw_id = str(item.get("id", ""))
@@ -305,6 +590,7 @@ class _EventParser:
                 self.complete_item(item, raw_id)
 
         if event_type == "turn.completed":
+            self.collector.poll()
             u = parsed.get("usage")
             if isinstance(u, dict):
                 try:
@@ -336,11 +622,12 @@ class _EventParser:
                                 val = norm_in + norm_out - (reasoning_out or 0)
                                 if val >= 0:
                                     ctx_used = val
-                                    self.accumulator.record_context_snapshot(
-                                        used_tokens=ctx_used,
-                                        source="derived",
-                                        quality="derived",
-                                    )
+                                    if not self.collector.has_reported_context and not self.collector.is_compacted:
+                                        self.accumulator.record_context_snapshot(
+                                            used_tokens=ctx_used,
+                                            source="derived",
+                                            quality="derived",
+                                        )
                             except Exception:
                                 log.warning("codex: could not derive context snapshot", exc_info=True)
 
@@ -357,7 +644,7 @@ class _EventParser:
                                     "quality": "reported",
                                 },
                             })
-                            if ctx_used is not None:
+                            if ctx_used is not None and not self.collector.has_reported_context and not self.collector.is_compacted:
                                 self.params.emitter({
                                     "kind": "telemetry.updated",
                                     "data": {
@@ -368,7 +655,9 @@ class _EventParser:
                                 })
                 except Exception:
                     log.warning("codex: turn usage processing failed", exc_info=True)
+            self.collector.poll()
         elif event_type in ("thread.completed", "summary"):
+            self.collector.poll()
             u = parsed.get("usage")
             if isinstance(u, dict):
                 raw_in = _as_int(u.get("input_tokens"))
@@ -400,6 +689,8 @@ class _EventParser:
                                 "quality": "reported",
                             },
                         })
+            self.collector.poll()
+
 
 
 def _agent_messages(last_message: str, parsed_agent_messages: str, stdout_text: str) -> str:
@@ -462,7 +753,7 @@ def execute(params: BackendParams) -> BackendResult:
     log.debug("codex command prepared args=%d", len(cmd))
 
     started_at = time.time()
-    parser = _EventParser(params)
+    parser = _EventParser(params, cwd=cd)
 
     stream = consume_stream(
         run_shell_command, cmd, params, cwd=os.fspath(cd), name="codex", on_event=parser.on_event, stdin_text=params.PROMPT,
@@ -484,8 +775,10 @@ def execute(params: BackendParams) -> BackendResult:
         fallback_session_id=params.SESSION_ID,
     )
 
-    if session_id_source:
+    if session_id:
         log.info("codex: resolved session id via %s", session_id_source)
+        parser.collector.set_session_id(session_id)
+        parser.collector.poll()
     else:
         log.warning(
             "codex: no session id found from stdout/session-file/params "
@@ -514,7 +807,11 @@ def execute(params: BackendParams) -> BackendResult:
         result.error = stream.error
     result.usage = _usage_dict(**_usage_values(stream))
     result.agent_messages = agent_messages
-    if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
+    if (
+        parser.accumulator._has_any_consumption
+        or parser.accumulator._context_used_tokens.value is not None
+        or parser.accumulator._context_window_size.value is not None
+    ):
         result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
     log.info(
         "codex.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",

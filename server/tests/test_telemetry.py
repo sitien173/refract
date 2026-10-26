@@ -568,3 +568,23 @@ def test_missing_baselines_produce_explicit_incomplete_totals():
     assert snap.total_output_tokens.value == 50
 
 
+def test_cli_arguments_documents_telemetry_capabilities_and_versions():
+    from pathlib import Path
+    cli_doc = Path(__file__).resolve().parents[1] / "CLI_ARGUMENTS.md"
+    assert cli_doc.is_file(), "CLI_ARGUMENTS.md must exist"
+    content = cli_doc.read_text(encoding="utf-8")
+
+    # Verified versions
+    assert "codex-cli 0.160.1" in content
+    assert "pi 1.4.0" in content or "@earendil-works/pi-coding-agent 1.4.0" in content
+    assert "1.4.7" in content and "agy" in content
+    assert "2.1.296" in content and "claude" in content
+
+    # Telemetry capabilities and limitations documented
+    assert "Worker telemetry and context measurement capabilities" in content
+    assert "token_count" in content
+    assert "context_window_size" in content
+    assert "context_used_tokens" in content
+
+
+

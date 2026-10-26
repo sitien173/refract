@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import threading
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -2303,3 +2304,539 @@ def test_pi_repeated_no_id_turn_end_does_not_open_implicit_turn(tmp_path: Path, 
     assert multi_res.telemetry is not None
     assert multi_res.telemetry["total_input_tokens"]["value"] == 250
     assert multi_res.telemetry["total_output_tokens"]["value"] == 35
+
+
+def test_codex_rollout_exact_session_enrichment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-111111111111"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 1500, "model_context_window": 128000}}}) + "\n"
+    )
+
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": "OK"}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 50, "cached_input_tokens": 200}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
+
+    emitted: list[dict[str, Any]] = []
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted.append))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_window_size"]["value"] == 128000
+    assert res.telemetry["context_window_size"]["quality"] == "reported"
+    assert res.telemetry["context_window_size"]["source"] == "session"
+    assert res.telemetry["context_used_tokens"]["value"] == 1500
+    assert res.telemetry["context_used_tokens"]["quality"] == "reported"
+    assert res.telemetry["context_used_tokens"]["source"] == "session"
+    assert res.telemetry["context_remaining_percent"]["value"] == 98.83
+
+
+def test_codex_rollout_refuses_mismatched_session_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-111111111111"
+    wrong_id = "00000000-0000-0000-0000-999999999999"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": wrong_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 9999, "model_context_window": 200000}}}) + "\n"
+    )
+
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": "OK"}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 50}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_window_size"]["value"] is None
+
+
+def test_codex_rollout_never_selects_unrelated_latest_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-111111111111"
+    unrelated_id = "00000000-0000-0000-0000-888888888888"
+    unrelated_file = sessions_dir / f"rollout_{unrelated_id}.jsonl"
+    unrelated_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": unrelated_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 4000, "model_context_window": 128000}}}) + "\n"
+    )
+
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": "OK"}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 50}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_window_size"]["value"] is None
+
+
+def test_codex_rollout_handles_partial_and_malformed_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-222222222222"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+        + "malformed raw non-json line\n"
+        + json.dumps({"type": "event_msg", "payload": "not a dict payload"}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 3200, "model_context_window": 100000}}}) + "\n"
+        + '{"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 5000' # unterminated partial line
+    )
+
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": "OK"}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 50}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_used_tokens"]["value"] == 3200
+    assert res.telemetry["context_window_size"]["value"] == 100000
+
+
+def test_codex_rollout_handles_file_growth_and_incremental_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-333333333333"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+    )
+
+    def stream_lines(*args, **kwargs):
+        yield json.dumps({"type": "thread.started", "thread_id": session_id})
+        with session_file.open("a") as f:
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 2000, "model_context_window": 128000}}}) + "\n")
+        yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 20}})
+        with session_file.open("a") as f:
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 3500, "model_context_window": 128000}}}) + "\n")
+        yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1500, "output_tokens": 30}})
+
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", stream_lines)
+
+    emitted: list[dict[str, Any]] = []
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted.append))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_used_tokens"]["value"] == 3500
+    assert res.telemetry["context_window_size"]["value"] == 128000
+
+
+def test_codex_rollout_handles_file_truncation_and_rotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-444444444444"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 5000, "model_context_window": 128000}}}) + "\n"
+        + ("x" * 5000) + "\n"
+    )
+
+    def stream_lines(*args, **kwargs):
+        yield json.dumps({"type": "thread.started", "thread_id": session_id})
+        # Simulate truncation / rotation: rewrite file with shorter content
+        session_file.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+            + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 1200, "model_context_window": 128000}}}) + "\n"
+        )
+        yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 20}})
+
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", stream_lines)
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_used_tokens"]["value"] == 1200
+
+
+def test_codex_rollout_compaction_invalidates_stale_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-555555555555"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 80000, "model_context_window": 128000}}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "context_compacted"}}) + "\n"
+    )
+
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 20}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_used_tokens"]["value"] is None
+    assert res.telemetry["context_window_size"]["value"] is None
+
+
+def test_codex_rollout_concurrent_sessions_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace1 = tmp_path / "ws1"
+    workspace2 = tmp_path / "ws2"
+    workspace1.mkdir()
+    workspace2.mkdir()
+
+    s1 = "00000000-0000-0000-0000-aaaaaaaaaaaa"
+    s2 = "00000000-0000-0000-0000-bbbbbbbbbbbb"
+
+    f1 = sessions_dir / f"rollout_{s1}.jsonl"
+    f2 = sessions_dir / f"rollout_{s2}.jsonl"
+
+    f1.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": s1, "cwd": str(workspace1)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 1111, "model_context_window": 100000}}}) + "\n"
+    )
+    f2.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": s2, "cwd": str(workspace2)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 2222, "model_context_window": 200000}}}) + "\n"
+    )
+
+    # Run for s1
+    monkeypatch.setattr(
+        "refract.backends.codex.run_shell_command",
+        lambda *a, **k: (l for l in [json.dumps({"type": "thread.started", "thread_id": s1}), json.dumps({"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 10}})]),
+    )
+    res1 = codex_sync(BackendParams(PROMPT="test", cd=workspace1))
+
+    # Run for s2
+    monkeypatch.setattr(
+        "refract.backends.codex.run_shell_command",
+        lambda *a, **k: (l for l in [json.dumps({"type": "thread.started", "thread_id": s2}), json.dumps({"type": "turn.completed", "usage": {"input_tokens": 200, "output_tokens": 20}})]),
+    )
+    res2 = codex_sync(BackendParams(PROMPT="test", cd=workspace2))
+
+    assert res1.telemetry["context_used_tokens"]["value"] == 1111
+    assert res1.telemetry["context_window_size"]["value"] == 100000
+    assert res2.telemetry["context_used_tokens"]["value"] == 2222
+    assert res2.telemetry["context_window_size"]["value"] == 200000
+
+
+def test_codex_rollout_bounded_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-666666666666"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+
+    # Write a header followed by thousands of noise lines, bounded read should not choke or run forever
+    lines = [json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}})]
+    for i in range(500):
+        lines.append(json.dumps({"type": "event_msg", "payload": {"type": "noise", "index": i}}))
+    lines.append(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 4500, "model_context_window": 128000}}}))
+    session_file.write_text("\n".join(lines) + "\n")
+
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 50}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_used_tokens"]["value"] == 4500
+    assert res.telemetry["context_window_size"]["value"] == 128000
+
+
+def test_codex_rollout_refuses_mismatched_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-777777777777"
+    mismatched_id = "00000000-0000-0000-0000-999999999999"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+
+    # File has mismatched session id in payload
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": mismatched_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 5000, "model_context_window": 128000}}}) + "\n"
+    )
+
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 50}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    # Must refuse the file and not report context_window_size from mismatched file
+    assert res.telemetry["context_window_size"]["value"] is None
+
+
+def test_codex_rollout_missing_file_degrades_gracefully(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-888888888888"
+
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 50}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_window_size"]["value"] is None
+    # Context used tokens still derived from turn usage
+    assert res.telemetry["context_used_tokens"]["value"] == 1050
+
+
+def test_codex_rollout_lifecycle_cancellation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    cancel_evt = threading.Event()
+    cancel_evt.set()
+
+    # Cancelled before execution starts
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace, cancel_event=cancel_evt))
+    assert res.outcome in ("FATAL", "CANCELLED", "ABORTED") or res.error_class in ("cancelled", "timeout")
+
+
+def test_codex_rollout_cumulative_counter_baselining_in_resumed_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-cccccccccccc"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+
+    # Pre-existing rollout content before resumed turn
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_usage_record", "info": {"total_input_tokens": 1000, "total_output_tokens": 200}}}) + "\n"
+    )
+
+    def stream_lines(*args, **kwargs):
+        yield json.dumps({"type": "thread.started", "thread_id": session_id})
+        # Simulate new turn writing to rollout
+        with session_file.open("a") as f:
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_usage_record", "info": {"total_input_tokens": 1500, "total_output_tokens": 350}}}) + "\n")
+        yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 500, "output_tokens": 150}})
+
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", stream_lines)
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace, SESSION_ID=session_id))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    # Cumulative counter 1500 - 1000 = 500, 350 - 200 = 150
+    assert res.telemetry["total_input_tokens"]["value"] == 500
+    assert res.telemetry["total_output_tokens"]["value"] == 150
+    assert res.telemetry["completeness"] == "complete"
+
+
+def test_codex_rollout_missing_baseline_marks_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-dddddddddddd"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+
+    # Resumed session file exists but has NO baseline usage record
+    session_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+    )
+
+    def stream_lines(*args, **kwargs):
+        yield json.dumps({"type": "thread.started", "thread_id": session_id})
+        # Rollout writes cumulative record without baseline having been established
+        with session_file.open("a") as f:
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_usage_record", "info": {"total_input_tokens": 2000, "total_output_tokens": 400}}}) + "\n")
+        yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 600, "output_tokens": 100}})
+
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", stream_lines)
+
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace, SESSION_ID=session_id))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    # Missing baseline must mark completeness partial while retaining invocation-local turn usage
+    assert res.telemetry["completeness"] == "partial"
+    assert res.telemetry["total_input_tokens"]["value"] == 600
+    assert res.telemetry["total_output_tokens"]["value"] == 100
+
+
+def test_pi_capacity_remains_null_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    pi_stdout = [
+        json.dumps({"type": "session", "id": "pi-sess-111"}),
+        json.dumps({"type": "turn_start"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "id": "msg_1",
+                "content": "Hello",
+                "usage": {"input": 400, "output": 50, "cacheRead": 100},
+            },
+        }),
+        json.dumps({"type": "turn_end"}),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_stdout))
+
+    res = pi_sync(BackendParams(PROMPT="test", cd=tmp_path))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    # Context occupied is derived from turn usage
+    assert res.telemetry["context_used_tokens"]["value"] == 550
+    # Capacity must remain null without external catalog / RPC daemon
+    assert res.telemetry["context_window_size"]["value"] is None
+    assert res.telemetry["context_remaining_percent"]["value"] is None
+
+
+def test_agy_capacity_remains_null_without_explicit_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    agy_stdout = [
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "state": "DONE",
+                "step_type": "agent_response",
+                "step_index": 1,
+                "text_delta": "Working",
+                "usage": {"input_tokens": 800, "output_tokens": 120},
+            },
+        }),
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": "00000000-0000-0000-0000-aaaaaaaaaaaa",
+                "response": "Done",
+                "usage": {"input_tokens": 800, "output_tokens": 120},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_stdout))
+
+    res = agy_sync(BackendParams(PROMPT="test", cd=tmp_path))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_used_tokens"]["value"] == 920
+    # Capacity must remain null when no explicit metadata is present
+    assert res.telemetry["context_window_size"]["value"] is None
+    assert res.telemetry["context_remaining_percent"]["value"] is None
+
+
+def test_agy_explicit_context_metadata_handled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    agy_stdout = [
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "state": "DONE",
+                "step_type": "agent_response",
+                "step_index": 1,
+                "text_delta": "Working",
+                "usage": {
+                    "input_tokens": 800,
+                    "output_tokens": 120,
+                    "model_context_window": 200000,
+                },
+            },
+        }),
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": "00000000-0000-0000-0000-aaaaaaaaaaaa",
+                "response": "Done",
+                "usage": {
+                    "input_tokens": 800,
+                    "output_tokens": 120,
+                    "model_context_window": 200000,
+                },
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_stdout))
+
+    res = agy_sync(BackendParams(PROMPT="test", cd=tmp_path))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    assert res.telemetry["context_used_tokens"]["value"] == 920
+    # Explicit capacity should be recorded and remaining percent derived
+    assert res.telemetry["context_window_size"]["value"] == 200000
+    assert res.telemetry["context_remaining_percent"]["value"] == 99.54
+
+
+
