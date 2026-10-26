@@ -26,17 +26,26 @@
 - Initial review: FAIL. Pi identity, unknown input, Codex malformed usage, context provenance.
 - Cycle 1 re-review: FAIL. Turn lifecycle, invalid cache components, Pi context provenance, shared event quality.
 - Both allowed automatic fix cycles have been used.
-- Final re-review pending.
+- Final re-review job `722a36d3-d226-458f-9a85-1148da7b0bdc`: FAIL, one blocking finding.
+- `server/src/refract/backends/pi.py:261–278`: repeated no-ID `turn_end` opens another implicit turn. Sequence `turn_start → message_end → turn_end → turn_end` doubles 100 input tokens to 200.
+- Fix required: retain completed turn identity until a real new-turn boundary; add repeated terminal-event regression coverage.
+- Review left server files unchanged at `385256099d321c768ff7b4b8fb03345cade60850`.
+- Retryable review routing failures used the returned next-target token; successful reviewer was independent.
+- Automatic fix bound exhausted. User authorization required before another cycle.
 
 ## Review Result
 
-- Spec Status: PENDING
-- Debt: none
+- Spec Status: FAIL
+- Quality Status: FAIL
+- Phase outcome: BLOCKED
+- Debt: none. The correctness blocker cannot be accepted as debt.
+- Remaining phases: 3 and 4 unstarted.
+- Next: obtain authorization for an additional Phase 2 fix/review cycle.
 
 ## Final Checkpoint
 
 - Phase base ref: refs/plans/worker-job-telemetry/phase-02/base
-- Phase implementation ref: refs/plans/worker-job-telemetry/phase-02/impl
+- Phase implementation ref: not written, review failed
 - Plan commit ref: pending
 - State checkpoint: temporary commit
 
