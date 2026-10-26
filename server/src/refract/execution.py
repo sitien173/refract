@@ -85,6 +85,17 @@ class TargetExecutor:
             key: semaphore for key, semaphore in self._target_semaphores.items()
             if self._target_users.get(key, 0)
         }
+    @staticmethod
+    def _safe_telemetry_dump(accumulator: TelemetryAccumulator | None) -> dict[str, Any] | None:
+        if accumulator is None:
+            return None
+        try:
+            if accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None:
+                return accumulator.snapshot().model_dump(mode="json")
+        except Exception:
+            log.warning("Failed to serialize telemetry snapshot", exc_info=True)
+        return None
+
     async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: CancelEvent, fresh_session: bool = False) -> TargetExecutionResult:
         record = await run_sync(self.database.job_record, job_id)
         existing_meta: dict[str, Any] = {}
@@ -99,15 +110,15 @@ class TargetExecutor:
 
         last = DriverResult("REQUEST_FATAL", "", "", "No admissible target", "circuit_open")
         if not plan.selection.targets:
-            tel = accumulator.snapshot().model_dump(mode="json") if accumulator._has_any_consumption else None
+            tel = self._safe_telemetry_dump(accumulator)
             return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
         if cancel_event.is_set():
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-            tel = accumulator.snapshot().model_dump(mode="json") if accumulator._has_any_consumption else None
+            tel = self._safe_telemetry_dump(accumulator)
             return TargetExecutionResult(cancelled, "", metadata=self._result_metadata(cancelled, None, None, telemetry=tel))
         target = await run_sync(self._select_target, plan.selection.targets, plan, job_id)
         if target is None:
-            tel = accumulator.snapshot().model_dump(mode="json") if accumulator._has_any_consumption else None
+            tel = self._safe_telemetry_dump(accumulator)
             return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
         target_key = target_execution_key(target)
         session_id, effective_prompt = await self._prepare_session(
@@ -128,7 +139,7 @@ class TargetExecutor:
             self._release_capacity(target.id)
             await run_sync(self.database.release_target_probe, target_key, job_id)
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-            tel = accumulator.snapshot().model_dump(mode="json") if accumulator._has_any_consumption else None
+            tel = self._safe_telemetry_dump(accumulator)
             return TargetExecutionResult(cancelled, target.id, target_key, self._result_metadata(cancelled, target, None, telemetry=tel))
         return await self._execute_attempt(_ExecutionContext(
             job_id=job_id, project=project, workflow=workflow,
@@ -273,6 +284,7 @@ class TargetExecutor:
             if phase != "initial":
                 details["phase"] = phase
                 details["invocation"] = invocation_idx
+                context.accumulator.invalidate_context()
                 await run_sync(self.database.event, job_id, "target.session_recovery_started", details)
             attempt.result, has_tool_activity = await self._run_target_invocation(
                 job_id=job_id,
@@ -370,9 +382,7 @@ class TargetExecutor:
                 await self._store_turn(attempt, job_id, project, workflow, context_key, target, target_key, prompt)
         else:
             await self._update_target_health(last, target_key, job_id, attempt.replay_blocked)
-        telemetry = None
-        if accumulator is not None and (accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None):
-            telemetry = accumulator.snapshot().model_dump(mode="json")
+        telemetry = self._safe_telemetry_dump(accumulator)
         return TargetExecutionResult(last, target.id, target_key, self._result_metadata(last, target, duration_ms, replay_blocked=attempt.replay_blocked, telemetry=telemetry))
 
     async def _store_turn(
@@ -434,9 +444,7 @@ class TargetExecutor:
             "cancelled" if cancelled else "execution_error",
         )
         try:
-            telemetry = None
-            if accumulator is not None and (accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None):
-                telemetry = accumulator.snapshot().model_dump(mode="json")
+            telemetry = cls._safe_telemetry_dump(accumulator)
             setattr(exc, "_refract_result_metadata", cls._result_metadata(result, target, duration_ms, telemetry=telemetry))
         except (AttributeError, TypeError):
             pass
@@ -507,8 +515,10 @@ class TargetExecutor:
         env: dict[str, str] | None = None,
     ) -> tuple[DriverResult, bool]:
         bridge = StreamBridge(queue_capacity=256) if supports_streaming else None
+        invocation_observed_consumption = False
 
         async def _handle_telemetry(event: dict[str, Any]) -> None:
+            nonlocal invocation_observed_consumption
             data = event.get("data")
             if not isinstance(data, dict):
                 return
@@ -528,7 +538,20 @@ class TargetExecutor:
                     invocation=invocation,
                 )
 
-            if "input_tokens" in data or "output_tokens" in data or "cache_read_tokens" in data or "cache_write_tokens" in data:
+            if "total_input_tokens" in data or "total_output_tokens" in data:
+                accumulator.reconcile_cumulative(
+                    attempt=attempt,
+                    invocation=invocation,
+                    total_input=data.get("total_input_tokens"),
+                    total_output=data.get("total_output_tokens"),
+                    cache_read=data.get("cache_read_tokens"),
+                    cache_write=data.get("cache_write_tokens"),
+                    source=source,
+                    quality=quality,
+                    observed_at=observed_at,
+                )
+                invocation_observed_consumption = True
+            elif "input_tokens" in data or "output_tokens" in data or "cache_read_tokens" in data or "cache_write_tokens" in data:
                 accumulator.record_consumption(
                     attempt=attempt,
                     invocation=invocation,
@@ -542,18 +565,7 @@ class TargetExecutor:
                     quality=quality,
                     observed_at=observed_at,
                 )
-            elif "total_input_tokens" in data or "total_output_tokens" in data:
-                accumulator.reconcile_cumulative(
-                    attempt=attempt,
-                    invocation=invocation,
-                    total_input=data.get("total_input_tokens"),
-                    total_output=data.get("total_output_tokens"),
-                    cache_read=data.get("cache_read_tokens"),
-                    cache_write=data.get("cache_write_tokens"),
-                    source=source,
-                    quality=quality,
-                    observed_at=observed_at,
-                )
+                invocation_observed_consumption = True
 
             snap = accumulator.snapshot()
             await run_sync(self.database.merge_job_telemetry, job_id, snap)
@@ -601,6 +613,17 @@ class TargetExecutor:
         if attempt_result is None:
             err_msg = str(driver_exc) if driver_exc else "execution_failed"
             attempt_result = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
+
+        if not invocation_observed_consumption:
+            accumulator.record_missing_contribution(attempt=attempt, invocation=invocation)
+
+        accumulator.finalize_invocation(attempt=attempt, invocation=invocation)
+        if accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None:
+            try:
+                await run_sync(self.database.merge_job_telemetry, job_id, accumulator.snapshot())
+            except Exception:
+                pass
+
         return attempt_result, has_tool_activity
 
     def _release_capacity(self, target_id: str) -> None:

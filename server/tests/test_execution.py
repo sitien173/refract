@@ -4288,3 +4288,101 @@ async def test_retry_uses_actual_attempt_number(tmp_path: Path) -> None:
         await runtime.close()
 
 
+@pytest.mark.asyncio
+async def test_telemetry_updated_dispatches_cumulative_totals_before_cache_fields(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class CumulativeDriver(FakeDrivers):
+        async def execute(self, **kwargs):
+            emitter = kwargs.get("emitter")
+            if emitter:
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "total_input_tokens": 500,
+                        "total_output_tokens": 200,
+                        "cache_read_tokens": 50,
+                        "source": "stream",
+                        "quality": "reported",
+                    },
+                })
+            return DriverResult("SUCCESS", "", "done", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = CumulativeDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        job = await runtime.wait(submission.job_id, 5)
+        assert job.state == "succeeded"
+        telemetry = job.result.metadata.get("telemetry")
+        assert telemetry is not None
+        assert telemetry["total_input_tokens"]["value"] == 500
+        assert telemetry["total_output_tokens"]["value"] == 200
+        assert telemetry["cache_read_tokens"]["value"] == 50
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_unobserved_recovery_invocation_marks_totals_incomplete(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class RecoveryUnobservedDriver(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, **kwargs):
+            self.calls += 1
+            emitter = kwargs.get("emitter")
+            if self.calls == 1:
+                # Invocation 1: fails with context_overflow, NO telemetry emitted
+                return DriverResult("RETRYABLE", "s1", "", "overflow", "context_overflow")
+            else:
+                # Invocation 2: recovery succeeds with telemetry
+                if emitter:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "input_tokens": 100,
+                            "output_tokens": 50,
+                            "source": "stream",
+                            "quality": "reported",
+                        },
+                    })
+                return DriverResult("SUCCESS", "s2", "recovered", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = RecoveryUnobservedDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        target = runtime.catalog.targets[0]
+        tkey = target_execution_key(target)
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="feature",
+            role="implement",
+            target_id=target.id,
+            target_key=tkey,
+            session_id="old-sess-1",
+            prompt="turn 1",
+            response="turn 1 resp",
+        )
+        submission = await runtime.submit(project.id, "implement", "turn 2", context_key="feature")
+        job = await runtime.wait(submission.job_id, 5)
+        assert job.state == "succeeded"
+        telemetry = job.result.metadata.get("telemetry")
+        assert telemetry is not None
+        # Because invocation 1 ran and consumed unobserved tokens before recovery, totals must be partial
+        assert telemetry["completeness"] == "partial"
+        assert telemetry["attribution"]["invocation"] == 2
+    finally:
+        await runtime.close()
+
+
+

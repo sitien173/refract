@@ -890,6 +890,32 @@ def test_terminal_metadata_protected_against_stale_observations(tmp_path) -> Non
     db.close()
 
 
+def test_merge_job_telemetry_validates_and_sanitizes_before_persistence(tmp_path) -> None:
+    db = Database(tmp_path / "refract.db")
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-san-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    # Attempt to write invalid telemetry (e.g. negative tokens or booleans)
+    invalid_payload = {
+        "version": 1,
+        "total_input_tokens": {"value": -100, "source": "provider", "quality": "reported"},
+    }
+    db.merge_job_telemetry("job-san-1", invalid_payload)
+    job = db.job("job-san-1")
+    assert job is not None
+    # Invalid telemetry must NOT be persisted
+    assert "telemetry" not in job.result.metadata
+    db.close()
+
+
+
 def test_finish_job_merges_with_running_telemetry(tmp_path) -> None:
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="p1", alias="p1", root="/p1")

@@ -103,3 +103,47 @@ def test_merge_job_telemetry_rolls_back_on_error(database):
         database.merge_job_telemetry("j", {"version": 1, "total_input_tokens": {"value": 100, "source": "provider", "quality": "reported"}})
     assert database.job_record("j")["result_metadata_json"] == "{}"
 
+
+def test_concurrent_terminal_and_telemetry_race(database):
+    import concurrent.futures
+    import json
+    import threading
+
+    create_job(database)
+    database.start_job("j")
+
+    errors = []
+    barrier = threading.Barrier(2)
+
+    def do_finish():
+        try:
+            barrier.wait()
+            database.finish_job("j", "succeeded", text="done", metadata={"terminal_key": "val"})
+        except Exception as e:
+            errors.append(e)
+
+    def do_telemetry():
+        try:
+            barrier.wait()
+            database.merge_job_telemetry("j", {
+                "version": 1,
+                "completeness": "complete",
+                "total_input_tokens": {"value": 50, "source": "stream", "quality": "reported"},
+                "attribution": {"attempt": 1, "invocation": 1},
+            })
+        except Exception as e:
+            errors.append(e)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(do_finish)
+        f2 = executor.submit(do_telemetry)
+        f1.result()
+        f2.result()
+
+    assert not errors
+    record = database.job_record("j")
+    assert record["state"] == "succeeded"
+    meta = json.loads(record["result_metadata_json"])
+    assert meta.get("terminal_key") == "val"
+
+

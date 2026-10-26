@@ -317,6 +317,8 @@ class Database:
 
     def merge_job_telemetry(self, job_id: str, telemetry: dict[str, Any] | TelemetryData) -> None:
         with self._connection:
+            if not self._connection.in_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
                 "SELECT state, result_metadata_json FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
@@ -332,11 +334,16 @@ class Database:
             except (json.JSONDecodeError, TypeError):
                 metadata = {}
 
-            telemetry_dict = (
-                telemetry.model_dump(mode="json")
-                if hasattr(telemetry, "model_dump")
-                else telemetry
-            )
+            try:
+                if hasattr(telemetry, "model_dump"):
+                    telemetry_dict = telemetry.model_dump(mode="json")
+                elif isinstance(telemetry, dict):
+                    telemetry_dict = TelemetryData.model_validate(telemetry).model_dump(mode="json")
+                else:
+                    return
+            except Exception:
+                return
+
             if "telemetry" in metadata and isinstance(metadata["telemetry"], dict):
                 metadata["telemetry"] = merge_telemetry(metadata["telemetry"], telemetry_dict)
             else:
@@ -352,6 +359,8 @@ class Database:
             self._finish(job_id, state, text=text, target_id=target_id, error=error, metadata=metadata)
 
     def _finish(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "", metadata: dict[str, Any] | None = None) -> None:
+        if not self._connection.in_transaction:
+            self._connection.execute("BEGIN IMMEDIATE")
         row = self._connection.execute(
             "SELECT result_metadata_json FROM jobs WHERE id=?", (job_id,)
         ).fetchone()
@@ -367,13 +376,19 @@ class Database:
         if metadata is not None:
             merged_meta = dict(current_meta)
             for k, v in metadata.items():
-                if (
-                    k == "telemetry"
-                    and "telemetry" in current_meta
-                    and isinstance(current_meta["telemetry"], dict)
-                    and isinstance(v, dict)
-                ):
-                    merged_meta["telemetry"] = merge_telemetry(current_meta["telemetry"], v)
+                if k == "telemetry" and isinstance(v, (dict, TelemetryData)):
+                    try:
+                        v_dict = (
+                            v.model_dump(mode="json")
+                            if hasattr(v, "model_dump")
+                            else TelemetryData.model_validate(v).model_dump(mode="json")
+                        )
+                        if "telemetry" in current_meta and isinstance(current_meta["telemetry"], dict):
+                            merged_meta["telemetry"] = merge_telemetry(current_meta["telemetry"], v_dict)
+                        else:
+                            merged_meta["telemetry"] = v_dict
+                    except Exception:
+                        pass
                 else:
                     merged_meta[k] = v
         else:
@@ -409,6 +424,8 @@ class Database:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         with self._connection:
+            if not self._connection.in_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
             self._append_turn(
                 project_id=project_id, context_key=context_key, role=role,
                 target_id=target_id, target_key=target_key, lane=lane,
@@ -419,6 +436,8 @@ class Database:
 
     def reset_retry(self, job_id: str) -> None:
         with self._connection:
+            if not self._connection.in_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
                 "SELECT result_metadata_json FROM jobs WHERE id=?", (job_id,)
             ).fetchone()

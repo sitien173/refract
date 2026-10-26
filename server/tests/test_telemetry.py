@@ -314,3 +314,183 @@ def test_completeness_tracking():
     # Incomplete invocation -> partial
     accumulator.record_missing_contribution(attempt=1, invocation=2)
     assert accumulator.snapshot().completeness == "partial"
+
+
+def test_accumulator_validates_before_mutating_state():
+    accumulator = TelemetryAccumulator()
+
+    # Boolean values must be rejected and not mutate state
+    with pytest.raises((ValueError, ValidationError)):
+        accumulator.record_consumption(
+            attempt=1, invocation=1, response_id="r1", input_tokens=True, output_tokens=10
+        )
+    # State should remain clean and empty
+    snap = accumulator.snapshot()
+    assert snap.total_input_tokens.value is None
+    assert snap.total_input_tokens.quality == "unavailable"
+    assert snap.completeness == "unavailable"
+
+    # Malformed negative counts must be rejected without mutating state
+    with pytest.raises((ValueError, ValidationError)):
+        accumulator.record_consumption(
+            attempt=1, invocation=1, response_id="r1", input_tokens=-10, output_tokens=10
+        )
+    # Malformed floats must be rejected without mutating state
+    with pytest.raises((ValueError, ValidationError)):
+        accumulator.record_consumption(
+            attempt=1, invocation=1, response_id="r1", input_tokens=10.5, output_tokens=10
+        )
+    snap2 = accumulator.snapshot()
+    assert snap2.total_input_tokens.value is None
+
+
+def test_availability_tracked_per_measurement_instead_of_zero():
+    accumulator = TelemetryAccumulator()
+    # Cumulative observation with total_input=None, total_output=4
+    accumulator.reconcile_cumulative(
+        attempt=1, invocation=1, total_input=None, total_output=4, source="result"
+    )
+    snap = accumulator.snapshot()
+    # Input must remain unavailable null, not converted to reported zero
+    assert snap.total_input_tokens.value is None
+    assert snap.total_input_tokens.quality == "unavailable"
+    # Output must be reported 4
+    assert snap.total_output_tokens.value == 4
+    assert snap.total_output_tokens.quality == "reported"
+    # Completeness must be partial because input was missing/unavailable
+    assert snap.completeness == "partial"
+
+
+def test_context_invalidation_preserved_and_older_invocation_rejected():
+    from refract.telemetry import merge_telemetry
+
+    # Test 1: Merging an explicitly invalidated snapshot must not resurrect prior context
+    existing = {
+        "version": 1,
+        "completeness": "complete",
+        "context_used_tokens": {"value": 1000, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T10:00:00Z"},
+        "context_window_size": {"value": 8000, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T10:00:00Z"},
+        "context_remaining_percent": {"value": 87.5, "source": "derived", "quality": "derived", "observed_at": "2026-10-26T10:00:00Z"},
+        "total_input_tokens": {"value": 100, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T10:00:00Z"},
+        "total_output_tokens": {"value": 50, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T10:00:00Z"},
+        "attribution": {"attempt": 1, "invocation": 1},
+    }
+    # Incoming explicitly invalidated context
+    incoming = {
+        "version": 1,
+        "completeness": "complete",
+        "context_used_tokens": {"value": None, "source": None, "quality": "unavailable", "observed_at": "2026-10-26T10:05:00Z"},
+        "context_window_size": {"value": None, "source": None, "quality": "unavailable", "observed_at": "2026-10-26T10:05:00Z"},
+        "context_remaining_percent": {"value": None, "source": None, "quality": "unavailable", "observed_at": "2026-10-26T10:05:00Z"},
+        "total_input_tokens": {"value": 150, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T10:05:00Z"},
+        "total_output_tokens": {"value": 60, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T10:05:00Z"},
+        "attribution": {"attempt": 1, "invocation": 1},
+    }
+    merged = merge_telemetry(existing, incoming)
+    # Context must NOT be resurrected to 1000
+    assert merged["context_used_tokens"]["value"] is None
+    assert merged["context_used_tokens"]["quality"] == "unavailable"
+
+    # Test 2: Recovery invocation (invocation=2) must not retain incompatible context from invocation 1
+    incoming_recovery = {
+        "version": 1,
+        "completeness": "complete",
+        "context_used_tokens": {"value": None, "source": None, "quality": "unavailable", "observed_at": "2026-10-26T10:06:00Z"},
+        "context_window_size": {"value": None, "source": None, "quality": "unavailable", "observed_at": "2026-10-26T10:06:00Z"},
+        "context_remaining_percent": {"value": None, "source": None, "quality": "unavailable", "observed_at": "2026-10-26T10:06:00Z"},
+        "total_input_tokens": {"value": 200, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T10:06:00Z"},
+        "total_output_tokens": {"value": 80, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T10:06:00Z"},
+        "attribution": {"attempt": 1, "invocation": 2},
+    }
+    merged_recovery = merge_telemetry(existing, incoming_recovery)
+    assert merged_recovery["context_used_tokens"]["value"] is None
+    assert merged_recovery["attribution"]["invocation"] == 2
+
+
+def test_observation_ordering_and_invocation_finalization():
+    accumulator = TelemetryAccumulator()
+
+    # Observation at T2 (newer)
+    accumulator.record_consumption(
+        attempt=1,
+        invocation=1,
+        response_id="resp-1",
+        input_tokens=50,
+        output_tokens=20,
+        observed_at="2026-10-26T10:02:00Z",
+    )
+    snap = accumulator.snapshot()
+    assert snap.total_input_tokens.value == 50
+
+    # Stale observation at T1 (older) arrives with larger counters for same response_id
+    accumulator.record_consumption(
+        attempt=1,
+        invocation=1,
+        response_id="resp-1",
+        input_tokens=100,
+        output_tokens=40,
+        observed_at="2026-10-26T10:01:00Z",
+    )
+    # Stale observation must be rejected; consumption remains 50, not 100
+    snap2 = accumulator.snapshot()
+    assert snap2.total_input_tokens.value == 50
+
+    # Finalize invocation 1
+    accumulator.finalize_invocation(attempt=1, invocation=1)
+
+    # Any new observation for finalized invocation must be rejected
+    accumulator.record_consumption(
+        attempt=1,
+        invocation=1,
+        response_id="resp-2",
+        input_tokens=200,
+        output_tokens=50,
+        observed_at="2026-10-26T10:05:00Z",
+    )
+    snap3 = accumulator.snapshot()
+    assert snap3.total_input_tokens.value == 50
+
+
+def test_retain_truthful_provenance():
+    accumulator = TelemetryAccumulator()
+    observed_time = "2026-10-26T09:30:00Z"
+    accumulator.record_consumption(
+        attempt=1,
+        invocation=1,
+        response_id="resp-1",
+        input_tokens=42,
+        output_tokens=15,
+        source="stream",
+        quality="estimated",
+        observed_at=observed_time,
+    )
+    snap = accumulator.snapshot()
+    # Quality must remain estimated, not changed to reported
+    assert snap.total_input_tokens.quality == "estimated"
+    assert snap.total_output_tokens.quality == "estimated"
+    # Source must remain stream, not changed to response
+    assert snap.total_input_tokens.source == "stream"
+    assert snap.total_output_tokens.source == "stream"
+    # Observed_at must match observation, not refreshed to now
+    assert snap.total_input_tokens.observed_at == observed_time
+    assert snap.total_output_tokens.observed_at == observed_time
+
+
+def test_merge_telemetry_validates_and_sanitizes_incoming():
+    from refract.telemetry import merge_telemetry
+
+    existing = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 100, "source": "provider", "quality": "reported"},
+        "attribution": {"attempt": 1, "invocation": 1},
+    }
+    # Invalid incoming with boolean / negative values
+    invalid_incoming = {
+        "version": 1,
+        "total_input_tokens": {"value": -50, "source": "provider", "quality": "reported"},
+    }
+    # Merging invalid incoming must not return invalid incoming or corrupt metadata
+    res = merge_telemetry(existing, invalid_incoming)
+    assert res["total_input_tokens"]["value"] == 100
+
