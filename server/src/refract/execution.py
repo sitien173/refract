@@ -608,21 +608,19 @@ class TargetExecutor:
                 await drain_task
             if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
                 attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+            # Record unknown contribution and finalize even when the driver raises.
+            if not invocation_observed_consumption:
+                accumulator.record_missing_contribution(attempt=attempt, invocation=invocation)
+            accumulator.finalize_invocation(attempt=attempt, invocation=invocation)
+            try:
+                await run_sync(self.database.merge_job_telemetry, job_id, accumulator.snapshot())
+            except Exception:
+                log.warning("Could not persist final invocation telemetry", exc_info=True)
 
         has_tool_activity = bridge.has_tool_activity if bridge else False
         if attempt_result is None:
             err_msg = str(driver_exc) if driver_exc else "execution_failed"
             attempt_result = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
-
-        if not invocation_observed_consumption:
-            accumulator.record_missing_contribution(attempt=attempt, invocation=invocation)
-
-        accumulator.finalize_invocation(attempt=attempt, invocation=invocation)
-        if accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None:
-            try:
-                await run_sync(self.database.merge_job_telemetry, job_id, accumulator.snapshot())
-            except Exception:
-                pass
 
         return attempt_result, has_tool_activity
 

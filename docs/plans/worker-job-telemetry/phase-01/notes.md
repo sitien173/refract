@@ -151,3 +151,29 @@ block even if all `none`.
   - Full suite `cd server && uv run pytest`: 663 passed, 11 deselected in 119.59s.
 - Root cause (bugfix only): 1) SQLite SELECT did not acquire write locks leading to race conditions; 2) unvalidated input mutated accumulator before model validation; 3) initial dict writes bypassed DB validation; 4) cumulative missing fields defaulted to 0; 5) unobserved recovery invocations were not tracked; 6) cache fields check preceded cumulative totals check; 7) merge resurrected invalidated context; 8) response replacement lacked timestamp ordering and invocation finalization; 9) snapshot hardcoded quality and refreshed timestamp.
 
+
+## Fix 2
+
+### Decisions made
+- Persist a partial telemetry snapshot for every invocation, including invocations with no token observations, and account/finalize it in the invocation `finally` path so driver exceptions cannot omit unknown contributions.
+- Reject context snapshots from older attempt/invocation identities and validate candidate measurements before advancing attribution or context state.
+- Apply strict non-negative integer validation to all completed-attempt counters.
+- Treat any terminal metadata `telemetry` key as validated input; invalid/non-dict values are ignored and cannot replace existing telemetry.
+- Retain completed measurement availability, quality, source, and observation timestamp, including observed zero, when aggregating completed attempts.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added context identity/atomicity, completed counter validation, completed aggregate provenance/zero, and terminal null telemetry regressions. Full verification: `cd server && uv run pytest` passed (666 passed, 11 deselected).
+- Root cause (bugfix only): missing invocation state was only recorded after normal return; context identity was updated before model construction; completed totals stored counters alone without measurement provenance; terminal merge distinguished only dict telemetry payloads.
+

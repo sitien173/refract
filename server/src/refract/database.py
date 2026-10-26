@@ -389,6 +389,9 @@ class Database:
                             merged_meta["telemetry"] = v_dict
                     except Exception:
                         pass
+                elif k == "telemetry":
+                    # Invalid telemetry never replaces a previously validated snapshot.
+                    continue
                 else:
                     merged_meta[k] = v
         else:

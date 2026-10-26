@@ -29,7 +29,7 @@ from tests.orchestration_helpers import register_project
 RESULT_METADATA_KEYS = {
     "model_name", "context_window_max", "context_window_used", "input_tokens",
     "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind",
-    "retryable", "next_target",
+    "retryable", "next_target", "telemetry",
 }
 
 
@@ -221,7 +221,7 @@ async def test_retryable_failure_runs_one_target_and_persists_result_metadata(tm
         assert metadata["input_tokens"] == 7
         assert isinstance(metadata["duration_ms"], int)
         assert metadata["next_target"] is None
-        assert set(metadata) == {"model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target"}
+        assert set(metadata) == RESULT_METADATA_KEYS
     finally:
         await runtime.close()
 

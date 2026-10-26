@@ -912,6 +912,11 @@ def test_merge_job_telemetry_validates_and_sanitizes_before_persistence(tmp_path
     assert job is not None
     # Invalid telemetry must NOT be persisted
     assert "telemetry" not in job.result.metadata
+    # A telemetry key is always validated, including explicit null values.
+    db.finish_job("job-san-1", "failed", metadata={"telemetry": None})
+    job = db.job("job-san-1")
+    assert job is not None
+    assert "telemetry" not in job.result.metadata
     db.close()
 
 

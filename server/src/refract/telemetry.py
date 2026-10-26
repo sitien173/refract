@@ -146,10 +146,10 @@ class TelemetryAttribution(BaseModel):
 class CompletedAttemptsAggregate(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
+    total_input_tokens: int = Field(default=0, ge=0, strict=True)
+    total_output_tokens: int = Field(default=0, ge=0, strict=True)
+    cache_read_tokens: int = Field(default=0, ge=0, strict=True)
+    cache_write_tokens: int = Field(default=0, ge=0, strict=True)
 
 
 class TelemetryData(BaseModel):
@@ -220,6 +220,8 @@ class TelemetryAccumulator:
         self._cumulative_invocations: dict[tuple[int, int], dict[str, Any]] = {}
         # Finalized invocations
         self._finalized_invocations: set[tuple[int, int]] = set()
+        self._missing_invocations: set[tuple[int, int]] = set()
+        self._completed_measurements: dict[str, Measurement] = {}
 
         # Has missing contribution
         self._has_missing_contribution = False
@@ -305,7 +307,7 @@ class TelemetryAccumulator:
         if isinstance(inv, bool) or not isinstance(inv, int) or inv < 1:
             raise ValueError("Invocation must be a positive integer")
 
-        if (att, inv) in self._finalized_invocations:
+        if (att, inv) in self._finalized_invocations or (att, inv) < (self._active_attempt, self._active_invocation):
             return
 
         used_val = _validate_token_count_value(used_tokens)
@@ -316,6 +318,10 @@ class TelemetryAccumulator:
             raise ValueError(f"Invalid quality: {quality}")
 
         ts = observed_at or utc_now()
+        # Construct every candidate before changing attribution or context.
+        candidate_used = Measurement(value=used_val, source=src, quality=quality, observed_at=ts) if used_val is not None else None
+        candidate_window = Measurement(value=win_val, source=src, quality=quality, observed_at=ts) if win_val is not None else None
+        candidate_remaining = Measurement(value=rem_val, source=src, quality=quality, observed_at=ts) if rem_val is not None else None
         existing_ts = self._context_used_tokens.observed_at or self._context_window_size.observed_at
         if existing_ts and ts < existing_ts and att == self._active_attempt and inv == self._active_invocation:
             return
@@ -323,19 +329,13 @@ class TelemetryAccumulator:
         self._active_attempt = max(self._active_attempt, att)
         self._active_invocation = max(self._active_invocation, inv)
 
-        if used_val is not None:
-            self._context_used_tokens = Measurement(
-                value=used_val, source=src, quality=quality, observed_at=ts
-            )
-        if win_val is not None:
-            self._context_window_size = Measurement(
-                value=win_val, source=src, quality=quality, observed_at=ts
-            )
+        if candidate_used is not None:
+            self._context_used_tokens = candidate_used
+        if candidate_window is not None:
+            self._context_window_size = candidate_window
 
-        if rem_val is not None:
-            self._context_remaining_percent = Measurement(
-                value=rem_val, source=src, quality=quality, observed_at=ts
-            )
+        if candidate_remaining is not None:
+            self._context_remaining_percent = candidate_remaining
         elif (
             self._context_window_size.value is not None
             and self._context_window_size.value > 0
@@ -475,12 +475,33 @@ class TelemetryAccumulator:
         }
 
     def record_missing_contribution(self, *, attempt: int, invocation: int) -> None:
+        self._missing_invocations.add((attempt, invocation))
         self._has_missing_contribution = True
         self._active_attempt = max(self._active_attempt, attempt)
         self._active_invocation = invocation
 
     def complete_attempt(self, attempt: int) -> None:
         attempt_input, attempt_output, attempt_cr, attempt_cw = self._calculate_attempt_totals(attempt)
+        metric_names = ("total_input_tokens", "total_output_tokens", "cache_read_tokens", "cache_write_tokens")
+        values = (attempt_input, attempt_output, attempt_cr, attempt_cw)
+        invocations = {inv for (att, inv, _) in self._responses if att == attempt}
+        invocations |= {inv for (att, inv) in self._cumulative_invocations if att == attempt}
+        for name, value in zip(metric_names, values):
+            if value is not None:
+                prior = self._completed_measurements.get(name)
+                qualities = [prior.quality] if prior else []
+                sources = [prior.source] if prior and prior.source else []
+                times = [prior.observed_at] if prior and prior.observed_at else []
+                for inv in invocations:
+                    measurement = self._calculate_invocation_measurements(attempt, inv)[metric_names.index(name)]
+                    if measurement.value is not None:
+                        qualities.append(measurement.quality)
+                        if measurement.source: sources.append(measurement.source)
+                        if measurement.observed_at: times.append(measurement.observed_at)
+                quality = "estimated" if "estimated" in qualities else "derived" if "derived" in qualities else "reported"
+                source = sources[0] if sources and len(set(sources)) == 1 else "derived" if sources else "response"
+                self._completed_measurements[name] = Measurement(value=(prior.value if prior else 0) + value,
+                    quality=quality, source=source, observed_at=max(times) if times else None)
 
         if attempt_input is None and attempt_output is None:
             self._has_missing_contribution = True
@@ -519,6 +540,7 @@ class TelemetryAccumulator:
         tot_cr: int | None = None
         tot_cw: int | None = None
 
+        invocations |= {inv for (att, inv) in self._missing_invocations if att == attempt}
         for inv in invocations:
             m_in, m_out, m_cr, m_cw = self._calculate_invocation_measurements(attempt, inv)
             if m_in.value is not None:
@@ -661,9 +683,13 @@ class TelemetryAccumulator:
             qualities: list[TelemetryQuality],
             sources: list[str],
             ts_list: list[str],
+            completed_measurement: Measurement | None = None,
         ) -> Measurement:
+
             if active_val is not None:
                 tot = completed_val + active_val
+            elif completed_measurement is not None:
+                tot = completed_measurement.value
             elif completed_val > 0:
                 tot = completed_val
             elif loaded_val is not None:
@@ -671,6 +697,12 @@ class TelemetryAccumulator:
             else:
                 return Measurement.unavailable()
 
+            if completed_measurement is not None:
+                qualities.append(completed_measurement.quality)
+                if completed_measurement.source:
+                    sources.append(completed_measurement.source)
+                if completed_measurement.observed_at:
+                    ts_list.append(completed_measurement.observed_at)
             if loaded_meta:
                 if loaded_meta.get("quality"):
                     qualities.append(loaded_meta["quality"])
@@ -700,22 +732,22 @@ class TelemetryAccumulator:
         m_input = _resolve_total(
             active_in, self._completed_attempts.total_input_tokens,
             self._loaded_total_input, self._loaded_input_meta,
-            qualities_in, sources_in, ts_in
+            qualities_in, sources_in, ts_in, self._completed_measurements.get("total_input_tokens")
         )
         m_output = _resolve_total(
             active_out, self._completed_attempts.total_output_tokens,
             self._loaded_total_output, self._loaded_output_meta,
-            qualities_out, sources_out, ts_out
+            qualities_out, sources_out, ts_out, self._completed_measurements.get("total_output_tokens")
         )
         m_cr = _resolve_total(
             active_cr, self._completed_attempts.cache_read_tokens,
             self._loaded_cache_read, self._loaded_cr_meta,
-            qualities_cr, sources_cr, ts_cr
+            qualities_cr, sources_cr, ts_cr, self._completed_measurements.get("cache_read_tokens")
         )
         m_cw = _resolve_total(
             active_cw, self._completed_attempts.cache_write_tokens,
             self._loaded_cache_write, self._loaded_cw_meta,
-            qualities_cw, sources_cw, ts_cw
+            qualities_cw, sources_cw, ts_cw, self._completed_measurements.get("cache_write_tokens")
         )
 
         has_any = (
@@ -726,7 +758,7 @@ class TelemetryAccumulator:
         )
 
         if not has_any:
-            completeness: TelemetryCompleteness = "unavailable"
+            completeness: TelemetryCompleteness = "partial" if self._has_missing_contribution else "unavailable"
         elif self._has_missing_contribution or m_input.value is None or m_output.value is None:
             completeness = "partial"
         else:

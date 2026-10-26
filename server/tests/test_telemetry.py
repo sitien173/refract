@@ -98,6 +98,36 @@ def test_telemetry_data_validation():
     assert data.context_window_size.quality == "unavailable"
 
 
+def test_rejects_older_context_identity_and_invalid_quality_without_mutation():
+    accumulator = TelemetryAccumulator()
+    accumulator.record_context_snapshot(used_tokens=200, window_size=1000, attempt=1, invocation=2)
+    accumulator.record_context_snapshot(used_tokens=100, window_size=500, attempt=1, invocation=1)
+    assert accumulator.snapshot().context_used_tokens.value == 200
+    with pytest.raises((ValueError, ValidationError)):
+        accumulator.record_context_snapshot(used_tokens=999, window_size=1000, quality="unavailable", attempt=2, invocation=1)
+    snap = accumulator.snapshot()
+    assert snap.attribution.attempt == 1
+    assert snap.context_used_tokens.value == 200
+
+
+def test_completed_attempt_counters_are_strict_nonnegative_integers():
+    for value in (-1, True, 1.5):
+        with pytest.raises((ValueError, ValidationError)):
+            TelemetryData.model_validate({"completed_attempts": {"total_input_tokens": value}})
+
+
+def test_completed_attempt_aggregate_preserves_zero_and_provenance():
+    accumulator = TelemetryAccumulator()
+    accumulator.record_consumption(attempt=1, invocation=1, response_id="z", input_tokens=0, output_tokens=0,
+                                   source="stream", quality="estimated", observed_at="2026-10-26T09:30:00Z")
+    accumulator.complete_attempt(1)
+    snap = accumulator.snapshot()
+    assert snap.total_input_tokens.value == 0
+    assert snap.total_input_tokens.quality == "estimated"
+    assert snap.total_input_tokens.source == "stream"
+    assert snap.total_input_tokens.observed_at == "2026-10-26T09:30:00Z"
+
+
 def test_context_snapshot_and_invalidation():
     accumulator = TelemetryAccumulator()
 
