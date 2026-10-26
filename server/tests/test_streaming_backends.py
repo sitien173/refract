@@ -1819,4 +1819,191 @@ def test_parsing_failures_leave_text_and_outcome_unchanged(tmp_path: Path, monke
     assert a_res.agent_messages == "agy reply"
 
 
+def test_pi_lifecycle_deduplication_without_provider_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    p_lines = [
+        json.dumps({"type": "session", "id": "pi-sess-noid"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "turn 1 message"}],
+                "usage": {"input": 150, "output": 25},
+            },
+        }),
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "turn 1 message"}],
+                "usage": {"input": 150, "output": 25},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines))
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert p_res.outcome == "OK"
+    assert p_res.telemetry is not None
+    assert p_res.telemetry["total_input_tokens"]["value"] == 150
+    assert p_res.telemetry["total_output_tokens"]["value"] == 25
+
+
+def test_missing_input_tokens_leaves_input_unavailable_and_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Claude: output tokens only
+    c_lines = [
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "id": "m1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "claude reply"}],
+                "usage": {"output_tokens": 42},
+            },
+        }),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "claude reply", "session_id": "c-sess-1"}),
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert c_res.outcome == "OK"
+    assert c_res.telemetry is not None
+    assert c_res.telemetry["total_input_tokens"]["value"] is None
+    assert c_res.telemetry["total_input_tokens"]["quality"] == "unavailable"
+    assert c_res.telemetry["total_output_tokens"]["value"] == 42
+    assert c_res.telemetry["completeness"] == "partial"
+
+    # Pi: output tokens only
+    p_lines = [
+        json.dumps({"type": "session", "id": "pi-sess"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "responseId": "r1",
+                "content": [{"type": "text", "text": "pi reply"}],
+                "usage": {"output": 35},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines))
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert p_res.outcome == "OK"
+    assert p_res.telemetry is not None
+    assert p_res.telemetry["total_input_tokens"]["value"] is None
+    assert p_res.telemetry["total_input_tokens"]["quality"] == "unavailable"
+    assert p_res.telemetry["total_output_tokens"]["value"] == 35
+    assert p_res.telemetry["completeness"] == "partial"
+
+    # Codex: output tokens only
+    cdx_lines = [
+        json.dumps({"type": "thread.started", "thread_id": "codex-tid"}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "msg1", "text": "codex reply"}}),
+        json.dumps({
+            "type": "turn.completed",
+            "usage": {"output_tokens": 60},
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines))
+    cdx_res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert cdx_res.outcome == "OK"
+    assert cdx_res.telemetry is not None
+    assert cdx_res.telemetry["total_input_tokens"]["value"] is None
+    assert cdx_res.telemetry["total_input_tokens"]["quality"] == "unavailable"
+    assert cdx_res.telemetry["total_output_tokens"]["value"] == 60
+    assert cdx_res.telemetry["completeness"] == "partial"
+
+
+def test_malformed_codex_usage_does_not_alter_backend_outcome_or_subsequent_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    cdx_lines = [
+        json.dumps({"type": "thread.started", "thread_id": "codex-test-tid"}),
+        json.dumps({"type": "turn.completed", "usage": {"reasoning_output_tokens": 10}}),
+        json.dumps({"type": "item.started", "item": {"type": "agent_message", "id": "msg1"}}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "msg1", "text": "clean completion after malformed usage"}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines))
+    emitted: list[dict[str, Any]] = []
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted.append))
+    assert res.outcome == "OK"
+    assert res.agent_messages == "clean completion after malformed usage"
+    assert any(e.get("kind") == "assistant.text.delta" for e in emitted)
+
+
+def test_backends_emit_derived_context_quality(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Claude derived context quality
+    c_lines = [
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "id": "m1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "claude reply"}],
+                "usage": {"input_tokens": 100, "output_tokens": 20},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
+    c_events: list[dict[str, Any]] = []
+    claude_sync(BackendParams(PROMPT="test", cd=workspace, emitter=c_events.append))
+    c_tel = [e["data"] for e in c_events if e.get("kind") == "telemetry.updated" and "context_used_tokens" in e["data"]]
+    assert len(c_tel) == 1
+    assert c_tel[0]["quality"] == "derived"
+
+    # Pi derived context quality (when totalTokens is absent)
+    p_lines = [
+        json.dumps({"type": "session", "id": "pi-sess"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "responseId": "r1",
+                "content": [{"type": "text", "text": "pi reply"}],
+                "usage": {"input": 120, "output": 30},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines))
+    p_events: list[dict[str, Any]] = []
+    pi_sync(BackendParams(PROMPT="test", cd=workspace, emitter=p_events.append))
+    p_tel = [e["data"] for e in p_events if e.get("kind") == "telemetry.updated" and "context_used_tokens" in e["data"]]
+    assert len(p_tel) == 1
+    assert p_tel[0]["quality"] == "derived"
+
+    # Codex derived context quality
+    cdx_lines = [
+        json.dumps({"type": "thread.started", "thread_id": "codex-tid"}),
+        json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 200, "output_tokens": 50, "reasoning_output_tokens": 10},
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines))
+    cdx_events: list[dict[str, Any]] = []
+    codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=cdx_events.append))
+    cdx_tel = [e["data"] for e in cdx_events if e.get("kind") == "telemetry.updated" and "context_used_tokens" in e["data"]]
+    assert len(cdx_tel) == 1
+    assert cdx_tel[0]["quality"] == "derived"
+
+    # Agy derived context quality
+    a_lines = [
+        json.dumps({"event": "step_update", "step_update": {"conversation_id": "00000000-0000-0000-0000-000000000000", "step_index": 1, "state": "DONE", "usage": {"input_tokens": 300, "output_tokens": 40}}}),
+    ]
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in a_lines))
+    a_events: list[dict[str, Any]] = []
+    agy_sync(BackendParams(PROMPT="test", cd=workspace, emitter=a_events.append))
+    a_tel = [e["data"] for e in a_events if e.get("kind") == "telemetry.updated" and "context_used_tokens" in e["data"]]
+    assert len(a_tel) == 1
+    assert a_tel[0]["quality"] == "derived"
+
+
+
 

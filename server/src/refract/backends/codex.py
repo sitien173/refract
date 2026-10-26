@@ -307,48 +307,62 @@ class _EventParser:
         if event_type == "turn.completed":
             u = parsed.get("usage")
             if isinstance(u, dict):
-                raw_in = _as_int(u.get("input_tokens"))
-                cached_in = _as_int(u.get("cached_input_tokens"))
-                cw = _as_int(u.get("cache_write_input_tokens"))
-                raw_out = _as_int(u.get("output_tokens"))
-                reasoning_out = _as_int(u.get("reasoning_output_tokens"))
-                if any(v is not None for v in (raw_in, cached_in, cw, raw_out, reasoning_out)):
-                    # Codex input_tokens already includes cached_input_tokens
-                    norm_in = raw_in
-                    norm_out = raw_out
-                    self.turn_counter += 1
-                    turn_id = f"turn_{self.turn_counter}"
-                    self.accumulator.record_consumption(
-                        attempt=1,
-                        invocation=1,
-                        response_id=turn_id,
-                        input_tokens=norm_in,
-                        output_tokens=norm_out,
-                        cache_read_tokens=cached_in,
-                        cache_write_tokens=cw,
-                        source="turn",
-                        quality="reported",
-                    )
-                    ctx_used = (norm_in or 0) + (norm_out or 0) - (reasoning_out or 0)
-                    self.accumulator.record_context_snapshot(
-                        used_tokens=ctx_used,
-                        source="derived",
-                        quality="derived",
-                    )
-                    if self.params.emitter is not None:
-                        self.params.emitter({
-                            "kind": "telemetry.updated",
-                            "data": {
+                try:
+                    raw_in = _as_int(u.get("input_tokens"))
+                    cached_in = _as_int(u.get("cached_input_tokens"))
+                    cw = _as_int(u.get("cache_write_input_tokens"))
+                    raw_out = _as_int(u.get("output_tokens"))
+                    reasoning_out = _as_int(u.get("reasoning_output_tokens"))
+                    if any(v is not None for v in (raw_in, cached_in, cw, raw_out, reasoning_out)):
+                        # Codex input_tokens already includes cached_input_tokens
+                        norm_in = raw_in
+                        norm_out = raw_out
+                        self.turn_counter += 1
+                        turn_id = f"turn_{self.turn_counter}"
+                        self.accumulator.record_consumption(
+                            attempt=1,
+                            invocation=1,
+                            response_id=turn_id,
+                            input_tokens=norm_in,
+                            output_tokens=norm_out,
+                            cache_read_tokens=cached_in,
+                            cache_write_tokens=cw,
+                            source="turn",
+                            quality="reported",
+                        )
+                        ctx_used = None
+                        if norm_in is not None and norm_out is not None:
+                            try:
+                                val = norm_in + norm_out - (reasoning_out or 0)
+                                if val >= 0:
+                                    ctx_used = val
+                                    self.accumulator.record_context_snapshot(
+                                        used_tokens=ctx_used,
+                                        source="derived",
+                                        quality="derived",
+                                    )
+                            except Exception:
+                                log.warning("codex: could not derive context snapshot", exc_info=True)
+
+                        if self.params.emitter is not None:
+                            event_data: dict[str, Any] = {
                                 "response_id": turn_id,
                                 "input_tokens": norm_in,
                                 "output_tokens": norm_out,
                                 "cache_read_tokens": cached_in,
                                 "cache_write_tokens": cw,
-                                "context_used_tokens": ctx_used,
                                 "source": "turn",
                                 "quality": "reported",
-                            },
-                        })
+                            }
+                            if ctx_used is not None:
+                                event_data["context_used_tokens"] = ctx_used
+                                event_data["quality"] = "derived"
+                            self.params.emitter({
+                                "kind": "telemetry.updated",
+                                "data": event_data,
+                            })
+                except Exception:
+                    log.warning("codex: turn usage processing failed", exc_info=True)
         elif event_type in ("thread.completed", "summary"):
             u = parsed.get("usage")
             if isinstance(u, dict):

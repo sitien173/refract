@@ -4517,5 +4517,51 @@ async def test_resumed_session_history_is_not_counted_as_subsequent_job_consumpt
         await runtime.close()
 
 
+@pytest.mark.asyncio
+async def test_persisted_context_quality_is_derived_not_reported(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class DerivedContextDriver(FakeDrivers):
+        async def execute(self, **kwargs):
+            emitter = kwargs.get("emitter")
+            if emitter:
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "response_id": "r1",
+                        "input_tokens": 120,
+                        "output_tokens": 45,
+                        "context_used_tokens": 165,
+                        "source": "stream",
+                        "quality": "derived",
+                    },
+                })
+            return DriverResult("SUCCESS", "sess-1", "done", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = DerivedContextDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        completed_job = await runtime.wait(submission.job_id, 5)
+        assert completed_job.state == "succeeded"
+        final_telemetry = completed_job.result.metadata.get("telemetry")
+        assert final_telemetry is not None
+        assert final_telemetry["context_used_tokens"]["value"] == 165
+        assert final_telemetry["context_used_tokens"]["quality"] == "derived"
+        assert final_telemetry["context_used_tokens"]["quality"] != "reported"
+
+        db_job = runtime.database.job(submission.job_id)
+        assert db_job is not None
+        db_telemetry = db_job.result.metadata.get("telemetry")
+        assert db_telemetry is not None
+        assert db_telemetry["context_used_tokens"]["quality"] == "derived"
+    finally:
+        await runtime.close()
+
+
+
 
 

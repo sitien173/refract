@@ -203,7 +203,7 @@ class _EventParser:
                     cw = _as_int(usage.get("cache_creation_input_tokens"))
                     raw_out = _as_int(usage.get("output_tokens"))
                     if any(v is not None for v in (raw_in, cr, cw, raw_out)):
-                        norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                        norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
                         resp_id = str(msg_id) if msg_id else f"msg-{self.response_counter + 1}"
                         self.response_counter += 1
                         self.recorded_responses.add(resp_id)
@@ -218,25 +218,33 @@ class _EventParser:
                             source="response",
                             quality="reported",
                         )
-                        ctx_used = norm_in + (raw_out or 0)
-                        self.accumulator.record_context_snapshot(
-                            used_tokens=ctx_used,
-                            source="derived",
-                            quality="derived",
-                        )
+                        ctx_used = None
+                        if norm_in is not None:
+                            try:
+                                ctx_used = norm_in + (raw_out or 0)
+                                self.accumulator.record_context_snapshot(
+                                    used_tokens=ctx_used,
+                                    source="derived",
+                                    quality="derived",
+                                )
+                            except Exception:
+                                pass
                         if self.params.emitter is not None:
+                            event_data: dict[str, Any] = {
+                                "response_id": resp_id,
+                                "input_tokens": norm_in,
+                                "output_tokens": raw_out,
+                                "cache_read_tokens": cr,
+                                "cache_write_tokens": cw,
+                                "source": "response",
+                                "quality": "reported",
+                            }
+                            if ctx_used is not None:
+                                event_data["context_used_tokens"] = ctx_used
+                                event_data["quality"] = "derived"
                             self.params.emitter({
                                 "kind": "telemetry.updated",
-                                "data": {
-                                    "response_id": resp_id,
-                                    "input_tokens": norm_in,
-                                    "output_tokens": raw_out,
-                                    "cache_read_tokens": cr,
-                                    "cache_write_tokens": cw,
-                                    "context_used_tokens": ctx_used,
-                                    "source": "response",
-                                    "quality": "reported",
-                                },
+                                "data": event_data,
                             })
         elif evt_type == "result":
             model_usage = event.get("modelUsage")
@@ -259,7 +267,7 @@ class _EventParser:
                 cw = _as_int(usage.get("cache_creation_input_tokens"))
                 raw_out = _as_int(usage.get("output_tokens"))
                 if any(v is not None for v in (raw_in, cr, cw, raw_out)):
-                    norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                    norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
                     self.accumulator.reconcile_cumulative(
                         attempt=1,
                         invocation=1,
@@ -286,7 +294,7 @@ class _EventParser:
                     cr = _as_int(usage.get("cache_read_input_tokens"))
                     cw = _as_int(usage.get("cache_creation_input_tokens"))
                     raw_out = _as_int(usage.get("output_tokens"))
-                    norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                    norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
                     data.update({
                         "total_input_tokens": norm_in,
                         "total_output_tokens": raw_out,

@@ -184,18 +184,36 @@ class _EventParser:
                     source="step",
                     quality="reported",
                 )
+                ctx_used = None
+                if norm_in is not None and norm_out is not None:
+                    try:
+                        thinking = _as_int(u.get("thinking_tokens"))
+                        val = norm_in + norm_out - (thinking or 0)
+                        if val >= 0:
+                            ctx_used = val
+                            self.accumulator.record_context_snapshot(
+                                used_tokens=ctx_used,
+                                source="derived",
+                                quality="derived",
+                            )
+                    except Exception:
+                        pass
                 if self.params.emitter is not None:
+                    event_data: dict[str, Any] = {
+                        "response_id": step_id,
+                        "input_tokens": norm_in,
+                        "output_tokens": norm_out,
+                        "cache_read_tokens": cr,
+                        "cache_write_tokens": cw,
+                        "source": "step",
+                        "quality": "reported",
+                    }
+                    if ctx_used is not None:
+                        event_data["context_used_tokens"] = ctx_used
+                        event_data["quality"] = "derived"
                     self.params.emitter({
                         "kind": "telemetry.updated",
-                        "data": {
-                            "response_id": step_id,
-                            "input_tokens": norm_in,
-                            "output_tokens": norm_out,
-                            "cache_read_tokens": cr,
-                            "cache_write_tokens": cw,
-                            "source": "step",
-                            "quality": "reported",
-                        },
+                        "data": event_data,
                     })
 
     def result(self, result: Any) -> None:
