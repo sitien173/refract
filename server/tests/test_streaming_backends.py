@@ -2744,6 +2744,43 @@ def test_codex_rollout_budget_exhaustion_invalidates_prefix_snapshot(tmp_path: P
     assert acc.snapshot().context_window_size.value is None
 
 
+def test_codex_same_inode_truncation_requires_session_header_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    root = tmp_path / "codex"
+    sessions = root / "sessions"
+    sessions.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(root))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sid = "00000000-0000-0000-0000-111111111111"
+    path = sessions / f"rollout_{sid}.jsonl"
+    header = json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": str(workspace)}})
+    valid_usage = {"input_tokens": 100, "output_tokens": 10, "reasoning_output_tokens": 0}
+    valid = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "last_token_usage": valid_usage, "model_context_window": 64000,
+    }}})
+    path.write_text(header + "\n" + valid + "\n")
+    original_inode = path.stat().st_ino
+    acc = TelemetryAccumulator()
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=sid, accumulator=acc)
+    collector.poll()
+    assert acc.snapshot().context_used_tokens.value == 110
+
+    hostile_usage = {"input_tokens": 900, "output_tokens": 90, "reasoning_output_tokens": 0}
+    token_only = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "last_token_usage": hostile_usage, "model_context_window": 200000,
+    }}})
+    with path.open("w") as rollout:
+        rollout.write(token_only + "\n")
+    assert path.stat().st_ino == original_inode
+    collector.poll()
+    current = acc.snapshot()
+    assert current.context_used_tokens.value is None
+    assert current.context_window_size.value is None
+
+
 def test_codex_rollout_refuses_mismatched_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     codex_home = tmp_path / "codex_home"
     sessions_dir = codex_home / "sessions"

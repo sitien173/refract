@@ -4107,6 +4107,51 @@ async def test_context_invalidation_persists_nulls_without_clearing_consumption(
 
 
 @pytest.mark.asyncio
+async def test_codex_budget_exhaustion_keeps_context_unknown_through_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from refract.backends.codex import _EventParser
+
+    root = repository(tmp_path)
+    codex_home = tmp_path / "codex-home"
+    sessions = codex_home / "sessions"
+    sessions.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    sid = "00000000-0000-0000-0000-aaaaaaaaaaaa"
+
+    class RolloutDriver(FakeDrivers):
+        async def execute(self, *, cwd, **kwargs):
+            rollout = sessions / f"rollout_{sid}.jsonl"
+            header = json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": str(cwd)}})
+            usage = {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10, "reasoning_output_tokens": 0, "total_tokens": 110}
+            token_count = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+                "total_token_usage": usage, "last_token_usage": usage, "model_context_window": 64000,
+            }}})
+            rollout.write_text(header + "\n" + token_count + "\n" + (" " * 5000) + "\n")
+            parser = _EventParser(BackendParams(PROMPT="test", cd=cwd, emitter=kwargs.get("emitter")))
+            parser.collector.max_bytes_per_poll = 4096
+            parser.collector.max_total_bytes = 4096
+            parser.on_event({"type": "thread.started", "thread_id": sid})
+            parser.on_event({"type": "turn.completed", "usage": {
+                "input_tokens": 5000, "output_tokens": 700, "reasoning_output_tokens": 100,
+            }})
+            return DriverResult("SUCCESS", sid, "done", "", "")
+
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = RolloutDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        job = await runtime.wait(submission.job_id, 5)
+        telemetry = job.result.metadata["telemetry"]
+        assert telemetry["context_used_tokens"]["value"] is None
+        assert telemetry["context_window_size"]["value"] is None
+        assert telemetry["total_input_tokens"]["value"] == 5000
+        assert telemetry["total_output_tokens"]["value"] == 700
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_telemetry_survives_transcript_quota_exhaustion_in_execution(tmp_path: Path) -> None:
     root = repository(tmp_path)
     catalog = config(tmp_path / "home")

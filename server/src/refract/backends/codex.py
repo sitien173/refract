@@ -242,6 +242,7 @@ class _CodexRolloutCollector:
 
         if stat.st_size < self.offset:
             self._emit_invalidation()
+            self.header_verified = False
             self.offset = 0
             self.partial_buffer = ""
         elif stat.st_size > self.offset and self.has_verified_context:
@@ -718,7 +719,7 @@ class _EventParser:
                                 val = norm_in + norm_out - (reasoning_out or 0)
                                 if val >= 0:
                                     ctx_used = val
-                                    if not self.collector.is_compacted and not self.collector.has_verified_context:
+                                    if not self.collector.is_compacted and not self.collector.has_verified_context and not self.collector.budget_exhausted:
                                         self.accumulator.record_context_snapshot(
                                             used_tokens=ctx_used,
                                             source="derived",
@@ -740,7 +741,7 @@ class _EventParser:
                                     "quality": "reported",
                                 },
                             })
-                            if ctx_used is not None and not self.collector.is_compacted and not self.collector.has_verified_context:
+                            if ctx_used is not None and not self.collector.is_compacted and not self.collector.has_verified_context and not self.collector.budget_exhausted:
                                 self.params.emitter({
                                     "kind": "telemetry.updated",
                                     "data": {

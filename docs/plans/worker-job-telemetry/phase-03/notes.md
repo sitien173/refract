@@ -154,3 +154,30 @@ Append one Task block per task using plugin/shared/notes-template.md. Preserve R
 - Final fresh `cd server && uv run pytest` -> 722 passed, 15 deselected.
 - No live probes, model requests, credential reads, conversation reads, or transport changes.
 - Final rerun after the total-byte-budget lifecycle adjustment: affected modules 183 passed; full suite 722 passed, 15 deselected in 124.47s.
+
+## Task 6 — Final budget-exhaustion and truncation regressions
+
+### Decisions made
+- Suppress both accumulator and emitted turn-derived context snapshots once the Codex rollout byte budget is exhausted. Turn input/output consumption is still emitted and persisted.
+- On detected truncation, revoke `header_verified`; the newly opened descriptor must revalidate its first session metadata line before any new rollout records are accepted.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED: `cd server && uv run pytest -q tests/test_execution.py -k 'codex_budget_exhaustion_keeps_context_unknown'` failed with `assert 5600 is None`; rollout exhaustion was followed by turn-usage context fallback and persisted that false occupancy.
+- RED: `cd server && uv run pytest -q tests/test_streaming_backends.py -k 'same_inode_truncation_requires_session_header'` failed with context `990` from a token-only truncated file on the same inode.
+- GREEN: both focused commands passed after fixes (1 passed each).
+- The first GREEN attempt for budget suppression exposed a second emitted-context guard that also needed the exhaustion condition; regression remained RED at 5600 until both local and emitted fallback paths were guarded.
+- `cd server && uv run pytest -q tests/test_streaming_backends.py tests/test_execution.py` -> 185 passed.
+- Final fresh `cd server && uv run pytest` -> 724 passed, 15 deselected.
+- No live probes, user sessions, credentials, or extra model requests were used.
