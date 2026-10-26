@@ -30,6 +30,7 @@ class BackendResult:
     error: str
     error_class: str
     usage: dict[str, int | str | None] = field(default_factory=dict)
+    telemetry: dict[str, Any] | None = None
 
 
 USAGE_KEYS = ("model_name", "input_tokens", "output_tokens", "cached_input_tokens", "context_window_max", "context_window_used")
@@ -109,6 +110,7 @@ def classify_backend_output(
     fatal_tokens: Iterable[str] = _DEFAULT_FATAL_TOKENS,
     treat_missing_session_as_ok_warning: bool = True,
     usage: dict[str, int | str | None] | None = None,
+    telemetry: dict[str, Any] | None = None,
 ) -> BackendResult:
     """Shared classifier for all backends.
 
@@ -131,6 +133,7 @@ def classify_backend_output(
             error=error_text_stripped or "fatal backend/auth failure",
             error_class="fatal_backend",
             usage=resolved_usage,
+            telemetry=telemetry,
         )
 
     if not agent_messages_stripped:
@@ -142,6 +145,7 @@ def classify_backend_output(
             error=f"Failed to get output from the {backend_name} session.{extra}".strip(),
             error_class="no_agent_messages",
             usage=resolved_usage,
+            telemetry=telemetry,
         )
 
     if not session_id and treat_missing_session_as_ok_warning:
@@ -152,6 +156,7 @@ def classify_backend_output(
             error="warning: no SESSION_ID",
             error_class="warning",
             usage=resolved_usage,
+            telemetry=telemetry,
         )
 
     return BackendResult(
@@ -161,6 +166,7 @@ def classify_backend_output(
         error="",
         error_class="",
         usage=resolved_usage,
+        telemetry=telemetry,
     )
 
 

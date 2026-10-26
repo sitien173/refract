@@ -15,8 +15,15 @@ from typing import Any
 from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
 from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
+from refract.telemetry import TelemetryAccumulator
 
 log = get_logger("codex")
+
+
+def _as_int(val: Any) -> int | None:
+    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+        return None
+    return val
 
 
 def run_shell_command(
@@ -223,6 +230,8 @@ class _EventParser:
         self.params = params
         self.entity_counter = 0
         self.raw_to_entity: dict[str, str] = {}
+        self.accumulator = TelemetryAccumulator()
+        self.turn_counter = 0
 
     def emit(self, event: dict[str, Any]) -> None:
         if self.params.emitter is not None:
@@ -286,17 +295,92 @@ class _EventParser:
             })
 
     def on_event(self, parsed: dict[str, Any]) -> None:
-        if self.params.emitter is None:
-            return
         event_type = parsed.get("type", "")
         item = parsed.get("item", {})
-        if not isinstance(item, dict):
-            return
-        raw_id = str(item.get("id", ""))
-        if event_type == "item.started":
-            self.start_item(item, raw_id)
-        elif event_type == "item.completed":
-            self.complete_item(item, raw_id)
+        if isinstance(item, dict):
+            raw_id = str(item.get("id", ""))
+            if event_type == "item.started":
+                self.start_item(item, raw_id)
+            elif event_type == "item.completed":
+                self.complete_item(item, raw_id)
+
+        if event_type == "turn.completed":
+            u = parsed.get("usage")
+            if isinstance(u, dict):
+                raw_in = _as_int(u.get("input_tokens"))
+                cached_in = _as_int(u.get("cached_input_tokens"))
+                cw = _as_int(u.get("cache_write_input_tokens"))
+                raw_out = _as_int(u.get("output_tokens"))
+                reasoning_out = _as_int(u.get("reasoning_output_tokens"))
+                if any(v is not None for v in (raw_in, cached_in, cw, raw_out, reasoning_out)):
+                    # Codex input_tokens already includes cached_input_tokens
+                    norm_in = raw_in
+                    norm_out = raw_out
+                    self.turn_counter += 1
+                    turn_id = f"turn_{self.turn_counter}"
+                    self.accumulator.record_consumption(
+                        attempt=1,
+                        invocation=1,
+                        response_id=turn_id,
+                        input_tokens=norm_in,
+                        output_tokens=norm_out,
+                        cache_read_tokens=cached_in,
+                        cache_write_tokens=cw,
+                        source="turn",
+                        quality="reported",
+                    )
+                    ctx_used = (norm_in or 0) + (norm_out or 0) - (reasoning_out or 0)
+                    self.accumulator.record_context_snapshot(
+                        used_tokens=ctx_used,
+                        source="derived",
+                        quality="derived",
+                    )
+                    if self.params.emitter is not None:
+                        self.params.emitter({
+                            "kind": "telemetry.updated",
+                            "data": {
+                                "response_id": turn_id,
+                                "input_tokens": norm_in,
+                                "output_tokens": norm_out,
+                                "cache_read_tokens": cached_in,
+                                "cache_write_tokens": cw,
+                                "context_used_tokens": ctx_used,
+                                "source": "turn",
+                                "quality": "reported",
+                            },
+                        })
+        elif event_type in ("thread.completed", "summary"):
+            u = parsed.get("usage")
+            if isinstance(u, dict):
+                raw_in = _as_int(u.get("input_tokens"))
+                cached_in = _as_int(u.get("cached_input_tokens"))
+                cw = _as_int(u.get("cache_write_input_tokens"))
+                raw_out = _as_int(u.get("output_tokens"))
+                if any(v is not None for v in (raw_in, cached_in, cw, raw_out)):
+                    norm_in = raw_in
+                    norm_out = raw_out
+                    self.accumulator.reconcile_cumulative(
+                        attempt=1,
+                        invocation=1,
+                        total_input=norm_in,
+                        total_output=norm_out,
+                        cache_read=cached_in,
+                        cache_write=cw,
+                        source="result",
+                        quality="reported",
+                    )
+                    if self.params.emitter is not None:
+                        self.params.emitter({
+                            "kind": "telemetry.updated",
+                            "data": {
+                                "total_input_tokens": norm_in,
+                                "total_output_tokens": norm_out,
+                                "cache_read_tokens": cached_in,
+                                "cache_write_tokens": cw,
+                                "source": "result",
+                                "quality": "reported",
+                            },
+                        })
 
 
 def _agent_messages(last_message: str, parsed_agent_messages: str, stdout_text: str) -> str:
@@ -411,6 +495,8 @@ def execute(params: BackendParams) -> BackendResult:
         result.error = stream.error
     result.usage = _usage_dict(**_usage_values(stream))
     result.agent_messages = agent_messages
+    if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
+        result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
     log.info(
         "codex.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",
         result.outcome,

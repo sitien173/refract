@@ -9,11 +9,18 @@ from collections.abc import Generator
 from typing import Any
 
 from refract.logging_setup import get_logger
+from refract.telemetry import TelemetryAccumulator
 
 from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
 from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 
 log = get_logger("claude")
+
+
+def _as_int(val: Any) -> int | None:
+    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+        return None
+    return val
 
 
 def run_shell_command(
@@ -91,13 +98,18 @@ def _extract_output(stream: StreamOutcome) -> tuple[str, str, str, str]:
     return agent_messages, session_id, "\n".join(diagnostics).strip(), result_error
 
 
-def _usage_values(stream: StreamOutcome) -> dict[str, Any]:
+def _usage_values(stream: StreamOutcome, active_model: str = "") -> dict[str, Any]:
     final_result = _final_result(stream)
     if final_result is None:
         return {}
     model_usage = final_result.get("modelUsage")
-    model = next(iter(model_usage)) if isinstance(model_usage, dict) and model_usage else None
-    stats = model_usage.get(model, {}) if model else {}
+    model = None
+    if isinstance(model_usage, dict) and model_usage:
+        if active_model and active_model in model_usage:
+            model = active_model
+        else:
+            model = next(iter(model_usage))
+    stats = model_usage.get(model, {}) if model and isinstance(model_usage, dict) else {}
     usage = final_result.get("usage")
     usage = usage if isinstance(usage, dict) else {}
     return {
@@ -110,12 +122,16 @@ def _usage_values(stream: StreamOutcome) -> dict[str, Any]:
 
 
 class _EventParser:
-    """Normalize Claude content blocks while tracking the active tool."""
+    """Normalize Claude content blocks while tracking the active tool and telemetry."""
 
     def __init__(self, params: BackendParams) -> None:
         self.params = params
         self.entity_counter = 0
         self.active_tool_id = ""
+        self.accumulator = TelemetryAccumulator()
+        self.active_model: str = ""
+        self.response_counter = 0
+        self.recorded_responses: set[str] = set()
 
     def emit(self, event: dict[str, Any]) -> None:
         if self.params.emitter is not None:
@@ -162,16 +178,127 @@ class _EventParser:
             self.active_tool_id = ""
 
     def on_event(self, raw_event: dict[str, Any]) -> None:
-        if self.params.emitter is None:
-            return
         event = _unwrap(raw_event)
         evt_type = event.get("type")
-        if evt_type == "content_block_delta":
-            self.text_delta(event)
-        elif evt_type == "content_block_start":
-            self.start_tool(event)
-        elif evt_type == "content_block_stop":
-            self.complete_tool()
+
+        if self.params.emitter is not None:
+            if evt_type == "content_block_delta":
+                self.text_delta(event)
+            elif evt_type == "content_block_start":
+                self.start_tool(event)
+            elif evt_type == "content_block_stop":
+                self.complete_tool()
+
+        if evt_type == "assistant":
+            message = event.get("message")
+            if isinstance(message, dict):
+                model = message.get("model")
+                if isinstance(model, str) and model:
+                    self.active_model = model
+                msg_id = message.get("id")
+                usage = message.get("usage")
+                if isinstance(usage, dict):
+                    raw_in = _as_int(usage.get("input_tokens"))
+                    cr = _as_int(usage.get("cache_read_input_tokens"))
+                    cw = _as_int(usage.get("cache_creation_input_tokens"))
+                    raw_out = _as_int(usage.get("output_tokens"))
+                    if any(v is not None for v in (raw_in, cr, cw, raw_out)):
+                        norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                        resp_id = str(msg_id) if msg_id else f"msg-{self.response_counter + 1}"
+                        self.response_counter += 1
+                        self.recorded_responses.add(resp_id)
+                        self.accumulator.record_consumption(
+                            attempt=1,
+                            invocation=1,
+                            response_id=resp_id,
+                            input_tokens=norm_in,
+                            output_tokens=raw_out,
+                            cache_read_tokens=cr,
+                            cache_write_tokens=cw,
+                            source="response",
+                            quality="reported",
+                        )
+                        ctx_used = norm_in + (raw_out or 0)
+                        self.accumulator.record_context_snapshot(
+                            used_tokens=ctx_used,
+                            source="derived",
+                            quality="derived",
+                        )
+                        if self.params.emitter is not None:
+                            self.params.emitter({
+                                "kind": "telemetry.updated",
+                                "data": {
+                                    "response_id": resp_id,
+                                    "input_tokens": norm_in,
+                                    "output_tokens": raw_out,
+                                    "cache_read_tokens": cr,
+                                    "cache_write_tokens": cw,
+                                    "context_used_tokens": ctx_used,
+                                    "source": "response",
+                                    "quality": "reported",
+                                },
+                            })
+        elif evt_type == "result":
+            model_usage = event.get("modelUsage")
+            capacity: int | None = None
+            if isinstance(model_usage, dict):
+                target_model = self.active_model
+                if not target_model and len(model_usage) == 1:
+                    target_model = next(iter(model_usage))
+                if target_model and target_model in model_usage:
+                    stats = model_usage[target_model]
+                    if isinstance(stats, dict):
+                        cap = _as_int(stats.get("contextWindow"))
+                        if cap and cap > 0:
+                            capacity = cap
+
+            usage = event.get("usage")
+            if isinstance(usage, dict):
+                raw_in = _as_int(usage.get("input_tokens"))
+                cr = _as_int(usage.get("cache_read_input_tokens"))
+                cw = _as_int(usage.get("cache_creation_input_tokens"))
+                raw_out = _as_int(usage.get("output_tokens"))
+                if any(v is not None for v in (raw_in, cr, cw, raw_out)):
+                    norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                    self.accumulator.reconcile_cumulative(
+                        attempt=1,
+                        invocation=1,
+                        total_input=norm_in,
+                        total_output=raw_out,
+                        cache_read=cr,
+                        cache_write=cw,
+                        source="result",
+                        quality="reported",
+                    )
+            if capacity is not None:
+                self.accumulator.record_context_snapshot(
+                    window_size=capacity,
+                    source="provider",
+                    quality="reported",
+                )
+            if self.params.emitter is not None and (isinstance(usage, dict) or capacity is not None):
+                data: dict[str, Any] = {
+                    "source": "result",
+                    "quality": "reported",
+                }
+                if isinstance(usage, dict):
+                    raw_in = _as_int(usage.get("input_tokens"))
+                    cr = _as_int(usage.get("cache_read_input_tokens"))
+                    cw = _as_int(usage.get("cache_creation_input_tokens"))
+                    raw_out = _as_int(usage.get("output_tokens"))
+                    norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                    data.update({
+                        "total_input_tokens": norm_in,
+                        "total_output_tokens": raw_out,
+                        "cache_read_tokens": cr,
+                        "cache_write_tokens": cw,
+                    })
+                if capacity is not None:
+                    data["context_window_size"] = capacity
+                self.params.emitter({
+                    "kind": "telemetry.updated",
+                    "data": data,
+                })
 
 
 def execute(params: BackendParams) -> BackendResult:
@@ -230,7 +357,9 @@ def execute(params: BackendParams) -> BackendResult:
         error_text=error_text,
     )
 
-    result.usage = _usage_dict(**_usage_values(stream))
+    result.usage = _usage_dict(**_usage_values(stream, active_model=parser.active_model))
+    if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
+        result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
     if result_error and not command_error:
         result.outcome = "FATAL"
         if result.error_class in {"", "warning", "no_agent_messages"}:

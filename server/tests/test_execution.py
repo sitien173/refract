@@ -4385,4 +4385,137 @@ async def test_unobserved_recovery_invocation_marks_totals_incomplete(tmp_path: 
         await runtime.close()
 
 
+@pytest.mark.asyncio
+async def test_synthetic_multi_response_persists_telemetry_before_completion(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    stream_step_event = asyncio.Event()
+    continue_event = asyncio.Event()
+
+    class PausingMultiResponseDriver(FakeDrivers):
+        async def execute(self, **kwargs):
+            emitter = kwargs.get("emitter")
+            if emitter:
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "response_id": "r1",
+                        "input_tokens": 120,
+                        "output_tokens": 45,
+                        "source": "stream",
+                        "quality": "reported",
+                    },
+                })
+            stream_step_event.set()
+            await continue_event.wait()
+            if emitter:
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "response_id": "r2",
+                        "input_tokens": 150,
+                        "output_tokens": 55,
+                        "source": "stream",
+                        "quality": "reported",
+                    },
+                })
+            return DriverResult("SUCCESS", "sess-1", "done", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = PausingMultiResponseDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+
+        await stream_step_event.wait()
+        await asyncio.sleep(0.05)
+
+        in_flight_job = runtime.database.job(submission.job_id)
+        assert in_flight_job is not None
+        assert in_flight_job.state == "running"
+        partial_telemetry = in_flight_job.result.metadata.get("telemetry")
+        assert partial_telemetry is not None
+        assert partial_telemetry["total_input_tokens"]["value"] == 120
+        assert partial_telemetry["total_output_tokens"]["value"] == 45
+
+        continue_event.set()
+        completed_job = await runtime.wait(submission.job_id, 5)
+        assert completed_job.state == "succeeded"
+        final_telemetry = completed_job.result.metadata.get("telemetry")
+        assert final_telemetry is not None
+        assert final_telemetry["total_input_tokens"]["value"] == 270
+        assert final_telemetry["total_output_tokens"]["value"] == 100
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_resumed_session_history_is_not_counted_as_subsequent_job_consumption(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class ResumedSessionDriver(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, **kwargs):
+            self.calls += 1
+            emitter = kwargs.get("emitter")
+            if self.calls == 1:
+                if emitter:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "response_id": "job1_r1",
+                            "input_tokens": 500,
+                            "output_tokens": 200,
+                            "source": "stream",
+                            "quality": "reported",
+                        },
+                    })
+                return DriverResult("SUCCESS", "shared-session-123", "job 1 ok", "", "")
+            else:
+                if emitter:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "response_id": "job2_r1",
+                            "input_tokens": 150,
+                            "output_tokens": 60,
+                            "source": "stream",
+                            "quality": "reported",
+                        },
+                    })
+                return DriverResult("SUCCESS", "shared-session-123", "job 2 ok", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = ResumedSessionDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub1 = await runtime.submit(project.id, "implement", "turn 1", context_key="feature")
+        job1 = await runtime.wait(sub1.job_id, 5)
+        assert job1.state == "succeeded"
+        tel1 = job1.result.metadata.get("telemetry")
+        assert tel1 is not None
+        assert tel1["total_input_tokens"]["value"] == 500
+        assert tel1["total_output_tokens"]["value"] == 200
+
+        sub2 = await runtime.submit(project.id, "implement", "turn 2", context_key="feature")
+        job2 = await runtime.wait(sub2.job_id, 5)
+        assert job2.state == "succeeded"
+        tel2 = job2.result.metadata.get("telemetry")
+        assert tel2 is not None
+        assert tel2["total_input_tokens"]["value"] == 150
+        assert tel2["total_output_tokens"]["value"] == 60
+        assert tel2["attribution"]["attempt"] == 1
+        assert tel2["completed_attempts"]["total_input_tokens"] == 0
+    finally:
+        await runtime.close()
+
+
+
 

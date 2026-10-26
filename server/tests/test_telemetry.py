@@ -524,3 +524,47 @@ def test_merge_telemetry_validates_and_sanitizes_incoming():
     res = merge_telemetry(existing, invalid_incoming)
     assert res["total_input_tokens"]["value"] == 100
 
+
+def test_repeated_cumulative_snapshots_replace_not_add():
+    accumulator = TelemetryAccumulator()
+    accumulator.reconcile_cumulative(attempt=1, invocation=1, total_input=200, total_output=50)
+    snap1 = accumulator.snapshot()
+    assert snap1.total_input_tokens.value == 200
+    assert snap1.total_output_tokens.value == 50
+
+    # Repeated cumulative snapshot replaces previous values
+    accumulator.reconcile_cumulative(attempt=1, invocation=1, total_input=250, total_output=60)
+    snap2 = accumulator.snapshot()
+    assert snap2.total_input_tokens.value == 250
+    assert snap2.total_output_tokens.value == 60
+
+
+def test_context_snapshot_shrinks_after_compaction_without_reducing_consumption():
+    accumulator = TelemetryAccumulator()
+    # Turn 1
+    accumulator.record_consumption(attempt=1, invocation=1, response_id="turn_1", input_tokens=1000, output_tokens=200)
+    accumulator.record_context_snapshot(used_tokens=1200, window_size=10000)
+    snap1 = accumulator.snapshot()
+    assert snap1.total_input_tokens.value == 1000
+    assert snap1.total_output_tokens.value == 200
+    assert snap1.context_used_tokens.value == 1200
+
+    # Compaction occurs: context shrinks to 500, but consumption increases
+    accumulator.record_consumption(attempt=1, invocation=1, response_id="turn_2", input_tokens=400, output_tokens=100)
+    accumulator.record_context_snapshot(used_tokens=500, window_size=10000)
+    snap2 = accumulator.snapshot()
+    assert snap2.total_input_tokens.value == 1400
+    assert snap2.total_output_tokens.value == 300
+    assert snap2.context_used_tokens.value == 500
+
+
+def test_missing_baselines_produce_explicit_incomplete_totals():
+    accumulator = TelemetryAccumulator()
+    # When cumulative counter is recorded with missing/unknown components
+    accumulator.reconcile_cumulative(attempt=1, invocation=1, total_input=None, total_output=50)
+    snap = accumulator.snapshot()
+    assert snap.completeness == "partial"
+    assert snap.total_input_tokens.value is None
+    assert snap.total_output_tokens.value == 50
+
+

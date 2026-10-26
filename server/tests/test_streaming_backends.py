@@ -1389,9 +1389,9 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert c_res.outcome == "OK"
     assert c_res.usage == {
         "model_name": "claude-opus-5-5",
-        "input_tokens": 4286,
-        "output_tokens": 4,
-        "cached_input_tokens": 27855,
+        "input_tokens": 6286,
+        "output_tokens": 14,
+        "cached_input_tokens": 59855,
         "context_window_max": 200000,
         "context_window_used": None,
     }
@@ -1421,9 +1421,9 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert cdx_res.outcome == "OK"
     assert cdx_res.usage == {
         "model_name": None,
-        "input_tokens": 15184,
-        "output_tokens": 5,
-        "cached_input_tokens": 0,
+        "input_tokens": 12000,
+        "output_tokens": 30,
+        "cached_input_tokens": 8000,
         "context_window_max": None,
         "context_window_used": None,
     }
@@ -1487,9 +1487,9 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert a_res.outcome == "OK"
     assert a_res.usage == {
         "model_name": None,
-        "input_tokens": 9072,
-        "output_tokens": 118,
-        "cached_input_tokens": 0,
+        "input_tokens": 14072,
+        "output_tokens": 168,
+        "cached_input_tokens": 1000,
         "context_window_max": None,
         "context_window_used": None,
     }
@@ -1540,4 +1540,283 @@ def test_malformed_usage_never_raises(tmp_path: Path, monkeypatch: pytest.Monkey
         "context_window_max": None,
         "context_window_used": None,
     }
+
+
+def test_backend_result_telemetry_field():
+    from refract.backends import BackendResult
+    res = BackendResult(outcome="OK", SESSION_ID="s1", agent_messages="ok", error="", error_class="")
+    assert res.telemetry is None
+
+
+def test_claude_capacity_not_selected_arbitrarily(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Case 1: Active model is matched, not first unrelated key in modelUsage
+    lines_multi_model = [
+        json.dumps({"type": "assistant", "message": {"id": "m1", "model": "claude-opus-5-5", "role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 10}}}),
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "OK",
+            "usage": {"input_tokens": 100, "output_tokens": 10},
+            "modelUsage": {
+                "unrelated-fast-model": {"contextWindow": 32000},
+                "claude-opus-5-5": {"contextWindow": 200000},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in lines_multi_model))
+    res1 = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res1.outcome == "OK"
+    assert res1.telemetry is not None
+    assert res1.telemetry["context_window_size"]["value"] == 200000
+
+    # Case 2: Active model not found in modelUsage leaves capacity unavailable null
+    lines_missing_model = [
+        json.dumps({"type": "assistant", "message": {"id": "m1", "model": "claude-opus-5-5", "role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 10}}}),
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "OK",
+            "usage": {"input_tokens": 100, "output_tokens": 10},
+            "modelUsage": {
+                "unrelated-fast-model": {"contextWindow": 32000},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in lines_missing_model))
+    res2 = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res2.outcome == "OK"
+    assert res2.telemetry is not None
+    assert res2.telemetry["context_window_size"]["value"] is None
+    assert res2.telemetry["context_remaining_percent"]["value"] is None
+
+
+def test_pi_lifecycle_duplicates_do_not_double_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Repeated message_end, turn_end, and message_update for the same response
+    lines = [
+        json.dumps({"type": "session", "id": "s1"}),
+        json.dumps({"type": "message_update", "usage": {"input": 0, "output": 0}}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "responseId": "resp-1",
+                "content": [{"type": "text", "text": "Turn 1"}],
+                "usage": {"input": 500, "output": 25, "cacheRead": 100, "cacheWrite": 0, "totalTokens": 625},
+            },
+        }),
+        # Repeated turn_end with exact same responseId and usage
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "responseId": "resp-1",
+                "content": [{"type": "text", "text": "Turn 1"}],
+                "usage": {"input": 500, "output": 25, "cacheRead": 100, "cacheWrite": 0, "totalTokens": 625},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in lines))
+    res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    # 500 + 100 = 600 input, NOT 1200
+    assert res.telemetry["total_input_tokens"]["value"] == 600
+    assert res.telemetry["total_output_tokens"]["value"] == 25
+    assert res.telemetry["cache_read_tokens"]["value"] == 100
+
+
+def test_multi_response_pi_telemetry_exceeds_final_message_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    fixtures_dir = Path(__file__).parent / "fixtures" / "usage"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    pi_lines = (fixtures_dir / "pi.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
+
+    emitted_events: list[dict[str, Any]] = []
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted_events.append))
+    assert p_res.outcome == "OK"
+
+    # Multi-response Pi consumption exceeds the final message alone (12622)
+    assert p_res.telemetry is not None
+    assert p_res.telemetry["total_input_tokens"]["value"] == 24638
+    assert p_res.telemetry["total_output_tokens"]["value"] == 47
+    assert p_res.telemetry["cache_read_tokens"]["value"] == 11904
+
+    # Verify at least one observation is emitted before completion
+    tel_events = [e for e in emitted_events if e.get("kind") == "telemetry.updated"]
+    assert len(tel_events) >= 1
+
+    # Legacy usage remains backward-compatible
+    assert p_res.usage["input_tokens"] == 718
+    assert p_res.usage["output_tokens"] == 5
+    assert p_res.usage["cached_input_tokens"] == 11904
+
+
+def test_claude_cache_reads_and_writes_enter_normalized_input_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    fixtures_dir = Path(__file__).parent / "fixtures" / "usage"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    claude_lines = (fixtures_dir / "claude.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
+
+    emitted_events: list[dict[str, Any]] = []
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted_events.append))
+    assert c_res.outcome == "OK"
+
+    # Claude cache reads and writes enter normalized input once
+    assert c_res.telemetry is not None
+    assert c_res.telemetry["total_input_tokens"]["value"] == 66291
+    assert c_res.telemetry["cache_read_tokens"]["value"] == 59855
+    assert c_res.telemetry["cache_write_tokens"]["value"] == 150
+    assert c_res.telemetry["total_output_tokens"]["value"] == 14
+    assert c_res.telemetry["context_window_size"]["value"] == 200000
+
+    tel_events = [e for e in emitted_events if e.get("kind") == "telemetry.updated"]
+    assert len(tel_events) >= 1
+
+
+def test_codex_cached_input_not_added_twice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    fixtures_dir = Path(__file__).parent / "fixtures" / "usage"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    codex_lines = (fixtures_dir / "codex.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
+
+    emitted_events: list[dict[str, Any]] = []
+    cdx_res = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted_events.append))
+    assert cdx_res.outcome == "OK"
+
+    # Codex cached input is already included in input, not added twice
+    assert cdx_res.telemetry is not None
+    assert cdx_res.telemetry["total_input_tokens"]["value"] == 22000
+    assert cdx_res.telemetry["total_output_tokens"]["value"] == 50
+    assert cdx_res.telemetry["cache_read_tokens"]["value"] == 10000
+    assert cdx_res.telemetry["cache_write_tokens"]["value"] == 800
+
+    tel_events = [e for e in emitted_events if e.get("kind") == "telemetry.updated"]
+    assert len(tel_events) >= 1
+
+
+def test_agy_final_totals_do_not_duplicate_prior_step_consumption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    fixtures_dir = Path(__file__).parent / "fixtures" / "usage"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    agy_lines = (fixtures_dir / "agy.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
+
+    emitted_events: list[dict[str, Any]] = []
+    a_res = agy_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted_events.append))
+    assert a_res.outcome == "OK"
+
+    # Final totals do not duplicate prior step consumption
+    assert a_res.telemetry is not None
+    assert a_res.telemetry["total_input_tokens"]["value"] == 14072
+    assert a_res.telemetry["total_output_tokens"]["value"] == 168
+    assert a_res.telemetry["cache_read_tokens"]["value"] == 1000
+
+    tel_events = [e for e in emitted_events if e.get("kind") == "telemetry.updated"]
+    assert len(tel_events) >= 1
+
+
+def test_no_emitter_execution_returns_normalized_telemetry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    fixtures_dir = Path(__file__).parent / "fixtures" / "usage"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Claude Code without emitter
+    claude_lines = (fixtures_dir / "claude.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace, emitter=None))
+    assert c_res.outcome == "OK"
+    assert c_res.telemetry is not None
+    assert c_res.telemetry["total_input_tokens"]["value"] == 66291
+    assert c_res.telemetry["total_output_tokens"]["value"] == 14
+
+    # Pi without emitter
+    pi_lines = (fixtures_dir / "pi.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace, emitter=None))
+    assert p_res.outcome == "OK"
+    assert p_res.telemetry is not None
+    assert p_res.telemetry["total_input_tokens"]["value"] == 24638
+    assert p_res.telemetry["total_output_tokens"]["value"] == 47
+
+    # Codex without emitter
+    codex_lines = (fixtures_dir / "codex.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
+    cdx_res = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=None))
+    assert cdx_res.outcome == "OK"
+    assert cdx_res.telemetry is not None
+    assert cdx_res.telemetry["total_input_tokens"]["value"] == 22000
+    assert cdx_res.telemetry["total_output_tokens"]["value"] == 50
+
+    # Agy without emitter
+    agy_lines = (fixtures_dir / "agy.jsonl").read_text().splitlines()
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
+    a_res = agy_sync(BackendParams(PROMPT="test", cd=workspace, emitter=None))
+    assert a_res.outcome == "OK"
+    assert a_res.telemetry is not None
+    assert a_res.telemetry["total_input_tokens"]["value"] == 14072
+    assert a_res.telemetry["total_output_tokens"]["value"] == 168
+
+
+def test_parsing_failures_leave_text_and_outcome_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # 1. Claude with broken/malformed usage payload and non-json line
+    c_lines = [
+        "not a json line at all",
+        json.dumps({"type": "assistant", "message": {"id": "m1", "role": "assistant", "content": [{"type": "text", "text": "claude reply"}], "usage": "invalid"}}),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "claude reply", "usage": {"input_tokens": -99, "output_tokens": "bad"}}),
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert c_res.outcome == "OK"
+    assert c_res.agent_messages == "claude reply"
+
+    # 2. Codex with invalid turn usage
+    cdx_lines = [
+        json.dumps({"type": "thread.started", "thread_id": "codex-test-tid"}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "msg1", "text": "codex reply"}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": "wrong", "output_tokens": -5}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines))
+    cdx_res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert cdx_res.outcome == "OK"
+    assert cdx_res.agent_messages == "codex reply"
+
+    # 3. Pi with malformed usage
+    p_lines = [
+        json.dumps({"type": "session", "id": "pi-sess"}),
+        json.dumps({"type": "message_end", "message": {"role": "assistant", "responseId": "r1", "content": [{"type": "text", "text": "pi reply"}], "usage": {"input": "nan"}}}),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines))
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert p_res.outcome == "OK"
+    assert p_res.agent_messages == "pi reply"
+
+    # 4. Agy with malformed usage
+    a_lines = [
+        json.dumps({"event": "step_update", "step_update": {"conversation_id": "00000000-0000-0000-0000-000000000000", "step_index": 1, "state": "DONE", "text_delta": "agy reply", "usage": {"input_tokens": []}}}),
+        json.dumps({"event": "result", "result": {"conversation_id": "00000000-0000-0000-0000-000000000000", "status": "SUCCESS", "response": "agy reply", "usage": {"input_tokens": None}}}),
+    ]
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in a_lines))
+    a_res = agy_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert a_res.outcome == "OK"
+    assert a_res.agent_messages == "agy reply"
+
+
 

@@ -11,8 +11,15 @@ from typing import Any
 from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
 from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
+from refract.telemetry import TelemetryAccumulator
 
 log = get_logger("pi")
+
+
+def _as_int(val: Any) -> int | None:
+    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+        return None
+    return val
 
 
 def run_shell_command(
@@ -144,12 +151,15 @@ def _tool_call_id(event: dict[str, Any]) -> str:
 
 
 class _EventParser:
-    """Normalize Pi text deltas and correlate tool lifecycle events."""
+    """Normalize Pi text deltas and correlate tool lifecycle and telemetry events."""
 
     def __init__(self, params: BackendParams) -> None:
         self.params = params
         self.entity_counter = 0
         self.raw_to_entity: dict[str, str] = {}
+        self.accumulator = TelemetryAccumulator()
+        self.recorded_responses: set[str] = set()
+        self.turn_counter = 0
 
     def emit(self, event: dict[str, Any]) -> None:
         if self.params.emitter is not None:
@@ -208,18 +218,147 @@ class _EventParser:
         })
 
     def on_event(self, event: dict[str, Any]) -> None:
-        if self.params.emitter is None:
-            return
         event_type = event.get("type", "")
-        if event_type == "message_update":
-            self.message_update(event)
-        elif event_type == "text_delta":
-            text = event.get("text")
-            self.emit_text(text if isinstance(text, str) else event.get("delta"))
-        elif event_type in {"tool_execution_start", "tool_call"}:
-            self.start_tool(event)
-        elif event_type in {"tool_execution_end", "tool_result"}:
-            self.complete_tool(event)
+        if self.params.emitter is not None:
+            if event_type == "message_update":
+                self.message_update(event)
+            elif event_type == "text_delta":
+                text = event.get("text")
+                self.emit_text(text if isinstance(text, str) else event.get("delta"))
+            elif event_type in {"tool_execution_start", "tool_call"}:
+                self.start_tool(event)
+            elif event_type in {"tool_execution_end", "tool_result"}:
+                self.complete_tool(event)
+
+        if event_type == "message_end":
+            msg = event.get("message")
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                resp_id = str(msg.get("responseId") or msg.get("id") or f"turn_{self.turn_counter + 1}")
+                self.turn_counter += 1
+                self.recorded_responses.add(resp_id)
+                u = msg.get("usage")
+                if isinstance(u, dict):
+                    raw_in = _as_int(u.get("input"))
+                    raw_out = _as_int(u.get("output"))
+                    cr = _as_int(u.get("cacheRead"))
+                    cw = _as_int(u.get("cacheWrite"))
+                    tot = _as_int(u.get("totalTokens"))
+                    if any(v is not None for v in (raw_in, raw_out, cr, cw, tot)):
+                        norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                        norm_out = raw_out
+                        self.accumulator.record_consumption(
+                            attempt=1,
+                            invocation=1,
+                            response_id=resp_id,
+                            input_tokens=norm_in,
+                            output_tokens=norm_out,
+                            cache_read_tokens=cr,
+                            cache_write_tokens=cw,
+                            source="response",
+                            quality="reported",
+                        )
+                        ctx_used = tot if tot is not None else (norm_in + (norm_out or 0))
+                        self.accumulator.record_context_snapshot(
+                            used_tokens=ctx_used,
+                            source="derived",
+                            quality="derived",
+                        )
+                        if self.params.emitter is not None:
+                            self.params.emitter({
+                                "kind": "telemetry.updated",
+                                "data": {
+                                    "response_id": resp_id,
+                                    "input_tokens": norm_in,
+                                    "output_tokens": norm_out,
+                                    "cache_read_tokens": cr,
+                                    "cache_write_tokens": cw,
+                                    "context_used_tokens": ctx_used,
+                                    "source": "response",
+                                    "quality": "reported",
+                                },
+                            })
+        elif event_type == "turn_end":
+            msg = event.get("message")
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                resp_id = str(msg.get("responseId") or msg.get("id") or "")
+                if not resp_id or resp_id not in self.recorded_responses:
+                    if not resp_id:
+                        resp_id = f"turn_{self.turn_counter + 1}"
+                    self.turn_counter += 1
+                    self.recorded_responses.add(resp_id)
+                    u = msg.get("usage")
+                    if isinstance(u, dict):
+                        raw_in = _as_int(u.get("input"))
+                        raw_out = _as_int(u.get("output"))
+                        cr = _as_int(u.get("cacheRead"))
+                        cw = _as_int(u.get("cacheWrite"))
+                        tot = _as_int(u.get("totalTokens"))
+                        if any(v is not None for v in (raw_in, raw_out, cr, cw, tot)):
+                            norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                            norm_out = raw_out
+                            self.accumulator.record_consumption(
+                                attempt=1,
+                                invocation=1,
+                                response_id=resp_id,
+                                input_tokens=norm_in,
+                                output_tokens=norm_out,
+                                cache_read_tokens=cr,
+                                cache_write_tokens=cw,
+                                source="response",
+                                quality="reported",
+                            )
+                            ctx_used = tot if tot is not None else (norm_in + (norm_out or 0))
+                            self.accumulator.record_context_snapshot(
+                                used_tokens=ctx_used,
+                                source="derived",
+                                quality="derived",
+                            )
+                            if self.params.emitter is not None:
+                                self.params.emitter({
+                                    "kind": "telemetry.updated",
+                                    "data": {
+                                        "response_id": resp_id,
+                                        "input_tokens": norm_in,
+                                        "output_tokens": norm_out,
+                                        "cache_read_tokens": cr,
+                                        "cache_write_tokens": cw,
+                                        "context_used_tokens": ctx_used,
+                                        "source": "response",
+                                        "quality": "reported",
+                                    },
+                                })
+        elif event_type in ("agent_end", "summary"):
+            u = event.get("usage") or event.get("totalUsage")
+            if isinstance(u, dict):
+                raw_in = _as_int(u.get("input"))
+                raw_out = _as_int(u.get("output"))
+                cr = _as_int(u.get("cacheRead"))
+                cw = _as_int(u.get("cacheWrite"))
+                if any(v is not None for v in (raw_in, raw_out, cr, cw)):
+                    norm_in = (raw_in or 0) + (cr or 0) + (cw or 0)
+                    norm_out = raw_out
+                    self.accumulator.reconcile_cumulative(
+                        attempt=1,
+                        invocation=1,
+                        total_input=norm_in,
+                        total_output=norm_out,
+                        cache_read=cr,
+                        cache_write=cw,
+                        source="summary",
+                        quality="reported",
+                    )
+                    if self.params.emitter is not None:
+                        self.params.emitter({
+                            "kind": "telemetry.updated",
+                            "data": {
+                                "total_input_tokens": norm_in,
+                                "total_output_tokens": norm_out,
+                                "cache_read_tokens": cr,
+                                "cache_write_tokens": cw,
+                                "source": "summary",
+                                "quality": "reported",
+                            },
+                        })
 
 
 def _apply_errors(
@@ -293,6 +432,8 @@ def execute(params: BackendParams) -> BackendResult:
     )
 
     result.usage = _usage_dict(**_usage_values(stream))
+    if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
+        result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
     _apply_errors(result, params, stream, error_text, structured_error)
     log.info(
         "pi.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",

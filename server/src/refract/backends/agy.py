@@ -13,8 +13,15 @@ from typing import Any
 from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
 from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
+from refract.telemetry import TelemetryAccumulator
 
 log = get_logger("agy")
+
+
+def _as_int(val: Any) -> int | None:
+    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+        return None
+    return val
 
 _ASSISTANT_TEXT_DELTA = "assistant.text.delta"
 _UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
@@ -88,11 +95,13 @@ class _EventParser:
     def __init__(self, params: BackendParams) -> None:
         self.params = params
         self.tool_counter = 0
+        self.step_counter = 0
         self.active_tool_id = ""
         self.assistant_deltas: list[str] = []
         self.terminal_lines: list[str] = []
         self.session_id = ""
         self.final_response = ""
+        self.accumulator = TelemetryAccumulator()
 
     def emit(self, kind: str, entity_id: str, data: dict[str, Any]) -> None:
         if self.params.emitter:
@@ -151,6 +160,44 @@ class _EventParser:
         elif step_type == "tool":
             self.tool_update(update)
 
+        state = update.get("state", "")
+        u = update.get("usage")
+        if state == "DONE" and isinstance(u, dict):
+            raw_in = _as_int(u.get("input_tokens"))
+            raw_out = _as_int(u.get("output_tokens"))
+            cr = _as_int(u.get("cache_read_tokens"))
+            cw = _as_int(u.get("cache_write_tokens"))
+            if any(v is not None for v in (raw_in, raw_out, cr, cw)):
+                norm_in = raw_in
+                norm_out = raw_out
+                self.step_counter += 1
+                step_idx = update.get("step_index")
+                step_id = f"step_{step_idx}" if step_idx is not None else f"step_{self.step_counter}"
+                self.accumulator.record_consumption(
+                    attempt=1,
+                    invocation=1,
+                    response_id=step_id,
+                    input_tokens=norm_in,
+                    output_tokens=norm_out,
+                    cache_read_tokens=cr,
+                    cache_write_tokens=cw,
+                    source="step",
+                    quality="reported",
+                )
+                if self.params.emitter is not None:
+                    self.params.emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "response_id": step_id,
+                            "input_tokens": norm_in,
+                            "output_tokens": norm_out,
+                            "cache_read_tokens": cr,
+                            "cache_write_tokens": cw,
+                            "source": "step",
+                            "quality": "reported",
+                        },
+                    })
+
     def result(self, result: Any) -> None:
         if not isinstance(result, dict):
             return
@@ -158,6 +205,37 @@ class _EventParser:
         response = result.get("response")
         if isinstance(response, str) and response:
             self.final_response = response
+        u = result.get("usage")
+        if isinstance(u, dict):
+            raw_in = _as_int(u.get("input_tokens"))
+            raw_out = _as_int(u.get("output_tokens"))
+            cr = _as_int(u.get("cache_read_tokens"))
+            cw = _as_int(u.get("cache_write_tokens"))
+            if any(v is not None for v in (raw_in, raw_out, cr, cw)):
+                norm_in = raw_in
+                norm_out = raw_out
+                self.accumulator.reconcile_cumulative(
+                    attempt=1,
+                    invocation=1,
+                    total_input=norm_in,
+                    total_output=norm_out,
+                    cache_read=cr,
+                    cache_write=cw,
+                    source="result",
+                    quality="reported",
+                )
+                if self.params.emitter is not None:
+                    self.params.emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "total_input_tokens": norm_in,
+                            "total_output_tokens": norm_out,
+                            "cache_read_tokens": cr,
+                            "cache_write_tokens": cw,
+                            "source": "result",
+                            "quality": "reported",
+                        },
+                    })
 
     def legacy_tool_completed(self, event: dict[str, Any]) -> None:
         tool_data = {"status": str(event.get("status", "completed"))}
@@ -228,9 +306,9 @@ def execute(params: BackendParams) -> BackendResult:
         "agy",
         "--dangerously-skip-permissions",
         *params.args,
+        "--output-format",
+        "stream-json",
     ]
-    if params.emitter is not None:
-        cmd.extend(["--output-format", "stream-json"])
     cmd.extend([
         "--log-file",
         tmp_log_path,
@@ -258,16 +336,21 @@ def execute(params: BackendParams) -> BackendResult:
         log.warning("agy: no session id found in log or params")
 
     if stream.error:
-        return BackendResult(
+        res = BackendResult(
             outcome="FATAL",
             SESSION_ID=extracted_session_id,
             agent_messages=agent_messages,
             error=stream.error,
             error_class=stream.error_class,
         )
+        if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
+            res.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
+        return res
 
     result = _classify_output(agent_messages, extracted_session_id, "")
     result.usage = _usage_dict(**_usage_values(stream))
+    if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
+        result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
     log.info(
         "agy.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",
         result.outcome,
