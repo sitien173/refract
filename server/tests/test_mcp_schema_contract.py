@@ -31,3 +31,24 @@ async def test_pinned_sdk_tool_error_prefix():
     with pytest.raises(ToolError) as error:
         await server.call_tool("rejected", {})
     assert str(error.value) == "Error executing tool rejected: contract failure"
+
+
+@pytest.mark.asyncio
+async def test_job_answer_schema_contract():
+    server = create_mcp()
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    assert "job_answer" in tools
+    job_answer_tool = tools["job_answer"]
+    schema = job_answer_tool.input_schema
+    assert schema["type"] == "object"
+    assert set(schema["required"]) == {"job_id", "answer"}
+    properties = schema["properties"]
+    assert properties["job_id"]["type"] == "string"
+    assert properties["job_id"]["minLength"] == 1
+    assert properties["answer"]["type"] == "string"
+    assert properties["answer"]["minLength"] == 1
+    assert properties["answer"]["maxLength"] == 8192
+    assert not _raw_argument_error(schema, {"job_id": "job-1", "answer": "ok"})
+    assert _raw_argument_error(schema, {"job_id": "job-1", "answer": 123})
+    assert _raw_argument_error(schema, {"job_id": "job-1", "answer": "ok", "extra": 1})
+

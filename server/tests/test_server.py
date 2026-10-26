@@ -10,8 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from refract.config import load_config
 from refract.models import JobResult, JobSummary, JobView, SubmissionResult
-from refract.server import job_wait, mcp
+from refract.runtime import OrchestrationError, Runtime
+from refract.scheduler import _Dispatch
+from refract.server import RefractError, job_answer, job_wait, mcp
 from tests.orchestration_helpers import register_project
 
 
@@ -73,6 +76,7 @@ async def test_v2_tool_surface_lists_exact_contract() -> None:
         "job_list": {"project_id"},
         "job_cancel": {"job_id"},
         "job_retry": {"job_id"},
+        "job_answer": {"job_id", "answer"},
     }
     tools = {tool.name: tool for tool in await mcp.list_tools()}
 
@@ -205,7 +209,7 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     assert set(tools) == {
         "project_resolve", "task_guide", "job_submit", "job_wait",
-        "job_list", "job_cancel", "job_retry",
+        "job_list", "job_cancel", "job_retry", "job_answer",
     }
     from refract.workflows import BUILTIN_WORKFLOWS
 
@@ -229,6 +233,7 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
         "job_list": (True, False, True, False),
         "job_cancel": (False, True, True, False),
         "job_retry": (False, True, False, True),
+        "job_answer": (False, False, False, False),
     }
     for name, expected_hints in expected_annotations.items():
         annotations = tools[name].annotations
@@ -1262,3 +1267,468 @@ async def test_application_lifespan_clears_state_when_runtime_close_fails(monkey
             pass
     assert application.state.refract_dashboard.runtime is None
     assert application.state.runtime is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_wait_and_job_wait_wake_early_with_pending_question(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-q-1",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-q-1'")
+        runtime.scheduler._current["job-q-1"] = _Dispatch(job_id="job-q-1", project_id=project.id)
+        token = runtime.ask_registry.issue_token("job-q-1")
+
+        # 1. Test Runtime.wait wakes early when question is asked
+        async def _ask_later():
+            await asyncio.sleep(0.05)
+            return await runtime.ask_registry.ask(token, "Need input on schema", timeout_s=5.0)
+
+        task = asyncio.create_task(_ask_later())
+
+        start = asyncio.get_running_loop().time()
+        job = await runtime.wait("job-q-1", timeout_s=10)
+        elapsed = asyncio.get_running_loop().time() - start
+
+        assert elapsed < 3.0
+        assert job.state == "running"
+        assert runtime.ask_registry.has_pending("job-q-1")
+
+        # 2. Test job_wait returns pending_question
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(lifespan_context=runtime),
+            report_progress=lambda **kwargs: asyncio.sleep(0),
+        )
+        res_str = await job_wait("job-q-1", ctx, timeout_s=10)
+        res = json.loads(res_str)
+        assert res["job"]["state"] == "running"
+        assert "pending_question" in res["result"]
+        pq = res["result"]["pending_question"]
+        assert pq["text"] == "Need input on schema"
+        assert pq["question_id"].startswith("q_")
+        assert res["next_action"] == "Call job_answer to answer the pending question."
+
+        # 3. Test job_answer delivers answer
+        ans_str = await job_answer("job-q-1", "Use v2 schema", ctx)
+        ans = json.loads(ans_str)
+        assert ans["job"]["id"] == "job-q-1"
+        assert not runtime.ask_registry.has_pending("job-q-1")
+
+        # HTTP ask receives answer
+        asked_result = await task
+        assert asked_result == "Use v2 schema"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_job_answer_errors(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-running",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        runtime.database.create_job(
+            job_id="job-succeeded",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-running'")
+            runtime.database._connection.execute("UPDATE jobs SET state='succeeded' WHERE id='job-succeeded'")
+
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(lifespan_context=runtime),
+            report_progress=lambda **kwargs: asyncio.sleep(0),
+        )
+
+        # 1. Unknown job -> unknown_job error
+        with pytest.raises(RefractError) as exc_info:
+            await job_answer("job-nonexistent", "ans", ctx)
+        assert exc_info.value.code == "unknown_job"
+
+        # 2. Terminal job -> invalid_state error
+        with pytest.raises(RefractError) as exc_info:
+            await job_answer("job-succeeded", "ans", ctx)
+        assert exc_info.value.code == "invalid_state"
+
+        # 3. Running job with no question pending -> invalid_state error
+        with pytest.raises(RefractError) as exc_info:
+            await job_answer("job-running", "ans", ctx)
+        assert exc_info.value.code == "invalid_state"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_job_wait_nonterminal_without_question(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-running-no-q",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-running-no-q'")
+
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(lifespan_context=runtime),
+            report_progress=lambda **kwargs: asyncio.sleep(0),
+        )
+
+        res_str = await job_wait("job-running-no-q", ctx, timeout_s=0)
+        res = json.loads(res_str)
+        assert res["job"]["state"] == "running"
+        assert res["result"] == {"text": "", "error": "", "next_offset": None}
+        assert "pending_question" not in res["result"]
+        assert res["next_action"] == "Call job_wait again with the same job_id."
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_connected_client_job_answer_and_wait(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-client-test",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-client-test'")
+        runtime.scheduler._current["job-client-test"] = _Dispatch(job_id="job-client-test", project_id=project.id)
+        token = runtime.ask_registry.issue_token("job-client-test")
+
+        async def _ask_later():
+            await asyncio.sleep(0.05)
+            return await runtime.ask_registry.ask(token, "Question via client", timeout_s=5.0)
+
+        task = asyncio.create_task(_ask_later())
+
+        # job_wait wakes early
+        wait_res = await client.call_tool("job_wait", {"job_id": "job-client-test", "timeout_s": 10})
+        assert not wait_res.is_error
+        wait_data = json.loads(wait_res.content[0].text)
+        assert wait_data["job"]["state"] == "running"
+        assert wait_data["result"]["pending_question"]["text"] == "Question via client"
+
+        # job_answer delivers
+        ans_res = await client.call_tool("job_answer", {"job_id": "job-client-test", "answer": "Answer via client"})
+        assert not ans_res.is_error
+        ans_data = json.loads(ans_res.content[0].text)
+        assert ans_data["job"]["id"] == "job-client-test"
+
+        asked_result = await task
+        assert asked_result == "Answer via client"
+
+
+@pytest.mark.asyncio
+async def test_job_answer_bounds_and_unicode_acceptance(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-bounds-test",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-bounds-test'")
+        runtime.scheduler._current["job-bounds-test"] = _Dispatch(job_id="job-bounds-test", project_id=project.id)
+        token = runtime.ask_registry.issue_token("job-bounds-test")
+
+        ask_task = asyncio.create_task(runtime.ask_registry.ask(token, "Question?", timeout_s=10.0))
+        await asyncio.sleep(0.02)
+        assert runtime.ask_registry.has_pending("job-bounds-test")
+
+        # 1. Direct Runtime.job_answer rejects answer > 8192 chars with invalid_request
+        oversized = "x" * 8193
+        with pytest.raises(OrchestrationError) as exc_info:
+            await runtime.job_answer("job-bounds-test", oversized)
+        assert exc_info.value.code == "invalid_request"
+        # Preserves pending question on rejection
+        assert runtime.ask_registry.has_pending("job-bounds-test")
+
+        # 2. MCP client rejection for answer > 8192 chars
+        mcp_res = await client.call_tool("job_answer", {"job_id": "job-bounds-test", "answer": oversized})
+        assert mcp_res.is_error
+        err_payload = json.loads(mcp_res.content[0].text)
+        assert err_payload["code"] == "invalid_request"
+        # Preserves pending question on rejection
+        assert runtime.ask_registry.has_pending("job-bounds-test")
+
+        # 3. Accepted Unicode boundary answer delivered exactly
+        unicode_answer = "Accepted: 🚀 Café ñ 日本語 " + ("A" * 100)
+        await runtime.job_answer("job-bounds-test", unicode_answer)
+        assert not runtime.ask_registry.has_pending("job-bounds-test")
+        delivered = await ask_task
+        assert delivered == unicode_answer
+
+
+@pytest.mark.asyncio
+async def test_job_wait_oversized_pending_question_raises_response_too_large(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-oversized-q",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-oversized-q'")
+        runtime.scheduler._current["job-oversized-q"] = _Dispatch(job_id="job-oversized-q", project_id=project.id)
+        token = runtime.ask_registry.issue_token("job-oversized-q")
+
+        # Pending question that exceeds envelope char limit
+        huge_text = "q" * 35000
+        asyncio.create_task(runtime.ask_registry.ask(token, huge_text, timeout_s=5.0))
+        await asyncio.sleep(0.02)
+
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(lifespan_context=runtime),
+            report_progress=lambda **kwargs: asyncio.sleep(0),
+        )
+        with pytest.raises(RefractError) as exc_info:
+            await job_wait("job-oversized-q", ctx, timeout_s=0)
+        assert exc_info.value.code == "response_too_large"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_real_asgi_ask_and_mcp_job_wait_job_answer_integration(tmp_path, monkeypatch) -> None:
+    from starlette.applications import Starlette
+    from refract.dashboard import register_dashboard_routes
+
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        from refract import server
+        state = [obj for obj in gc.get_objects() if type(obj).__name__ == "DashboardState" and getattr(obj, "runtime", None) is runtime][0] if "gc" in globals() else None
+        # Build ASGI app with real dashboard routes pointing to the same runtime
+        from refract.dashboard import DashboardState
+        dash_state = DashboardState()
+        dash_state.runtime = runtime
+        app = Starlette(routes=register_dashboard_routes(dash_state))
+
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-asgi-1",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-asgi-1'")
+        runtime.scheduler._current["job-asgi-1"] = _Dispatch(job_id="job-asgi-1", project_id=project.id)
+        token = runtime.ask_registry.issue_token("job-asgi-1")
+
+        # 1. Send genuine ASGI POST /ask request in background
+        sent = []
+        body_bytes = json.dumps({"token": token, "question": "Need ASGI confirmation?"}).encode("utf-8")
+        received = False
+
+        async def receive():
+            nonlocal received
+            if received:
+                return {"type": "http.disconnect"}
+            received = True
+            return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+        async def send(msg):
+            sent.append(msg)
+
+        scope = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "path": "/ask",
+            "raw_path": b"/ask",
+            "query_string": b"",
+            "headers": [(b"host", b"127.0.0.1:8765")],
+            "client": ("127.0.0.1", 1234),
+            "server": ("127.0.0.1", 8765),
+            "scheme": "http",
+            "root_path": "",
+            "app": app,
+        }
+        asgi_task = asyncio.create_task(app(scope, receive, send))
+
+        # 2. Call job_wait via MCP -> wakes early with pending_question
+        wait_res = await client.call_tool("job_wait", {"job_id": "job-asgi-1", "timeout_s": 15})
+        assert not wait_res.is_error
+        wait_data = json.loads(wait_res.content[0].text)
+        assert wait_data["job"]["state"] == "running"
+        assert wait_data["result"]["pending_question"]["text"] == "Need ASGI confirmation?"
+
+        # 3. Call job_answer via MCP -> delivers answer
+        ans_res = await client.call_tool("job_answer", {"job_id": "job-asgi-1", "answer": "Confirmed via MCP"})
+        assert not ans_res.is_error
+        ans_data = json.loads(ans_res.content[0].text)
+        assert ans_data["job"]["id"] == "job-asgi-1"
+
+        # 4. Verify ASGI POST /ask response status 200 and exact JSON answer
+        await asgi_task
+        status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+        body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+        assert status == 200
+        assert json.loads(body.decode("utf-8")) == {"answer": "Confirmed via MCP"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_wait_scheduler_exception_and_task_cleanup(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-err-1",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-err-1'")
+
+        async def _failing_scheduler_wait(job_id, timeout_s):
+            await asyncio.sleep(0.01)
+            raise RuntimeError("scheduler simulated failure")
+
+        runtime.scheduler.wait = _failing_scheduler_wait
+
+        with pytest.raises(RuntimeError, match="scheduler simulated failure"):
+            await runtime.wait("job-err-1", timeout_s=5)
+
+        # Question waiter must be cleaned up
+        assert not runtime.ask_registry._question_waiters.get("job-err-1")
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_wait_indefinite_on_timeout_zero_until_question(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-t0-1",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-t0-1'")
+        runtime.scheduler._current["job-t0-1"] = _Dispatch(job_id="job-t0-1", project_id=project.id)
+        token = runtime.ask_registry.issue_token("job-t0-1")
+
+        # Runtime.wait with timeout_s=0 must NOT return immediately while running
+        wait_task = asyncio.create_task(runtime.wait("job-t0-1", timeout_s=0))
+        await asyncio.sleep(0.05)
+        assert not wait_task.done()
+
+        # Asking a question wakes it
+        ask_task = asyncio.create_task(runtime.ask_registry.ask(token, "Question at t=0", timeout_s=5.0))
+        job = await asyncio.wait_for(wait_task, timeout=2.0)
+        assert job.state == "running"
+        assert runtime.ask_registry.has_pending("job-t0-1")
+
+        # Cleanup
+        runtime.ask_registry.deliver_answer("job-t0-1", "done")
+        await ask_task
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_question_waiter_cleanup_on_timeout_and_cancellation(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        # 1. Cleanup on timeout
+        res = await runtime.ask_registry.wait_question("job-waiter-1", timeout_s=0.02)
+        assert res is None
+        assert "job-waiter-1" not in runtime.ask_registry._question_waiters
+
+        # 2. Cleanup on cancellation
+        task = asyncio.create_task(runtime.ask_registry.wait_question("job-waiter-2", timeout_s=10.0))
+        await asyncio.sleep(0.01)
+        assert "job-waiter-2" in runtime.ask_registry._question_waiters
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        assert "job-waiter-2" not in runtime.ask_registry._question_waiters
+    finally:
+        runtime.database.close()
+

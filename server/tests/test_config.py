@@ -703,3 +703,38 @@ def test_notifications_config_helper_validation() -> None:
 
     with pytest.raises(ValueError, match="notifications.enabled must be true or false"):
         _notifications_config({"enabled": 1})
+
+
+def test_ask_timeout_s_default_and_custom(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config(), encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg.ask_timeout_s == 300
+
+    path.write_text(
+        _explicit_config().replace(
+            'default_profile = "balanced"',
+            'default_profile = "balanced"\nask_timeout_s = 60',
+        ),
+        encoding="utf-8",
+    )
+    cfg2 = load_config(path)
+    assert cfg2.ask_timeout_s == 60
+
+
+@pytest.mark.parametrize(
+    "invalid_val",
+    ["false", "true", '"60"', "0", "-5", "3.14"],
+)
+def test_ask_timeout_s_invalid_values_rejected(tmp_path, invalid_val) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _explicit_config().replace(
+            'default_profile = "balanced"',
+            f'default_profile = "balanced"\nask_timeout_s = {invalid_val}',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="positive integer"):
+        load_config(path)
+

@@ -157,8 +157,10 @@ For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch wit
 
 1. Submit one prompt-only `implement` job with the saved route. Its prompt
    names the absolute `phase-<NN>/prompt.md` path.
-2. Wait using the default heartbeat rule. Read the complete result from the
-   wait response.
+2. Wait using the default heartbeat rule. If `result.pending_question` appears,
+   answer its `text` from the plan or user through `job_answer(job_id, answer)`,
+   then call `job_wait` again with the same job ID. Read the complete terminal
+   result from the wait response.
 3. Diff the working tree against the recorded HEAD. Compare it with ERP
    `FILES MODIFIED` and the phase file set. An undeclared or out-of-scope path
    is a specification failure for Gate 3.

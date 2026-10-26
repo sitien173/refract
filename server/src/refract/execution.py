@@ -65,11 +65,13 @@ class TargetExecutor:
     def __init__(
         self, config: DaemonConfig, database: Database, drivers: DriverRegistry,
         *, on_stream_commit: Callable[[str, int], Any] | None = None,
+        ask_registry: Any = None,
     ) -> None:
         self.config = config
         self.database = database
         self.drivers = drivers
         self.on_stream_commit = on_stream_commit
+        self.ask_registry = ask_registry
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
         self._target_users: dict[str, int] = {}
@@ -177,12 +179,25 @@ class TargetExecutor:
             await run_sync(self.database.release_target_probe, target_key, job_id)
             raise
 
+        ask_env: dict[str, str] | None = None
+        if self.ask_registry is not None:
+            token = self.ask_registry.issue_token(
+                job_id,
+                workflow_timeout_s=plan.selection.timeout_s,
+                started_at=started_at,
+            )
+            ask_url = f"http://{self.config.host}:{self.config.port}/ask"
+            ask_env = {
+                "REFRACT_ASK_URL": ask_url,
+                "REFRACT_ASK_TOKEN": token,
+            }
+
         attempt = _TargetAttempt()
         driver_exc: BaseException | None = None
         try:
             await self._recover_session(
                 attempt=attempt, context=context, recorder=recorder,
-                supports_streaming=supports_streaming,
+                supports_streaming=supports_streaming, env=ask_env,
             )
         except BaseException as exc:
             driver_exc = exc
@@ -191,6 +206,8 @@ class TargetExecutor:
             self._attach_exception_metadata(exc, target, duration_ms)
             raise
         finally:
+            if self.ask_registry is not None:
+                self.ask_registry.revoke_token(job_id)
             if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
                 attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
             try:
@@ -213,6 +230,7 @@ class TargetExecutor:
     async def _recover_session(
         self, *, attempt: _TargetAttempt, context: _ExecutionContext,
         recorder: StreamRecorder | None, supports_streaming: bool,
+        env: dict[str, str] | None = None,
     ) -> None:
         job_id = context.job_id
         project = context.project
@@ -237,6 +255,7 @@ class TargetExecutor:
                 target=target, prompt=phase_prompt, session_id=phase_session,
                 cwd=cwd, timeout_s=timeout_s, cancel_event=cancel_event,
                 recorder=recorder, supports_streaming=supports_streaming,
+                env=env,
             )
             last = attempt.result
             await self._record_recovery_result(job_id, phase, details, last)
@@ -440,6 +459,7 @@ class TargetExecutor:
         cancel_event: threading.Event,
         recorder: StreamRecorder | None,
         supports_streaming: bool,
+        env: dict[str, str] | None = None,
     ) -> tuple[DriverResult, bool]:
         bridge = StreamBridge(queue_capacity=256) if supports_streaming else None
 
@@ -462,6 +482,7 @@ class TargetExecutor:
                     timeout_s=timeout_s,
                     cancel_event=cancel_event,
                     emitter=bridge.emit if bridge else None,
+                    env=env,
                 )
         except BaseException as exc:
             driver_exc = exc

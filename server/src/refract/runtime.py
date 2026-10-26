@@ -6,11 +6,13 @@ import asyncio
 import json
 import math
 import sqlite3
+from contextlib import suppress
 from dataclasses import replace
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from refract.ask import AskRegistry
 from refract.config import DaemonConfig, load_config, load_project_config
 from refract.config_inspection import bound_error, sanitize_config_error, utc_now
 from refract.config_mutation import ConfigurationMutationService
@@ -38,6 +40,7 @@ from refract.workers import run_sync
 
 log = get_logger("runtime")
 RETENTION_INTERVAL_S = 3600
+MAX_ANSWER_LENGTH = 8192
 
 
 class OrchestrationError(ValueError):
@@ -66,6 +69,7 @@ class Runtime:
         self.config = config
         self.config.home.mkdir(parents=True, exist_ok=True)
         self.database = Database(config.database_path, history_turns=config.history_turns)
+        self.ask_registry = AskRegistry()
         self._retention_task: asyncio.Task[None] | None = None
         self.stream_hub = JobStreamHub()
         self._catalog = config
@@ -77,7 +81,8 @@ class Runtime:
         self._loop: asyncio.AbstractEventLoop | None = None
         self.notifier = notifier or _noop_notifier
         self.target_executor = TargetExecutor(
-            config, self.database, DriverRegistry(), on_stream_commit=self.stream_hub.publish
+            config, self.database, DriverRegistry(), on_stream_commit=self.stream_hub.publish,
+            ask_registry=self.ask_registry,
         )
         self.runner = JobRunner(
             self.database,
@@ -408,13 +413,76 @@ class Runtime:
             if refreshed is None:
                 raise OrchestrationError(f"Unknown job: {job_id}")
             return refreshed
-        await self.scheduler.wait(job_id, timeout_s)
+
+        if self.ask_registry.has_pending(job_id):
+            refreshed = await run_sync(self.database.job, job_id)
+            if refreshed is None:
+                raise OrchestrationError(f"Unknown job: {job_id}")
+            return refreshed
+
+        scheduler_task = asyncio.create_task(self.scheduler.wait(job_id, timeout_s))
+        question_task = asyncio.create_task(self.ask_registry.wait_question(job_id, timeout_s))
+        try:
+            done, pending = await asyncio.wait(
+                [scheduler_task, question_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                exc = task.exception()
+                if exc is not None:
+                    raise exc
+        finally:
+            for task in (scheduler_task, question_task):
+                if not task.done():
+                    task.cancel()
+            for task in (scheduler_task, question_task):
+                with suppress(asyncio.CancelledError, Exception):
+                    await task
+
         refreshed = await run_sync(self.database.job, job_id)
         if refreshed is None:
             raise OrchestrationError(f"Unknown job: {job_id}")
         return refreshed
 
+    async def job_answer(self, job_id: str, answer: str) -> ActionResult:
+        job = await run_sync(self.database.job, job_id)
+        if job is None:
+            raise OrchestrationError(
+                "Job does not exist.",
+                code="unknown_job",
+                next_action="Call job_list for the project and use a listed job ID.",
+            )
+        if job.state in TERMINAL_STATES:
+            raise OrchestrationError(
+                f"Job {job_id} is in terminal state '{job.state}'.",
+                code="invalid_state",
+                next_action="Inspect using job_wait; use a new job if appropriate.",
+            )
+        cleaned_answer = answer if isinstance(answer, str) else ""
+        if not cleaned_answer:
+            raise OrchestrationError(
+                "Answer must be a non-empty string.",
+                code="invalid_request",
+                next_action="Provide a non-empty answer string.",
+            )
+        if len(cleaned_answer) > MAX_ANSWER_LENGTH:
+            raise OrchestrationError(
+                f"Answer exceeds maximum length of {MAX_ANSWER_LENGTH} characters.",
+                code="invalid_request",
+                next_action=f"Provide an answer up to {MAX_ANSWER_LENGTH} characters.",
+            )
+        delivered = self.ask_registry.deliver_answer(job_id, cleaned_answer)
+        if not delivered:
+            raise OrchestrationError(
+                f"No question is pending for job {job_id}.",
+                code="invalid_state",
+                next_action="Inspect using job_wait; use a new job if appropriate.",
+            )
+        await run_sync(self.database.event, job_id, "job.question_answered", {"answer": cleaned_answer})
+        return ActionResult(success=True, job_id=job_id, state=job.state)
+
     async def cancel(self, job_id: str) -> ActionResult:
+        self.ask_registry.revoke_token(job_id)
         # Reserve cancellation before yielding to a worker or starting dispatch.
         location = self.scheduler.cancel(job_id)
         job = await run_sync(self.database.job, job_id)

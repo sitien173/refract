@@ -20,6 +20,7 @@ def run_shell_command(
     cwd: str | None = None,
     timeout_s: int = 0,
     cancel_event: threading.Event | None = None,
+    env: dict[str, str] | None = None,
 ) -> Generator[str, None, None]:
     """Run Pi and yield its combined output one line at a time."""
     yield from stream_shell_command_lines(
@@ -32,6 +33,7 @@ def run_shell_command(
         terminate_wait_s=5,
         cancel_event=cancel_event,
         check_returncode=True,
+        env=env,
     )
 
 

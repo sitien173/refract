@@ -129,10 +129,10 @@ def test_imports() -> None:
 
 
 def test_backend_params_are_transport_only() -> None:
-    expected = {"PROMPT", "cd", "SESSION_ID", "args", "timeout_s", "cancel_event", "emitter"}
-    assert {field.name for field in fields(BackendParams)} == expected
-    assert {field.name for field in fields(BackendParams)} == expected
-    assert {field.name for field in fields(BackendParams)} == expected
+    expected = {"PROMPT", "cd", "SESSION_ID", "args", "timeout_s", "cancel_event", "emitter", "env"}
+    params = BackendParams(PROMPT="x", cd=Path("."), env={"REFRACT_ASK_TOKEN": "secret"})
+    assert "secret" not in repr(params)
+    assert params.env == {"REFRACT_ASK_TOKEN": "secret"}
     assert {field.name for field in fields(BackendParams)} == expected
 
 
@@ -1473,3 +1473,217 @@ async def test_driver_compiles_agy_and_codex_target_configuration(monkeypatch, t
         "-c", 'model="gpt-5-mini"',
         "-c", "model_reasoning_effort=high",
     )
+
+
+def test_ask_missing_env(monkeypatch, capsys) -> None:
+    from refract.cli import main
+
+    monkeypatch.delenv("REFRACT_ASK_URL", raising=False)
+    monkeypatch.delenv("REFRACT_ASK_TOKEN", raising=False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["ask", "Should we migrate?"])
+    assert exc_info.value.code != 0
+    captured = capsys.readouterr()
+    assert "REFRACT_ASK_URL" in captured.err
+    assert "REFRACT_ASK_TOKEN" in captured.err
+
+
+def test_ask_unreachable_server(monkeypatch, capsys) -> None:
+    from refract.cli import main
+
+    monkeypatch.setenv("REFRACT_ASK_URL", "http://127.0.0.1:1/ask")
+    monkeypatch.setenv("REFRACT_ASK_TOKEN", "fake-token")
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["ask", "Should we migrate?"])
+    assert exc_info.value.code != 0
+    captured = capsys.readouterr()
+    assert "unreachable" in captured.err.lower() or "connection" in captured.err.lower() or "failed" in captured.err.lower()
+
+
+def test_ask_http_rejection(monkeypatch, capsys) -> None:
+    import http.server
+
+    from refract.cli import main
+
+    class RejectHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Forbidden"}).encode("utf-8"))
+
+        def log_message(self, format, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), RejectHandler)
+    server.timeout = 1
+    port = server.server_port
+    t = threading.Thread(target=server.handle_request, daemon=True)
+    t.start()
+
+    monkeypatch.setenv("REFRACT_ASK_URL", f"http://127.0.0.1:{port}/ask")
+    monkeypatch.setenv("REFRACT_ASK_TOKEN", "bad-token")
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["ask", "Question?"])
+        assert exc_info.value.code != 0
+        captured = capsys.readouterr()
+        assert "403" in captured.err
+    finally:
+        server.server_close()
+        t.join(timeout=2)
+
+
+def test_ask_successful_answer(monkeypatch, capsys) -> None:
+    import http.server
+
+    from refract.cli import main
+
+    received_body = {}
+
+    class AnswerHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            nonlocal received_body
+            received_body = json.loads(self.rfile.read(length).decode("utf-8"))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"answer": "Use schema v15."}).encode("utf-8"))
+
+        def log_message(self, format, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), AnswerHandler)
+    server.timeout = 1
+    port = server.server_port
+    t = threading.Thread(target=server.handle_request, daemon=True)
+    t.start()
+
+    monkeypatch.setenv("REFRACT_ASK_URL", f"http://127.0.0.1:{port}/ask")
+    monkeypatch.setenv("REFRACT_ASK_TOKEN", "valid-token-123")
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["ask", "What schema version?"])
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "Use schema v15."
+        assert received_body == {"token": "valid-token-123", "question": "What schema version?"}
+    finally:
+        server.server_close()
+        t.join(timeout=2)
+
+
+def test_ask_timeout_prints_exact_no_answer_text(monkeypatch, capsys) -> None:
+    import http.server
+
+    from refract.ask import NO_ANSWER_TEXT
+    from refract.cli import main
+
+    class TimeoutHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"answer": NO_ANSWER_TEXT}).encode("utf-8"))
+
+        def log_message(self, format, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), TimeoutHandler)
+    server.timeout = 1
+    port = server.server_port
+    t = threading.Thread(target=server.handle_request, daemon=True)
+    t.start()
+
+    monkeypatch.setenv("REFRACT_ASK_URL", f"http://127.0.0.1:{port}/ask")
+    monkeypatch.setenv("REFRACT_ASK_TOKEN", "valid-token")
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["ask", "Timeout question?"])
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert captured.out.strip() == NO_ANSWER_TEXT
+    finally:
+        server.server_close()
+        t.join(timeout=2)
+
+
+def test_ask_token_secrecy(monkeypatch, capsys) -> None:
+    import http.server
+
+    from refract.cli import main
+
+    secret_token = "secret-token-never-disclose-998877"
+
+    class EchoErrorHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": f"Invalid token {secret_token}"}).encode("utf-8"))
+
+        def log_message(self, format, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), EchoErrorHandler)
+    server.timeout = 1
+    port = server.server_port
+    t = threading.Thread(target=server.handle_request, daemon=True)
+    t.start()
+
+    monkeypatch.setenv("REFRACT_ASK_URL", f"http://127.0.0.1:{port}/ask")
+    monkeypatch.setenv("REFRACT_ASK_TOKEN", secret_token)
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["ask", "Question with secret?"])
+        assert exc_info.value.code != 0
+        captured = capsys.readouterr()
+        assert secret_token not in captured.out
+        assert secret_token not in captured.err
+    finally:
+        server.server_close()
+        t.join(timeout=2)
+
+
+def test_ask_does_not_require_daemon_config(monkeypatch, tmp_path, capsys) -> None:
+    import http.server
+
+    from refract.cli import main
+
+    class OkHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"answer": "ok"}).encode("utf-8"))
+
+        def log_message(self, format, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), OkHandler)
+    server.timeout = 1
+    port = server.server_port
+    t = threading.Thread(target=server.handle_request, daemon=True)
+    t.start()
+
+    # Point REFRACT_HOME to non-existent directory without config.toml
+    monkeypatch.setenv("REFRACT_HOME", str(tmp_path / "nonexistent-home"))
+    monkeypatch.setenv("REFRACT_ASK_URL", f"http://127.0.0.1:{port}/ask")
+    monkeypatch.setenv("REFRACT_ASK_TOKEN", "valid-token")
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["ask", "Question without config?"])
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "ok"
+    finally:
+        server.server_close()
+        t.join(timeout=2)

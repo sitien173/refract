@@ -27,6 +27,7 @@ def run_shell_command(
     timeout_s: int = 0,
     cancel_event: threading.Event | None = None,
     stdin_text: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> Generator[str, None, None]:
     """Execute a command and stream its output line-by-line (non-Windows / fallback)."""
     yield from stream_shell_command_lines(
@@ -40,6 +41,7 @@ def run_shell_command(
         cancel_event=cancel_event,
         check_returncode=True,
         stdin_text=stdin_text,
+        env=env,
     )
 
 

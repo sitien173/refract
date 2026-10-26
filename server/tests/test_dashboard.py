@@ -2415,3 +2415,146 @@ async def test_dashboard_settings_put_is_not_supported(active_runtime) -> None:
         body=b'{"max_project_readers": 2}',
     )
     assert status == 404
+
+
+@pytest.mark.asyncio
+async def test_ask_malformed_body_and_empty_question(active_runtime) -> None:
+    app = create_application()
+
+    # Empty body
+    status, _, _ = await request(app, "/ask", method="POST", body=b"")
+    assert status == 400
+
+    # Malformed JSON
+    status, _, _ = await request(app, "/ask", method="POST", body=b"not-json")
+    assert status == 400
+
+    # Missing / empty token
+    status, _, _ = await request(
+        app, "/ask", method="POST",
+        body=json.dumps({"token": "", "question": "valid"}).encode(),
+    )
+    assert status == 400
+
+    # Missing / empty question
+    status, _, _ = await request(
+        app, "/ask", method="POST",
+        body=json.dumps({"token": "tok", "question": "   "}).encode(),
+    )
+    assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_ask_token_auth_and_wrong_job(active_runtime) -> None:
+    app = create_application()
+    token = active_runtime.ask_registry.issue_token("job-1")
+
+    # Unknown tokens, including non-ASCII and escaped surrogate values, -> 403
+    for unknown in ("unknown-token", "未知"):
+        status, _, _ = await request(
+            app, "/ask", method="POST",
+            body=json.dumps({"token": unknown, "question": "q"}).encode(),
+        )
+        assert status == 403
+    status, _, _ = await request(
+        app, "/ask", method="POST",
+        body=b'{"token": "\\ud800", "question": "q"}',
+    )
+    assert status == 403
+
+    # Revoked token -> 403
+    active_runtime.ask_registry.revoke_token("job-1")
+    status, _, _ = await request(
+        app, "/ask", method="POST",
+        body=json.dumps({"token": token, "question": "q"}).encode(),
+    )
+    assert status == 403
+
+    # Wrong job identifiers, including non-ASCII and escaped surrogate values, -> 403
+    token2 = active_runtime.ask_registry.issue_token("job-2")
+    for wrong_job in ("job-other", "未知"):
+        status, _, _ = await request(
+            app, "/ask", method="POST",
+            body=json.dumps({"token": token2, "question": "q", "job_id": wrong_job}).encode(),
+        )
+        assert status == 403
+    status, _, _ = await request(
+        app, "/ask", method="POST",
+        body=f'{{"token": "{token2}", "question": "q", "job_id": "\\ud800"}}'.encode("utf-8"),
+    )
+    assert status == 403
+
+
+@pytest.mark.asyncio
+async def test_ask_answered_and_conflict(active_runtime) -> None:
+    import asyncio
+    app = create_application()
+    token = active_runtime.ask_registry.issue_token("job-ask-1")
+
+    async def _respond():
+        await asyncio.sleep(0.02)
+        active_runtime.ask_registry.deliver_answer("job-ask-1", "Answer from coordinator")
+
+    asyncio.create_task(_respond())
+    status, _, body = await request(
+        app, "/ask", method="POST",
+        body=json.dumps({"token": token, "question": "What next?"}).encode(),
+    )
+    assert status == 200
+    assert json.loads(body.decode()) == {"answer": "Answer from coordinator"}
+
+
+@pytest.mark.asyncio
+async def test_ask_second_pending_returns_409(active_runtime) -> None:
+    import asyncio
+    app = create_application()
+    token = active_runtime.ask_registry.issue_token("job-conflict-1")
+
+    first_req = asyncio.create_task(
+        request(app, "/ask", method="POST", body=json.dumps({"token": token, "question": "Q1"}).encode())
+    )
+    await asyncio.sleep(0.01)
+
+    # Second question while first is pending returns 409
+    status, _, _ = await request(
+        app, "/ask", method="POST",
+        body=json.dumps({"token": token, "question": "Q2"}).encode(),
+    )
+    assert status == 409
+
+    active_runtime.ask_registry.deliver_answer("job-conflict-1", "Answer 1")
+    first_status, _, first_body = await first_req
+    assert first_status == 200
+    assert json.loads(first_body.decode()) == {"answer": "Answer 1"}
+
+
+@pytest.mark.asyncio
+async def test_ask_timeout_returns_no_answer_text(active_runtime) -> None:
+    from dataclasses import replace
+    from refract.ask import NO_ANSWER_TEXT
+    app = create_application()
+    token = active_runtime.ask_registry.issue_token("job-timeout-1")
+    orig_config = active_runtime.config
+    try:
+        active_runtime.config = replace(orig_config, ask_timeout_s=0.02)
+        status, _, body = await request(
+            app, "/ask", method="POST",
+            body=json.dumps({"token": token, "question": "Timing out?"}).encode(),
+        )
+        assert status == 200
+        assert json.loads(body.decode()) == {"answer": NO_ANSWER_TEXT}
+    finally:
+        active_runtime.config = orig_config
+
+
+@pytest.mark.asyncio
+async def test_ask_non_loopback_rejected(active_runtime) -> None:
+    app = create_application()
+    token = active_runtime.ask_registry.issue_token("job-loopback-1")
+    status, _, _ = await request(
+        app, "/ask", method="POST", client_host="192.168.1.50",
+        body=json.dumps({"token": token, "question": "Non-loopback"}).encode(),
+    )
+    assert status == 403
+
+

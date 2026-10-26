@@ -335,7 +335,7 @@ def _normalize_tool_error(wire_result: Mapping[str, Any], tool_name: str, reques
             RefractError(
                 "invalid_request",
                 "The requested tool is not available.",
-                "Use one of the seven tools returned by tools/list.",
+                "Use one of the eight tools returned by tools/list.",
             )
         )
     log.warning(
@@ -414,10 +414,11 @@ def _error_boundary(ctx: Any, call_next: Callable[[Any], Awaitable[Any]], schema
 _PROJECT_RESOLVE_DESCRIPTION = "Resolve an existing Git-root directory to a stable project ID. Use once per session. path must name an existing directory. Returns {project:{id,alias,path}}. Errors: invalid_path, alias_taken."
 _TASK_GUIDE_DESCRIPTION = "Load workflow and profile choices and project guidance before submission. Returns {workflows,profiles:{default,available},guidance}. Errors: unknown_project, config_invalid, response_too_large."
 _JOB_SUBMIT_DESCRIPTION = "Queue a durable coding job. prompt must be self-contained; optionally pass next_target from a failed job's result.metadata to pin to that candidate. Returns {job:summary}. Errors include targets_unavailable (retry_after_s), invalid_request, unknown_project, unknown_profile, config_invalid, daemon_stopping, response_too_large."
-_JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are normal; repeat with the same job_id. Terminal text uses Unicode character offsets. Every terminal page returns result.metadata, including a live opaque next_target on failed or cancelled jobs. Returns {job:summary,result:{text,error,next_offset,metadata}}. Errors: unknown_job, invalid_request, response_too_large."
+_JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are normal; repeat with the same job_id. When a running worker asks a question, wait returns early with result.pending_question. Terminal text uses Unicode character offsets. Every terminal page returns result.metadata, including a live opaque next_target on failed or cancelled jobs. Returns {job:summary,result:{text,error,next_offset,metadata}}. Errors: unknown_job, invalid_request, response_too_large."
 _JOB_LIST_DESCRIPTION = "List all active jobs and up to 10 most recently updated terminal jobs for a project. Returns {active,recent,more_recent}. Errors: unknown_project, response_too_large."
 _JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary}. Errors: unknown_job, response_too_large."
 _JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, targets_unavailable, response_too_large."
+_JOB_ANSWER_DESCRIPTION = "Deliver a coordinator answer (up to 8192 characters) to a running job's pending question. Returns {job:summary}. Errors: unknown_job, invalid_state, invalid_request, response_too_large."
 
 
 _INSTRUCTIONS = """Refract runs durable coding jobs (consult, implement, review, other) on external agents for a local project. Jobs persist across client disconnects and daemon restarts.
@@ -434,6 +435,7 @@ Rules:
 - Reuse context_key to continue a worker session; fresh_session=true starts over.
 - On session resume, call job_list(project_id) and reconcile active jobs before submitting new ones.
 - Use job_cancel(job_id) to stop queued or running work. Use job_retry(job_id) for eligible terminal jobs.
+- Use job_answer(job_id, answer) to answer a running worker question returned in result.pending_question.
 - On failed/cancelled job_wait, use result.metadata.next_target with job_submit(next_target=...) for a follow-up on the next healthy target; tokens are opaque and can expire after config changes. result.metadata.retryable reflects a live next target for routing failures.
 - targets_unavailable errors include retry_after_s; wait at least that many seconds before retrying.
 - Errors are JSON with code, message, next_action, retryable (and retry_after_s for targets_unavailable). Follow next_action."""
@@ -686,10 +688,20 @@ async def job_wait(
         raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
     summary = _summary(current)
     if current.state not in TERMINAL_STATES:
+        pending = runtime.ask_registry.get_pending(job_id) if hasattr(runtime, "ask_registry") else None
+        result: dict[str, Any] = {"text": "", "error": "", "next_offset": None}
+        if pending is not None:
+            result["pending_question"] = {
+                "question_id": pending.question_id,
+                "text": pending.text,
+            }
+            next_action = "Call job_answer to answer the pending question."
+        else:
+            next_action = "Call job_wait again with the same job_id."
         return _render_payload({
             "job": summary,
-            "result": {"text": "", "error": "", "next_offset": None},
-            "next_action": "Call job_wait again with the same job_id.",
+            "result": result,
+            "next_action": next_action,
         })
     return _page_terminal_result(
         current,
@@ -769,6 +781,32 @@ async def job_retry(
     return _render_payload(
         {"job": _summary(job)},
         applied=("Job retry", job.id, f"Use job ID {job.id} with job_wait or job_list; do not retry it again blindly."),
+    )
+
+
+@_tool(
+    title="Answer Job Question",
+    description=_JOB_ANSWER_DESCRIPTION,
+    annotations=_annotations("Answer Job Question", read_only=False, destructive=False, idempotent=False, open_world=False),
+    structured_output=False,
+)
+@_logged_request("job_answer")
+async def job_answer(
+    job_id: Annotated[str, Field(description="Job ID returned by job_submit.", min_length=1)],
+    answer: Annotated[str, Field(description="Answer to deliver to the running worker.", min_length=1, max_length=8192)],
+    ctx: Context,
+) -> str:
+    runtime = _runtime(ctx)
+    job = await run_sync(runtime.database.job, job_id)
+    if job is None:
+        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
+    await runtime.job_answer(job_id, answer)
+    current = await run_sync(runtime.database.job, job_id)
+    if current is None:
+        raise _internal_error(_request_id(ctx))
+    return _render_payload(
+        {"job": _summary(current)},
+        applied=("Job answer", job.id, f"Use job ID {job.id} with job_wait or job_list; do not repeat the answer blindly."),
     )
 
 
@@ -859,6 +897,6 @@ mcp = create_mcp()
 
 
 __all__ = [
-    "RefractError", "create_application", "job_cancel", "job_list", "job_retry",
+    "RefractError", "create_application", "job_answer", "job_cancel", "job_list", "job_retry",
     "job_submit", "job_wait", "mcp", "project_resolve", "task_guide",
 ]

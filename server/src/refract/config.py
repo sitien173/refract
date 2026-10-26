@@ -22,6 +22,7 @@ from refract.workflows import get_workflow
 
 log = get_logger("config")
 DEFAULT_PORT = 8765
+DEFAULT_ASK_TIMEOUT_S = 300
 
 
 @dataclass(slots=True, frozen=True)
@@ -98,6 +99,7 @@ class DaemonConfig:
     breaker_failure_threshold: int = 3
     breaker_base_cooldown_s: int = 60
     breaker_max_cooldown_s: int = 900
+    ask_timeout_s: int = DEFAULT_ASK_TIMEOUT_S
 
     @property
     def database_path(self) -> Path:
@@ -626,6 +628,7 @@ def _load_config_values(
         "breaker_failure_threshold",
         "breaker_base_cooldown_s",
         "breaker_max_cooldown_s",
+        "ask_timeout_s",
     }
     if unsupported_daemon:
         raise ValueError(f"Unsupported daemon settings: {sorted(unsupported_daemon)}")
@@ -677,6 +680,7 @@ def _load_config_values(
         breaker_failure_threshold=_positive_int(daemon.get("breaker_failure_threshold"), 3, "[daemon].breaker_failure_threshold"),
         breaker_base_cooldown_s=breaker_base,
         breaker_max_cooldown_s=breaker_max,
+        ask_timeout_s=_positive_int(daemon.get("ask_timeout_s"), DEFAULT_ASK_TIMEOUT_S, "[daemon].ask_timeout_s"),
     )
 
 
@@ -758,6 +762,7 @@ def _load_project_config_values(
         breaker_failure_threshold=base.breaker_failure_threshold,
         breaker_base_cooldown_s=base.breaker_base_cooldown_s,
         breaker_max_cooldown_s=base.breaker_max_cooldown_s,
+        ask_timeout_s=base.ask_timeout_s,
     )
 
 

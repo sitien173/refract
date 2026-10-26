@@ -251,6 +251,7 @@ class DriverRegistry:
         timeout_s: int,
         cancel_event: threading.Event,
         emitter: Callable[[dict[str, Any]], None] | None = None,
+        env: dict[str, str] | None = None,
     ) -> DriverResult:
         try:
             args = _target_args(target)
@@ -279,6 +280,7 @@ class DriverRegistry:
             timeout_s=timeout_s,
             cancel_event=cancel_event,
             emitter=emitter,
+            env=env,
         )
         result = await asyncio.to_thread(backend.execute, params)
         return _normalize(result)

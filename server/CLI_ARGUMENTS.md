@@ -45,6 +45,76 @@ extends = "base"
 consult = "pi-offline"
 ```
 
+## Worker coordinator questions
+
+During a worker job, run `refract ask "<question>"` for an
+unresolved decision. The command reads `REFRACT_ASK_URL` and
+`REFRACT_ASK_TOKEN` from the injected environment without daemon configuration.
+Never print these values or copy them into prompts.
+
+The command blocks until the coordinator answers or the server ask timeout
+expires, then prints the answer. The timeout response is exactly:
+
+```text
+No answer from coordinator; use your best judgment or end with BLOCKED.
+```
+
+Missing environment, connection failures, and HTTP rejection return nonzero.
+If the command fails or shell tools are unavailable, return `BLOCKED` with
+the unresolved question. The coordinator answers `result.pending_question`
+through `job_answer`, then resumes `job_wait` on the same job ID.
+
+The worker tool-shell PATH must contain the installed `refract` executable.
+The live probes prepend this checkout's `server/.venv/bin` to PATH. They do
+not alter backend credentials, configuration, sandbox controls, or tool lists.
+
+### Live ask reachability evidence
+
+Observed on Linux, 2026-10-26. Command from `server/`:
+
+```sh
+uv run pytest -m live -k test_live_ask_coordinator tests/test_live_backends.py -v -s --tb=no
+```
+
+Each probe used `DriverRegistry.execute`, a temporary workspace, a 90-second
+backend deadline, and an ephemeral loopback listener. Success required a valid
+injected token, the exact question, and an exact random answer not present in
+the prompt. The listener emulated answer delivery; this was not a full live
+daemon/MCP round trip. Server tests cover that integration separately.
+
+| Backend | Target mode | Observed result | Evidence |
+|---|---|---|---|
+| codex | normal | Prerequisite failure | CLI exited before session creation; inherited `CODEX_HOME` directory does not exist. Reachability unverified. |
+| codex | read_only | Prerequisite failure | Same startup failure; reachability unverified. |
+| claude | normal | Reached listener | Valid request and exact answer. |
+| claude | read_only | BLOCKED fallback | Worker returned BLOCKED; listener not reached. Target tools exclude shell execution. |
+| agy | normal | Reached listener | Valid request and exact answer. |
+| agy | read_only | Reached listener | Valid request and exact answer; see policy limitation below. |
+| pi | normal | Reached listener | Valid request and exact answer. |
+| pi | read_only | BLOCKED fallback | Worker returned BLOCKED; listener not reached. Target tools exclude shell execution. |
+
+Initial result: 4 passed, 2 xfailed for explicit BLOCKED fallback,
+2 failed for Codex startup, 3 deselected in 113.05 seconds. An xfail records
+fallback behavior, not successful env passthrough or loopback reachability.
+No successful probe establishes stronger sandbox or isolation guarantees.
+
+The final rerun used the same command with `-v -s -rx --tb=short`.
+It reproduced all eight outcomes: 4 passed, 2 xfailed, 2 failed,
+3 deselected in 111.78 seconds. Both Codex failure messages explicitly named
+the missing inherited `CODEX_HOME` directory.
+
+Codex diagnosis reproduced with `codex --version`, `codex exec --help`, and
+`printf '%s\\n' 'Reply with PONG.' | codex exec --cd /tmp --yolo --json -`.
+Installed version: `codex-cli 0.160.1`. The last command exited 1 because the
+inherited `CODEX_HOME` directory does not exist. No credential or configuration
+change was made. Both Codex modes require a valid existing backend home before
+reachability can be tested.
+
+Policy limitation: the current driver does not translate `read_only` into
+restrictions for Codex or Agy. Their target-mode labels alone do not establish
+read-only enforcement. Claude and Pi receive their documented restricted tool
+lists. These probes do not add shell tools or weaken target controls.
+
 ## Target configuration
 
 Every target accepts an `args` array for backend-specific options that do not

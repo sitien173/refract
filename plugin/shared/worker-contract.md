@@ -44,6 +44,14 @@ For each task in order:
 - **Evidence before "done":** the phase `Done When` checks must pass with fresh
   output; record RED→GREEN and root-cause evidence in `notes.md`.
 
+## Coordinator questions
+
+For an unresolved decision the phase prompt does not answer, run
+`refract ask "<question>"` and continue with its response. Do not ask about
+routine choices already settled by the plan. The command needs the injected
+`REFRACT_ASK_URL` and `REFRACT_ASK_TOKEN` environment variables; never print
+their values. If the command fails, return `BLOCKED` with the question.
+
 ## Prompt discipline
 
 - Stay within the declared file set. Report every changed path.

@@ -18,6 +18,8 @@ class BackendParams:
     timeout_s: int = 0
     cancel_event: threading.Event | None = None
     emitter: Callable[[dict[str, Any]], None] | None = None
+    env: dict[str, str] | None = field(default=None, repr=False)
+
 
 
 @dataclass(slots=True)

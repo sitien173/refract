@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import shutil
 import subprocess
@@ -126,6 +127,7 @@ def stream_shell_command_lines(
     cancel_event: threading.Event | None = None,
     check_returncode: bool = False,
     stdin_text: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> Generator[str, None, None]:
     """Execute a command and stream combined stdout and stderr lines.
 
@@ -149,6 +151,10 @@ def stream_shell_command_lines(
     }
     if errors is not None:
         popen_kwargs["errors"] = errors
+    if env is not None:
+        merged_env = dict(os.environ)
+        merged_env.update(env)
+        popen_kwargs["env"] = merged_env
 
     process = subprocess.Popen(popen_cmd, **popen_kwargs)
     output_queue: queue.Queue[str | None] = queue.Queue()
@@ -213,6 +219,8 @@ def consume_stream(
     kwargs: dict[str, Any] = {"cwd": cwd, "timeout_s": params.timeout_s, "cancel_event": params.cancel_event}
     if stdin_text is not None:
         kwargs["stdin_text"] = stdin_text
+    if params.env is not None:
+        kwargs["env"] = params.env
     try:
         for line in run(cmd, **kwargs):
             event = parse_json_object(line.strip())

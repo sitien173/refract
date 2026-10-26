@@ -2,7 +2,7 @@
 
 Follow these rules for every Refract MCP call. Default endpoint is `http://127.0.0.1:8765/mcp`;
 
-## Seven tools
+## Eight tools
 
 | Tool | Parameters | Returns |
 |---|---|---|
@@ -13,6 +13,7 @@ Follow these rules for every Refract MCP call. Default endpoint is `http://127.0
 | `job_list` | `project_id` | `{active, recent, more_recent}` |
 | `job_cancel` | `job_id` | `{job:summary}` |
 | `job_retry` | `job_id` | `{job:summary}` |
+| `job_answer` | `job_id`, `answer` | `{job:summary}` |
 
 Call only these tools with only these parameters; your client may prefix the names. Unknown tool arguments return `invalid_request`. Capture `project.id` and `job.id` from returned envelopes.
 
@@ -52,9 +53,8 @@ At most one job per project runs at a time. Jobs within each project are admitte
 ## Waiting, paging, and bounds
 
 - Call `job_wait` with its 3600-second heartbeat default. `timeout_s` accepts 0..3600. `result_offset` is a nonnegative Unicode code-point offset, default 0.
-- Wait sequentially, one call per job. Do not use short hardcoded waits, polling, sleeps, or overlapping calls.
-- Treat a timeout as normal, not failure. Repeat only while nonterminal; nonterminal text is empty and the offset does not advance.
-- After a dropped connection, wait again on the same job ID.
+- Treat timeouts as normal, not failure; repeat only while nonterminal. When a worker asks a question, `job_wait` returns early with `result.pending_question` (`{question_id, text}`); call `job_answer(job_id, answer)` (up to 8192 characters) to deliver the answer; calling without a pending question or on a terminal job returns `invalid_state`.
+- Wait sequentially, one call per job; no polling or overlapping calls. After dropped connections, wait again on the same job ID.
 
 To read a terminal result, keep `result.text`, then call `job_wait(job_id, timeout_s=0, result_offset=<result.next_offset>)` until `next_offset` is null. Concatenate every page.
 

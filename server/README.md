@@ -11,7 +11,7 @@ It exposes AI agent workflows through Model Context Protocol tools.
 - One-job-per-project FIFO admission with multi-project concurrency bounded by global `max_jobs`.
 - Immutable execution plan snapshots for every job.
 - Multi-provider support for Antigravity, Codex, Pi, and Claude Code backends.
-- Seven self-describing MCP tools for project resolution, guidance, and durable job management.
+- Eight self-describing MCP tools for project resolution, guidance, and durable job management.
 - Isolated and read-only execution modes for sensitive tasks.
 - Per-project, per-workflow context instructions injected into every backend.
 
@@ -339,7 +339,7 @@ reference.
 
 ## MCP Tool Surface
 
-Refract exposes seven tools and no MCP resources:
+Refract exposes eight tools and no MCP resources:
 
 | Tool | Purpose |
 | --- | --- |
@@ -350,10 +350,11 @@ Refract exposes seven tools and no MCP resources:
 | `job_list(project_id)` | List active jobs and the 10 most recently updated terminal jobs. |
 | `job_cancel(job_id)` | Cancel a queued or running job. |
 | `job_retry(job_id)` | Retry a failed, cancelled, or interrupted job. |
+| `job_answer(job_id, answer)` | Deliver an answer (up to 8192 characters) to a pending worker question. |
 
 The standard cycle is `project_resolve` → `task_guide` → `job_submit` → `job_wait` (four calls). Prompts must be self-contained. Jobs in a project are admitted one at a time in FIFO order; jobs in different projects can run concurrently up to global `max_jobs`. Job summaries do not expose provider or target identity.
 
-`job_wait` supports timeouts from 0 to 3600 seconds. `timeout_s=0` reads immediately. A terminal result is paged by Unicode character offset; continue with the returned `next_offset`. Nonterminal timeouts return the current summary and an action to call `job_wait` again. Errors are compact JSON containing `code`, `message`, `next_action`, and `retryable` and are delivered as MCP tool errors.
+`job_wait` supports timeouts from 0 to 3600 seconds. `timeout_s=0` reads immediately. A terminal result is paged by Unicode character offset; continue with the returned `next_offset`. Nonterminal timeouts return the current summary and an action to call `job_wait` again. When a running job asks a question, `job_wait` returns early with `result.pending_question` containing `question_id` and `text`. Call `job_answer` with the job ID and answer (up to 8192 characters) to resume execution; calling without a pending question or on a terminal job returns `invalid_state`. Errors are compact JSON containing `code`, `message`, `next_action`, and `retryable` and are delivered as MCP tool errors.
 
 MCP tool results are bounded. Terminal result text adapts to the serialized response budget without losing characters. Oversized non-pageable metadata returns `response_too_large`; for operations already applied, the error identifies the created or affected ID. Use the dashboard to inspect oversized metadata rather than blindly repeating a mutation.
 

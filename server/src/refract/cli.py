@@ -9,6 +9,8 @@ import os
 import shutil
 import sys
 from collections.abc import Sequence
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from refract.config import DaemonConfig, load_config
 from refract.logging_setup import configure as configure_logging, get_logger, resolve_config
@@ -52,7 +54,42 @@ def _parser() -> argparse.ArgumentParser:
         help="Enable or disable stderr application logs",
     )
     commands.add_parser("doctor", help="Inspect daemon prerequisites")
+    ask = commands.add_parser("ask", help="Ask the coordinator during a worker job")
+    ask.add_argument("question")
     return parser
+
+
+def _ask(question: str) -> int:
+    url = os.environ.get("REFRACT_ASK_URL")
+    token = os.environ.get("REFRACT_ASK_TOKEN")
+    if not url or not token:
+        sys.stderr.write("refract ask requires REFRACT_ASK_URL and REFRACT_ASK_TOKEN.\n")
+        return 1
+    if not question.strip():
+        sys.stderr.write("Question must not be empty.\n")
+        return 1
+    try:
+        request = Request(
+            url,
+            data=json.dumps({"token": token, "question": question}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request) as response:
+            answer = json.load(response)["answer"]
+        if not isinstance(answer, str):
+            raise TypeError("Invalid answer")
+    except HTTPError as exc:
+        sys.stderr.write(f"Coordinator rejected the question: HTTP {exc.code}.\n")
+        return 1
+    except (OSError, URLError):
+        sys.stderr.write("Coordinator connection failed.\n")
+        return 1
+    except (ValueError, KeyError, TypeError):
+        sys.stderr.write("Coordinator response or ask environment is invalid.\n")
+        return 1
+    sys.stdout.write(answer + "\n")
+    return 0
 
 
 def _doctor(config: DaemonConfig | None = None) -> int:
@@ -122,6 +159,8 @@ def _is_loopback_bind(host: str) -> bool:
 def main(argv: Sequence[str] | None = None) -> None:
     """Run the daemon or inspect local prerequisites."""
     args = _parser().parse_args(argv)
+    if args.command == "ask":
+        raise SystemExit(_ask(args.question))
     if args.command == "doctor":
         raise SystemExit(_doctor())
     if args.command not in {None, "serve"}:

@@ -19,6 +19,7 @@ from starlette.staticfiles import StaticFiles
 
 from pydantic import ValidationError
 
+from refract.ask import AskAuthError, AskConflictError
 from refract.config import DaemonConfig, ProfileDeclaration, TargetSelection, load_task_guide
 from refract.config_inspection import sanitize_config_error
 from refract.config_mutation import ConfigurationMutationError
@@ -1120,8 +1121,68 @@ def _register_asset_routes() -> list[Route]:
     ]
 
 
+def _register_ask_routes(state: DashboardState) -> list[Route]:
+    async def ask(request: Request) -> Response:
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+
+        try:
+            raw_body = await request.body()
+        except Exception:
+            return _error("Malformed request body", 400, code="bad_request")
+
+        if not raw_body:
+            return _error("Malformed request body", 400, code="bad_request")
+
+        try:
+            body = json.loads(raw_body.decode("utf-8"))
+        except Exception:
+            return _error("Malformed request body", 400, code="bad_request")
+
+        if not isinstance(body, dict):
+            return _error("Malformed request body", 400, code="bad_request")
+
+        token = body.get("token")
+        question = body.get("question")
+        job_id = body.get("job_id") or request.headers.get("x-refract-job-id") or request.query_params.get("job_id")
+
+        if not isinstance(token, str) or not token:
+            return _error("token must be a non-empty string", 400, code="bad_request")
+
+        if not isinstance(question, str) or not question.strip():
+            return _error("question must be a non-empty string", 400, code="bad_request")
+
+        if job_id is not None and not isinstance(job_id, str):
+            return _error("job_id must be a string", 400, code="bad_request")
+
+        registry = getattr(runtime, "ask_registry", None)
+        if registry is None:
+            return _runtime_error()
+
+        timeout_s = getattr(runtime.config, "ask_timeout_s", 300)
+        try:
+            answer = await registry.ask(
+                token=token,
+                question=question,
+                timeout_s=timeout_s,
+                job_id=job_id,
+            )
+            return _json_response({"answer": answer}, 200)
+        except AskAuthError:
+            return _error("Forbidden", 403, code="forbidden")
+        except AskConflictError:
+            return _error("A question is already pending for this job", 409, code="conflict")
+
+    return [
+        _loopback_route("/ask", ask, methods=["POST"]),
+    ]
+
+
 def register_dashboard_routes(state: DashboardState) -> list[Route]:
     return [
+        *_register_ask_routes(state),
         *_register_status_routes(state),
         *_register_target_configuration_routes(state),
         *_register_profile_configuration_routes(state),

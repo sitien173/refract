@@ -46,14 +46,16 @@ assert agy_version == plugin_version == market_version == codex_version == pi_ve
 
 contract = (root / "skills/coordinating-multi-model-work/references/tool-contract.md").read_text()
 contract_flat = " ".join(contract.split())
-tool_table = contract.split("## Seven tools", 1)[1].split("## ", 1)[0]
+tool_table = contract.split("## Eight tools", 1)[1].split("## ", 1)[0]
 tools = re.findall(r"^\| `([a-z_]+)` \|", tool_table, re.M)
-assert tools == ["project_resolve", "task_guide", "job_submit", "job_wait", "job_list", "job_cancel", "job_retry"]
+assert tools == ["project_resolve", "task_guide", "job_submit", "job_wait", "job_list", "job_cancel", "job_retry", "job_answer"]
 for detail in (
     "`path`, `alias=\"\"`", "{project:{id, alias, path}}",
     "{workflows, profiles:{default, available}, guidance}",
     "{job:summary}", "{job:summary, result:{text, error, next_offset, metadata}}",
     "{active, recent, more_recent}", "{job:summary}",
+    "`job_id`, `answer`",
+    "pending_question",
     "Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, created_at, updated_at`.",
     "Unknown tool arguments return `invalid_request`.",
     "At most one job per project runs at a time. Jobs within each project are admitted FIFO, bounded by the global `max_jobs` capacity; jobs in different projects may run concurrently up to that capacity.",
@@ -193,7 +195,7 @@ test "$(wc -l < skills/coordinating-multi-model-work/references/tool-contract.md
 test "$(wc -l < skills/coordinating-multi-model-work/references/review.md)" -le 100
 test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 100
 
-if grep -R -E 'project_resolve|task_guide|job_submit|job_wait|job_list|job_cancel|job_retry|project_register|openmcp://' \
+if grep -R -E 'project_resolve|task_guide|job_submit|job_wait|job_list|job_cancel|job_retry|job_answer|project_register|openmcp://' \
     skills/brainstorming skills/systematic-debugging \
     skills/test-driven-development skills/verifying-before-completion; then
     printf 'Refract mechanics leaked into a policy skill\n' >&2
