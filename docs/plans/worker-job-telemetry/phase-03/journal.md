@@ -35,10 +35,10 @@ Independent job `8c5dce8b-665d-4253-842a-65b833242b7e` returned FAIL. Reviewed r
 Live-probe limitations are not blockers. Two automatic specification fix cycles exhausted. Further fixes require user authorization. Explicit persisted invalidation may require execution.py and test_execution.py beyond original Phase 3 allowed file set; approve that narrowly with additional cycle.
 
 ## Review Result
-- Spec Status: FAIL
-- Quality Status: FAIL
-- Phase outcome: BLOCKED
-- Debt: none. Correctness blockers cannot be accepted as debt.
+- Spec Status: PASS
+- Quality Status: PASS
+- Phase outcome: DONE
+- Debt: none
 - User authorized additional cycle with narrow execution invalidation scope.
 - Implementation `9020ee32-ac57-4dcd-a997-54a6408cbff6` returned TASK_COMPLETE, five declared files matched diff.
 - Fresh coordinator full Python check: 722 passed, 15 deselected, 124.43 seconds at tree checkpoint `22d42a0`.
@@ -46,9 +46,14 @@ Live-probe limitations are not blockers. Two automatic specification fix cycles 
   1. codex.py:253–257,721–725,743–750: turn.completed immediately repopulates context after budget exhaustion. Exhausted collector plus input 5000/output 700/reasoning 100 yields 5600 rather than null. Suppress fallback context and emitted observations after exhaustion; test integrated parser and persistence.
   2. codex.py:243–246,274–291: same-inode truncation resets offset without revoking header_verified. Token-only shortened file supplies 990 used/200000 capacity without owner header. Revoke and revalidate header on truncation; regression required.
 - Reviewer confirmed persisted invalidation, normal rollout precedence, session switch, and different-inode discovery replacement are addressed.
-- Next: authorize one additional narrowly scoped fix/review cycle for these two findings.
+- User authorized narrow final cycle. Implementation job `a1aa9b23-b8d0-481e-9513-410b670db9c4` returned TASK_COMPLETE; four declared files match inspected diff.
+- RED and GREEN evidence in notes Task 6. Source delta: revoke header_verified on truncation; guard both fallback context paths with budget_exhausted.
+- Fresh coordinator check at `cee6b69`: `cd server && uv run pytest` passed, 724 passed, 15 deselected, 127.77 seconds.
+- Independent review `adb85142-6224-4deb-890e-10cb2c6a94b1`: PASS. Both remaining blockers fixed; no introduced blockers. No implementation or Git changes from reviewer.
+- Accepted limitation: runtime availability/timing remains unverified because live probes are not authorized. Unsupported Pi/Agy capacities remain unavailable.
+- Next: Execute Phase 4.
 
 ## Final Checkpoint
 - Phase base ref: refs/plans/worker-job-telemetry/phase-03/base
-- Phase implementation ref: pending
+- Phase implementation ref: refs/plans/worker-job-telemetry/phase-03/impl
 - State checkpoint: temporary commit
