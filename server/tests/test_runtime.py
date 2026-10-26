@@ -82,6 +82,64 @@ async def test_live_metadata_routes_after_failure_without_persisting_hint(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_live_result_metadata_preserves_telemetry(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 250, "source": "provider", "quality": "reported"},
+        "context_used_tokens": {"value": 1500, "source": "provider", "quality": "reported"},
+    }
+    try:
+        job_id = "live-telemetry-test"
+        runtime.database.create_job(
+            job_id=job_id, project_id=project.id, workflow="consult",
+            profile="balanced", prompt="hi",
+            execution_plan_json=json.dumps(execution_plan_data(plan)),
+            context_key=job_id,
+        )
+        runtime.database.merge_job_telemetry(job_id, telemetry)
+        view = runtime.database.job(job_id)
+        result = runtime.live_result_metadata(view)
+        assert "telemetry" in result
+        assert result["telemetry"]["total_input_tokens"]["value"] == 250
+        assert result["telemetry"]["context_used_tokens"]["value"] == 1500
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_live_result_metadata_historical_empty_metadata(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    try:
+        job_id = "live-historical-test"
+        runtime.database.create_job(
+            job_id=job_id, project_id=project.id, workflow="consult",
+            profile="balanced", prompt="hi",
+            execution_plan_json=json.dumps(execution_plan_data(plan)),
+            context_key=job_id,
+        )
+        view = runtime.database.job(job_id)
+        result = runtime.live_result_metadata(view)
+        assert "telemetry" not in result
+        assert result["model_name"] is None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_submit_rejects_foreign_profile_and_stale_revision_tokens_without_insert(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     _two_target_config(config_path)

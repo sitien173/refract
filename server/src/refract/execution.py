@@ -21,6 +21,7 @@ from refract.models import ProjectView, TargetView, TERMINAL_STATES
 from refract.planning import ExecutionPlan, parse_execution_plan, target_execution_key
 from refract.streaming import StreamRecorder
 from refract.scheduler import CancelEvent
+from refract.telemetry import TelemetryAccumulator
 from refract.workers import run_sync
 
 
@@ -59,6 +60,7 @@ class _ExecutionContext:
     session_id: str
     effective_prompt: str
     semaphore: asyncio.Semaphore
+    accumulator: TelemetryAccumulator
 
 
 class TargetExecutor:
@@ -84,15 +86,29 @@ class TargetExecutor:
             if self._target_users.get(key, 0)
         }
     async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: CancelEvent, fresh_session: bool = False) -> TargetExecutionResult:
+        record = await run_sync(self.database.job_record, job_id)
+        existing_meta: dict[str, Any] = {}
+        if record and record.get("result_metadata_json"):
+            try:
+                parsed = json.loads(record["result_metadata_json"])
+                if isinstance(parsed, dict):
+                    existing_meta = parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+        accumulator = TelemetryAccumulator(existing_meta.get("telemetry"))
+
         last = DriverResult("REQUEST_FATAL", "", "", "No admissible target", "circuit_open")
         if not plan.selection.targets:
-            return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True))
+            tel = accumulator.snapshot().model_dump(mode="json") if accumulator._has_any_consumption else None
+            return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
         if cancel_event.is_set():
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-            return TargetExecutionResult(cancelled, "", metadata=self._result_metadata(cancelled, None, None))
+            tel = accumulator.snapshot().model_dump(mode="json") if accumulator._has_any_consumption else None
+            return TargetExecutionResult(cancelled, "", metadata=self._result_metadata(cancelled, None, None, telemetry=tel))
         target = await run_sync(self._select_target, plan.selection.targets, plan, job_id)
         if target is None:
-            return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True))
+            tel = accumulator.snapshot().model_dump(mode="json") if accumulator._has_any_consumption else None
+            return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
         target_key = target_execution_key(target)
         session_id, effective_prompt = await self._prepare_session(
             project, context_key, workflow, target_key, prompt, fresh_session
@@ -106,19 +122,21 @@ class TargetExecutor:
         except BaseException as exc:
             self._release_capacity(target.id)
             await run_sync(self.database.release_target_probe, target_key, job_id)
-            self._attach_exception_metadata(exc, None, None)
+            self._attach_exception_metadata(exc, None, None, accumulator=accumulator)
             raise
         if not acquired:
             self._release_capacity(target.id)
             await run_sync(self.database.release_target_probe, target_key, job_id)
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-            return TargetExecutionResult(cancelled, target.id, target_key, self._result_metadata(cancelled, target, None))
+            tel = accumulator.snapshot().model_dump(mode="json") if accumulator._has_any_consumption else None
+            return TargetExecutionResult(cancelled, target.id, target_key, self._result_metadata(cancelled, target, None, telemetry=tel))
         return await self._execute_attempt(_ExecutionContext(
             job_id=job_id, project=project, workflow=workflow,
             context_key=context_key, plan=plan, prompt=prompt, cwd=cwd,
             cancel_event=cancel_event, fresh_session=fresh_session,
             target=target, target_key=target_key, session_id=session_id,
             effective_prompt=effective_prompt, semaphore=semaphore,
+            accumulator=accumulator,
         ))
 
     async def _prepare_session(
@@ -134,10 +152,10 @@ class TargetExecutor:
     async def _start_attempt(
         self, job_id: str, target: TargetConfig, plan: ExecutionPlan,
         workflow: str, session_id: str,
-    ) -> tuple[float, bool, StreamRecorder | None]:
-        await run_sync(self.database.record_job_attempt, job_id, target.id)
+    ) -> tuple[float, bool, StreamRecorder | None, int]:
+        attempt_number = await run_sync(self.database.record_job_attempt, job_id, target.id)
         started_at = time.monotonic()
-        log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": 1, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
+        log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt_number, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
         supports_streaming = await run_sync(self.drivers.supports_structured_streaming, target)
         recorder = None
         if supports_streaming:
@@ -147,12 +165,12 @@ class TargetExecutor:
             recorder = await run_sync(StreamRecorder,
                 database=self.database,
                 job_id=job_id,
-                attempt=1,
+                attempt=attempt_number,
                 target_id=target.id,
                 backend=target.backend,
                 on_commit=on_commit,
             )
-        return started_at, supports_streaming, recorder
+        return started_at, supports_streaming, recorder, attempt_number
 
     async def _execute_attempt(self, context: _ExecutionContext) -> TargetExecutionResult:
         job_id = context.job_id
@@ -169,7 +187,7 @@ class TargetExecutor:
         semaphore = context.semaphore
         self._target_active[target.id] += 1
         try:
-            started_at, supports_streaming, recorder = await self._start_attempt(
+            started_at, supports_streaming, recorder, attempt_number = await self._start_attempt(
                 job_id, target, plan, workflow, session_id
             )
         except BaseException:
@@ -198,12 +216,13 @@ class TargetExecutor:
             await self._recover_session(
                 attempt=attempt, context=context, recorder=recorder,
                 supports_streaming=supports_streaming, env=ask_env,
+                attempt_number=attempt_number,
             )
         except BaseException as exc:
             driver_exc = exc
             duration_ms = int((time.monotonic() - started_at) * 1000)
             await run_sync(self.database.release_target_probe, target_key, job_id)
-            self._attach_exception_metadata(exc, target, duration_ms)
+            self._attach_exception_metadata(exc, target, duration_ms, accumulator=context.accumulator)
             raise
         finally:
             if self.ask_registry is not None:
@@ -215,7 +234,7 @@ class TargetExecutor:
             except BaseException as exc:
                 duration_ms = int((time.monotonic() - started_at) * 1000)
                 await run_sync(self.database.release_target_probe, target_key, job_id)
-                self._attach_exception_metadata(exc, target, duration_ms)
+                self._attach_exception_metadata(exc, target, duration_ms, accumulator=context.accumulator)
                 raise
             finally:
                 self._target_active[target.id] -= 1
@@ -225,12 +244,15 @@ class TargetExecutor:
         return await self._complete_attempt(
             attempt, job_id, project, workflow, context_key, target, target_key,
             prompt, fresh_session, duration_ms,
+            attempt_number=attempt_number,
+            accumulator=context.accumulator,
         )
 
     async def _recover_session(
         self, *, attempt: _TargetAttempt, context: _ExecutionContext,
         recorder: StreamRecorder | None, supports_streaming: bool,
         env: dict[str, str] | None = None,
+        attempt_number: int = 1,
     ) -> None:
         job_id = context.job_id
         project = context.project
@@ -246,12 +268,17 @@ class TargetExecutor:
         fresh_session = context.fresh_session
         phase_prompt = effective_prompt
         phase_session = session_id
-        for phase in ("initial", "reconstruct", "fresh"):
+        for invocation_idx, phase in enumerate(("initial", "reconstruct", "fresh"), start=1):
             details = {"workflow": workflow, "target": target.id}
             if phase != "initial":
                 details["phase"] = phase
+                details["invocation"] = invocation_idx
                 await run_sync(self.database.event, job_id, "target.session_recovery_started", details)
             attempt.result, has_tool_activity = await self._run_target_invocation(
+                job_id=job_id,
+                attempt=attempt_number,
+                invocation=invocation_idx,
+                accumulator=context.accumulator,
                 target=target, prompt=phase_prompt, session_id=phase_session,
                 cwd=cwd, timeout_s=timeout_s, cancel_event=cancel_event,
                 recorder=recorder, supports_streaming=supports_streaming,
@@ -331,17 +358,22 @@ class TargetExecutor:
         self, attempt: _TargetAttempt, job_id: str, project: ProjectView,
         workflow: str, context_key: str, target: TargetConfig, target_key: str,
         prompt: str, fresh_session: bool, duration_ms: int,
+        attempt_number: int = 1,
+        accumulator: TelemetryAccumulator | None = None,
     ) -> TargetExecutionResult:
         last = attempt.result
-        await run_sync(self.database.event, job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": 1, "outcome": last.outcome, "error_code": last.error_code})
-        log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": 1, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": duration_ms})
+        await run_sync(self.database.event, job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": attempt_number, "outcome": last.outcome, "error_code": last.error_code})
+        log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": attempt_number, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": duration_ms})
         if last.outcome == "SUCCESS":
             await run_sync(self.database.record_target_success, target_key, self.config.breaker_base_cooldown_s)
             if not fresh_session:
                 await self._store_turn(attempt, job_id, project, workflow, context_key, target, target_key, prompt)
         else:
             await self._update_target_health(last, target_key, job_id, attempt.replay_blocked)
-        return TargetExecutionResult(last, target.id, target_key, self._result_metadata(last, target, duration_ms, replay_blocked=attempt.replay_blocked))
+        telemetry = None
+        if accumulator is not None and (accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None):
+            telemetry = accumulator.snapshot().model_dump(mode="json")
+        return TargetExecutionResult(last, target.id, target_key, self._result_metadata(last, target, duration_ms, replay_blocked=attempt.replay_blocked, telemetry=telemetry))
 
     async def _store_turn(
         self, attempt: _TargetAttempt, job_id: str, project: ProjectView,
@@ -390,6 +422,8 @@ class TargetExecutor:
         exc: BaseException,
         target: TargetConfig | None,
         duration_ms: int | None,
+        *,
+        accumulator: TelemetryAccumulator | None = None,
     ) -> None:
         cancelled = isinstance(exc, asyncio.CancelledError)
         result = DriverResult(
@@ -400,7 +434,10 @@ class TargetExecutor:
             "cancelled" if cancelled else "execution_error",
         )
         try:
-            setattr(exc, "_refract_result_metadata", cls._result_metadata(result, target, duration_ms))
+            telemetry = None
+            if accumulator is not None and (accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None):
+                telemetry = accumulator.snapshot().model_dump(mode="json")
+            setattr(exc, "_refract_result_metadata", cls._result_metadata(result, target, duration_ms, telemetry=telemetry))
         except (AttributeError, TypeError):
             pass
 
@@ -412,6 +449,7 @@ class TargetExecutor:
         *,
         replay_blocked: bool = False,
         circuit_open: bool = False,
+        telemetry: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if result.outcome == "SUCCESS":
             failure_kind, retryable = None, None
@@ -435,7 +473,7 @@ class TargetExecutor:
         model_name = usage.get("model_name")
         if model_name is None and target is not None:
             model_name = target.model or None
-        return {
+        meta = {
             "model_name": model_name,
             "context_window_max": usage.get("context_window_max"),
             "context_window_used": usage.get("context_window_used"),
@@ -447,10 +485,17 @@ class TargetExecutor:
             "retryable": retryable,
             "next_target": None,
         }
+        if telemetry is not None:
+            meta["telemetry"] = telemetry
+        return meta
 
     async def _run_target_invocation(
         self,
         *,
+        job_id: str,
+        attempt: int,
+        invocation: int,
+        accumulator: TelemetryAccumulator,
         target: TargetConfig,
         prompt: str,
         session_id: str,
@@ -463,13 +508,70 @@ class TargetExecutor:
     ) -> tuple[DriverResult, bool]:
         bridge = StreamBridge(queue_capacity=256) if supports_streaming else None
 
-        async def drain_stream() -> None:
-            if bridge and recorder:
-                async for event in bridge.consumer():
-                    await recorder.record(event)
-                await recorder.flush()
+        async def _handle_telemetry(event: dict[str, Any]) -> None:
+            data = event.get("data")
+            if not isinstance(data, dict):
+                return
+            source = data.get("source", "stream")
+            quality = data.get("quality", "reported")
+            observed_at = data.get("observed_at")
 
-        drain_task = asyncio.create_task(drain_stream()) if bridge and recorder else None
+            if "context_used_tokens" in data or "context_window_size" in data or "context_remaining_percent" in data:
+                accumulator.record_context_snapshot(
+                    used_tokens=data.get("context_used_tokens"),
+                    window_size=data.get("context_window_size"),
+                    remaining_percent=data.get("context_remaining_percent"),
+                    source=source,
+                    quality=quality,
+                    observed_at=observed_at,
+                    attempt=attempt,
+                    invocation=invocation,
+                )
+
+            if "input_tokens" in data or "output_tokens" in data or "cache_read_tokens" in data or "cache_write_tokens" in data:
+                accumulator.record_consumption(
+                    attempt=attempt,
+                    invocation=invocation,
+                    response_id=data.get("response_id"),
+                    input_tokens=data.get("input_tokens"),
+                    output_tokens=data.get("output_tokens"),
+                    cache_read_tokens=data.get("cache_read_tokens"),
+                    cache_write_tokens=data.get("cache_write_tokens"),
+                    is_snapshot=bool(data.get("is_snapshot", False)),
+                    source=source,
+                    quality=quality,
+                    observed_at=observed_at,
+                )
+            elif "total_input_tokens" in data or "total_output_tokens" in data:
+                accumulator.reconcile_cumulative(
+                    attempt=attempt,
+                    invocation=invocation,
+                    total_input=data.get("total_input_tokens"),
+                    total_output=data.get("total_output_tokens"),
+                    cache_read=data.get("cache_read_tokens"),
+                    cache_write=data.get("cache_write_tokens"),
+                    source=source,
+                    quality=quality,
+                    observed_at=observed_at,
+                )
+
+            snap = accumulator.snapshot()
+            await run_sync(self.database.merge_job_telemetry, job_id, snap)
+
+        async def drain_stream() -> None:
+            if bridge:
+                async for event in bridge.consumer():
+                    if isinstance(event, dict) and event.get("kind") == "telemetry.updated":
+                        try:
+                            await _handle_telemetry(event)
+                        except Exception:
+                            log.warning("Telemetry update failed", exc_info=True)
+                    if recorder and supports_streaming:
+                        await recorder.record(event)
+                if recorder and supports_streaming:
+                    await recorder.flush()
+
+        drain_task = asyncio.create_task(drain_stream()) if bridge else None
         attempt_result: DriverResult | None = None
         driver_exc: BaseException | None = None
         try:

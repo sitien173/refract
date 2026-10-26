@@ -52,3 +52,22 @@ async def test_job_answer_schema_contract():
     assert _raw_argument_error(schema, {"job_id": "job-1", "answer": 123})
     assert _raw_argument_error(schema, {"job_id": "job-1", "answer": "ok", "extra": 1})
 
+
+@pytest.mark.asyncio
+async def test_job_wait_schema_contract():
+    server = create_mcp()
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    assert "job_wait" in tools
+    job_wait_tool = tools["job_wait"]
+    schema = job_wait_tool.input_schema
+    assert schema["type"] == "object"
+    assert "job_id" in schema["required"]
+    properties = schema["properties"]
+    assert properties["job_id"]["type"] == "string"
+    assert properties["timeout_s"]["type"] == "integer"
+    assert properties["result_offset"]["type"] == "integer"
+    assert not _raw_argument_error(schema, {"job_id": "job-1", "timeout_s": 0, "result_offset": 0})
+    assert _raw_argument_error(schema, {"job_id": "job-1", "timeout_s": "not-an-int"})
+    assert _raw_argument_error(schema, {"job_id": "job-1", "extra": 1})
+
+

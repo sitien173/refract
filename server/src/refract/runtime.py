@@ -372,6 +372,8 @@ class Runtime:
         if not stored:
             return dict.fromkeys(keys)
         metadata = {key: stored.get(key) for key in keys}
+        if "telemetry" in stored:
+            metadata["telemetry"] = stored["telemetry"]
         if job.state == "succeeded":
             metadata["next_target"] = metadata["retryable"] = None
             return metadata

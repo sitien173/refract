@@ -21,6 +21,7 @@ from refract.models import (
     ProjectView,
     StreamTotals,
 )
+from refract.telemetry import TelemetryData, merge_telemetry, prepare_telemetry_for_retry
 
 log = get_logger("database")
 _SCHEMA_VERSION = 15
@@ -303,22 +304,88 @@ class Database:
             )
             self._event(job_id, "job.running", {})
 
-    def record_job_attempt(self, job_id: str, target_id: str) -> None:
+    def record_job_attempt(self, job_id: str, target_id: str) -> int:
         with self._connection:
-            self._connection.execute("UPDATE jobs SET target_id=?, attempts=attempts+1, updated_at=? WHERE id=?", (target_id, utc_now(), job_id))
+            self._connection.execute(
+                "UPDATE jobs SET target_id=?, attempts=attempts+1, updated_at=? WHERE id=?",
+                (target_id, utc_now(), job_id),
+            )
+            row = self._connection.execute(
+                "SELECT attempts FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            return int(row["attempts"]) if row else 1
+
+    def merge_job_telemetry(self, job_id: str, telemetry: dict[str, Any] | TelemetryData) -> None:
+        with self._connection:
+            row = self._connection.execute(
+                "SELECT state, result_metadata_json FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return
+            if row["state"] in TERMINAL_STATES:
+                # Protect terminal metadata against stale observations
+                return
+            try:
+                metadata = json.loads(row["result_metadata_json"] or "{}")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+            except (json.JSONDecodeError, TypeError):
+                metadata = {}
+
+            telemetry_dict = (
+                telemetry.model_dump(mode="json")
+                if hasattr(telemetry, "model_dump")
+                else telemetry
+            )
+            if "telemetry" in metadata and isinstance(metadata["telemetry"], dict):
+                metadata["telemetry"] = merge_telemetry(metadata["telemetry"], telemetry_dict)
+            else:
+                metadata["telemetry"] = telemetry_dict
+
+            self._connection.execute(
+                "UPDATE jobs SET result_metadata_json=?, updated_at=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), utc_now(), job_id),
+            )
 
     def finish_job(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "", metadata: dict[str, Any] | None = None) -> None:
         with self._connection:
             self._finish(job_id, state, text=text, target_id=target_id, error=error, metadata=metadata)
 
     def _finish(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "", metadata: dict[str, Any] | None = None) -> None:
+        row = self._connection.execute(
+            "SELECT result_metadata_json FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        current_meta: dict[str, Any] = {}
+        if row and row["result_metadata_json"]:
+            try:
+                current_meta = json.loads(row["result_metadata_json"])
+                if not isinstance(current_meta, dict):
+                    current_meta = {}
+            except (json.JSONDecodeError, TypeError):
+                current_meta = {}
+
+        if metadata is not None:
+            merged_meta = dict(current_meta)
+            for k, v in metadata.items():
+                if (
+                    k == "telemetry"
+                    and "telemetry" in current_meta
+                    and isinstance(current_meta["telemetry"], dict)
+                    and isinstance(v, dict)
+                ):
+                    merged_meta["telemetry"] = merge_telemetry(current_meta["telemetry"], v)
+                else:
+                    merged_meta[k] = v
+        else:
+            merged_meta = current_meta
+
         self._connection.execute(
             """UPDATE jobs SET state=?, result_text=?,
                target_id=CASE WHEN ?='' THEN target_id ELSE ? END, error=?,
-               result_metadata_json=COALESCE(?, result_metadata_json), updated_at=?
+               result_metadata_json=?, updated_at=?
                WHERE id=?""",
             (state, text, target_id, target_id, error,
-             json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
+             json.dumps(merged_meta, ensure_ascii=False),
              utc_now(), job_id),
         )
         self._connection.execute(
@@ -352,10 +419,25 @@ class Database:
 
     def reset_retry(self, job_id: str) -> None:
         with self._connection:
+            row = self._connection.execute(
+                "SELECT result_metadata_json FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            meta_json = "{}"
+            if row and row["result_metadata_json"]:
+                try:
+                    meta = json.loads(row["result_metadata_json"])
+                    if isinstance(meta, dict) and "telemetry" in meta and isinstance(meta["telemetry"], dict):
+                        meta["telemetry"] = prepare_telemetry_for_retry(meta["telemetry"])
+                        meta_json = json.dumps(meta, ensure_ascii=False)
+                    elif isinstance(meta, dict):
+                        meta_json = json.dumps(meta, ensure_ascii=False)
+                except (json.JSONDecodeError, TypeError):
+                    meta_json = "{}"
+
             self._connection.execute(
                 """UPDATE jobs SET state='queued', result_text='',
-                   target_id='', error='', updated_at=? WHERE id=?""",
-                (utc_now(), job_id),
+                   target_id='', error='', result_metadata_json=?, updated_at=? WHERE id=?""",
+                (meta_json, utc_now(), job_id),
             )
             self._event(job_id, "job.retried", {})
 

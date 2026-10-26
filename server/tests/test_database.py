@@ -823,3 +823,171 @@ def test_failure_threshold_and_immediate_open(tmp_path) -> None:
     db.record_target_failure("fatal", threshold=3, base_cooldown_s=60, max_cooldown_s=300, immediate=True)
     assert db.target_health("fatal")["circuit_open_until"]
     db.close()
+
+
+def test_merge_job_telemetry_preserves_unrelated_fields(tmp_path) -> None:
+    db = Database(tmp_path / "refract.db")
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-tel-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    with db._connection:
+        db._connection.execute(
+            "UPDATE jobs SET result_metadata_json=? WHERE id=?",
+            (json.dumps({"custom_flag": "test", "model_name": "gpt-4"}), "job-tel-1"),
+        )
+    telemetry_payload = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 150, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+        "total_output_tokens": {"value": 50, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+    }
+    db.merge_job_telemetry("job-tel-1", telemetry_payload)
+    job = db.job("job-tel-1")
+    assert job is not None
+    assert job.result.metadata["custom_flag"] == "test"
+    assert job.result.metadata["model_name"] == "gpt-4"
+    assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 150
+    assert job.result.metadata["telemetry"]["total_output_tokens"]["value"] == 50
+    db.close()
+
+
+def test_terminal_metadata_protected_against_stale_observations(tmp_path) -> None:
+    db = Database(tmp_path / "refract.db")
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-term-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    final_telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 200, "source": "result", "quality": "reported", "observed_at": "2026-10-26T00:00:02Z"},
+    }
+    db.finish_job("job-term-1", "succeeded", metadata={"telemetry": final_telemetry})
+
+    # Stale observation should be ignored on terminal job
+    stale_telemetry = {
+        "version": 1,
+        "completeness": "partial",
+        "total_input_tokens": {"value": 100, "source": "stream", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
+    }
+    db.merge_job_telemetry("job-term-1", stale_telemetry)
+    job = db.job("job-term-1")
+    assert job is not None
+    assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 200
+    db.close()
+
+
+def test_finish_job_merges_with_running_telemetry(tmp_path) -> None:
+    db = Database(tmp_path / "refract.db")
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-fin-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    running_telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 300, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
+    }
+    db.merge_job_telemetry("job-fin-1", running_telemetry)
+
+    # finish_job called with non-telemetry metadata
+    db.finish_job("job-fin-1", "succeeded", metadata={"duration_ms": 120, "model_name": "claude"})
+    job = db.job("job-fin-1")
+    assert job is not None
+    assert job.result.metadata["duration_ms"] == 120
+    assert job.result.metadata["model_name"] == "claude"
+    assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 300
+    db.close()
+
+
+def test_retry_preserves_completed_attempt_aggregate_and_totals(tmp_path) -> None:
+    db = Database(tmp_path / "refract.db")
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-retry-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    attempt1_telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 150, "source": "response", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
+        "total_output_tokens": {"value": 50, "source": "response", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
+        "context_used_tokens": {"value": 1000, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
+        "attribution": {"attempt": 1, "invocation": 1},
+        "completed_attempts": {"total_input_tokens": 0, "total_output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
+    }
+    db.merge_job_telemetry("job-retry-1", attempt1_telemetry)
+    db.finish_job("job-retry-1", "failed", error="timeout")
+
+    # Reset retry
+    db.reset_retry("job-retry-1")
+    job = db.job("job-retry-1")
+    assert job is not None
+    assert job.state == "queued"
+    telemetry = job.result.metadata["telemetry"]
+    # Aggregate from attempt 1 preserved
+    assert telemetry["completed_attempts"]["total_input_tokens"] == 150
+    assert telemetry["completed_attempts"]["total_output_tokens"] == 50
+    # Total consumption preserved
+    assert telemetry["total_input_tokens"]["value"] == 150
+    assert telemetry["total_output_tokens"]["value"] == 50
+    # Context snapshot is cleared (not carried over to new attempt)
+    assert telemetry["context_used_tokens"]["value"] is None
+    assert telemetry["context_used_tokens"]["quality"] == "unavailable"
+    db.close()
+
+
+def test_database_reopen_preserves_telemetry_without_schema_upgrade(tmp_path) -> None:
+    path = tmp_path / "reopen.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-reopen-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 500, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
+    }
+    db.merge_job_telemetry("job-reopen-1", telemetry)
+    db.close()
+
+    # Reopen
+    db2 = Database(path)
+    version = int(db2._connection.execute("PRAGMA user_version").fetchone()[0])
+    assert version == 15
+    job = db2.job("job-reopen-1")
+    assert job is not None
+    assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 500
+    db2.close()
+

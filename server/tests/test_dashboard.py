@@ -892,7 +892,6 @@ async def test_configuration_profiles_read_and_security(active_runtime) -> None:
         app, "/dashboard/api/configuration/profiles", headers=(("Host", "attacker.com"),)
     )
     assert status == 403
-
     # Non-loopback client rejected with 403
     status, _, _ = await request(
         app,
@@ -901,7 +900,6 @@ async def test_configuration_profiles_read_and_security(active_runtime) -> None:
         client_host="192.168.1.50",
     )
     assert status == 403
-
     # Loopback read succeeds
     status, headers, body = await request(
         app, "/dashboard/api/configuration/profiles", headers=(("Host", "127.0.0.1"),)
@@ -959,7 +957,6 @@ async def test_configuration_profiles_crud_and_references(active_runtime) -> Non
         headers=bad_csrf_headers,
     )
     assert status == 403
-
     # If-Match missing check
     no_match_headers = (
         ("Host", "127.0.0.1"),
@@ -1161,7 +1158,6 @@ async def test_project_profile_override_routes_crud_and_fallback(active_runtime)
     # Security: non-loopback host rejected
     status, _, _ = await request(app, url_base, headers=(("Host", "attacker.com"),))
     assert status == 403
-
     # Unknown project rejected
     status, _, body = await request(
         app,
@@ -2456,12 +2452,13 @@ async def test_ask_token_auth_and_wrong_job(active_runtime) -> None:
             body=json.dumps({"token": unknown, "question": "q"}).encode(),
         )
         assert status == 403
+
+
     status, _, _ = await request(
         app, "/ask", method="POST",
         body=b'{"token": "\\ud800", "question": "q"}',
     )
     assert status == 403
-
     # Revoked token -> 403
     active_runtime.ask_registry.revoke_token("job-1")
     status, _, _ = await request(
@@ -2469,7 +2466,6 @@ async def test_ask_token_auth_and_wrong_job(active_runtime) -> None:
         body=json.dumps({"token": token, "question": "q"}).encode(),
     )
     assert status == 403
-
     # Wrong job identifiers, including non-ASCII and escaped surrogate values, -> 403
     token2 = active_runtime.ask_registry.issue_token("job-2")
     for wrong_job in ("job-other", "未知"):
@@ -2478,12 +2474,13 @@ async def test_ask_token_auth_and_wrong_job(active_runtime) -> None:
             body=json.dumps({"token": token2, "question": "q", "job_id": wrong_job}).encode(),
         )
         assert status == 403
+
+
     status, _, _ = await request(
         app, "/ask", method="POST",
         body=f'{{"token": "{token2}", "question": "q", "job_id": "\\ud800"}}'.encode("utf-8"),
     )
     assert status == 403
-
 
 @pytest.mark.asyncio
 async def test_ask_answered_and_conflict(active_runtime) -> None:
@@ -2556,5 +2553,45 @@ async def test_ask_non_loopback_rejected(active_runtime) -> None:
         body=json.dumps({"token": token, "question": "Non-loopback"}).encode(),
     )
     assert status == 403
+
+
+@pytest.mark.asyncio
+async def test_dashboard_job_reads_expose_telemetry(active_runtime) -> None:
+    app = create_application()
+    project = active_runtime.database.project("project")
+    job_id = "job-dashboard-telemetry"
+    active_runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k",
+    )
+    telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 500, "source": "provider", "quality": "reported"},
+        "context_used_tokens": {"value": 2000, "source": "provider", "quality": "reported"},
+    }
+    active_runtime.database.merge_job_telemetry(job_id, telemetry)
+
+    # 1. Direct job read
+    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
+    assert status == 200
+    job_data = json.loads(body.decode())
+    assert "telemetry" in job_data["result"]["metadata"]
+    assert job_data["result"]["metadata"]["telemetry"]["total_input_tokens"]["value"] == 500
+    assert job_data["result"]["metadata"]["telemetry"]["context_used_tokens"]["value"] == 2000
+
+    # 2. Project jobs listing
+    status, _, body = await request(app, f"/dashboard/api/projects/{project.id}/jobs")
+    assert status == 200
+    listing = json.loads(body.decode())
+    active_jobs = [j for j in listing["active"] if j["id"] == job_id]
+    assert len(active_jobs) == 1
+    assert "telemetry" in active_jobs[0]["result"]["metadata"]
+    assert active_jobs[0]["result"]["metadata"]["telemetry"]["total_input_tokens"]["value"] == 500
 
 

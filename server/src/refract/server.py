@@ -689,7 +689,10 @@ async def job_wait(
     summary = _summary(current)
     if current.state not in TERMINAL_STATES:
         pending = runtime.ask_registry.get_pending(job_id) if hasattr(runtime, "ask_registry") else None
+        live_meta = await run_sync(runtime.live_result_metadata, current)
         result: dict[str, Any] = {"text": "", "error": "", "next_offset": None}
+        if "telemetry" in live_meta:
+            result["metadata"] = live_meta
         if pending is not None:
             result["pending_question"] = {
                 "question_id": pending.question_id,

@@ -42,6 +42,18 @@ class StreamBridge:
         if isinstance(event, dict) and event.get("kind") == "tool.started":
             self._tool_activity.set()
         try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is self.loop:
+            try:
+                self.queue.put_nowait(event)
+            except asyncio.QueueFull:
+                log.warning("Stream event dropped")
+            return
+
+        try:
             future = asyncio.run_coroutine_threadsafe(self.queue.put(event), self.loop)
             future.result()
         except Exception:
@@ -52,6 +64,18 @@ class StreamBridge:
         if self._closed:
             return
         self._closed = True
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is self.loop:
+            try:
+                self.queue.put_nowait(_PRODUCER_SENTINEL)
+            except asyncio.QueueFull:
+                pass
+            return
+
         try:
             future = asyncio.run_coroutine_threadsafe(self.queue.put(_PRODUCER_SENTINEL), self.loop)
             future.result()

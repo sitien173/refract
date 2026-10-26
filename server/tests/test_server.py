@@ -1732,3 +1732,102 @@ async def test_question_waiter_cleanup_on_timeout_and_cancellation(tmp_path) -> 
     finally:
         runtime.database.close()
 
+
+@pytest.mark.asyncio
+async def test_job_wait_running_returns_persisted_synthetic_telemetry(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-running-tel",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        with runtime.database._connection:
+            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-running-tel'")
+
+        synthetic_telemetry = {
+            "version": 1,
+            "completeness": "complete",
+            "context_used_tokens": {"value": 1500, "source": "provider", "quality": "reported"},
+            "context_window_size": {"value": 8000, "source": "provider", "quality": "reported"},
+            "total_input_tokens": {"value": 300, "source": "provider", "quality": "reported"},
+            "total_output_tokens": {"value": 100, "source": "provider", "quality": "reported"},
+        }
+        runtime.database.merge_job_telemetry("job-running-tel", synthetic_telemetry)
+
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(lifespan_context=runtime),
+            report_progress=lambda **kwargs: asyncio.sleep(0),
+        )
+
+        res_str = await job_wait("job-running-tel", ctx, timeout_s=0)
+        res = json.loads(res_str)
+        assert res["job"]["state"] == "running"
+        assert "metadata" in res["result"]
+        tel = res["result"]["metadata"]["telemetry"]
+        assert tel["context_used_tokens"]["value"] == 1500
+        assert tel["total_input_tokens"]["value"] == 300
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_job_wait_paginated_retains_identical_telemetry(tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(_serve_config(), encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    try:
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        long_text = "word " * 15000  # large enough to paginate across multiple pages
+        runtime.database.create_job(
+            job_id="job-paged-tel",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            execution_plan_json="{}",
+            context_key="c1",
+        )
+        synthetic_telemetry = {
+            "version": 1,
+            "completeness": "complete",
+            "context_used_tokens": {"value": 2500, "source": "provider", "quality": "reported"},
+            "total_input_tokens": {"value": 600, "source": "provider", "quality": "reported"},
+        }
+        runtime.database.finish_job(
+            "job-paged-tel",
+            "succeeded",
+            text=long_text,
+            metadata={"telemetry": synthetic_telemetry},
+        )
+
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(lifespan_context=runtime),
+            report_progress=lambda **kwargs: asyncio.sleep(0),
+        )
+
+        page1_str = await job_wait("job-paged-tel", ctx, timeout_s=0, result_offset=0)
+        page1 = json.loads(page1_str)
+        next_offset = page1["result"]["next_offset"]
+        assert next_offset is not None
+        assert page1["result"]["metadata"]["telemetry"]["context_used_tokens"]["value"] == 2500
+
+        page2_str = await job_wait("job-paged-tel", ctx, timeout_s=0, result_offset=next_offset)
+        page2 = json.loads(page2_str)
+        assert page2["result"]["metadata"]["telemetry"]["context_used_tokens"]["value"] == 2500
+        assert page1["result"]["metadata"]["telemetry"] == page2["result"]["metadata"]["telemetry"]
+    finally:
+        runtime.database.close()
+
+

@@ -91,3 +91,15 @@ def test_stream_metadata_is_one_query_and_scoped_to_job(database):
     with database._connection:
         database._connection.execute("DELETE FROM job_stream_events WHERE id=?", (events[0].id,))
     assert database.stream_metadata("j")["retained_from"] == events[-1].id
+
+
+def test_merge_job_telemetry_rolls_back_on_error(database):
+    create_job(database)
+    database._connection.execute(
+        """CREATE TRIGGER reject_job_updates BEFORE UPDATE ON jobs
+           BEGIN SELECT RAISE(ABORT, 'job update rejected'); END"""
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="job update rejected"):
+        database.merge_job_telemetry("j", {"version": 1, "total_input_tokens": {"value": 100, "source": "provider", "quality": "reported"}})
+    assert database.job_record("j")["result_metadata_json"] == "{}"
+

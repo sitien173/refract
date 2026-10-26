@@ -4029,3 +4029,262 @@ async def test_terminal_desktop_notifications_disabled_does_not_lookup_job(
         mock_job.assert_not_called()
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_updated_routes_through_execution_before_stream_recording(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class TelemetryDriver(FakeDrivers):
+        async def execute(self, **kwargs):
+            emitter = kwargs.get("emitter")
+            if emitter:
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "context_used_tokens": 1200,
+                        "context_window_size": 8000,
+                        "input_tokens": 100,
+                        "output_tokens": 40,
+                        "response_id": "r1",
+                    },
+                })
+            return DriverResult("SUCCESS", "", "done", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = TelemetryDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        job = await runtime.wait(submission.job_id, 5)
+        assert job.state == "succeeded"
+        telemetry = job.result.metadata.get("telemetry")
+        assert telemetry is not None
+        assert telemetry["context_used_tokens"]["value"] == 1200
+        assert telemetry["context_window_size"]["value"] == 8000
+        assert telemetry["context_remaining_percent"]["value"] == 85.0
+        assert telemetry["total_input_tokens"]["value"] == 100
+        assert telemetry["total_output_tokens"]["value"] == 40
+        assert telemetry["attribution"]["attempt"] == 1
+        assert telemetry["attribution"]["invocation"] == 1
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_survives_transcript_quota_exhaustion_in_execution(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class QuotaExhaustionDriver(FakeDrivers):
+        async def execute(self, **kwargs):
+            emitter = kwargs.get("emitter")
+            if emitter:
+                # Fill quota with lots of text deltas
+                large_chunk = "x" * 20000
+                for i in range(100):
+                    emitter({
+                        "kind": "assistant.text.delta",
+                        "data": {"text": large_chunk},
+                        "entity_id": f"msg-{i}",
+                    })
+                # Now emit telemetry after stream truncation
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "context_used_tokens": 4000,
+                        "context_window_size": 8000,
+                        "input_tokens": 250,
+                        "output_tokens": 80,
+                    },
+                })
+            return DriverResult("SUCCESS", "", "done", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = QuotaExhaustionDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        job = await runtime.wait(submission.job_id, 5)
+        assert job.state == "succeeded"
+        telemetry = job.result.metadata.get("telemetry")
+        assert telemetry is not None
+        assert telemetry["context_used_tokens"]["value"] == 4000
+        assert telemetry["total_input_tokens"]["value"] == 250
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_and_failure_retain_partial_telemetry(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class FailingDriverWithTelemetry(FakeDrivers):
+        async def execute(self, **kwargs):
+            emitter = kwargs.get("emitter")
+            if emitter:
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "context_used_tokens": 3000,
+                        "context_window_size": 8000,
+                        "input_tokens": 180,
+                        "output_tokens": 50,
+                    },
+                })
+            return DriverResult("TARGET_FATAL", "", "", "target crashed", "crashed")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = FailingDriverWithTelemetry()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        job = await runtime.wait(submission.job_id, 5)
+        assert job.state == "failed"
+        telemetry = job.result.metadata.get("telemetry")
+        assert telemetry is not None
+        assert telemetry["context_used_tokens"]["value"] == 3000
+        assert telemetry["total_input_tokens"]["value"] == 180
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_session_recovery_separate_invocation_identities(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class RecoveryDriverWithTelemetry(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.invocation_count = 0
+
+        async def execute(self, **kwargs):
+            self.invocation_count += 1
+            emitter = kwargs.get("emitter")
+            if self.invocation_count == 1:
+                if emitter:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "input_tokens": 100,
+                            "output_tokens": 30,
+                            "response_id": "r1",
+                        },
+                    })
+                return DriverResult("RETRYABLE", "", "", "context overflow", "context_overflow")
+            else:
+                if emitter:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "input_tokens": 150,
+                            "output_tokens": 50,
+                            "response_id": "r2",
+                        },
+                    })
+                return DriverResult("SUCCESS", "sess-recovered", "recovered", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = RecoveryDriverWithTelemetry()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        # Seed an existing session so recovery triggers
+        runtime.database.append_turn(
+            project_id=project.id,
+            context_key="implement",
+            role="implement",
+            target_id="primary",
+            target_key=target_execution_key(catalog.targets[0]),
+            session_id="old-session",
+            prompt="hi",
+            response="there",
+        )
+        submission = await runtime.submit(project.id, "implement", "test")
+        job = await runtime.wait(submission.job_id, 5)
+        assert job.state == "succeeded"
+        telemetry = job.result.metadata.get("telemetry")
+        assert telemetry is not None
+        # Accumulates 100 + 150 = 250
+        assert telemetry["total_input_tokens"]["value"] == 250
+        assert telemetry["total_output_tokens"]["value"] == 80
+        # Attribution invocation is 2
+        assert telemetry["attribution"]["invocation"] == 2
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_uses_actual_attempt_number(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+
+    class FailThenSucceedDriver(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, **kwargs):
+            self.calls += 1
+            emitter = kwargs.get("emitter")
+            if self.calls == 1:
+                if emitter:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "input_tokens": 100,
+                            "output_tokens": 40,
+                            "context_used_tokens": 1000,
+                        },
+                    })
+                return DriverResult("RETRYABLE", "", "", "failure", "transient")
+            else:
+                if emitter:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "input_tokens": 150,
+                            "output_tokens": 60,
+                            "context_used_tokens": 2000,
+                        },
+                    })
+                return DriverResult("SUCCESS", "", "done", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = FailThenSucceedDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        job1 = await runtime.wait(submission.job_id, 5)
+        assert job1.state == "failed"
+        assert job1.attempts == 1
+
+        await runtime.retry(submission.job_id)
+        job2 = await runtime.wait(submission.job_id, 5)
+        assert job2.state == "succeeded"
+        assert job2.attempts == 2
+
+        telemetry = job2.result.metadata.get("telemetry")
+        assert telemetry is not None
+        assert telemetry["attribution"]["attempt"] == 2
+        assert telemetry["completed_attempts"]["total_input_tokens"] == 100
+        assert telemetry["total_input_tokens"]["value"] == 250
+        assert telemetry["total_output_tokens"]["value"] == 100
+        assert telemetry["context_used_tokens"]["value"] == 2000
+
+        events = runtime.database.events(submission.job_id)
+        attempt_finished_events = [e for e in events if e["kind"] == "target.attempt_finished"]
+        assert len(attempt_finished_events) == 2
+        assert attempt_finished_events[0]["data"]["attempt"] == 1
+        assert attempt_finished_events[1]["data"]["attempt"] == 2
+    finally:
+        await runtime.close()
+
+

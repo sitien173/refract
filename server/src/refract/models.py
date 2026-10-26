@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from refract.telemetry import Measurement, TelemetryData
+
 
 JobState = Literal[
     "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
@@ -376,6 +378,7 @@ __all__ = [
     "JobState",
     "JobStreamEvent",
     "JobSummary",
+    "Measurement",
     "ProfileDeleteResponse",
     "ProfileEditorData",
     "ProfileEditorResponse",
@@ -396,5 +399,6 @@ __all__ = [
     "TargetReference",
     "TargetResponse",
     "TargetView",
+    "TelemetryData",
     "WorkflowPolicyData",
 ]
