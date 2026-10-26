@@ -199,13 +199,12 @@ class _EventParser:
                             ctx_used = val
                             self.accumulator.record_context_snapshot(
                                 used_tokens=ctx_used,
-                                window_size=win_size,
-                                source="derived" if win_size is None else "session",
-                                quality="derived" if win_size is None else "reported",
+                                source="derived",
+                                quality="derived",
                             )
                     except Exception:
                         pass
-                elif win_size is not None:
+                if win_size is not None:
                     self.accumulator.record_context_snapshot(
                         window_size=win_size,
                         source="session",
@@ -224,22 +223,28 @@ class _EventParser:
                             "quality": "reported",
                         },
                     })
-                    if ctx_used is not None or win_size is not None:
-                        ctx_data: dict[str, Any] = {
-                            "source": "derived" if win_size is None else "session",
-                            "quality": "derived" if win_size is None else "reported",
-                        }
-                        if ctx_used is not None:
-                            ctx_data["context_used_tokens"] = ctx_used
-                        if win_size is not None:
-                            ctx_data["context_window_size"] = win_size
-                            if ctx_used is not None and win_size > 0:
-                                ctx_data["context_remaining_percent"] = round(
-                                    max(0.0, min(100.0, (1.0 - (ctx_used / win_size)) * 100.0)), 2
-                                )
+                    if ctx_used is not None:
                         self.params.emitter({
                             "kind": "telemetry.updated",
-                            "data": ctx_data,
+                            "data": {
+                                "context_used_tokens": ctx_used,
+                                "source": "derived",
+                                "quality": "derived",
+                            },
+                        })
+                    if win_size is not None:
+                        emit_win: dict[str, Any] = {
+                            "context_window_size": win_size,
+                            "source": "session",
+                            "quality": "reported",
+                        }
+                        if ctx_used is not None and win_size > 0:
+                            emit_win["context_remaining_percent"] = round(
+                                max(0.0, min(100.0, (1.0 - (ctx_used / win_size)) * 100.0)), 2
+                            )
+                        self.params.emitter({
+                            "kind": "telemetry.updated",
+                            "data": emit_win,
                         })
 
     def result(self, result: Any) -> None:
@@ -287,6 +292,20 @@ class _EventParser:
                     source="result",
                     quality="reported",
                 )
+                if self.params.emitter is not None:
+                    emit_term: dict[str, Any] = {
+                        "context_window_size": win_size,
+                        "source": "result",
+                        "quality": "reported",
+                    }
+                    if self.accumulator._context_used_tokens.value is not None and win_size > 0:
+                        emit_term["context_remaining_percent"] = round(
+                            max(0.0, min(100.0, (1.0 - (self.accumulator._context_used_tokens.value / win_size)) * 100.0)), 2
+                        )
+                    self.params.emitter({
+                        "kind": "telemetry.updated",
+                        "data": emit_term,
+                    })
 
     def legacy_tool_completed(self, event: dict[str, Any]) -> None:
         tool_data = {"status": str(event.get("status", "completed"))}

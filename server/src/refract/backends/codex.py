@@ -23,6 +23,10 @@ log = get_logger("codex")
 class _CodexRolloutCollector:
     """Bounded exact-session Codex rollout collector."""
 
+    MAX_DISCOVERY_ENTRIES = 50
+    MAX_DISCOVERY_RETRIES = 3
+    MAX_DISCOVERY_DEPTH = 3
+
     def __init__(
         self,
         *,
@@ -37,89 +41,181 @@ class _CodexRolloutCollector:
         self.emitter = emitter
         self.session_file: Path | None = None
         self.file_verified = False
+        self.file_dev: int | None = None
+        self.file_ino: int | None = None
         self.offset = 0
         self.partial_buffer = ""
         self.model_name: str | None = None
-        self.has_reported_context = False
         self.is_compacted = False
         self.max_bytes_per_poll = 65536
         self.max_total_bytes = 1048576
         self.total_bytes_read = 0
-        self.baseline_input: int | None = None
-        self.baseline_output: int | None = None
-        self.baseline_recorded = False
-        self.is_resumed = bool(self.session_id)
-        self.preflight_done = not self.is_resumed
-
-    def preflight_baseline(self) -> None:
-        if self.is_resumed:
-            self.poll()
-            self.preflight_done = True
+        self.missing_discovery_retries = 0
 
     def set_session_id(self, session_id: str) -> None:
         sid = session_id.strip()
         if sid and sid != self.session_id:
             self.session_id = sid
-            self.session_file = None
-            self.file_verified = False
-            self.offset = 0
-            self.partial_buffer = ""
+            self._reset_file_state()
+            self.missing_discovery_retries = 0
+            self.is_compacted = False
+
+    def _reset_file_state(self) -> None:
+        self.session_file = None
+        self.file_verified = False
+        self.file_dev = None
+        self.file_ino = None
+        self.offset = 0
+        self.partial_buffer = ""
+
+    def _emit_invalidation(self, is_compaction: bool = False) -> None:
+        self.accumulator.invalidate_context()
+        if is_compaction:
+            self.is_compacted = True
+        if self.emitter is not None:
+            self.emitter({
+                "kind": "telemetry.updated",
+                "data": {
+                    "context_used_tokens": None,
+                    "context_window_size": None,
+                    "context_remaining_percent": None,
+                    "source": "session",
+                    "quality": "unavailable",
+                },
+            })
 
     def _find_exact_file(self) -> Path | None:
         if not self.session_id or not _SESSION_ID_RE.fullmatch(self.session_id):
             return None
+        if self.missing_discovery_retries >= self.MAX_DISCOVERY_RETRIES:
+            return None
+
         sessions_dir = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
-        if not sessions_dir.is_dir():
+        if not sessions_dir.is_dir() or sessions_dir.is_symlink():
+            self.missing_discovery_retries += 1
             return None
 
         try:
-            candidates = list(sessions_dir.glob(f"**/*{self.session_id}*.jsonl"))[:20]
+            resolved_sessions_dir = sessions_dir.resolve()
         except OSError:
+            self.missing_discovery_retries += 1
             return None
 
-        for path in candidates:
+        entries_inspected = 0
+        dirs_to_visit = [(sessions_dir, 0)]
+        found_file: Path | None = None
+
+        while dirs_to_visit and entries_inspected < self.MAX_DISCOVERY_ENTRIES:
+            current_dir, depth = dirs_to_visit.pop(0)
             try:
-                stat = path.stat()
-                if stat.st_size < 10:
-                    continue
-                with path.open("r", encoding="utf-8", errors="replace") as f:
-                    first_line = f.readline(4096)
-                if not first_line:
-                    continue
-                parsed = json.loads(first_line)
-                if not isinstance(parsed, dict) or parsed.get("type") != "session_meta":
-                    continue
-                payload = parsed.get("payload", {})
-                if not isinstance(payload, dict):
-                    continue
-                if payload.get("id") == self.session_id and _same_path(payload.get("cwd", ""), self.cwd):
-                    return path
-            except (OSError, json.JSONDecodeError):
+                with os.scandir(current_dir) as it:
+                    for entry in it:
+                        entries_inspected += 1
+                        if entries_inspected >= self.MAX_DISCOVERY_ENTRIES:
+                            break
+
+                        try:
+                            if entry.is_symlink():
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                if depth < self.MAX_DISCOVERY_DEPTH:
+                                    dirs_to_visit.append((Path(entry.path), depth + 1))
+                                continue
+                            if not entry.is_file(follow_symlinks=False):
+                                continue
+                        except OSError:
+                            continue
+
+                        name = entry.name
+                        if not (name.endswith(".jsonl") and self.session_id in name):
+                            continue
+
+                        file_path = Path(entry.path)
+                        try:
+                            if file_path.is_symlink():
+                                continue
+                            resolved_file = file_path.resolve()
+                            if not resolved_file.is_relative_to(resolved_sessions_dir):
+                                continue
+
+                            stat = file_path.stat()
+                            if stat.st_size < 10:
+                                continue
+
+                            with file_path.open("r", encoding="utf-8", errors="replace") as f:
+                                first_line = f.readline(4096)
+                            if not first_line:
+                                continue
+
+                            parsed = json.loads(first_line)
+                            if not isinstance(parsed, dict) or parsed.get("type") != "session_meta":
+                                continue
+
+                            payload = parsed.get("payload")
+                            if not isinstance(payload, dict):
+                                continue
+
+                            payload_id = str(payload.get("id") or "").strip()
+                            payload_cwd = payload.get("cwd")
+                            if payload_id == self.session_id and _same_path(payload_cwd, self.cwd):
+                                found_file = file_path
+                                break
+                        except (OSError, json.JSONDecodeError):
+                            continue
+            except OSError:
                 continue
-        return None
+
+            if found_file is not None:
+                break
+
+        if found_file is None:
+            self.missing_discovery_retries += 1
+            return None
+
+        return found_file
 
     def poll(self) -> None:
+        try:
+            self._poll_internal()
+        except Exception:
+            log.warning("codex: rollout poll error", exc_info=True)
+
+    def _poll_internal(self) -> None:
         if not self.session_id:
             return
         if self.session_file is None:
             self.session_file = self._find_exact_file()
             if self.session_file is None:
                 return
-            self.file_verified = True
+            try:
+                st = self.session_file.stat()
+                self.file_dev = st.st_dev
+                self.file_ino = st.st_ino
+                self.file_verified = True
+            except OSError:
+                self._reset_file_state()
+                return
 
-        if not self.file_verified or not self.session_file.is_file():
+        if not self.file_verified:
             return
 
         try:
             stat = self.session_file.stat()
         except OSError:
+            self._emit_invalidation()
+            self._reset_file_state()
             return
 
+        if self.file_dev is not None and self.file_ino is not None:
+            if (stat.st_dev, stat.st_ino) != (self.file_dev, self.file_ino):
+                self._emit_invalidation()
+                self._reset_file_state()
+                return
+
         if stat.st_size < self.offset:
+            self._emit_invalidation()
             self.offset = 0
             self.partial_buffer = ""
-            self.accumulator.invalidate_context()
-            self.has_reported_context = False
 
         if stat.st_size == self.offset and not self.partial_buffer:
             return
@@ -166,9 +262,9 @@ class _CodexRolloutCollector:
 
         if rec_type == "session_meta":
             if isinstance(payload, dict):
-                sid = payload.get("id")
+                sid = str(payload.get("id") or "").strip()
                 scwd = payload.get("cwd")
-                if sid != self.session_id or not _same_path(scwd or "", self.cwd):
+                if sid != self.session_id or not _same_path(scwd, self.cwd):
                     self.file_verified = False
             return
 
@@ -177,119 +273,17 @@ class _CodexRolloutCollector:
 
         if rec_type == "event_msg" and isinstance(payload, dict):
             p_type = payload.get("type", "")
-            if p_type == "token_count":
-                self._handle_token_count(payload)
-            elif p_type == "token_usage_record":
-                self._handle_token_usage_record(payload)
-            elif p_type == "context_compacted":
-                self.accumulator.invalidate_context()
-                self.has_reported_context = False
-                self.is_compacted = True
-                if self.emitter is not None:
-                    self.emitter({
-                        "kind": "telemetry.updated",
-                        "data": {
-                            "context_used_tokens": None,
-                            "context_window_size": None,
-                            "context_remaining_percent": None,
-                            "source": "session",
-                            "quality": "unavailable",
-                        },
-                    })
+            if p_type == "context_compacted":
+                self._emit_invalidation(is_compaction=True)
             elif p_type in ("session_configured", "model_reroute"):
                 model = payload.get("model") or payload.get("to_model")
                 if model:
                     model_str = str(model)
                     if self.model_name and self.model_name != model_str:
-                        self.accumulator.invalidate_context()
-                        self.has_reported_context = False
-                        self.is_compacted = True
+                        self._emit_invalidation(is_compaction=False)
                     self.model_name = model_str
-        elif rec_type == "token_count":
-            self._handle_token_count(record)
-        elif rec_type == "token_usage_record":
-            self._handle_token_usage_record(record)
         elif rec_type == "context_compacted":
-            self.accumulator.invalidate_context()
-            self.has_reported_context = False
-            self.is_compacted = True
-
-    def _handle_token_usage_record(self, data: dict[str, Any]) -> None:
-        info = data.get("info") if isinstance(data.get("info"), dict) else data
-        total_in = _as_int(info.get("total_input_tokens") or info.get("input_tokens"))
-        total_out = _as_int(info.get("total_output_tokens") or info.get("output_tokens"))
-        cr = _as_int(info.get("cache_read_tokens") or info.get("cached_input_tokens"))
-        cw = _as_int(info.get("cache_write_tokens"))
-
-        if total_in is None and total_out is None:
-            return
-
-        if self.is_resumed and not self.preflight_done:
-            self.baseline_input = total_in
-            self.baseline_output = total_out
-            self.baseline_recorded = True
-            return
-
-        if self.is_resumed and self.baseline_input is None:
-            self.accumulator.record_missing_contribution(attempt=1, invocation=1)
-            return
-
-        base_in = self.baseline_input or 0
-        base_out = self.baseline_output or 0
-        norm_in = max(0, (total_in or 0) - base_in) if total_in is not None else None
-        norm_out = max(0, (total_out or 0) - base_out) if total_out is not None else None
-
-        self.accumulator.reconcile_cumulative(
-            attempt=1,
-            invocation=1,
-            total_input=norm_in,
-            total_output=norm_out,
-            cache_read=cr,
-            cache_write=cw,
-            source="session",
-            quality="reported",
-        )
-        if self.emitter is not None:
-            self.emitter({
-                "kind": "telemetry.updated",
-                "data": {
-                    "total_input_tokens": norm_in,
-                    "total_output_tokens": norm_out,
-                    "cache_read_tokens": cr,
-                    "cache_write_tokens": cw,
-                    "source": "session",
-                    "quality": "reported",
-                },
-            })
-
-    def _handle_token_count(self, data: dict[str, Any]) -> None:
-        info = data.get("info") if isinstance(data.get("info"), dict) else data
-        used_tokens = _as_int(info.get("total_token_usage"))
-        window_size = _as_int(info.get("model_context_window"))
-
-        if used_tokens is not None:
-            self.has_reported_context = True
-            self.is_compacted = False
-            self.accumulator.record_context_snapshot(
-                used_tokens=used_tokens,
-                window_size=window_size,
-                source="session",
-                quality="reported",
-            )
-            if self.emitter is not None:
-                emit_data: dict[str, Any] = {
-                    "context_used_tokens": used_tokens,
-                    "source": "session",
-                    "quality": "reported",
-                }
-                if window_size is not None and window_size > 0:
-                    emit_data["context_window_size"] = window_size
-                    pct = round(max(0.0, min(100.0, (1.0 - (used_tokens / window_size)) * 100.0)), 2)
-                    emit_data["context_remaining_percent"] = pct
-                self.emitter({
-                    "kind": "telemetry.updated",
-                    "data": emit_data,
-                })
+            self._emit_invalidation(is_compaction=True)
 
 
 
@@ -344,13 +338,18 @@ def _extract_session_id_from_stdout(text: str) -> str:
     return match.group(1) if match else ""
 
 
-def _same_path(left: str, right: Path) -> bool:
+def _same_path(left: Any, right: Path) -> bool:
+    if not isinstance(left, str) or not left.strip():
+        return False
     try:
         return Path(left).resolve() == right.resolve()
-    except OSError:
-        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
-            os.path.abspath(os.fspath(right))
-        )
+    except (OSError, ValueError, TypeError):
+        try:
+            return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+                os.path.abspath(os.fspath(right))
+            )
+        except Exception:
+            return False
 
 
 def _extract_session_id_from_latest_session(cwd: Path, prompt: str, started_at: float) -> str:
@@ -512,7 +511,6 @@ class _EventParser:
             accumulator=self.accumulator,
             emitter=self.params.emitter,
         )
-        self.collector.preflight_baseline()
 
     def emit(self, event: dict[str, Any]) -> None:
         if self.params.emitter is not None:
@@ -622,7 +620,7 @@ class _EventParser:
                                 val = norm_in + norm_out - (reasoning_out or 0)
                                 if val >= 0:
                                     ctx_used = val
-                                    if not self.collector.has_reported_context and not self.collector.is_compacted:
+                                    if not self.collector.is_compacted:
                                         self.accumulator.record_context_snapshot(
                                             used_tokens=ctx_used,
                                             source="derived",
@@ -644,7 +642,7 @@ class _EventParser:
                                     "quality": "reported",
                                 },
                             })
-                            if ctx_used is not None and not self.collector.has_reported_context and not self.collector.is_compacted:
+                            if ctx_used is not None and not self.collector.is_compacted:
                                 self.params.emitter({
                                     "kind": "telemetry.updated",
                                     "data": {
@@ -667,28 +665,31 @@ class _EventParser:
                 if any(v is not None for v in (raw_in, cached_in, cw, raw_out)):
                     norm_in = raw_in
                     norm_out = raw_out
-                    self.accumulator.reconcile_cumulative(
-                        attempt=1,
-                        invocation=1,
-                        total_input=norm_in,
-                        total_output=norm_out,
-                        cache_read=cached_in,
-                        cache_write=cw,
-                        source="result",
-                        quality="reported",
-                    )
-                    if self.params.emitter is not None:
-                        self.params.emitter({
-                            "kind": "telemetry.updated",
-                            "data": {
-                                "total_input_tokens": norm_in,
-                                "total_output_tokens": norm_out,
-                                "cache_read_tokens": cached_in,
-                                "cache_write_tokens": cw,
-                                "source": "result",
-                                "quality": "reported",
-                            },
-                        })
+                    if not self.params.SESSION_ID:
+                        self.accumulator.reconcile_cumulative(
+                            attempt=1,
+                            invocation=1,
+                            total_input=norm_in,
+                            total_output=norm_out,
+                            cache_read=cached_in,
+                            cache_write=cw,
+                            source="result",
+                            quality="reported",
+                        )
+                        if self.params.emitter is not None:
+                            self.params.emitter({
+                                "kind": "telemetry.updated",
+                                "data": {
+                                    "total_input_tokens": norm_in,
+                                    "total_output_tokens": norm_out,
+                                    "cache_read_tokens": cached_in,
+                                    "cache_write_tokens": cw,
+                                    "source": "result",
+                                    "quality": "reported",
+                                },
+                            })
+                    else:
+                        self.accumulator.record_missing_contribution(attempt=1, invocation=1)
             self.collector.poll()
 
 

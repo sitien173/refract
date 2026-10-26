@@ -2318,7 +2318,6 @@ def test_codex_rollout_exact_session_enrichment(tmp_path: Path, monkeypatch: pyt
     session_file = sessions_dir / f"rollout_{session_id}.jsonl"
     session_file.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 1500, "model_context_window": 128000}}}) + "\n"
     )
 
     codex_stdout = [
@@ -2332,13 +2331,12 @@ def test_codex_rollout_exact_session_enrichment(tmp_path: Path, monkeypatch: pyt
     res = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted.append))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    assert res.telemetry["context_window_size"]["value"] == 128000
-    assert res.telemetry["context_window_size"]["quality"] == "reported"
-    assert res.telemetry["context_window_size"]["source"] == "session"
-    assert res.telemetry["context_used_tokens"]["value"] == 1500
-    assert res.telemetry["context_used_tokens"]["quality"] == "reported"
-    assert res.telemetry["context_used_tokens"]["source"] == "session"
-    assert res.telemetry["context_remaining_percent"]["value"] == 98.83
+    assert res.telemetry["context_window_size"]["value"] is None
+    assert res.telemetry["context_window_size"]["quality"] == "unavailable"
+    assert res.telemetry["context_used_tokens"]["value"] == 1050
+    assert res.telemetry["context_used_tokens"]["quality"] == "derived"
+    assert res.telemetry["context_used_tokens"]["source"] == "derived"
+    assert res.telemetry["context_remaining_percent"]["value"] is None
 
 
 def test_codex_rollout_refuses_mismatched_session_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2414,8 +2412,7 @@ def test_codex_rollout_handles_partial_and_malformed_lines(tmp_path: Path, monke
         json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
         + "malformed raw non-json line\n"
         + json.dumps({"type": "event_msg", "payload": "not a dict payload"}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 3200, "model_context_window": 100000}}}) + "\n"
-        + '{"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 5000' # unterminated partial line
+        + '{"type": "event_msg", "payload": {"type": "noise"' # unterminated partial line
     )
 
     codex_stdout = [
@@ -2428,8 +2425,10 @@ def test_codex_rollout_handles_partial_and_malformed_lines(tmp_path: Path, monke
     res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    assert res.telemetry["context_used_tokens"]["value"] == 3200
-    assert res.telemetry["context_window_size"]["value"] == 100000
+    # Context occupied is derived from turn usage; capacity is unverified null
+    assert res.telemetry["context_used_tokens"]["value"] == 1050
+    assert res.telemetry["context_used_tokens"]["quality"] == "derived"
+    assert res.telemetry["context_window_size"]["value"] is None
 
 
 def test_codex_rollout_handles_file_growth_and_incremental_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2449,20 +2448,19 @@ def test_codex_rollout_handles_file_growth_and_incremental_reads(tmp_path: Path,
     def stream_lines(*args, **kwargs):
         yield json.dumps({"type": "thread.started", "thread_id": session_id})
         with session_file.open("a") as f:
-            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 2000, "model_context_window": 128000}}}) + "\n")
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "noise", "data": 1}}) + "\n")
         yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 20}})
         with session_file.open("a") as f:
-            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 3500, "model_context_window": 128000}}}) + "\n")
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "noise", "data": 2}}) + "\n")
         yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1500, "output_tokens": 30}})
 
     monkeypatch.setattr("refract.backends.codex.run_shell_command", stream_lines)
 
-    emitted: list[dict[str, Any]] = []
-    res = codex_sync(BackendParams(PROMPT="test", cd=workspace, emitter=emitted.append))
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    assert res.telemetry["context_used_tokens"]["value"] == 3500
-    assert res.telemetry["context_window_size"]["value"] == 128000
+    assert res.telemetry["context_used_tokens"]["value"] == 1530
+    assert res.telemetry["context_window_size"]["value"] is None
 
 
 def test_codex_rollout_handles_file_truncation_and_rotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2478,16 +2476,14 @@ def test_codex_rollout_handles_file_truncation_and_rotation(tmp_path: Path, monk
 
     session_file.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 5000, "model_context_window": 128000}}}) + "\n"
         + ("x" * 5000) + "\n"
     )
 
     def stream_lines(*args, **kwargs):
         yield json.dumps({"type": "thread.started", "thread_id": session_id})
-        # Simulate truncation / rotation: rewrite file with shorter content
+        # Simulate truncation: rewrite file with shorter content
         session_file.write_text(
             json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
-            + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 1200, "model_context_window": 128000}}}) + "\n"
         )
         yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 20}})
 
@@ -2496,7 +2492,7 @@ def test_codex_rollout_handles_file_truncation_and_rotation(tmp_path: Path, monk
     res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    assert res.telemetry["context_used_tokens"]["value"] == 1200
+    assert res.telemetry["context_used_tokens"]["value"] == 1020
 
 
 def test_codex_rollout_compaction_invalidates_stale_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2512,7 +2508,6 @@ def test_codex_rollout_compaction_invalidates_stale_context(tmp_path: Path, monk
 
     session_file.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 80000, "model_context_window": 128000}}}) + "\n"
         + json.dumps({"type": "event_msg", "payload": {"type": "context_compacted"}}) + "\n"
     )
 
@@ -2525,6 +2520,7 @@ def test_codex_rollout_compaction_invalidates_stale_context(tmp_path: Path, monk
     res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert res.outcome == "OK"
     assert res.telemetry is not None
+    # Compaction invalidates context
     assert res.telemetry["context_used_tokens"]["value"] is None
     assert res.telemetry["context_window_size"]["value"] is None
 
@@ -2547,31 +2543,27 @@ def test_codex_rollout_concurrent_sessions_isolated(tmp_path: Path, monkeypatch:
 
     f1.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": s1, "cwd": str(workspace1)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 1111, "model_context_window": 100000}}}) + "\n"
     )
     f2.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": s2, "cwd": str(workspace2)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 2222, "model_context_window": 200000}}}) + "\n"
     )
 
-    # Run for s1
     monkeypatch.setattr(
         "refract.backends.codex.run_shell_command",
         lambda *a, **k: (l for l in [json.dumps({"type": "thread.started", "thread_id": s1}), json.dumps({"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 10}})]),
     )
     res1 = codex_sync(BackendParams(PROMPT="test", cd=workspace1))
 
-    # Run for s2
     monkeypatch.setattr(
         "refract.backends.codex.run_shell_command",
         lambda *a, **k: (l for l in [json.dumps({"type": "thread.started", "thread_id": s2}), json.dumps({"type": "turn.completed", "usage": {"input_tokens": 200, "output_tokens": 20}})]),
     )
     res2 = codex_sync(BackendParams(PROMPT="test", cd=workspace2))
 
-    assert res1.telemetry["context_used_tokens"]["value"] == 1111
-    assert res1.telemetry["context_window_size"]["value"] == 100000
-    assert res2.telemetry["context_used_tokens"]["value"] == 2222
-    assert res2.telemetry["context_window_size"]["value"] == 200000
+    assert res1.telemetry["context_used_tokens"]["value"] == 110
+    assert res2.telemetry["context_used_tokens"]["value"] == 220
+    assert res1.telemetry["context_window_size"]["value"] is None
+    assert res2.telemetry["context_window_size"]["value"] is None
 
 
 def test_codex_rollout_bounded_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2589,7 +2581,6 @@ def test_codex_rollout_bounded_reads(tmp_path: Path, monkeypatch: pytest.MonkeyP
     lines = [json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}})]
     for i in range(500):
         lines.append(json.dumps({"type": "event_msg", "payload": {"type": "noise", "index": i}}))
-    lines.append(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 4500, "model_context_window": 128000}}}))
     session_file.write_text("\n".join(lines) + "\n")
 
     codex_stdout = [
@@ -2601,8 +2592,8 @@ def test_codex_rollout_bounded_reads(tmp_path: Path, monkeypatch: pytest.MonkeyP
     res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    assert res.telemetry["context_used_tokens"]["value"] == 4500
-    assert res.telemetry["context_window_size"]["value"] == 128000
+    assert res.telemetry["context_used_tokens"]["value"] == 1050
+    assert res.telemetry["context_window_size"]["value"] is None
 
 
 def test_codex_rollout_refuses_mismatched_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2620,7 +2611,6 @@ def test_codex_rollout_refuses_mismatched_identity(tmp_path: Path, monkeypatch: 
     # File has mismatched session id in payload
     session_file.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": mismatched_id, "cwd": str(workspace)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": 5000, "model_context_window": 128000}}}) + "\n"
     )
 
     codex_stdout = [
@@ -2632,7 +2622,6 @@ def test_codex_rollout_refuses_mismatched_identity(tmp_path: Path, monkeypatch: 
     res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    # Must refuse the file and not report context_window_size from mismatched file
     assert res.telemetry["context_window_size"]["value"] is None
 
 
@@ -2671,7 +2660,7 @@ def test_codex_rollout_lifecycle_cancellation(tmp_path: Path, monkeypatch: pytes
     assert res.outcome in ("FATAL", "CANCELLED", "ABORTED") or res.error_class in ("cancelled", "timeout")
 
 
-def test_codex_rollout_cumulative_counter_baselining_in_resumed_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_codex_resumed_session_without_baseline_marks_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     codex_home = tmp_path / "codex_home"
     sessions_dir = codex_home / "sessions"
     sessions_dir.mkdir(parents=True)
@@ -2680,33 +2669,27 @@ def test_codex_rollout_cumulative_counter_baselining_in_resumed_session(tmp_path
     workspace.mkdir()
 
     session_id = "00000000-0000-0000-0000-cccccccccccc"
-    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
 
-    # Pre-existing rollout content before resumed turn
-    session_file.write_text(
-        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_usage_record", "info": {"total_input_tokens": 1000, "total_output_tokens": 200}}}) + "\n"
-    )
-
-    def stream_lines(*args, **kwargs):
-        yield json.dumps({"type": "thread.started", "thread_id": session_id})
-        # Simulate new turn writing to rollout
-        with session_file.open("a") as f:
-            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_usage_record", "info": {"total_input_tokens": 1500, "total_output_tokens": 350}}}) + "\n")
-        yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 500, "output_tokens": 150}})
-
-    monkeypatch.setattr("refract.backends.codex.run_shell_command", stream_lines)
+    # Resumed session: turn completed emits invocation-local tokens (500, 150),
+    # then thread.completed emits cumulative tokens across session (2000, 400).
+    # Because pre-execution baseline is not available, invocation-local turn totals
+    # are preserved and completeness is marked partial.
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 500, "output_tokens": 150}}),
+        json.dumps({"type": "thread.completed", "usage": {"input_tokens": 2000, "output_tokens": 400}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
 
     res = codex_sync(BackendParams(PROMPT="test", cd=workspace, SESSION_ID=session_id))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    # Cumulative counter 1500 - 1000 = 500, 350 - 200 = 150
     assert res.telemetry["total_input_tokens"]["value"] == 500
     assert res.telemetry["total_output_tokens"]["value"] == 150
-    assert res.telemetry["completeness"] == "complete"
+    assert res.telemetry["completeness"] == "partial"
 
 
-def test_codex_rollout_missing_baseline_marks_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_codex_fresh_session_cumulative_reconciles_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     codex_home = tmp_path / "codex_home"
     sessions_dir = codex_home / "sessions"
     sessions_dir.mkdir(parents=True)
@@ -2715,27 +2698,19 @@ def test_codex_rollout_missing_baseline_marks_incomplete(tmp_path: Path, monkeyp
     workspace.mkdir()
 
     session_id = "00000000-0000-0000-0000-dddddddddddd"
-    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
 
-    # Resumed session file exists but has NO baseline usage record
-    session_file.write_text(
-        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
-    )
+    # Fresh session (no SESSION_ID): invocation is whole session. thread.completed reconciles complete.
+    codex_stdout = [
+        json.dumps({"type": "thread.started", "thread_id": session_id}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 600, "output_tokens": 100}}),
+        json.dumps({"type": "thread.completed", "usage": {"input_tokens": 600, "output_tokens": 100}}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_stdout))
 
-    def stream_lines(*args, **kwargs):
-        yield json.dumps({"type": "thread.started", "thread_id": session_id})
-        # Rollout writes cumulative record without baseline having been established
-        with session_file.open("a") as f:
-            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_usage_record", "info": {"total_input_tokens": 2000, "total_output_tokens": 400}}}) + "\n")
-        yield json.dumps({"type": "turn.completed", "usage": {"input_tokens": 600, "output_tokens": 100}})
-
-    monkeypatch.setattr("refract.backends.codex.run_shell_command", stream_lines)
-
-    res = codex_sync(BackendParams(PROMPT="test", cd=workspace, SESSION_ID=session_id))
+    res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    # Missing baseline must mark completeness partial while retaining invocation-local turn usage
-    assert res.telemetry["completeness"] == "partial"
+    assert res.telemetry["completeness"] == "complete"
     assert res.telemetry["total_input_tokens"]["value"] == 600
     assert res.telemetry["total_output_tokens"]["value"] == 100
 
@@ -2837,6 +2812,162 @@ def test_agy_explicit_context_metadata_handled(tmp_path: Path, monkeypatch: pyte
     # Explicit capacity should be recorded and remaining percent derived
     assert res.telemetry["context_window_size"]["value"] == 200000
     assert res.telemetry["context_remaining_percent"]["value"] == 99.54
+
+
+def test_codex_discovery_bounded_entries_and_depth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-aaaaaaaa1111"
+    # Create 60 dummy files/dirs so an entry-bounded scan cannot scan forever
+    for i in range(60):
+        dummy = sessions_dir / f"dummy_dir_{i:03d}"
+        dummy.mkdir()
+        (dummy / "noise.jsonl").write_text("noise\n")
+
+    # Target file placed deep or far in listing
+    target_dir = sessions_dir / "dummy_dir_059"
+    target_file = target_dir / f"rollout_{session_id}.jsonl"
+    target_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+    )
+
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    acc = TelemetryAccumulator()
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=session_id, accumulator=acc)
+    # Must enforce entry limits
+    assert collector.MAX_DISCOVERY_ENTRIES <= 50
+    assert collector.MAX_DISCOVERY_RETRIES <= 3
+
+
+def test_codex_discovery_missing_file_retry_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-bbbbbbbb2222"
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    acc = TelemetryAccumulator()
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=session_id, accumulator=acc)
+
+    # Poll multiple times when file does not exist
+    for _ in range(10):
+        collector.poll()
+
+    assert collector.missing_discovery_retries <= collector.MAX_DISCOVERY_RETRIES
+    # Once cap is reached, no file is set and further polls do not retry
+    assert collector.session_file is None
+    assert collector.missing_discovery_retries == collector.MAX_DISCOVERY_RETRIES
+
+
+def test_codex_discovery_refuses_symlinks_and_hostile_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-cccccccc3333"
+
+    # Create hostile symlink pointing outside sessions_dir
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    secret_target = outside_dir / f"rollout_{session_id}.jsonl"
+    secret_target.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+    )
+    symlink_file = sessions_dir / f"symlink_{session_id}.jsonl"
+    symlink_file.symlink_to(secret_target)
+
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    acc = TelemetryAccumulator()
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=session_id, accumulator=acc)
+    collector.poll()
+    # Must refuse symlink escape
+    assert collector.session_file is None
+
+
+def test_codex_rollout_rotation_equal_size_revalidates_and_emits_invalidation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    codex_home = tmp_path / "codex_home"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    session_id = "00000000-0000-0000-0000-dddddddd4444"
+    session_file = sessions_dir / f"rollout_{session_id}.jsonl"
+
+    content1 = json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+    session_file.write_text(content1)
+
+    emitted: list[dict[str, Any]] = []
+    from refract.backends.codex import _CodexRolloutCollector
+    from refract.telemetry import TelemetryAccumulator
+
+    acc = TelemetryAccumulator()
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=session_id, accumulator=acc, emitter=emitted.append)
+    collector.poll()
+    assert collector.session_file is not None
+    orig_ino = collector.file_ino
+    assert orig_ino is not None
+
+    # Replace file with new inode of exactly equal size
+    session_file.unlink()
+    content2 = json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(workspace)}}) + "\n"
+    session_file.write_text(content2)
+
+    collector.poll()
+    # Rotation must revalidate inode, detect replacement, and emit invalidation
+    assert any(
+        e.get("kind") == "telemetry.updated"
+        and e.get("data", {}).get("quality") == "unavailable"
+        for e in emitted
+    )
+
+
+def test_agy_context_provenance_separated_from_capacity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    agy_stdout = [
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "state": "DONE",
+                "step_type": "agent_response",
+                "step_index": 1,
+                "text_delta": "Working",
+                "usage": {
+                    "input_tokens": 800,
+                    "output_tokens": 120,
+                    "model_context_window": 200000,
+                },
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_stdout))
+
+    res = agy_sync(BackendParams(PROMPT="test", cd=tmp_path))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    # Occupied context MUST remain derived provenance
+    assert res.telemetry["context_used_tokens"]["quality"] == "derived"
+    assert res.telemetry["context_used_tokens"]["source"] == "derived"
+    # Capacity is reported
+    assert res.telemetry["context_window_size"]["quality"] == "reported"
+
 
 
 

@@ -358,9 +358,9 @@ Telemetry exposes job consumption and live context snapshots. Unsupported values
 
 | Measurement | Meaning | Codex | Claude Code | Pi | Agy |
 |---|---|---|---|---|---|
-| `context_remaining_percent` | Context remaining percentage | Derived from capacity | Derived from capacity | Unavailable null | Unavailable null |
-| `context_window_size` | Context capacity limit | Rollout `token_count` | Observed in `modelUsage` | Unavailable null | Unavailable null |
-| `context_used_tokens` | Current occupied context | Rollout `token_count` | Derived response usage | Derived response usage | Derived step usage |
+| `context_remaining_percent` | Context remaining percentage | Unavailable null | Derived from capacity | Unavailable null | Unavailable null (derived only if explicit metadata present) |
+| `context_window_size` | Context capacity limit | Unavailable null | Observed in `modelUsage` | Unavailable null | Unavailable null (supported only if explicit metadata present) |
+| `context_used_tokens` | Current occupied context | Derived turn usage | Derived response usage | Derived response usage | Derived step usage |
 | `total_input_tokens` | Normalized input tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
 | `total_output_tokens` | Normalized output tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
 | `cache_read_tokens` | Cached input read tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
@@ -368,21 +368,29 @@ Telemetry exposes job consumption and live context snapshots. Unsupported values
 
 ### Measurement evidence and status
 
+Capabilities are categorized by evidence level: package/CLI documentation evidence, synthetic fixture-only testing, and runtime unverified/unavailable limitations.
+
 - Codex:
-  - Observed: stream `turn.completed.usage` records input, output, and cached tokens.
-  - Observed: rollout files contain `token_count` records with `total_token_usage` and `model_context_window`.
-  - Compaction: `context_compacted` rollout records invalidate context.
-  - Limitation: ephemeral mode or missing rollout files leave context capacity null.
+  - Package/CLI evidence: `codex-cli 0.160.1` (`/home/ngosi/.codex/packages/standalone/releases/0.160.1-x86_64-unknown-linux-musl/bin/codex`). Stream `turn.completed.usage` records input, output, and cached input tokens. Occupied context is derived from latest turn usage (`norm_in + norm_out - reasoning_out`).
+  - Synthetic fixture-only: rollout parsing tests characterize bounded exact-session file discovery, rotation on inode change, truncation handling, and `context_compacted` event invalidation. Speculative `token_count` / `token_usage_record` schemas are unverified in package evidence and removed.
+  - Runtime unverified: context capacity limit (`context_window_size`) and remaining percent are not emitted on stdout or verified rollout events; they remain unavailable null.
+  - Baselining: fresh sessions reconcile with `thread.completed`. Resumed sessions retain invocation-local turn totals and mark partial when pre-execution baseline is unavailable.
 - Claude Code:
-  - Observed: `result` usage provides input, output, cache reads, and cache writes.
-  - Observed: `modelUsage` exposes model `contextWindow` when model matches.
-  - Limitation: unmatched model in `modelUsage` leaves capacity null.
+  - Package/CLI evidence: `claude 2.1.296 (Claude Code)`. `result` usage provides input, output, cache reads, and cache writes. `modelUsage` exposes model `contextWindow` when model matches.
+  - Runtime unverified: unmatched models in `modelUsage` leave capacity null.
 - Pi:
-  - Observed: JSON stream `message_end` provides input, output, and cache reads.
-  - Verified: neither JSON events nor session files expose `context_window_size`.
-  - Limitation: capacity remains null without external catalog or RPC process.
+  - Package/CLI evidence: `pi 1.4.0` (`@earendil-works/pi-coding-agent 1.4.0`). JSON stream `message_end` provides input, output, and cache reads. Occupied context is derived from response consumption.
+  - Runtime unverified: neither JSON stream events nor session files expose `context_window_size`. Capacity remains unavailable null without external catalog tables or an external RPC daemon.
 - Antigravity:
-  - Observed: `step_update` and `result` provide input, output, and cache reads.
-  - Verified: headless print mode does not emit `context_window_size`.
-  - Limitation: capacity remains null unless explicit context metadata is supplied.
+  - Package/CLI evidence: `agy 1.4.7` (`/home/ngosi/.local/bin/agy`). `step_update` and `result` provide input, output, and cache reads. Occupied context is derived from step usage (`norm_in + norm_out - thinking_tokens`).
+  - Synthetic fixture-only: tests verify that if explicit `model_context_window` or `context_window_size` metadata is provided in stream updates or results, capacity is reported and remaining percent derived while occupied context remains derived provenance.
+  - Runtime unverified: standard headless print mode (`agy --print`) does not emit context window capacity; capacity remains unavailable null.
+
+### Opt-in live telemetry probes
+
+Live telemetry probes are located in `server/tests/test_live_backends.py`:
+- Selector: `server/tests/test_live_backends.py::test_live_telemetry_probe`
+- Status: Opt-in only via `REFRACT_LIVE_TELEMETRY_OPT_IN=1`. Marked `not run` in standard test runs.
+- Missing prerequisites (such as missing CLI binaries, unauthenticated credentials, or non-existent `CODEX_HOME`) immediately fail the probe rather than reporting a false pass.
+- No live model requests or probe runs are authorized without explicit user direction.
 
