@@ -152,4 +152,34 @@ block even if all `none`.
   - Finding 3: `pi.py` used `u.get("totalTokens")` as `context_used_tokens` with `source="provider", quality="reported"`. Fixed by deriving context only when retained components are established and setting `quality="derived", source="derived"`.
   - Finding 4: All adapters emitted consumption and context in a single event with `quality="derived"`, causing `execution.py` to record consumption with `derived` quality. Fixed by emitting consumption with reported quality separately from derived context observations.
 
+## Review Cycle 3 Fixes
+
+### Decisions made
+- Retained completed Pi turn identity until actual new-turn boundary (`turn_start`); completion events (`message_end`, `turn_end`) alone cannot start a new identity.
+- Removed `self.turn_active = False` on `turn_end` in `_EventParser` that previously triggered implicit new turns on repeated terminal events within the same turn.
+- Distinct subsequent turns continue to be recognized at explicit `turn_start` boundaries, and single-turn fallback streams initialize turn identity at first completion without opening implicit turns on subsequent terminal events.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN:
+  - `cd server && uv run pytest tests/test_streaming_backends.py -k "test_pi_repeated_no_id_turn_end_does_not_open_implicit_turn"`
+    - RED Failure: `tests/test_streaming_backends.py:2277: AssertionError: assert 200 == 100`
+    - GREEN: 1 passed in 0.17s.
+  - Streaming suite verification: `cd server && uv run pytest tests/test_streaming_backends.py` -> 34 passed in 0.28s.
+  - Full suite verification: `cd server && uv run pytest` -> 693 passed, 11 deselected in 121.78s.
+- Root cause (bugfix only):
+  - In `server/src/refract/backends/pi.py`, `turn_end` set `self.turn_active = False`. When a subsequent `turn_end` arrived without an intervening `turn_start`, `not self.turn_active` evaluated to True, incrementing `self.turn_counter` and resetting `turn_completed_in_current_turn = False`, double-counting response tokens as a new implicit turn (`turn_2`). Fixed by retaining turn identity and completion status until the actual `turn_start` boundary.
+
+
 

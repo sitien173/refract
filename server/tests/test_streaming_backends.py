@@ -2233,3 +2233,73 @@ def test_pi_total_tokens_never_labeled_reported_context_and_derivation_provenanc
     assert res_no_in.telemetry is not None
     assert res_no_in.telemetry["context_used_tokens"]["value"] is None
     assert res_no_in.telemetry["context_used_tokens"]["quality"] == "unavailable"
+
+
+def test_pi_repeated_no_id_turn_end_does_not_open_implicit_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # 1. Exact reproduction: turn_start -> message_end -> turn_end -> turn_end
+    # for one assistant response with input 100, output 20, no responseId.
+    # Must report 100, not 200.
+    repro_lines = [
+        json.dumps({"type": "session", "id": "pi-sess-repro"}),
+        json.dumps({"type": "turn_start"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 1 message"}],
+                "usage": {"input": 100, "output": 20},
+            },
+        }),
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 1 message"}],
+                "usage": {"input": 100, "output": 20},
+            },
+        }),
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 1 message"}],
+                "usage": {"input": 100, "output": 20},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in repro_lines))
+    repro_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert repro_res.outcome == "OK"
+    assert repro_res.telemetry is not None
+    assert repro_res.telemetry["total_input_tokens"]["value"] == 100
+    assert repro_res.telemetry["total_output_tokens"]["value"] == 20
+
+    # 2. Distinct subsequent turn after actual new-turn boundary (turn_start) with repeated turn_end
+    multi_turn_lines = repro_lines + [
+        json.dumps({"type": "turn_start"}),
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 2 message"}],
+                "usage": {"input": 150, "output": 15},
+            },
+        }),
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 2 message"}],
+                "usage": {"input": 150, "output": 15},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in multi_turn_lines))
+    multi_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert multi_res.outcome == "OK"
+    assert multi_res.telemetry is not None
+    assert multi_res.telemetry["total_input_tokens"]["value"] == 250
+    assert multi_res.telemetry["total_output_tokens"]["value"] == 35

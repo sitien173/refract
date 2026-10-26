@@ -171,7 +171,6 @@ class _EventParser:
         self.accumulator = TelemetryAccumulator()
         self.recorded_responses: set[str] = set()
         self.turn_counter = 0
-        self.turn_active = False
         self.turn_completed_in_current_turn = False
 
     def emit(self, event: dict[str, Any]) -> None:
@@ -245,7 +244,6 @@ class _EventParser:
 
         if event_type == "turn_start":
             self.turn_counter += 1
-            self.turn_active = True
             self.turn_completed_in_current_turn = False
         elif event_type in ("message_end", "turn_end"):
             msg = event.get("message")
@@ -253,29 +251,20 @@ class _EventParser:
                 resp_id = str(msg.get("responseId") or msg.get("id") or "")
                 if resp_id:
                     if resp_id in self.recorded_responses:
-                        if event_type == "turn_end":
-                            self.turn_active = False
                         return
                     assigned_id = resp_id
                 else:
-                    if not self.turn_active:
-                        self.turn_counter += 1
-                        self.turn_active = True
+                    if self.turn_counter == 0:
+                        self.turn_counter = 1
                         self.turn_completed_in_current_turn = False
                     elif self.turn_completed_in_current_turn:
-                        if event_type == "turn_end":
-                            self.turn_active = False
                         return
                     assigned_id = f"turn_{self.turn_counter}"
                     if assigned_id in self.recorded_responses:
-                        if event_type == "turn_end":
-                            self.turn_active = False
                         return
 
                 self.recorded_responses.add(assigned_id)
                 self.turn_completed_in_current_turn = True
-                if event_type == "turn_end":
-                    self.turn_active = False
 
                 u = msg.get("usage")
                 if isinstance(u, dict):
