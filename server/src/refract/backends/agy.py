@@ -199,22 +199,27 @@ class _EventParser:
                     except Exception:
                         pass
                 if self.params.emitter is not None:
-                    event_data: dict[str, Any] = {
-                        "response_id": step_id,
-                        "input_tokens": norm_in,
-                        "output_tokens": norm_out,
-                        "cache_read_tokens": cr,
-                        "cache_write_tokens": cw,
-                        "source": "step",
-                        "quality": "reported",
-                    }
-                    if ctx_used is not None:
-                        event_data["context_used_tokens"] = ctx_used
-                        event_data["quality"] = "derived"
                     self.params.emitter({
                         "kind": "telemetry.updated",
-                        "data": event_data,
+                        "data": {
+                            "response_id": step_id,
+                            "input_tokens": norm_in,
+                            "output_tokens": norm_out,
+                            "cache_read_tokens": cr,
+                            "cache_write_tokens": cw,
+                            "source": "step",
+                            "quality": "reported",
+                        },
                     })
+                    if ctx_used is not None:
+                        self.params.emitter({
+                            "kind": "telemetry.updated",
+                            "data": {
+                                "context_used_tokens": ctx_used,
+                                "source": "derived",
+                                "quality": "derived",
+                            },
+                        })
 
     def result(self, result: Any) -> None:
         if not isinstance(result, dict):

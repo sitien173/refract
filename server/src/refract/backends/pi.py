@@ -22,6 +22,17 @@ def _as_int(val: Any) -> int | None:
     return val
 
 
+def _parse_token_component(usage: dict[str, Any], key: str) -> tuple[int | None, bool]:
+    if key not in usage:
+        return None, False
+    val = usage[key]
+    if val is None:
+        return None, False
+    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+        return None, True
+    return val, False
+
+
 def run_shell_command(
     cmd: list[str],
     cwd: str | None = None,
@@ -159,8 +170,9 @@ class _EventParser:
         self.raw_to_entity: dict[str, str] = {}
         self.accumulator = TelemetryAccumulator()
         self.recorded_responses: set[str] = set()
-        self.recorded_turns: set[int] = set()
         self.turn_counter = 0
+        self.turn_active = False
+        self.turn_completed_in_current_turn = False
 
     def emit(self, event: dict[str, Any]) -> None:
         if self.params.emitter is not None:
@@ -231,26 +243,52 @@ class _EventParser:
             elif event_type in {"tool_execution_end", "tool_result"}:
                 self.complete_tool(event)
 
-        if event_type == "message_end":
+        if event_type == "turn_start":
+            self.turn_counter += 1
+            self.turn_active = True
+            self.turn_completed_in_current_turn = False
+        elif event_type in ("message_end", "turn_end"):
             msg = event.get("message")
             if isinstance(msg, dict) and msg.get("role") == "assistant":
                 resp_id = str(msg.get("responseId") or msg.get("id") or "")
-                self.turn_counter += 1
-                turn_idx = self.turn_counter
-                turn_key = f"turn_{turn_idx}"
-                assigned_id = resp_id or turn_key
+                if resp_id:
+                    if resp_id in self.recorded_responses:
+                        if event_type == "turn_end":
+                            self.turn_active = False
+                        return
+                    assigned_id = resp_id
+                else:
+                    if not self.turn_active:
+                        self.turn_counter += 1
+                        self.turn_active = True
+                        self.turn_completed_in_current_turn = False
+                    elif self.turn_completed_in_current_turn:
+                        if event_type == "turn_end":
+                            self.turn_active = False
+                        return
+                    assigned_id = f"turn_{self.turn_counter}"
+                    if assigned_id in self.recorded_responses:
+                        if event_type == "turn_end":
+                            self.turn_active = False
+                        return
+
                 self.recorded_responses.add(assigned_id)
-                self.recorded_turns.add(turn_idx)
+                self.turn_completed_in_current_turn = True
+                if event_type == "turn_end":
+                    self.turn_active = False
+
                 u = msg.get("usage")
                 if isinstance(u, dict):
-                    raw_in = _as_int(u.get("input"))
-                    raw_out = _as_int(u.get("output"))
-                    cr = _as_int(u.get("cacheRead"))
-                    cw = _as_int(u.get("cacheWrite"))
-                    tot = _as_int(u.get("totalTokens"))
-                    if any(v is not None for v in (raw_in, raw_out, cr, cw, tot)):
-                        norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
-                        norm_out = raw_out
+                    raw_in, raw_in_bad = _parse_token_component(u, "input")
+                    raw_out, raw_out_bad = _parse_token_component(u, "output")
+                    cr, cr_bad = _parse_token_component(u, "cacheRead")
+                    cw, cw_bad = _parse_token_component(u, "cacheWrite")
+                    if raw_in_bad or cr_bad or cw_bad or raw_in is None:
+                        norm_in = None
+                    else:
+                        norm_in = raw_in + (cr or 0) + (cw or 0)
+                    norm_out = raw_out
+                    if any(v is not None for v in (norm_in, norm_out, cr, cw)) or raw_in_bad or raw_out_bad or cr_bad or cw_bad:
                         self.accumulator.record_consumption(
                             attempt=1,
                             invocation=1,
@@ -263,120 +301,48 @@ class _EventParser:
                             quality="reported",
                         )
                         ctx_used = None
-                        ctx_qual = "derived"
-                        if tot is not None:
-                            ctx_used = tot
-                            ctx_qual = "reported"
-                            self.accumulator.record_context_snapshot(
-                                used_tokens=ctx_used,
-                                source="provider",
-                                quality="reported",
-                            )
-                        elif norm_in is not None:
+                        if norm_in is not None:
                             ctx_used = norm_in + (norm_out or 0)
-                            ctx_qual = "derived"
                             self.accumulator.record_context_snapshot(
                                 used_tokens=ctx_used,
                                 source="derived",
                                 quality="derived",
                             )
                         if self.params.emitter is not None:
-                            event_data: dict[str, Any] = {
-                                "response_id": assigned_id,
-                                "input_tokens": norm_in,
-                                "output_tokens": norm_out,
-                                "cache_read_tokens": cr,
-                                "cache_write_tokens": cw,
-                                "source": "response",
-                                "quality": "reported",
-                            }
-                            if ctx_used is not None:
-                                event_data["context_used_tokens"] = ctx_used
-                                event_data["quality"] = ctx_qual
                             self.params.emitter({
                                 "kind": "telemetry.updated",
-                                "data": event_data,
+                                "data": {
+                                    "response_id": assigned_id,
+                                    "input_tokens": norm_in,
+                                    "output_tokens": norm_out,
+                                    "cache_read_tokens": cr,
+                                    "cache_write_tokens": cw,
+                                    "source": "response",
+                                    "quality": "reported",
+                                },
                             })
-        elif event_type == "turn_end":
-            msg = event.get("message")
-            if isinstance(msg, dict) and msg.get("role") == "assistant":
-                resp_id = str(msg.get("responseId") or msg.get("id") or "")
-                if resp_id and resp_id in self.recorded_responses:
-                    return
-                if not resp_id and self.turn_counter in self.recorded_turns:
-                    return
-                self.turn_counter += 1
-                turn_idx = self.turn_counter
-                turn_key = f"turn_{turn_idx}"
-                assigned_id = resp_id or turn_key
-                self.recorded_responses.add(assigned_id)
-                self.recorded_turns.add(turn_idx)
-                u = msg.get("usage")
-                if isinstance(u, dict):
-                    raw_in = _as_int(u.get("input"))
-                    raw_out = _as_int(u.get("output"))
-                    cr = _as_int(u.get("cacheRead"))
-                    cw = _as_int(u.get("cacheWrite"))
-                    tot = _as_int(u.get("totalTokens"))
-                    if any(v is not None for v in (raw_in, raw_out, cr, cw, tot)):
-                        norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
-                        norm_out = raw_out
-                        self.accumulator.record_consumption(
-                            attempt=1,
-                            invocation=1,
-                            response_id=assigned_id,
-                            input_tokens=norm_in,
-                            output_tokens=norm_out,
-                            cache_read_tokens=cr,
-                            cache_write_tokens=cw,
-                            source="response",
-                            quality="reported",
-                        )
-                        ctx_used = None
-                        ctx_qual = "derived"
-                        if tot is not None:
-                            ctx_used = tot
-                            ctx_qual = "reported"
-                            self.accumulator.record_context_snapshot(
-                                used_tokens=ctx_used,
-                                source="provider",
-                                quality="reported",
-                            )
-                        elif norm_in is not None:
-                            ctx_used = norm_in + (norm_out or 0)
-                            ctx_qual = "derived"
-                            self.accumulator.record_context_snapshot(
-                                used_tokens=ctx_used,
-                                source="derived",
-                                quality="derived",
-                            )
-                        if self.params.emitter is not None:
-                            event_data = {
-                                "response_id": assigned_id,
-                                "input_tokens": norm_in,
-                                "output_tokens": norm_out,
-                                "cache_read_tokens": cr,
-                                "cache_write_tokens": cw,
-                                "source": "response",
-                                "quality": "reported",
-                            }
                             if ctx_used is not None:
-                                event_data["context_used_tokens"] = ctx_used
-                                event_data["quality"] = ctx_qual
-                            self.params.emitter({
-                                "kind": "telemetry.updated",
-                                "data": event_data,
-                            })
+                                self.params.emitter({
+                                    "kind": "telemetry.updated",
+                                    "data": {
+                                        "context_used_tokens": ctx_used,
+                                        "source": "derived",
+                                        "quality": "derived",
+                                    },
+                                })
         elif event_type in ("agent_end", "summary"):
             u = event.get("usage") or event.get("totalUsage")
             if isinstance(u, dict):
-                raw_in = _as_int(u.get("input"))
-                raw_out = _as_int(u.get("output"))
-                cr = _as_int(u.get("cacheRead"))
-                cw = _as_int(u.get("cacheWrite"))
-                if any(v is not None for v in (raw_in, raw_out, cr, cw)):
-                    norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
-                    norm_out = raw_out
+                raw_in, raw_in_bad = _parse_token_component(u, "input")
+                raw_out, raw_out_bad = _parse_token_component(u, "output")
+                cr, cr_bad = _parse_token_component(u, "cacheRead")
+                cw, cw_bad = _parse_token_component(u, "cacheWrite")
+                if raw_in_bad or cr_bad or cw_bad or raw_in is None:
+                    norm_in = None
+                else:
+                    norm_in = raw_in + (cr or 0) + (cw or 0)
+                norm_out = raw_out
+                if any(v is not None for v in (norm_in, norm_out, cr, cw)) or raw_in_bad or raw_out_bad or cr_bad or cw_bad:
                     self.accumulator.reconcile_cumulative(
                         attempt=1,
                         invocation=1,

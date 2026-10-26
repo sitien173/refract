@@ -23,6 +23,17 @@ def _as_int(val: Any) -> int | None:
     return val
 
 
+def _parse_token_component(usage: dict[str, Any], key: str) -> tuple[int | None, bool]:
+    if key not in usage:
+        return None, False
+    val = usage[key]
+    if val is None:
+        return None, False
+    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+        return None, True
+    return val, False
+
+
 def run_shell_command(
     cmd: list[str],
     cwd: str | None = None,
@@ -198,12 +209,15 @@ class _EventParser:
                 msg_id = message.get("id")
                 usage = message.get("usage")
                 if isinstance(usage, dict):
-                    raw_in = _as_int(usage.get("input_tokens"))
-                    cr = _as_int(usage.get("cache_read_input_tokens"))
-                    cw = _as_int(usage.get("cache_creation_input_tokens"))
-                    raw_out = _as_int(usage.get("output_tokens"))
-                    if any(v is not None for v in (raw_in, cr, cw, raw_out)):
-                        norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
+                    raw_in, raw_in_bad = _parse_token_component(usage, "input_tokens")
+                    cr, cr_bad = _parse_token_component(usage, "cache_read_input_tokens")
+                    cw, cw_bad = _parse_token_component(usage, "cache_creation_input_tokens")
+                    raw_out, raw_out_bad = _parse_token_component(usage, "output_tokens")
+                    if raw_in_bad or cr_bad or cw_bad or raw_in is None:
+                        norm_in = None
+                    else:
+                        norm_in = raw_in + (cr or 0) + (cw or 0)
+                    if any(v is not None for v in (norm_in, cr, cw, raw_out)) or raw_in_bad or cr_bad or cw_bad or raw_out_bad:
                         resp_id = str(msg_id) if msg_id else f"msg-{self.response_counter + 1}"
                         self.response_counter += 1
                         self.recorded_responses.add(resp_id)
@@ -230,22 +244,27 @@ class _EventParser:
                             except Exception:
                                 pass
                         if self.params.emitter is not None:
-                            event_data: dict[str, Any] = {
-                                "response_id": resp_id,
-                                "input_tokens": norm_in,
-                                "output_tokens": raw_out,
-                                "cache_read_tokens": cr,
-                                "cache_write_tokens": cw,
-                                "source": "response",
-                                "quality": "reported",
-                            }
-                            if ctx_used is not None:
-                                event_data["context_used_tokens"] = ctx_used
-                                event_data["quality"] = "derived"
                             self.params.emitter({
                                 "kind": "telemetry.updated",
-                                "data": event_data,
+                                "data": {
+                                    "response_id": resp_id,
+                                    "input_tokens": norm_in,
+                                    "output_tokens": raw_out,
+                                    "cache_read_tokens": cr,
+                                    "cache_write_tokens": cw,
+                                    "source": "response",
+                                    "quality": "reported",
+                                },
                             })
+                            if ctx_used is not None:
+                                self.params.emitter({
+                                    "kind": "telemetry.updated",
+                                    "data": {
+                                        "context_used_tokens": ctx_used,
+                                        "source": "derived",
+                                        "quality": "derived",
+                                    },
+                                })
         elif evt_type == "result":
             model_usage = event.get("modelUsage")
             capacity: int | None = None
@@ -261,13 +280,22 @@ class _EventParser:
                             capacity = cap
 
             usage = event.get("usage")
+            has_cum = False
+            norm_in = None
+            raw_out = None
+            cr = None
+            cw = None
             if isinstance(usage, dict):
-                raw_in = _as_int(usage.get("input_tokens"))
-                cr = _as_int(usage.get("cache_read_input_tokens"))
-                cw = _as_int(usage.get("cache_creation_input_tokens"))
-                raw_out = _as_int(usage.get("output_tokens"))
-                if any(v is not None for v in (raw_in, cr, cw, raw_out)):
-                    norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
+                raw_in, raw_in_bad = _parse_token_component(usage, "input_tokens")
+                cr, cr_bad = _parse_token_component(usage, "cache_read_input_tokens")
+                cw, cw_bad = _parse_token_component(usage, "cache_creation_input_tokens")
+                raw_out, raw_out_bad = _parse_token_component(usage, "output_tokens")
+                if raw_in_bad or cr_bad or cw_bad or raw_in is None:
+                    norm_in = None
+                else:
+                    norm_in = raw_in + (cr or 0) + (cw or 0)
+                if any(v is not None for v in (norm_in, cr, cw, raw_out)) or raw_in_bad or cr_bad or cw_bad or raw_out_bad:
+                    has_cum = True
                     self.accumulator.reconcile_cumulative(
                         attempt=1,
                         invocation=1,
@@ -284,29 +312,28 @@ class _EventParser:
                     source="provider",
                     quality="reported",
                 )
-            if self.params.emitter is not None and (isinstance(usage, dict) or capacity is not None):
-                data: dict[str, Any] = {
-                    "source": "result",
-                    "quality": "reported",
-                }
-                if isinstance(usage, dict):
-                    raw_in = _as_int(usage.get("input_tokens"))
-                    cr = _as_int(usage.get("cache_read_input_tokens"))
-                    cw = _as_int(usage.get("cache_creation_input_tokens"))
-                    raw_out = _as_int(usage.get("output_tokens"))
-                    norm_in = (raw_in + (cr or 0) + (cw or 0)) if raw_in is not None else None
-                    data.update({
-                        "total_input_tokens": norm_in,
-                        "total_output_tokens": raw_out,
-                        "cache_read_tokens": cr,
-                        "cache_write_tokens": cw,
+            if self.params.emitter is not None:
+                if has_cum:
+                    self.params.emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "total_input_tokens": norm_in,
+                            "total_output_tokens": raw_out,
+                            "cache_read_tokens": cr,
+                            "cache_write_tokens": cw,
+                            "source": "result",
+                            "quality": "reported",
+                        },
                     })
                 if capacity is not None:
-                    data["context_window_size"] = capacity
-                self.params.emitter({
-                    "kind": "telemetry.updated",
-                    "data": data,
-                })
+                    self.params.emitter({
+                        "kind": "telemetry.updated",
+                        "data": {
+                            "context_window_size": capacity,
+                            "source": "provider",
+                            "quality": "reported",
+                        },
+                    })
 
 
 def execute(params: BackendParams) -> BackendResult:

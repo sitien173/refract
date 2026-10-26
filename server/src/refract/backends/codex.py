@@ -345,22 +345,27 @@ class _EventParser:
                                 log.warning("codex: could not derive context snapshot", exc_info=True)
 
                         if self.params.emitter is not None:
-                            event_data: dict[str, Any] = {
-                                "response_id": turn_id,
-                                "input_tokens": norm_in,
-                                "output_tokens": norm_out,
-                                "cache_read_tokens": cached_in,
-                                "cache_write_tokens": cw,
-                                "source": "turn",
-                                "quality": "reported",
-                            }
-                            if ctx_used is not None:
-                                event_data["context_used_tokens"] = ctx_used
-                                event_data["quality"] = "derived"
                             self.params.emitter({
                                 "kind": "telemetry.updated",
-                                "data": event_data,
+                                "data": {
+                                    "response_id": turn_id,
+                                    "input_tokens": norm_in,
+                                    "output_tokens": norm_out,
+                                    "cache_read_tokens": cached_in,
+                                    "cache_write_tokens": cw,
+                                    "source": "turn",
+                                    "quality": "reported",
+                                },
                             })
+                            if ctx_used is not None:
+                                self.params.emitter({
+                                    "kind": "telemetry.updated",
+                                    "data": {
+                                        "context_used_tokens": ctx_used,
+                                        "source": "derived",
+                                        "quality": "derived",
+                                    },
+                                })
                 except Exception:
                     log.warning("codex: turn usage processing failed", exc_info=True)
         elif event_type in ("thread.completed", "summary"):

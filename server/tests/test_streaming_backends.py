@@ -2005,5 +2005,231 @@ def test_backends_emit_derived_context_quality(tmp_path: Path, monkeypatch: pyte
     assert a_tel[0]["quality"] == "derived"
 
 
+def test_pi_no_id_lifecycle_scoped_to_actual_turns_and_dedups_repeated_message_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Turn 1: turn_start -> message_end -> repeated message_end -> turn_end (all no-ID)
+    # Turn 2: turn_start -> turn_end-only fallback response (no-ID)
+    # Turn 3: turn_start -> turn_end-only fallback response (no-ID)
+    p_lines = [
+        json.dumps({"type": "session", "id": "pi-sess-no-id-turns"}),
+        # Turn 1
+        json.dumps({"type": "turn_start"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 1 answer"}],
+                "usage": {"input": 100, "output": 20},
+            },
+        }),
+        # Repeated message_end within Turn 1 (must be deduplicated)
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 1 answer"}],
+                "usage": {"input": 100, "output": 20},
+            },
+        }),
+        # turn_end for Turn 1 (must not double-count)
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 1 answer"}],
+                "usage": {"input": 100, "output": 20},
+            },
+        }),
+        # Turn 2: turn_end-only fallback response after turn_start
+        json.dumps({"type": "turn_start"}),
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 2 answer"}],
+                "usage": {"input": 200, "output": 30},
+            },
+        }),
+        # Turn 3: second turn_end-only fallback response after turn_start
+        json.dumps({"type": "turn_start"}),
+        json.dumps({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Turn 3 answer"}],
+                "usage": {"input": 150, "output": 15},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines))
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert p_res.outcome == "OK"
+    assert p_res.telemetry is not None
+    # Input must be 100 + 200 + 150 = 450, output 20 + 30 + 15 = 65
+    assert p_res.telemetry["total_input_tokens"]["value"] == 450
+    assert p_res.telemetry["total_output_tokens"]["value"] == 65
 
 
+def test_claude_and_pi_malformed_cache_preserves_unknown_normalized_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # 1. Claude response path: invalid negative, bool, non-finite, and string cache components
+    invalid_cache_values = [-5, True, float("nan"), float("inf"), "invalid_component"]
+    for bad_val in invalid_cache_values:
+        c_lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "id": f"msg-{bad_val}",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "reply"}],
+                    "usage": {"input_tokens": 100, "cache_read_input_tokens": bad_val, "output_tokens": 20},
+                },
+            }),
+            json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "reply", "session_id": "c-1"}),
+        ]
+        monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
+        c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+        assert c_res.outcome == "OK"
+        assert c_res.telemetry is not None
+        assert c_res.telemetry["total_input_tokens"]["value"] is None
+        assert c_res.telemetry["total_input_tokens"]["quality"] == "unavailable"
+        assert c_res.telemetry["total_output_tokens"]["value"] == 20
+        assert c_res.telemetry["completeness"] == "partial"
+
+    # 2. Claude cumulative path: invalid cacheWrite in result event
+    c_cum_lines = [
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "reply",
+            "session_id": "c-2",
+            "usage": {"input_tokens": 120, "cache_creation_input_tokens": -1, "output_tokens": 30},
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_cum_lines))
+    c_cum_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert c_cum_res.outcome == "OK"
+    assert c_cum_res.telemetry is not None
+    assert c_cum_res.telemetry["total_input_tokens"]["value"] is None
+    assert c_cum_res.telemetry["total_input_tokens"]["quality"] == "unavailable"
+    assert c_cum_res.telemetry["completeness"] == "partial"
+
+    # 3. Pi response path: invalid cacheRead in message_end
+    for bad_val in [-10, False, float("nan")]:
+        p_lines = [
+            json.dumps({"type": "session", "id": "pi-bad"}),
+            json.dumps({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "responseId": "r-bad",
+                    "content": [{"type": "text", "text": "reply"}],
+                    "usage": {"input": 150, "cacheRead": bad_val, "output": 25},
+                },
+            }),
+        ]
+        monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines))
+        p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+        assert p_res.outcome == "OK"
+        assert p_res.telemetry is not None
+        assert p_res.telemetry["total_input_tokens"]["value"] is None
+        assert p_res.telemetry["total_input_tokens"]["quality"] == "unavailable"
+        assert p_res.telemetry["total_output_tokens"]["value"] == 25
+        assert p_res.telemetry["completeness"] == "partial"
+
+    # 4. Pi cumulative path: invalid cacheWrite in summary
+    p_cum_lines = [
+        json.dumps({"type": "session", "id": "pi-cum-bad"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "responseId": "r-cum",
+                "content": [{"type": "text", "text": "cum reply"}],
+            },
+        }),
+        json.dumps({
+            "type": "summary",
+            "usage": {"input": 150, "cacheWrite": -1, "output": 25},
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_cum_lines))
+    p_cum_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert p_cum_res.outcome == "OK"
+    assert p_cum_res.telemetry is not None
+    assert p_cum_res.telemetry["total_input_tokens"]["value"] is None
+    assert p_cum_res.telemetry["total_input_tokens"]["quality"] == "unavailable"
+    assert p_cum_res.telemetry["completeness"] == "partial"
+
+    # 5. Legitimate omitted and zero fields produce complete input
+    p_ok_lines = [
+        json.dumps({"type": "session", "id": "pi-ok"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "responseId": "r-ok",
+                "content": [{"type": "text", "text": "reply"}],
+                "usage": {"input": 150, "cacheRead": 0, "output": 25},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_ok_lines))
+    p_ok_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert p_ok_res.outcome == "OK"
+    assert p_ok_res.telemetry is not None
+    assert p_ok_res.telemetry["total_input_tokens"]["value"] == 150
+    assert p_ok_res.telemetry["completeness"] == "complete"
+
+
+def test_pi_total_tokens_never_labeled_reported_context_and_derivation_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Normal payload with totalTokens present
+    lines = [
+        json.dumps({"type": "session", "id": "pi-sess"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "responseId": "r1",
+                "content": [{"type": "text", "text": "pi reply"}],
+                "usage": {"input": 500, "output": 25, "cacheRead": 100, "cacheWrite": 0, "totalTokens": 625},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in lines))
+    res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res.outcome == "OK"
+    assert res.telemetry is not None
+    # totalTokens is response usage, not explicit context occupancy:
+    # Context must be derived with source="derived" and quality="derived", NEVER reported/provider
+    assert res.telemetry["context_used_tokens"]["value"] == 625
+    assert res.telemetry["context_used_tokens"]["quality"] == "derived"
+    assert res.telemetry["context_used_tokens"]["source"] == "derived"
+
+    # When retained components are not established (missing input tokens), context is unavailable even if totalTokens present
+    no_input_lines = [
+        json.dumps({"type": "session", "id": "pi-sess"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "responseId": "r2",
+                "content": [{"type": "text", "text": "pi reply"}],
+                "usage": {"output": 25, "totalTokens": 625},
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in no_input_lines))
+    res_no_in = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res_no_in.outcome == "OK"
+    assert res_no_in.telemetry is not None
+    assert res_no_in.telemetry["context_used_tokens"]["value"] is None
+    assert res_no_in.telemetry["context_used_tokens"]["quality"] == "unavailable"

@@ -4562,6 +4562,110 @@ async def test_persisted_context_quality_is_derived_not_reported(tmp_path: Path)
         await runtime.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_name", ["claude", "pi", "codex", "agy"])
+async def test_real_adapter_observations_through_execution_persist_reported_consumption_alongside_derived_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_name: str
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+    monkeypatch.setattr("refract.drivers.DriverRegistry._detect_structured_mode", lambda *a, **k: True)
 
+    if backend_name == "claude":
+        c_lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "id": "c-msg-1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "claude done"}],
+                    "usage": {"input_tokens": 100, "cache_read_input_tokens": 30, "output_tokens": 20},
+                },
+            }),
+            json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "claude done", "session_id": "c-sess-1"}),
+        ]
+        monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
+    elif backend_name == "pi":
+        p_lines = [
+            json.dumps({"type": "session", "id": "pi-sess-1"}),
+            json.dumps({"type": "turn_start"}),
+            json.dumps({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "responseId": "p-resp-1",
+                    "content": [{"type": "text", "text": "pi done"}],
+                    "usage": {"input": 120, "cacheRead": 40, "output": 25},
+                },
+            }),
+            json.dumps({
+                "type": "turn_end",
+                "message": {
+                    "role": "assistant",
+                    "responseId": "p-resp-1",
+                    "content": [{"type": "text", "text": "pi done"}],
+                    "usage": {"input": 120, "cacheRead": 40, "output": 25},
+                },
+            }),
+        ]
+        monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines))
+    elif backend_name == "codex":
+        cdx_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "cdx-tid-1"}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "m1", "text": "codex done"}}),
+            json.dumps({
+                "type": "turn.completed",
+                "usage": {"input_tokens": 200, "cached_input_tokens": 50, "output_tokens": 35},
+            }),
+        ]
+        monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines))
+    elif backend_name == "agy":
+        a_lines = [
+            json.dumps({
+                "event": "step_update",
+                "step_update": {
+                    "conversation_id": "00000000-0000-0000-0000-000000000001",
+                    "step_index": 1,
+                    "state": "DONE",
+                    "usage": {"input_tokens": 300, "cache_read_tokens": 60, "output_tokens": 40},
+                },
+            }),
+            json.dumps({
+                "event": "result",
+                "result": {"conversation_id": "00000000-0000-0000-0000-000000000001", "response": "agy done"},
+            }),
+        ]
+        monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in a_lines))
 
+    target = TargetConfig(id=f"{backend_name}-target", backend=backend_name)
+    selection = TargetSelection((target.id,))
+    catalog = replace(
+        config(tmp_path / "home"),
+        targets=(target,),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
 
+    runtime = Runtime(catalog)
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test task")
+        completed_job = await runtime.wait(submission.job_id, 10)
+        assert completed_job.state == "succeeded"
+        final_telemetry = completed_job.result.metadata.get("telemetry")
+        assert final_telemetry is not None
+        # Assert reported consumption is preserved alongside derived context
+        assert final_telemetry["total_input_tokens"]["quality"] == "reported"
+        assert final_telemetry["total_output_tokens"]["quality"] == "reported"
+        assert final_telemetry["context_used_tokens"]["quality"] == "derived"
+        assert final_telemetry["context_used_tokens"]["value"] is not None
+
+        db_job = runtime.database.job(submission.job_id)
+        assert db_job is not None
+        db_telemetry = db_job.result.metadata.get("telemetry")
+        assert db_telemetry is not None
+        assert db_telemetry["total_input_tokens"]["quality"] == "reported"
+        assert db_telemetry["total_output_tokens"]["quality"] == "reported"
+        assert db_telemetry["context_used_tokens"]["quality"] == "derived"
+    finally:
+        await runtime.close()
