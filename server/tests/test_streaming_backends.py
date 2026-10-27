@@ -1388,16 +1388,11 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
     c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
     assert c_res.outcome == "OK"
-    assert c_res.usage == {
-        "model_name": "claude-opus-5-5",
-        "input_tokens": 6286,
-        "output_tokens": 14,
-        "cached_input_tokens": 59855,
-        "context_window_max": 200000,
-        "context_window_used": None,
-    }
+    assert c_res.model == "claude-opus-5-5"
+    assert not hasattr(c_res, "usage")
     c_drv = _normalize(c_res)
-    assert c_drv.usage == c_res.usage
+    assert c_drv.model == "claude-opus-5-5"
+    assert not hasattr(c_drv, "usage")
 
     # Claude with usage removed
     c_lines_no_usage = [
@@ -1406,30 +1401,19 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines_no_usage))
     c_res_empty = claude_sync(BackendParams(PROMPT="test", cd=workspace))
     assert c_res_empty.outcome == "OK"
-    assert c_res_empty.usage == {
-        "model_name": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "cached_input_tokens": None,
-        "context_window_max": None,
-        "context_window_used": None,
-    }
+    assert c_res_empty.model is None
+    assert not hasattr(c_res_empty, "usage")
 
     # 2. Codex
     codex_lines = (fixtures_dir / "codex.jsonl").read_text().splitlines()
     monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
     cdx_res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert cdx_res.outcome == "OK"
-    assert cdx_res.usage == {
-        "model_name": None,
-        "input_tokens": 12000,
-        "output_tokens": 30,
-        "cached_input_tokens": 8000,
-        "context_window_max": None,
-        "context_window_used": None,
-    }
+    assert cdx_res.model is None
+    assert not hasattr(cdx_res, "usage")
     cdx_drv = _normalize(cdx_res)
-    assert cdx_drv.usage == cdx_res.usage
+    assert cdx_drv.model is None
+    assert not hasattr(cdx_drv, "usage")
 
     # Codex with usage removed
     cdx_lines_no_usage = [
@@ -1439,30 +1423,19 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines_no_usage))
     cdx_res_empty = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert cdx_res_empty.outcome == "OK"
-    assert cdx_res_empty.usage == {
-        "model_name": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "cached_input_tokens": None,
-        "context_window_max": None,
-        "context_window_used": None,
-    }
+    assert cdx_res_empty.model is None
+    assert not hasattr(cdx_res_empty, "usage")
 
     # 3. Pi
     pi_lines = (fixtures_dir / "pi.jsonl").read_text().splitlines()
     monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
     p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
     assert p_res.outcome == "OK"
-    assert p_res.usage == {
-        "model_name": "gpt-6.1-sol",
-        "input_tokens": 718,
-        "output_tokens": 5,
-        "cached_input_tokens": 11904,
-        "context_window_max": None,
-        "context_window_used": None,
-    }
+    assert p_res.model == "gpt-6.1-sol"
+    assert not hasattr(p_res, "usage")
     p_drv = _normalize(p_res)
-    assert p_drv.usage == p_res.usage
+    assert p_drv.model == "gpt-6.1-sol"
+    assert not hasattr(p_drv, "usage")
 
     # Pi with usage removed
     p_lines_no_usage = [
@@ -1472,30 +1445,19 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines_no_usage))
     p_res_empty = pi_sync(BackendParams(PROMPT="test", cd=workspace))
     assert p_res_empty.outcome == "OK"
-    assert p_res_empty.usage == {
-        "model_name": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "cached_input_tokens": None,
-        "context_window_max": None,
-        "context_window_used": None,
-    }
+    assert p_res_empty.model is None
+    assert not hasattr(p_res_empty, "usage")
 
     # 4. Agy
     agy_lines = (fixtures_dir / "agy.jsonl").read_text().splitlines()
     monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
     a_res = agy_sync(BackendParams(PROMPT="test", cd=workspace))
     assert a_res.outcome == "OK"
-    assert a_res.usage == {
-        "model_name": None,
-        "input_tokens": 14072,
-        "output_tokens": 168,
-        "cached_input_tokens": 1000,
-        "context_window_max": None,
-        "context_window_used": None,
-    }
+    assert a_res.model is None
+    assert not hasattr(a_res, "usage")
     a_drv = _normalize(a_res)
-    assert a_drv.usage == a_res.usage
+    assert a_drv.model is None
+    assert not hasattr(a_drv, "usage")
 
     # Agy with usage removed
     a_lines_no_usage = [
@@ -1504,14 +1466,8 @@ def test_fixture_usage_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in a_lines_no_usage))
     a_res_empty = agy_sync(BackendParams(PROMPT="test", cd=workspace))
     assert a_res_empty.outcome == "OK"
-    assert a_res_empty.usage == {
-        "model_name": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "cached_input_tokens": None,
-        "context_window_max": None,
-        "context_window_used": None,
-    }
+    assert a_res_empty.model is None
+    assert not hasattr(a_res_empty, "usage")
 
 
 def test_malformed_usage_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1533,20 +1489,310 @@ def test_malformed_usage_never_raises(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
     c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
     assert c_res.outcome == "OK"
-    assert c_res.usage == {
-        "model_name": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "cached_input_tokens": None,
-        "context_window_max": None,
-        "context_window_used": None,
-    }
+    assert c_res.model is None
+    assert not hasattr(c_res, "usage")
 
 
 def test_backend_result_telemetry_field():
     from refract.backends import BackendResult
     res = BackendResult(outcome="OK", SESSION_ID="s1", agent_messages="ok", error="", error_class="")
     assert res.telemetry is None
+
+
+def test_result_model_identity_replaces_usage():
+    from refract.backends import BackendResult, classify_backend_output
+    from refract.drivers import DriverResult, _normalize
+
+    res = BackendResult(
+        outcome="OK",
+        SESSION_ID="s1",
+        agent_messages="ok",
+        error="",
+        error_class="",
+        model="claude-opus-5-5",
+    )
+    assert res.model == "claude-opus-5-5"
+    assert not hasattr(res, "usage")
+
+    drv = _normalize(res)
+    assert drv.model == "claude-opus-5-5"
+    assert not hasattr(drv, "usage")
+
+    classified = classify_backend_output(
+        backend_name="claude",
+        agent_messages="ok",
+        session_id="s1",
+        error_text="",
+        model="claude-opus-5-5",
+    )
+    assert classified.model == "claude-opus-5-5"
+    assert not hasattr(classified, "usage")
+
+
+def test_behavioral_model_extraction_all_routes_and_propagation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from refract.backends import BackendParams
+    from refract.backends.agy import execute as agy_sync
+    from refract.backends.claude import execute as claude_sync
+    from refract.backends.codex import execute as codex_sync
+    from refract.backends.pi import execute as pi_sync
+    from refract.config import TargetConfig
+    from refract.drivers import DriverResult, _normalize
+    from refract.execution import TargetExecutor
+
+    workspace = tmp_path / "ws_behavioral"
+    workspace.mkdir()
+
+    # Route 1: Agy with stream model event and absent telemetry
+    agy_lines = [
+        json.dumps({"event": "model", "model": "agy-test-model"}),
+        json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "ok"}}),
+    ]
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
+    res_agy = agy_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res_agy.model == "agy-test-model"
+
+    # Route 2a: Claude with modelUsage in final result
+    claude_lines_final = [
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "result": "done",
+            "modelUsage": {"claude-3-5-sonnet-20241022": {}},
+        })
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines_final))
+    res_claude_final = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res_claude_final.model == "claude-3-5-sonnet-20241022"
+
+    # Route 2b: Claude with streaming assistant active_model and absent telemetry
+    claude_lines_stream = [
+        json.dumps({
+            "type": "assistant",
+            "message": {"role": "assistant", "model": "claude-3-haiku-20240307"},
+        }),
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "result": "done",
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines_stream))
+    res_claude_stream = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res_claude_stream.model == "claude-3-haiku-20240307"
+
+    # Route 3a: Codex with session_configured in rollout and absent telemetry
+    codex_home = tmp_path / "codex_home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    thread_id = "11111111-2222-3333-4444-555555555555"
+    sessions_dir = codex_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    rollout_file = sessions_dir / f"rollout_{thread_id}.jsonl"
+    rollout_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": thread_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "session_configured", "model": "gpt-4o-custom"}}) + "\n"
+    )
+    codex_lines = [
+        json.dumps({"type": "thread.started", "thread_id": thread_id}),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
+    res_cdx = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res_cdx.model == "gpt-4o-custom"
+
+    # Route 3b: Codex with model_reroute in rollout
+    rollout_file.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": thread_id, "cwd": str(workspace)}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "session_configured", "model": "gpt-4o-custom"}}) + "\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "model_reroute", "to_model": "o3-mini-custom"}}) + "\n"
+    )
+    res_cdx_reroute = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res_cdx_reroute.model == "o3-mini-custom"
+
+    # Route 4a: Pi with message_end metadata
+    pi_lines_msg = [
+        json.dumps({"type": "session", "id": "pi-s1"}),
+        json.dumps({
+            "type": "message_end",
+            "message": {"role": "assistant", "model": "pi-streaming-extracted", "content": "hello"},
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines_msg))
+    res_pi_msg = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res_pi_msg.model == "pi-streaming-extracted"
+
+    # Route 4b: Pi with agent_end messages and absent telemetry
+    pi_lines_agent = [
+        json.dumps({"type": "session", "id": "pi-s2"}),
+        json.dumps({
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "model": "pi-agent-end-extracted", "content": "done"}],
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines_agent))
+    res_pi_agent = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert res_pi_agent.model == "pi-agent-end-extracted"
+
+    # Route 5: DriverResult._normalize propagation
+    drv = _normalize(res_pi_agent)
+    assert drv.model == "pi-agent-end-extracted"
+
+    # Route 6: TargetExecutor._result_metadata propagation and fallback
+    target_fallback = TargetConfig(id="tgt-1", backend="pi", model="fallback-configured-model")
+    meta_present = TargetExecutor._result_metadata(drv, target_fallback, duration_ms=50)
+    assert meta_present["execution"]["model"] == "pi-agent-end-extracted"
+
+    drv_none = DriverResult(
+        outcome="SUCCESS",
+        session_id="pi-s-none",
+        text="done",
+        error="",
+        error_code="",
+        model=None,
+    )
+    meta_fallback = TargetExecutor._result_metadata(drv_none, target_fallback, duration_ms=50)
+    assert meta_fallback["execution"]["model"] == "fallback-configured-model"
+    assert meta_fallback["telemetry"]["context_window_size"]["quality"] == "unavailable"
+
+    target_empty = TargetConfig(id="tgt-2", backend="pi", model="")
+    meta_empty = TargetExecutor._result_metadata(drv_none, target_empty, duration_ms=50)
+    assert meta_empty["execution"]["model"] is None
+
+
+def test_all_four_adapters_final_only_non_streaming_and_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # 1. Claude: final-only non-streaming result with cache accounting
+    claude_lines = [
+        json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "result": "Claude non-streaming done",
+            "session_id": "claude-sess-term",
+            "modelUsage": {"claude-3-haiku": {"contextWindow": 200000}},
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 50,
+                "cache_creation_input_tokens": 10,
+            },
+        })
+    ]
+    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in claude_lines))
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert c_res.outcome == "OK"
+    assert c_res.model == "claude-3-haiku"
+    assert not hasattr(c_res, "usage")
+    assert c_res.telemetry is not None
+    assert c_res.telemetry["total_input_tokens"]["value"] == 160
+    assert c_res.telemetry["total_output_tokens"]["value"] == 20
+    assert c_res.telemetry["cache_read_tokens"]["value"] == 50
+    assert c_res.telemetry["cache_write_tokens"]["value"] == 10
+    assert c_res.telemetry["context_window_size"]["value"] == 200000
+
+    # 2. Pi: final-only non-streaming agent_end with cache accounting
+    pi_lines = [
+        json.dumps({
+            "type": "session",
+            "id": "pi-sess-term",
+        }),
+        json.dumps({
+            "type": "agent_end",
+            "messages": [{
+                "role": "assistant",
+                "content": "Pi non-streaming done",
+                "model": "pi-model-term",
+            }],
+            "usage": {
+                "input": 200,
+                "output": 40,
+                "cacheRead": 60,
+                "cacheWrite": 15,
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in pi_lines))
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert p_res.outcome == "OK"
+    assert p_res.model == "pi-model-term"
+    assert not hasattr(p_res, "usage")
+    assert p_res.telemetry is not None
+    assert p_res.telemetry["total_input_tokens"]["value"] == 275
+    assert p_res.telemetry["total_output_tokens"]["value"] == 40
+    assert p_res.telemetry["cache_read_tokens"]["value"] == 60
+    assert p_res.telemetry["cache_write_tokens"]["value"] == 15
+
+    # 3. Codex: non-streaming summary with cache accounting
+    codex_lines = [
+        json.dumps({"type": "thread.started", "thread_id": "00000000-0000-0000-0000-000000000000"}),
+        json.dumps({
+            "type": "summary",
+            "usage": {
+                "input_tokens": 300,
+                "output_tokens": 50,
+                "cached_input_tokens": 70,
+                "cache_write_input_tokens": 25,
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in codex_lines))
+    cdx_res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert cdx_res.outcome == "OK"
+    assert not hasattr(cdx_res, "usage")
+    assert cdx_res.telemetry is not None
+    assert cdx_res.telemetry["total_input_tokens"]["value"] == 300
+    assert cdx_res.telemetry["total_output_tokens"]["value"] == 50
+    assert cdx_res.telemetry["cache_read_tokens"]["value"] == 70
+    assert cdx_res.telemetry["cache_write_tokens"]["value"] == 25
+
+    # 4. Agy: final-only result event with cache accounting
+    agy_lines = [
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": "00000000-0000-0000-0000-000000000000",
+                "status": "SUCCESS",
+                "response": "Agy non-streaming done",
+                "usage": {
+                    "input_tokens": 400,
+                    "output_tokens": 60,
+                    "cache_read_tokens": 80,
+                    "cache_write_tokens": 30,
+                    "model_context_window": 128000,
+                },
+            },
+        }),
+    ]
+    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in agy_lines))
+    a_res = agy_sync(BackendParams(PROMPT="test", cd=workspace))
+    assert a_res.outcome == "OK"
+    assert not hasattr(a_res, "usage")
+    assert a_res.telemetry is not None
+    assert a_res.telemetry["total_input_tokens"]["value"] == 400
+    assert a_res.telemetry["total_output_tokens"]["value"] == 60
+    assert a_res.telemetry["cache_read_tokens"]["value"] == 80
+    assert a_res.telemetry["cache_write_tokens"]["value"] == 30
+    assert a_res.telemetry["context_window_size"]["value"] == 128000
+
+
+def test_backend_cancellation_and_failure_precedence_preserved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    cancel_evt = threading.Event()
+    cancel_evt.set()
+
+    # Cancellation across backends
+    c_res = claude_sync(BackendParams(PROMPT="test", cd=workspace, cancel_event=cancel_evt))
+    assert c_res.outcome == "FATAL"
+    assert c_res.error_class == "cancelled"
+    assert not hasattr(c_res, "usage")
+
+    p_res = pi_sync(BackendParams(PROMPT="test", cd=workspace, cancel_event=cancel_evt))
+    assert p_res.outcome == "FATAL"
+    assert p_res.error_class == "cancelled"
+    assert not hasattr(p_res, "usage")
+
+
 
 
 def test_claude_capacity_not_selected_arbitrarily(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1656,10 +1902,9 @@ def test_multi_response_pi_telemetry_exceeds_final_message_alone(tmp_path: Path,
     tel_events = [e for e in emitted_events if e.get("kind") == "telemetry.updated"]
     assert len(tel_events) >= 1
 
-    # Legacy usage remains backward-compatible
-    assert p_res.usage["input_tokens"] == 718
-    assert p_res.usage["output_tokens"] == 5
-    assert p_res.usage["cached_input_tokens"] == 11904
+    # Legacy usage removed; model identity preserved
+    assert p_res.model == "gpt-6.1-sol"
+    assert not hasattr(p_res, "usage")
 
 
 def test_claude_cache_reads_and_writes_enter_normalized_input_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

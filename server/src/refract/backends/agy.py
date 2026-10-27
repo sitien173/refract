@@ -10,7 +10,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
-from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
+from . import BackendParams, BackendResult, classify_backend_output, classify_tool_activity, preflight
 from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
 from refract.telemetry import TelemetryAccumulator
@@ -52,12 +52,13 @@ def run_shell_command(
     )
 
 
-def _classify_output(agent_messages: str, session_id: str, error_text: str) -> BackendResult:
+def _classify_output(agent_messages: str, session_id: str, error_text: str, model: str | None = None) -> BackendResult:
     result = classify_backend_output(
         backend_name="agy",
         agent_messages=agent_messages,
         session_id=session_id,
         error_text=error_text,
+        model=model,
     )
     # Preserve historical "no_agent_messages" wording for back-compat with
     # tests that read the error string verbatim.
@@ -67,14 +68,19 @@ def _classify_output(agent_messages: str, session_id: str, error_text: str) -> B
     return result
 
 
-def _usage_values(stream: StreamOutcome) -> dict[str, Any]:
-    usage_values: dict[str, Any] = {}
-    for event in stream.objects():
-        payload = event.get("result") if event.get("event") == "result" else None
-        u = payload.get("usage") if isinstance(payload, dict) else None
-        if isinstance(u, dict):
-            usage_values = {"input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"), "cached_input_tokens": u.get("cache_read_tokens")}
-    return usage_values
+def _extract_model(stream: StreamOutcome) -> str | None:
+    for event in reversed(stream.events):
+        if not isinstance(event, dict):
+            continue
+        m = event.get("model")
+        if isinstance(m, str) and m:
+            return m
+        res = event.get("result")
+        if isinstance(res, dict):
+            m = res.get("model")
+            if isinstance(m, str) and m:
+                return m
+    return None
 
 
 def _read_log(path: str) -> str:
@@ -405,6 +411,8 @@ def execute(params: BackendParams) -> BackendResult:
     else:
         log.warning("agy: no session id found in log or params")
 
+    model = _extract_model(stream)
+
     if stream.error:
         res = BackendResult(
             outcome="FATAL",
@@ -412,13 +420,13 @@ def execute(params: BackendParams) -> BackendResult:
             agent_messages=agent_messages,
             error=stream.error,
             error_class=stream.error_class,
+            model=model,
         )
         if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
             res.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
         return res
 
-    result = _classify_output(agent_messages, extracted_session_id, "")
-    result.usage = _usage_dict(**_usage_values(stream))
+    result = _classify_output(agent_messages, extracted_session_id, "", model=model)
     if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
         result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
     log.info(

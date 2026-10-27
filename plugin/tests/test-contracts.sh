@@ -260,6 +260,21 @@ grep -q '`other` requires an explicit mapping' skills/coordinating-multi-model-w
 # Preserve source-freeze and temporary-checkpoint policy guards.
 grep -q 'After submission, do not edit the root until that job is terminal.' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Create a temporary checkpoint commit only after it passes.' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'result.metadata.failure.kind' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'result.metadata.retry.retryable' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'result.metadata.retry.next_target' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'result.metadata.retry.next_target' skills/coordinating-multi-model-work/references/tool-contract.md
+if grep -qF '`result.metadata.telemetry.context_used_tokens` exceeds' skills/coordinating-multi-model-work/references/tool-contract.md; then
+    printf 'context_used_tokens object compared directly to threshold\n' >&2
+    exit 1
+fi
+grep -qF 'result.metadata.telemetry.context_used_tokens.value' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'Always start every phase with `fresh_session=true`' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -qF 'For follow-up jobs within the same phase' skills/coordinating-multi-model-work/references/tool-contract.md
+if grep -q -E 'result\.metadata\.failure_kind|result\.metadata\.context_window_used' skills/coordinating-multi-model-work/SKILL.md skills/coordinating-multi-model-work/references/tool-contract.md; then
+    printf 'removed legacy metadata field found in coordinator guidance\n' >&2
+    exit 1
+fi
 
 anchors=skills/coordinating-multi-model-work/references/git-anchors.md
 grep -qF 'refs/plans/<slug>/base' "$anchors"

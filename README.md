@@ -37,9 +37,9 @@ uv run refract serve
 
 These steps document a manual migration from the prior product state. They have not been run by this plan.
 
-Renaming files does not upgrade the database schema. This server accepts schema v15 only. Upgrade a backup of an older database using a migration-capable Refract version. Use a compatible server for newer databases. Select another state directory with `REFRACT_HOME` to start fresh without deleting history.
+Renaming files does not upgrade the database schema. This server accepts schema 16. Fresh databases initialize directly to schema 16. On startup, the server automatically upgrades schema 15 databases. Read-only preflight checks reject unsupported schemas (<15 or >16) before writes. Preflight also rejects malformed JSON and invalid recognized metadata before writes. Any later migration failure triggers an atomic transaction rollback. Stop the daemon and back up the full state directory including sidecars. Downgrade requires restoring this pre-upgrade backup; older binaries reject schema 16. Raw historical counters are deleted during migration, not normalized. Server, plugin, and dashboard must deploy together as a unit. Select another state directory with `REFRACT_HOME` to start fresh without deleting history.
 
-1. Stop the old daemon. Back up the complete state directory, including SQLite sidecars.
+1. Stop the daemon. Back up the complete state directory, including SQLite sidecars.
 2. Move the state directory, then rename files matching `openmcp.db*` to `refract.db*` and `openmcp.log*` to `refract.log*` inside `~/.refract`. Preserve each file's suffix, including SQLite sidecars.
 
    ```bash

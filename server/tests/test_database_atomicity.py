@@ -40,7 +40,7 @@ def test_state_change_rolls_back_when_event_fails(database, operation):
     reject_events(database)
     operations = {
         "start": lambda: database.start_job("j"),
-        "finish": lambda: database.finish_job("j", "succeeded", text="result", metadata={"a": 1}),
+        "finish": lambda: database.finish_job("j", "succeeded", text="result", metadata={"execution": {"model": "m"}}),
         "retry": lambda: database.reset_retry("j"),
     }
     change_state = operations[operation]
@@ -118,7 +118,7 @@ def test_concurrent_terminal_and_telemetry_race(database):
     def do_finish():
         try:
             barrier.wait()
-            database.finish_job("j", "succeeded", text="done", metadata={"terminal_key": "val"})
+            database.finish_job("j", "succeeded", text="done", metadata={"execution": {"model": "m"}})
         except Exception as e:
             errors.append(e)
 
@@ -144,6 +144,6 @@ def test_concurrent_terminal_and_telemetry_race(database):
     record = database.job_record("j")
     assert record["state"] == "succeeded"
     meta = json.loads(record["result_metadata_json"])
-    assert meta.get("terminal_key") == "val"
+    assert meta["execution"]["model"] == "m"
 
 

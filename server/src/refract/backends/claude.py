@@ -11,7 +11,7 @@ from typing import Any
 from refract.logging_setup import get_logger
 from refract.telemetry import TelemetryAccumulator
 
-from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
+from . import BackendParams, BackendResult, classify_backend_output, classify_tool_activity, preflight
 from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 
 log = get_logger("claude")
@@ -109,27 +109,17 @@ def _extract_output(stream: StreamOutcome) -> tuple[str, str, str, str]:
     return agent_messages, session_id, "\n".join(diagnostics).strip(), result_error
 
 
-def _usage_values(stream: StreamOutcome, active_model: str = "") -> dict[str, Any]:
+def _extract_model(stream: StreamOutcome, active_model: str = "") -> str | None:
     final_result = _final_result(stream)
-    if final_result is None:
-        return {}
-    model_usage = final_result.get("modelUsage")
-    model = None
-    if isinstance(model_usage, dict) and model_usage:
-        if active_model and active_model in model_usage:
-            model = active_model
-        else:
-            model = next(iter(model_usage))
-    stats = model_usage.get(model, {}) if model and isinstance(model_usage, dict) else {}
-    usage = final_result.get("usage")
-    usage = usage if isinstance(usage, dict) else {}
-    return {
-        "model_name": model,
-        "input_tokens": usage.get("input_tokens"),
-        "output_tokens": usage.get("output_tokens"),
-        "cached_input_tokens": usage.get("cache_read_input_tokens"),
-        "context_window_max": stats.get("contextWindow") if isinstance(stats, dict) else None,
-    }
+    if final_result is not None:
+        model_usage = final_result.get("modelUsage")
+        if isinstance(model_usage, dict) and model_usage:
+            if active_model and active_model in model_usage:
+                return active_model
+            first = next(iter(model_usage))
+            if isinstance(first, str) and first:
+                return first
+    return active_model or None
 
 
 class _EventParser:
@@ -385,14 +375,15 @@ def execute(params: BackendParams) -> BackendResult:
     error_text = "\n".join(
         part for part in (command_error, diagnostics, result_error) if part
     ).strip()
+    model = _extract_model(stream, active_model=parser.active_model)
     result = classify_backend_output(
         backend_name="claude",
         agent_messages=agent_messages,
         session_id=session_id,
         error_text=error_text,
+        model=model,
     )
 
-    result.usage = _usage_dict(**_usage_values(stream, active_model=parser.active_model))
     if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
         result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
     if result_error and not command_error:

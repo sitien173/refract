@@ -4,6 +4,41 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import JobDetails from './JobDetails'
 import * as api from '../api'
 
+function assertCanonicalMetadata(metadata) {
+  expect(metadata).toBeDefined()
+  expect(Object.keys(metadata).sort()).toEqual(['execution', 'failure', 'retry', 'telemetry'])
+  expect(Object.keys(metadata.execution).sort()).toEqual(['duration_ms', 'model'])
+  if (metadata.failure !== null) {
+    expect(Object.keys(metadata.failure).sort()).toEqual(['kind'])
+  }
+  expect(Object.keys(metadata.retry).sort()).toEqual(['next_target', 'retryable'])
+  expect(Object.keys(metadata.telemetry).sort()).toEqual([
+    'cache_read_tokens',
+    'cache_write_tokens',
+    'completeness',
+    'context_remaining_percent',
+    'context_used_tokens',
+    'context_window_size',
+    'total_input_tokens',
+    'total_output_tokens',
+  ])
+  const metricNames = [
+    'context_remaining_percent',
+    'context_window_size',
+    'context_used_tokens',
+    'total_input_tokens',
+    'total_output_tokens',
+    'cache_read_tokens',
+    'cache_write_tokens',
+  ]
+  for (const name of metricNames) {
+    const m = metadata.telemetry[name]
+    expect(typeof m).toBe('object')
+    expect(m).not.toBeNull()
+    expect(Object.keys(m).sort()).toEqual(['observed_at', 'quality', 'source', 'value'])
+  }
+}
+
 describe('JobDetails component', () => {
   beforeEach(() => {
     vi.spyOn(api, 'getDiagnostics').mockResolvedValue({ reports: [], next_before: null })
@@ -412,11 +447,20 @@ describe('JobDetails component', () => {
   describe('Normalized Telemetry rendering (Phase 4 Task 1)', () => {
     const fullTelemetryJob = {
       ...mockJob,
+      state: 'succeeded',
       result: {
         output: 'Done.',
         metadata: {
+          execution: {
+            model: 'claude-3-7-sonnet',
+            duration_ms: 2400,
+          },
+          failure: null,
+          retry: {
+            retryable: false,
+            next_target: null,
+          },
           telemetry: {
-            version: 1,
             completeness: 'complete',
             context_remaining_percent: {
               value: 65.5,
@@ -466,6 +510,7 @@ describe('JobDetails component', () => {
     }
 
     it('renders normalized telemetry panel with separated context and consumption, all five primary measurements, quality, source, and observation time', () => {
+      assertCanonicalMetadata(fullTelemetryJob.result.metadata)
       render(<JobDetails job={fullTelemetryJob} />)
 
       expect(screen.getByRole('heading', { name: 'Telemetry' })).toBeInTheDocument()
@@ -506,21 +551,27 @@ describe('JobDetails component', () => {
     it('distinguishes reported zero from unavailable null values', () => {
       const zeroJob = {
         ...mockJob,
+        state: 'succeeded',
         result: {
           output: 'Zero output',
           metadata: {
+            execution: { model: 'codex-model', duration_ms: 100 },
+            failure: null,
+            retry: { retryable: false, next_target: null },
             telemetry: {
-              version: 1,
               completeness: 'complete',
-              context_used_tokens: { value: 0, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
-              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               context_remaining_percent: { value: 100.0, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              context_used_tokens: { value: 0, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               total_input_tokens: { value: 0, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               total_output_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
             },
           },
         },
       }
+      assertCanonicalMetadata(zeroJob.result.metadata)
       render(<JobDetails job={zeroJob} />)
 
       // 0 is displayed for context used and input tokens
@@ -533,21 +584,27 @@ describe('JobDetails component', () => {
     it('distinguishes estimated quality and partial completeness', () => {
       const partialJob = {
         ...mockJob,
+        state: 'running',
         result: {
           output: 'Partial output',
           metadata: {
+            execution: { model: 'stream-model', duration_ms: 50 },
+            failure: null,
+            retry: { retryable: null, next_target: null },
             telemetry: {
-              version: 1,
               completeness: 'partial',
-              context_used_tokens: { value: 5000, quality: 'estimated', source: 'stream', observed_at: '2026-10-26T17:00:00Z' },
-              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
               context_remaining_percent: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              context_used_tokens: { value: 5000, quality: 'estimated', source: 'stream', observed_at: '2026-10-26T17:00:00Z' },
               total_input_tokens: { value: 5000, quality: 'estimated', source: 'stream', observed_at: '2026-10-26T17:00:00Z' },
               total_output_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
             },
           },
         },
       }
+      assertCanonicalMetadata(partialJob.result.metadata)
       render(<JobDetails job={partialJob} />)
 
       expect(screen.getByText('partial')).toBeInTheDocument()
@@ -558,21 +615,27 @@ describe('JobDetails component', () => {
     it('marks remaining percentage unavailable when capacity is null even if percentage value is supplied', () => {
       const missingCapacityJob = {
         ...mockJob,
+        state: 'succeeded',
         result: {
           output: 'No capacity',
           metadata: {
+            execution: { model: 'pi-model', duration_ms: 300 },
+            failure: null,
+            retry: { retryable: false, next_target: null },
             telemetry: {
-              version: 1,
               completeness: 'complete',
-              context_used_tokens: { value: 2000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
-              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
               context_remaining_percent: { value: 75.0, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              context_used_tokens: { value: 2000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               total_input_tokens: { value: 2000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               total_output_tokens: { value: 100, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
             },
           },
         },
       }
+      assertCanonicalMetadata(missingCapacityJob.result.metadata)
       render(<JobDetails job={missingCapacityJob} />)
 
       expect(screen.getByText('Context remaining')).toBeInTheDocument()
@@ -581,23 +644,103 @@ describe('JobDetails component', () => {
       expect(screen.queryByText('75.0%')).not.toBeInTheDocument()
     })
 
-    it('does not fabricate measurements for historical jobs without telemetry, and ignores legacy counters for context used', () => {
-      const historicalJob = {
+    it('renders canonical unavailable telemetry snapshot in terminal and running states without internal fields', () => {
+      const terminalUnavailableJob = {
         ...mockJob,
+        state: 'succeeded',
         result: {
-          output: 'Historical output',
+          output: 'Done.',
           metadata: {
-            // Legacy metadata counters that must NOT be shown as normalized context used
-            context_window_used: 99999,
-            input_tokens: 88888,
+            execution: { model: 'claude-3-7-sonnet', duration_ms: 500 },
+            failure: null,
+            retry: { retryable: false, next_target: null },
+            telemetry: {
+              completeness: 'unavailable',
+              context_remaining_percent: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              context_window_size: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              context_used_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              total_input_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              total_output_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              cache_read_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              cache_write_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+            },
           },
         },
       }
-      render(<JobDetails job={historicalJob} />)
+      assertCanonicalMetadata(terminalUnavailableJob.result.metadata)
 
+      const { rerender } = render(<JobDetails job={terminalUnavailableJob} />)
+      expect(screen.getByRole('heading', { name: 'Telemetry' })).toBeInTheDocument()
+      expect(document.querySelector('.telemetry-completeness')).toHaveTextContent('unavailable')
+      expect(screen.getAllByText('Unavailable')).toHaveLength(5)
+      expect(screen.queryByText('Cache read tokens')).not.toBeInTheDocument()
+      expect(screen.queryByText('Cache write tokens')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Live polling active/i)).not.toBeInTheDocument()
+
+      const runningUnavailableJob = {
+        ...terminalUnavailableJob,
+        state: 'running',
+      }
+      assertCanonicalMetadata(runningUnavailableJob.result.metadata)
+      rerender(<JobDetails job={runningUnavailableJob} />)
+      expect(screen.getByText(/Live polling active/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Telemetry' })).toBeInTheDocument()
+      expect(document.querySelector('.telemetry-completeness')).toHaveTextContent('unavailable')
+    })
+
+    it('does not fabricate measurements for historical migrated jobs with unavailable canonical telemetry', () => {
+      const historicalMigratedJob = {
+        ...mockJob,
+        state: 'succeeded',
+        result: {
+          output: 'Historical output',
+          metadata: {
+            execution: { model: 'historical-model', duration_ms: null },
+            failure: null,
+            retry: { retryable: null, next_target: null },
+            telemetry: {
+              completeness: 'unavailable',
+              context_remaining_percent: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              context_window_size: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              context_used_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              total_input_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              total_output_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              cache_read_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+              cache_write_tokens: { value: null, source: null, quality: 'unavailable', observed_at: null },
+            },
+          },
+        },
+      }
+      assertCanonicalMetadata(historicalMigratedJob.result.metadata)
+
+      render(<JobDetails job={historicalMigratedJob} />)
+
+      expect(screen.getByRole('heading', { name: 'Telemetry' })).toBeInTheDocument()
+      expect(document.querySelector('.telemetry-completeness')).toHaveTextContent('unavailable')
+      expect(screen.getAllByText('Unavailable')).toHaveLength(5)
+      expect(screen.queryByText('Cache read tokens')).not.toBeInTheDocument()
+      expect(screen.queryByText('Cache write tokens')).not.toBeInTheDocument()
+    })
+
+    it('handles jobs with genuinely absent result or absent result metadata cleanly without rendering telemetry', () => {
+      const absentResultJob = {
+        ...mockJob,
+        state: 'running',
+        result: null,
+      }
+      const { rerender } = render(<JobDetails job={absentResultJob} />)
       expect(screen.getByText('Telemetry unavailable')).toBeInTheDocument()
-      expect(screen.queryByText('99999')).not.toBeInTheDocument()
-      expect(screen.queryByText('88888')).not.toBeInTheDocument()
+      expect(screen.queryByText('Context used')).not.toBeInTheDocument()
+
+      const emptyResultJob = {
+        ...mockJob,
+        state: 'succeeded',
+        result: {
+          output: 'No metadata present',
+        },
+      }
+      rerender(<JobDetails job={emptyResultJob} />)
+      expect(screen.getByText('Telemetry unavailable')).toBeInTheDocument()
       expect(screen.queryByText('Context used')).not.toBeInTheDocument()
     })
   })

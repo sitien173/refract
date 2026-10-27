@@ -492,6 +492,19 @@ class TelemetryAccumulator:
                 qualities = [prior.quality] if prior else []
                 sources = [prior.source] if prior and prior.source else []
                 times = [prior.observed_at] if prior and prior.observed_at else []
+                loaded_meta = {
+                    "total_input_tokens": self._loaded_input_meta,
+                    "total_output_tokens": self._loaded_output_meta,
+                    "cache_read_tokens": self._loaded_cr_meta,
+                    "cache_write_tokens": self._loaded_cw_meta,
+                }[name]
+                if loaded_meta:
+                    if loaded_meta.get("quality"):
+                        qualities.append(loaded_meta["quality"])
+                    if loaded_meta.get("source"):
+                        sources.append(loaded_meta["source"])
+                    if loaded_meta.get("observed_at"):
+                        times.append(loaded_meta["observed_at"])
                 for inv in invocations:
                     measurement = self._calculate_invocation_measurements(attempt, inv)[metric_names.index(name)]
                     if measurement.value is not None:
@@ -512,6 +525,12 @@ class TelemetryAccumulator:
                 cache_read_tokens=self._completed_attempts.cache_read_tokens + (attempt_cr or 0),
                 cache_write_tokens=self._completed_attempts.cache_write_tokens + (attempt_cw or 0),
             )
+        for name in metric_names:
+            measurement = self._completed_measurements.get(name)
+            if measurement is not None:
+                self._completed_measurements[name] = measurement.model_copy(
+                    update={"value": getattr(self._completed_attempts, name)}
+                )
 
         self._responses = {k: v for k, v in self._responses.items() if k[0] != attempt}
         self._cumulative_invocations = {

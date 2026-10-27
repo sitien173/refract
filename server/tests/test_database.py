@@ -18,7 +18,7 @@ def table_columns(database: Database, table: str) -> set[str]:
     }
 
 
-@pytest.mark.parametrize("version", [-1, *range(15), 16, 99])
+@pytest.mark.parametrize("version", [-1, *range(15), 17, 99])
 def test_unsupported_schema_is_rejected_without_writes_or_connection_leaks(tmp_path, monkeypatch, version) -> None:
     path = tmp_path / "refract.db"
     connection = sqlite3.connect(path)
@@ -43,7 +43,7 @@ def test_unsupported_schema_is_rejected_without_writes_or_connection_leaks(tmp_p
     with pytest.raises(ValueError, match=f"Unsupported database schema {version}") as error:
         Database(path)
 
-    assert "supports schema 15 only" in str(error.value)
+    assert "supports schema 15 or 16 only" in str(error.value)
     assert "not modified" in str(error.value)
     assert str(path) in str(error.value)
     recovery = "upgrade" if version < 15 else f"supports schema {version}"
@@ -57,7 +57,7 @@ def test_unsupported_schema_is_rejected_without_writes_or_connection_leaks(tmp_p
         opened[0].execute("SELECT 1")
 
 
-@pytest.mark.parametrize("version", [14, 16])
+@pytest.mark.parametrize("version", [14, 17])
 def test_rejected_wal_database_is_not_checkpointed(tmp_path, version) -> None:
     path = tmp_path / "refract #?.db"
     subprocess.run([
@@ -143,15 +143,15 @@ def test_initialization_failure_closes_connection(tmp_path, monkeypatch, failure
 
 
 @pytest.mark.parametrize("existing_empty_file", [False, True])
-def test_fresh_database_uses_v15_schema(tmp_path, existing_empty_file) -> None:
+def test_fresh_database_uses_v16_schema(tmp_path, existing_empty_file) -> None:
     path = tmp_path / "refract.db"
     if existing_empty_file:
         path.touch()
     database = Database(path)
     tables = {row["name"] for row in database._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 15
+    assert database._connection.execute("PRAGMA user_version").fetchone()[0] == 16
     assert table_columns(database, "projects") == {"id", "alias", "root", "created_at"}
-    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
+    assert table_columns(database, "jobs") == {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "telemetry_state_json", "created_at", "updated_at"}
     assert "job_dependencies" not in tables
     assert {"projects", "jobs", "events", "context_sessions", "context_turns", "target_health", "job_stream_events"} <= tables
     assert "stages" not in tables
@@ -177,7 +177,7 @@ def test_reopening_v15_preserves_jobs_and_history(tmp_path) -> None:
     first.close()
 
     second = Database(path)
-    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 15
+    assert second._connection.execute("PRAGMA user_version").fetchone()[0] == 16
     assert list(second._connection.iterdump()) == before
     job = second.job("job")
     assert job is not None
@@ -186,6 +186,383 @@ def test_reopening_v15_preserves_jobs_and_history(tmp_path) -> None:
     assert second.recent_turns(project.id, "consult", "consult", 8)[0]["response"] == "retained response"
     assert second.target_health("target")["consecutive_failures"] == 1
     second.close()
+
+
+def _schema15_database(path, metadata_json: str = '{"model_name":"historical-model","input_tokens":900}') -> None:
+    """Build a synthetic pre-upgrade schema-15 database (no schema-16 columns)."""
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE projects (id TEXT PRIMARY KEY, alias TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workflow TEXT NOT NULL,
+            profile TEXT NOT NULL, prompt TEXT NOT NULL, execution_plan_json TEXT NOT NULL,
+            context_key TEXT NOT NULL, state TEXT NOT NULL, result_text TEXT NOT NULL DEFAULT '',
+            target_id TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '', config_revision TEXT NOT NULL DEFAULT '',
+            fresh_session INTEGER NOT NULL DEFAULT 0, result_metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
+        CREATE TABLE context_sessions (project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, target_key TEXT NOT NULL, lane TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project_id,context_key,role,target_key,lane));
+        CREATE TABLE context_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, context_key TEXT NOT NULL, role TEXT NOT NULL, target_id TEXT NOT NULL, prompt TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE target_health (target_id TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '', cooldown_s INTEGER NOT NULL DEFAULT 0, probe_job_id TEXT NOT NULL DEFAULT '');
+        CREATE TABLE job_stream_events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL, attempt INTEGER NOT NULL, target_id TEXT NOT NULL, backend TEXT NOT NULL, kind TEXT NOT NULL, entity_id TEXT NOT NULL, parent_entity_id TEXT NOT NULL, data_json TEXT NOT NULL, size_bytes INTEGER NOT NULL);
+        CREATE INDEX jobs_state_idx ON jobs(state, created_at);
+        CREATE INDEX jobs_project_idx ON jobs(project_id, updated_at);
+        CREATE INDEX events_job_idx ON events(job_id, id);
+        CREATE INDEX context_turns_stream_idx ON context_turns(project_id,context_key,role,id);
+        CREATE INDEX job_stream_events_job_idx ON job_stream_events(job_id,id);
+        INSERT INTO projects VALUES ('p','p','/p','created');
+    """)
+    connection.execute("INSERT INTO jobs(id,project_id,workflow,profile,prompt,execution_plan_json,context_key,state,result_metadata_json,created_at,updated_at) VALUES ('j','p','consult','balanced','prompt','{}','ctx','failed',?,'created','updated')", (metadata_json,))
+    connection.execute("PRAGMA user_version=15")
+    connection.commit()
+    connection.close()
+
+
+def test_later_attempt_terminal_measurement_preserves_accounting_identity_retry_and_reopen(tmp_path) -> None:
+    path = tmp_path / "attempt-two-terminal.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p", alias="p", root="/p")
+    db.create_job(job_id="j", project_id=project.id, workflow="consult", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+    db.merge_job_telemetry("j", {
+        "completeness": "complete",
+        "attribution": {"attempt": 1, "invocation": 1},
+        "completed_attempts": {"total_input_tokens": 0},
+        "total_input_tokens": {"value": 10, "source": "response", "quality": "reported", "observed_at": "2026-10-27T00:00:00Z"},
+    })
+    db.finish_job("j", "failed")
+    db.reset_retry("j")
+    db.merge_job_telemetry("j", {
+        "completeness": "complete",
+        "attribution": {"attempt": 2, "invocation": 1},
+        "completed_attempts": {"total_input_tokens": 10},
+        "total_input_tokens": {"value": 20, "source": "response", "quality": "reported", "observed_at": "2026-10-27T00:00:02Z"},
+    })
+    db.finish_job("j", "failed", metadata={"telemetry": {
+        "completeness": "complete",
+        "total_input_tokens": {"value": 28, "source": "response", "quality": "reported", "observed_at": "2026-10-27T00:00:03Z"},
+    }})
+    internal = json.loads(db.job_record("j")["telemetry_state_json"])
+    assert internal["attribution"]["attempt"] == 2
+    assert internal["completed_attempts"]["total_input_tokens"] == 10
+    db.reset_retry("j")
+    value = db.job("j").result.metadata.telemetry.total_input_tokens
+    internal = json.loads(db.job_record("j")["telemetry_state_json"])
+    assert (value.value, value.source, value.quality, value.observed_at) == (28, "response", "reported", "2026-10-27T00:00:03Z")
+    assert internal["attribution"]["attempt"] == 3
+    assert internal["completed_attempts"]["total_input_tokens"] == 28
+    db.merge_job_telemetry("j", {
+        "completeness": "complete",
+        "attribution": {"attempt": 3, "invocation": 1},
+        "completed_attempts": {"total_input_tokens": 28},
+        "total_input_tokens": {"value": 35, "source": "response", "quality": "reported", "observed_at": "2026-10-27T00:00:04Z"},
+    })
+    db.finish_job("j", "failed", metadata={"telemetry": {
+        "completeness": "complete",
+        "total_input_tokens": {"value": 40, "source": "response", "quality": "reported", "observed_at": "2026-10-27T00:00:05Z"},
+    }})
+    internal = json.loads(db.job_record("j")["telemetry_state_json"])
+    assert internal["attribution"]["attempt"] == 3
+    assert internal["completed_attempts"]["total_input_tokens"] == 28
+    db.reset_retry("j")
+    value = db.job("j").result.metadata.telemetry.total_input_tokens
+    assert (value.value, value.source, value.quality, value.observed_at) == (40, "response", "reported", "2026-10-27T00:00:05Z")
+    internal = json.loads(db.job_record("j")["telemetry_state_json"])
+    assert internal["completed_attempts"]["total_input_tokens"] == 40
+    assert internal["attribution"]["attempt"] == 4
+    db.close()
+    db = Database(path)
+    value = db.job("j").result.metadata.telemetry.total_input_tokens
+    assert (value.value, value.source, value.quality, value.observed_at) == (40, "response", "reported", "2026-10-27T00:00:05Z")
+    db.reset_retry("j")
+    internal = json.loads(db.job_record("j")["telemetry_state_json"])
+    assert internal["completed_attempts"]["total_input_tokens"] == 40
+    assert internal["attribution"]["attempt"] == 5
+    db.close()
+
+
+def test_terminal_telemetry_accounting_survives_retry_and_reopen(tmp_path) -> None:
+    path = tmp_path / "terminal-rollover.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p", alias="p", root="/p")
+    db.create_job(job_id="j", project_id=project.id, workflow="consult", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+    db.merge_job_telemetry("j", {"completeness": "complete", "total_input_tokens": {"value": 10, "source": "response", "quality": "reported", "observed_at": "2026-10-27T00:00:00Z"}})
+    db.finish_job("j", "failed", metadata={"telemetry": {"completeness": "complete", "total_input_tokens": {"value": 18, "source": "response", "quality": "reported", "observed_at": "2026-10-27T00:00:01Z"}}})
+    terminal_json = db.job_record("j")["result_metadata_json"]
+    db.reset_retry("j")
+    value = db.job("j").result.metadata.telemetry.total_input_tokens
+    assert (value.value, value.source, value.quality, value.observed_at) == (18, "response", "reported", "2026-10-27T00:00:01Z")
+    state = json.loads(db.job_record("j")["telemetry_state_json"])
+    assert state["completed_attempts"]["total_input_tokens"] == 18
+    db.close()
+    db = Database(path)
+    assert db.job("j").result.metadata.telemetry.total_input_tokens.value == 18
+    db.reset_retry("j")
+    assert json.loads(db.job_record("j")["telemetry_state_json"])["completed_attempts"]["total_input_tokens"] == 18
+    assert json.loads(terminal_json)["telemetry"]["total_input_tokens"]["observed_at"] == "2026-10-27T00:00:01Z"
+    db.close()
+
+
+def test_terminal_merge_keeps_newer_measurement_and_original_provenance(tmp_path) -> None:
+    db = Database(tmp_path / "terminal-provenance.db")
+    project = db.upsert_project(project_id="p", alias="p", root="/p")
+    db.create_job(job_id="j", project_id=project.id, workflow="consult", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+    db.merge_job_telemetry("j", {"completeness": "complete", "total_input_tokens": {"value": 10, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"}})
+    db.finish_job("j", "succeeded", metadata={"telemetry": {"completeness": "complete", "total_input_tokens": {"value": 18, "source": "result", "quality": "derived", "observed_at": "2026-10-26T00:00:02Z"}}})
+    value = json.loads(db.job_record("j")["result_metadata_json"])["telemetry"]["total_input_tokens"]
+    assert value == {"value": 18, "source": "result", "quality": "derived", "observed_at": "2026-10-26T00:00:02Z"}
+    db.close()
+
+
+def test_corrupt_internal_telemetry_fails_strictly_but_external_invalid_observation_is_ignored(tmp_path) -> None:
+    db = Database(tmp_path / "corrupt-state.db")
+    project = db.upsert_project(project_id="p", alias="p", root="/p")
+    db.create_job(job_id="j", project_id=project.id, workflow="consult", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+    db._connection.execute("UPDATE jobs SET telemetry_state_json=? WHERE id='j'", ('{"version":"bad"}',))
+    db._connection.commit()
+    with pytest.raises(ValueError):
+        db.merge_job_telemetry("j", {"completeness": "complete"})
+    with pytest.raises(ValueError):
+        db.finish_job("j", "failed")
+    db._connection.execute("UPDATE jobs SET telemetry_state_json='' WHERE id='j'")
+    db._connection.commit()
+    before = db.job_record("j")["result_metadata_json"]
+    db.merge_job_telemetry("j", {"total_input_tokens": {"value": True}})
+    assert db.job_record("j")["result_metadata_json"] == before
+    db.close()
+
+
+def test_finish_job_never_persists_retry_routing_token(tmp_path) -> None:
+    db = Database(tmp_path / "tokens.db")
+    project = db.upsert_project(project_id="p", alias="p", root="/p")
+    db.create_job(job_id="j", project_id=project.id, workflow="consult", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+    db.finish_job("j", "failed", metadata={"execution": {}, "failure": {"kind": "retryable"}, "retry": {"retryable": True, "next_target": "nt_synthetic"}, "telemetry": {}})
+    stored = json.loads(db.job_record("j")["result_metadata_json"])
+    assert stored["retry"]["next_target"] is None
+    db.close()
+
+
+def test_finish_job_rejects_malformed_persisted_canonical_metadata(tmp_path) -> None:
+    db = Database(tmp_path / "corrupt-metadata.db")
+    project = db.upsert_project(project_id="p", alias="p", root="/p")
+    db.create_job(job_id="j", project_id=project.id, workflow="consult", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+    db._connection.execute("UPDATE jobs SET result_metadata_json=? WHERE id='j'", ("{bad",))
+    with pytest.raises(ValueError):
+        db.finish_job("j", "failed")
+    db.close()
+
+
+def test_schema15_migrates_grouped_metadata_and_separate_internal_state(tmp_path) -> None:
+    path = tmp_path / "legacy-v15.db"
+    _schema15_database(path)
+    db = Database(path)
+    record = db.job_record("j")
+    metadata = json.loads(record["result_metadata_json"])
+    assert metadata["execution"]["model"] == "historical-model"
+    assert set(metadata) == {"execution", "failure", "retry", "telemetry"}
+    assert "model_name" not in metadata and "context_window_max" not in metadata
+    assert record["telemetry_state_json"] == ""
+    assert db._connection.execute("PRAGMA user_version").fetchone()[0] == 16
+    db.close()
+
+
+def test_schema15_preflight_rejects_nullable_required_support_column(tmp_path) -> None:
+    path = tmp_path / "nullable-v15.db"
+    _schema15_database(path)
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA writable_schema=ON")
+    connection.execute("UPDATE sqlite_master SET sql=replace(sql, 'cooldown_s INTEGER NOT NULL DEFAULT 0', 'cooldown_s INTEGER DEFAULT 0') WHERE name='target_health'")
+    connection.execute("PRAGMA writable_schema=OFF")
+    connection.execute("PRAGMA schema_version=2")
+    connection.commit()
+    connection.close()
+    with pytest.raises(ValueError, match="NOT NULL constraint"):
+        Database(path)
+
+
+def test_schema15_preflight_rejects_missing_project_uniqueness_constraint(tmp_path) -> None:
+    path = tmp_path / "missing-unique-v15.db"
+    _schema15_database(path)
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA writable_schema=ON")
+    connection.execute("UPDATE sqlite_master SET sql=replace(sql, 'alias TEXT NOT NULL UNIQUE', 'alias TEXT NOT NULL') WHERE name='projects'")
+    connection.execute("DELETE FROM sqlite_master WHERE name LIKE 'sqlite_autoindex_projects_%'")
+    connection.execute("PRAGMA writable_schema=OFF")
+    connection.execute("PRAGMA schema_version=2")
+    connection.commit()
+    connection.close()
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="uniqueness constraint"):
+        Database(path)
+    assert path.read_bytes() == before
+
+
+def test_schema15_preflight_rejects_wrong_index_definition_without_writes(tmp_path) -> None:
+    path = tmp_path / "wrong-index-v15.db"
+    _schema15_database(path)
+    connection = sqlite3.connect(path)
+    connection.execute("DROP INDEX jobs_state_idx")
+    connection.execute("CREATE INDEX jobs_state_idx ON jobs(created_at, state)")
+    connection.commit()
+    connection.close()
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="index definition"):
+        Database(path)
+    assert path.read_bytes() == before
+
+
+def test_schema15_preflight_rejects_incomplete_support_table_without_writes(tmp_path) -> None:
+    path = tmp_path / "incomplete-v15.db"
+    _schema15_database(path)
+    connection = sqlite3.connect(path)
+    connection.execute("ALTER TABLE context_turns DROP COLUMN response")
+    connection.commit()
+    connection.close()
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="context_turns columns are invalid"):
+        Database(path)
+    assert path.read_bytes() == before
+
+
+def test_schema15_migration_rolls_back_ddl_and_rows_when_update_fails(tmp_path) -> None:
+    path = tmp_path / "rollback-v15.db"
+    _schema15_database(path, '{"model_name":"preserve-model","input_tokens":12}')
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TRIGGER abort_metadata_update BEFORE UPDATE OF result_metadata_json ON jobs BEGIN SELECT RAISE(ABORT, 'injected update failure'); END")
+    connection.commit()
+    connection.close()
+    with pytest.raises(sqlite3.IntegrityError, match="injected update failure"):
+        Database(path)
+    connection = sqlite3.connect(path)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
+    assert "telemetry_state_json" not in {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+    row = connection.execute("SELECT result_metadata_json, prompt, state FROM jobs WHERE id='j'").fetchone()
+    assert row == ('{"model_name":"preserve-model","input_tokens":12}', "prompt", "failed")
+    assert connection.execute("SELECT alias, root FROM projects WHERE id='p'").fetchone() == ("p", "/p")
+    connection.close()
+
+
+def test_schema15_normalized_telemetry_provenance_survives_reopen_and_retry(tmp_path) -> None:
+    path = tmp_path / "historical-telemetry-v15.db"
+    historical = {
+        "model_name": "historical-model",
+        "telemetry": {
+            "version": 1,
+            "completeness": "partial",
+            "attribution": {"attempt": 2, "invocation": 3},
+            "completed_attempts": {"total_input_tokens": 31, "total_output_tokens": 12, "cache_read_tokens": 4, "cache_write_tokens": 2},
+            "total_input_tokens": {"value": 41, "source": "provider", "quality": "reported", "observed_at": "2026-10-25T12:00:00Z"},
+            "context_used_tokens": {"value": 900, "source": "response", "quality": "derived", "observed_at": "2026-10-25T12:01:00Z"},
+        },
+    }
+    _schema15_database(path, json.dumps(historical))
+    db = Database(path)
+    job = db.job("j")
+    assert job is not None
+    measurement = job.result.metadata.telemetry.total_input_tokens
+    assert (measurement.value, measurement.source, measurement.quality, measurement.observed_at) == (41, "provider", "reported", "2026-10-25T12:00:00Z")
+    internal_before = db.job_record("j")["telemetry_state_json"]
+    state = json.loads(internal_before)
+    assert state["completed_attempts"]["total_input_tokens"] == 31
+    db.close()
+    db = Database(path)
+    assert db.job_record("j")["telemetry_state_json"] == internal_before
+    db.reset_retry("j")
+    retried = db.job("j")
+    assert retried.result.metadata.telemetry.total_input_tokens.value == 41
+    assert json.loads(db.job_record("j")["telemetry_state_json"])["completed_attempts"]["total_input_tokens"] == 41
+    retained = retried.result.metadata.telemetry.total_input_tokens
+    assert (retained.source, retained.quality, retained.observed_at) == ("provider", "reported", "2026-10-25T12:00:00Z")
+    db.close()
+
+
+def test_schema15_preflight_rejects_malformed_metadata_without_writes(tmp_path) -> None:
+    path = tmp_path / "invalid-v15.db"
+    _schema15_database(path, '{"duration_ms":"not-a-duration","private":"must-not-leak"}')
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="job j metadata field") as error:
+        Database(path)
+    assert "must-not-leak" not in str(error.value)
+    assert path.read_bytes() == before
+    connection = sqlite3.connect(path)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
+    assert "telemetry_state_json" not in {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+    connection.close()
+
+
+def test_schema16_reopen_does_not_rewrite_metadata(tmp_path) -> None:
+    path = tmp_path / "reopen-v15.db"
+    _schema15_database(path)
+    db = Database(path)
+    before = db.job_record("j")["result_metadata_json"]
+    db.close()
+    reopened = Database(path)
+    assert reopened.job_record("j")["result_metadata_json"] == before
+    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 16
+    reopened.close()
+
+
+def test_schema16_structural_preflight_rejects_missing_column(tmp_path) -> None:
+    path = tmp_path / "incomplete-v16.db"
+    _schema15_database(path)
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA user_version=16")
+    connection.commit()
+    connection.close()
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="schema 16 at .* is incomplete") as error:
+        Database(path)
+    assert "The database was not modified." in str(error.value)
+    assert path.read_bytes() == before
+
+
+def test_schema15_migration_rolls_back_on_failure(tmp_path) -> None:
+    path = tmp_path / "rollback-v15.db"
+    _schema15_database(path, '{"model_name":"rollback-model","input_tokens":100}')
+    connection = sqlite3.connect(path)
+    connection.execute("""
+        CREATE TRIGGER abort_migration BEFORE UPDATE ON jobs
+        BEGIN SELECT RAISE(ABORT, 'forced migration failure'); END
+    """)
+    connection.commit()
+    connection.close()
+    with pytest.raises(Exception, match="forced migration failure"):
+        Database(path)
+    direct = sqlite3.connect(path)
+    assert direct.execute("PRAGMA user_version").fetchone()[0] == 15
+    columns = {row[1] for row in direct.execute("PRAGMA table_info(jobs)")}
+    assert "telemetry_state_json" not in columns
+    raw = direct.execute("SELECT result_metadata_json FROM jobs WHERE id='j'").fetchone()[0]
+    assert raw == '{"model_name":"rollback-model","input_tokens":100}'
+    direct.close()
+
+
+def test_schema15_migration_preserves_all_operational_data(tmp_path) -> None:
+    path = tmp_path / "complete-v15.db"
+    _schema15_database(path, '{"model_name":"m1","duration_ms":50,"failure_kind":"retryable","retryable":true}')
+    connection = sqlite3.connect(path)
+    connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES ('j','2026-10-26T00:00:00Z','test.event','{\"x\":1}')")
+    connection.execute("INSERT INTO context_sessions VALUES ('p','ctx','consult','t1','k1','','s1','2026-10-26T00:00:00Z')")
+    connection.execute("INSERT INTO context_turns VALUES (1,'p','ctx','consult','t1','prompt1','resp1','2026-10-26T00:00:00Z')")
+    connection.execute("INSERT INTO target_health VALUES ('t1',2,'2026-10-27T00:00:00Z','2026-10-25T00:00:00Z',60,'')")
+    connection.execute("INSERT INTO job_stream_events VALUES (1,'j','2026-10-26T00:00:00Z',1,'t1','codex','chunk','e1','','{}',10)")
+    connection.commit()
+    connection.close()
+
+    db = Database(path)
+    record = db.job_record("j")
+    assert record["id"] == "j"
+    assert record["state"] == "failed"
+    assert record["project_id"] == "p"
+    events = db.events("j")
+    assert len(events) == 1 and events[0]["kind"] == "test.event"
+    assert db.session("p", "ctx", "consult", "k1") == "s1"
+    assert len(db.recent_turns("p", "ctx", "consult", 10)) == 1
+    health = db.target_health("t1")
+    assert health["consecutive_failures"] == 2
+    assert db.stream_metadata("j")["high_water"] == 1
+    db.close()
 
 
 def test_create_job_persists_fresh_session_flag(tmp_path) -> None:
@@ -614,7 +991,7 @@ def test_database_reopen_preserves_stream_events_and_cursors(tmp_path) -> None:
     database.close()
 
     reopened = Database(path)
-    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 15
+    assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 16
     assert reopened.stream_high_water("job-1") == event_id
     assert reopened.stream_retained_from("job-1") == event_id
     events = reopened.stream_events("job-1", after=0)
@@ -840,7 +1217,7 @@ def test_merge_job_telemetry_preserves_unrelated_fields(tmp_path) -> None:
     with db._connection:
         db._connection.execute(
             "UPDATE jobs SET result_metadata_json=? WHERE id=?",
-            (json.dumps({"custom_flag": "test", "model_name": "gpt-4"}), "job-tel-1"),
+            (json.dumps({"execution": {"model": "gpt-4"}}), "job-tel-1"),
         )
     telemetry_payload = {
         "version": 1,
@@ -851,10 +1228,9 @@ def test_merge_job_telemetry_preserves_unrelated_fields(tmp_path) -> None:
     db.merge_job_telemetry("job-tel-1", telemetry_payload)
     job = db.job("job-tel-1")
     assert job is not None
-    assert job.result.metadata["custom_flag"] == "test"
-    assert job.result.metadata["model_name"] == "gpt-4"
-    assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 150
-    assert job.result.metadata["telemetry"]["total_output_tokens"]["value"] == 50
+    assert job.result.metadata.execution.model == "gpt-4"
+    assert job.result.metadata.telemetry.total_input_tokens.value == 150
+    assert job.result.metadata.telemetry.total_output_tokens.value == 50
     db.close()
 
 
@@ -871,7 +1247,6 @@ def test_terminal_metadata_protected_against_stale_observations(tmp_path) -> Non
         context_key="k1",
     )
     final_telemetry = {
-        "version": 1,
         "completeness": "complete",
         "total_input_tokens": {"value": 200, "source": "result", "quality": "reported", "observed_at": "2026-10-26T00:00:02Z"},
     }
@@ -886,7 +1261,7 @@ def test_terminal_metadata_protected_against_stale_observations(tmp_path) -> Non
     db.merge_job_telemetry("job-term-1", stale_telemetry)
     job = db.job("job-term-1")
     assert job is not None
-    assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 200
+    assert job.result.metadata.telemetry.total_input_tokens.value == 200
     db.close()
 
 
@@ -911,12 +1286,8 @@ def test_merge_job_telemetry_validates_and_sanitizes_before_persistence(tmp_path
     job = db.job("job-san-1")
     assert job is not None
     # Invalid telemetry must NOT be persisted
-    assert "telemetry" not in job.result.metadata
-    # A telemetry key is always validated, including explicit null values.
-    db.finish_job("job-san-1", "failed", metadata={"telemetry": None})
-    job = db.job("job-san-1")
-    assert job is not None
-    assert "telemetry" not in job.result.metadata
+    assert job.result.metadata.telemetry.completeness == "unavailable"
+    assert job.result.metadata.telemetry.total_input_tokens.value is None
     db.close()
 
 
@@ -941,12 +1312,12 @@ def test_finish_job_merges_with_running_telemetry(tmp_path) -> None:
     db.merge_job_telemetry("job-fin-1", running_telemetry)
 
     # finish_job called with non-telemetry metadata
-    db.finish_job("job-fin-1", "succeeded", metadata={"duration_ms": 120, "model_name": "claude"})
+    db.finish_job("job-fin-1", "succeeded", metadata={"execution": {"duration_ms": 120, "model": "claude"}})
     job = db.job("job-fin-1")
     assert job is not None
-    assert job.result.metadata["duration_ms"] == 120
-    assert job.result.metadata["model_name"] == "claude"
-    assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 300
+    assert job.result.metadata.execution.duration_ms == 120
+    assert job.result.metadata.execution.model == "claude"
+    assert job.result.metadata.telemetry.total_input_tokens.value == 300
     db.close()
 
 
@@ -979,16 +1350,18 @@ def test_retry_preserves_completed_attempt_aggregate_and_totals(tmp_path) -> Non
     job = db.job("job-retry-1")
     assert job is not None
     assert job.state == "queued"
-    telemetry = job.result.metadata["telemetry"]
-    # Aggregate from attempt 1 preserved
-    assert telemetry["completed_attempts"]["total_input_tokens"] == 150
-    assert telemetry["completed_attempts"]["total_output_tokens"] == 50
-    # Total consumption preserved
-    assert telemetry["total_input_tokens"]["value"] == 150
-    assert telemetry["total_output_tokens"]["value"] == 50
+    telemetry = job.result.metadata.telemetry
+    # Aggregate from attempt 1 preserved in internal state
+    record = db.job_record("job-retry-1")
+    internal = json.loads(record["telemetry_state_json"])
+    assert internal["completed_attempts"]["total_input_tokens"] == 150
+    assert internal["completed_attempts"]["total_output_tokens"] == 50
+    # Total consumption preserved in public telemetry
+    assert telemetry.total_input_tokens.value == 150
+    assert telemetry.total_output_tokens.value == 50
     # Context snapshot is cleared (not carried over to new attempt)
-    assert telemetry["context_used_tokens"]["value"] is None
-    assert telemetry["context_used_tokens"]["quality"] == "unavailable"
+    assert telemetry.context_used_tokens.value is None
+    assert telemetry.context_used_tokens.quality == "unavailable"
     db.close()
 
 
@@ -1016,10 +1389,10 @@ def test_database_reopen_preserves_telemetry_without_schema_upgrade(tmp_path) ->
     # Reopen
     db2 = Database(path)
     version = int(db2._connection.execute("PRAGMA user_version").fetchone()[0])
-    assert version == 15
+    assert version == 16
     job = db2.job("job-reopen-1")
     assert job is not None
-    assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 500
+    assert job.result.metadata.telemetry.total_input_tokens.value == 500
     db2.close()
 
 

@@ -27,6 +27,7 @@ from refract.config import DaemonConfig, load_config, load_task_guide
 from refract.dashboard import DashboardState, register_dashboard_routes
 from refract.logging_setup import configure as configure_logging, get_logger, log_context
 from refract.models import JobSummary, JobView, TERMINAL_STATES
+from refract.result_metadata import JobResultMetadata
 from refract.workers import run_sync
 from refract.runtime import OrchestrationError, Runtime
 from refract.workflows import BUILTIN_WORKFLOWS
@@ -106,11 +107,19 @@ def _public_data(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     if isinstance(value, Mapping):
-        return {
-            str(key): _public_data(item)
-            for key, item in value.items()
-            if str(key).casefold() not in _FORBIDDEN_OUTPUT_KEYS
-        }
+        public: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            if name.casefold() in _FORBIDDEN_OUTPUT_KEYS:
+                continue
+            if name == "metadata":
+                try:
+                    public[name] = JobResultMetadata.model_validate(item).model_dump(mode="json")
+                except Exception:
+                    public[name] = _public_data(item)
+            else:
+                public[name] = _public_data(item)
+        return public
     if isinstance(value, (list, tuple)):
         return [_public_data(item) for item in value]
     return value
@@ -192,6 +201,10 @@ def _page_terminal_result(
     result_text = job.result.text
     start = min(offset, len(result_text))
     end = min(len(result_text), start + _MAX_RESULT_PAGE)
+    raw_meta = metadata if metadata is not None else job.result.metadata
+    if hasattr(raw_meta, "model_dump"):
+        raw_meta = raw_meta.model_dump(mode="json")
+    meta_dict = JobResultMetadata.model_validate(raw_meta).model_dump(mode="json")
     while True:
         page_text = result_text[start:end]
         payload = {
@@ -200,7 +213,7 @@ def _page_terminal_result(
                 "text": page_text,
                 "error": public_error,
                 "next_offset": end if end < len(result_text) else None,
-                "metadata": dict(metadata if metadata is not None else job.result.metadata),
+                "metadata": meta_dict,
             },
         }
         serialized = json.dumps(_public_data(payload), ensure_ascii=False, separators=(",", ":"))
@@ -413,8 +426,8 @@ def _error_boundary(ctx: Any, call_next: Callable[[Any], Awaitable[Any]], schema
 
 _PROJECT_RESOLVE_DESCRIPTION = "Resolve an existing Git-root directory to a stable project ID. Use once per session. path must name an existing directory. Returns {project:{id,alias,path}}. Errors: invalid_path, alias_taken."
 _TASK_GUIDE_DESCRIPTION = "Load workflow and profile choices and project guidance before submission. Returns {workflows,profiles:{default,available},guidance}. Errors: unknown_project, config_invalid, response_too_large."
-_JOB_SUBMIT_DESCRIPTION = "Queue a durable coding job. prompt must be self-contained; optionally pass next_target from a failed job's result.metadata to pin to that candidate. Returns {job:summary}. Errors include targets_unavailable (retry_after_s), invalid_request, unknown_project, unknown_profile, config_invalid, daemon_stopping, response_too_large."
-_JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are normal; repeat with the same job_id. When a running worker asks a question, wait returns early with result.pending_question. Terminal text uses Unicode character offsets. Every terminal page returns result.metadata, including a live opaque next_target on failed or cancelled jobs. Returns {job:summary,result:{text,error,next_offset,metadata}}. Errors: unknown_job, invalid_request, response_too_large."
+_JOB_SUBMIT_DESCRIPTION = "Queue a durable coding job. prompt must be self-contained; optionally pass next_target from a failed job's result.metadata.retry.next_target to pin to that candidate. Returns {job:summary}. Errors include targets_unavailable (retry_after_s), invalid_request, unknown_project, unknown_profile, config_invalid, daemon_stopping, response_too_large."
+_JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are normal; repeat with the same job_id. When a running worker asks a question, wait returns early with result.pending_question. Terminal text uses Unicode character offsets. Every terminal page returns result.metadata, including grouped metadata with a live opaque retry.next_target on eligible failed or cancelled jobs. Returns {job:summary,result:{text,error,next_offset,metadata}}. Errors: unknown_job, invalid_request, response_too_large."
 _JOB_LIST_DESCRIPTION = "List all active jobs and up to 10 most recently updated terminal jobs for a project. Returns {active,recent,more_recent}. Errors: unknown_project, response_too_large."
 _JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary}. Errors: unknown_job, response_too_large."
 _JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, targets_unavailable, response_too_large."
@@ -438,7 +451,7 @@ Rules:
 - Use job_cancel(job_id) to stop queued or running work. Use job_retry(job_id) for eligible terminal jobs.
 - Use job_answer(job_id, answer) to answer a running worker question returned in result.pending_question.
 - Use job_report_error(job_id, category, expected, observed, report_key) to record unexpected protocol or output anomalies.
-- On failed/cancelled job_wait, use result.metadata.next_target with job_submit(next_target=...) for a follow-up on the next healthy target; tokens are opaque and can expire after config changes. result.metadata.retryable reflects a live next target for routing failures.
+- On failed/cancelled job_wait, use result.metadata.retry.next_target with job_submit(next_target=...) for a follow-up on the next healthy target; tokens are opaque and can expire after config changes. result.metadata.retry.retryable reflects a live next target for routing failures. Inspect result.metadata.failure.kind for failure classification.
 - targets_unavailable errors include retry_after_s; wait at least that many seconds before retrying.
 - Errors are JSON with code, message, next_action, retryable (and retry_after_s for targets_unavailable). Follow next_action."""
 
@@ -613,7 +626,7 @@ async def job_submit(
     profile: Annotated[str, Field(description="Available profile from task_guide; empty uses the project's default.")] = "",
     context_key: Annotated[str, Field(description="Session/history scope; empty uses the workflow name.")] = "",
     fresh_session: Annotated[bool, Field(description="Start a new worker session instead of reusing the context.")] = False,
-    next_target: Annotated[str, Field(description="Opaque routing token from result.metadata.next_target; omit to use the profile's first available target.")] = "",
+    next_target: Annotated[str, Field(description="Opaque routing token from result.metadata.retry.next_target; omit to use the profile's first available target.")] = "",
 ) -> str:
     runtime = _runtime(ctx)
     submission = await runtime.submit(
@@ -693,7 +706,9 @@ async def job_wait(
         pending = runtime.ask_registry.get_pending(job_id) if hasattr(runtime, "ask_registry") else None
         live_meta = await run_sync(runtime.live_result_metadata, current)
         result: dict[str, Any] = {"text": "", "error": "", "next_offset": None}
-        if "telemetry" in live_meta:
+        tel = live_meta.get("telemetry") if isinstance(live_meta, Mapping) else getattr(live_meta, "telemetry", None)
+        completeness = tel.get("completeness") if isinstance(tel, Mapping) else getattr(tel, "completeness", None)
+        if completeness in ("complete", "partial"):
             result["metadata"] = live_meta
         if pending is not None:
             result["pending_question"] = {

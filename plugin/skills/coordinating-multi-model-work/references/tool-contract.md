@@ -37,8 +37,8 @@ At most one job per project runs at a time. Jobs within each project are admitte
 
 ## Sessions
 
-- Start every phase and any job after `result.metadata.context_window_used` exceeds 150,000 tokens with `fresh_session=true`. Summarize prior state and include full role contracts plus the phase prompt path.
-- For follow-up jobs within the same phase, workflow, and `context_key` below 150,000 tokens, omit `fresh_session` and send only the delta.
+- Always start every phase with `fresh_session=true`, summarizing prior state and including full role contracts plus the phase prompt path. Also start with `fresh_session=true` when `context_overflow` occurred or when `result.metadata.telemetry.context_used_tokens.value` exceeds 150,000 tokens.
+- For follow-up jobs within the same phase, workflow, and `context_key`: if `context_used_tokens.value` is below 150,000 tokens, or if `value` is null or unavailable, omit `fresh_session` and send only the delta; do not invent usage.
 - A fresh job runs your prompt without stored history and replaces the stored session on success.
 - A resumed job uses the stored session, or bounded turn history when none exists. `job_retry` keeps the original `fresh_session` setting.
 - Changing project, `context_key`, workflow, or configured target starts a separate session.
@@ -51,9 +51,9 @@ At most one job per project runs at a time. Jobs within each project are admitte
 
 To read a terminal result, keep `result.text` and call `job_wait(job_id, timeout_s=0, result_offset=<result.next_offset>)` until `next_offset` is null. Concatenate all pages.
 
-Every terminal page includes `result.metadata` with `model_name, context_window_max, context_window_used, input_tokens, output_tokens, cached_input_tokens, duration_ms, failure_kind, retryable, next_target` (null when unreported), alongside an optional versioned `telemetry` object containing normalized `context_used_tokens`, `context_window_size`, `context_remaining_percent`, `total_input_tokens`, `total_output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `attribution`, and `completeness`. Measurements contain value, source, quality, and observed_at. `failure_kind` is `cancelled, circuit_open, replay_blocked, context_overflow, request_fatal, target_fatal, retryable`.
+Every terminal page includes canonical grouped `result.metadata`: `execution` (`model`, `duration_ms`), `failure` (`null` or `{kind}`), `retry` (`retryable`, `next_target`), and `telemetry` (`completeness`, `context_remaining_percent`, `context_window_size`, `context_used_tokens`, `total_input_tokens`, `total_output_tokens`, `cache_read_tokens`, `cache_write_tokens`). Measurements contain value, source, quality, and observed_at. `failure.kind` is `cancelled`, `circuit_open`, `replay_blocked`, `context_overflow`, `request_fatal`, `target_fatal`, or `retryable`.
 
-On failure, pass a token `next_target` unchanged to `job_submit(next_target=...)`; on `invalid_request`, resubmit without it. On `context_overflow`, summarize state and resubmit with `fresh_session=true`. Otherwise, report the failure.
+On failure, pass `result.metadata.retry.next_target` unchanged to `job_submit(next_target=...)`; on `invalid_request`, resubmit without it. On `context_overflow`, summarize state and resubmit with `fresh_session=true`. Otherwise, report the failure.
 
 Responses stay below 30,000 characters and 9,000 UTF-8 bytes. If a response overflows after an applied mutation, report the actual outcome and keep the root job or project ID. Never blindly resubmit.
 

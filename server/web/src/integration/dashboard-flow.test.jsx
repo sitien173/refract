@@ -34,6 +34,41 @@ vi.mock('../api', () => ({
   getDiagnostics: vi.fn(),
 }))
 
+function assertCanonicalMetadata(metadata) {
+  expect(metadata).toBeDefined()
+  expect(Object.keys(metadata).sort()).toEqual(['execution', 'failure', 'retry', 'telemetry'])
+  expect(Object.keys(metadata.execution).sort()).toEqual(['duration_ms', 'model'])
+  if (metadata.failure !== null) {
+    expect(Object.keys(metadata.failure).sort()).toEqual(['kind'])
+  }
+  expect(Object.keys(metadata.retry).sort()).toEqual(['next_target', 'retryable'])
+  expect(Object.keys(metadata.telemetry).sort()).toEqual([
+    'cache_read_tokens',
+    'cache_write_tokens',
+    'completeness',
+    'context_remaining_percent',
+    'context_used_tokens',
+    'context_window_size',
+    'total_input_tokens',
+    'total_output_tokens',
+  ])
+  const metricNames = [
+    'context_remaining_percent',
+    'context_window_size',
+    'context_used_tokens',
+    'total_input_tokens',
+    'total_output_tokens',
+    'cache_read_tokens',
+    'cache_write_tokens',
+  ]
+  for (const name of metricNames) {
+    const m = metadata.telemetry[name]
+    expect(typeof m).toBe('object')
+    expect(m).not.toBeNull()
+    expect(Object.keys(m).sort()).toEqual(['observed_at', 'quality', 'source', 'value'])
+  }
+}
+
 describe('Dashboard integrated user flows', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -868,14 +903,18 @@ describe('Dashboard integrated user flows', () => {
       result: {
         output: '',
         metadata: {
+          execution: { model: 'gpt-5.6', duration_ms: 1500 },
+          failure: null,
+          retry: { retryable: null, next_target: null },
           telemetry: {
-            version: 1,
             completeness: 'partial',
             context_used_tokens: { value: 1600, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:00Z' },
             context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
             context_remaining_percent: { value: 98.4, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
             total_input_tokens: { value: 400, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
             total_output_tokens: { value: 90, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+            cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
           },
         },
       },
@@ -887,18 +926,25 @@ describe('Dashboard integrated user flows', () => {
       result: {
         output: 'Finished successfully.',
         metadata: {
+          execution: { model: 'gpt-5.6', duration_ms: 3200 },
+          failure: null,
+          retry: { retryable: false, next_target: null },
           telemetry: {
-            version: 1,
             completeness: 'complete',
             context_used_tokens: { value: 1600, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:05Z' },
             context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
             context_remaining_percent: { value: 98.4, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:05Z' },
             total_input_tokens: { value: 900, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
             total_output_tokens: { value: 210, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
+            cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+            cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
           },
         },
       },
     }
+
+    assertCanonicalMetadata(legacyRunningJob.result.metadata)
+    assertCanonicalMetadata(legacyTerminalJob.result.metadata)
 
     vi.mocked(api.getJob)
       .mockResolvedValueOnce(legacyRunningJob)
@@ -943,18 +989,30 @@ describe('Dashboard integrated user flows', () => {
       result: {
         output: '',
         metadata: {
+          execution: {
+            model: 'gpt-5.6',
+            duration_ms: null,
+          },
+          failure: null,
+          retry: {
+            retryable: null,
+            next_target: null,
+          },
           telemetry: {
-            version: 1,
             completeness: 'complete',
-            context_used_tokens: { value: 3333, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
-            context_window_size: { value: 64000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
             context_remaining_percent: { value: 94.7, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+            context_window_size: { value: 64000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            context_used_tokens: { value: 3333, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
             total_input_tokens: { value: 777, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
             total_output_tokens: { value: 88, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+            cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
           },
         },
       },
     }
+
+    assertCanonicalMetadata(truncatedTelemetryJob.result.metadata)
 
     vi.mocked(api.getJob).mockResolvedValue(truncatedTelemetryJob)
     vi.mocked(api.getJobOutput).mockResolvedValue({

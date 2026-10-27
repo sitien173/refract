@@ -26,11 +26,7 @@ from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, gi
 from tests.orchestration_helpers import register_project
 
 
-RESULT_METADATA_KEYS = {
-    "model_name", "context_window_max", "context_window_used", "input_tokens",
-    "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind",
-    "retryable", "next_target", "telemetry",
-}
+RESULT_METADATA_KEYS = {"execution", "failure", "retry", "telemetry"}
 
 
 async def _dispatch_claimed_probe(tmp_path, drivers, runtime_holder=None):
@@ -203,7 +199,7 @@ async def test_retryable_failure_runs_one_target_and_persists_result_metadata(tm
 
         async def execute(self, *, target, **kwargs):
             self.called.append(target.id)
-            return DriverResult("RETRYABLE", "", "", "transient", "backend_failure", usage={"input_tokens": 7})
+            return DriverResult("RETRYABLE", "", "", "transient", "backend_failure")
 
     drivers = RetryDrivers()
     runtime = Runtime(catalog)
@@ -212,15 +208,14 @@ async def test_retryable_failure_runs_one_target_and_persists_result_metadata(tm
     try:
         project = register_project(runtime, str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "fail once")).job_id, 5)
-        metadata = job.result.metadata
+        metadata = job.result.metadata.model_dump(mode="json")
         assert drivers.called == ["one"]
         assert job.state == "failed"
-        assert metadata["failure_kind"] == "retryable"
-        assert metadata["retryable"] is False
-        assert metadata["model_name"] == "public-model-a"
-        assert metadata["input_tokens"] == 7
-        assert isinstance(metadata["duration_ms"], int)
-        assert metadata["next_target"] is None
+        assert metadata["failure"]["kind"] == "retryable"
+        assert metadata["retry"]["retryable"] is False
+        assert metadata["execution"]["model"] == "public-model-a"
+        assert isinstance(metadata["execution"]["duration_ms"], int)
+        assert metadata["retry"]["next_target"] is None
         assert set(metadata) == RESULT_METADATA_KEYS
     finally:
         await runtime.close()
@@ -238,7 +233,7 @@ async def test_retry_overwrites_previous_run_metadata_after_driver_exception(tmp
         async def execute(self, **kwargs):
             self.calls += 1
             if self.calls == 1:
-                return DriverResult("RETRYABLE", "", "", "transient", "backend_failure", usage={"model_name": "old-model", "input_tokens": 222})
+                return DriverResult("RETRYABLE", "", "", "transient", "backend_failure", model="old-model")
             raise RuntimeError("retry backend failure")
 
     runtime = Runtime(catalog)
@@ -249,15 +244,13 @@ async def test_retry_overwrites_previous_run_metadata_after_driver_exception(tmp
         project = register_project(runtime, str(root))
         submission = await runtime.submit(project.id, "implement", "retry")
         first = await runtime.wait(submission.job_id, 5)
-        assert first.result.metadata["model_name"] == "old-model"
-        assert first.result.metadata["input_tokens"] == 222
+        assert first.result.metadata.execution.model == "old-model"
         await runtime.retry(submission.job_id)
         second = await runtime.wait(submission.job_id, 5)
         assert second.state == "failed"
-        assert set(second.result.metadata) == RESULT_METADATA_KEYS
-        assert second.result.metadata["failure_kind"] == "request_fatal"
-        assert second.result.metadata["model_name"] == "configured-model"
-        assert second.result.metadata["input_tokens"] is None
+        assert set(second.result.metadata.model_dump(mode="json")) == RESULT_METADATA_KEYS
+        assert second.result.metadata.failure.kind == "request_fatal"
+        assert second.result.metadata.execution.model == "configured-model"
     finally:
         await runtime.close()
 
@@ -304,8 +297,8 @@ async def test_all_open_targets_fail_dispatch_without_counting_or_invoking_drive
         job = runtime.database.job(job_id)
         assert drivers.calls == 0
         assert job.state == "failed"
-        assert job.result.metadata["failure_kind"] == "circuit_open"
-        assert job.result.metadata["duration_ms"] is None
+        assert job.result.metadata.failure.kind == "circuit_open"
+        assert job.result.metadata.execution.duration_ms is None
         assert all(runtime.database.target_health(target_execution_key(target))["consecutive_failures"] == 2 for target in targets)
     finally:
         await runtime.close()
@@ -483,11 +476,11 @@ async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) ->
         await task
     cancelled_job = runtime.database.job("runner-cancel")
     assert cancelled_job.state == "cancelled"
-    assert set(cancelled_job.result.metadata) == RESULT_METADATA_KEYS
-    assert cancelled_job.result.metadata["failure_kind"] == "cancelled"
-    assert cancelled_job.result.metadata["retryable"] is False
-    assert cancelled_job.result.metadata["model_name"] == "cancel-model"
-    assert isinstance(cancelled_job.result.metadata["duration_ms"], int)
+    assert set(cancelled_job.result.metadata.model_dump(mode="json")) == RESULT_METADATA_KEYS
+    assert cancelled_job.result.metadata.failure.kind == "cancelled"
+    assert cancelled_job.result.metadata.retry.retryable is False
+    assert cancelled_job.result.metadata.execution.model == "cancel-model"
+    assert isinstance(cancelled_job.result.metadata.execution.duration_ms, int)
     runtime.database.close()
 
 
@@ -2266,12 +2259,12 @@ async def test_attempt_finished_records_driver_exception_as_request_failure(tmp_
         sub = await runtime.submit(project.id, "implement", "do crashing attempt")
         job = await runtime.wait(sub.job_id, 5)
         assert job.state == "failed"
-        metadata = job.result.metadata
+        metadata = job.result.metadata.model_dump(mode="json")
         assert set(metadata) == RESULT_METADATA_KEYS
-        assert metadata["failure_kind"] == "request_fatal"
-        assert metadata["retryable"] is False
-        assert metadata["model_name"] == "configured-model"
-        assert isinstance(metadata["duration_ms"], int)
+        assert metadata["failure"]["kind"] == "request_fatal"
+        assert metadata["retry"]["retryable"] is False
+        assert metadata["execution"]["model"] == "configured-model"
+        assert isinstance(metadata["execution"]["duration_ms"], int)
 
         events = runtime.database.stream_events(sub.job_id, after=0)
         finished = [e for e in events if e.attempt == 1 and e.kind == "attempt.finished"]
@@ -2507,7 +2500,7 @@ async def test_single_failed_execution_metadata_survives_runtime_reload(tmp_path
         job = await runtime1.wait(sub.job_id, 5)
         assert job.state == "failed"
         assert job.attempts == 1
-        assert job.result.metadata["failure_kind"] == "retryable"
+        assert job.result.metadata.failure.kind == "retryable"
     finally:
         await runtime1.close()
 
@@ -2518,8 +2511,8 @@ async def test_single_failed_execution_metadata_survives_runtime_reload(tmp_path
         assert len(deltas) == 1
         assert deltas[0].data["text"] == "attempt-1-text"
         reloaded_job = runtime2.database.job(sub.job_id)
-        assert reloaded_job.result.metadata["failure_kind"] == "retryable"
-        assert reloaded_job.result.metadata["retryable"] is False
+        assert reloaded_job.result.metadata.failure.kind == "retryable"
+        assert reloaded_job.result.metadata.retry.retryable is False
     finally:
         await runtime2.close()
 
@@ -4060,15 +4053,17 @@ async def test_telemetry_updated_routes_through_execution_before_stream_recordin
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "succeeded"
-        telemetry = job.result.metadata.get("telemetry")
+        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
         assert telemetry is not None
         assert telemetry["context_used_tokens"]["value"] == 1200
         assert telemetry["context_window_size"]["value"] == 8000
         assert telemetry["context_remaining_percent"]["value"] == 85.0
         assert telemetry["total_input_tokens"]["value"] == 100
         assert telemetry["total_output_tokens"]["value"] == 40
-        assert telemetry["attribution"]["attempt"] == 1
-        assert telemetry["attribution"]["invocation"] == 1
+        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (submission.job_id,)).fetchone()
+        internal_telemetry = json.loads(row[0])
+        assert internal_telemetry["attribution"]["attempt"] == 1
+        assert internal_telemetry["attribution"]["invocation"] == 1
     finally:
         await runtime.close()
 
@@ -4096,12 +4091,12 @@ async def test_context_invalidation_persists_nulls_without_clearing_consumption(
         project = register_project(runtime, str(root))
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
-        telemetry = job.result.metadata["telemetry"]
-        assert telemetry["context_used_tokens"]["value"] is None
-        assert telemetry["context_window_size"]["value"] is None
-        assert telemetry["context_remaining_percent"]["value"] is None
-        assert telemetry["total_input_tokens"]["value"] == 100
-        assert telemetry["total_output_tokens"]["value"] == 20
+        telemetry = job.result.metadata.telemetry
+        assert telemetry.context_used_tokens.value is None
+        assert telemetry.context_window_size.value is None
+        assert telemetry.context_remaining_percent.value is None
+        assert telemetry.total_input_tokens.value == 100
+        assert telemetry.total_output_tokens.value == 20
     finally:
         await runtime.close()
 
@@ -4142,11 +4137,11 @@ async def test_codex_budget_exhaustion_keeps_context_unknown_through_persistence
         project = register_project(runtime, str(root))
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
-        telemetry = job.result.metadata["telemetry"]
-        assert telemetry["context_used_tokens"]["value"] is None
-        assert telemetry["context_window_size"]["value"] is None
-        assert telemetry["total_input_tokens"]["value"] == 5000
-        assert telemetry["total_output_tokens"]["value"] == 700
+        telemetry = job.result.metadata.telemetry
+        assert telemetry.context_used_tokens.value is None
+        assert telemetry.context_window_size.value is None
+        assert telemetry.total_input_tokens.value == 5000
+        assert telemetry.total_output_tokens.value == 700
     finally:
         await runtime.close()
 
@@ -4188,7 +4183,7 @@ async def test_telemetry_survives_transcript_quota_exhaustion_in_execution(tmp_p
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "succeeded"
-        telemetry = job.result.metadata.get("telemetry")
+        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
         assert telemetry is not None
         assert telemetry["context_used_tokens"]["value"] == 4000
         assert telemetry["total_input_tokens"]["value"] == 250
@@ -4224,7 +4219,7 @@ async def test_cancellation_and_failure_retain_partial_telemetry(tmp_path: Path)
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "failed"
-        telemetry = job.result.metadata.get("telemetry")
+        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
         assert telemetry is not None
         assert telemetry["context_used_tokens"]["value"] == 3000
         assert telemetry["total_input_tokens"]["value"] == 180
@@ -4287,13 +4282,15 @@ async def test_session_recovery_separate_invocation_identities(tmp_path: Path) -
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "succeeded"
-        telemetry = job.result.metadata.get("telemetry")
+        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
         assert telemetry is not None
         # Accumulates 100 + 150 = 250
         assert telemetry["total_input_tokens"]["value"] == 250
         assert telemetry["total_output_tokens"]["value"] == 80
-        # Attribution invocation is 2
-        assert telemetry["attribution"]["invocation"] == 2
+        # Attribution invocation is 2 in internal state
+        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (submission.job_id,)).fetchone()
+        internal_telemetry = json.loads(row[0])
+        assert internal_telemetry["attribution"]["invocation"] == 2
     finally:
         await runtime.close()
 
@@ -4349,10 +4346,12 @@ async def test_retry_uses_actual_attempt_number(tmp_path: Path) -> None:
         assert job2.state == "succeeded"
         assert job2.attempts == 2
 
-        telemetry = job2.result.metadata.get("telemetry")
+        telemetry = job2.result.metadata.telemetry.model_dump(mode="json")
         assert telemetry is not None
-        assert telemetry["attribution"]["attempt"] == 2
-        assert telemetry["completed_attempts"]["total_input_tokens"] == 100
+        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (submission.job_id,)).fetchone()
+        internal_telemetry = json.loads(row[0])
+        assert internal_telemetry["attribution"]["attempt"] == 2
+        assert internal_telemetry["completed_attempts"]["total_input_tokens"] == 100
         assert telemetry["total_input_tokens"]["value"] == 250
         assert telemetry["total_output_tokens"]["value"] == 100
         assert telemetry["context_used_tokens"]["value"] == 2000
@@ -4395,7 +4394,7 @@ async def test_telemetry_updated_dispatches_cumulative_totals_before_cache_field
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "succeeded"
-        telemetry = job.result.metadata.get("telemetry")
+        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
         assert telemetry is not None
         assert telemetry["total_input_tokens"]["value"] == 500
         assert telemetry["total_output_tokens"]["value"] == 200
@@ -4454,11 +4453,13 @@ async def test_unobserved_recovery_invocation_marks_totals_incomplete(tmp_path: 
         submission = await runtime.submit(project.id, "implement", "turn 2", context_key="feature")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "succeeded"
-        telemetry = job.result.metadata.get("telemetry")
+        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
         assert telemetry is not None
         # Because invocation 1 ran and consumed unobserved tokens before recovery, totals must be partial
         assert telemetry["completeness"] == "partial"
-        assert telemetry["attribution"]["invocation"] == 2
+        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (submission.job_id,)).fetchone()
+        internal_telemetry = json.loads(row[0])
+        assert internal_telemetry["attribution"]["invocation"] == 2
     finally:
         await runtime.close()
 
@@ -4513,7 +4514,7 @@ async def test_synthetic_multi_response_persists_telemetry_before_completion(tmp
         in_flight_job = runtime.database.job(submission.job_id)
         assert in_flight_job is not None
         assert in_flight_job.state == "running"
-        partial_telemetry = in_flight_job.result.metadata.get("telemetry")
+        partial_telemetry = in_flight_job.result.metadata.telemetry.model_dump(mode="json")
         assert partial_telemetry is not None
         assert partial_telemetry["total_input_tokens"]["value"] == 120
         assert partial_telemetry["total_output_tokens"]["value"] == 45
@@ -4521,7 +4522,7 @@ async def test_synthetic_multi_response_persists_telemetry_before_completion(tmp
         continue_event.set()
         completed_job = await runtime.wait(submission.job_id, 5)
         assert completed_job.state == "succeeded"
-        final_telemetry = completed_job.result.metadata.get("telemetry")
+        final_telemetry = completed_job.result.metadata.telemetry.model_dump(mode="json")
         assert final_telemetry is not None
         assert final_telemetry["total_input_tokens"]["value"] == 270
         assert final_telemetry["total_output_tokens"]["value"] == 100
@@ -4577,7 +4578,7 @@ async def test_resumed_session_history_is_not_counted_as_subsequent_job_consumpt
         sub1 = await runtime.submit(project.id, "implement", "turn 1", context_key="feature")
         job1 = await runtime.wait(sub1.job_id, 5)
         assert job1.state == "succeeded"
-        tel1 = job1.result.metadata.get("telemetry")
+        tel1 = job1.result.metadata.telemetry.model_dump(mode="json")
         assert tel1 is not None
         assert tel1["total_input_tokens"]["value"] == 500
         assert tel1["total_output_tokens"]["value"] == 200
@@ -4585,12 +4586,14 @@ async def test_resumed_session_history_is_not_counted_as_subsequent_job_consumpt
         sub2 = await runtime.submit(project.id, "implement", "turn 2", context_key="feature")
         job2 = await runtime.wait(sub2.job_id, 5)
         assert job2.state == "succeeded"
-        tel2 = job2.result.metadata.get("telemetry")
+        tel2 = job2.result.metadata.telemetry.model_dump(mode="json")
         assert tel2 is not None
         assert tel2["total_input_tokens"]["value"] == 150
         assert tel2["total_output_tokens"]["value"] == 60
-        assert tel2["attribution"]["attempt"] == 1
-        assert tel2["completed_attempts"]["total_input_tokens"] == 0
+        row2 = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (sub2.job_id,)).fetchone()
+        internal_telemetry2 = json.loads(row2[0])
+        assert internal_telemetry2["attribution"]["attempt"] == 1
+        assert internal_telemetry2["completed_attempts"]["total_input_tokens"] == 0
     finally:
         await runtime.close()
 
@@ -4625,7 +4628,7 @@ async def test_persisted_context_quality_is_derived_not_reported(tmp_path: Path)
         submission = await runtime.submit(project.id, "implement", "test")
         completed_job = await runtime.wait(submission.job_id, 5)
         assert completed_job.state == "succeeded"
-        final_telemetry = completed_job.result.metadata.get("telemetry")
+        final_telemetry = completed_job.result.metadata.telemetry.model_dump(mode="json")
         assert final_telemetry is not None
         assert final_telemetry["context_used_tokens"]["value"] == 165
         assert final_telemetry["context_used_tokens"]["quality"] == "derived"
@@ -4633,7 +4636,7 @@ async def test_persisted_context_quality_is_derived_not_reported(tmp_path: Path)
 
         db_job = runtime.database.job(submission.job_id)
         assert db_job is not None
-        db_telemetry = db_job.result.metadata.get("telemetry")
+        db_telemetry = db_job.result.metadata.telemetry.model_dump(mode="json")
         assert db_telemetry is not None
         assert db_telemetry["context_used_tokens"]["quality"] == "derived"
     finally:
@@ -4730,7 +4733,7 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
         submission = await runtime.submit(project.id, "implement", "test task")
         completed_job = await runtime.wait(submission.job_id, 10)
         assert completed_job.state == "succeeded"
-        final_telemetry = completed_job.result.metadata.get("telemetry")
+        final_telemetry = completed_job.result.metadata.telemetry.model_dump(mode="json")
         assert final_telemetry is not None
         # Assert reported consumption is preserved alongside derived context
         assert final_telemetry["total_input_tokens"]["quality"] == "reported"
@@ -4740,7 +4743,7 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
 
         db_job = runtime.database.job(submission.job_id)
         assert db_job is not None
-        db_telemetry = db_job.result.metadata.get("telemetry")
+        db_telemetry = db_job.result.metadata.telemetry.model_dump(mode="json")
         assert db_telemetry is not None
         assert db_telemetry["total_input_tokens"]["quality"] == "reported"
         assert db_telemetry["total_output_tokens"]["quality"] == "reported"
@@ -4891,7 +4894,7 @@ async def test_retry_policy_bounded_attempts_and_budget_exhaustion(tmp_path: Pat
         assert job.state == "failed"
         assert len(drivers.invocations) == 3
         assert job.attempts == 3
-        assert job.result.metadata["failure_kind"] == "retryable"
+        assert job.result.metadata.failure.kind == "retryable"
     finally:
         await runtime.close()
 
@@ -5142,11 +5145,13 @@ async def test_retry_telemetry_rollover_cumulative_consumption(tmp_path: Path) -
         assert job.state == "succeeded"
         assert job.attempts == 2
 
-        telemetry = job.result.metadata.get("telemetry")
+        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
         assert telemetry is not None
-        assert telemetry["attribution"]["attempt"] == 2
-        assert telemetry["completed_attempts"]["total_input_tokens"] == 100
-        assert telemetry["completed_attempts"]["total_output_tokens"] == 20
+        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (sub.job_id,)).fetchone()
+        internal_telemetry = json.loads(row[0])
+        assert internal_telemetry["attribution"]["attempt"] == 2
+        assert internal_telemetry["completed_attempts"]["total_input_tokens"] == 100
+        assert internal_telemetry["completed_attempts"]["total_output_tokens"] == 20
         assert telemetry["total_input_tokens"]["value"] == 250
         assert telemetry["total_output_tokens"]["value"] == 50
     finally:
@@ -5223,7 +5228,7 @@ async def test_retry_tool_activity_after_truncation_blocks_replay(tmp_path: Path
         assert job.state == "failed"
         assert len(drivers.invocations) == 1
         assert job.attempts == 1
-        assert job.result.metadata["failure_kind"] == "replay_blocked"
+        assert job.result.metadata.failure.kind == "replay_blocked"
     finally:
         await runtime.close()
 
@@ -5696,3 +5701,53 @@ async def test_retry_cancellation_during_recovery_bookkeeping_prevents_invocatio
         assert runtime.target_executor._target_users.get("primary", 0) == 0
     finally:
         await runtime.close()
+
+
+def test_grouped_failure_producer_exposes_only_canonical_fields() -> None:
+    result = DriverResult("TARGET_FATAL", "", "", "target unavailable", "backend_failure", model="model-x")
+    metadata = TargetExecutor._result_metadata(result, TargetConfig(id="target", backend="codex", model="configured"), 25)
+    assert set(metadata) == {"execution", "failure", "retry", "telemetry"}
+    assert metadata["execution"] == {"model": "model-x", "duration_ms": 25}
+    assert metadata["failure"] == {"kind": "target_fatal"}
+    assert metadata["retry"] == {"retryable": False, "next_target": None}
+    assert metadata["telemetry"]["completeness"] == "unavailable"
+    assert "input_tokens" not in metadata
+
+
+def test_result_metadata_produces_canonical_grouped_structure_and_context_overflow() -> None:
+    # 1. Success case
+    success_res = DriverResult("SUCCESS", "", "", "", "", model="model-1")
+    meta_success = TargetExecutor._result_metadata(success_res, None, 123)
+    assert set(meta_success) == {"execution", "failure", "retry", "telemetry"}
+    assert meta_success["execution"]["model"] == "model-1"
+    assert meta_success["execution"]["duration_ms"] == 123
+    assert meta_success["failure"] is None
+    assert meta_success["retry"]["retryable"] is None
+    assert meta_success["retry"]["next_target"] is None
+
+    # 2. Context overflow case
+    overflow_res = DriverResult("RETRYABLE", "", "", "context overflow", "context_overflow")
+    meta_overflow = TargetExecutor._result_metadata(overflow_res, None, 50)
+    assert set(meta_overflow) == {"execution", "failure", "retry", "telemetry"}
+    assert meta_overflow["failure"]["kind"] == "context_overflow"
+    assert meta_overflow["retry"]["retryable"] is True
+    assert meta_overflow["retry"]["next_target"] is None
+
+    # 3. Cancelled case
+    cancelled_res = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+    meta_cancelled = TargetExecutor._result_metadata(cancelled_res, None, None)
+    assert meta_cancelled["failure"]["kind"] == "cancelled"
+    assert meta_cancelled["retry"]["retryable"] is False
+
+    # 4. Model fallback without fabricated capacity
+    fallback_res = DriverResult("SUCCESS", "", "", "", "", model=None)
+    meta_fallback = TargetExecutor._result_metadata(
+        fallback_res,
+        TargetConfig(id="t1", backend="codex", model="fallback-configured-model"),
+        200,
+    )
+    assert meta_fallback["execution"]["model"] == "fallback-configured-model"
+    assert meta_fallback["telemetry"]["context_window_size"]["value"] is None
+    assert meta_fallback["telemetry"]["context_window_size"]["quality"] == "unavailable"
+    assert meta_fallback["telemetry"]["context_remaining_percent"]["value"] is None
+    assert meta_fallback["telemetry"]["context_remaining_percent"]["quality"] == "unavailable"

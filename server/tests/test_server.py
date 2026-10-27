@@ -12,6 +12,7 @@ import pytest
 
 from refract.config import load_config
 from refract.models import JobResult, JobSummary, JobView, SubmissionResult
+from refract.result_metadata import JobResultMetadata
 from refract.runtime import OrchestrationError, Runtime
 from refract.scheduler import _Dispatch
 from refract.server import RefractError, job_answer, job_wait, mcp
@@ -590,7 +591,7 @@ async def test_multipage_terminal_wait_has_metadata_and_stays_private_and_bounde
         runtime.database.finish_job("multi-terminal", "succeeded", text="z" * 40_000)
         offset = 0
         pages = 0
-        forbidden = {"target_id", "backend", "model"}
+        forbidden = {"target_id", "backend"}
         while True:
             response = await client.call_tool("job_wait", {"job_id": "multi-terminal", "timeout_s": 0, "result_offset": offset})
             assert not response.is_error
@@ -598,7 +599,7 @@ async def test_multipage_terminal_wait_has_metadata_and_stays_private_and_bounde
             serialized = json.dumps(wire, ensure_ascii=False, separators=(",", ":"))
             assert len(serialized.encode("utf-8")) < 9000
             payload = json.loads(response.content[0].text)
-            assert set(payload["result"]["metadata"]) == {"model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target"}
+            assert set(payload["result"]["metadata"]) == {"execution", "failure", "retry", "telemetry"}
             def inspect_private(value):
                 if isinstance(value, dict):
                     assert forbidden.isdisjoint(key.casefold() for key in value)
@@ -645,14 +646,15 @@ async def test_all_tool_success_payloads_are_private_and_single_text_content(tmp
         responses.append(await client.call_tool("job_retry", {"job_id": "privacy-retry"}))
 
         forbidden = {"access_mode", "target_id", "backend", "model", "resource_uri", "config_revision"}
-        def visit(value):
+        def visit(value, in_metadata: bool = False):
             if isinstance(value, dict):
-                assert forbidden.isdisjoint(key.casefold() for key in value)
-                for item in value.values():
-                    visit(item)
+                current_forbidden = forbidden - {"model"} if in_metadata else forbidden
+                assert current_forbidden.isdisjoint(key.casefold() for key in value)
+                for k, item in value.items():
+                    visit(item, in_metadata=(in_metadata or k == "metadata"))
             elif isinstance(value, list):
                 for item in value:
-                    visit(item)
+                    visit(item, in_metadata=in_metadata)
         for response in responses:
             assert not response.is_error
             assert len(response.content) == 1 and response.content[0].type == "text"
@@ -794,7 +796,7 @@ async def test_empty_and_eof_result_metadata_overflow_is_bounded(tmp_path, monke
         runtime.database.finish_job("empty-fitting", "succeeded", text="")
         empty_ok = await client.call_tool("job_wait", {"job_id": "empty-fitting", "timeout_s": 0})
         assert not empty_ok.is_error
-        assert json.loads(empty_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None, "metadata": dict.fromkeys(("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target"))}
+        assert json.loads(empty_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None, "metadata": JobResultMetadata().model_dump(mode="json")}
 
         runtime.database.create_job(
             job_id="eof-fitting", project_id=project.id, workflow="review", profile="balanced",
@@ -803,7 +805,7 @@ async def test_empty_and_eof_result_metadata_overflow_is_bounded(tmp_path, monke
         runtime.database.finish_job("eof-fitting", "succeeded", text="done")
         eof_ok = await client.call_tool("job_wait", {"job_id": "eof-fitting", "timeout_s": 0, "result_offset": 4})
         assert not eof_ok.is_error
-        assert json.loads(eof_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None, "metadata": dict.fromkeys(("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target"))}
+        assert json.loads(eof_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None, "metadata": JobResultMetadata().model_dump(mode="json")}
 
 
 @pytest.mark.parametrize(("result_text", "offset"), [("", 0), ("done", 4)])
@@ -827,6 +829,21 @@ def test_empty_or_eof_page_fit_loop_has_finite_sentinel(monkeypatch, result_text
     assert raised.value.code == "response_too_large"
 
 
+def test_public_data_filters_unvalidated_metadata_and_preserves_canonical_execution_model() -> None:
+    from refract.server import _public_data
+    from refract.result_metadata import JobResultMetadata, ExecutionMetadata
+
+    arbitrary = {"metadata": {"backend": "synthetic-private-backend", "execution": {"model": "unvalidated-private-model"}}}
+    filtered = _public_data(arbitrary)
+    assert filtered == {"metadata": {"execution": {}}}
+    canonical = JobResultMetadata(execution=ExecutionMetadata(model="allowed-model"))
+    public = _public_data({"metadata": canonical})
+    assert public["metadata"]["execution"]["model"] == "allowed-model"
+    assert set(public["metadata"]) == {"execution", "failure", "retry", "telemetry"}
+    assert public["metadata"]["failure"] is None
+    assert public["metadata"]["telemetry"]["completeness"] == "unavailable"
+
+
 def _job_view(state: str) -> JobView:
     return JobView(
         id="job-1",
@@ -838,6 +855,20 @@ def _job_view(state: str) -> JobView:
         created_at="2026-01-01T00:00:00+00:00",
         updated_at="2026-01-01T00:00:00+00:00",
     )
+
+
+def test_terminal_page_rejects_malformed_canonical_metadata_and_keeps_unavailable_shape() -> None:
+    from refract.server import _page_terminal_result
+
+    job = _job_view("succeeded")
+    with pytest.raises(ValueError):
+        _page_terminal_result(job, {"id": job.id}, 0, metadata={"execution": {}, "retry": {"legacy": True}})
+    payload = json.loads(_page_terminal_result(job, {"id": job.id}, 0))
+    metadata = payload["result"]["metadata"]
+    assert set(metadata) == {"execution", "failure", "retry", "telemetry"}
+    assert metadata["failure"] is None
+    assert metadata["telemetry"]["completeness"] == "unavailable"
+    assert metadata["telemetry"]["total_input_tokens"] == {"value": None, "source": None, "quality": "unavailable", "observed_at": None}
 
 
 def _stub_job_record(_job_id: str) -> dict[str, str]:
@@ -890,7 +921,7 @@ async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -
 
     assert waits == ([] if timeout_s == 0 else [(initial.id, timeout_s)])
     assert result["job"]["state"] == ("running" if timeout_s == 0 else "succeeded")
-    assert result["result"] == ({"text": "", "error": "", "next_offset": None} if timeout_s == 0 else {"text": "", "error": "", "next_offset": None, "metadata": {}})
+    assert result["result"] == ({"text": "", "error": "", "next_offset": None} if timeout_s == 0 else {"text": "", "error": "", "next_offset": None, "metadata": JobResultMetadata().model_dump(mode="json")})
     assert json.loads(progress_messages[0]) == {"state": "running"}
 
 
@@ -1806,10 +1837,9 @@ async def test_job_wait_paginated_retains_identical_telemetry(tmp_path) -> None:
             context_key="c1",
         )
         synthetic_telemetry = {
-            "version": 1,
             "completeness": "complete",
-            "context_used_tokens": {"value": 2500, "source": "provider", "quality": "reported"},
-            "total_input_tokens": {"value": 600, "source": "provider", "quality": "reported"},
+            "context_used_tokens": {"value": 2500, "source": "provider", "quality": "reported", "observed_at": "2026-01-01T00:00:00Z"},
+            "total_input_tokens": {"value": 600, "source": "provider", "quality": "reported", "observed_at": "2026-01-01T00:00:00Z"},
         }
         runtime.database.finish_job(
             "job-paged-tel",

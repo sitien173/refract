@@ -8,7 +8,7 @@ import threading
 from collections.abc import Generator
 from typing import Any
 
-from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
+from . import BackendParams, BackendResult, classify_backend_output, classify_tool_activity, preflight
 from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
 from refract.telemetry import TelemetryAccumulator
@@ -147,14 +147,23 @@ def _extract_output(stream: StreamOutcome) -> tuple[str, str, str, str]:
     return parser.agent_message, parser.session_id, "\n".join(parser.diagnostics).strip(), parser.structured_error
 
 
-def _usage_values(stream: StreamOutcome) -> dict[str, Any]:
-    usage_values: dict[str, Any] = {}
-    for event in stream.objects():
+def _extract_model(stream: StreamOutcome) -> str | None:
+    for event in reversed(stream.events):
+        if not isinstance(event, dict):
+            continue
         msg = event.get("message")
-        u = msg.get("usage") if isinstance(msg, dict) else None
-        if isinstance(msg, dict) and isinstance(u, dict) and msg.get("role") == "assistant":
-            usage_values = {"model_name": msg.get("model"), "input_tokens": u.get("input"), "output_tokens": u.get("output"), "cached_input_tokens": u.get("cacheRead")}
-    return usage_values
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            model = msg.get("model")
+            if isinstance(model, str) and model:
+                return model
+        messages = event.get("messages")
+        if isinstance(messages, list):
+            for m in reversed(messages):
+                if isinstance(m, dict) and m.get("role") == "assistant":
+                    model = m.get("model")
+                    if isinstance(model, str) and model:
+                        return model
+    return None
 
 
 def _tool_call_id(event: dict[str, Any]) -> str:
@@ -419,14 +428,15 @@ def execute(params: BackendParams) -> BackendResult:
     agent_messages, extracted_session_id, diagnostics, structured_error = _extract_output(stream)
     session_id = extracted_session_id or params.SESSION_ID
     error_text = "\n".join(part for part in (command_error, diagnostics) if part).strip()
+    model = _extract_model(stream)
     result = classify_backend_output(
         backend_name="pi",
         agent_messages=agent_messages,
         session_id=session_id,
         error_text=error_text,
+        model=model,
     )
 
-    result.usage = _usage_dict(**_usage_values(stream))
     if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
         result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
     _apply_errors(result, params, stream, error_text, structured_error)
