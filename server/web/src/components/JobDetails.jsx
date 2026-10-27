@@ -6,6 +6,34 @@ import { useJobStream } from '../hooks/useJobStream'
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted'])
 
+function TelemetryRow({ label, measurement, isPercent = false, forceUnavailable = false }) {
+  const isUnavailable = forceUnavailable || !measurement || measurement.value == null
+  const displayValue = isUnavailable
+    ? 'Unavailable'
+    : isPercent
+    ? `${measurement.value}%`
+    : String(measurement.value)
+  const quality = isUnavailable ? (forceUnavailable ? 'unavailable' : measurement?.quality || 'unavailable') : measurement.quality
+  const source = isUnavailable && forceUnavailable ? null : measurement?.source
+  const observedAt = isUnavailable && forceUnavailable ? null : measurement?.observed_at
+
+  return (
+    <div className="meta-row telemetry-row">
+      <div className="telemetry-label-col">
+        <span className="eyebrow">{label}</span>
+      </div>
+      <div className="telemetry-value-col">
+        <span className="telemetry-value">{displayValue}</span>
+        <div className="telemetry-details caption">
+          {quality && <span className="telemetry-quality tag">{quality}</span>}
+          {source && <span className="telemetry-source tag">{source}</span>}
+          {observedAt && <span className="telemetry-observed-at">{observedAt}</span>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function JobDetails({
   job,
   isLoading = false,
@@ -201,6 +229,101 @@ export default function JobDetails({
           </div>
         </section>
       </div>
+
+      {(() => {
+        const telemetry = job.result?.metadata?.telemetry
+        const hasTelemetry = Boolean(telemetry && typeof telemetry === 'object' && Object.keys(telemetry).length > 0)
+
+        if (!hasTelemetry) {
+          return (
+            <section className="panel job-telemetry-panel" aria-labelledby="job-telemetry-heading">
+              <div className="panel-header">
+                <h3 id="job-telemetry-heading">Telemetry</h3>
+              </div>
+              <div className="job-telemetry-content">
+                <div className="telemetry-unavailable">
+                  <p className="caption">Telemetry unavailable</p>
+                </div>
+              </div>
+            </section>
+          )
+        }
+
+        const completeness = telemetry.completeness || 'unavailable'
+        const capacityKnown = telemetry.context_window_size?.value != null
+        const hasCacheRead = Boolean(
+          telemetry.cache_read_tokens &&
+            (telemetry.cache_read_tokens.value != null ||
+              (telemetry.cache_read_tokens.quality && telemetry.cache_read_tokens.quality !== 'unavailable'))
+        )
+        const hasCacheWrite = Boolean(
+          telemetry.cache_write_tokens &&
+            (telemetry.cache_write_tokens.value != null ||
+              (telemetry.cache_write_tokens.quality && telemetry.cache_write_tokens.quality !== 'unavailable'))
+        )
+
+        return (
+          <section className="panel job-telemetry-panel" aria-labelledby="job-telemetry-heading">
+            <div className="panel-header">
+              <h3 id="job-telemetry-heading">Telemetry</h3>
+              {completeness && (
+                <span className={`telemetry-completeness tag tag-${completeness}`}>
+                  {completeness}
+                </span>
+              )}
+            </div>
+            <div className="job-telemetry-content">
+              <div className="telemetry-grid">
+                <div className="telemetry-section telemetry-context-section">
+                  <h4 className="telemetry-subheading" id="telemetry-context-subheading">Context</h4>
+                  <div className="job-meta-rows">
+                    <TelemetryRow
+                      label="Context used"
+                      measurement={telemetry.context_used_tokens}
+                    />
+                    <TelemetryRow
+                      label="Context capacity"
+                      measurement={telemetry.context_window_size}
+                    />
+                    <TelemetryRow
+                      label="Context remaining"
+                      measurement={telemetry.context_remaining_percent}
+                      isPercent={true}
+                      forceUnavailable={!capacityKnown}
+                    />
+                  </div>
+                </div>
+
+                <div className="telemetry-section telemetry-consumption-section">
+                  <h4 className="telemetry-subheading" id="telemetry-consumption-subheading">Consumption</h4>
+                  <div className="job-meta-rows">
+                    <TelemetryRow
+                      label="Job input tokens"
+                      measurement={telemetry.total_input_tokens}
+                    />
+                    <TelemetryRow
+                      label="Job output tokens"
+                      measurement={telemetry.total_output_tokens}
+                    />
+                    {hasCacheRead && (
+                      <TelemetryRow
+                        label="Cache read tokens"
+                        measurement={telemetry.cache_read_tokens}
+                      />
+                    )}
+                    {hasCacheWrite && (
+                      <TelemetryRow
+                        label="Cache write tokens"
+                        measurement={telemetry.cache_write_tokens}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )
+      })()}
 
       <section className="panel job-prompt-panel" aria-labelledby="job-prompt-heading">
         <details className="job-prompt-disclosure">

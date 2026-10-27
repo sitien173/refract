@@ -32,6 +32,10 @@ A terminal one-page result takes four calls; resume, recovery, nonterminal waits
 - Choose `workflow` from `workflows` and `profile` from `profiles.available`. Omit `profile` to use `profiles.default`.
 - Profiles may be partial. `other` requires an explicit mapping and never falls back. Follow returned guidance or error for unsupported mappings; never invent a replacement.
 
+## Admission
+
+At most one job per project runs at a time. Jobs within each project are admitted FIFO, bounded by the global `max_jobs` capacity; jobs in different projects may run concurrently up to that capacity.
+
 ## Sessions
 
 - Start every phase and any job after `result.metadata.context_window_used` exceeds 150,000 tokens with `fresh_session=true`. Summarize prior state and include full role contracts plus the phase prompt path.
@@ -48,7 +52,7 @@ A terminal one-page result takes four calls; resume, recovery, nonterminal waits
 
 To read a terminal result, keep `result.text` and call `job_wait(job_id, timeout_s=0, result_offset=<result.next_offset>)` until `next_offset` is null. Concatenate all pages.
 
-Every terminal page includes `result.metadata` with `model_name, context_window_max, context_window_used, input_tokens, output_tokens, cached_input_tokens, duration_ms, failure_kind, retryable, next_target` (null when unreported). `failure_kind` is `cancelled, circuit_open, replay_blocked, context_overflow, request_fatal, target_fatal, retryable`.
+Every terminal page includes `result.metadata` with `model_name, context_window_max, context_window_used, input_tokens, output_tokens, cached_input_tokens, duration_ms, failure_kind, retryable, next_target` (null when unreported), alongside an optional versioned `telemetry` object containing normalized `context_used_tokens`, `context_window_size`, `context_remaining_percent`, `total_input_tokens`, `total_output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `attribution`, and `completeness`. Measurements contain value, source, quality, and observed_at. `failure_kind` is `cancelled, circuit_open, replay_blocked, context_overflow, request_fatal, target_fatal, retryable`.
 
 On failure, pass a token `next_target` unchanged to `job_submit(next_target=...)`; on `invalid_request`, resubmit without it. On `context_overflow`, summarize state and resubmit with `fresh_session=true`. Otherwise, report the failure.
 

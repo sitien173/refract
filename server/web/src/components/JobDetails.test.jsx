@@ -405,4 +405,197 @@ describe('JobDetails component', () => {
     expect(screen.getByText('Transcript is not available for this job.')).toBeInTheDocument()
     expect(document.querySelector('.transcript-user-card')).not.toBeInTheDocument()
   })
+
+  describe('Normalized Telemetry rendering (Phase 4 Task 1)', () => {
+    const fullTelemetryJob = {
+      ...mockJob,
+      result: {
+        output: 'Done.',
+        metadata: {
+          telemetry: {
+            version: 1,
+            completeness: 'complete',
+            context_remaining_percent: {
+              value: 65.5,
+              quality: 'derived',
+              source: 'derived',
+              observed_at: '2026-10-26T17:00:00Z',
+            },
+            context_window_size: {
+              value: 128000,
+              quality: 'reported',
+              source: 'session',
+              observed_at: '2026-10-26T17:00:00Z',
+            },
+            context_used_tokens: {
+              value: 44160,
+              quality: 'derived',
+              source: 'response',
+              observed_at: '2026-10-26T17:00:00Z',
+            },
+            total_input_tokens: {
+              value: 12500,
+              quality: 'reported',
+              source: 'provider',
+              observed_at: '2026-10-26T17:00:00Z',
+            },
+            total_output_tokens: {
+              value: 850,
+              quality: 'reported',
+              source: 'provider',
+              observed_at: '2026-10-26T17:00:00Z',
+            },
+            cache_read_tokens: {
+              value: 3000,
+              quality: 'reported',
+              source: 'provider',
+              observed_at: '2026-10-26T17:00:00Z',
+            },
+            cache_write_tokens: {
+              value: 1200,
+              quality: 'reported',
+              source: 'provider',
+              observed_at: '2026-10-26T17:00:00Z',
+            },
+          },
+        },
+      },
+    }
+
+    it('renders normalized telemetry panel with separated context and consumption, all five primary measurements, quality, source, and observation time', () => {
+      render(<JobDetails job={fullTelemetryJob} />)
+
+      expect(screen.getByRole('heading', { name: 'Telemetry' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Context' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Consumption' })).toBeInTheDocument()
+
+      // Primary measurements
+      expect(screen.getByText('Context used')).toBeInTheDocument()
+      expect(screen.getByText('44160')).toBeInTheDocument()
+
+      expect(screen.getByText('Context capacity')).toBeInTheDocument()
+      expect(screen.getByText('128000')).toBeInTheDocument()
+
+      expect(screen.getByText('Context remaining')).toBeInTheDocument()
+      expect(screen.getByText('65.5%')).toBeInTheDocument()
+
+      expect(screen.getByText('Job input tokens')).toBeInTheDocument()
+      expect(screen.getByText('12500')).toBeInTheDocument()
+
+      expect(screen.getByText('Job output tokens')).toBeInTheDocument()
+      expect(screen.getByText('850')).toBeInTheDocument()
+
+      // Cache components
+      expect(screen.getByText('Cache read tokens')).toBeInTheDocument()
+      expect(screen.getByText('3000')).toBeInTheDocument()
+      expect(screen.getByText('Cache write tokens')).toBeInTheDocument()
+      expect(screen.getByText('1200')).toBeInTheDocument()
+
+      // Completeness, quality, source, observed_at
+      expect(screen.getByText('complete')).toBeInTheDocument()
+      expect(screen.getAllByText('derived').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('reported').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('response').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('session').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('2026-10-26T17:00:00Z').length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('distinguishes reported zero from unavailable null values', () => {
+      const zeroJob = {
+        ...mockJob,
+        result: {
+          output: 'Zero output',
+          metadata: {
+            telemetry: {
+              version: 1,
+              completeness: 'complete',
+              context_used_tokens: { value: 0, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              context_remaining_percent: { value: 100.0, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+              total_input_tokens: { value: 0, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_output_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+            },
+          },
+        },
+      }
+      render(<JobDetails job={zeroJob} />)
+
+      // 0 is displayed for context used and input tokens
+      expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(2)
+      // Total output tokens is unavailable
+      expect(screen.getAllByText('Unavailable').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('unavailable').length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('distinguishes estimated quality and partial completeness', () => {
+      const partialJob = {
+        ...mockJob,
+        result: {
+          output: 'Partial output',
+          metadata: {
+            telemetry: {
+              version: 1,
+              completeness: 'partial',
+              context_used_tokens: { value: 5000, quality: 'estimated', source: 'stream', observed_at: '2026-10-26T17:00:00Z' },
+              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              context_remaining_percent: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              total_input_tokens: { value: 5000, quality: 'estimated', source: 'stream', observed_at: '2026-10-26T17:00:00Z' },
+              total_output_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+            },
+          },
+        },
+      }
+      render(<JobDetails job={partialJob} />)
+
+      expect(screen.getByText('partial')).toBeInTheDocument()
+      expect(screen.getAllByText('estimated').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('stream').length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('marks remaining percentage unavailable when capacity is null even if percentage value is supplied', () => {
+      const missingCapacityJob = {
+        ...mockJob,
+        result: {
+          output: 'No capacity',
+          metadata: {
+            telemetry: {
+              version: 1,
+              completeness: 'complete',
+              context_used_tokens: { value: 2000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              context_remaining_percent: { value: 75.0, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+              total_input_tokens: { value: 2000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_output_tokens: { value: 100, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            },
+          },
+        },
+      }
+      render(<JobDetails job={missingCapacityJob} />)
+
+      expect(screen.getByText('Context remaining')).toBeInTheDocument()
+      // Should NOT render 75.0% or 75% because capacity is unknown
+      expect(screen.queryByText('75%')).not.toBeInTheDocument()
+      expect(screen.queryByText('75.0%')).not.toBeInTheDocument()
+    })
+
+    it('does not fabricate measurements for historical jobs without telemetry, and ignores legacy counters for context used', () => {
+      const historicalJob = {
+        ...mockJob,
+        result: {
+          output: 'Historical output',
+          metadata: {
+            // Legacy metadata counters that must NOT be shown as normalized context used
+            context_window_used: 99999,
+            input_tokens: 88888,
+          },
+        },
+      }
+      render(<JobDetails job={historicalJob} />)
+
+      expect(screen.getByText('Telemetry unavailable')).toBeInTheDocument()
+      expect(screen.queryByText('99999')).not.toBeInTheDocument()
+      expect(screen.queryByText('88888')).not.toBeInTheDocument()
+      expect(screen.queryByText('Context used')).not.toBeInTheDocument()
+    })
+  })
 })

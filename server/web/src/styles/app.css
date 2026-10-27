@@ -564,7 +564,18 @@ a:hover { text-decoration: underline; }
 
 /* Job Detail */
 .job-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg); }
-.job-meta-panel, .job-revision-panel, .job-plan-panel, .job-result-panel { padding: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-md); }
+.job-meta-panel, .job-revision-panel, .job-plan-panel, .job-result-panel, .job-telemetry-panel { padding: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-md); }
+.job-telemetry-content { display: flex; flex-direction: column; gap: var(--space-md); }
+.telemetry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg); }
+.telemetry-section { display: flex; flex-direction: column; gap: var(--space-sm); }
+.telemetry-subheading { font-size: var(--type-text-sm-size); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); margin: 0 0 var(--space-xs) 0; }
+.telemetry-row { align-items: flex-start; }
+.telemetry-label-col { display: flex; align-items: center; }
+.telemetry-value-col { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2xs); }
+.telemetry-value { font-weight: 600; font-family: var(--font-mono, monospace); font-size: var(--type-text-sm-size); }
+.telemetry-details { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; justify-content: flex-end; }
+.telemetry-quality, .telemetry-source, .telemetry-completeness { font-size: 0.75rem; }
+.telemetry-unavailable { display: flex; flex-direction: column; gap: var(--space-xs); }
 .job-meta-rows { display: flex; flex-direction: column; gap: var(--space-xs); }
 .meta-row { display: flex; justify-content: space-between; align-items: center; padding: var(--space-xs) 0; border-bottom: 1px solid var(--color-surface-muted); font-size: var(--type-text-sm-size); }
 .job-revision-content, .job-plan-content, .job-result-content { display: flex; flex-direction: column; gap: var(--space-sm); }

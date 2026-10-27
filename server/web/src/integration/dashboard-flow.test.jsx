@@ -825,4 +825,145 @@ describe('Dashboard integrated user flows', () => {
     expect(screen.getByText('git_checkout')).toBeInTheDocument()
     expect(screen.getByText('code_search')).toBeInTheDocument()
   })
+
+  it('displays normalized telemetry and refreshes until terminal on legacy route /dashboard/jobs/:jobId', async () => {
+    const legacyRunningJob = {
+      id: 'job-legacy-telemetry',
+      project_id: 'proj-alpha',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'running',
+      target_id: 'worker-1',
+      config_revision: 'rev-overall-001',
+      attempts: 1,
+      created_at: '2026-09-04 15:00:00',
+      updated_at: '2026-09-04 15:01:00',
+      execution_plan: {
+        profile: 'balanced',
+        workflow: 'implement',
+        selection: { targets: ['worker-1'], max_attempts: 1, timeout_s: 60 },
+        targets: [{ id: 'worker-1', backend: 'pi', model: 'gpt-5.6', isolated: true, read_only: false, max_concurrency: 2 }],
+      },
+      result: {
+        output: '',
+        metadata: {
+          telemetry: {
+            version: 1,
+            completeness: 'partial',
+            context_used_tokens: { value: 1600, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:00Z' },
+            context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            context_remaining_percent: { value: 98.4, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+            total_input_tokens: { value: 400, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            total_output_tokens: { value: 90, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+          },
+        },
+      },
+    }
+
+    const legacyTerminalJob = {
+      ...legacyRunningJob,
+      state: 'succeeded',
+      result: {
+        output: 'Finished successfully.',
+        metadata: {
+          telemetry: {
+            version: 1,
+            completeness: 'complete',
+            context_used_tokens: { value: 1600, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:05Z' },
+            context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
+            context_remaining_percent: { value: 98.4, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:05Z' },
+            total_input_tokens: { value: 900, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
+            total_output_tokens: { value: 210, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
+          },
+        },
+      },
+    }
+
+    vi.mocked(api.getJob)
+      .mockResolvedValueOnce(legacyRunningJob)
+      .mockResolvedValueOnce(legacyRunningJob)
+      .mockResolvedValueOnce(legacyTerminalJob)
+
+    window.history.pushState({}, '', '/dashboard/jobs/job-legacy-telemetry')
+    render(<App />)
+
+    expect(await screen.findByText('Job job-legacy-telemetry')).toBeInTheDocument()
+    expect(screen.getByText('1600')).toBeInTheDocument()
+    expect(screen.getByText('400')).toBeInTheDocument()
+    expect(screen.getByText(/Live polling active/i)).toBeInTheDocument()
+
+    // Trigger refresh
+    const refreshBtn = screen.getByRole('button', { name: /Refresh job details/i })
+    fireEvent.click(refreshBtn)
+
+    expect(await screen.findByText('900')).toBeInTheDocument()
+    expect(screen.getByText('210')).toBeInTheDocument()
+    expect(screen.getByText('complete')).toBeInTheDocument()
+  })
+
+  it('retains telemetry display when transcript window is truncated', async () => {
+    const truncatedTelemetryJob = {
+      id: 'job-trunc-telemetry',
+      project_id: 'proj-alpha',
+      workflow: 'implement',
+      profile: 'balanced',
+      state: 'running',
+      target_id: 'worker-1',
+      config_revision: 'rev-overall-001',
+      attempts: 1,
+      created_at: '2026-09-04 15:00:00',
+      updated_at: '2026-09-04 15:01:00',
+      execution_plan: {
+        profile: 'balanced',
+        workflow: 'implement',
+        selection: { targets: ['worker-1'], max_attempts: 1, timeout_s: 60 },
+        targets: [{ id: 'worker-1', backend: 'pi', model: 'gpt-5.6', isolated: true, read_only: false, max_concurrency: 2 }],
+      },
+      result: {
+        output: '',
+        metadata: {
+          telemetry: {
+            version: 1,
+            completeness: 'complete',
+            context_used_tokens: { value: 3333, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            context_window_size: { value: 64000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            context_remaining_percent: { value: 94.7, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+            total_input_tokens: { value: 777, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            total_output_tokens: { value: 88, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+          },
+        },
+      },
+    }
+
+    vi.mocked(api.getJob).mockResolvedValue(truncatedTelemetryJob)
+    vi.mocked(api.getJobOutput).mockResolvedValue({
+      events: [
+        {
+          id: 50,
+          attempt: 1,
+          type: 'assistant_message',
+          data: { role: 'assistant', text: 'Recent event only' },
+          timestamp: '2026-09-04 15:00:30',
+        },
+      ],
+      cursor: 50,
+      has_more: false,
+      retained_from: 20,
+      stream_status: 'truncated',
+    })
+
+    window.history.pushState({}, '', '/dashboard/projects/proj-alpha/jobs/job-trunc-telemetry')
+    const { container } = render(<App />)
+
+    expect(await screen.findByText('Job job-trunc-telemetry')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(container.querySelector('.transcript-status-badge')?.textContent).toBe('Transcript truncated')
+    })
+    // Telemetry panel and all measurements remain rendered and intact
+    expect(screen.getByText('3333')).toBeInTheDocument()
+    expect(screen.getByText('64000')).toBeInTheDocument()
+    expect(screen.getByText('94.7%')).toBeInTheDocument()
+    expect(screen.getByText('777')).toBeInTheDocument()
+    expect(screen.getByText('88')).toBeInTheDocument()
+  })
 })

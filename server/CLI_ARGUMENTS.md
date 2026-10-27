@@ -385,6 +385,13 @@ Capabilities are categorized by evidence level: package/CLI documentation eviden
   - Synthetic fixture-only: optional explicit capacity metadata is accepted in fixtures. This does not establish that the installed CLI emits it, nor does it prove that a fixture-derived occupied count is an authoritative live context snapshot.
   - Runtime unverified: headless capacity and occupied-context semantics have not been verified; unsupported capacity remains null.
 
+### Semantics, cache accounting, and observation timing
+
+- **Normalized vs legacy semantics:** Normalized telemetry under `result.metadata.telemetry` separates active context occupancy from cumulative job consumption. Legacy fields in `result.metadata` (`input_tokens`, `output_tokens`, `cached_input_tokens`, `context_window_used`) retain backend-specific raw values.
+- **Cache accounting:** Normalized `cache_read_tokens` and `cache_write_tokens` isolate cache contributions. For Codex, cumulative turn usage is normalized across attempts; for Claude Code, response and result usage maps cached read/write tokens.
+- **Observation and presentation timing:** Telemetry observations are reconciled on the server during job execution and persisted to `jobs.result_metadata_json`. Dashboards poll active jobs at standard intervals. Final values are persisted on job completion.
+- **Partial totals:** If any execution invocation has unobserved consumption, aggregate job consumption completeness is marked `partial`. Unreported measurements remain `null` with `quality: "unavailable"`.
+
 ### Opt-in live telemetry probes
 
 Live telemetry probes are located in `server/tests/test_live_backends.py`:

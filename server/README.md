@@ -390,6 +390,17 @@ The dashboard renders live transcripts for running jobs.
 - **Historical fallback:** Older jobs without stream events show final results.
 - **Subagent streaming:** Subagent text streaming remains deferred.
 
+### Worker Telemetry and Context Measurement
+
+The dashboard and MCP result metadata expose normalized live context and job consumption telemetry.
+
+- **Normalized vs legacy semantics:** Normalized telemetry distinguishes current occupied context (`context_used_tokens`, `context_window_size`, `context_remaining_percent`) from cumulative job consumption (`total_input_tokens`, `total_output_tokens`, `cache_read_tokens`, `cache_write_tokens`). Legacy `result.metadata` counters (e.g. `context_window_used`, `input_tokens`) retain backend-native meanings and are not modified.
+- **Cache accounting:** `total_input_tokens` reflects aggregate input tokens. Where supported by backends, cache reads (`cache_read_tokens`) and cache writes (`cache_write_tokens`) are tracked separately and preserved.
+- **Observation and presentation timing:** In running jobs, telemetry refreshes via existing selected-job polling (`/dashboard/api/jobs/{id}`) bounded by the poll interval. Execution consumes observations before transcript recording; presentation does not rely on SSE or transcript cursors.
+- **Partial totals:** When intermediate invocations or attempts have missing observations, consumption is labeled `partial` rather than fabricated or zeroed. Complete measurements require all attempts and invocations to be observed.
+- **Capability limits and unavailable metrics:** Unsupported backend capabilities remain explicitly `null` and render as `Unavailable` with quality `unavailable`. Historical jobs without telemetry omit the panel cleanly without fabricating metrics.
+- **Opt-in probe limitations:** Live model telemetry probes are strictly opt-in (`REFRACT_LIVE_TELEMETRY_OPT_IN=1`) and require execution authorization; missing prerequisites fail rather than report false passes.
+
 ## Development and Testing
 
 ```bash

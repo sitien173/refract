@@ -2595,3 +2595,187 @@ async def test_dashboard_job_reads_expose_telemetry(active_runtime) -> None:
     assert active_jobs[0]["result"]["metadata"]["telemetry"]["total_input_tokens"]["value"] == 500
 
 
+@pytest.mark.asyncio
+async def test_dashboard_running_to_terminal_telemetry_progression(active_runtime) -> None:
+    app = create_application()
+    project = active_runtime.database.project("project")
+    job_id = "job-tel-progression"
+    active_runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="implement",
+        profile="balanced",
+        prompt="progression test",
+        execution_plan_json="{}",
+        context_key="k",
+    )
+    with active_runtime.database._connection:
+        active_runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id=?", (job_id,))
+
+    # Live running telemetry
+    live_telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "context_used_tokens": {"value": 1800, "source": "response", "quality": "derived"},
+        "context_window_size": {"value": 128000, "source": "session", "quality": "reported"},
+        "context_remaining_percent": {"value": 98.59, "source": "derived", "quality": "derived"},
+        "total_input_tokens": {"value": 450, "source": "provider", "quality": "reported"},
+        "total_output_tokens": {"value": 80, "source": "provider", "quality": "reported"},
+    }
+    active_runtime.database.merge_job_telemetry(job_id, live_telemetry)
+
+    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
+    assert status == 200
+    running_data = json.loads(body.decode())
+    assert running_data["state"] == "running"
+    tel_running = running_data["result"]["metadata"]["telemetry"]
+    assert tel_running["completeness"] == "complete"
+    assert tel_running["context_used_tokens"]["value"] == 1800
+    assert tel_running["total_input_tokens"]["value"] == 450
+
+    # Final terminal transition
+    final_telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "context_used_tokens": {"value": 1800, "source": "response", "quality": "derived"},
+        "context_window_size": {"value": 128000, "source": "session", "quality": "reported"},
+        "context_remaining_percent": {"value": 98.59, "source": "derived", "quality": "derived"},
+        "total_input_tokens": {"value": 1200, "source": "provider", "quality": "reported"},
+        "total_output_tokens": {"value": 310, "source": "provider", "quality": "reported"},
+    }
+    active_runtime.database.finish_job(
+        job_id,
+        "succeeded",
+        text="Final result completed",
+        metadata={"telemetry": final_telemetry},
+    )
+
+    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
+    assert status == 200
+    terminal_data = json.loads(body.decode())
+    assert terminal_data["state"] == "succeeded"
+    tel_terminal = terminal_data["result"]["metadata"]["telemetry"]
+    assert tel_terminal["completeness"] == "complete"
+    assert tel_terminal["total_input_tokens"]["value"] == 1200
+    assert tel_terminal["total_output_tokens"]["value"] == 310
+
+
+@pytest.mark.asyncio
+async def test_dashboard_telemetry_persists_across_runtime_reload(tmp_path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    config_path.write_text(
+        """
+[daemon]
+default_profile = "balanced"
+max_jobs = 2
+
+[[targets]]
+id = "primary"
+backend = "codex"
+profile = "legacy-profile"
+model = "gpt-4"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+other = "primary"
+""",
+        encoding="utf-8",
+    )
+    cfg = load_config(config_path)
+
+    # 1. First runtime session
+    runtime1 = Runtime(cfg)
+    try:
+        runtime1.database.upsert_project(project_id="p-reload", alias="p-reload", root=str(tmp_path))
+        job_id = "job-reload-telemetry"
+        runtime1.database.create_job(
+            job_id=job_id,
+            project_id="p-reload",
+            workflow="implement",
+            profile="balanced",
+            prompt="reload prompt",
+            execution_plan_json="{}",
+            context_key="k",
+        )
+        telemetry = {
+            "version": 1,
+            "completeness": "complete",
+            "context_used_tokens": {"value": 3400, "source": "response", "quality": "derived"},
+            "context_window_size": {"value": 200000, "source": "session", "quality": "reported"},
+            "context_remaining_percent": {"value": 98.3, "source": "derived", "quality": "derived"},
+            "total_input_tokens": {"value": 7500, "source": "provider", "quality": "reported"},
+            "total_output_tokens": {"value": 1100, "source": "provider", "quality": "reported"},
+            "cache_read_tokens": {"value": 2000, "source": "provider", "quality": "reported"},
+            "cache_write_tokens": {"value": 500, "source": "provider", "quality": "reported"},
+        }
+        runtime1.database.finish_job(job_id, "succeeded", metadata={"telemetry": telemetry})
+    finally:
+        runtime1.database.close()
+
+    # 2. Reloaded runtime session from same database
+    runtime2 = Runtime(cfg)
+    from refract import server
+    from refract.dashboard import DashboardState
+    monkeypatch.setattr(
+        server, "DashboardState",
+        lambda: DashboardState(runtime=runtime2, csrf_token="test-token"),
+    )
+    try:
+        app = create_application()
+        status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
+        assert status == 200
+        reloaded = json.loads(body.decode())
+        assert "telemetry" in reloaded["result"]["metadata"]
+        tel = reloaded["result"]["metadata"]["telemetry"]
+        assert tel["context_used_tokens"]["value"] == 3400
+        assert tel["context_window_size"]["value"] == 200000
+        assert tel["total_input_tokens"]["value"] == 7500
+        assert tel["cache_read_tokens"]["value"] == 2000
+        assert tel["cache_write_tokens"]["value"] == 500
+    finally:
+        runtime2.database.close()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_historical_jobs_without_telemetry_return_cleanly(active_runtime) -> None:
+    app = create_application()
+    project = active_runtime.database.project("project")
+    job_id = "job-historical-clean"
+    active_runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="historical prompt",
+        execution_plan_json="{}",
+        context_key="k",
+    )
+    # Historical job with legacy metadata only (no telemetry)
+    legacy_metadata = {
+        "context_window_used": 15000,
+        "input_tokens": 12000,
+        "output_tokens": 500,
+    }
+    active_runtime.database.finish_job(
+        job_id,
+        "succeeded",
+        text="Historical result text",
+        metadata=legacy_metadata,
+    )
+
+    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
+    assert status == 200
+    job_data = json.loads(body.decode())
+    meta = job_data["result"]["metadata"]
+    # Telemetry key must NOT be fabricated
+    assert "telemetry" not in meta
+    # Legacy counters remain untouched
+    assert meta["context_window_used"] == 15000
+    assert meta["input_tokens"] == 12000
+
+
+

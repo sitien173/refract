@@ -1110,4 +1110,299 @@ describe('ProjectDetail screen', () => {
     // Stale details should not overwrite current screen state
     expect(screen.queryByText('Job job-poll-1')).not.toBeInTheDocument()
   })
+
+  describe('Selected-job telemetry polling on canonical route (Phase 4 Task 2)', () => {
+    it('polls active selected job and updates telemetry until reaching terminal state', async () => {
+      vi.useFakeTimers()
+      try {
+        vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+        vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
+        vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
+
+        const runningJobInitial = {
+          id: 'job-tel-poll',
+          project_id: 'proj-demo',
+          workflow: 'implement',
+          profile: 'balanced',
+          state: 'running',
+          target_id: 'worker-1',
+          result: {
+            output: '',
+            metadata: {
+              telemetry: {
+                version: 1,
+                completeness: 'partial',
+                context_used_tokens: { value: 1000, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:00Z' },
+                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:00Z' },
+                context_remaining_percent: { value: 99.2, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+                total_input_tokens: { value: 150, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+                total_output_tokens: { value: 50, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              },
+            },
+          },
+        }
+
+        const runningJobRefreshed = {
+          ...runningJobInitial,
+          result: {
+            output: 'Partial stream output',
+            metadata: {
+              telemetry: {
+                version: 1,
+                completeness: 'partial',
+                context_used_tokens: { value: 2500, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:05Z' },
+                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:00Z' },
+                context_remaining_percent: { value: 98.0, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:05Z' },
+                total_input_tokens: { value: 500, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
+                total_output_tokens: { value: 120, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
+              },
+            },
+          },
+        }
+
+        const terminalJobFinal = {
+          ...runningJobInitial,
+          state: 'succeeded',
+          result: {
+            output: 'Final completed execution.',
+            metadata: {
+              telemetry: {
+                version: 1,
+                completeness: 'complete',
+                context_used_tokens: { value: 2500, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:10Z' },
+                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:00Z' },
+                context_remaining_percent: { value: 98.0, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:10Z' },
+                total_input_tokens: { value: 800, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:10Z' },
+                total_output_tokens: { value: 250, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:10Z' },
+              },
+            },
+          },
+        }
+
+        vi.mocked(api.getJob)
+          .mockResolvedValueOnce(runningJobInitial)
+          .mockResolvedValueOnce(runningJobRefreshed)
+          .mockResolvedValueOnce(terminalJobFinal)
+
+        render(<ProjectDetail projectId="proj-demo" jobId="job-tel-poll" />)
+
+        await act(async () => {
+          await Promise.resolve()
+        })
+
+        // Initial loading
+        expect(screen.getByText('Job job-tel-poll')).toBeInTheDocument()
+        expect(screen.getByText('1000')).toBeInTheDocument()
+        expect(screen.getByText('150')).toBeInTheDocument()
+        expect(screen.getByText(/Live polling active/i)).toBeInTheDocument()
+
+        // First background poll triggers at 5000ms
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000)
+        })
+
+        expect(screen.getByText('2500')).toBeInTheDocument()
+        expect(screen.getByText('500')).toBeInTheDocument()
+        expect(screen.getByText(/Live polling active/i)).toBeInTheDocument()
+
+        // Second background poll triggers and transitions to terminal
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000)
+        })
+
+        expect(screen.getByText('800')).toBeInTheDocument()
+        expect(screen.getByText('250')).toBeInTheDocument()
+        expect(screen.getByText('complete')).toBeInTheDocument()
+        expect(screen.queryByText(/Live polling active/i)).not.toBeInTheDocument()
+
+        // Polling has ceased because job reached terminal state
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10000)
+        })
+        expect(api.getJob).toHaveBeenCalledTimes(3)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('preserves displayed telemetry during background refresh failure and recovers on subsequent poll', async () => {
+      vi.useFakeTimers()
+      try {
+        vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+      vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
+      vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
+
+      const activeJob = {
+        id: 'job-tel-fail-recover',
+        project_id: 'proj-demo',
+        workflow: 'implement',
+        profile: 'balanced',
+        state: 'running',
+        target_id: 'worker-1',
+        result: {
+          output: '',
+          metadata: {
+            telemetry: {
+              version: 1,
+              completeness: 'partial',
+              context_used_tokens: { value: 1200, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:00Z' },
+              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              context_remaining_percent: { value: 98.8, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+              total_input_tokens: { value: 300, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_output_tokens: { value: 40, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            },
+          },
+        },
+      }
+
+      const recoveredJob = {
+        ...activeJob,
+        result: {
+          output: '',
+          metadata: {
+            telemetry: {
+              version: 1,
+              completeness: 'partial',
+              context_used_tokens: { value: 1800, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:10Z' },
+              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              context_remaining_percent: { value: 98.2, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:10Z' },
+              total_input_tokens: { value: 600, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:10Z' },
+              total_output_tokens: { value: 80, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:10Z' },
+            },
+          },
+        },
+      }
+
+      vi.mocked(api.getJob)
+        .mockResolvedValueOnce(activeJob)
+        .mockRejectedValueOnce(new Error('Network gateway timeout'))
+        .mockResolvedValueOnce(recoveredJob)
+
+      render(<ProjectDetail projectId="proj-demo" jobId="job-tel-fail-recover" />)
+
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(screen.getByText('Job job-tel-fail-recover')).toBeInTheDocument()
+      expect(screen.getByText('300')).toBeInTheDocument()
+
+      // Poll 1 fails
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      // Error alert displayed, but prior telemetry values remain displayed
+      expect(screen.getByText(/Showing previously loaded job details/i)).toBeInTheDocument()
+      expect(screen.getByText('300')).toBeInTheDocument()
+      expect(screen.getByText('1200')).toBeInTheDocument()
+
+      // Poll 2 succeeds (recovery)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      // Error alert cleared, new telemetry displayed
+      expect(screen.queryByText(/Showing previously loaded job details/i)).not.toBeInTheDocument()
+      expect(screen.getByText('600')).toBeInTheDocument()
+      expect(screen.getByText('1800')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+    it('discards late poll response when switching between selected jobs', async () => {
+      vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+      vi.mocked(api.getProjectJobs).mockResolvedValue({ active: [], recent: [], more_recent: 0 })
+      vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
+
+      const jobA = {
+        id: 'job-A',
+        project_id: 'proj-demo',
+        workflow: 'implement',
+        profile: 'balanced',
+        state: 'running',
+        target_id: 'worker-1',
+        result: {
+          output: '',
+          metadata: {
+            telemetry: {
+              version: 1,
+              completeness: 'partial',
+              context_used_tokens: { value: 111, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_input_tokens: { value: 112, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            },
+          },
+        },
+      }
+
+      const jobB = {
+        id: 'job-B',
+        project_id: 'proj-demo',
+        workflow: 'implement',
+        profile: 'balanced',
+        state: 'running',
+        target_id: 'worker-1',
+        result: {
+          output: '',
+          metadata: {
+            telemetry: {
+              version: 1,
+              completeness: 'partial',
+              context_used_tokens: { value: 222, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_input_tokens: { value: 223, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            },
+          },
+        },
+      }
+
+      let resolveJobAPoll
+      const slowJobAPollPromise = new Promise((resolve) => {
+        resolveJobAPoll = resolve
+      })
+
+      vi.mocked(api.getJob)
+        .mockResolvedValueOnce(jobA) // initial jobA
+        .mockReturnValueOnce(slowJobAPollPromise) // in-flight poll for jobA
+        .mockResolvedValueOnce(jobB) // initial jobB
+
+      const { rerender } = render(<ProjectDetail projectId="proj-demo" jobId="job-A" />)
+
+      expect(await screen.findByText('Job job-A')).toBeInTheDocument()
+      expect(screen.getByText('111')).toBeInTheDocument()
+
+      // User refreshes Job A to start in-flight poll
+      const refreshBtn = screen.getByRole('button', { name: /Refresh job details/i })
+      fireEvent.click(refreshBtn)
+
+      // User switches to Job B before Job A's poll resolves
+      rerender(<ProjectDetail projectId="proj-demo" jobId="job-B" />)
+
+      expect(await screen.findByText('Job job-B')).toBeInTheDocument()
+      expect(screen.getByText('222')).toBeInTheDocument()
+
+      // Late poll response for Job A resolves with new telemetry
+      resolveJobAPoll({
+        ...jobA,
+        result: {
+          output: '',
+          metadata: {
+            telemetry: {
+              version: 1,
+              completeness: 'partial',
+              context_used_tokens: { value: 9999, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_input_tokens: { value: 9999, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+            },
+          },
+        },
+      })
+
+      await Promise.resolve()
+
+      // Job B remains displayed and 9999 is never applied
+      expect(screen.getByText('Job job-B')).toBeInTheDocument()
+      expect(screen.queryByText('9999')).not.toBeInTheDocument()
+      expect(screen.getByText('222')).toBeInTheDocument()
+    })
+  })
 })

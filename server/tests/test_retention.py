@@ -76,3 +76,59 @@ async def test_periodic_retention_retries_and_stops_on_close(tmp_path, monkeypat
         await runtime.close()
     assert task.done()
     assert runtime._retention_task is None
+
+
+def test_transcript_pruning_preserves_job_telemetry(tmp_path):
+    """Transcript pruning prunes old events but strictly preserves metadata and telemetry."""
+    runtime = Runtime(DaemonConfig(home=tmp_path))
+    db = runtime.database
+    try:
+        db.upsert_project(project_id="proj", alias="proj", root="/proj")
+        job_id = "old-pruned-telemetry-job"
+        db.create_job(
+            job_id=job_id,
+            project_id="proj",
+            workflow="implement",
+            profile="balanced",
+            prompt="do work",
+            execution_plan_json="{}",
+            context_key="k",
+        )
+        telemetry = {
+            "version": 1,
+            "completeness": "complete",
+            "context_used_tokens": {"value": 2400, "source": "provider", "quality": "reported"},
+            "context_window_size": {"value": 128000, "source": "provider", "quality": "reported"},
+            "context_remaining_percent": {"value": 98.125, "source": "derived", "quality": "derived"},
+            "total_input_tokens": {"value": 5000, "source": "provider", "quality": "reported"},
+            "total_output_tokens": {"value": 600, "source": "provider", "quality": "reported"},
+        }
+        db.merge_job_telemetry(job_id, telemetry)
+        db.append_stream_events(job_id, [{"attempt": 1, "kind": "assistant_message", "data": {"text": "hello"}}])
+        db.finish_job(job_id, "succeeded", metadata={"telemetry": telemetry})
+
+        # Age the job beyond the recent threshold
+        with db._connection:
+            db._connection.execute("UPDATE jobs SET updated_at='2000-01-01' WHERE id=?", (job_id,))
+
+        # Verify events are present before pruning
+        assert len(db.stream_events(job_id)) > 0
+
+        # Run pruning
+        pruned_count = runtime.prune_retained_transcripts()
+        assert pruned_count > 0
+
+        # Transcript events are pruned
+        assert db.stream_events(job_id) == []
+
+        # Job record and its telemetry remain completely intact
+        job_view = db.job(job_id)
+        assert job_view is not None
+        assert "telemetry" in job_view.result.metadata
+        saved_telemetry = job_view.result.metadata["telemetry"]
+        assert saved_telemetry["context_used_tokens"]["value"] == 2400
+        assert saved_telemetry["total_input_tokens"]["value"] == 5000
+        assert saved_telemetry["completeness"] == "complete"
+    finally:
+        db.close()
+
