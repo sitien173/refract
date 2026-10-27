@@ -28,6 +28,7 @@ export default function TargetEditor({
     read_only: false,
     max_concurrency: 1,
     args: [],
+    retryPolicy: '',
   }
 
   const [formData, setFormData] = useState(initialForm)
@@ -70,6 +71,7 @@ export default function TargetEditor({
         read_only: Boolean(target.read_only),
         max_concurrency: target.max_concurrency || 1,
         args: Array.isArray(target.args) ? [...target.args] : [],
+        retryPolicy: target.retryPolicy || target.retry_policy || '',
       })
     } else if (mode === 'create') {
       setFormData(initialForm)
@@ -141,6 +143,7 @@ export default function TargetEditor({
       read_only: formData.read_only,
       max_concurrency: Number(formData.max_concurrency) || 1,
       args: formData.args,
+      retryPolicy: formData.retryPolicy.trim(),
     }
 
     return submit({
@@ -169,6 +172,7 @@ export default function TargetEditor({
         read_only: Boolean(item.read_only),
         max_concurrency: item.max_concurrency || 1,
         args: Array.isArray(item.args) ? [...item.args] : [],
+        retryPolicy: item.retryPolicy || item.retry_policy || '',
       }),
       mode,
       entity: 'Target',
@@ -322,6 +326,21 @@ export default function TargetEditor({
               onChange={(e) => handleFieldChange('max_concurrency', e.target.value)}
               disabled={isSubmitting}
               required
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="target-retry-policy" className="form-label">
+              Retry policy
+            </label>
+            <input
+              id="target-retry-policy"
+              type="text"
+              className="search-input"
+              value={formData.retryPolicy}
+              onChange={(e) => handleFieldChange('retryPolicy', e.target.value)}
+              disabled={isSubmitting}
+              placeholder="e.g. transient, network-flake"
             />
           </div>
         </div>

@@ -342,6 +342,7 @@ describe('Targets screen', () => {
           read_only: false,
           max_concurrency: 3,
           args: ['--second', '--first'],
+          retryPolicy: '',
         },
         'rev-001'
       )
@@ -723,5 +724,182 @@ describe('Targets screen', () => {
     // Submit remains blocked
     fireEvent.submit(form)
     expect(api.updateConfigurationTarget).toHaveBeenCalledTimes(1)
+  })
+
+  it('loads, edits, and submits retryPolicy in target editor', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValue({
+      revision: 'rev-001',
+      target: {
+        ...mockTargets[0],
+        retryPolicy: 'transient',
+      },
+    })
+    vi.mocked(api.updateConfigurationTarget).mockResolvedValue({
+      revision: 'rev-002',
+      target: { ...mockTargets[0], retryPolicy: 'network-flake' },
+    })
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    const healthyRow = screen.getByText('target-healthy').closest('tr')
+    fireEvent.click(healthyRow)
+
+    const editBtn = await screen.findByRole('button', { name: /Edit target/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit target: target-healthy/i })
+    expect(dialog).toBeInTheDocument()
+
+    const retryPolicyInput = within(dialog).getByLabelText(/Retry policy/i)
+    await vi.waitFor(() => {
+      expect(retryPolicyInput).toHaveValue('transient')
+    })
+
+    fireEvent.change(retryPolicyInput, { target: { value: 'network-flake' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /Save target/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
+    fireEvent.click(saveBtn)
+
+    await vi.waitFor(() => {
+      expect(api.updateConfigurationTarget).toHaveBeenCalledWith(
+        'target-healthy',
+        expect.objectContaining({
+          retryPolicy: 'network-flake',
+        }),
+        'rev-001'
+      )
+    })
+  })
+
+  it('clearing retryPolicy submits empty string to disable automatic retries', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValue({
+      revision: 'rev-001',
+      target: {
+        ...mockTargets[0],
+        retryPolicy: 'transient',
+      },
+    })
+    vi.mocked(api.updateConfigurationTarget).mockResolvedValue({
+      revision: 'rev-002',
+      target: { ...mockTargets[0], retryPolicy: '' },
+    })
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    const healthyRow = screen.getByText('target-healthy').closest('tr')
+    fireEvent.click(healthyRow)
+
+    const editBtn = await screen.findByRole('button', { name: /Edit target/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit target: target-healthy/i })
+    const retryPolicyInput = within(dialog).getByLabelText(/Retry policy/i)
+    await vi.waitFor(() => {
+      expect(retryPolicyInput).toHaveValue('transient')
+    })
+
+    fireEvent.change(retryPolicyInput, { target: { value: '' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /Save target/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
+    fireEvent.click(saveBtn)
+
+    await vi.waitFor(() => {
+      expect(api.updateConfigurationTarget).toHaveBeenCalledWith(
+        'target-healthy',
+        expect.objectContaining({
+          retryPolicy: '',
+        }),
+        'rev-001'
+      )
+    })
+  })
+
+  it('preserves draft upon unknown retry policy rejection from server', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTargets).mockResolvedValue({ revision: 'rev-001', targets: [] })
+    vi.mocked(api.createConfigurationTarget).mockRejectedValueOnce(
+      new api.DashboardApiError("Target 'test-target' references unknown retry policy: 'nonexistent'", 400, {
+        code: 'configuration_invalid',
+        recovery: 'Correct the configuration file and retry.',
+      })
+    )
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create target$/i }))
+    const dialog = await screen.findByRole('dialog', { name: /Create target/i })
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
+
+    fireEvent.change(within(dialog).getByLabelText(/Identifier/i), { target: { value: 'test-target' } })
+    fireEvent.change(within(dialog).getByLabelText(/Retry policy/i), { target: { value: 'nonexistent' } })
+
+    const submitBtn = within(dialog).getByRole('button', { name: /^Create target$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
+    fireEvent.click(submitBtn)
+
+    expect(await within(dialog).findByText(/Validation error/i)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Target 'test-target' references unknown retry policy: 'nonexistent'/i)).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(/Identifier/i)).toHaveValue('test-target')
+    expect(within(dialog).getByLabelText(/Retry policy/i)).toHaveValue('nonexistent')
+  })
+
+  it('conflict reload updates retryPolicy to freshly loaded configuration', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValue({
+      revision: 'rev-targets-001',
+      target: { ...mockTargets[0], retryPolicy: 'initial-policy' },
+    })
+    vi.mocked(api.updateConfigurationTarget).mockRejectedValueOnce(
+      new api.DashboardApiError('Conflict', 409, {
+        code: 'configuration_conflict',
+        unchanged: 'Configuration changed on server.',
+        recovery: 'Reload current configuration and retry.',
+        current: 'rev-targets-002',
+      })
+    )
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('target-healthy').closest('tr'))
+    const editBtn = await screen.findByRole('button', { name: /^Edit target$/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit target: target-healthy/i })
+    const retryPolicyInput = within(dialog).getByLabelText(/Retry policy/i)
+    await vi.waitFor(() => {
+      expect(retryPolicyInput).toHaveValue('initial-policy')
+    })
+
+    fireEvent.change(retryPolicyInput, { target: { value: 'user-draft-policy' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /^Save target$/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
+    fireEvent.click(saveBtn)
+
+    expect(await within(dialog).findByText('Configuration conflict')).toBeInTheDocument()
+
+    vi.mocked(api.getConfigurationTarget).mockResolvedValueOnce({
+      revision: 'rev-targets-002',
+      target: {
+        ...mockTargets[0],
+        retryPolicy: 'server-updated-policy',
+      },
+    })
+
+    const reloadBtn = within(dialog).getByRole('button', { name: /Reload current configuration/i })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).queryByText('Configuration conflict')).not.toBeInTheDocument()
+    })
+    expect(within(dialog).getByLabelText(/Retry policy/i)).toHaveValue('server-updated-policy')
   })
 })

@@ -1788,3 +1788,277 @@ def test_project_override_crud_and_missing_file_creation(tmp_path) -> None:
         assert fallback is None
     finally:
         runtime.database.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Shared retry policy reference mutation roundtrips
+# ---------------------------------------------------------------------------
+
+
+def _retry_policy_global_text() -> str:
+    return """# operator comment
+[daemon]
+default_profile = "balanced"
+
+[retryPolicies.transient]
+retryAttempt = 2
+errorCodes = ["rate_limit"]
+errorPatterns = ["temporarily unavailable"]
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "transient"
+max_concurrency = 2
+
+[[targets]]
+id = "fallback"
+backend = "pi"
+isolated = true
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+"""
+
+
+def _retry_policy_global_source(tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    home.mkdir(parents=True)
+    path = home / "config.toml"
+    path.write_text(_retry_policy_global_text(), encoding="utf-8")
+    return path
+
+
+def test_target_editor_data_retry_policy_contract() -> None:
+    data = TargetEditorData(id="demo", backend="codex", retryPolicy="transient")
+    assert data.retryPolicy == "transient"
+    assert data.retry_policy == "transient"
+    assert data.model_dump()["retryPolicy"] == "transient"
+
+    data_alias = TargetEditorData(id="demo", backend="codex", retry_policy="transient")
+    assert data_alias.retryPolicy == "transient"
+    assert data_alias.retry_policy == "transient"
+
+    data_default = TargetEditorData(id="demo", backend="codex")
+    assert data_default.retryPolicy == ""
+    assert data_default.retry_policy == ""
+
+    data_none = TargetEditorData(id="demo", backend="codex", retryPolicy=None)
+    assert data_none.retryPolicy == ""
+
+    data_ws = TargetEditorData(id="demo", backend="codex", retryPolicy="  transient  ")
+    assert data_ws.retryPolicy == "transient"
+
+
+def test_read_targets_and_get_target_expose_retry_policy(tmp_path: Path) -> None:
+    source = _retry_policy_global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        source_read, targets = service.read_targets()
+        assert source_read.revision == _revision(source)
+        assert len(targets) == 2
+        primary = next(t for t in targets if t.id == "primary")
+        assert primary.retryPolicy == "transient"
+        assert primary.retry_policy == "transient"
+
+        fallback = next(t for t in targets if t.id == "fallback")
+        assert fallback.retryPolicy == ""
+        assert fallback.retry_policy == ""
+
+        _, retrieved_primary = service.get_target("primary")
+        assert retrieved_primary.retryPolicy == "transient"
+
+        _, retrieved_fallback = service.get_target("fallback")
+        assert retrieved_fallback.retryPolicy == ""
+    finally:
+        runtime.database.close()
+
+
+def test_create_target_with_retry_policy_roundtrips_and_preserves_shared_tables(tmp_path: Path) -> None:
+    source = _retry_policy_global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        data = TargetEditorData(
+            id="secondary",
+            backend="pi",
+            retryPolicy="transient",
+            max_concurrency=1,
+        )
+        result, created = service.create_target(data, expected_revision=expected)
+        assert created.id == "secondary"
+        assert created.retryPolicy == "transient"
+        assert result.changed is True
+
+        new_text = source.read_text(encoding="utf-8")
+        assert "# operator comment" in new_text
+        assert "[retryPolicies.transient]" in new_text
+        assert "retryAttempt = 2" in new_text
+        assert 'errorCodes = ["rate_limit"]' in new_text
+        assert 'retryPolicy = "transient"' in new_text
+
+        retrieved_config = load_config(source)
+        secondary_config = next(t for t in retrieved_config.targets if t.id == "secondary")
+        assert secondary_config.retry_policy == "transient"
+    finally:
+        runtime.database.close()
+
+
+def test_create_target_with_unknown_retry_policy_is_rejected_without_mutating(tmp_path: Path) -> None:
+    source = _retry_policy_global_source(tmp_path)
+    original_bytes = source.read_bytes()
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        data = TargetEditorData(
+            id="secondary",
+            backend="pi",
+            retryPolicy="nonexistent",
+        )
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.create_target(data, expected_revision=expected)
+        assert raised.value.code == "configuration_invalid"
+        assert source.read_bytes() == original_bytes
+    finally:
+        runtime.database.close()
+
+
+def test_update_target_retry_policy_transitions_and_clearing(tmp_path: Path) -> None:
+    source = _retry_policy_global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+
+        fallback_data = TargetEditorData(
+            id="fallback",
+            backend="pi",
+            isolated=True,
+            retryPolicy="transient",
+        )
+        result1, updated1 = service.update_target("fallback", fallback_data, expected_revision=expected)
+        assert updated1.retryPolicy == "transient"
+        text1 = source.read_text(encoding="utf-8")
+        assert 'id = "fallback"' in text1
+        fallback_section1 = text1.split('id = "fallback"')[1].split('[[targets]]')[0].split('[profiles')[0]
+        assert 'retryPolicy = "transient"' in fallback_section1
+
+        primary_data = TargetEditorData(
+            id="primary",
+            backend="codex",
+            backend_profile="legacy-profile",
+            max_concurrency=2,
+            retryPolicy="",
+        )
+        result2, updated2 = service.update_target("primary", primary_data, expected_revision=result1.revision)
+        assert updated2.retryPolicy == ""
+        text2 = source.read_text(encoding="utf-8")
+        primary_section2 = text2.split('id = "primary"')[1].split('[[targets]]')[0]
+        assert "retryPolicy" not in primary_section2
+        assert "retry_policy" not in primary_section2
+        assert "[retryPolicies.transient]" in text2
+
+        retrieved_config = load_config(source)
+        primary_cfg = next(t for t in retrieved_config.targets if t.id == "primary")
+        assert primary_cfg.retry_policy == ""
+    finally:
+        runtime.database.close()
+
+
+def test_update_target_unrelated_fields_preserves_retry_policy_and_comments(tmp_path: Path) -> None:
+    source = _retry_policy_global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        data = TargetEditorData(
+            id="primary",
+            backend="codex",
+            model="gpt-4o",
+            backend_profile="legacy-profile",
+            max_concurrency=3,
+            retryPolicy="transient",
+        )
+        result, updated = service.update_target("primary", data, expected_revision=expected)
+        assert updated.model == "gpt-4o"
+        assert updated.retryPolicy == "transient"
+        assert updated.max_concurrency == 3
+
+        text = source.read_text(encoding="utf-8")
+        assert "# operator comment" in text
+        assert "[retryPolicies.transient]" in text
+        assert 'retryPolicy = "transient"' in text
+    finally:
+        runtime.database.close()
+
+
+def test_update_target_with_unknown_retry_policy_is_rejected_without_mutating(tmp_path: Path) -> None:
+    source = _retry_policy_global_source(tmp_path)
+    original_bytes = source.read_bytes()
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        data = TargetEditorData(
+            id="primary",
+            backend="codex",
+            backend_profile="legacy-profile",
+            max_concurrency=2,
+            retryPolicy="nonexistent",
+        )
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.update_target("primary", data, expected_revision=expected)
+        assert raised.value.code == "configuration_invalid"
+        assert source.read_bytes() == original_bytes
+    finally:
+        runtime.database.close()
+
+
+def test_delete_target_preserves_shared_retry_policies(tmp_path: Path) -> None:
+    source = _retry_policy_global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        result, deleted = service.delete_target("fallback", expected_revision=expected)
+        assert deleted == "fallback"
+        assert result.changed is True
+
+        text = source.read_text(encoding="utf-8")
+        assert "# operator comment" in text
+        assert "[retryPolicies.transient]" in text
+        assert "retryAttempt = 2" in text
+        assert 'id = "fallback"' not in text
+    finally:
+        runtime.database.close()
+
+
+def test_existing_targets_without_retry_policy_remain_editable(tmp_path: Path) -> None:
+    source = _global_source(tmp_path)
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        data = TargetEditorData(
+            id="fallback",
+            backend="pi",
+            isolated=False,
+            model="fast-model",
+            retryPolicy="",
+        )
+        result, updated = service.update_target("fallback", data, expected_revision=expected)
+        assert updated.isolated is False
+        assert updated.model == "fast-model"
+        assert updated.retryPolicy == ""
+
+        text = source.read_text(encoding="utf-8")
+        fallback_section = text.split('id = "fallback"')[1]
+        assert "retryPolicy" not in fallback_section
+        assert "retry_policy" not in fallback_section
+    finally:
+        runtime.database.close()
