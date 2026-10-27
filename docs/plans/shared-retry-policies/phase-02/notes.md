@@ -191,3 +191,27 @@
 ### Test evidence
 - Coordinator checkpoint at `868e7a9`: 201 focused tests passed; 810 server tests passed, 15 deselected; diff check passed.
 - Final worker validation is listed under FIX batch 1: 201 focused and 810 full server tests pass; diff check passes.
+
+## FIX batch 2: Cancellation race
+
+### Decisions made
+- Recheck `cancel_event` immediately before every `_run_target_invocation`, after attempt setup and recovery event bookkeeping have completed. Set the attempt result to `CANCELLED` and leave through existing ask-token, recorder, capacity, and probe cleanup.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- Coordinator independent re-review.
+
+### Test evidence
+- RED: `cd server && uv run --extra dev pytest -q tests/test_execution.py -k 'cancellation_during_attempt_setup or cancellation_during_recovery_bookkeeping'` — both regression tests failed at the expected `len(drivers.calls) == 1` assertion: actual count was 2. One cancellation was set during second-attempt setup; the other was set by the awaited recovery-start event before its invocation.
+- GREEN: same focused test command — 2 passed, 143 deselected. Tests also verify cancellation attempt stream finalization; setup-race test verifies both ask tokens were revoked and both attempt events finalized.
+- Required focused phase command: `cd server && uv run --extra dev pytest tests/test_execution.py tests/test_telemetry.py tests/test_target_capacity.py tests/test_runtime.py` — 203 passed in 140.86s.
+- Full server command: `cd server && uv run --extra dev pytest` — 812 passed, 15 deselected in 164.96s.
+- `git diff --check` — passed.

@@ -95,6 +95,19 @@ TASK_COMPLETE
 - Configured LSP diagnostics ran for execution.py. Remaining optional result dereferences in _store_turn, optional callable in _prepare_session, and timeout type diagnostics occur in unchanged baseline code. New optional-exception handling errors no longer appear. Legacy warnings remain outside scope.
 - Worker returned CONTINUE_CONTEXT, requiring a final continuation before quality review. Continuation 2 will reconcile evidence and return final ERP; no further automatic continuation remains.
 
+## Independent Review 1
+- Job 9218f1d8-0865-4202-9669-5acaa51ff800 reviewed base..fbbf075 read-only. Quality FAIL.
+- HIGH: cancellation during awaited _start_attempt or recovery-event setup can launch another invocation with cancellation already set. Reviewer reproduced entries [(1, False), (2, True)]. Recheck immediately before every _run_target_invocation, and exit through cleanup.
+- No other blocking code findings. Historical GREEN-only evidence does not demonstrate test-first compliance for every lifecycle addition; no waiver is assumed.
+- Only coordinator's required post-submit .handover.md job-ref update changed the root during review. Reviewed product tree unchanged.
+- FIX batch 2 is the final automatic fix batch. Require RED then GREEN cancellation regressions during attempt setup and recovery bookkeeping.
+
+## Coordinator FIX Batch 2 Validation
+- Task bb0f24cc3, exit 0: 203 phase tests passed in 215.22s; 812 full server tests passed, 15 deselected in 170.94s; git diff --check passed.
+- Product delta since fbbf075: four-line cancellation guard before _run_target_invocation and two deterministic regressions. Both regressions recorded intended RED before GREEN. Scope matches worker declaration.
+- Final automatic fix batch used. Independent re-review required for fbbf075..next checkpoint.
+- Historical evidence gap remains: some lifecycle additions have GREEN-only coverage and no documented prior RED. No user waiver exists; final specification acceptance must not silently waive this requirement.
+
 ## Quality Review
 
 ## Review Result
@@ -146,6 +159,29 @@ Reconciled test evidence labels and confirmed Phase 2 implementation is complete
 - phase-02/notes.md (Continuation 1 Task 1, Continuation 1 Task 2, Continuation 1 Task 3, FIX batch 1, Continuation 2: Evidence reconciliation)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — Implementation criteria have passing focused/full validation per worker and coordinator evidence. Independent quality review remains the coordinator's next gate, not implementation debt.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+## Implementation Response: FIX batch 2 (Final)
+
+# EXTERNAL RESPONSE
+## META
+- Phase 2 / Started 2026-10-27T13:44:49+07:00 / Finished 2026-10-27T13:44:49+07:00 / Plan dir docs/plans/shared-retry-policies
+## SUMMARY
+Prevented driver invocations after cancellation during attempt setup or recovery bookkeeping, with deterministic regression tests and full validation.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Modified | `server/src/refract/execution.py` | Check cancellation immediately before each driver invocation and exit as cancelled through existing cleanup. |
+| Modified | `server/tests/test_execution.py` | Add setup-race and recovery-bookkeeping cancellation regressions, including stream/token/resource cleanup assertions. |
+| Modified | `docs/plans/shared-retry-policies/phase-02/notes.md` | Record actual RED failures, GREEN results, and final validation. |
+| Modified | `docs/plans/shared-retry-policies/phase-02/journal.md` | Append final batch response. |
+## NOTES
+- phase-02/notes.md (FIX batch 2: Cancellation race)
+## SPEC COMPLIANCE
+- Meets Spec? YES — The cancellation race is fixed; focused and full server tests and diff check pass. Coordinator re-review is the next gate.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

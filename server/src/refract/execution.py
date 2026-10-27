@@ -310,6 +310,10 @@ class TargetExecutor:
                         accumulator.invalidate_context()
                         await run_sync(self.database.event, job_id, "target.session_recovery_started", details)
 
+                    if cancel_event.is_set():
+                        attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+                        break
+
                     inv_result, has_tool_activity = await self._run_target_invocation(
                         job_id=job_id,
                         attempt=attempt_number,

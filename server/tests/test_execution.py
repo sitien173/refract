@@ -5594,3 +5594,105 @@ async def test_retry_finalization_faults_release_target_resources(tmp_path: Path
         assert runtime.target_executor._target_users.get("primary", 0) == 0
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_cancellation_during_attempt_setup_prevents_driver_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
+    runtime = Runtime(catalog)
+    drivers = ScriptedRecoveryDrivers([
+        (DriverResult("RETRYABLE", "", "", "transient", "rate_limit"), False),
+        (DriverResult("SUCCESS", "session", "unexpected", "", ""), False),
+    ])
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        job_id = "cancel-setup-race"
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        cancel_event = CancelEvent()
+        starts = 0
+        original_start = runtime.target_executor._start_attempt
+        async def cancel_during_setup(*args, **kwargs):
+            nonlocal starts
+            starts += 1
+            value = await original_start(*args, **kwargs)
+            if starts == 2:
+                cancel_event.set()
+            return value
+        monkeypatch.setattr(runtime.target_executor, "_start_attempt", cancel_during_setup)
+        class TrackingAsk:
+            issued = 0
+            revoked = 0
+            def issue_token(self, *_args, **_kwargs):
+                self.issued += 1
+                return f"token-{self.issued}"
+            def revoke_token(self, *_args, **_kwargs):
+                self.revoked += 1
+        ask = TrackingAsk()
+        runtime.target_executor.ask_registry = ask
+        result = await runtime.target_executor.execute(
+            job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
+            prompt="p", cwd=root, cancel_event=cancel_event,
+        )
+        assert len(drivers.calls) == 1
+        assert result.result.outcome == "CANCELLED"
+        assert ask.issued == ask.revoked == 2
+        assert not runtime.target_executor._target_active
+        assert runtime.target_executor._target_users.get("primary", 0) == 0
+        attempt_finishes = [event for event in runtime.database.events(job_id) if event["kind"] == "target.attempt_finished"]
+        assert len(attempt_finishes) == 2
+        stream_finishes = [event for event in runtime.database.stream_events(job_id) if event.kind == "attempt.finished"]
+        assert len(stream_finishes) == 2
+        assert stream_finishes[-1].data["status"] == "cancelled"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_cancellation_during_recovery_bookkeeping_prevents_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
+    runtime = Runtime(catalog)
+    drivers = ScriptedRecoveryDrivers([
+        (DriverResult("RETRYABLE", "old-session", "", "context overflow", "context_overflow"), False),
+        (DriverResult("SUCCESS", "new-session", "unexpected", "", ""), False),
+    ])
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        job_id = "cancel-recovery-event-race"
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        target_key = target_execution_key(catalog.targets[0])
+        runtime.database.append_turn(project_id=project.id, context_key="ctx", role="implement", target_id="primary", target_key=target_key, session_id="old-session", prompt="prior", response="history")
+        cancel_event = CancelEvent()
+        original_event = runtime.database.event
+        def cancel_on_recovery(job, kind, data):
+            result = original_event(job, kind, data)
+            if kind == "target.session_recovery_started":
+                cancel_event.set()
+            return result
+        monkeypatch.setattr(runtime.database, "event", cancel_on_recovery)
+        result = await runtime.target_executor.execute(
+            job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
+            prompt="p", cwd=root, cancel_event=cancel_event,
+        )
+        assert len(drivers.calls) == 1
+        assert result.result.outcome == "CANCELLED"
+        stream_finishes = [event for event in runtime.database.stream_events(job_id) if event.kind == "attempt.finished"]
+        assert len(stream_finishes) == 1
+        assert stream_finishes[0].data["status"] == "cancelled"
+        assert not runtime.target_executor._target_active
+        assert runtime.target_executor._target_users.get("primary", 0) == 0
+    finally:
+        await runtime.close()
