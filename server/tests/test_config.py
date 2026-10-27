@@ -738,3 +738,310 @@ def test_ask_timeout_s_invalid_values_rejected(tmp_path, invalid_val) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         load_config(path)
 
+
+def test_two_targets_can_reference_one_global_retry_policy(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.transient]
+retryAttempt = 2
+errorCodes = ["rate_limit"]
+errorPatterns = ["temporarily unavailable"]
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "transient"
+
+[[targets]]
+id = "secondary"
+backend = "pi"
+retryPolicy = "transient"
+
+[profiles.balanced]
+implement = "primary"
+review = "secondary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    catalog = load_config(path)
+    assert "transient" in catalog.retry_policies
+    policy = catalog.retry_policies["transient"]
+    assert policy.retry_attempt == 2
+    assert policy.error_codes == ("rate_limit",)
+    assert policy.error_patterns == ("temporarily unavailable",)
+    assert catalog.targets[0].retry_policy == "transient"
+    assert catalog.targets[1].retry_policy == "transient"
+
+
+def test_missing_retry_policies_section_preserves_no_retry_behavior(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config(), encoding="utf-8")
+    catalog = load_config(path)
+    assert catalog.retry_policies == {}
+    assert catalog.targets[0].retry_policy == ""
+
+
+def test_retry_policy_defaults_and_empty_rule_lists(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.empty_rules]
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "empty_rules"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    catalog = load_config(path)
+    policy = catalog.retry_policies["empty_rules"]
+    assert policy.retry_attempt == 0
+    assert policy.error_codes == ()
+    assert policy.error_patterns == ()
+
+
+@pytest.mark.parametrize(
+    "invalid_attempt",
+    ["-1", "true", "false", "1.5", '"2"'],
+)
+def test_retry_attempt_rejects_negative_boolean_fractional_and_string(tmp_path, invalid_attempt) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f"""[daemon]
+default_profile = "balanced"
+
+[retryPolicies.bad]
+retryAttempt = {invalid_attempt}
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="retryAttempt"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_val"),
+    [
+        ("errorCodes", '"rate_limit"'),
+        ("errorCodes", '[123]'),
+        ("errorCodes", '[""]'),
+        ("errorPatterns", '"temporarily unavailable"'),
+        ("errorPatterns", '[false]'),
+        ("errorPatterns", '[""]'),
+    ],
+)
+def test_retry_policy_rejects_malformed_rule_lists(tmp_path, field, invalid_val) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f"""[daemon]
+default_profile = "balanced"
+
+[retryPolicies.bad]
+{field} = {invalid_val}
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=field):
+        load_config(path)
+
+
+def test_retry_policy_rejects_unknown_fields(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.bad]
+retryAttempt = 2
+backoff_s = 5
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unsupported settings"):
+        load_config(path)
+
+
+def test_retry_policy_rejects_non_table_policy(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """retryPolicies = "invalid"
+
+[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"\[retryPolicies\] must be a TOML table"):
+        load_config(path)
+
+
+def test_target_rejects_dangling_retry_policy_reference(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "missing"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unknown retry policy"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    "setting",
+    ['retry = 2', 'retryAttempt = 2', 'retry_attempt = 2'],
+)
+def test_target_rejects_inline_retry_declarations(tmp_path, setting) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f"""[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+{setting}
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cannot declare inline retry settings"):
+        load_config(path)
+
+
+def test_project_overlay_retains_global_policies_and_rejects_project_policies(tmp_path) -> None:
+    global_path = tmp_path / "global_config.toml"
+    global_path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.transient]
+retryAttempt = 2
+errorCodes = ["rate_limit"]
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "transient"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    base = load_config(global_path)
+    assert "transient" in base.retry_policies
+
+    project_root = tmp_path / "project"
+    (project_root / ".refract").mkdir(parents=True)
+    project_config = project_root / ".refract" / "config.toml"
+    project_config.write_text(
+        """[project]
+default_profile = "balanced"
+""",
+        encoding="utf-8",
+    )
+    overlaid = load_project_config(project_root, base)
+    assert "transient" in overlaid.retry_policies
+    assert overlaid.retry_policies == base.retry_policies
+
+    project_config.write_text(
+        """[project]
+default_profile = "balanced"
+
+[retryPolicies.local]
+retryAttempt = 1
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Unsupported project config sections"):
+        load_project_config(project_root, base)
+
+
+def test_target_rejects_unrequested_retry_policy_alias(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.transient]
+retryAttempt = 2
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retry_policy = "transient"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unsupported settings"):
+        load_config(path)

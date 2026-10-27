@@ -37,6 +37,14 @@ class TargetConfig:
     read_only: bool = False
     args: tuple[str, ...] = ()
     max_concurrency: int = 1
+    retry_policy: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class RetryPolicy:
+    retry_attempt: int = 0
+    error_codes: tuple[str, ...] = ()
+    error_patterns: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -96,6 +104,7 @@ class DaemonConfig:
     config_loaded_at: str = ""
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    retry_policies: dict[str, RetryPolicy] = field(default_factory=dict)
     breaker_failure_threshold: int = 3
     breaker_base_cooldown_s: int = 60
     breaker_max_cooldown_s: int = 900
@@ -397,13 +406,63 @@ def validate_target_args(
         )
 
 
-def _targets(raw: Any) -> tuple[TargetConfig, ...]:
+def _retry_policies(raw: Any) -> dict[str, RetryPolicy]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("[retryPolicies] must be a TOML table")
+    policies: dict[str, RetryPolicy] = {}
+    for policy_id, mapping in raw.items():
+        if not isinstance(policy_id, str) or not policy_id.strip():
+            raise ValueError("Invalid retry policy declaration")
+        if not isinstance(mapping, dict):
+            raise ValueError(f"Retry policy {policy_id!r} must be a TOML table")
+        unknown = set(mapping) - {"retryAttempt", "errorCodes", "errorPatterns"}
+        if unknown:
+            raise ValueError(
+                f"Retry policy {policy_id!r} has unsupported settings: {sorted(unknown)}"
+            )
+        raw_attempt = mapping.get("retryAttempt", 0)
+        if (
+            isinstance(raw_attempt, bool)
+            or not isinstance(raw_attempt, int)
+            or raw_attempt < 0
+        ):
+            raise ValueError(
+                f"Retry policy {policy_id!r} retryAttempt must be a non-negative integer"
+            )
+        raw_codes = mapping.get("errorCodes", [])
+        if not isinstance(raw_codes, list) or not all(
+            isinstance(value, str) and value for value in raw_codes
+        ):
+            raise ValueError(
+                f"Retry policy {policy_id!r} errorCodes must be a list of non-empty strings"
+            )
+        raw_patterns = mapping.get("errorPatterns", [])
+        if not isinstance(raw_patterns, list) or not all(
+            isinstance(value, str) and value for value in raw_patterns
+        ):
+            raise ValueError(
+                f"Retry policy {policy_id!r} errorPatterns must be a list of non-empty strings"
+            )
+        policies[policy_id] = RetryPolicy(
+            retry_attempt=raw_attempt,
+            error_codes=tuple(raw_codes),
+            error_patterns=tuple(raw_patterns),
+        )
+    return policies
+
+
+def _targets(
+    raw: Any, retry_policies: dict[str, RetryPolicy] | None = None
+) -> tuple[TargetConfig, ...]:
     if isinstance(raw, dict) and not raw:
         raise ValueError("[targets] must contain at least one target")
     if not isinstance(raw, list):
         raise ValueError("[targets] must be a TOML array of tables")
     if not raw:
         raise ValueError("[targets] must contain at least one target")
+    available_policies = retry_policies or {}
     targets: list[TargetConfig] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -416,6 +475,27 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
             # Do not echo the complete declaration: it may contain prompts or
             # other operator-supplied sensitive values.
             raise ValueError("Invalid target declaration")
+        if "retry" in item or "retryAttempt" in item or "retry_attempt" in item:
+            raise ValueError(
+                f"Target {target_id!r} cannot declare inline retry settings"
+            )
+        if "retry_policy" in item:
+            raise ValueError(
+                f"Target {target_id!r} has unsupported settings: ['retry_policy']"
+            )
+        raw_retry_policy = item.get("retryPolicy")
+        if raw_retry_policy is not None:
+            if not isinstance(raw_retry_policy, str) or not raw_retry_policy.strip():
+                raise ValueError(
+                    f"Target {target_id!r} retryPolicy must be a non-empty string"
+                )
+            retry_policy = raw_retry_policy.strip()
+            if retry_policy not in available_policies:
+                raise ValueError(
+                    f"Target {target_id!r} references unknown retry policy: {retry_policy!r}"
+                )
+        else:
+            retry_policy = ""
         args = item.get("args", [])
         if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
             raise ValueError(f"Target {target_id!r} args must be a list of strings")
@@ -461,6 +541,7 @@ def _targets(raw: Any) -> tuple[TargetConfig, ...]:
                     1,
                     f"Target {target_id!r} max_concurrency",
                 ),
+                retry_policy=retry_policy,
             )
         )
     if len({target.id for target in targets}) != len(targets):
@@ -612,6 +693,7 @@ def _load_config_values(
         "targets",
         "profiles",
         "notifications",
+        "retryPolicies",
     }
     if unsupported:
         raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
@@ -636,7 +718,8 @@ def _load_config_values(
         raise ValueError("Missing required [targets] section")
     if "profiles" not in raw:
         raise ValueError("Missing required [profiles] section")
-    targets = _targets(raw["targets"])
+    retry_policies = _retry_policies(raw.get("retryPolicies"))
+    targets = _targets(raw["targets"], retry_policies)
     profile_declarations = _profile_declarations(raw["profiles"], targets)
     profiles = _resolve_profile_maps(profile_declarations)
     default_profile = str(daemon.get("default_profile", "")).strip()
@@ -677,6 +760,7 @@ def _load_config_values(
         profile_declarations=profile_declarations,
         logging=_logging_config(raw.get("logging"), home),
         notifications=_notifications_config(raw.get("notifications")),
+        retry_policies=retry_policies,
         breaker_failure_threshold=_positive_int(daemon.get("breaker_failure_threshold"), 3, "[daemon].breaker_failure_threshold"),
         breaker_base_cooldown_s=breaker_base,
         breaker_max_cooldown_s=breaker_max,
@@ -759,6 +843,7 @@ def _load_project_config_values(
         config_loaded_at=base.config_loaded_at,
         logging=base.logging,
         notifications=base.notifications,
+        retry_policies=base.retry_policies,
         breaker_failure_threshold=base.breaker_failure_threshold,
         breaker_base_cooldown_s=base.breaker_base_cooldown_s,
         breaker_max_cooldown_s=base.breaker_max_cooldown_s,
@@ -771,6 +856,7 @@ __all__ = [
     "LoggingConfig",
     "NotificationsConfig",
     "ProfileDeclaration",
+    "RetryPolicy",
     "TargetConfig",
     "TargetSelection",
     "load_config",

@@ -413,7 +413,6 @@ def test_publish_configuration_refreshes_catalog_and_executor(tmp_path) -> None:
     finally:
         runtime.database.close()
 
-
 def test_catalog_reload_after_manual_edit_refreshes_executor(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -427,7 +426,6 @@ def test_catalog_reload_after_manual_edit_refreshes_executor(tmp_path) -> None:
         assert runtime.target_executor.config.config_revision == hashlib.sha256(path.read_bytes()).hexdigest()
     finally:
         runtime.database.close()
-
 
 @pytest.mark.asyncio
 async def test_catalog_cache_reuses_parses_and_invalidates_on_changes(tmp_path, monkeypatch) -> None:
@@ -497,7 +495,6 @@ def test_config_mutation_service_exposes_shared_lock(tmp_path) -> None:
             runtime.publish_configuration()
     finally:
         runtime.database.close()
-
 
 @pytest.mark.asyncio
 async def test_project_override_runtime_activation_and_plan_preservation(tmp_path) -> None:
@@ -867,7 +864,6 @@ def test_resolve_project_is_canonical_idempotent_and_handles_alias_collisions(tm
     finally:
         runtime.database.close()
 
-
 def test_resolve_project_rereads_concurrent_root_winner(tmp_path, monkeypatch) -> None:
     import sqlite3
 
@@ -899,7 +895,6 @@ def test_resolve_project_rereads_concurrent_root_winner(tmp_path, monkeypatch) -
     finally:
         runtime.database.close()
 
-
 def test_resolve_project_preserves_alias_of_concurrent_canonical_winner(tmp_path, monkeypatch) -> None:
     from refract.database import Database
 
@@ -929,4 +924,83 @@ def test_resolve_project_preserves_alias_of_concurrent_canonical_winner(tmp_path
         assert stored is not None and stored.alias == "winner"
     finally:
         other.close()
+        runtime.database.close()
+
+
+def test_target_execution_key_matches_literal_pre_change_fixture() -> None:
+    from refract.config import TargetConfig
+    from refract.planning import target_execution_key
+
+    # Exact historical key fixture before Phase 1
+    target_plain = TargetConfig(id="primary", backend="codex")
+    assert target_execution_key(target_plain) == "primary:fcb7f648a676a587"
+
+    target_with_args = TargetConfig(
+        id="native-with-custom-args",
+        backend="pi",
+        isolated=True,
+        read_only=True,
+        args=("--verbose", "--system-prompt", "advisory only"),
+    )
+    assert target_execution_key(target_with_args) == "native-with-custom-args:66e11d34a73875df"
+
+    # Adding or modifying retry_policy produces the EXACT same historical key
+    target_with_retry = TargetConfig(id="primary", backend="codex", retry_policy="transient")
+    assert target_execution_key(target_with_retry) == "primary:fcb7f648a676a587"
+
+    target_with_other_retry = TargetConfig(id="primary", backend="codex", retry_policy="aggressive")
+    assert target_execution_key(target_with_other_retry) == "primary:fcb7f648a676a587"
+
+
+def test_retry_only_configuration_changes_preserve_existing_sessions(tmp_path) -> None:
+    from refract.planning import target_execution_key
+
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "project")
+    try:
+        target_initial = runtime.catalog.targets[0]
+        key_initial = target_execution_key(target_initial)
+        runtime.database._upsert_session(
+            project_id=project.id,
+            context_key="ctx_1",
+            role="implement",
+            target_id=target_initial.id,
+            target_key=key_initial,
+            lane="",
+            session_id="sess_historical_123",
+            clear_sessions=False,
+        )
+        assert runtime.database.session(project.id, "ctx_1", "implement", key_initial) == "sess_historical_123"
+
+        # Reconfigure target with retryPolicy = "transient"
+        config_path.write_text(
+            """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.transient]
+retryAttempt = 2
+errorCodes = ["rate_limit"]
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "transient"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+            encoding="utf-8",
+        )
+        runtime.publish_configuration()
+        target_reconfigured = runtime.catalog.targets[0]
+        key_reconfigured = target_execution_key(target_reconfigured)
+        assert key_reconfigured == key_initial
+        assert runtime.database.session(project.id, "ctx_1", "implement", key_reconfigured) == "sess_historical_123"
+    finally:
         runtime.database.close()

@@ -75,3 +75,46 @@ def test_missing_source_has_empty_revision(tmp_path) -> None:
         load_config(tmp_path / "missing.toml")
 
     assert getattr(raised.value, "revision", None) == ""
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "Retry policy 'SECRET_POLICY' has unsupported settings: ['SECRET_FIELD']",
+            "Retry policy has unsupported settings",
+        ),
+        (
+            "Retry policy 'SECRET_POLICY' retryAttempt must be a non-negative integer",
+            "Retry policy retryAttempt must be a non-negative integer",
+        ),
+        (
+            "Retry policy 'SECRET_POLICY' errorCodes must be a list of non-empty strings",
+            "Retry policy errorCodes must be a list of non-empty strings",
+        ),
+        (
+            "Retry policy 'SECRET_POLICY' errorPatterns must be a list of non-empty strings",
+            "Retry policy errorPatterns must be a list of non-empty strings",
+        ),
+        (
+            "Target 'SECRET_TARGET' references unknown retry policy: 'SECRET_POLICY'",
+            "Target references unknown retry policy",
+        ),
+        (
+            "Target 'SECRET_TARGET' cannot declare inline retry settings",
+            "Target cannot declare inline retry settings",
+        ),
+        (
+            "Target 'SECRET_TARGET' retryPolicy must be a non-empty string",
+            "Target retryPolicy must be a non-empty string",
+        ),
+        (
+            "Target 'SECRET_TARGET' has unsupported settings: ['retry_policy']",
+            "Target has unsupported settings",
+        ),
+    ],
+)
+def test_sanitizer_does_not_expose_retry_policy_or_error_patterns(message, expected) -> None:
+    sanitized = sanitize_config_error(message)
+    assert sanitized == expected
+    assert "SECRET_" not in sanitized
