@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { getDiagnostics } from './api'
 import StatusBadge from './components/StatusBadge'
 const appStyles = readFileSync(resolve(process.cwd(), 'src/styles/app.css'), 'utf8')
 const flowforgeTokens = readFileSync(resolve(process.cwd(), 'src/styles/colors_and_type.css'), 'utf8')
@@ -21,6 +22,8 @@ vi.mock('./api', () => ({
     projects: 0,
     unhealthy_targets: 0,
   }),
+  getDiagnostics: vi.fn().mockResolvedValue({ reports: [], next_before: null }),
+  getProjects: vi.fn().mockResolvedValue([]),
 }))
 
 describe('dashboard shell', () => {
@@ -50,6 +53,138 @@ describe('dashboard shell', () => {
 
   it('does not use gradients in application styles', () => {
     expect(appStyles.toLowerCase()).not.toContain('gradient')
+  })
+
+  it('navigates to Diagnostics view and updates route', async () => {
+    window.history.pushState({}, '', '/dashboard/')
+    render(<App />)
+
+    const diagButton = await screen.findByRole('button', { name: /^Diagnostics$/i })
+    expect(diagButton).toBeInTheDocument()
+    fireEvent.click(diagButton)
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Diagnostics' })).toBeInTheDocument()
+    expect(diagButton).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('resets filtered diagnostics, handles delayed stale response, and resets pagination on sidebar navigation', async () => {
+    let resolveFiltered
+    const delayedFilteredPromise = new Promise((resolve) => {
+      resolveFiltered = resolve
+    })
+
+    const cleanReportsPage1 = [
+      {
+        id: 'clean-901',
+        job_id: 'job-clean',
+        project_id: 'proj-clean',
+        category: 'system',
+        severity: 'info',
+        source: 'worker',
+        code: 'CLEAN_OBSERVATION',
+        message: 'Clean diagnostics report',
+        created_at: 1710000000,
+      },
+    ]
+
+    const filteredReports = [
+      {
+        id: 'filtered-101',
+        job_id: 'job-filtered',
+        project_id: 'proj-filtered',
+        category: 'protocol',
+        severity: 'error',
+        source: 'worker',
+        code: 'STALE_FILTERED',
+        message: 'Stale filtered report',
+        created_at: 1710000005,
+      },
+    ]
+
+    getDiagnostics.mockImplementation(({ jobId }) => {
+      if (jobId === 'job-filtered') {
+        return delayedFilteredPromise
+      }
+      return Promise.resolve({ reports: cleanReportsPage1, next_before: null })
+    })
+
+    window.history.pushState({}, '', '/dashboard/diagnostics?job_id=job-filtered')
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Diagnostics' })).toBeInTheDocument()
+    const jobInput = screen.getByLabelText('Filter by job')
+    expect(jobInput.value).toBe('job-filtered')
+
+    const diagButton = screen.getByRole('button', { name: /^Diagnostics$/i })
+    fireEvent.click(diagButton)
+
+    expect(window.location.pathname).toBe('/dashboard/diagnostics')
+    expect(window.location.search).toBe('')
+    expect(jobInput.value).toBe('')
+
+    resolveFiltered({ reports: filteredReports, next_before: null })
+
+    expect(await screen.findByText('clean-901')).toBeInTheDocument()
+    expect(screen.queryByText('filtered-101')).not.toBeInTheDocument()
+    expect(screen.queryByText('Stale filtered report')).not.toBeInTheDocument()
+    expect(screen.getByText('Page 1')).toBeInTheDocument()
+  })
+
+  it('clears query and resets filters on repeat sidebar navigation after local filter edits', async () => {
+    const cleanReports = [
+      {
+        id: 'clean-902',
+        job_id: 'job-clean-2',
+        project_id: 'proj-clean-2',
+        category: 'system',
+        severity: 'info',
+        source: 'worker',
+        code: 'CLEAN_2',
+        message: 'Clean report 2',
+        created_at: 1710000010,
+      },
+    ]
+
+    const editedReports = [
+      {
+        id: 'edited-202',
+        job_id: 'job-edited',
+        project_id: 'proj-edited',
+        category: 'protocol',
+        severity: 'warn',
+        source: 'worker',
+        code: 'EDITED_JOB',
+        message: 'Edited job report',
+        created_at: 1710000020,
+      },
+    ]
+
+    getDiagnostics.mockImplementation(({ jobId }) => {
+      if (jobId === 'job-edited') {
+        return Promise.resolve({ reports: editedReports, next_before: null })
+      }
+      return Promise.resolve({ reports: cleanReports, next_before: null })
+    })
+
+    window.history.pushState({}, '', '/dashboard/diagnostics')
+    render(<App />)
+
+    expect(await screen.findByText('clean-902')).toBeInTheDocument()
+
+    const jobInput = screen.getByLabelText('Filter by job')
+    fireEvent.change(jobInput, { target: { value: 'job-edited' } })
+    expect(jobInput.value).toBe('job-edited')
+    expect(await screen.findByText('edited-202')).toBeInTheDocument()
+    expect(window.location.search).toContain('job_id=job-edited')
+
+    const diagButton = screen.getByRole('button', { name: /^Diagnostics$/i })
+    fireEvent.click(diagButton)
+
+    expect(window.location.pathname).toBe('/dashboard/diagnostics')
+    expect(window.location.search).toBe('')
+    expect(jobInput.value).toBe('')
+    expect(await screen.findByText('clean-902')).toBeInTheDocument()
+    expect(screen.queryByText('edited-202')).not.toBeInTheDocument()
   })
 })
 

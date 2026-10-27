@@ -319,12 +319,14 @@ def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
     return None if record is None else _dashboard_job_from_record(runtime, record)
 
 
-def _dashboard_job_from_record(runtime: Any, record: dict[str, Any]) -> DashboardJob:
+def _dashboard_job_from_record(runtime: Any, record: dict[str, Any], diagnostic_count: int | None = None) -> DashboardJob:
     job = runtime.database.job_view(record)
     try:
         raw_plan = json.loads(record.get("execution_plan_json", ""))
     except (TypeError, json.JSONDecodeError):
         raw_plan = None
+    if diagnostic_count is None:
+        diagnostic_count = runtime.database.diagnostic_counts([job.id]).get(job.id, 0)
     return DashboardJob(
         id=job.id,
         project_id=job.project_id,
@@ -340,6 +342,8 @@ def _dashboard_job_from_record(runtime: Any, record: dict[str, Any]) -> Dashboar
         updated_at=job.updated_at,
         result=job.result,
         execution_plan=_safe_execution_plan(raw_plan),
+        diagnostic_count=diagnostic_count,
+        suspect=diagnostic_count > 0,
     )
 
 
@@ -919,6 +923,61 @@ def _register_task_guide_routes(state: DashboardState) -> list[Route]:
     ]
 
 
+def _register_diagnostics_routes(state: DashboardState) -> list[Route]:
+    def diagnostics(request: Request) -> Response:
+        try:
+            runtime = _runtime(state)
+        except RuntimeError:
+            return _runtime_error()
+        allowed = {"project_id", "job_id", "category", "before", "limit"}
+        if set(request.query_params.keys()) - allowed or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params.keys()):
+            return _error("Invalid diagnostics query parameters", 400, code="bad_request")
+        project_id = request.query_params.get("project_id", "")
+        job_id = request.query_params.get("job_id", "")
+        category = request.query_params.get("category", "")
+        if any(key in request.query_params and not request.query_params[key]
+               for key in ("project_id", "job_id", "category")):
+            return _error("Diagnostics filters must not be empty", 400, code="bad_request")
+        if category and category not in {"protocol", "output"}:
+            return _error("Invalid diagnostics category", 400, code="bad_request")
+        before_raw = request.query_params.get("before")
+        limit_raw = request.query_params.get("limit", "50")
+        if not limit_raw.isascii() or not limit_raw.isdecimal():
+            return _error("Invalid diagnostics limit", 400, code="bad_request")
+        normalized_limit = limit_raw.lstrip("0")
+        if not normalized_limit or len(normalized_limit) > 3:
+            return _error("Invalid diagnostics limit", 400, code="bad_request")
+        limit = int(normalized_limit)
+        if not 1 <= limit <= 100:
+            return _error("Invalid diagnostics limit", 400, code="bad_request")
+        before = None
+        if before_raw is not None:
+            if not before_raw.isascii() or not before_raw.isdecimal():
+                return _error("Invalid diagnostics cursor", 400, code="bad_request")
+            normalized_before = before_raw.lstrip("0")
+            max_cursor = "9223372036854775807"
+            if (not normalized_before or len(normalized_before) > len(max_cursor)
+                    or (len(normalized_before) == len(max_cursor) and normalized_before > max_cursor)):
+                return _error("Invalid diagnostics cursor", 400, code="bad_request")
+            before = int(normalized_before)
+        if project_id:
+            project = runtime.database.project(project_id)
+            if project is None:
+                return _error(_UNKNOWN_PROJECT, 404, code="not_found")
+            project_id = project.id
+        if job_id and runtime.database.job(job_id) is None:
+            return _error("Unknown job", 404, code="not_found")
+        rows = runtime.database.diagnostic_reports(
+            project_id=project_id, job_id=job_id, category=category,
+            before=before, limit=limit,
+        )
+        has_more = len(rows) > limit
+        reports = rows[:limit]
+        return _json_response({"reports": reports, "next_before": reports[-1]["id"] if has_more and reports else None})
+
+    return [_loopback_route("/dashboard/api/diagnostics", diagnostics, methods=["GET"])]
+
+
 def _register_job_routes(state: DashboardState) -> list[Route]:
     def project_jobs(request: Request) -> Response:
         try:
@@ -928,9 +987,10 @@ def _register_job_routes(state: DashboardState) -> list[Route]:
             if project_view is None:
                 return _error(_UNKNOWN_PROJECT, 404, code="not_found")
             active, recent, more_recent = runtime.database.job_listing(project_view.id)
+            counts = runtime.database.diagnostic_counts([record["id"] for record in (*active, *recent)])
             return _json_response({
-                "active": [_dashboard_job_from_record(runtime, record) for record in active],
-                "recent": [_dashboard_job_from_record(runtime, record) for record in recent],
+                "active": [_dashboard_job_from_record(runtime, record, counts.get(record["id"], 0)) for record in active],
+                "recent": [_dashboard_job_from_record(runtime, record, counts.get(record["id"], 0)) for record in recent],
                 "more_recent": more_recent,
             })
         except RuntimeError:
@@ -1190,6 +1250,7 @@ def register_dashboard_routes(state: DashboardState) -> list[Route]:
         *_register_catalog_routes(state),
         *_register_project_routes(state),
         *_register_task_guide_routes(state),
+        *_register_diagnostics_routes(state),
         *_register_job_routes(state),
         *_register_job_output_routes(state),
         *_register_asset_routes(),

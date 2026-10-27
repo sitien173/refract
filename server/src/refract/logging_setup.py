@@ -183,7 +183,7 @@ def _resolved_logging_config(
     )
 
 
-def _redact_text(value: str) -> str:
+def redact_text(value: str) -> str:
     redacted = value
     for pattern in _SECRET_PATTERNS:
         if pattern.groups == 1:
@@ -191,6 +191,9 @@ def _redact_text(value: str) -> str:
         else:
             redacted = pattern.sub(r"\1[REDACTED]", redacted)
     return redacted
+
+
+_redact_text = redact_text
 
 
 def _safe_value(value: Any, key: str = "") -> Any:
@@ -578,6 +581,7 @@ __all__ = [
     "configure",
     "get_logger",
     "log_context",
+    "redact_text",
     "resolve_config",
     "shutdown",
 ]

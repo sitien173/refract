@@ -483,6 +483,24 @@ class Runtime:
         await run_sync(self.database.event, job_id, "job.question_answered", {"answer": cleaned_answer})
         return ActionResult(success=True, job_id=job_id, state=job.state)
 
+    async def report_error(
+        self,
+        *,
+        job_id: str,
+        category: str,
+        expected: str,
+        observed: str,
+        report_key: str,
+    ) -> dict[str, Any]:
+        return await run_sync(
+            self.database.record_error_report,
+            job_id=job_id,
+            category=category,
+            expected=expected,
+            observed=observed,
+            report_key=report_key,
+        )
+
     async def cancel(self, job_id: str) -> ActionResult:
         self.ask_registry.revoke_token(job_id)
         # Reserve cancellation before yielding to a worker or starting dispatch.

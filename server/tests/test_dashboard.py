@@ -114,6 +114,110 @@ other = "primary"
 
 
 @pytest.mark.asyncio
+async def test_dashboard_diagnostics_filters_pages_and_derives_job_counts(active_runtime) -> None:
+    database = active_runtime.database
+    project = database.projects()[0]
+    for job_id in ("diag-job-1", "diag-job-2"):
+        database.create_job(
+            job_id=job_id, project_id=project.id, workflow="other", profile="balanced",
+            prompt="private prompt", execution_plan_json="{}", context_key=job_id,
+        )
+    first = database.record_error_report(
+        job_id="diag-job-1", category="protocol", expected="expected", observed="observed", report_key="one"
+    )["report"]["id"]
+    second = database.record_error_report(
+        job_id="diag-job-2", category="output", expected="needed", observed="missing", report_key="two"
+    )["report"]["id"]
+
+    from refract.dashboard import DashboardState, register_dashboard_routes
+    from starlette.applications import Starlette
+    app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=active_runtime)))
+    status, _, body = await request(app, "/dashboard/api/diagnostics?category=protocol&limit=1")
+    assert status == 200
+    page = json.loads(body)
+    assert [row["id"] for row in page["reports"]] == [first]
+    assert page["next_before"] is None
+    status, _, body = await request(app, "/dashboard/api/diagnostics?project_id=project&job_id=diag-job-2&category=output")
+    assert status == 200
+    report = json.loads(body)["reports"][0]
+    assert report["id"] == second
+    assert report["current_state"] == "queued"
+    assert "report_key" not in report and "private prompt" not in body.decode()
+    status, _, body = await request(app, "/dashboard/api/jobs/diag-job-2")
+    assert status == 200
+    job = json.loads(body)
+    assert job["suspect"] is True and job["diagnostic_count"] == 1
+    status, _, body = await request(app, "/dashboard/api/diagnostics?limit=0")
+    assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_cursor_is_exclusive_and_unknown_filters_are_explicit(active_runtime) -> None:
+    database = active_runtime.database
+    project = database.projects()[0]
+    database.create_job(job_id="paged-job", project_id=project.id, workflow="other", profile="p", prompt="", execution_plan_json="{}", context_key="paged")
+    ids = []
+    for key in ("a", "b"):
+        ids.append(database.record_error_report(job_id="paged-job", category="protocol", expected="e", observed="o", report_key=key)["report"]["id"])
+    from refract.dashboard import DashboardState, register_dashboard_routes
+    from starlette.applications import Starlette
+    app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=active_runtime)))
+    status, _, body = await request(app, "/dashboard/api/diagnostics?limit=1")
+    page = json.loads(body)
+    assert status == 200 and page["reports"][0]["id"] == ids[1]
+    assert page["next_before"] == ids[1]
+    database.record_error_report(job_id="paged-job", category="protocol", expected="e", observed="o", report_key="c")
+    status, _, body = await request(app, f"/dashboard/api/diagnostics?limit=1&before={page['next_before']}")
+    older = json.loads(body)
+    assert status == 200 and [row["id"] for row in older["reports"]] == [ids[0]]
+    assert older["next_before"] is None
+    assert (await request(app, "/dashboard/api/diagnostics?project_id=missing"))[0] == 404
+    assert (await request(app, "/dashboard/api/diagnostics?job_id=missing"))[0] == 404
+    assert (await request(app, "/dashboard/api/diagnostics?limit=101"))[0] == 400
+    assert (await request(app, "/dashboard/api/diagnostics?before=0"))[0] == 400
+    assert (await request(app, "/dashboard/api/diagnostics?unexpected=x"))[0] == 400
+    assert (await request(app, "/dashboard/api/diagnostics", client_host="192.0.2.1"))[0] == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parameter", ["limit", "before"])
+async def test_diagnostics_rejects_extremely_long_decimal_query_values(active_runtime, parameter) -> None:
+    from refract.dashboard import DashboardState, register_dashboard_routes
+    from starlette.applications import Starlette
+    app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=active_runtime)))
+
+    status, _, _ = await request(app, f"/dashboard/api/diagnostics?{parameter}=" + "9" * 4500)
+
+    assert status == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parameter", ["category", "project_id", "job_id"])
+async def test_diagnostics_rejects_explicitly_empty_filters(active_runtime, parameter) -> None:
+    from refract.dashboard import DashboardState, register_dashboard_routes
+    from starlette.applications import Starlette
+    app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=active_runtime)))
+
+    status, _, _ = await request(app, f"/dashboard/api/diagnostics?{parameter}=")
+
+    assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_preserves_leading_zero_numeric_values(active_runtime) -> None:
+    from refract.dashboard import DashboardState, register_dashboard_routes
+    from starlette.applications import Starlette
+    app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=active_runtime)))
+
+    limit_status, _, limit_body = await request(app, "/dashboard/api/diagnostics?limit=0001")
+    before_status, _, before_body = await request(app, "/dashboard/api/diagnostics?before=0001")
+
+    assert limit_status == before_status == 200
+    assert json.loads(limit_body) == {"reports": [], "next_before": None}
+    assert json.loads(before_body) == {"reports": [], "next_before": None}
+
+
+@pytest.mark.asyncio
 async def test_dashboard_reads_fail_closed_without_runtime() -> None:
     app = create_application()
 

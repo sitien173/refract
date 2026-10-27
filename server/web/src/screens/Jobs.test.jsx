@@ -8,6 +8,7 @@ vi.mock('../api', () => ({
   getProjects: vi.fn(),
   getProjectJobs: vi.fn(),
   getJob: vi.fn(),
+  getDiagnostics: vi.fn().mockResolvedValue({ reports: [], next_before: null }),
 }))
 
 describe('Jobs screen and JobDetail screen', () => {
@@ -72,6 +73,51 @@ describe('Jobs screen and JobDetail screen', () => {
     const rows = screen.getAllByRole('row').slice(1)
     expect(rows[0]).toHaveTextContent('job-102')
     expect(rows[1]).toHaveTextContent('job-101')
+  })
+
+  it('renders a visually separate textual suspect badge on suspect jobs without altering execution state', async () => {
+    vi.mocked(api.getProjectJobs).mockResolvedValue({
+      active: [],
+      recent: [
+        {
+          id: 'job-suspect-1',
+          workflow: 'implement',
+          profile: 'balanced',
+          state: 'succeeded',
+          target_id: 'worker-primary',
+          config_revision: '',
+          created_at: '2026-10-27 14:00:00',
+          suspect: true,
+          diagnostic_count: 2,
+        },
+        {
+          id: 'job-clean-1',
+          workflow: 'review',
+          profile: 'balanced',
+          state: 'succeeded',
+          target_id: 'worker-review',
+          config_revision: '',
+          created_at: '2026-10-27 14:05:00',
+          suspect: false,
+          diagnostic_count: 0,
+        },
+      ],
+      more_recent: 0,
+    })
+
+    render(<Jobs projectId="proj-1" />)
+
+    expect(await screen.findByText('job-suspect-1')).toBeInTheDocument()
+    expect(screen.getByText('job-clean-1')).toBeInTheDocument()
+
+    const succeededBadges = screen.getAllByText('succeeded')
+    expect(succeededBadges.length).toBe(2)
+
+    const suspectBadges = screen.getAllByText('Suspect')
+    expect(suspectBadges.length).toBe(1)
+    const badgeElement = suspectBadges[0].closest('.suspect-badge')
+    expect(badgeElement).toBeInTheDocument()
+    expect(badgeElement.querySelector('.suspect-icon')).toBeInTheDocument()
   })
 
   it('concatenates active and recent groups and reports omitted terminal history', async () => {

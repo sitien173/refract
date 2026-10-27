@@ -1,10 +1,13 @@
 import { createRef } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import JobDetails from './JobDetails'
 import * as api from '../api'
 
 describe('JobDetails component', () => {
+  beforeEach(() => {
+    vi.spyOn(api, 'getDiagnostics').mockResolvedValue({ reports: [], next_before: null })
+  })
   const mockJob = {
     id: 'job-xyz-123',
     project_id: 'proj-alpha',
@@ -596,6 +599,260 @@ describe('JobDetails component', () => {
       expect(screen.queryByText('99999')).not.toBeInTheDocument()
       expect(screen.queryByText('88888')).not.toBeInTheDocument()
       expect(screen.queryByText('Context used')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Diagnostic reports and suspect indicator', () => {
+    it('renders a visually separate textual suspect badge when job is suspect, preserving execution status', () => {
+      const suspectJob = {
+        ...mockJob,
+        state: 'succeeded',
+        suspect: true,
+        diagnostic_count: 2,
+      }
+      render(<JobDetails job={suspectJob} />)
+
+      // Execution status remains intact
+      expect(screen.getByText('succeeded')).toBeInTheDocument()
+
+      // Textual suspect badge with non-color marker
+      const suspectBadges = screen.getAllByText('Suspect')
+      expect(suspectBadges.length).toBeGreaterThanOrEqual(1)
+      const badge = suspectBadges[0].closest('.suspect-badge')
+      expect(badge).toBeInTheDocument()
+      expect(badge.querySelector('.suspect-icon')).toBeInTheDocument()
+    })
+
+    it('fetches bounded reports and renders them with explicit current state as plain text', async () => {
+      const diagSpy = vi.spyOn(api, 'getDiagnostics').mockResolvedValue({
+        reports: [
+          {
+            id: '501',
+            job_id: mockJob.id,
+            category: 'protocol',
+            created_at: '2026-10-27 15:30:00',
+            expected: 'JSON response <b>schema</b>',
+            observed: 'Raw string <img src="x" onerror="alert(1)" />',
+            project_id: mockJob.project_id,
+            current_state: 'succeeded',
+          },
+        ],
+        next_before: null,
+      })
+
+      const { container } = render(<JobDetails job={mockJob} />)
+
+      await waitFor(() => {
+        expect(diagSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ jobId: mockJob.id, limit: 50 }),
+          expect.anything()
+        )
+      })
+
+      expect(await screen.findByText('501')).toBeInTheDocument()
+      expect(screen.getByText('protocol')).toBeInTheDocument()
+      expect(screen.getByText('2026-10-27 15:30:00')).toBeInTheDocument()
+      expect(screen.getByText(/Current: succeeded/)).toBeInTheDocument()
+
+      // Plain text check: raw HTML tags rendered as text, not HTML elements
+      expect(screen.getByText(/JSON response <b>schema<\/b>/)).toBeInTheDocument()
+      expect(screen.getByText(/Raw string <img src="x"/)).toBeInTheDocument()
+      expect(container.querySelector('b')).toBeNull()
+      expect(container.querySelector('img[onerror]')).toBeNull()
+    })
+
+    it('renders empty message when job has no diagnostic reports', async () => {
+      vi.spyOn(api, 'getDiagnostics').mockResolvedValue({ reports: [], next_before: null })
+
+      render(<JobDetails job={mockJob} />)
+
+      expect(await screen.findByText(/No diagnostic reports for this job/i)).toBeInTheDocument()
+    })
+
+    it('handles reports error alert and refresh discovery on terminal job', async () => {
+      const onRefresh = vi.fn()
+      const diagSpy = vi.spyOn(api, 'getDiagnostics')
+        .mockResolvedValueOnce({ reports: [], next_before: null })
+        .mockResolvedValueOnce({
+          reports: [
+            {
+              id: '502',
+              job_id: mockJob.id,
+              category: 'output',
+              created_at: '2026-10-27 16:00:00',
+              expected: 'Valid output',
+              observed: 'Empty output',
+              project_id: mockJob.project_id,
+              current_state: 'succeeded',
+            },
+          ],
+          next_before: null,
+        })
+
+      const terminalJob = {
+        ...mockJob,
+        state: 'succeeded',
+      }
+
+      render(<JobDetails job={terminalJob} onRefresh={onRefresh} />)
+
+      expect(await screen.findByText(/No diagnostic reports for this job/i)).toBeInTheDocument()
+
+      const refreshBtn = screen.getByRole('button', { name: /Refresh job details/i })
+      fireEvent.click(refreshBtn)
+
+      expect(onRefresh).toHaveBeenCalledTimes(1)
+      expect(await screen.findByText('502')).toBeInTheDocument()
+      expect(screen.getByText('Valid output')).toBeInTheDocument()
+    })
+
+    it('renders explicit client-observation label, bounded-subset indication, and link to diagnostics when next_before is present', async () => {
+      vi.spyOn(api, 'getDiagnostics').mockResolvedValue({
+        reports: [
+          {
+            id: '501',
+            job_id: mockJob.id,
+            category: 'protocol',
+            created_at: '2026-10-27 15:30:00',
+            expected: 'Valid protocol response',
+            observed: 'Unexpected status code',
+            project_id: mockJob.project_id,
+            current_state: 'succeeded',
+          },
+        ],
+        next_before: '450',
+      })
+
+      render(<JobDetails job={mockJob} />)
+
+      // Explicit client-observation labeling
+      expect(await screen.findByText(/Client observations, not verified server failures/i)).toBeInTheDocument()
+
+      // Bounded subset indication
+      expect(screen.getByText(/bounded newest subset/i)).toBeInTheDocument()
+
+      // Link to inspect remaining reports in diagnostics
+      const link = screen.getByRole('link', { name: /Inspect remaining reports/i })
+      expect(link).toBeInTheDocument()
+      expect(link).toHaveAttribute(
+        'href',
+        `/dashboard/diagnostics?job_id=${encodeURIComponent(mockJob.id)}`
+      )
+    })
+
+    it('clears old reports when job identity changes and does not attribute job A data to job B on slow or failed request', async () => {
+      let rejectJobB
+      const jobBPromise = new Promise((resolve, reject) => {
+        rejectJobB = reject
+      })
+
+      const diagSpy = vi.spyOn(api, 'getDiagnostics')
+        .mockResolvedValueOnce({
+          reports: [
+            {
+              id: 'report-for-job-A',
+              job_id: 'job-A',
+              category: 'protocol',
+              created_at: '2026-10-27 15:00:00',
+              expected: 'Job A expected',
+              observed: 'Job A observed',
+              project_id: 'proj-1',
+              current_state: 'failed',
+            },
+          ],
+          next_before: null,
+        })
+        .mockImplementationOnce(() => jobBPromise)
+
+      const jobA = { ...mockJob, id: 'job-A' }
+      const jobB = { ...mockJob, id: 'job-B' }
+
+      const { rerender } = render(<JobDetails job={jobA} />)
+
+      // Job A reports load
+      expect(await screen.findByText('report-for-job-A')).toBeInTheDocument()
+
+      // Switch to job B
+      rerender(<JobDetails job={jobB} />)
+
+      // Job A reports must immediately NOT be in the document
+      expect(screen.queryByText('report-for-job-A')).toBeNull()
+
+      // Job B request fails
+      rejectJobB(new Error('Failed to fetch job B diagnostics'))
+
+      // Must show error alert, NEVER job A reports
+      expect(await screen.findByText(/Failed to fetch job B diagnostics/i)).toBeInTheDocument()
+      expect(screen.queryByText('report-for-job-A')).toBeNull()
+      expect(screen.queryByText(/Showing previously loaded diagnostic reports/i)).toBeNull()
+    })
+
+    it('ignores late responses when switching jobs and preserves same-job refresh-failure with warning', async () => {
+      let resolveSlowA
+      const slowAPromise = new Promise((resolve) => {
+        resolveSlowA = resolve
+      })
+
+      vi.spyOn(api, 'getDiagnostics')
+        .mockImplementationOnce(() => slowAPromise)
+        .mockResolvedValueOnce({
+          reports: [
+            {
+              id: 'report-for-job-B',
+              job_id: 'job-B',
+              category: 'output',
+              created_at: '2026-10-27 15:30:00',
+              expected: 'Job B expected',
+              observed: 'Job B observed',
+              project_id: 'proj-1',
+              current_state: 'succeeded',
+            },
+          ],
+          next_before: null,
+        })
+
+      const jobA = { ...mockJob, id: 'job-A' }
+      const jobB = { ...mockJob, id: 'job-B' }
+      const onRefresh = vi.fn()
+
+      const { rerender } = render(<JobDetails job={jobA} onRefresh={onRefresh} />)
+
+      // Quickly switch to job B while job A request is still in-flight
+      rerender(<JobDetails job={jobB} onRefresh={onRefresh} />)
+
+      // Job B finishes
+      expect(await screen.findByText('report-for-job-B')).toBeInTheDocument()
+
+      // Now slow A finishes late
+      resolveSlowA({
+        reports: [
+          {
+            id: 'late-report-A',
+            job_id: 'job-A',
+            category: 'protocol',
+            created_at: '2026-10-27 15:00:00',
+            expected: 'Late A expected',
+            observed: 'Late A observed',
+            project_id: 'proj-1',
+            current_state: 'failed',
+          },
+        ],
+        next_before: null,
+      })
+
+      // Wait a tick and verify late-report-A is NOT displayed
+      await new Promise((r) => setTimeout(r, 50))
+      expect(screen.queryByText('late-report-A')).toBeNull()
+      expect(screen.getByText('report-for-job-B')).toBeInTheDocument()
+
+      // Now test same-job refresh failure: job B refresh fails
+      vi.spyOn(api, 'getDiagnostics').mockRejectedValueOnce(new Error('Daemon unreachable on refresh'))
+      const refreshBtn = screen.getByRole('button', { name: /Refresh job/i })
+      fireEvent.click(refreshBtn)
+
+      // Warning alert is shown, and report-for-job-B is preserved!
+      expect(await screen.findByText(/Showing previously loaded diagnostic reports/i)).toBeInTheDocument()
+      expect(screen.getByText('report-for-job-B')).toBeInTheDocument()
     })
   })
 })

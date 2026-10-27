@@ -151,9 +151,22 @@ export default function Jobs({ projectId: propProjectId, onNavigate }) {
       priority: 'primary',
       sortable: true,
       sortAccessor: (row) => row.state,
-      width: '140px',
-      minWidth: '100px',
-      render: (row) => <StatusBadge status={row.state} label={row.state} />,
+      width: '180px',
+      minWidth: '130px',
+      render: (row) => (
+        <div className="state-cell-container">
+          <StatusBadge status={row.state} label={row.state} />
+          {row.suspect && (
+            <span
+              className="suspect-badge"
+              aria-label={`Job is suspect: ${row.diagnostic_count || 1} diagnostic report(s)`}
+            >
+              <span className="suspect-icon" aria-hidden="true">!</span>
+              <span>Suspect</span>
+            </span>
+          )}
+        </div>
+      ),
     },
     {
       key: 'target_id',

@@ -77,6 +77,7 @@ async def test_v2_tool_surface_lists_exact_contract() -> None:
         "job_cancel": {"job_id"},
         "job_retry": {"job_id"},
         "job_answer": {"job_id", "answer"},
+        "job_report_error": {"job_id", "category", "expected", "observed", "report_key"},
     }
     tools = {tool.name: tool for tool in await mcp.list_tools()}
 
@@ -209,7 +210,7 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     assert set(tools) == {
         "project_resolve", "task_guide", "job_submit", "job_wait",
-        "job_list", "job_cancel", "job_retry", "job_answer",
+        "job_list", "job_cancel", "job_retry", "job_answer", "job_report_error",
     }
     from refract.workflows import BUILTIN_WORKFLOWS
 
@@ -218,6 +219,10 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
     assert tools["job_wait"].input_schema["properties"]["timeout_s"]["maximum"] == 3600
     assert tools["job_wait"].input_schema["properties"]["result_offset"]["minimum"] == 0
     assert tools["job_submit"].input_schema["properties"]["fresh_session"]["default"] is False
+    assert tools["job_report_error"].input_schema["properties"]["category"]["enum"] == ["protocol", "output"]
+    assert tools["job_report_error"].input_schema["properties"]["expected"]["maxLength"] == 2048
+    assert tools["job_report_error"].input_schema["properties"]["observed"]["maxLength"] == 2048
+    assert tools["job_report_error"].input_schema["properties"]["report_key"]["maxLength"] == 128
     assert tools["job_cancel"].annotations is not None
     assert tools["job_cancel"].annotations.idempotent_hint is True
     assert tools["project_resolve"].annotations.idempotent_hint is True
@@ -234,6 +239,7 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
         "job_cancel": (False, True, True, False),
         "job_retry": (False, True, False, True),
         "job_answer": (False, False, False, False),
+        "job_report_error": (False, False, True, False),
     }
     for name, expected_hints in expected_annotations.items():
         annotations = tools[name].annotations
@@ -1831,3 +1837,160 @@ async def test_job_wait_paginated_retains_identical_telemetry(tmp_path) -> None:
         runtime.database.close()
 
 
+@pytest.mark.asyncio
+async def test_job_report_error_mcp_validation_and_acknowledgement(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-rep-1",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Hello",
+            execution_plan_json="{}",
+            context_key="k1",
+        )
+
+        # Missing required parameter -> invalid_request
+        bad_args = await client.call_tool(
+            "job_report_error",
+            {"job_id": "job-rep-1", "category": "protocol"},
+        )
+        assert bad_args.is_error
+        bad_payload = json.loads(bad_args.content[0].text)
+        assert bad_payload["code"] == "invalid_request"
+
+        # Extra parameter -> invalid_request
+        extra_args = await client.call_tool(
+            "job_report_error",
+            {
+                "job_id": "job-rep-1",
+                "category": "protocol",
+                "expected": "exp",
+                "observed": "obs",
+                "report_key": "k-1",
+                "extra": "forbidden",
+            },
+        )
+        assert extra_args.is_error
+        extra_payload = json.loads(extra_args.content[0].text)
+        assert extra_payload["code"] == "invalid_request"
+
+        # Valid call returns compact acknowledgement without summaries
+        res = await client.call_tool(
+            "job_report_error",
+            {
+                "job_id": "job-rep-1",
+                "category": "protocol",
+                "expected": "Expected behavior Bearer secret-123",
+                "observed": "Observed behavior sk-456",
+                "report_key": "k-1",
+            },
+        )
+        assert not res.is_error
+        data = json.loads(res.content[0].text)
+        assert data["duplicate"] is False
+        assert set(data) == {"report", "duplicate"}
+        assert set(data["report"]) == {"id", "job_id", "category", "created_at"}
+        assert "expected" not in data["report"]
+        assert "observed" not in data["report"]
+        assert "secret-123" not in res.content[0].text
+        assert "sk-456" not in res.content[0].text
+
+        # Duplicate delivery
+        dup_res = await client.call_tool(
+            "job_report_error",
+            {
+                "job_id": "job-rep-1",
+                "category": "protocol",
+                "expected": "Expected behavior Bearer secret-123",
+                "observed": "Observed behavior sk-456",
+                "report_key": "k-1",
+            },
+        )
+        assert not dup_res.is_error
+        dup_data = json.loads(dup_res.content[0].text)
+        assert dup_data["duplicate"] is True
+        assert dup_data["report"]["id"] == data["report"]["id"]
+
+        # Unknown job
+        unk_res = await client.call_tool(
+            "job_report_error",
+            {
+                "job_id": "job-missing",
+                "category": "protocol",
+                "expected": "exp",
+                "observed": "obs",
+                "report_key": "k-2",
+            },
+        )
+        assert unk_res.is_error
+        unk_payload = json.loads(unk_res.content[0].text)
+        assert unk_payload["code"] == "unknown_job"
+
+
+@pytest.mark.asyncio
+async def test_job_report_error_logging_behavior(tmp_path, monkeypatch, caplog) -> None:
+    import logging
+
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        project = register_project(runtime, str(tmp_path), "test-proj")
+        runtime.database.create_job(
+            job_id="job-log-1",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Hello",
+            execution_plan_json="{}",
+            context_key="k1",
+        )
+
+        with caplog.at_level(logging.INFO, logger="refract.server"):
+            res1 = await client.call_tool(
+                "job_report_error",
+                {
+                    "job_id": "job-log-1",
+                    "category": "protocol",
+                    "expected": "Expected behavior",
+                    "observed": "Observed behavior",
+                    "report_key": "log-key-1",
+                },
+            )
+            assert not res1.is_error
+
+            records = [
+                r
+                for r in caplog.records
+                if getattr(r, "event", "") == "job.error_reported"
+            ]
+            assert len(records) == 1
+            rec = records[0]
+            assert rec.report_id
+            assert rec.job_id == "job-log-1"
+            assert rec.project_id == project.id
+            assert rec.category == "protocol"
+            assert "Expected behavior" not in rec.getMessage()
+            assert "Expected behavior" not in str(rec.__dict__)
+            assert "Observed behavior" not in rec.getMessage()
+            assert "Observed behavior" not in str(rec.__dict__)
+            assert "log-key-1" not in rec.getMessage()
+            assert "log-key-1" not in str(rec.__dict__)
+
+            # Second call (duplicate delivery): no second job.error_reported log!
+            res2 = await client.call_tool(
+                "job_report_error",
+                {
+                    "job_id": "job-log-1",
+                    "category": "protocol",
+                    "expected": "Expected behavior",
+                    "observed": "Observed behavior",
+                    "report_key": "log-key-1",
+                },
+            )
+            assert not res2.is_error
+            records2 = [
+                r
+                for r in caplog.records
+                if getattr(r, "event", "") == "job.error_reported"
+            ]
+            assert len(records2) == 1

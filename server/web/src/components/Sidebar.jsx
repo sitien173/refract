@@ -25,6 +25,15 @@ export default function Sidebar({ route, onNavigate }) {
       </nav>
       <div className="nav-section nav-section-bottom">Operations</div>
       <nav>
+        <button
+          type="button"
+          className={`nav-item ${route === 'diagnostics' ? 'active' : ''}`}
+          aria-current={route === 'diagnostics' ? 'page' : undefined}
+          onClick={() => onNavigate('diagnostics')}
+        >
+          <span className="nav-icon" aria-hidden="true" />
+          Diagnostics
+        </button>
         <button type="button" className={`nav-item ${route === 'settings' ? 'active' : ''}`} onClick={() => onNavigate('settings')}>
           <span className="nav-icon" aria-hidden="true" />
           Runtime settings
