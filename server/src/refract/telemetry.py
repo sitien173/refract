@@ -689,7 +689,9 @@ class TelemetryAccumulator:
             if active_val is not None:
                 tot = completed_val + active_val
             elif completed_measurement is not None:
-                tot = completed_measurement.value
+                # The serialized aggregate can lag the completed-attempt counter
+                # after an accumulator is reloaded and rolls over again.
+                tot = max(completed_val, completed_measurement.value or 0)
             elif completed_val > 0:
                 tot = completed_val
             elif loaded_val is not None:
