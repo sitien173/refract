@@ -79,6 +79,8 @@ def _section_config_error(text: str) -> str | None:
         "[retryPolicies] must be a TOML table",
         "[logging] must be a TOML table",
         "[project] must be a TOML table",
+        "[envs] must be a TOML table",
+        "Invalid environment set declaration",
         "[daemon].default_profile must be set",
         "[daemon].host must be a non-empty string",
         "[daemon].port must not exceed 65535",
@@ -148,6 +150,51 @@ def _target_config_error(text: str) -> str | None:
         return "Target retryPolicy must be a non-empty string"
     if "has unsupported settings" in text:
         return "Target has unsupported settings"
+    if "envs_vars must be a list of strings" in text:
+        return "Target envs_vars must be a list of strings"
+    if "envs must be a TOML table" in text:
+        return "Target envs must be a TOML table"
+    if "references unknown environment set" in text:
+        return "Target references unknown environment set"
+    return None
+
+
+def _environment_config_error(text: str) -> str | None:
+    """Sanitize environment declarations, references, and project overlay errors."""
+    if "Environment values must be strings" in text:
+        return "Environment values must be strings"
+    if "Environment values cannot contain NUL bytes" in text:
+        return "Environment values cannot contain NUL bytes"
+    if "Environment key cannot be empty" in text:
+        return "Environment key cannot be empty"
+    if "Environment key cannot contain '='" in text:
+        return "Environment key cannot contain '='"
+    if "Environment key cannot contain NUL bytes" in text:
+        return "Environment key cannot contain NUL bytes"
+    if "Environment keys cannot use protected prefix" in text:
+        return "Environment keys cannot use protected prefix"
+    if text.startswith("Environment set ") and "must be a TOML table" in text:
+        return "Environment set must be a TOML table"
+    if text.startswith("Project target override ") and "has unsupported settings" in text:
+        return "Project target override has unsupported settings"
+    if text.startswith("Unknown project target override"):
+        return "Unknown project target override"
+    if text.startswith("Duplicate project target override"):
+        return "Duplicate project target override"
+    if text.startswith("Missing environment reference"):
+        return "Missing environment reference"
+    if text.startswith("Environment reference cycle detected"):
+        return "Environment reference cycle detected"
+    if "Unterminated environment reference" in text:
+        return "Unterminated environment reference"
+    if "Empty environment reference" in text:
+        return "Empty environment reference"
+    if "Malformed environment reference" in text:
+        return "Malformed environment reference"
+    if "Protected environment reference" in text:
+        return "Protected environment reference"
+    if text.startswith("Unknown target"):
+        return "Unknown target"
     return None
 
 
@@ -195,6 +242,9 @@ def sanitize_config_error(error: object) -> str:
     retry_policy_error = _retry_policy_config_error(text)
     if retry_policy_error is not None:
         return retry_policy_error
+    env_error = _environment_config_error(text)
+    if env_error is not None:
+        return env_error
     if text.startswith("Invalid logging level"):
         return "Invalid logging level"
     if "must be a positive integer" in text:

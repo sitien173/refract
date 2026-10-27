@@ -37,6 +37,32 @@ def test_legacy_plan_target_capabilities_still_parse(tmp_path) -> None:
     assert parse_execution_plan(data) == plan
 
 
+def test_plan_environment_marker_is_structural_and_legacy_absence_is_empty(tmp_path) -> None:
+    from dataclasses import replace
+
+    catalog = config(tmp_path / "home")
+    target = replace(catalog.targets[0], envs_vars=("shared",), envs={"LOCAL": "SYNTHETIC_TEMPLATE"})
+    catalog = replace(catalog, targets=(target,))
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    data = execution_plan_data(plan)
+
+    assert data["environment_targets"] == [target.id]
+    assert "SYNTHETIC_TEMPLATE" not in str(data)
+    restored = parse_execution_plan(data)
+    assert restored.environment_targets == (target.id,)
+    assert not restored.target(target.id).envs
+    data.pop("environment_targets")
+    assert parse_execution_plan(data).environment_targets == ()
+
+
+@pytest.mark.parametrize("marker", ["primary", ["primary", "primary"], ["unknown"], [1]])
+def test_plan_rejects_invalid_environment_marker(tmp_path, marker) -> None:
+    data = execution_plan_data(resolve_execution_plan(get_workflow("review"), config(tmp_path / "home"), "balanced"))
+    data["environment_targets"] = marker
+    with pytest.raises(ValueError, match="environment metadata"):
+        parse_execution_plan(data)
+
+
 def test_plan_rejects_legacy_multi_workflow_shape(tmp_path) -> None:
     data = execution_plan_data(resolve_execution_plan(get_workflow("review"), config(tmp_path / "home"), "balanced"))
     data.pop("selection")

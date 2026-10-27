@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -9,13 +10,237 @@ from refract.config import load_config
 from refract.runtime import OrchestrationError, Runtime
 from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target
 from refract.result_metadata import JobResultMetadata, FailureMetadata, RetryMetadata
-from tests.orchestration_helpers import register_project
+from tests.orchestration_helpers import config as make_config, register_project
+
+
+def test_runtime_rejects_removed_marked_target_without_echoing_identifier(tmp_path) -> None:
+    base = make_config(tmp_path / "home")
+    target = replace(base.targets[0], envs={"LOCAL": "value"})
+    runtime = Runtime(replace(base, targets=(target,)))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root))
+    runtime._catalog = replace(runtime.catalog, targets=())
+    try:
+        with pytest.raises(ValueError, match="Unknown target") as error:
+            runtime._resolve_target_environment(project, target.id)
+        assert target.id not in str(error.value)
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
+def test_environment_session_revision_is_opaque_and_runtime_scoped(tmp_path) -> None:
+    base = make_config(tmp_path / "home")
+    target = replace(base.targets[0], envs={"SECRET": "SYNTHETIC_REVISION_SECRET"})
+    catalog = replace(base, targets=(target,))
+    root = tmp_path / "project"
+    root.mkdir()
+    first_runtime = Runtime(catalog)
+    project = register_project(first_runtime, str(root))
+    try:
+        _, first = first_runtime._resolve_target_environment(project, target.id)
+        _, repeated = first_runtime._resolve_target_environment(project, target.id)
+        assert first == repeated
+    finally:
+        import asyncio
+        asyncio.run(first_runtime.close())
+
+    second_runtime = Runtime(catalog)
+    try:
+        same_project = second_runtime.database.project(project.id)
+        assert same_project is not None
+        _, restarted = second_runtime._resolve_target_environment(same_project, target.id)
+        assert restarted != first
+    finally:
+        import asyncio
+        asyncio.run(second_runtime.close())
+
+
+def test_runtime_resolves_current_project_environment_by_stored_target_id(tmp_path) -> None:
+    base = make_config(tmp_path / "home")
+    target = replace(base.targets[0], envs_vars=("shared",), args=("--safe",), max_concurrency=3)
+    catalog = replace(base, targets=(target,), envs={"shared": {"ENDPOINT": "global"}})
+    root = tmp_path / "project"
+    root.mkdir()
+    runtime = Runtime(catalog)
+    project = register_project(runtime, str(root))
+    project_config = root / ".refract" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text('[envs.shared]\nENDPOINT = "project-one"\n', encoding="utf-8")
+    try:
+        first, first_revision = runtime._resolve_target_environment(project, target.id)
+        stored_plan = resolve_execution_plan("implement", catalog, "balanced")
+        project_config.write_text('[envs.shared]\nENDPOINT = "project-two"\n', encoding="utf-8")
+        second, second_revision = runtime._resolve_target_environment(project, target.id)
+        assert first == {"ENDPOINT": "project-one"}
+        assert second == {"ENDPOINT": "project-two"}
+        assert first_revision != second_revision
+        other_root = tmp_path / "other-project"
+        other_root.mkdir()
+        other_project = register_project(runtime, str(other_root))
+        other_config = other_root / ".refract" / "config.toml"
+        other_config.parent.mkdir()
+        other_config.write_text('[envs.shared]\nENDPOINT = "isolated-project"\n', encoding="utf-8")
+        other_values, other_revision = runtime._resolve_target_environment(other_project, target.id)
+        assert other_values == {"ENDPOINT": "isolated-project"}
+        assert other_revision != second_revision
+        assert stored_plan.target(target.id).args == ("--safe",)
+        assert stored_plan.target(target.id).max_concurrency == 3
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
+def test_resolve_target_environment_derives_revision_from_catalog_snapshot_not_subsequent_stat(tmp_path, monkeypatch) -> None:
+    import refract.runtime as runtime_module
+
+    base = make_config(tmp_path / "home")
+    target = replace(base.targets[0], envs_vars=("shared",))
+    catalog = replace(base, targets=(target,), envs={"shared": {"ENDPOINT": "global"}})
+    root = tmp_path / "project"
+    root.mkdir()
+    runtime = Runtime(catalog)
+    project = register_project(runtime, str(root))
+    project_config = root / ".refract" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text('[envs.shared]\nENDPOINT = "v1"\n', encoding="utf-8")
+    try:
+        original_resolve = runtime_module.resolve_target_environment
+        edited = False
+
+        def edit_during_resolution(cat, tgt, inherited=None):
+            nonlocal edited
+            res = original_resolve(cat, tgt, inherited=inherited)
+            if not edited:
+                edited = True
+                # Simulate an external edit between catalog acquisition and revision generation
+                project_config.write_text('[envs.shared]\nENDPOINT = "v2"\n', encoding="utf-8")
+            return res
+
+        monkeypatch.setattr(runtime_module, "resolve_target_environment", edit_during_resolution)
+
+        first_values, first_revision = runtime._resolve_target_environment(project, target.id)
+        assert first_values == {"ENDPOINT": "v1"}
+
+        second_values, second_revision = runtime._resolve_target_environment(project, target.id)
+        assert second_values == {"ENDPOINT": "v2"}
+
+        assert first_revision != second_revision
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
+def test_project_catalog_snapshot_retries_when_file_changes_during_load(tmp_path, monkeypatch) -> None:
+    import refract.runtime as runtime_module
+
+    base = make_config(tmp_path / "home")
+    root = tmp_path / "project"
+    root.mkdir()
+    runtime = Runtime(base)
+    old_identity = (1000, 100, 1)
+    new_identity = (2000, 200, 2)
+    identities = iter((old_identity, new_identity, new_identity, new_identity))
+    loaded = []
+    catalog = replace(base, envs={"shared": {"ENDPOINT": "current"}})
+
+    def file_identity(path):
+        return next(identities)
+
+    def load_project(root_path, base_catalog):
+        loaded.append(base_catalog)
+        return catalog
+
+    monkeypatch.setattr(runtime_module, "_file_identity", file_identity)
+    monkeypatch.setattr(runtime_module, "load_project_config", load_project)
+    try:
+        # A distinct base object forces the project-catalog cache miss that exposed
+        # the pre-load identity race during a global configuration reload.
+        result, revision = runtime._project_catalog_snapshot(root, replace(base))
+        assert result is catalog
+        assert len(loaded) == 2
+        assert runtime._project_catalogs[root][0] == new_identity
+        assert revision == runtime._project_catalogs[root][3]
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
+def test_project_catalog_snapshot_fails_safely_after_continuous_file_churn(tmp_path, monkeypatch) -> None:
+    import refract.runtime as runtime_module
+
+    base = make_config(tmp_path / "home")
+    root = tmp_path / "project"
+    root.mkdir()
+    runtime = Runtime(base)
+    identities = iter((1000, 2000, 3000, 4000, 5000, 6000))
+    loads = 0
+
+    def file_identity(path):
+        return (next(identities), 100, 1)
+
+    def load_project(root_path, base_catalog):
+        nonlocal loads
+        loads += 1
+        return replace(base_catalog, envs={"shared": {"TOKEN": "SYNTHETIC_SECRET"}})
+
+    monkeypatch.setattr(runtime_module, "_file_identity", file_identity)
+    monkeypatch.setattr(runtime_module, "load_project_config", load_project)
+    try:
+        with pytest.raises(ValueError, match="Project configuration changed during loading") as error:
+            runtime._project_catalog_snapshot(root, replace(base))
+        assert loads == 3
+        assert "SYNTHETIC_SECRET" not in str(error.value)
+        assert root not in runtime._project_catalogs
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
+def test_resolve_target_environment_mocked_sequence_does_not_label_old_binding_with_new_identity(tmp_path, monkeypatch) -> None:
+    import refract.runtime as runtime_module
+
+    base = make_config(tmp_path / "home")
+    target = replace(base.targets[0], envs_vars=("shared",))
+    catalog_old = replace(base, targets=(target,), envs={"shared": {"ENDPOINT": "old"}})
+    catalog_new = replace(base, targets=(target,), envs={"shared": {"ENDPOINT": "new"}})
+
+    root = tmp_path / "project"
+    root.mkdir()
+    runtime = Runtime(base)
+    project = register_project(runtime, str(root))
+
+    old_ident = (1000, 100, 1)
+    new_ident = (2000, 200, 2)
+    file_identities = [old_ident, old_ident, new_ident, new_ident]
+    catalog_loads = [catalog_old, catalog_new]
+
+    def mock_file_identity(path):
+        return file_identities.pop(0) if file_identities else new_ident
+
+    def mock_load_project_config(root_path, base_catalog):
+        return catalog_loads.pop(0)
+
+    monkeypatch.setattr(runtime_module, "_file_identity", mock_file_identity)
+    monkeypatch.setattr(runtime_module, "load_project_config", mock_load_project_config)
+
+    try:
+        first_values, first_revision = runtime._resolve_target_environment(project, target.id)
+        second_values, second_revision = runtime._resolve_target_environment(project, target.id)
+
+        assert first_values == {"ENDPOINT": "old"}
+        assert second_values == {"ENDPOINT": "new"}
+        assert first_revision != second_revision
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
 
 
 @pytest.mark.asyncio
 async def test_submit_pins_valid_token_and_prechecks_all_open_targets(tmp_path) -> None:
     path = tmp_path / "config.toml"
-    path.write_text('''[daemon]\ndefault_profile = "balanced"\nbreaker_base_cooldown_s = 7\n\n[[targets]]\nid = "a"\nbackend = "codex"\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[profiles.balanced]\nconsult = ["a", "b"]\n''', encoding="utf-8")
+    path.write_text('''[daemon]\ndefault_profile = "balanced"\nbreaker_base_cooldown_s = 7\n\n[[targets]]\nid = "a"\nbackend = "codex"\nenvs = { A = "SYNTHETIC_MARKER" }\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[profiles.balanced]\nconsult = ["a", "b"]\n''', encoding="utf-8")
     runtime = Runtime(load_config(path))
     root = tmp_path / "project"
     root.mkdir()
@@ -25,7 +250,9 @@ async def test_submit_pins_valid_token_and_prechecks_all_open_targets(tmp_path) 
     try:
         first = await runtime.submit(project.id, "consult", "hello", next_target=token)
         stored = runtime.database.job_record(first.job_id)
-        assert json.loads(stored["execution_plan_json"])["selection"]["targets"] == ["b"]
+        stored_plan = json.loads(stored["execution_plan_json"])
+        assert stored_plan["selection"]["targets"] == ["b"]
+        assert "environment_targets" not in stored_plan
         assert len(runtime.database.jobs(project.id)) == 1
         for target in plan.targets:
             runtime.database.record_target_failure(target_execution_key(target), immediate=True, base_cooldown_s=7)

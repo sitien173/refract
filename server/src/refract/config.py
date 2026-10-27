@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,8 @@ class TargetConfig:
     args: tuple[str, ...] = ()
     max_concurrency: int = 1
     retry_policy: str = ""
+    envs_vars: tuple[str, ...] = field(default_factory=tuple, repr=False)
+    envs: dict[str, str] = field(default_factory=dict, repr=False)
 
 
 @dataclass(slots=True, frozen=True)
@@ -109,6 +112,7 @@ class DaemonConfig:
     breaker_base_cooldown_s: int = 60
     breaker_max_cooldown_s: int = 900
     ask_timeout_s: int = DEFAULT_ASK_TIMEOUT_S
+    envs: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
     @property
     def database_path(self) -> Path:
@@ -453,8 +457,48 @@ def _retry_policies(raw: Any) -> dict[str, RetryPolicy]:
     return policies
 
 
+def _validate_env_mapping(mapping: Any, *, context: str) -> dict[str, str]:
+    if not isinstance(mapping, dict):
+        raise ValueError(f"{context} must be a TOML table")
+    result: dict[str, str] = {}
+    for key, val in mapping.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"Environment key cannot be empty in {context}")
+        if "=" in key:
+            raise ValueError(f"Environment key cannot contain '=' in {context}")
+        if "\x00" in key:
+            raise ValueError(f"Environment key cannot contain NUL bytes in {context}")
+        if key.startswith("REFRACT_ASK_"):
+            raise ValueError(f"Environment keys cannot use protected prefix REFRACT_ASK_ in {context}")
+        if isinstance(val, bool) or not isinstance(val, str):
+            raise ValueError(f"Environment values must be strings in {context}")
+        if "\x00" in val:
+            raise ValueError(f"Environment values cannot contain NUL bytes in {context}")
+        result[key] = val
+    return result
+
+
+def _envs(raw: Any) -> dict[str, dict[str, str]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("[envs] must be a TOML table")
+    result: dict[str, dict[str, str]] = {}
+    for name, mapping in raw.items():
+        if not isinstance(name, str) or not name or "\x00" in name:
+            raise ValueError("Invalid environment set declaration")
+        if not isinstance(mapping, dict):
+            raise ValueError(f"Environment set {name!r} must be a TOML table")
+        result[name] = _validate_env_mapping(
+            mapping, context=f"Environment set {name!r}"
+        )
+    return result
+
+
 def _targets(
-    raw: Any, retry_policies: dict[str, RetryPolicy] | None = None
+    raw: Any,
+    retry_policies: dict[str, RetryPolicy] | None = None,
+    envs: dict[str, dict[str, str]] | None = None,
 ) -> tuple[TargetConfig, ...]:
     if isinstance(raw, dict) and not raw:
         raise ValueError("[targets] must contain at least one target")
@@ -525,6 +569,26 @@ def _targets(
                 f"Target {target_id!r} backend_profile must be a string"
             )
         validate_target_args(target_id, backend, tuple(args), isolated=isolated)
+        raw_envs_vars = item.get("envs_vars", [])
+        if not isinstance(raw_envs_vars, list) or not all(
+            isinstance(value, str) for value in raw_envs_vars
+        ):
+            raise ValueError(
+                f"Target {target_id!r} envs_vars must be a list of strings"
+            )
+        available_envs = envs or {}
+        for var_set in raw_envs_vars:
+            if var_set not in available_envs:
+                raise ValueError(
+                    f"Target {target_id!r} references unknown environment set: {var_set!r}"
+                )
+        envs_vars = tuple(raw_envs_vars)
+        raw_envs = item.get("envs", {})
+        if not isinstance(raw_envs, dict):
+            raise ValueError(f"Target {target_id!r} envs must be a TOML table")
+        target_envs = _validate_env_mapping(
+            raw_envs, context=f"Target {target_id!r} envs"
+        )
         targets.append(
             TargetConfig(
                 id=target_id,
@@ -542,6 +606,8 @@ def _targets(
                     f"Target {target_id!r} max_concurrency",
                 ),
                 retry_policy=retry_policy,
+                envs_vars=envs_vars,
+                envs=target_envs,
             )
         )
     if len({target.id for target in targets}) != len(targets):
@@ -694,6 +760,7 @@ def _load_config_values(
         "profiles",
         "notifications",
         "retryPolicies",
+        "envs",
     }
     if unsupported:
         raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
@@ -718,8 +785,9 @@ def _load_config_values(
         raise ValueError("Missing required [targets] section")
     if "profiles" not in raw:
         raise ValueError("Missing required [profiles] section")
+    shared_envs = _envs(raw.get("envs"))
     retry_policies = _retry_policies(raw.get("retryPolicies"))
-    targets = _targets(raw["targets"], retry_policies)
+    targets = _targets(raw["targets"], retry_policies, shared_envs)
     profile_declarations = _profile_declarations(raw["profiles"], targets)
     profiles = _resolve_profile_maps(profile_declarations)
     default_profile = str(daemon.get("default_profile", "")).strip()
@@ -765,6 +833,7 @@ def _load_config_values(
         breaker_base_cooldown_s=breaker_base,
         breaker_max_cooldown_s=breaker_max,
         ask_timeout_s=_positive_int(daemon.get("ask_timeout_s"), DEFAULT_ASK_TIMEOUT_S, "[daemon].ask_timeout_s"),
+        envs=shared_envs,
     )
 
 
@@ -796,6 +865,8 @@ def _load_project_config_values(
     unsupported = set(raw) - {
         "project",
         "profiles",
+        "envs",
+        "targets",
     }
     if unsupported:
         raise ValueError(f"Unsupported project config sections: {sorted(unsupported)}")
@@ -807,12 +878,83 @@ def _load_project_config_values(
     if unsupported_project:
         raise ValueError(f"Unsupported project settings: {sorted(unsupported_project)}")
 
+    if "envs" in raw:
+        project_envs = _envs(raw["envs"])
+        merged_envs: dict[str, dict[str, str]] = {
+            k: dict(v) for k, v in base.envs.items()
+        }
+        for proj_set_name, proj_set_map in project_envs.items():
+            if proj_set_name in merged_envs:
+                merged_envs[proj_set_name].update(proj_set_map)
+            else:
+                merged_envs[proj_set_name] = dict(proj_set_map)
+    else:
+        merged_envs = {k: dict(v) for k, v in base.envs.items()}
+
+    targets = [replace(t, envs=dict(t.envs)) for t in base.targets]
+    target_by_id = {t.id: (i, t) for i, t in enumerate(base.targets)}
+    if "targets" in raw:
+        raw_targets = raw["targets"]
+        if not isinstance(raw_targets, list):
+            raise ValueError("[targets] must be a TOML array of tables")
+        seen_target_ids: set[str] = set()
+        for item in raw_targets:
+            if not isinstance(item, dict):
+                raise ValueError("Each target must be a TOML table")
+            raw_target_id = item.get("id")
+            if not isinstance(raw_target_id, str) or not raw_target_id.strip():
+                raise ValueError("Target override must specify an id string")
+            target_id = raw_target_id.strip()
+            if target_id not in target_by_id:
+                raise ValueError(f"Unknown project target override: {target_id!r}")
+            if target_id in seen_target_ids:
+                raise ValueError(f"Duplicate project target override: {target_id!r}")
+            seen_target_ids.add(target_id)
+            unsupported_fields = set(item) - {"id", "envs_vars", "envs"}
+            if unsupported_fields:
+                raise ValueError(
+                    f"Project target override {target_id!r} has unsupported settings: {sorted(unsupported_fields)}"
+                )
+            idx, base_target = target_by_id[target_id]
+            if "envs_vars" in item:
+                raw_vars = item["envs_vars"]
+                if not isinstance(raw_vars, list) or not all(
+                    isinstance(v, str) for v in raw_vars
+                ):
+                    raise ValueError(
+                        f"Target {target_id!r} envs_vars must be a list of strings"
+                    )
+                for var_set in raw_vars:
+                    if var_set not in merged_envs:
+                        raise ValueError(
+                            f"Target {target_id!r} references unknown environment set: {var_set!r}"
+                        )
+                new_envs_vars = tuple(raw_vars)
+            else:
+                new_envs_vars = base_target.envs_vars
+            if "envs" in item:
+                raw_target_envs = item["envs"]
+                if not isinstance(raw_target_envs, dict):
+                    raise ValueError(f"Target {target_id!r} envs must be a TOML table")
+                proj_local = _validate_env_mapping(
+                    raw_target_envs, context=f"Target {target_id!r} envs"
+                )
+                new_envs = dict(base_target.envs)
+                new_envs.update(proj_local)
+            else:
+                new_envs = dict(base_target.envs)
+            targets[idx] = replace(
+                base_target,
+                envs_vars=new_envs_vars,
+                envs=new_envs,
+            )
+
     if "profiles" not in raw:
         profiles = {profile_id: dict(mapping) for profile_id, mapping in base.profiles.items()}
         profile_declarations = dict(base.profile_declarations)
         project_declarations = {}
     else:
-        project_declarations = _profile_declarations(raw["profiles"], base.targets)
+        project_declarations = _profile_declarations(raw["profiles"], tuple(targets))
         project_profiles = _resolve_profile_maps(
             project_declarations,
             snapshots=base.profiles,
@@ -833,7 +975,7 @@ def _load_project_config_values(
         history_turns=base.history_turns,
         history_bytes=base.history_bytes,
         default_profile=default_profile,
-        targets=base.targets,
+        targets=tuple(targets),
         profiles=profiles,
         profile_declarations=profile_declarations,
         project_profile_declarations=project_declarations,
@@ -848,7 +990,133 @@ def _load_project_config_values(
         breaker_base_cooldown_s=base.breaker_base_cooldown_s,
         breaker_max_cooldown_s=base.breaker_max_cooldown_s,
         ask_timeout_s=base.ask_timeout_s,
+        envs=merged_envs,
     )
+
+
+def _parse_env_template(template: str) -> tuple[list[tuple[bool, str]], set[str]]:
+    """Parse an environment value template into chunks of (is_ref, value) and refs."""
+    chunks: list[tuple[bool, str]] = []
+    refs: set[str] = set()
+    i = 0
+    n = len(template)
+    cur_literal: list[str] = []
+
+    def flush_literal() -> None:
+        if cur_literal:
+            chunks.append((False, "".join(cur_literal)))
+            cur_literal.clear()
+
+    while i < n:
+        if template[i:i + 2] == "$$":
+            cur_literal.append("$")
+            i += 2
+        elif template[i:i + 2] == "${":
+            close_idx = template.find("}", i + 2)
+            if close_idx == -1:
+                raise ValueError("Unterminated environment reference")
+            ref_name = template[i + 2:close_idx]
+            if not ref_name or not ref_name.strip():
+                raise ValueError("Empty environment reference")
+            if "=" in ref_name or "\x00" in ref_name:
+                raise ValueError("Malformed environment reference")
+            if ref_name.startswith("REFRACT_ASK_"):
+                raise ValueError("Protected environment reference")
+            flush_literal()
+            chunks.append((True, ref_name))
+            refs.add(ref_name)
+            i = close_idx + 1
+        elif template[i] == "$":
+            cur_literal.append("$")
+            i += 1
+        else:
+            cur_literal.append(template[i])
+            i += 1
+
+    flush_literal()
+    return chunks, refs
+
+
+def resolve_target_environment(
+    catalog: DaemonConfig,
+    target: TargetConfig | str,
+    inherited: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Resolve configured environment overrides for a target iteratively."""
+    if isinstance(target, str):
+        target_obj: TargetConfig | None = None
+        for t in catalog.targets:
+            if t.id == target:
+                target_obj = t
+                break
+        if target_obj is None:
+            raise ValueError("Unknown target")
+    else:
+        target_obj = target
+
+    inherited_map: Mapping[str, str] = os.environ if inherited is None else inherited
+
+    # Merge configured namespace: selected shared sets in order, then target local envs
+    configured_raw: dict[str, str] = {}
+    for set_name in target_obj.envs_vars:
+        if set_name in catalog.envs:
+            configured_raw.update(catalog.envs[set_name])
+    configured_raw.update(target_obj.envs)
+
+    if not configured_raw:
+        return {}
+
+    parsed_chunks: dict[str, list[tuple[bool, str]]] = {}
+    unresolved_deps: dict[str, set[str]] = {}
+    dependents: dict[str, set[str]] = {k: set() for k in configured_raw}
+
+    for key, raw_val in configured_raw.items():
+        chunks, refs = _parse_env_template(raw_val)
+        parsed_chunks[key] = chunks
+
+        if key in refs:
+            raise ValueError("Environment reference cycle detected")
+
+        configured_deps: set[str] = set()
+        for ref in refs:
+            if ref in configured_raw:
+                configured_deps.add(ref)
+            elif ref in inherited_map:
+                pass
+            else:
+                raise ValueError("Missing environment reference")
+
+        unresolved_deps[key] = configured_deps
+        for dep in configured_deps:
+            dependents[dep].add(key)
+
+    ready: list[str] = [k for k, deps in unresolved_deps.items() if not deps]
+    resolved: dict[str, str] = {}
+
+    while ready:
+        curr = ready.pop()
+        parts: list[str] = []
+        for is_ref, val in parsed_chunks[curr]:
+            if is_ref:
+                if val in resolved:
+                    parts.append(resolved[val])
+                elif val in inherited_map:
+                    parts.append(inherited_map[val])
+                else:
+                    raise ValueError("Missing environment reference")
+            else:
+                parts.append(val)
+        resolved[curr] = "".join(parts)
+
+        for dep_key in dependents[curr]:
+            unresolved_deps[dep_key].discard(curr)
+            if not unresolved_deps[dep_key]:
+                ready.append(dep_key)
+
+    if len(resolved) < len(configured_raw):
+        raise ValueError("Environment reference cycle detected")
+
+    return resolved
 
 
 __all__ = [
@@ -863,5 +1131,6 @@ __all__ = [
     "load_project_config",
     "load_task_guide",
     "refract_home",
+    "resolve_target_environment",
     "validate_target_args",
 ]

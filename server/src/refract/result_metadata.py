@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Strict
 
 from refract.telemetry import Measurement, TelemetryCompleteness, TelemetryData
 
-FAILURE_KINDS = ("cancelled", "circuit_open", "context_overflow", "replay_blocked", "request_fatal", "retryable", "target_fatal")
-FailureKind = Literal["cancelled", "circuit_open", "context_overflow", "replay_blocked", "request_fatal", "retryable", "target_fatal"]
+FAILURE_KINDS = ("cancelled", "circuit_open", "config_invalid", "context_overflow", "replay_blocked", "request_fatal", "retryable", "target_fatal")
+FailureKind = Literal["cancelled", "circuit_open", "config_invalid", "context_overflow", "replay_blocked", "request_fatal", "retryable", "target_fatal"]
 METRIC_NAMES = (
     "context_remaining_percent", "context_window_size", "context_used_tokens",
     "total_input_tokens", "total_output_tokens", "cache_read_tokens", "cache_write_tokens",

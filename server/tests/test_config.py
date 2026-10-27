@@ -1045,3 +1045,34 @@ consult = "primary"
     )
     with pytest.raises(ValueError, match="unsupported settings"):
         load_config(path)
+
+
+
+def test_environment_declarations_preserve_source_revision_metadata(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[envs.shared]
+KEY = "val"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+envs_vars = ["shared"]
+envs = { LOCAL = "loc" }
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    catalog = load_config(path)
+    assert catalog.config_revision != ""
+    assert catalog.revision == catalog.config_revision
+    assert catalog.envs["shared"]["KEY"] == "val"
+    assert catalog.targets[0].envs_vars == ("shared",)
+    assert catalog.targets[0].envs == {"LOCAL": "loc"}

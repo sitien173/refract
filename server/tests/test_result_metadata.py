@@ -14,7 +14,10 @@ METRICS = (
     "context_remaining_percent", "context_window_size", "context_used_tokens",
     "total_input_tokens", "total_output_tokens", "cache_read_tokens", "cache_write_tokens",
 )
-FAILURES = ("cancelled", "circuit_open", "context_overflow", "replay_blocked", "request_fatal", "retryable", "target_fatal")
+FAILURES = (
+    "cancelled", "circuit_open", "config_invalid", "context_overflow",
+    "replay_blocked", "request_fatal", "retryable", "target_fatal",
+)
 TS = "2025-01-01T00:00:00Z"
 
 
@@ -286,3 +289,36 @@ def test_converter_preserves_valid_quality_exactly(quality):
     })
     assert meta.telemetry.total_input_tokens.quality == quality
     assert internal.total_input_tokens.quality == quality
+
+
+def test_canonical_schema_accepts_config_invalid_and_nonretryable_metadata():
+    metadata = JobResultMetadata(
+        failure=FailureMetadata(kind="config_invalid"),
+        retry=RetryMetadata(retryable=False),
+    )
+    assert metadata.failure is not None
+    assert metadata.failure.kind == "config_invalid"
+    assert metadata.retry.retryable is False
+
+    job_result = JobResult(metadata=metadata)
+    assert job_result.metadata.failure is not None
+    assert job_result.metadata.failure.kind == "config_invalid"
+    assert job_result.metadata.retry.retryable is False
+
+
+def test_converter_accepts_historical_config_invalid():
+    metadata, internal = convert_schema15_metadata({
+        "failure_kind": "config_invalid",
+        "retryable": False,
+    })
+    assert metadata.failure is not None
+    assert metadata.failure.kind == "config_invalid"
+    assert metadata.retry.retryable is False
+    assert internal is None
+
+
+def test_strict_unknown_failure_validation_preserved():
+    with pytest.raises(ValidationError):
+        FailureMetadata(kind="unknown")
+    with pytest.raises(ValidationError):
+        JobResultMetadata(failure={"kind": "unknown"})

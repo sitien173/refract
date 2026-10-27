@@ -145,6 +145,7 @@ class ExecutionPlan:
     selection: TargetSelection
     targets: tuple[TargetConfig, ...]
     retry_policies: Mapping[str, RetryPolicy] = field(default_factory=dict)
+    environment_targets: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -243,6 +244,8 @@ def execution_plan_data(plan: ExecutionPlan) -> dict[str, Any]:
         "selection": _selection_data(plan.selection),
         "targets": [_target_data(target) for target in plan.targets],
     }
+    if plan.environment_targets:
+        data["environment_targets"] = list(plan.environment_targets)
     if plan.retry_policies:
         data["retry_policies"] = {
             name: _retry_policy_data(policy)
@@ -268,12 +271,21 @@ def parse_execution_plan(data: Any) -> ExecutionPlan:
     else:
         raw_policies = {}
     retry_policies = _parse_retry_policies(raw_policies, targets)
+    raw_environment_targets = data.get("environment_targets", [])
+    if (
+        not isinstance(raw_environment_targets, list)
+        or not all(isinstance(value, str) and value for value in raw_environment_targets)
+        or len(set(raw_environment_targets)) != len(raw_environment_targets)
+        or set(raw_environment_targets) - {target.id for target in targets}
+    ):
+        raise ValueError("Execution plan has invalid environment metadata")
     return ExecutionPlan(
         str(data.get("profile", "")),
         workflow,
         selection,
         targets,
         retry_policies,
+        tuple(raw_environment_targets),
     )
 
 
@@ -304,6 +316,7 @@ def resolve_execution_plan(
         selection,
         targets,
         retry_policies,
+        tuple(target.id for target in targets if target.envs_vars or target.envs),
     )
 
 
