@@ -118,3 +118,95 @@ def test_sanitizer_does_not_expose_retry_policy_or_error_patterns(message, expec
     sanitized = sanitize_config_error(message)
     assert sanitized == expected
     assert "SECRET_" not in sanitized
+
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "Target 'SECRET_TARGET' references unknown environment set: 'SECRET_GROUP'",
+            "Target references unknown environment set",
+        ),
+        (
+            "Target 'SECRET_TARGET' envs must be a TOML table",
+            "Target envs must be a TOML table",
+        ),
+        (
+            "Target 'SECRET_TARGET' envs_vars must be a list of strings",
+            "Target envs_vars must be a list of strings",
+        ),
+        (
+            "Environment set 'SECRET_GROUP' must be a TOML table",
+            "Environment set must be a TOML table",
+        ),
+        (
+            "Environment values must be strings in Environment set 'SECRET_GROUP'",
+            "Environment values must be strings",
+        ),
+        (
+            "Environment values cannot contain NUL bytes in Target 'SECRET_TARGET' envs",
+            "Environment values cannot contain NUL bytes",
+        ),
+        (
+            "Environment key cannot be empty in Target 'SECRET_TARGET' envs",
+            "Environment key cannot be empty",
+        ),
+        (
+            "Environment key cannot contain '=' in Environment set 'SECRET_GROUP'",
+            "Environment key cannot contain '='",
+        ),
+        (
+            "Environment key cannot contain NUL bytes in Environment set 'SECRET_GROUP'",
+            "Environment key cannot contain NUL bytes",
+        ),
+        (
+            "Environment keys cannot use protected prefix REFRACT_ASK_ in Environment set 'SECRET_GROUP'",
+            "Environment keys cannot use protected prefix",
+        ),
+        (
+            "Project target override 'SECRET_TARGET' has unsupported settings: ['SECRET_FIELD']",
+            "Project target override has unsupported settings",
+        ),
+        (
+            "Unknown project target override: 'SECRET_TARGET'",
+            "Unknown project target override",
+        ),
+        (
+            "Duplicate project target override: 'SECRET_TARGET'",
+            "Duplicate project target override",
+        ),
+        (
+            "Missing environment reference: SECRET_VAR",
+            "Missing environment reference",
+        ),
+        (
+            "Environment reference cycle detected: SECRET_VAR",
+            "Environment reference cycle detected",
+        ),
+        (
+            "Protected environment reference: SECRET_REF",
+            "Protected environment reference",
+        ),
+        (
+            "Unterminated environment reference",
+            "Unterminated environment reference",
+        ),
+        (
+            "Empty environment reference",
+            "Empty environment reference",
+        ),
+        (
+            "Malformed environment reference: SECRET_NAME",
+            "Malformed environment reference",
+        ),
+        (
+            "Unknown target: 'SECRET_TARGET'",
+            "Unknown target",
+        ),
+    ],
+)
+def test_sanitizer_does_not_expose_environment_details_or_templates(message, expected) -> None:
+    sanitized = sanitize_config_error(message)
+    assert sanitized == expected
+    assert "SECRET_" not in sanitized

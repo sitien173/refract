@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import inspect
+import hashlib
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,8 @@ class TargetExecutionResult:
     target_id: str
     target_key: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    session_key: str = ""
+    session_context_key: str = ""
 
 
 @dataclass(slots=True)
@@ -57,9 +60,11 @@ class _ExecutionContext:
     fresh_session: bool
     target: TargetConfig
     target_key: str
+    session_target_key: str
     session_id: str
     effective_prompt: str
     accumulator: TelemetryAccumulator
+    bound_env: dict[str, str] = field(default_factory=dict)
 
 
 class TargetExecutor:
@@ -67,12 +72,14 @@ class TargetExecutor:
         self, config: DaemonConfig, database: Database, drivers: DriverRegistry,
         *, on_stream_commit: Callable[[str, int], Any] | None = None,
         ask_registry: Any = None,
+        environment_resolver: Callable[[ProjectView, str], tuple[dict[str, str], str]] | None = None,
     ) -> None:
         self.config = config
         self.database = database
         self.drivers = drivers
         self.on_stream_commit = on_stream_commit
         self.ask_registry = ask_registry
+        self.environment_resolver = environment_resolver
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
         self._target_users: dict[str, int] = {}
@@ -120,9 +127,27 @@ class TargetExecutor:
             tel = self._safe_telemetry_dump(accumulator)
             return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
         target_key = target_execution_key(target)
+        bound_env: dict[str, str] = {}
+        session_target_key = target_key
+        session_context_key = context_key
+        if target.id in plan.environment_targets:
+            if self.environment_resolver is None:
+                await self._release_probe(target_key, job_id)
+                return self._configuration_failure(target, target_key, "Target environment configuration is unavailable")
+            try:
+                bound_env, revision_context = await run_sync(self.environment_resolver, project, target.id)
+                opaque_revision = hashlib.sha256((project.id + revision_context).encode()).hexdigest()[:20]
+                session_target_key = f"{target_key}:env:{opaque_revision}"
+                session_context_key = f"{context_key}:env:{opaque_revision}"
+            except asyncio.CancelledError:
+                await self._release_probe(target_key, job_id)
+                raise
+            except Exception:
+                await self._release_probe(target_key, job_id)
+                return self._configuration_failure(target, target_key, "Target environment configuration is invalid")
         try:
             session_id, effective_prompt = await self._prepare_session(
-                project, context_key, workflow, target_key, prompt, fresh_session
+                project, session_context_key, workflow, session_target_key, prompt, fresh_session
             )
             await run_sync(self.database.event, job_id, "target.selected", {"workflow": workflow, "target": target.id, "attempt": 1})
         except BaseException as exc:
@@ -154,10 +179,11 @@ class TargetExecutor:
         try:
             return await self._execute_attempt(_ExecutionContext(
                 job_id=job_id, project=project, workflow=workflow,
-                context_key=context_key, plan=plan, prompt=prompt, cwd=cwd,
+                context_key=session_context_key, plan=plan, prompt=prompt, cwd=cwd,
                 cancel_event=cancel_event, fresh_session=fresh_session,
-                target=target, target_key=target_key, session_id=session_id,
+                target=target, target_key=target_key, session_target_key=session_target_key, session_id=session_id,
                 effective_prompt=effective_prompt, accumulator=accumulator,
+                bound_env=bound_env,
             ))
         finally:
             try:
@@ -170,6 +196,11 @@ class TargetExecutor:
                         self._release_capacity(target.id)
                     finally:
                         await self._release_probe(target_key, job_id)
+
+    @classmethod
+    def _configuration_failure(cls, target: TargetConfig, target_key: str, message: str) -> TargetExecutionResult:
+        result = DriverResult("REQUEST_FATAL", "", "", message, "configuration_error")
+        return TargetExecutionResult(result, target.id, target_key, cls._result_metadata(result, target, None))
 
     async def _release_probe(self, target_key: str, job_id: str) -> None:
         try:
@@ -257,7 +288,9 @@ class TargetExecutor:
         fresh_session = context.fresh_session
         target = context.target
         target_key = context.target_key
+        session_target_key = context.session_target_key
         accumulator = context.accumulator
+        bound_env = context.bound_env
 
         policy = plan.retry_policy(target.id)
 
@@ -323,7 +356,7 @@ class TargetExecutor:
                         cancel_event=cancel_event,
                         recorder=recorder,
                         supports_streaming=supports_streaming,
-                        env=ask_env,
+                        env={**bound_env, **(ask_env or {})} or None,
                     )
                     attempt.result = inv_result
                     attempt.replay_blocked = has_tool_activity and inv_result.outcome != "SUCCESS"
@@ -438,7 +471,7 @@ class TargetExecutor:
             if last.outcome == "SUCCESS":
                 await run_sync(self.database.record_target_success, target_key, self.config.breaker_base_cooldown_s)
                 if not fresh_session:
-                    await self._store_turn(attempt, job_id, project, workflow, context_key, target, target_key, prompt)
+                    await self._store_turn(attempt, job_id, project, workflow, context_key, target, session_target_key, prompt)
             else:
                 await self._update_target_health(last, target_key, job_id, attempt.replay_blocked)
         except BaseException as exc:
@@ -457,6 +490,8 @@ class TargetExecutor:
                 replay_blocked=attempt.replay_blocked,
                 telemetry=telemetry,
             ),
+            session_target_key,
+            context_key,
         )
 
     async def _record_recovery_result(
@@ -593,6 +628,8 @@ class TargetExecutor:
             failure_kind, retryable = "replay_blocked", False
         elif result.error_code == "context_overflow":
             failure_kind, retryable = "context_overflow", True
+        elif result.error_code == "configuration_error":
+            failure_kind, retryable = "config_invalid", False
         elif result.outcome == "REQUEST_FATAL":
             failure_kind, retryable = "request_fatal", False
         elif result.outcome == "TARGET_FATAL":
@@ -1008,10 +1045,10 @@ class JobRunner:
             await run_sync(self.database.finish_fresh_job_success,
                 job_id=job_id,
                 project_id=project.id,
-                context_key=record["context_key"],
+                context_key=execution.session_context_key or record["context_key"],
                 role=record["workflow"],
                 target_id=execution.target_id,
-                target_key=execution.target_key,
+                target_key=execution.session_key or execution.target_key,
                 session_id=execution.result.session_id,
                 prompt=record["prompt"],
                 response=execution.result.text,

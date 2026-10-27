@@ -1347,6 +1347,71 @@ def test_update_target_rejects_rename_and_unknown_target(tmp_path) -> None:
         runtime.database.close()
 
 
+def test_target_edit_preserves_environment_declarations_and_comments(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    source.write_text(source.read_text() + '''\n# Shared endpoint comment\n[envs.first]\nFIRST = "first-value"\n[envs.shared]\nAPI_TOKEN = "synthetic-editor-marker" # token comment\nBASE_URL = "https://example.invalid"\n[envs.last]\nLAST = "last-value"\n''', encoding="utf-8")
+    text = source.read_text().replace(
+        'id = "primary"\nbackend = "codex"',
+        'id = "primary"\nbackend = "codex"\nenvs_vars = ["first", "shared", "last"] # order comment\nenvs = { LOCAL = "target-value" }',
+    )
+    source.write_text(text, encoding="utf-8")
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        service.update_target(
+            "primary", TargetEditorData(id="primary", backend="codex", model="edited"),
+            expected_revision=service.source_read().revision,
+        )
+        saved = source.read_text()
+        assert 'envs_vars = ["first", "shared", "last"] # order comment' in saved
+        assert 'envs = { LOCAL = "target-value" }' in saved
+        assert '# Shared endpoint comment' in saved
+        assert '# token comment' in saved
+        assert 'API_TOKEN = "synthetic-editor-marker"' in saved
+    finally:
+        runtime.database.close()
+
+
+def test_target_edit_preserves_ordinary_environment_tables_and_stale_candidate(tmp_path) -> None:
+    source = _global_source(tmp_path)
+    text = source.read_text().replace(
+        'backend = "codex"\nprofile = "legacy-profile"',
+        'backend = "codex"\nprofile = "legacy-profile"\nenvs_vars = ["first", "shared", "last"] # ordered comment',
+    ).replace(
+        '\n[[targets]]\nid = "fallback"',
+        '\n[targets.envs]\nLOCAL_VALUE = "local-marker" # local comment\n\n[[targets]]\nid = "fallback"',
+    )
+    text += '\n[envs.first]\nFIRST = "first-marker"\n[envs.shared]\nTOKEN = "ordinary-secret-marker" # shared comment\n[envs.last]\nLAST = "last-marker"\n'
+    source.write_text(text, encoding="utf-8")
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        expected = service.source_read().revision
+        document = service.read_document(load_source(source))
+        target = service.find_target(document, "primary")
+        service.set_target_value(target, "model", "edited")
+        service.set_target_value(target, "backend", "invalid-backend")
+        with pytest.raises(ConfigurationMutationError) as invalid:
+            service.commit_document(document, expected_revision=expected)
+        assert invalid.value.code == "configuration_invalid"
+        assert source.read_text() == text
+        service.set_target_value(target, "backend", "codex")
+        with pytest.raises(ConfigurationMutationError) as raised:
+            service.commit_document(document, expected_revision="0" * 64)
+        assert raised.value.code == "configuration_conflict"
+        assert source.read_text() == text
+        service.update_target(
+            "primary", TargetEditorData(id="primary", backend="codex", model="edited"),
+            expected_revision=expected,
+        )
+        saved = source.read_text()
+        assert 'envs_vars = ["first", "shared", "last"] # ordered comment' in saved
+        assert '[targets.envs]' in saved and 'LOCAL_VALUE = "local-marker" # local comment' in saved
+        assert '[envs.shared]' in saved and 'TOKEN = "ordinary-secret-marker" # shared comment' in saved
+    finally:
+        runtime.database.close()
+
+
 def test_update_target_concurrency_conflict(tmp_path) -> None:
     source = _global_source(tmp_path)
     runtime = Runtime(load_config(source))
@@ -1703,6 +1768,85 @@ def test_global_profile_crud_and_references(tmp_path) -> None:
         # 6. Delete custom now succeeds
         result5, deleted_id = service.delete_profile("custom", expected_revision=result4.revision)
         assert deleted_id == "custom"
+    finally:
+        runtime.database.close()
+
+
+def test_project_profile_edit_preserves_target_environment_overlay(tmp_path) -> None:
+    from refract.models import ProfileEditorData, WorkflowPolicyData
+
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        path = project_root / ".refract" / "config.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('''[envs.project_only]
+PROJECT_SECRET = "synthetic-project-marker" # preserve comment
+
+[[targets]]
+id = "primary"
+envs_vars = ["project_only"]
+envs = { LOCAL = "local-value" }
+
+[profiles.quality]
+consult = "primary"
+''', encoding="utf-8")
+        service = runtime.mutations
+        service.update_project_override(
+            project_root, "quality",
+            ProfileEditorData(id="quality", workflows={
+                "consult": WorkflowPolicyData(targets=["fallback"]),
+            }),
+            expected_revision=service.source_read(project_root).revision,
+        )
+        saved = path.read_text()
+        assert '[envs.project_only]' in saved
+        assert 'PROJECT_SECRET = "synthetic-project-marker" # preserve comment' in saved
+        assert 'envs_vars = ["project_only"]' in saved
+        assert 'envs = { LOCAL = "local-value" }' in saved
+        assert 'consult = "fallback"' in saved
+    finally:
+        runtime.database.close()
+
+
+def test_project_profile_edit_preserves_ordinary_target_environment_table(tmp_path) -> None:
+    from refract.models import ProfileEditorData, WorkflowPolicyData
+
+    runtime, project_root = _runtime_with_project(tmp_path)
+    try:
+        path = project_root / ".refract" / "config.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        original = '''[envs.project_set]
+PROJECT_VALUE = "project-secret-marker" # project shared comment
+
+[envs.second_set]
+SECOND = "second-value"
+
+[[targets]]
+id = "primary"
+envs_vars = ["project_set", "second_set"] # ordered overlay
+
+[targets.envs]
+OVERLAY_VALUE = "overlay-secret-marker" # overlay comment
+
+[profiles.quality]
+consult = "primary"
+'''
+        path.write_text(original, encoding="utf-8")
+        service = runtime.mutations
+        service.update_project_override(
+            project_root, "quality",
+            ProfileEditorData(id="quality", workflows={
+                "consult": WorkflowPolicyData(targets=["fallback"]),
+            }),
+            expected_revision=service.source_read(project_root).revision,
+        )
+        saved = path.read_text()
+        assert '[envs.project_set]' in saved
+        assert 'PROJECT_VALUE = "project-secret-marker" # project shared comment' in saved
+        assert 'envs_vars = ["project_set", "second_set"] # ordered overlay' in saved
+        assert '[targets.envs]' in saved
+        assert 'OVERLAY_VALUE = "overlay-secret-marker" # overlay comment' in saved
+        assert 'consult = "fallback"' in saved
     finally:
         runtime.database.close()
 

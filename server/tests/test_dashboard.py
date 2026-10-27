@@ -289,6 +289,157 @@ async def test_dashboard_job_detail_redacts_execution_plan(active_runtime) -> No
 
 
 @pytest.mark.asyncio
+async def test_dashboard_job_detail_omits_marked_environment_metadata(active_runtime) -> None:
+    from refract.dashboard import _safe_execution_plan
+
+    plan = resolve_execution_plan("consult", active_runtime.catalog, "balanced")
+    snapshot = execution_plan_data(plan)
+    snapshot["environment_targets"] = ["primary"]
+    snapshot["targets"][0]["envs_vars"] = ["synthetic-template-marker"]
+    snapshot["targets"][0]["envs"] = {"SECRET": "synthetic-secret-marker"}
+    safe = json.dumps(_safe_execution_plan(snapshot))
+    assert "environment_targets" not in safe
+    assert "envs_vars" not in safe
+    assert "envs" not in safe
+    assert "synthetic-template-marker" not in safe
+    assert "synthetic-secret-marker" not in safe
+
+
+@pytest.mark.asyncio
+async def test_environment_markers_stay_private_across_dashboard_http_surfaces(active_runtime) -> None:
+    runtime = active_runtime
+    source = runtime.catalog.config_path
+    text = source.read_text(encoding="utf-8").replace(
+        'args = ["--flag"]\nmax_concurrency = 2',
+        'args = ["--flag"]\nmax_concurrency = 2\nenvs_vars = ["shared"]\n\n[targets.envs]\nLOCAL_MARKER = "global-local-secret-marker" # local comment',
+    )
+    text += '''\n[envs.shared]
+GLOBAL_MARKER = "global-secret-marker"
+GLOBAL_TEMPLATE = "${GLOBAL_MARKER}/template-marker"
+'''
+    source.write_text(text, encoding="utf-8")
+    runtime.publish_configuration()
+
+    project = runtime.database.project("project")
+    project_path = Path(project.root) / ".refract" / "config.toml"
+    project_path.parent.mkdir(parents=True, exist_ok=True)
+    project_path.write_text('''[envs.shared]
+PROJECT_MARKER = "project-secret-marker"
+PROJECT_TEMPLATE = "${PROJECT_MARKER}/template-marker"
+
+[[targets]]
+id = "primary"
+envs_vars = ["shared", "project_only"]
+
+[targets.envs]
+PROJECT_LOCAL = "project-local-secret-marker"
+
+[envs.project_only]
+ONLY_MARKER = "project-only-secret-marker"
+
+[profiles.balanced]
+consult = "primary"
+''', encoding="utf-8")
+
+    app = create_application()
+    responses: list[bytes] = []
+    for endpoint in (
+        "/dashboard/api/configuration",
+        "/dashboard/api/overview",
+        "/dashboard/api/settings",
+        "/dashboard/api/configuration/targets",
+        "/dashboard/api/configuration/targets/primary",
+        "/dashboard/api/configuration/profiles",
+        f"/dashboard/api/projects/{project.id}",
+        f"/dashboard/api/projects/{project.id}/profile-overrides",
+    ):
+        status, _, body = await request(app, endpoint)
+        assert status == 200, (endpoint, body)
+        responses.append(body)
+
+    revision = runtime.mutations.source_read().revision
+    headers = (
+        ("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"),
+        ("X-Refract-CSRF", "test-token"), ("If-Match", f'"{revision}"'),
+    )
+    update_data = {"id": "primary", "backend": "codex", "model": "updated"}
+    status, _, body = await request(
+        app, "/dashboard/api/configuration/targets/primary", method="PUT",
+        body=json.dumps(update_data).encode(), headers=headers,
+    )
+    assert status == 200
+    responses.append(body)
+
+    stale_headers = (*headers[:-1], ("If-Match", '"stale-environment-revision"'))
+    status, _, body = await request(
+        app, "/dashboard/api/configuration/targets/primary", method="PUT",
+        body=json.dumps(update_data).encode(), headers=stale_headers,
+    )
+    assert status == 409
+    responses.append(body)
+
+    current_revision = runtime.mutations.source_read().revision
+    invalid_headers = (*headers[:-1], ("If-Match", f'"{current_revision}"'))
+    invalid_data = {"id": "primary", "backend": "invalid-backend"}
+    status, _, body = await request(
+        app, "/dashboard/api/configuration/targets/primary", method="PUT",
+        body=json.dumps(invalid_data).encode(), headers=invalid_headers,
+    )
+    assert status == 422
+    responses.append(body)
+
+    project_url = f"/dashboard/api/projects/{project.id}/profile-overrides"
+    _, _, project_read_body = await request(app, project_url)
+    project_revision = json.loads(project_read_body)["revision"]
+    project_headers = (
+        ("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"),
+        ("X-Refract-CSRF", "test-token"), ("If-Match", f'"{project_revision}"'),
+    )
+    project_update = {"id": "balanced", "consult": {"targets": ["fallback"]}}
+    status, _, body = await request(
+        app, f"{project_url}/balanced", method="PUT",
+        body=json.dumps(project_update).encode(), headers=project_headers,
+    )
+    assert status == 200
+    responses.append(body)
+    stale_project_headers = (*project_headers[:-1], ("If-Match", '"stale-project-revision"'))
+    status, _, body = await request(
+        app, f"{project_url}/balanced", method="PUT",
+        body=json.dumps(project_update).encode(), headers=stale_project_headers,
+    )
+    assert status == 409
+    responses.append(body)
+
+    plan = execution_plan_data(resolve_execution_plan("consult", runtime.catalog, "balanced"))
+    for job_id, marked in (("environment-legacy", False), ("environment-marked", True)):
+        snapshot = dict(plan)
+        if marked:
+            snapshot["environment_targets"] = ["primary"]
+            snapshot["targets"] = [dict(target) for target in snapshot["targets"]]
+            snapshot["targets"][0].update(
+                envs_vars=["global-secret-marker-template"],
+                envs={"SECRET": "global-secret-marker"},
+            )
+        runtime.database.create_job(
+            job_id=job_id, project_id=project.id, workflow="consult", profile="balanced",
+            prompt="dashboard synthetic job", execution_plan_json=json.dumps(snapshot),
+            context_key=job_id,
+        )
+        status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
+        assert status == 200
+        responses.append(body)
+
+    for marker in (
+        "global-secret-marker", "${GLOBAL_MARKER}/template-marker", "global-local-secret-marker",
+        "project-secret-marker", "${PROJECT_MARKER}/template-marker",
+        "project-local-secret-marker", "project-only-secret-marker", "global-secret-marker-template",
+    ):
+        assert marker.encode() not in b"\n".join(responses), marker
+    assert "global-secret-marker" in source.read_text(encoding="utf-8")
+    assert "project-secret-marker" in project_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_dashboard_job_detail_preserves_prompt_whitespace_and_multiline(active_runtime) -> None:
     runtime = active_runtime
     project = runtime.database.project("project")

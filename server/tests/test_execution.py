@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import inspect
+import hashlib
 import json
+import os
 import subprocess
+import sys
 import threading
 from datetime import datetime, timezone
 from dataclasses import dataclass, replace
@@ -24,6 +27,406 @@ from refract.scheduler import CancelEvent
 from refract.workflows import get_workflow
 from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, git, repository
 from tests.orchestration_helpers import register_project
+
+
+@pytest.mark.asyncio
+async def test_legacy_snapshot_ignores_current_target_environment(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    target = replace(base.targets[0], envs={"CURRENT_ONLY": "SYNTHETIC_CURRENT_VALUE"})
+    catalog = replace(base, targets=(target,))
+    runtime = Runtime(catalog)
+    project = register_project(runtime, str(root))
+    plan_data = execution_plan_data(resolve_execution_plan(get_workflow("implement"), catalog, "balanced"))
+    plan_data.pop("environment_targets")
+    calls = []
+    resolver = runtime.target_executor.environment_resolver
+    def tracking_resolver(*args):
+        calls.append(True)
+        return resolver(*args)
+    runtime.target_executor.environment_resolver = tracking_resolver
+    runtime.database.create_job(
+        job_id="legacy-env-snapshot", project_id=project.id, workflow="implement",
+        profile="balanced", prompt="legacy", execution_plan_json=json.dumps(plan_data),
+        context_key="legacy",
+    )
+    received: list[dict[str, str]] = []
+    class LegacyDrivers(FakeDrivers):
+        async def execute(self, *, env=None, **kwargs):
+            received.append(dict(env or {}))
+            return await super().execute(**kwargs)
+    runtime.drivers = LegacyDrivers()
+    await runtime.start()
+    try:
+        assert (await runtime.wait("legacy-env-snapshot", 10)).state == "succeeded"
+        assert calls == []
+        assert all("CURRENT_ONLY" not in env for env in received)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_projects_keep_environment_bindings_isolated(tmp_path: Path) -> None:
+    base = config(tmp_path / "home")
+    target = replace(base.targets[0], envs_vars=("shared",), max_concurrency=1)
+    catalog = replace(base, targets=(target,), envs={"shared": {"PROJECT_BINDING": "global"}})
+    roots = [tmp_path / "project-a", tmp_path / "project-b"]
+    projects_config = ("project-a-secret", "project-b-secret")
+    runtime = Runtime(catalog)
+    received: list[str] = []
+    active = 0
+    maximum_active = 0
+    class ConcurrentDrivers(FakeDrivers):
+        async def execute(self, *, env=None, **kwargs):
+            nonlocal active, maximum_active
+            received.append((env or {}).get("PROJECT_BINDING", ""))
+            active += 1
+            maximum_active = max(maximum_active, active)
+            try:
+                await asyncio.sleep(0.05)
+                return await super().execute(**kwargs)
+            finally:
+                active -= 1
+    runtime.drivers = ConcurrentDrivers()
+    await runtime.start()
+    try:
+        projects = []
+        for root, value in zip(roots, projects_config, strict=True):
+            root.mkdir()
+            config_path = root / ".refract" / "config.toml"
+            config_path.parent.mkdir()
+            config_path.write_text(f'[envs.shared]\nPROJECT_BINDING = "{value}"\n', encoding="utf-8")
+            projects.append(register_project(runtime, str(root)))
+        submissions = await asyncio.gather(*(
+            runtime.submit(project.id, "implement", "isolated") for project in projects
+        ))
+        jobs = await asyncio.gather(*(runtime.wait(sub.job_id, 10) for sub in submissions))
+        assert all(job.state == "succeeded" for job in jobs)
+        assert set(received) == set(projects_config)
+        assert maximum_active == 1
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_queued_restart_binds_current_project_environment(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    project_config = root / ".refract" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text('[envs.shared]\nRESTART_VALUE = "before"\n', encoding="utf-8")
+    base = config(tmp_path / "home")
+    target = replace(base.targets[0], envs_vars=("shared",))
+    catalog = replace(base, targets=(target,), envs={"shared": {"RESTART_VALUE": "global"}})
+    runtime = Runtime(catalog)
+    project = register_project(runtime, str(root))
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    runtime.database.create_job(
+        job_id="queued-env-restart", project_id=project.id, workflow="implement",
+        profile="balanced", prompt="restart", execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="restart",
+    )
+    runtime.database.close()
+    project_config.write_text('[envs.shared]\nRESTART_VALUE = "after"\n', encoding="utf-8")
+    received: list[str] = []
+    class RestartDrivers(FakeDrivers):
+        async def execute(self, *, env=None, **kwargs):
+            received.append((env or {}).get("RESTART_VALUE", ""))
+            return await super().execute(**kwargs)
+    restarted = Runtime(catalog)
+    restarted.drivers = RestartDrivers()
+    await restarted.start()
+    try:
+        assert (await restarted.wait("queued-env-restart", 10)).state == "succeeded"
+        assert received == ["after"]
+    finally:
+        await restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_stored_target_policy_survives_current_policy_changes(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    old_policy = RetryPolicy(1, ("temporary",), ())
+    old_target = replace(
+        base.targets[0], backend="codex", args=("--old-setting",), max_concurrency=1,
+        retry_policy="stored", envs_vars=("shared",),
+    )
+    old_catalog = replace(
+        base, targets=(old_target,), retry_policies={"stored": old_policy},
+        envs={"shared": {"ROTATED_ENV": "SYNTHETIC_OLD_ENV"}},
+    )
+    runtime = Runtime(old_catalog)
+    project = register_project(runtime, str(root))
+    stored_plan = resolve_execution_plan(get_workflow("implement"), old_catalog, "balanced")
+    plan_json = json.dumps(execution_plan_data(stored_plan))
+    job_id = "stored-policy-environment"
+    runtime.database.create_job(
+        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
+        prompt="stored policy", execution_plan_json=plan_json, context_key="stored-policy",
+    )
+    current_target = replace(
+        old_target, backend="pi", args=("--new-setting",), max_concurrency=4,
+        retry_policy="current",
+    )
+    current_catalog = replace(
+        old_catalog, targets=(current_target,),
+        retry_policies={"stored": old_policy, "current": RetryPolicy(0, (), ())},
+        envs={"shared": {"ROTATED_ENV": "SYNTHETIC_CURRENT_ENV"}},
+    )
+    runtime._catalog = current_catalog
+    runtime.target_executor.refresh_configuration(current_catalog)
+    observations = []
+    class PolicyObservingDrivers(FakeDrivers):
+        async def execute(self, *, target, env=None, **kwargs):
+            observations.append((target.backend, target.args, target.max_concurrency, target.retry_policy, (env or {}).get("ROTATED_ENV")))
+            if len(observations) == 1:
+                return DriverResult("RETRYABLE", "", "", "temporary", "temporary")
+            return await super().execute(target=target, **kwargs)
+    runtime.drivers = PolicyObservingDrivers()
+    await runtime.start()
+    try:
+        job = await runtime.wait(job_id, 10)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+        assert observations == [
+            ("codex", ("--old-setting",), 1, "stored", "SYNTHETIC_CURRENT_ENV"),
+            ("codex", ("--old-setting",), 1, "stored", "SYNTHETIC_CURRENT_ENV"),
+        ]
+        assert "SYNTHETIC_" not in runtime.database.job_record(job_id)["execution_plan_json"]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_retry_rebinds_rotated_project_environment(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    target = replace(base.targets[0], envs_vars=("shared",))
+    catalog = replace(base, targets=(target,), envs={"shared": {"ROTATION": "global"}})
+    project_config = root / ".refract" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text('[envs.shared]\nROTATION = "first"\n', encoding="utf-8")
+    received: list[str] = []
+    class RotatingDrivers(FakeDrivers):
+        async def execute(self, *, env=None, **kwargs):
+            received.append((env or {}).get("ROTATION", ""))
+            if len(received) == 1:
+                return DriverResult("REQUEST_FATAL", "", "", "first failure", "execution_error")
+            return await super().execute(**kwargs)
+    runtime = Runtime(catalog)
+    runtime.drivers = RotatingDrivers()
+    session_keys: list[str] = []
+    original_session = runtime.database.session
+    def capture_session(project_id, context_key, role, target_key):
+        session_keys.append(target_key)
+        return original_session(project_id, context_key, role, target_key)
+    runtime.database.session = capture_session
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submitted = await runtime.submit(project.id, "implement", "rotate")
+        assert (await runtime.wait(submitted.job_id, 10)).state == "failed"
+        project_config.write_text('[envs.shared]\nROTATION = "second"\n', encoding="utf-8")
+        await runtime.retry(submitted.job_id)
+        assert (await runtime.wait(submitted.job_id, 10)).state == "succeeded"
+        assert received == ["first", "second"]
+        assert len(session_keys) == 2 and session_keys[0] != session_keys[1]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_environment_resolution_releases_probe(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    target = replace(base.targets[0], envs={"LOCAL": "synthetic"})
+    catalog = replace(base, targets=(target,))
+    runtime = Runtime(catalog)
+    runtime.drivers = FakeDrivers()
+    project = register_project(runtime, str(root))
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    runtime.database.create_job(
+        job_id="cancel-env-resolution", project_id=project.id, workflow="implement",
+        profile="balanced", prompt="cancel", execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="cancel",
+    )
+    key = target_execution_key(target)
+    with runtime.database._connection:
+        runtime.database._connection.execute(
+            "INSERT INTO target_health(target_id, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, '2000-01-01T00:00:00+00:00', 60, '')",
+            (key,),
+        )
+    def cancel_resolution(*_args):
+        raise asyncio.CancelledError
+    runtime.target_executor.environment_resolver = cancel_resolution
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await runtime.target_executor.execute(
+                job_id="cancel-env-resolution", project=project, workflow="implement",
+                context_key="cancel", plan=plan, prompt="cancel", cwd=root,
+                cancel_event=CancelEvent(),
+            )
+        assert runtime.database.target_health(key)["probe_job_id"] == ""
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_environment_binding_uses_real_driver_backend_shell_transport(
+    tmp_path: Path, caplog, monkeypatch
+) -> None:
+    root = repository(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    captured_path = tmp_path / "child-environment.json"
+    fake_codex = bin_dir / "codex"
+    fake_codex.write_text(
+        f'''#!{sys.executable}
+import json, os, pathlib, sys
+if '--help' in sys.argv:
+    print('--json')
+    raise SystemExit(0)
+capture = pathlib.Path({str(captured_path)!r})
+keys = ('SYNTHETIC_INHERITED_VALUE', 'SHARED_ONLY', 'PROJECT_ONLY', 'LOCAL_ONLY', 'LAYERED', 'REFRACT_ASK_URL', 'REFRACT_ASK_TOKEN')
+capture.write_text(json.dumps({{key: os.environ.get(key) for key in keys}}))
+if '-o' in sys.argv:
+    pathlib.Path(sys.argv[sys.argv.index('-o') + 1]).write_text('fake provider response')
+print(json.dumps({{'type': 'thread.started', 'thread_id': '00000000-0000-4000-8000-000000000001'}}))
+print(json.dumps({{'type': 'item.completed', 'item': {{'type': 'agent_message', 'text': 'synthetic success'}}}}))
+''',
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    fake_codex_home = tmp_path / "codex-home"
+    (fake_codex_home / "sessions").mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(fake_codex_home))
+    monkeypatch.setenv("SYNTHETIC_INHERITED_VALUE", "inherited-marker")
+
+    base = config(tmp_path / "home")
+    target = replace(
+        base.targets[0], envs_vars=("shared",),
+        envs={"LOCAL_ONLY": "local-value", "LAYERED": "target-local"},
+    )
+    catalog = replace(
+        base, targets=(target,),
+        envs={"shared": {"SHARED_ONLY": "global-value", "LAYERED": "global-layer"}},
+    )
+    project_config = root / ".refract" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text(
+        '''[envs.shared]
+SHARED_ONLY = "project-value"
+PROJECT_ONLY = "project-only"
+LAYERED = "project-layer"
+''',
+        encoding="utf-8",
+    )
+    before_environment = dict(os.environ)
+    runtime = Runtime(catalog)
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submitted = await runtime.submit(project.id, "implement", "exercise fake codex")
+        job = await runtime.wait(submitted.job_id, 15)
+        assert job.state == "succeeded"
+        child_environment = json.loads(captured_path.read_text(encoding="utf-8"))
+        assert child_environment == {
+            "SYNTHETIC_INHERITED_VALUE": "inherited-marker",
+            "SHARED_ONLY": "project-value",
+            "PROJECT_ONLY": "project-only",
+            "LOCAL_ONLY": "local-value",
+            "LAYERED": "target-local",
+            "REFRACT_ASK_URL": f"http://{runtime.config.host}:{runtime.config.port}/ask",
+            "REFRACT_ASK_TOKEN": child_environment["REFRACT_ASK_TOKEN"],
+        }
+        assert child_environment["REFRACT_ASK_TOKEN"]
+        record = runtime.database.job_record(submitted.job_id)
+        assert "SYNTHETIC_" not in record["execution_plan_json"]
+        assert "SYNTHETIC_" not in record["result_metadata_json"]
+        assert all("SYNTHETIC_" not in json.dumps(event) for event in runtime.database.events(submitted.job_id))
+        assert "SYNTHETIC_" not in caplog.text
+        assert dict(os.environ) == before_environment
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_environment_configuration_failure_is_sanitized_and_not_provider_failure(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    target = replace(base.targets[0], envs={"BROKEN": "${MISSING_SYNTHETIC_SECRET}"}, retry_policy="transient")
+    runtime = Runtime(replace(base, targets=(target,), retry_policies={"transient": RetryPolicy(3, (), ())}))
+    calls = []
+    class CountingDrivers(FakeDrivers):
+        async def execute(self, **kwargs):
+            calls.append(True)
+            return await super().execute(**kwargs)
+    runtime.drivers = CountingDrivers()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submitted = await runtime.submit(project.id, "implement", "bad config")
+        job = await runtime.wait(submitted.job_id, 10)
+        assert job.state == "failed"
+        assert calls == []
+        assert job.attempts == 0
+        assert job.result.metadata["failure_kind"] == "config_invalid"
+        assert "MISSING_SYNTHETIC_SECRET" not in str(job.result)
+        health = runtime.database.target_health(target_execution_key(target))
+        assert health["consecutive_failures"] == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_environment_binding_reaches_driver_without_persisting_values(tmp_path: Path, caplog, monkeypatch) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    target = replace(base.targets[0], envs_vars=("shared",), envs={"LOCAL_ONLY": "SYNTHETIC_LOCAL_VALUE"}, retry_policy="transient")
+    catalog = replace(base, targets=(target,), envs={"shared": {"SHARED_ONLY": "SYNTHETIC_GLOBAL_VALUE"}}, retry_policies={"transient": RetryPolicy(1, ("temporary",), ())})
+    project_config = root / ".refract" / "config.toml"
+    project_config.parent.mkdir()
+    project_config.write_text('[envs.shared]\nSHARED_ONLY = "SYNTHETIC_PROJECT_VALUE"\nPROJECT_ONLY = "SYNTHETIC_PROJECT_ONLY"\n', encoding="utf-8")
+    monkeypatch.setenv("SYNTHETIC_INHERITED_VALUE", "SYNTHETIC_INHERITED_MARKER")
+    received: list[dict[str, str]] = []
+
+    class CapturingDrivers(FakeDrivers):
+        async def execute(self, *, env=None, **kwargs):
+            received.append(dict(env or {}))
+            child_env = {**os.environ, **(env or {})}
+            child = subprocess.run(
+                [sys.executable, "-c", "import os; print(os.environ.get('SYNTHETIC_INHERITED_VALUE', '')); print(os.environ.get('SHARED_ONLY', '')); print(os.environ.get('LOCAL_ONLY', '')); print(os.environ.get('PROJECT_ONLY', ''))"],
+                env=child_env, capture_output=True, text=True, check=True,
+            )
+            assert child.stdout.splitlines() == ["SYNTHETIC_INHERITED_MARKER", "SYNTHETIC_PROJECT_VALUE", "SYNTHETIC_LOCAL_VALUE", "SYNTHETIC_PROJECT_ONLY"]
+            if len(received) == 1:
+                return DriverResult("RETRYABLE", "", "", "retry", "temporary")
+            return await super().execute(**kwargs)
+
+    before_environment = dict(os.environ)
+    runtime = Runtime(catalog)
+    runtime.drivers = CapturingDrivers()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submitted = await runtime.submit(project.id, "implement", "bind env")
+        job = await runtime.wait(submitted.job_id, 10)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+        assert received[0]["SHARED_ONLY"] == received[1]["SHARED_ONLY"] == "SYNTHETIC_PROJECT_VALUE"
+        assert received[0]["LOCAL_ONLY"] == received[1]["LOCAL_ONLY"] == "SYNTHETIC_LOCAL_VALUE"
+        assert received[-1]["SHARED_ONLY"] == "SYNTHETIC_PROJECT_VALUE"
+        assert received[-1]["LOCAL_ONLY"] == "SYNTHETIC_LOCAL_VALUE"
+        assert "REFRACT_ASK_TOKEN" in received[-1]
+        record = runtime.database.job_record(submitted.job_id)
+        assert "SYNTHETIC_" not in record["execution_plan_json"]
+        assert "SYNTHETIC_" not in record["result_metadata_json"]
+        assert all("SYNTHETIC_" not in json.dumps(event) for event in runtime.database.events(submitted.job_id))
+        assert "SYNTHETIC_" not in caplog.text
+        assert dict(os.environ) == before_environment
+    finally:
+        await runtime.close()
 
 
 RESULT_METADATA_KEYS = {
@@ -5277,18 +5680,20 @@ async def test_retry_recovery_to_transient_to_success(tmp_path: Path) -> None:
     catalog = replace(
         base,
         retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient", envs={"RECOVERY_BINDING": "SYNTHETIC_RECOVERY_BINDING"}),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
     invocations = []
+    observed_envs = []
 
     class RecoveryRetryDriver(FakeDrivers):
         def supports_structured_streaming(self, target):
             return True
 
-        async def execute(self, *, target, prompt=None, session_id=None, **kwargs):
+        async def execute(self, *, target, prompt=None, session_id=None, env=None, **kwargs):
             invocations.append((session_id, prompt))
+            observed_envs.append(dict(env or {}))
             if len(invocations) == 1:
                 return DriverResult("RETRYABLE", "s-initial", "", "ctx limit exceeded", "context_overflow")
             elif len(invocations) == 2:
@@ -5303,9 +5708,13 @@ async def test_retry_recovery_to_transient_to_success(tmp_path: Path) -> None:
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
+        _, revision = runtime._resolve_target_environment(project, target.id)
+        session_suffix = hashlib.sha256((project.id + revision).encode()).hexdigest()[:20]
+        session_key = f"{target_key}:env:{session_suffix}"
+        session_context = f"implement:env:{session_suffix}"
         runtime.database.append_turn(
-            project_id=project.id, context_key="implement", role="implement",
-            target_id="primary", target_key=target_key, session_id="s-initial",
+            project_id=project.id, context_key=session_context, role="implement",
+            target_id="primary", target_key=session_key, session_id="s-initial",
             prompt="turn 0 prompt", response="turn 0 response",
         )
 
@@ -5314,6 +5723,7 @@ async def test_retry_recovery_to_transient_to_success(tmp_path: Path) -> None:
         assert job.state == "succeeded"
         assert job.attempts == 2
         assert len(invocations) == 3
+        assert all(env["RECOVERY_BINDING"] == "SYNTHETIC_RECOVERY_BINDING" for env in observed_envs)
 
         # Invocation 1 used s-initial and overflowed
         assert invocations[0][0] == "s-initial"
@@ -5329,11 +5739,11 @@ async def test_retry_recovery_to_transient_to_success(tmp_path: Path) -> None:
         assert replaced[0]["data"]["phase"] == "reconstruct"
 
         # Stored turn has replacement session
-        turns = runtime.database.recent_turns(project.id, "implement", "implement", 10)
+        turns = runtime.database.recent_turns(project.id, session_context, "implement", 10)
         assert len(turns) == 2
         assert turns[-1]["prompt"] == "recovery retry test"
         assert turns[-1]["response"] == "recovered final answer"
-        assert runtime.database.session(project.id, "implement", "implement", target_key) == "s-recovered"
+        assert runtime.database.session(project.id, session_context, "implement", session_key) == "s-recovered"
     finally:
         await runtime.close()
 

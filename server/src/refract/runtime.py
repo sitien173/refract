@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import hmac
+import secrets
 import sqlite3
 from contextlib import suppress
 from dataclasses import replace
@@ -13,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from refract.ask import AskRegistry
-from refract.config import DaemonConfig, load_config, load_project_config
+from refract.config import DaemonConfig, load_config, load_project_config, resolve_target_environment
 from refract.config_inspection import bound_error, sanitize_config_error, utc_now
 from refract.config_mutation import ConfigurationMutationService
 from refract.database import Database
@@ -73,9 +75,12 @@ class Runtime:
         self._retention_task: asyncio.Task[None] | None = None
         self.stream_hub = JobStreamHub()
         self._catalog = config
+        # A per-runtime secret makes revision contexts opaque and prevents
+        # session keys from becoming fingerprints of secret-bearing config hashes.
+        self._session_revision_secret = secrets.token_bytes(32)
         # Parsed configs keyed by file identity; parse again only on change.
         self._catalog_stat: tuple[int, int, int] | None = None
-        self._project_catalogs: dict[Path, tuple[tuple[int, int, int] | None, DaemonConfig, DaemonConfig]] = {}
+        self._project_catalogs: dict[Path, tuple[tuple[int, int, int] | None, DaemonConfig, DaemonConfig, str]] = {}
         self._config_health = self._seed_config_health(config)
         self._closing = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -83,6 +88,7 @@ class Runtime:
         self.target_executor = TargetExecutor(
             config, self.database, DriverRegistry(), on_stream_commit=self.stream_hub.publish,
             ask_registry=self.ask_registry,
+            environment_resolver=self._resolve_target_environment,
         )
         self.runner = JobRunner(
             self.database,
@@ -339,7 +345,14 @@ class Runtime:
                     target = resolve_next_target(next_target, catalog.config_revision, project.id, plan)
                     if target is None:
                         raise OrchestrationError("The next_target token is invalid or stale.", code="invalid_request", next_action="Resubmit without next_target.")
-                    plan = replace(plan, selection=replace(plan.selection, targets=(target.id,)), targets=(target,))
+                    plan = replace(
+                        plan,
+                        selection=replace(plan.selection, targets=(target.id,)),
+                        targets=(target,),
+                        environment_targets=tuple(
+                            value for value in plan.environment_targets if value == target.id
+                        ),
+                    )
                 self._ensure_candidates_available(plan)
         except OrchestrationError:
             raise
@@ -622,14 +635,45 @@ class Runtime:
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
 
+    def _project_catalog_snapshot(
+        self, root: Path, base: DaemonConfig
+    ) -> tuple[DaemonConfig, str]:
+        config_path = root / ".refract" / "config.toml"
+        for _ in range(3):
+            before = _file_identity(config_path)
+            cached = self._project_catalogs.get(root)
+            if cached is not None and cached[0] == before and cached[1] is base:
+                return cached[2], cached[3]
+            catalog = load_project_config(root, base)
+            after = _file_identity(config_path)
+            if before != after:
+                continue
+            # Revision context uses the validated file identity, not a digest of secret-bearing values.
+            revision_payload = json.dumps(
+                [catalog.config_revision, after], separators=(",", ":")
+            ).encode("utf-8")
+            revision = hmac.new(
+                self._session_revision_secret, revision_payload, "sha256"
+            ).hexdigest()
+            self._project_catalogs[root] = (after, base, catalog, revision)
+            return catalog, revision
+        raise ValueError("Project configuration changed during loading")
+
     def _project_catalog(self, root: Path, base: DaemonConfig) -> DaemonConfig:
-        stat = _file_identity(root / ".refract" / "config.toml")
-        cached = self._project_catalogs.get(root)
-        if cached is not None and cached[0] == stat and cached[1] is base:
-            return cached[2]
-        catalog = load_project_config(root, base)
-        self._project_catalogs[root] = (stat, base, catalog)
+        catalog, _ = self._project_catalog_snapshot(root, base)
         return catalog
+
+    def _resolve_target_environment(self, project: ProjectView, target_id: str) -> tuple[dict[str, str], str]:
+        """Resolve a marked target against the current project catalog off-loop."""
+        with self.mutations.lock:
+            catalog, revision = self._project_catalog_snapshot(
+                Path(project.root), self._reload_catalog_locked()
+            )
+            target = next((item for item in catalog.targets if item.id == target_id), None)
+            if target is None:
+                raise ValueError("Unknown target")
+            resolved = resolve_target_environment(catalog, target)
+            return resolved, revision
 
     def _publish_project_configuration_locked(self, project_root: Path) -> None:
         self._project_catalogs.pop(Path(project_root), None)
