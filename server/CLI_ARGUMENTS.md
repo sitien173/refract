@@ -387,7 +387,7 @@ Capabilities are categorized by evidence level: package/CLI documentation eviden
 
 ### Semantics, cache accounting, and observation timing
 
-- **Normalized vs legacy semantics:** Normalized telemetry under `result.metadata.telemetry` separates active context occupancy from cumulative job consumption. Legacy fields in `result.metadata` (`input_tokens`, `output_tokens`, `cached_input_tokens`, `context_window_used`) retain backend-specific raw values.
+- **Canonical grouped metadata:** Public metadata strictly separates responsibilities into `execution`, `failure`, `retry`, and `telemetry` groups. Flat legacy counters and aliases (`input_tokens`, `output_tokens`, `cached_input_tokens`, `context_window_used`, `model_name`, `failure_kind`, `retryable`, `next_target`) have been removed from public responses. Active context occupancy remains strictly separated from cumulative job consumption under `result.metadata.telemetry`.
 - **Cache accounting:** Normalized `cache_read_tokens` and `cache_write_tokens` isolate cache contributions. For Codex, cumulative turn usage is normalized across attempts; for Claude Code, response and result usage maps cached read/write tokens.
 - **Observation and presentation timing:** Telemetry observations are reconciled on the server during job execution and persisted to `jobs.result_metadata_json`. Dashboards poll active jobs at standard intervals. Final values are persisted on job completion.
 - **Partial totals:** If any execution invocation has unobserved consumption, aggregate job consumption completeness is marked `partial`. Unreported measurements remain `null` with `quality: "unavailable"`.

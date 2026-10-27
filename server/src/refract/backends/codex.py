@@ -13,7 +13,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
-from . import BackendParams, BackendResult, _usage_dict, classify_backend_output, classify_tool_activity, preflight
+from . import BackendParams, BackendResult, classify_backend_output, classify_tool_activity, preflight
 from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
 from refract.telemetry import TelemetryAccumulator
@@ -542,12 +542,13 @@ def _resolve_session_id(
     return "", ""
 
 
-def _classify(*, agent_messages: str, session_id: str, error_text: str) -> BackendResult:
+def _classify(*, agent_messages: str, session_id: str, error_text: str, model: str | None = None) -> BackendResult:
     return classify_backend_output(
         backend_name="codex",
         agent_messages=agent_messages,
         session_id=session_id,
         error_text=error_text,
+        model=model,
     )
 
 
@@ -570,15 +571,6 @@ def _extract_output(stream: StreamOutcome) -> tuple[str, str]:
         if isinstance(item, dict) and item.get("type") == "agent_message" and item.get("text"):
             agent_messages += str(item.get("text"))
     return session_id, agent_messages
-
-
-def _usage_values(stream: StreamOutcome) -> dict[str, Any]:
-    usage_values: dict[str, Any] = {}
-    for event in stream.objects():
-        if event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
-            u = event["usage"]
-            usage_values = {"input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"), "cached_input_tokens": u.get("cached_input_tokens")}
-    return usage_values
 
 
 def _read_last_message(path: Path) -> str:
@@ -900,12 +892,12 @@ def execute(params: BackendParams) -> BackendResult:
         agent_messages=agent_messages,
         session_id=session_id,
         error_text=error_text,
+        model=parser.collector.model_name,
     )
     if stream.error:
         result.outcome = "FATAL"
         result.error_class = stream.error_class
         result.error = stream.error
-    result.usage = _usage_dict(**_usage_values(stream))
     result.agent_messages = agent_messages
     if (
         parser.accumulator._has_any_consumption

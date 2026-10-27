@@ -29,6 +29,7 @@ from refract.models import (
     DashboardJob,
     DashboardOverview,
     JobOutputResponse,
+    JobResult,
     ProfileDeleteResponse,
     ProfileEditorData,
     ProfileEditorResponse,
@@ -78,6 +79,12 @@ def _jsonable(value: Any) -> Any:
             ProjectOverrideDeleteResponse,
         ),
     ):
+        return value.model_dump(mode="json")
+    if isinstance(value, DashboardJob):
+        data = value.model_dump(mode="json", exclude={"result"})
+        data["result"] = value.result.model_dump(mode="json")
+        return data
+    if isinstance(value, JobResult):
         return value.model_dump(mode="json")
     if hasattr(value, "model_dump"):
         return _jsonable(value.model_dump(mode="json", exclude_none=True))
@@ -338,7 +345,11 @@ def _dashboard_job_from_record(runtime: Any, record: dict[str, Any]) -> Dashboar
         attempts=job.attempts,
         created_at=job.created_at,
         updated_at=job.updated_at,
-        result=job.result,
+        result=JobResult(
+            text=job.result.text,
+            error=job.result.error,
+            metadata=runtime.live_result_metadata(job),
+        ),
         execution_plan=_safe_execution_plan(raw_plan),
     )
 

@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from refract.telemetry import Measurement, TelemetryData
+from refract.result_metadata import JobResultMetadata
 
 
 JobState = Literal[
@@ -25,7 +26,7 @@ class ProjectView(BaseModel):
 class JobResult(BaseModel):
     text: str = ""
     error: str = ""
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: JobResultMetadata = Field(default_factory=JobResultMetadata)
 
 
 class ConfigHealth(BaseModel):

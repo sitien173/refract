@@ -29,6 +29,41 @@ vi.mock('../api', () => {
   }
 })
 
+function assertCanonicalMetadata(metadata) {
+  expect(metadata).toBeDefined()
+  expect(Object.keys(metadata).sort()).toEqual(['execution', 'failure', 'retry', 'telemetry'])
+  expect(Object.keys(metadata.execution).sort()).toEqual(['duration_ms', 'model'])
+  if (metadata.failure !== null) {
+    expect(Object.keys(metadata.failure).sort()).toEqual(['kind'])
+  }
+  expect(Object.keys(metadata.retry).sort()).toEqual(['next_target', 'retryable'])
+  expect(Object.keys(metadata.telemetry).sort()).toEqual([
+    'cache_read_tokens',
+    'cache_write_tokens',
+    'completeness',
+    'context_remaining_percent',
+    'context_used_tokens',
+    'context_window_size',
+    'total_input_tokens',
+    'total_output_tokens',
+  ])
+  const metricNames = [
+    'context_remaining_percent',
+    'context_window_size',
+    'context_used_tokens',
+    'total_input_tokens',
+    'total_output_tokens',
+    'cache_read_tokens',
+    'cache_write_tokens',
+  ]
+  for (const name of metricNames) {
+    const m = metadata.telemetry[name]
+    expect(typeof m).toBe('object')
+    expect(m).not.toBeNull()
+    expect(Object.keys(m).sort()).toEqual(['observed_at', 'quality', 'source', 'value'])
+  }
+}
+
 describe('ProjectDetail screen', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -1129,14 +1164,18 @@ describe('ProjectDetail screen', () => {
           result: {
             output: '',
             metadata: {
+              execution: { model: 'worker-1-model', duration_ms: null },
+              failure: null,
+              retry: { retryable: null, next_target: null },
               telemetry: {
-                version: 1,
                 completeness: 'partial',
-                context_used_tokens: { value: 1000, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:00Z' },
-                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:00Z' },
                 context_remaining_percent: { value: 99.2, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:00Z' },
+                context_used_tokens: { value: 1000, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:00Z' },
                 total_input_tokens: { value: 150, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
                 total_output_tokens: { value: 50, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+                cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+                cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
               },
             },
           },
@@ -1147,18 +1186,25 @@ describe('ProjectDetail screen', () => {
           result: {
             output: 'Partial stream output',
             metadata: {
+              execution: { model: 'worker-1-model', duration_ms: null },
+              failure: null,
+              retry: { retryable: null, next_target: null },
               telemetry: {
-                version: 1,
                 completeness: 'partial',
-                context_used_tokens: { value: 2500, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:05Z' },
-                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:00Z' },
                 context_remaining_percent: { value: 98.0, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:05Z' },
+                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:00Z' },
+                context_used_tokens: { value: 2500, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:05Z' },
                 total_input_tokens: { value: 500, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
                 total_output_tokens: { value: 120, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:05Z' },
+                cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+                cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
               },
             },
           },
         }
+
+        assertCanonicalMetadata(runningJobInitial.result.metadata)
+        assertCanonicalMetadata(runningJobRefreshed.result.metadata)
 
         const terminalJobFinal = {
           ...runningJobInitial,
@@ -1166,18 +1212,23 @@ describe('ProjectDetail screen', () => {
           result: {
             output: 'Final completed execution.',
             metadata: {
+              execution: { model: 'worker-1-model', duration_ms: 3500 },
+              failure: null,
+              retry: { retryable: false, next_target: null },
               telemetry: {
-                version: 1,
                 completeness: 'complete',
-                context_used_tokens: { value: 2500, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:10Z' },
-                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:00Z' },
                 context_remaining_percent: { value: 98.0, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:10Z' },
+                context_window_size: { value: 128000, quality: 'reported', source: 'session', observed_at: '2026-10-26T17:00:10Z' },
+                context_used_tokens: { value: 2500, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:10Z' },
                 total_input_tokens: { value: 800, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:10Z' },
                 total_output_tokens: { value: 250, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:10Z' },
+                cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+                cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
               },
             },
           },
         }
+        assertCanonicalMetadata(terminalJobFinal.result.metadata)
 
         vi.mocked(api.getJob)
           .mockResolvedValueOnce(runningJobInitial)
@@ -1242,14 +1293,18 @@ describe('ProjectDetail screen', () => {
         result: {
           output: '',
           metadata: {
+            execution: { model: 'worker-1-model', duration_ms: null },
+            failure: null,
+            retry: { retryable: null, next_target: null },
             telemetry: {
-              version: 1,
               completeness: 'partial',
-              context_used_tokens: { value: 1200, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:00Z' },
-              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               context_remaining_percent: { value: 98.8, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:00Z' },
+              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              context_used_tokens: { value: 1200, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:00Z' },
               total_input_tokens: { value: 300, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               total_output_tokens: { value: 40, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
             },
           },
         },
@@ -1260,18 +1315,25 @@ describe('ProjectDetail screen', () => {
         result: {
           output: '',
           metadata: {
+            execution: { model: 'worker-1-model', duration_ms: null },
+            failure: null,
+            retry: { retryable: null, next_target: null },
             telemetry: {
-              version: 1,
               completeness: 'partial',
-              context_used_tokens: { value: 1800, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:10Z' },
-              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               context_remaining_percent: { value: 98.2, quality: 'derived', source: 'derived', observed_at: '2026-10-26T17:00:10Z' },
+              context_window_size: { value: 100000, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              context_used_tokens: { value: 1800, quality: 'derived', source: 'response', observed_at: '2026-10-26T17:00:10Z' },
               total_input_tokens: { value: 600, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:10Z' },
               total_output_tokens: { value: 80, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:10Z' },
+              cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
             },
           },
         },
       }
+
+      assertCanonicalMetadata(activeJob.result.metadata)
+      assertCanonicalMetadata(recoveredJob.result.metadata)
 
       vi.mocked(api.getJob)
         .mockResolvedValueOnce(activeJob)
@@ -1326,11 +1388,18 @@ describe('ProjectDetail screen', () => {
         result: {
           output: '',
           metadata: {
+            execution: { model: 'worker-1-model', duration_ms: null },
+            failure: null,
+            retry: { retryable: null, next_target: null },
             telemetry: {
-              version: 1,
               completeness: 'partial',
+              context_remaining_percent: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
               context_used_tokens: { value: 111, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               total_input_tokens: { value: 112, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_output_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
             },
           },
         },
@@ -1346,15 +1415,25 @@ describe('ProjectDetail screen', () => {
         result: {
           output: '',
           metadata: {
+            execution: { model: 'worker-1-model', duration_ms: null },
+            failure: null,
+            retry: { retryable: null, next_target: null },
             telemetry: {
-              version: 1,
               completeness: 'partial',
+              context_remaining_percent: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
               context_used_tokens: { value: 222, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               total_input_tokens: { value: 223, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_output_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
             },
           },
         },
       }
+
+      assertCanonicalMetadata(jobA.result.metadata)
+      assertCanonicalMetadata(jobB.result.metadata)
 
       let resolveJobAPoll
       const slowJobAPollPromise = new Promise((resolve) => {
@@ -1382,20 +1461,29 @@ describe('ProjectDetail screen', () => {
       expect(screen.getByText('222')).toBeInTheDocument()
 
       // Late poll response for Job A resolves with new telemetry
-      resolveJobAPoll({
+      const lateJobAPoll = {
         ...jobA,
         result: {
           output: '',
           metadata: {
+            execution: { model: 'worker-1-model', duration_ms: null },
+            failure: null,
+            retry: { retryable: null, next_target: null },
             telemetry: {
-              version: 1,
               completeness: 'partial',
+              context_remaining_percent: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              context_window_size: { value: null, quality: 'unavailable', source: null, observed_at: null },
               context_used_tokens: { value: 9999, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
               total_input_tokens: { value: 9999, quality: 'reported', source: 'provider', observed_at: '2026-10-26T17:00:00Z' },
+              total_output_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
             },
           },
         },
-      })
+      }
+      assertCanonicalMetadata(lateJobAPoll.result.metadata)
+      resolveJobAPoll(lateJobAPoll)
 
       await Promise.resolve()
 

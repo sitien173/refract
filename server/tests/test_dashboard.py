@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from refract.config import load_config
+from refract.config import TargetConfig, load_config
 from refract.planning import execution_plan_data, resolve_execution_plan
 from refract.runtime import Runtime
 from refract.server import create_application
@@ -2616,11 +2616,11 @@ async def test_dashboard_running_to_terminal_telemetry_progression(active_runtim
     live_telemetry = {
         "version": 1,
         "completeness": "complete",
-        "context_used_tokens": {"value": 1800, "source": "response", "quality": "derived"},
-        "context_window_size": {"value": 128000, "source": "session", "quality": "reported"},
-        "context_remaining_percent": {"value": 98.59, "source": "derived", "quality": "derived"},
-        "total_input_tokens": {"value": 450, "source": "provider", "quality": "reported"},
-        "total_output_tokens": {"value": 80, "source": "provider", "quality": "reported"},
+        "context_used_tokens": {"value": 1800, "source": "response", "quality": "derived", "observed_at": "2026-10-26T00:00:01Z"},
+        "context_window_size": {"value": 128000, "source": "session", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
+        "context_remaining_percent": {"value": 98.59, "source": "derived", "quality": "derived", "observed_at": "2026-10-26T00:00:01Z"},
+        "total_input_tokens": {"value": 450, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
+        "total_output_tokens": {"value": 80, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:01Z"},
     }
     active_runtime.database.merge_job_telemetry(job_id, live_telemetry)
 
@@ -2637,17 +2637,17 @@ async def test_dashboard_running_to_terminal_telemetry_progression(active_runtim
     final_telemetry = {
         "version": 1,
         "completeness": "complete",
-        "context_used_tokens": {"value": 1800, "source": "response", "quality": "derived"},
-        "context_window_size": {"value": 128000, "source": "session", "quality": "reported"},
-        "context_remaining_percent": {"value": 98.59, "source": "derived", "quality": "derived"},
-        "total_input_tokens": {"value": 1200, "source": "provider", "quality": "reported"},
-        "total_output_tokens": {"value": 310, "source": "provider", "quality": "reported"},
+        "context_used_tokens": {"value": 1800, "source": "response", "quality": "derived", "observed_at": "2026-10-26T00:00:02Z"},
+        "context_window_size": {"value": 128000, "source": "session", "quality": "reported", "observed_at": "2026-10-26T00:00:02Z"},
+        "context_remaining_percent": {"value": 98.59, "source": "derived", "quality": "derived", "observed_at": "2026-10-26T00:00:02Z"},
+        "total_input_tokens": {"value": 1200, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:02Z"},
+        "total_output_tokens": {"value": 310, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:02Z"},
     }
+    active_runtime.database.merge_job_telemetry(job_id, final_telemetry)
     active_runtime.database.finish_job(
         job_id,
         "succeeded",
         text="Final result completed",
-        metadata={"telemetry": final_telemetry},
     )
 
     status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
@@ -2704,15 +2704,16 @@ other = "primary"
         telemetry = {
             "version": 1,
             "completeness": "complete",
-            "context_used_tokens": {"value": 3400, "source": "response", "quality": "derived"},
-            "context_window_size": {"value": 200000, "source": "session", "quality": "reported"},
-            "context_remaining_percent": {"value": 98.3, "source": "derived", "quality": "derived"},
-            "total_input_tokens": {"value": 7500, "source": "provider", "quality": "reported"},
-            "total_output_tokens": {"value": 1100, "source": "provider", "quality": "reported"},
-            "cache_read_tokens": {"value": 2000, "source": "provider", "quality": "reported"},
-            "cache_write_tokens": {"value": 500, "source": "provider", "quality": "reported"},
+            "context_used_tokens": {"value": 3400, "source": "response", "quality": "derived", "observed_at": "2026-10-26T00:00:00Z"},
+            "context_window_size": {"value": 200000, "source": "session", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+            "context_remaining_percent": {"value": 98.3, "source": "derived", "quality": "derived", "observed_at": "2026-10-26T00:00:00Z"},
+            "total_input_tokens": {"value": 7500, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+            "total_output_tokens": {"value": 1100, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+            "cache_read_tokens": {"value": 2000, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+            "cache_write_tokens": {"value": 500, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
         }
-        runtime1.database.finish_job(job_id, "succeeded", metadata={"telemetry": telemetry})
+        runtime1.database.merge_job_telemetry(job_id, telemetry)
+        runtime1.database.finish_job(job_id, "succeeded")
     finally:
         runtime1.database.close()
 
@@ -2754,28 +2755,81 @@ async def test_dashboard_historical_jobs_without_telemetry_return_cleanly(active
         execution_plan_json="{}",
         context_key="k",
     )
-    # Historical job with legacy metadata only (no telemetry)
-    legacy_metadata = {
-        "context_window_used": 15000,
-        "input_tokens": 12000,
-        "output_tokens": 500,
-    }
+    # Historical migrated job without telemetry
     active_runtime.database.finish_job(
         job_id,
         "succeeded",
         text="Historical result text",
-        metadata=legacy_metadata,
     )
 
     status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
     assert status == 200
     job_data = json.loads(body.decode())
     meta = job_data["result"]["metadata"]
-    # Telemetry key must NOT be fabricated
-    assert "telemetry" not in meta
-    # Legacy counters remain untouched
-    assert meta["context_window_used"] == 15000
-    assert meta["input_tokens"] == 12000
+    assert meta["telemetry"]["completeness"] == "unavailable"
+    assert "context_window_used" not in meta
+    assert "input_tokens" not in meta
+
+
+@pytest.mark.asyncio
+async def test_mcp_and_dashboard_detail_metadata_exact_key_and_null_parity(active_runtime) -> None:
+    app = create_application()
+    project = active_runtime.database.project("project")
+    job_id = "job-parity-1"
+    active_runtime.database.create_job(
+        job_id=job_id,
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="parity test",
+        execution_plan_json="{}",
+        context_key="k",
+    )
+    active_runtime.database.finish_job(
+        job_id,
+        "succeeded",
+        text="Result text",
+        metadata={"execution": {"model": "test-model", "duration_ms": 100}},
+    )
+    job = active_runtime.database.job(job_id)
+    assert job is not None
+    mcp_meta = job.result.metadata.model_dump(mode="json")
+
+    status, _, body = await request(app, f"/dashboard/api/jobs/{job_id}")
+    assert status == 200
+    dashboard_data = json.loads(body.decode())
+    dashboard_meta = dashboard_data["result"]["metadata"]
+
+    assert dashboard_meta == mcp_meta
+    assert "failure" in dashboard_meta
+    assert dashboard_meta["failure"] is None
+
+
+@pytest.mark.asyncio
+async def test_dashboard_and_mcp_project_same_live_retry_route(tmp_path, monkeypatch) -> None:
+    from refract import server
+    from refract.dashboard import DashboardState
+
+    cfg = config(tmp_path / "home", (TargetConfig(id="first", backend="codex"), TargetConfig(id="next", backend="claude")))
+    runtime = Runtime(cfg)
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "route-project")
+    monkeypatch.setattr(server, "DashboardState", lambda: DashboardState(runtime=runtime, csrf_token="test-token"))
+    job_id = "job-route-parity"
+    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="route", execution_plan_json="{}", context_key="route")
+    runtime.database.finish_job(job_id, "failed", target_id="first", metadata={"failure": {"kind": "retryable"}, "retry": {"retryable": True}})
+    job = runtime.database.job(job_id)
+    assert job is not None
+    expected = runtime.live_result_metadata(job)
+    try:
+        status, _, body = await request(create_application(), f"/dashboard/api/jobs/{job_id}")
+        assert status == 200
+        actual = json.loads(body)["result"]["metadata"]
+        assert actual == expected
+        assert actual["retry"]["next_target"].startswith("nt_")
+    finally:
+        runtime.database.close()
 
 
 

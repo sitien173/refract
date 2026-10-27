@@ -10,6 +10,26 @@ from refract.telemetry import (
     TelemetryAttribution,
     TelemetryData,
 )
+from refract.result_metadata import project_telemetry
+
+
+def test_public_projection_excludes_internal_accounting_fields():
+    internal = TelemetryData(
+        version=1,
+        attribution=TelemetryAttribution(attempt=3, invocation=2),
+        completed_attempts={"total_input_tokens": 4},
+        total_input_tokens=Measurement(value=8, source="provider", quality="reported", observed_at="2025-01-01T00:00:00Z"),
+    )
+    projected = project_telemetry(internal).model_dump(mode="json")
+    assert set(projected) == {
+        "completeness", "context_remaining_percent", "context_window_size",
+        "context_used_tokens", "total_input_tokens", "total_output_tokens",
+        "cache_read_tokens", "cache_write_tokens",
+    }
+    assert projected["total_input_tokens"]["value"] == 8
+    assert "attribution" not in projected
+    assert "completed_attempts" not in projected
+    assert "version" not in projected
 
 
 def test_measurement_valid_values():

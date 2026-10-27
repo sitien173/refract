@@ -22,9 +22,10 @@ from refract.models import (
     StreamTotals,
 )
 from refract.telemetry import TelemetryData, merge_telemetry, prepare_telemetry_for_retry
+from refract.result_metadata import convert_schema15_metadata, JobResultMetadata, PublicTelemetry, project_telemetry
 
 log = get_logger("database")
-_SCHEMA_VERSION = 15
+_SCHEMA_VERSION = 16
 
 
 class Database:
@@ -87,12 +88,17 @@ class Database:
         if self._path.exists():
             # A writable connection can checkpoint an unsupported WAL on close.
             with closing(sqlite3.connect(f"{self._path.resolve().as_uri()}?mode=ro", uri=True)) as probe:
-                self._validate_schema(probe)
+                empty_probe = self._validate_schema(probe)
+                if not empty_probe and int(probe.execute("PRAGMA user_version").fetchone()[0]) == 15:
+                    self._preflight_schema15(probe)
         connection = self._connection
         empty = self._validate_schema(connection)
-        connection.execute("PRAGMA journal_mode=WAL")
         if empty:
+            connection.execute("PRAGMA journal_mode=WAL")
             self._create_schema()
+        elif int(connection.execute("PRAGMA user_version").fetchone()[0]) == 15:
+            self._migrate_schema15(connection)
+        connection.execute("PRAGMA journal_mode=WAL")
         log.debug(
             "Database schema is current",
             extra={"event": "database.schema_ready", "schema_version": _SCHEMA_VERSION},
@@ -102,24 +108,152 @@ class Database:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         schema = connection.execute("SELECT name, type FROM sqlite_master").fetchall()
         empty = version == 0 and not schema
-        if not empty and version != _SCHEMA_VERSION:
+        if not empty and version not in (15, _SCHEMA_VERSION):
             recovery = (
-                "Back up the database and upgrade it to schema 15 using a migration-capable "
+                "Back up the database and upgrade it to schema 16 using a migration-capable "
                 "Refract version, or select a new state directory with REFRACT_HOME."
                 if version < _SCHEMA_VERSION
                 else f"Use a Refract version that supports schema {version}."
             )
             raise ValueError(
                 f"Unsupported database schema {version} at {self._path}; "
-                f"this version supports schema {_SCHEMA_VERSION} only. {recovery} "
+                f"this version supports schema 15 or {_SCHEMA_VERSION} only. {recovery} "
                 "The database was not modified."
             )
-        if not empty and not any(name == "jobs" and kind == "table" for name, kind in schema):
-            raise ValueError(
-                f"Database schema {version} at {self._path} is incomplete: jobs table missing. "
-                "Restore a compatible backup. The database was not modified."
-            )
+        if not empty:
+            tables = {name for name, kind in schema if kind == "table"}
+            expected_tables = {"projects", "jobs", "events", "context_sessions", "context_turns", "target_health", "job_stream_events"}
+            if "jobs" not in tables:
+                raise ValueError(
+                    f"Database schema {version} at {self._path} is incomplete: jobs table missing. "
+                    "Restore a compatible backup. The database was not modified."
+                )
+            if not expected_tables <= tables:
+                missing = sorted(expected_tables - tables)
+                raise ValueError(
+                    f"Database schema {version} at {self._path} is incomplete: required tables missing ({', '.join(missing)}). "
+                    "Restore a compatible backup. The database was not modified."
+                )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+            required_jobs = {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
+            if not required_jobs <= columns:
+                raise ValueError(
+                    f"Database schema {version} at {self._path} is incomplete: jobs columns missing. "
+                    "Restore a compatible backup. The database was not modified."
+                )
+            if version == 15 and "telemetry_state_json" in columns:
+                raise ValueError(
+                    f"Database schema 15 at {self._path} is incomplete: unexpected column telemetry_state_json. "
+                    "Restore a compatible backup. The database was not modified."
+                )
+            if version == 16 and "telemetry_state_json" not in columns:
+                raise ValueError(
+                    f"Database schema 16 at {self._path} is incomplete: telemetry_state_json column missing. "
+                    "Restore a compatible backup. The database was not modified."
+                )
+            expected_columns = {
+                "projects": {"id", "alias", "root", "created_at"},
+                "jobs": required_jobs | ({"telemetry_state_json"} if version == 16 else set()),
+                "events": {"id", "job_id", "created_at", "kind", "data_json"},
+                "context_sessions": {"project_id", "context_key", "role", "target_id", "target_key", "lane", "session_id", "updated_at"},
+                "context_turns": {"id", "project_id", "context_key", "role", "target_id", "prompt", "response", "created_at"},
+                "target_health": {"target_id", "consecutive_failures", "circuit_open_until", "last_success_at", "cooldown_s", "probe_job_id"},
+                "job_stream_events": {"id", "job_id", "created_at", "attempt", "target_id", "backend", "kind", "entity_id", "parent_entity_id", "data_json", "size_bytes"},
+            }
+            for table, expected in expected_columns.items():
+                actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+                if actual != expected:
+                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} columns are invalid. The database was not modified.")
+            expected_indexes = {
+                "jobs_state_idx": ("jobs", ("state", "created_at")),
+                "jobs_project_idx": ("jobs", ("project_id", "updated_at")),
+                "events_job_idx": ("events", ("job_id", "id")),
+                "context_turns_stream_idx": ("context_turns", ("project_id", "context_key", "role", "id")),
+                "job_stream_events_job_idx": ("job_stream_events", ("job_id", "id")),
+            }
+            index_rows = {row[1]: row for row in connection.execute("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type='index'")}
+            for name, (table, expected) in expected_indexes.items():
+                index = index_rows.get(name)
+                columns = tuple(row[2] for row in connection.execute(f"PRAGMA index_info({name})")) if index else ()
+                unique = bool(connection.execute(f"PRAGMA index_list({table})").fetchall() and next((row[2] for row in connection.execute(f"PRAGMA index_list({table})") if row[1] == name), 0))
+                if index is None or index[2] != table or columns != expected or unique:
+                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: index definition {name} is invalid. The database was not modified.")
+            not_null_columns = {
+                "projects": {"alias", "root", "created_at"},
+                "jobs": {"project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"} | ({"telemetry_state_json"} if version == 16 else set()),
+                "events": {"job_id", "created_at", "kind", "data_json"},
+                "context_sessions": {"project_id", "context_key", "role", "target_id", "target_key", "lane", "session_id", "updated_at"},
+                "context_turns": {"project_id", "context_key", "role", "target_id", "prompt", "response", "created_at"},
+                "target_health": {"consecutive_failures", "circuit_open_until", "last_success_at", "cooldown_s", "probe_job_id"},
+                "job_stream_events": {"job_id", "created_at", "attempt", "target_id", "backend", "kind", "entity_id", "parent_entity_id", "data_json", "size_bytes"},
+            }
+            for table, expected in not_null_columns.items():
+                actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})") if row[3]}
+                if not expected <= actual:
+                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} NOT NULL constraint is missing. The database was not modified.")
+            primary_keys = {
+                "projects": ("id",), "jobs": ("id",), "events": ("id",),
+                "context_sessions": ("project_id", "context_key", "role", "target_key", "lane"),
+                "context_turns": ("id",), "target_health": ("target_id",),
+                "job_stream_events": ("id",),
+            }
+            for table, expected in primary_keys.items():
+                actual = tuple(row[1] for row in sorted(connection.execute(f"PRAGMA table_info({table})"), key=lambda row: row[5]) if row[5])
+                if actual != expected:
+                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} primary-key constraint is invalid. The database was not modified.")
+            required_unique = {"projects": {("alias",), ("root",)}}
+            for table, expected_sets in required_unique.items():
+                actual_sets = set()
+                for index_row in connection.execute(f"PRAGMA index_list({table})"):
+                    if index_row[2]:
+                        actual_sets.add(tuple(row[2] for row in connection.execute(f"PRAGMA index_info({index_row[1]})")))
+                if not expected_sets <= actual_sets:
+                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} uniqueness constraint is missing. The database was not modified.")
+            foreign_keys = {
+                "jobs": {("projects", "project_id", "id", "NO ACTION")},
+                "events": {("jobs", "job_id", "id", "CASCADE")},
+                "context_sessions": {("projects", "project_id", "id", "CASCADE")},
+                "context_turns": {("projects", "project_id", "id", "CASCADE")},
+                "job_stream_events": {("jobs", "job_id", "id", "CASCADE")},
+            }
+            for table, expected in foreign_keys.items():
+                actual = {(row[2], row[3], row[4], row[6].upper()) for row in connection.execute(f"PRAGMA foreign_key_list({table})")}
+                if not expected <= actual:
+                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} foreign-key constraint is invalid. The database was not modified.")
         return empty
+
+    def _preflight_schema15(self, connection: sqlite3.Connection) -> list[tuple[str, str, str]]:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+        required = {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        expected_tables = {"projects", "jobs", "events", "context_sessions", "context_turns", "target_health", "job_stream_events"}
+        if not required <= columns or not expected_tables <= tables or "telemetry_state_json" in columns:
+            raise ValueError("Database schema 15 is incomplete: required table or jobs structure is invalid. The database was not modified.")
+        prepared = []
+        for row in connection.execute("SELECT id, result_metadata_json FROM jobs ORDER BY id"):
+            try:
+                raw = json.loads(row[1] or "{}")
+                metadata, internal = convert_schema15_metadata(raw)
+                public_json = json.dumps(metadata.model_dump(mode="json"), ensure_ascii=False)
+                state_json = json.dumps(internal.model_dump(mode="json"), ensure_ascii=False) if internal else ""
+            except Exception as exc:
+                diagnostic = str(exc).splitlines()[0][:120]
+                raise ValueError(f"Schema 15 migration rejected job {row[0]} metadata field: {diagnostic}") from None
+            prepared.append((row[0], public_json, state_json))
+        return prepared
+
+    def _migrate_schema15(self, connection: sqlite3.Connection) -> None:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            prepared = self._preflight_schema15(connection)
+            connection.execute("ALTER TABLE jobs ADD COLUMN telemetry_state_json TEXT NOT NULL DEFAULT ''")
+            for job_id, public_json, state_json in prepared:
+                connection.execute("UPDATE jobs SET result_metadata_json=?, telemetry_state_json=? WHERE id=?", (public_json, state_json, job_id))
+            connection.execute("PRAGMA user_version=16")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
 
     def _create_schema(self) -> None:
         self._connection.executescript(
@@ -146,6 +280,7 @@ class Database:
                 config_revision TEXT NOT NULL DEFAULT '',
                 fresh_session INTEGER NOT NULL DEFAULT 0,
                 result_metadata_json TEXT NOT NULL DEFAULT '{}',
+                telemetry_state_json TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -316,43 +451,20 @@ class Database:
             return int(row["attempts"]) if row else 1
 
     def merge_job_telemetry(self, job_id: str, telemetry: dict[str, Any] | TelemetryData) -> None:
+        try:
+            incoming = telemetry if isinstance(telemetry, TelemetryData) else TelemetryData.model_validate(telemetry)
+        except Exception:
+            return
         with self._connection:
-            if not self._connection.in_transaction:
-                self._connection.execute("BEGIN IMMEDIATE")
-            row = self._connection.execute(
-                "SELECT state, result_metadata_json FROM jobs WHERE id=?", (job_id,)
-            ).fetchone()
-            if row is None:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute("SELECT state, result_metadata_json, telemetry_state_json FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None or row["state"] in TERMINAL_STATES:
                 return
-            if row["state"] in TERMINAL_STATES:
-                # Protect terminal metadata against stale observations
-                return
-            try:
-                metadata = json.loads(row["result_metadata_json"] or "{}")
-                if not isinstance(metadata, dict):
-                    metadata = {}
-            except (json.JSONDecodeError, TypeError):
-                metadata = {}
-
-            try:
-                if hasattr(telemetry, "model_dump"):
-                    telemetry_dict = telemetry.model_dump(mode="json")
-                elif isinstance(telemetry, dict):
-                    telemetry_dict = TelemetryData.model_validate(telemetry).model_dump(mode="json")
-                else:
-                    return
-            except Exception:
-                return
-
-            if "telemetry" in metadata and isinstance(metadata["telemetry"], dict):
-                metadata["telemetry"] = merge_telemetry(metadata["telemetry"], telemetry_dict)
-            else:
-                metadata["telemetry"] = telemetry_dict
-
-            self._connection.execute(
-                "UPDATE jobs SET result_metadata_json=?, updated_at=? WHERE id=?",
-                (json.dumps(metadata, ensure_ascii=False), utc_now(), job_id),
-            )
+            state = TelemetryData.model_validate_json(row["telemetry_state_json"]) if row["telemetry_state_json"] else TelemetryData()
+            merged_state = TelemetryData.model_validate(merge_telemetry(state.model_dump(mode="json"), incoming.model_dump(mode="json")))
+            metadata = JobResultMetadata.model_validate_json(row["result_metadata_json"] or "{}")
+            metadata.telemetry = project_telemetry(merged_state)
+            self._connection.execute("UPDATE jobs SET result_metadata_json=?, telemetry_state_json=?, updated_at=? WHERE id=?", (metadata.model_dump_json(), merged_state.model_dump_json(), utc_now(), job_id))
 
     def finish_job(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "", metadata: dict[str, Any] | None = None) -> None:
         with self._connection:
@@ -361,54 +473,33 @@ class Database:
     def _finish(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "", metadata: dict[str, Any] | None = None) -> None:
         if not self._connection.in_transaction:
             self._connection.execute("BEGIN IMMEDIATE")
-        row = self._connection.execute(
-            "SELECT result_metadata_json FROM jobs WHERE id=?", (job_id,)
-        ).fetchone()
-        current_meta: dict[str, Any] = {}
-        if row and row["result_metadata_json"]:
-            try:
-                current_meta = json.loads(row["result_metadata_json"])
-                if not isinstance(current_meta, dict):
-                    current_meta = {}
-            except (json.JSONDecodeError, TypeError):
-                current_meta = {}
-
+        row = self._connection.execute("SELECT result_metadata_json, telemetry_state_json FROM jobs WHERE id=?", (job_id,)).fetchone()
+        current = JobResultMetadata.model_validate_json(row["result_metadata_json"] or "{}") if row else JobResultMetadata()
         if metadata is not None:
-            merged_meta = dict(current_meta)
-            for k, v in metadata.items():
-                if k == "telemetry" and isinstance(v, (dict, TelemetryData)):
-                    try:
-                        v_dict = (
-                            v.model_dump(mode="json")
-                            if hasattr(v, "model_dump")
-                            else TelemetryData.model_validate(v).model_dump(mode="json")
-                        )
-                        if "telemetry" in current_meta and isinstance(current_meta["telemetry"], dict):
-                            merged_meta["telemetry"] = merge_telemetry(current_meta["telemetry"], v_dict)
-                        else:
-                            merged_meta["telemetry"] = v_dict
-                    except Exception:
-                        pass
-                elif k == "telemetry":
-                    # Invalid telemetry never replaces a previously validated snapshot.
-                    continue
-                else:
-                    merged_meta[k] = v
-        else:
-            merged_meta = current_meta
-
+            incoming = metadata if isinstance(metadata, JobResultMetadata) else JobResultMetadata.model_validate(metadata)
+            current.execution = incoming.execution
+            current.failure = incoming.failure
+            current.retry = incoming.retry.model_copy(update={"next_target": None})
+            if incoming.telemetry.completeness != "unavailable":
+                current.telemetry = incoming.telemetry
+        state_json = row["telemetry_state_json"] if row else ""
+        if state_json:
+            stored_state = TelemetryData.model_validate_json(state_json)
+            incoming_state_data = current.telemetry.model_dump(mode="json")
+            incoming_state_data["attribution"] = stored_state.attribution.model_dump(mode="json")
+            incoming_state_data["completed_attempts"] = stored_state.completed_attempts.model_dump(mode="json")
+            incoming_state = TelemetryData.model_validate(incoming_state_data)
+            retained = TelemetryData.model_validate(merge_telemetry(stored_state.model_dump(mode="json"), incoming_state.model_dump(mode="json")))
+            current.telemetry = project_telemetry(retained)
+            state_json = retained.model_dump_json()
+        elif current.telemetry.completeness != "unavailable":
+            state_json = TelemetryData.model_validate(current.telemetry.model_dump(mode="json")).model_dump_json()
         self._connection.execute(
-            """UPDATE jobs SET state=?, result_text=?,
-               target_id=CASE WHEN ?='' THEN target_id ELSE ? END, error=?,
-               result_metadata_json=?, updated_at=?
-               WHERE id=?""",
-            (state, text, target_id, target_id, error,
-             json.dumps(merged_meta, ensure_ascii=False),
-             utc_now(), job_id),
+            """UPDATE jobs SET state=?, result_text=?, target_id=CASE WHEN ?='' THEN target_id ELSE ? END,
+               error=?, result_metadata_json=?, telemetry_state_json=?, updated_at=? WHERE id=?""",
+            (state, text, target_id, target_id, error, current.model_dump_json(), state_json, utc_now(), job_id),
         )
-        self._connection.execute(
-            "UPDATE target_health SET probe_job_id='' WHERE probe_job_id=?", (job_id,)
-        )
+        self._connection.execute("UPDATE target_health SET probe_job_id='' WHERE probe_job_id=?", (job_id,))
         self._event(job_id, f"job.{state}", {"error": error} if error else {})
 
     def finish_fresh_job_success(
@@ -441,25 +532,21 @@ class Database:
         with self._connection:
             if not self._connection.in_transaction:
                 self._connection.execute("BEGIN IMMEDIATE")
-            row = self._connection.execute(
-                "SELECT result_metadata_json FROM jobs WHERE id=?", (job_id,)
-            ).fetchone()
-            meta_json = "{}"
-            if row and row["result_metadata_json"]:
-                try:
-                    meta = json.loads(row["result_metadata_json"])
-                    if isinstance(meta, dict) and "telemetry" in meta and isinstance(meta["telemetry"], dict):
-                        meta["telemetry"] = prepare_telemetry_for_retry(meta["telemetry"])
-                        meta_json = json.dumps(meta, ensure_ascii=False)
-                    elif isinstance(meta, dict):
-                        meta_json = json.dumps(meta, ensure_ascii=False)
-                except (json.JSONDecodeError, TypeError):
-                    meta_json = "{}"
-
+            row = self._connection.execute("SELECT result_metadata_json, telemetry_state_json FROM jobs WHERE id=?", (job_id,)).fetchone()
+            current = JobResultMetadata.model_validate_json(row["result_metadata_json"] or "{}") if row else JobResultMetadata()
+            state_json = row["telemetry_state_json"] if row else ""
+            if state_json:
+                state = TelemetryData.model_validate_json(state_json)
+                state = TelemetryData.model_validate(prepare_telemetry_for_retry(state.model_dump(mode="json")))
+                state_json = state.model_dump_json()
+                current.telemetry = project_telemetry(state)
+            current.execution = current.execution.model_copy(update={"duration_ms": None})
+            current.failure = None
+            current.retry = current.retry.model_copy(update={"retryable": None, "next_target": None})
             self._connection.execute(
-                """UPDATE jobs SET state='queued', result_text='',
-                   target_id='', error='', result_metadata_json=?, updated_at=? WHERE id=?""",
-                (meta_json, utc_now(), job_id),
+                """UPDATE jobs SET state='queued', result_text='', target_id='', error='',
+                   result_metadata_json=?, telemetry_state_json=?, updated_at=? WHERE id=?""",
+                (current.model_dump_json(), state_json, utc_now(), job_id),
             )
             self._event(job_id, "job.retried", {})
 

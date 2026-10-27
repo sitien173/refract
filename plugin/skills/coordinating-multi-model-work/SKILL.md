@@ -150,7 +150,7 @@ for every wait, reconnect, and terminal result page.
 
 ## Gate 2: Execute
 
-On a failed job, read `result.metadata.failure_kind`; then resubmit with `next_target`, resubmit with `fresh_session=true` for `context_overflow`, or report.
+On a failed job, inspect `result.metadata.failure.kind`, `result.metadata.retry.retryable`, and `result.metadata.retry.next_target`. Resubmit with `next_target`, resubmit with `fresh_session=true` for `context_overflow`, or report.
 
 For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch with
 [implementer-prompt.md](../executing-plans/implementer-prompt.md).

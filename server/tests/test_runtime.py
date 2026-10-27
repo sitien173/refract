@@ -8,6 +8,7 @@ import pytest
 from refract.config import load_config
 from refract.runtime import OrchestrationError, Runtime
 from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target
+from refract.result_metadata import JobResultMetadata, FailureMetadata, RetryMetadata
 from tests.orchestration_helpers import register_project
 
 
@@ -54,6 +55,28 @@ def test_next_target_token_is_bound_to_revision_project_profile_workflow_and_can
 
 
 @pytest.mark.asyncio
+async def test_context_overflow_projects_read_time_route_to_next_healthy_target(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "overflow-project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "overflow-project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    try:
+        job_id = "overflow-route"
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="overflow", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
+        runtime.database.finish_job(job_id, "failed", target_id="a", metadata={"failure": {"kind": "context_overflow"}, "retry": {"retryable": True}})
+        view = runtime.database.job(job_id)
+        result = runtime.live_result_metadata(view)
+        assert result["retry"]["retryable"] is True
+        assert result["retry"]["next_target"].startswith("nt_")
+        assert json.loads(runtime.database.job_record(job_id)["result_metadata_json"])["retry"]["next_target"] is None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_live_metadata_routes_after_failure_without_persisting_hint(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     _two_target_config(config_path)
@@ -62,8 +85,10 @@ async def test_live_metadata_routes_after_failure_without_persisting_hint(tmp_pa
     root.mkdir()
     project = register_project(runtime, str(root), "project")
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    metadata = {key: None for key in ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms")}
-    metadata.update(failure_kind="retryable", retryable=False, next_target=None)
+    metadata = JobResultMetadata(
+        failure=FailureMetadata(kind="retryable"),
+        retry=RetryMetadata(retryable=False, next_target=None),
+    )
     try:
         for target_b_open in (False, True):
             job_id = "live-route-open" if target_b_open else "live-route-closed"
@@ -75,8 +100,8 @@ async def test_live_metadata_routes_after_failure_without_persisting_hint(tmp_pa
                 runtime.database.record_target_success(target_execution_key(plan.targets[1]))
             view = runtime.database.job(job_id)
             result = runtime.live_result_metadata(view)
-            assert (result["next_target"].startswith("nt_") and result["retryable"] is True) if not target_b_open else (result["next_target"] is None and result["retryable"] is False)
-            assert json.loads(runtime.database.job_record(job_id)["result_metadata_json"])["next_target"] is None
+            assert (result["retry"]["next_target"].startswith("nt_") and result["retry"]["retryable"] is True) if not target_b_open else (result["retry"]["next_target"] is None and result["retry"]["retryable"] is False)
+            assert json.loads(runtime.database.job_record(job_id)["result_metadata_json"])["retry"]["next_target"] is None
     finally:
         await runtime.close()
 
@@ -133,8 +158,9 @@ async def test_live_result_metadata_historical_empty_metadata(tmp_path) -> None:
         )
         view = runtime.database.job(job_id)
         result = runtime.live_result_metadata(view)
-        assert "telemetry" not in result
-        assert result["model_name"] is None
+        assert "telemetry" in result
+        assert result["telemetry"]["completeness"] == "unavailable"
+        assert result["execution"]["model"] is None
     finally:
         await runtime.close()
 
@@ -176,8 +202,10 @@ async def test_retry_all_open_leaves_failed_job_untouched(tmp_path) -> None:
     project = register_project(runtime, str(root), "project")
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     job_id = "retry-open"
-    metadata = {key: None for key in ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms")}
-    metadata.update(failure_kind="retryable", retryable=False, next_target=None)
+    metadata = JobResultMetadata(
+        failure=FailureMetadata(kind="retryable"),
+        retry=RetryMetadata(retryable=False, next_target=None),
+    )
     runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="retry-open")
     runtime.database.record_job_attempt(job_id, "a")
     runtime.database.finish_job(job_id, "failed", target_id="a", metadata=metadata)
@@ -929,4 +957,41 @@ def test_resolve_project_preserves_alias_of_concurrent_canonical_winner(tmp_path
         assert stored is not None and stored.alias == "winner"
     finally:
         other.close()
+        runtime.database.close()
+
+
+def test_live_result_metadata_dynamic_routing_and_context_overflow(tmp_path) -> None:
+    from refract.models import JobView, JobResult
+    from refract.result_metadata import JobResultMetadata, ExecutionMetadata, FailureMetadata, RetryMetadata
+
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    try:
+        # 1. Success job
+        succ_meta = JobResultMetadata(execution=ExecutionMetadata(model="m1", duration_ms=10))
+        job_succ = JobView(
+            id="j1", project_id="p1", workflow="consult", profile="balanced",
+            state="succeeded", context_key="c1", created_at="now", updated_at="now",
+            result=JobResult(metadata=succ_meta),
+        )
+        live_succ = runtime.live_result_metadata(job_succ)
+        assert set(live_succ) == {"execution", "failure", "retry", "telemetry"}
+        assert live_succ["retry"] == {"retryable": None, "next_target": None}
+
+        # 2. Context overflow job
+        overflow_meta = JobResultMetadata(
+            failure=FailureMetadata(kind="context_overflow"),
+            retry=RetryMetadata(retryable=True, next_target=None),
+        )
+        job_overflow = JobView(
+            id="j2", project_id="p1", workflow="consult", profile="balanced",
+            state="failed", context_key="c1", created_at="now", updated_at="now",
+            result=JobResult(metadata=overflow_meta),
+        )
+        live_overflow = runtime.live_result_metadata(job_overflow)
+        assert set(live_overflow) == {"execution", "failure", "retry", "telemetry"}
+        assert live_overflow["failure"]["kind"] == "context_overflow"
+        assert live_overflow["retry"] == {"retryable": True, "next_target": None}
+    finally:
         runtime.database.close()

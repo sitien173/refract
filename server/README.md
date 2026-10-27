@@ -297,9 +297,9 @@ review = ["claude-sonnet-medium-review"]
 
 ### Database compatibility
 
-Schema v15 is the minimum and current supported database schema. New databases and empty, unversioned files initialize to v15. Existing v15 databases retain jobs, sessions, history, and stream events. Older and newer schemas fail before journal changes or schema writes. This server does not migrate them automatically.
+Schema 16 is the current supported database schema. New databases initialize directly to schema 16. The server automatically upgrades schema 15 databases on startup. Read-only preflight checks reject unsupported schemas (<15 or >16) before writes. Preflight also rejects malformed JSON and invalid recognized metadata before writes. Any later migration failure triggers an atomic transaction rollback. Existing jobs, sessions, history, and stream events survive. Raw historical counters are deleted during migration, not normalized.
 
-Stop the daemon and back up the complete state directory before upgrading. Upgrade a backup of an older database with a migration-capable Refract version. Use a server supporting the stored schema for newer databases. Select another state directory with `REFRACT_HOME` to start fresh without deleting the original database.
+Stop the daemon and back up the full state directory including sidecars before upgrading. Downgrade requires restoring this pre-upgrade backup because older server binaries reject schema 16. Server, plugin, and dashboard must deploy together as a unit. Select another state directory with `REFRACT_HOME` to start fresh without deleting history.
 
 ### Starting the Daemon
 
@@ -392,9 +392,9 @@ The dashboard renders live transcripts for running jobs.
 
 ### Worker Telemetry and Context Measurement
 
-The dashboard and MCP result metadata expose normalized live context and job consumption telemetry.
+The dashboard and MCP result metadata expose canonical grouped metadata and telemetry.
 
-- **Normalized vs legacy semantics:** Normalized telemetry distinguishes current occupied context (`context_used_tokens`, `context_window_size`, `context_remaining_percent`) from cumulative job consumption (`total_input_tokens`, `total_output_tokens`, `cache_read_tokens`, `cache_write_tokens`). Legacy `result.metadata` counters (e.g. `context_window_used`, `input_tokens`) retain backend-native meanings and are not modified.
+- **Canonical grouped metadata:** All public result metadata follows four groups: `execution`, `failure`, `retry`, and `telemetry`. Flat legacy counters and aliases have been completely removed. Internal accumulator fields are stored separately and excluded from public responses. Normalized telemetry distinguishes current occupied context (`context_used_tokens`, `context_window_size`, `context_remaining_percent`) from cumulative job consumption (`total_input_tokens`, `total_output_tokens`, `cache_read_tokens`, `cache_write_tokens`).
 - **Cache accounting:** `total_input_tokens` reflects aggregate input tokens. Where supported by backends, cache reads (`cache_read_tokens`) and cache writes (`cache_write_tokens`) are tracked separately and preserved.
 - **Observation and presentation timing:** In running jobs, telemetry refreshes via existing selected-job polling (`/dashboard/api/jobs/{id}`) bounded by the poll interval. Execution consumes observations before transcript recording; presentation does not rely on SSE or transcript cursors.
 - **Partial totals:** When intermediate invocations or attempts have missing observations, consumption is labeled `partial` rather than fabricated or zeroed. Complete measurements require all attempts and invocations to be observed.

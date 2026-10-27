@@ -367,20 +367,16 @@ class Runtime:
         return project, workflow, selected_profile
 
     def live_result_metadata(self, job: JobView) -> dict[str, object]:
-        keys = ("model_name", "context_window_max", "context_window_used", "input_tokens", "output_tokens", "cached_input_tokens", "duration_ms", "failure_kind", "retryable", "next_target")
-        stored = job.result.metadata
-        if not stored:
-            return dict.fromkeys(keys)
-        metadata = {key: stored.get(key) for key in keys}
-        if "telemetry" in stored:
-            metadata["telemetry"] = stored["telemetry"]
+        metadata = job.result.metadata.model_dump(mode="json")
         if job.state == "succeeded":
-            metadata["next_target"] = metadata["retryable"] = None
+            metadata["retry"] = {"retryable": None, "next_target": None}
             return metadata
-        if metadata.get("failure_kind") in {"retryable", "target_fatal", "circuit_open", "cancelled"}:
+        failure = metadata.get("failure")
+        kind = failure.get("kind") if isinstance(failure, dict) else None
+        if kind in {"retryable", "target_fatal", "circuit_open", "cancelled", "context_overflow"}:
             next_token = self._next_target_token(job)
-            metadata["next_target"] = next_token
-            metadata["retryable"] = next_token is not None
+            retryable = metadata["retry"].get("retryable") if kind == "context_overflow" else next_token is not None
+            metadata["retry"] = {"retryable": retryable, "next_target": next_token}
         return metadata
 
     def _next_target_token(self, job: JobView) -> str | None:

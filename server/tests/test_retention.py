@@ -97,15 +97,15 @@ def test_transcript_pruning_preserves_job_telemetry(tmp_path):
         telemetry = {
             "version": 1,
             "completeness": "complete",
-            "context_used_tokens": {"value": 2400, "source": "provider", "quality": "reported"},
-            "context_window_size": {"value": 128000, "source": "provider", "quality": "reported"},
-            "context_remaining_percent": {"value": 98.125, "source": "derived", "quality": "derived"},
-            "total_input_tokens": {"value": 5000, "source": "provider", "quality": "reported"},
-            "total_output_tokens": {"value": 600, "source": "provider", "quality": "reported"},
+            "context_used_tokens": {"value": 2400, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+            "context_window_size": {"value": 128000, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+            "context_remaining_percent": {"value": 98.125, "source": "derived", "quality": "derived", "observed_at": "2026-10-26T00:00:00Z"},
+            "total_input_tokens": {"value": 5000, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
+            "total_output_tokens": {"value": 600, "source": "provider", "quality": "reported", "observed_at": "2026-10-26T00:00:00Z"},
         }
         db.merge_job_telemetry(job_id, telemetry)
         db.append_stream_events(job_id, [{"attempt": 1, "kind": "assistant_message", "data": {"text": "hello"}}])
-        db.finish_job(job_id, "succeeded", metadata={"telemetry": telemetry})
+        db.finish_job(job_id, "succeeded")
 
         # Age the job beyond the recent threshold
         with db._connection:
@@ -124,11 +124,10 @@ def test_transcript_pruning_preserves_job_telemetry(tmp_path):
         # Job record and its telemetry remain completely intact
         job_view = db.job(job_id)
         assert job_view is not None
-        assert "telemetry" in job_view.result.metadata
-        saved_telemetry = job_view.result.metadata["telemetry"]
-        assert saved_telemetry["context_used_tokens"]["value"] == 2400
-        assert saved_telemetry["total_input_tokens"]["value"] == 5000
-        assert saved_telemetry["completeness"] == "complete"
+        saved_telemetry = job_view.result.metadata.telemetry
+        assert saved_telemetry.context_used_tokens.value == 2400
+        assert saved_telemetry.total_input_tokens.value == 5000
+        assert saved_telemetry.completeness == "complete"
     finally:
         db.close()
 

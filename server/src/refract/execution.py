@@ -18,10 +18,11 @@ from refract.database import Database
 from refract.drivers import DriverRegistry, DriverResult, StreamBridge
 from refract.logging_setup import get_logger, log_context
 from refract.models import ProjectView, TargetView, TERMINAL_STATES
+from refract.result_metadata import JobResultMetadata, ExecutionMetadata, FailureMetadata, RetryMetadata, PublicTelemetry
 from refract.planning import ExecutionPlan, parse_execution_plan, target_execution_key
 from refract.streaming import StreamRecorder
 from refract.scheduler import CancelEvent
-from refract.telemetry import TelemetryAccumulator
+from refract.telemetry import TelemetryAccumulator, TelemetryData
 from refract.workers import run_sync
 
 
@@ -98,15 +99,8 @@ class TargetExecutor:
 
     async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: CancelEvent, fresh_session: bool = False) -> TargetExecutionResult:
         record = await run_sync(self.database.job_record, job_id)
-        existing_meta: dict[str, Any] = {}
-        if record and record.get("result_metadata_json"):
-            try:
-                parsed = json.loads(record["result_metadata_json"])
-                if isinstance(parsed, dict):
-                    existing_meta = parsed
-            except (json.JSONDecodeError, TypeError):
-                pass
-        accumulator = TelemetryAccumulator(existing_meta.get("telemetry"))
+        telemetry_state = json.loads(record.get("telemetry_state_json") or "{}") if record else {}
+        accumulator = TelemetryAccumulator(telemetry_state if telemetry_state else None)
 
         last = DriverResult("REQUEST_FATAL", "", "", "No admissible target", "circuit_open")
         if not plan.selection.targets:
@@ -477,25 +471,18 @@ class TargetExecutor:
             failure_kind, retryable = "retryable", False
         else:
             failure_kind, retryable = "request_fatal", False
-        usage = result.usage if isinstance(result.usage, dict) else {}
-        model_name = usage.get("model_name")
+        model_name = result.model
         if model_name is None and target is not None:
             model_name = target.model or None
-        meta = {
-            "model_name": model_name,
-            "context_window_max": usage.get("context_window_max"),
-            "context_window_used": usage.get("context_window_used"),
-            "input_tokens": usage.get("input_tokens"),
-            "output_tokens": usage.get("output_tokens"),
-            "cached_input_tokens": usage.get("cached_input_tokens"),
-            "duration_ms": duration_ms,
-            "failure_kind": failure_kind,
-            "retryable": retryable,
-            "next_target": None,
-        }
-        if telemetry is not None:
-            meta["telemetry"] = telemetry
-        return meta
+        canonical = JobResultMetadata(
+            execution=ExecutionMetadata(model=model_name, duration_ms=duration_ms),
+            failure=FailureMetadata(kind=failure_kind) if failure_kind else None,
+            retry=RetryMetadata(retryable=retryable, next_target=None),
+            telemetry=PublicTelemetry.from_internal(
+                TelemetryData.model_validate(telemetry)
+            ) if telemetry is not None else PublicTelemetry(),
+        )
+        return canonical.model_dump(mode="json")
 
     async def _run_target_invocation(
         self,
