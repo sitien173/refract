@@ -110,7 +110,7 @@
 - none
 
 ### Test evidence
-- RED -> GREEN: `test_retry_sequential_observability_streams_and_ask_tokens`, `test_retry_probe_and_capacity_held_and_final_only_health`, and `test_retry_telemetry_rollover_cumulative_consumption` verified attempt observability, continuous probe/capacity holding, and cumulative telemetry rollover (3 passed in 3.94s).
+- GREEN-only coverage (no documented prior RED): `test_retry_sequential_observability_streams_and_ask_tokens`, `test_retry_probe_and_capacity_held_and_final_only_health`, and `test_retry_telemetry_rollover_cumulative_consumption` verified attempt observability, continuous probe/capacity holding, and cumulative telemetry rollover (3 passed in 3.94s).
 
 ## Continuation 1: Task 3
 
@@ -138,7 +138,7 @@
 - none
 
 ### Test evidence
-- RED -> GREEN: 6 edge case tests in `test_execution.py` passed in 7.19s, `test_target_capacity.py` passed in 1.65s, `test_runtime.py` passed in 1.14s.
+- GREEN-only coverage (no documented prior RED): 6 edge case tests in `test_execution.py` passed in 7.19s, `test_target_capacity.py` passed in 1.65s, `test_runtime.py` passed in 1.14s.
 - Fresh full Phase 2 verification command: `cd server && uv run --extra dev pytest tests/test_execution.py tests/test_telemetry.py tests/test_target_capacity.py tests/test_runtime.py` passed 193 in 128.80s.
 - `git diff --check` passed clean.
 
@@ -169,3 +169,25 @@
 - Required phase command, final after cleanup nesting: `cd server && uv run --extra dev pytest tests/test_execution.py tests/test_telemetry.py tests/test_target_capacity.py tests/test_runtime.py` — 201 passed in 101.07s.
 - Full server, final: `cd server && uv run --extra dev pytest` — 810 passed, 15 deselected in 113.83s.
 - `git diff --check` passed. No configured LSP diagnostics runner was found in project configuration.
+
+## Continuation 2: Evidence reconciliation
+
+### Decisions made
+- Correct historical labels for Continuation 1 Task 2 and Task 3: these are GREEN-only test evidence because no prior RED failure was documented. Preserve recorded RED failures for Continuation 1 Task 1 and FIX batch 1 as written.
+- No product changes were necessary. Coordinator's clean checkpoint and independent validations are the final implementation evidence; independent quality review is a subsequent coordinator gate, not worker debt.
+
+### Spec deviations
+- none known from implementation evidence; independent review pending.
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- Coordinator to perform independent quality review.
+
+### Test evidence
+- Coordinator checkpoint at `868e7a9`: 201 focused tests passed; 810 server tests passed, 15 deselected; diff check passed.
+- Final worker validation is listed under FIX batch 1: 201 focused and 810 full server tests pass; diff check passes.
