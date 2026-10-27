@@ -1,6 +1,6 @@
 # Shared Retry Policies Implementation Plan
 
-**Status:** Approved for execution on `main`; baseline verification passed at `ef9f219`. Phase 1 passed specification and independent quality review. Phase 2 is active.
+**Status:** Approved for execution on `main`; baseline verification passed at `ef9f219`. Phases 1 and 2 passed specification and independent quality review. The user accepted Phase 2 with a waiver for missing historical RED evidence. Phase 3 is next.
 **Design:** `docs/plans/shared-retry-policies/DESIGN.md`
 **Commit:** `feat(retry): add shared target retry policies`
 
