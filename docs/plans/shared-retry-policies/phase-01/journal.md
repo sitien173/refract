@@ -5,8 +5,8 @@
 - Implementation Profile: implement
 - Consultation Profile: base
 - Review Profile: review
-- Implementation Job: f48c6afd-433e-4339-99aa-f857a1dc3236
-- Review Job: pending
+- Implementation Job: f48c6afd-433e-4339-99aa-f857a1dc3236; fixes 29ff216a-8947-4674-923e-99d23c90e193 and 571e131d-7a78-4600-b487-c00ccea78b0e
+- Review Job: a1e97ab8-40a9-4f76-9ea3-f9fae50b7772
 
 ## Baseline Evidence
 Revision: ef9f219. Background task b63bdac80 exited 0.
@@ -143,13 +143,40 @@ TASK_COMPLETE
 - No retry execution or dashboard changes are included. No live probes or service restarts ran.
 
 ## Quality Review
+Job a1e97ab8-40a9-4f76-9ea3-f9fae50b7772, profile review, gpt-6.1-sol.
+
+## PASS
+
+No blocking correctness or security findings identified in `a3eb8b0..952547c32530bc7fbb030d028882353722f36ac6`. No new debt requiring assignment.
+
+**Scope checked**
+- Global allowlist, strict policy validation, shared references, and inline-declaration rejection.
+- Project overlay registry retention and rejection of local registries.
+- Immutable resolved snapshots, serialization/parsing agreement, legacy disabled defaults, and malformed persisted-data rejection.
+- Historical identity payload against base fields, literal key fixtures, and session-preservation coverage.
+- Sanitized diagnostics returning structural messages without arbitrary policy names, fields, or values.
+- All seven changed source/test files and plan evidence.
+
+The incidental blank-line removals are non-behavioral. Retry execution and dashboard work were correctly excluded.
+
+**Verification:** Read-only source, diff, and evidence inspection; tests were not rerun. Reported test counts were not treated as proof of correctness. No files, Git state, services, or live backends were modified.
+
+## Final Verification
+- Reviewed revision: 952547c32530bc7fbb030d028882353722f36ac6.
+- Checkpoint validation b85e4b29d: 175 passed, exit 0; root clean before review.
+- Full server validation b28d98096 on identical product tree: 787 passed, 15 live tests deselected, exit 0.
+- Review left HEAD and product files unchanged. Only the coordinator's expected latest_review handover field changed.
+- All Phase 1 criteria met through the configuration, planning, sanitization and runtime regressions.
+- No live probes, daemon restarts, Phase 2 execution changes or Phase 3 dashboard changes.
 
 ## Review Result
-- Spec Status: PENDING
-- Quality Status: PENDING
+- Spec Status: PASS
+- Quality Status: PASS
 - Debt: none
 
 ## Final Checkpoint
 - Phase base ref: refs/plans/shared-retry-policies/phase-01/base
 - Phase implementation ref: refs/plans/shared-retry-policies/phase-01/impl
-- Plan commit ref: pending
+- Plan commit ref: pending until all three phases pass and consolidate
+- Implementation checkpoint reviewed: 952547c32530bc7fbb030d028882353722f36ac6
+- State checkpoint: final Phase 1 coordination commit, resolved through phase implementation ref
