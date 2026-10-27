@@ -76,6 +76,7 @@ def _section_config_error(text: str) -> str | None:
         "[targets] must contain at least one target",
         "[targets] must be a TOML array of tables",
         "[profiles] must contain at least one profile",
+        "[retryPolicies] must be a TOML table",
         "[logging] must be a TOML table",
         "[project] must be a TOML table",
         "[daemon].default_profile must be set",
@@ -139,7 +140,32 @@ def _target_config_error(text: str) -> str | None:
         return "Target backend_profile must be a string"
     if "positive integer" in text:
         return "Target setting must be a positive integer"
+    if "cannot declare inline retry settings" in text:
+        return "Target cannot declare inline retry settings"
+    if "references unknown retry policy" in text:
+        return "Target references unknown retry policy"
+    if "retryPolicy must be a non-empty string" in text:
+        return "Target retryPolicy must be a non-empty string"
+    if "has unsupported settings" in text:
+        return "Target has unsupported settings"
     return None
+
+
+def _retry_policy_config_error(text: str) -> str | None:
+    """Remove retry policy identifiers, rule values, and patterns from validation errors."""
+    if not text.startswith("Retry policy "):
+        return None
+    if "must be a TOML table" in text:
+        return "Retry policy must be a TOML table"
+    if "has unsupported settings" in text:
+        return "Retry policy has unsupported settings"
+    if "retryAttempt must be a non-negative integer" in text:
+        return "Retry policy retryAttempt must be a non-negative integer"
+    if "errorCodes must be a list of non-empty strings" in text:
+        return "Retry policy errorCodes must be a list of non-empty strings"
+    if "errorPatterns must be a list of non-empty strings" in text:
+        return "Retry policy errorPatterns must be a list of non-empty strings"
+    return "Invalid retry policy declaration"
 
 
 def sanitize_config_error(error: object) -> str:
@@ -166,6 +192,9 @@ def sanitize_config_error(error: object) -> str:
     target_error = _target_config_error(text)
     if target_error is not None:
         return target_error
+    retry_policy_error = _retry_policy_config_error(text)
+    if retry_policy_error is not None:
+        return retry_policy_error
     if text.startswith("Invalid logging level"):
         return "Invalid logging level"
     if "must be a positive integer" in text:

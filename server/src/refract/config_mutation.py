@@ -493,6 +493,7 @@ def target_to_editor_data(target: Any) -> TargetEditorData:
             read_only=target.read_only,
             args=list(target.args),
             max_concurrency=target.max_concurrency,
+            retryPolicy=target.retry_policy,
         )
     raw_args = target.get("args", [])
     args = [str(x) for x in raw_args] if isinstance(raw_args, (list, Array)) else []
@@ -501,6 +502,11 @@ def target_to_editor_data(target: Any) -> TargetEditorData:
         backend_profile = str(target["backend_profile"])
     elif "profile" in target:
         backend_profile = str(target["profile"])
+    retry_policy = ""
+    if "retryPolicy" in target:
+        retry_policy = str(target["retryPolicy"])
+    elif "retry_policy" in target:
+        retry_policy = str(target["retry_policy"])
     return TargetEditorData(
         id=str(target.get("id", "")),
         backend=str(target.get("backend", "")),
@@ -512,6 +518,7 @@ def target_to_editor_data(target: Any) -> TargetEditorData:
         read_only=bool(target.get("read_only", False)),
         args=args,
         max_concurrency=int(target.get("max_concurrency", 1)),
+        retryPolicy=retry_policy,
     )
 
 
@@ -886,6 +893,8 @@ class ConfigurationMutationService:
             table["args"] = _string_array(list(data.args))
         if data.max_concurrency != 1:
             table["max_concurrency"] = data.max_concurrency
+        if data.retryPolicy:
+            table["retryPolicy"] = data.retryPolicy
         return table
 
     def create_target(
@@ -952,6 +961,20 @@ class ConfigurationMutationService:
         if data.max_concurrency != 1 or "max_concurrency" in target:
             self.set_target_value(target, "max_concurrency", data.max_concurrency)
 
+    def _update_target_retry_settings(self, target: Table, data: TargetEditorData) -> None:
+        """Update retry policy reference without creating dangling or empty declarations."""
+        if "retryPolicy" not in data.model_fields_set and "retry_policy" not in data.model_fields_set:
+            return
+        if data.retryPolicy:
+            self.set_target_value(target, "retryPolicy", data.retryPolicy)
+            if "retry_policy" in target:
+                del target["retry_policy"]
+        else:
+            if "retryPolicy" in target:
+                del target["retryPolicy"]
+            if "retry_policy" in target:
+                del target["retry_policy"]
+
     def update_target(
         self,
         target_id: str,
@@ -981,6 +1004,7 @@ class ConfigurationMutationService:
             self.set_target_value(target, "backend", data.backend)
             self._update_target_model_settings(target, data)
             self._update_target_execution_settings(target, data)
+            self._update_target_retry_settings(target, data)
             return target_to_editor_data(self.find_target(document, target_id) or target)
 
         return self._mutate(None, expected_revision, edit)

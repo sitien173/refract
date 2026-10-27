@@ -147,3 +147,210 @@ def test_pi_native_args_round_trip_in_plan(native_args: tuple[str, ...]) -> None
     )
     restored = parse_execution_plan(execution_plan_data(plan))
     assert restored.target(target.id).args == native_args
+
+
+def test_plan_snapshots_retry_policy_and_survives_config_edits(tmp_path) -> None:
+    from refract.config import RetryPolicy
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.transient]
+retryAttempt = 2
+errorCodes = ["rate_limit"]
+errorPatterns = ["temporarily unavailable"]
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "transient"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    catalog = load_config(path)
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    assert "transient" in plan.retry_policies
+    policy = plan.retry_policy("primary")
+    assert policy.retry_attempt == 2
+    assert policy.error_codes == ("rate_limit",)
+    assert policy.error_patterns == ("temporarily unavailable",)
+
+    # Round trip serialization
+    data = execution_plan_data(plan)
+    assert "retry_policies" in data
+    assert data["retry_policies"]["transient"]["retry_attempt"] == 2
+    restored = parse_execution_plan(data)
+    assert restored == plan
+    assert restored.retry_policy("primary") == policy
+
+    # Catalog edits do not affect existing plan snapshot
+    catalog.retry_policies.clear()
+    assert plan.retry_policy("primary") == policy
+    assert restored.retry_policy("primary") == policy
+
+
+def test_legacy_plan_without_retry_policies_defaults_to_no_retry(tmp_path) -> None:
+    from refract.config import RetryPolicy
+    catalog = config(tmp_path / "home")
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    data = execution_plan_data(plan)
+    data.pop("retry_policies", None)
+    if "retry_policy" in data["targets"][0]:
+        del data["targets"][0]["retry_policy"]
+
+    restored = parse_execution_plan(data)
+    assert restored.retry_policy("primary") == RetryPolicy(retry_attempt=0, error_codes=(), error_patterns=())
+
+
+@pytest.mark.parametrize(
+    ("mutate"),
+    [
+        lambda d: d.update(retry_policies="not a dict"),
+        lambda d: d.update(retry_policies=None),
+        lambda d: d.update(retry_policies={"transient": "not a dict"}),
+        lambda d: d["retry_policies"]["transient"].update(retry_attempt=-1),
+        lambda d: d["retry_policies"]["transient"].update(retry_attempt="2"),
+        lambda d: d["retry_policies"]["transient"].update(retry_attempt=True),
+        lambda d: d["retry_policies"]["transient"].update(retryAttempt=-1),
+        lambda d: d["retry_policies"]["transient"].update(retryAttempt=99),
+        lambda d: d["retry_policies"]["transient"].update(error_codes="not a list"),
+        lambda d: d["retry_policies"]["transient"].update(error_codes=[123]),
+        lambda d: d["retry_policies"]["transient"].update(error_codes=[""]),
+        lambda d: d["retry_policies"]["transient"].update(errorCodes=["rate_limit"]),
+        lambda d: d["retry_policies"]["transient"].update(error_patterns=[False]),
+        lambda d: d["retry_policies"]["transient"].update(error_patterns=[""]),
+        lambda d: d["retry_policies"]["transient"].update(errorPatterns=["pattern"]),
+        lambda d: d["retry_policies"]["transient"].update(unknown_field="boom"),
+        lambda d: d["targets"][0].update(retry_policy="dangling_policy"),
+        lambda d: d["targets"][0].update(retry=2),
+        lambda d: d["targets"][0].update(retryAttempt=2),
+        lambda d: d["targets"][0].update(retryPolicy="transient"),
+    ],
+)
+def test_plan_rejects_malformed_persisted_retry_data(tmp_path, mutate) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.transient]
+retryAttempt = 2
+errorCodes = ["rate_limit"]
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "transient"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    catalog = load_config(path)
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    data = execution_plan_data(plan)
+    mutate(data)
+    with pytest.raises(ValueError):
+        parse_execution_plan(data)
+
+
+def test_execution_plan_retry_policies_is_immutable_and_isolated() -> None:
+    from refract.config import RetryPolicy, TargetConfig, TargetSelection
+    from refract.planning import ExecutionPlan
+
+    target = TargetConfig(id="primary", backend="codex", retry_policy="transient")
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    source = {"transient": policy}
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow("implement"),
+        selection=TargetSelection((target.id,)),
+        targets=(target,),
+        retry_policies=source,
+    )
+    with pytest.raises(TypeError):
+        plan.retry_policies["transient"] = RetryPolicy(99)
+
+    source["transient"] = RetryPolicy(99)
+    assert plan.retry_policies["transient"].retry_attempt == 2
+    assert plan.retry_policy("primary").retry_attempt == 2
+
+
+def test_plan_rejects_explicit_null_retry_policies(tmp_path) -> None:
+    catalog = config(tmp_path / "home")
+    data = execution_plan_data(resolve_execution_plan(get_workflow("implement"), catalog, "balanced"))
+    data["retry_policies"] = None
+    with pytest.raises(ValueError, match="mapping"):
+        parse_execution_plan(data)
+
+
+def test_plan_rejects_missing_retry_policies_when_target_references_policy(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """[daemon]
+default_profile = "balanced"
+
+[retryPolicies.transient]
+retryAttempt = 2
+errorCodes = ["rate_limit"]
+
+[[targets]]
+id = "primary"
+backend = "codex"
+retryPolicy = "transient"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+""",
+        encoding="utf-8",
+    )
+    catalog = load_config(path)
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    data = execution_plan_data(plan)
+    del data["retry_policies"]
+    with pytest.raises(ValueError, match="unknown retry policy"):
+        parse_execution_plan(data)
+
+
+def test_retry_policy_accessor_rejects_dangling_reference() -> None:
+    from refract.config import TargetConfig, TargetSelection
+    from refract.planning import ExecutionPlan
+
+    target = TargetConfig(id="primary", backend="codex", retry_policy="transient")
+    plan = ExecutionPlan(
+        profile="balanced",
+        workflow=get_workflow("implement"),
+        selection=TargetSelection((target.id,)),
+        targets=(target,),
+        retry_policies={},
+    )
+    with pytest.raises(ValueError, match="unknown retry policy"):
+        plan.retry_policy("primary")
+
+
+def test_resolve_execution_plan_rejects_dangling_reference() -> None:
+    from pathlib import Path
+    from refract.config import DaemonConfig, TargetConfig, TargetSelection
+    from refract.planning import resolve_execution_plan
+
+    target = TargetConfig(id="primary", backend="codex", retry_policy="missing_policy")
+    cfg = DaemonConfig(
+        home=Path("/tmp"),
+        default_profile="balanced",
+        targets=(target,),
+        profiles={"balanced": {"implement": TargetSelection((target.id,))}},
+        retry_policies={},
+    )
+    with pytest.raises(ValueError, match="unknown retry policy"):
+        resolve_execution_plan("implement", cfg, "balanced")

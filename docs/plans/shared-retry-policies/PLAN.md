@@ -1,6 +1,6 @@
 # Shared Retry Policies Implementation Plan
 
-**Status:** Approved for execution on `main`; baseline verification pending.
+**Status:** All three phases passed specification and independent quality review. The user accepted Phase 2 with a waiver for missing historical RED evidence. Consolidation records one plan commit on `main`; final verification runs against that commit before completion is reported.
 **Design:** `docs/plans/shared-retry-policies/DESIGN.md`
 **Commit:** `feat(retry): add shared target retry policies`
 
@@ -20,10 +20,10 @@ Preserve every pre-existing change. Do not edit the telemetry plan. Do not stash
 4. Use existing telemetry code as the baseline without consolidating its plan.
 5. Consultation `556ea624-0f44-4357-a0af-c75eb8e1b03e` completed. Approved clarifications: unknown replay safety blocks retries; overflow recovery invocations are separate from policy attempts; each manual retry receives a fresh policy budget; Phase 2 includes a narrow telemetry rollover correction.
 6. Run every verification command below against that clean baseline. Record results. If a baseline fails, stop and revise Phase 1 to repair it with user-approved scope.
-7. Set `refs/plans/shared-retry-policies/base` at the verified clean HEAD. No anchor exists yet.
+7. The verified plan base is `refs/plans/shared-retry-policies/base` at `ef9f219`. Preserve that anchor.
 8. Plan approval is confirmed. Resolve task guidance during execution.
 
-No commands below have been run during authoring. They are verification requirements, not passing evidence. Test scripts and dependencies were identified from repository configuration.
+Commands were not run during authoring. Execution baseline verification passed at `ef9f219`; exact counts are recorded in phase-01/journal.md. These commands remain fresh verification requirements for each phase.
 
 ## Route
 

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from refract.config import NotificationsConfig, TargetConfig, TargetSelection
+from refract.config import NotificationsConfig, RetryPolicy, TargetConfig, TargetSelection
 from refract.database import Database
 from refract.drivers import DriverResult
 from refract.backends import BackendParams
@@ -4745,5 +4745,954 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
         assert db_telemetry["total_input_tokens"]["quality"] == "reported"
         assert db_telemetry["total_output_tokens"]["quality"] == "reported"
         assert db_telemetry["context_used_tokens"]["quality"] == "derived"
+    finally:
+        await runtime.close()
+
+
+class StreamingSequenceDrivers(FakeDrivers):
+    def __init__(self, sequence):
+        super().__init__()
+        self.sequence = list(sequence)
+        self.invocations = []
+
+    def supports_structured_streaming(self, target):
+        return True
+
+    async def execute(self, *, target, **kwargs):
+        self.invocations.append(target.id)
+        if self.sequence:
+            item = self.sequence.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+        return DriverResult("SUCCESS", "ok", "", "", "")
+
+
+@pytest.mark.asyncio
+async def test_retry_policy_matching_code_or_pattern_and_empty_rules(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    # Policy matches rate_limit code OR overloaded pattern
+    policy = RetryPolicy(2, ("rate_limit",), ("overloaded",))
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy, "catchall": RetryPolicy(1, (), ())},
+        targets=(
+            TargetConfig(id="t_match", backend="codex", retry_policy="transient"),
+            TargetConfig(id="t_all", backend="codex", retry_policy="catchall"),
+        ),
+        profiles={
+            "p_match": {"implement": TargetSelection(("t_match",)), "review": TargetSelection(("t_match",)), "consult": TargetSelection(("t_match",))},
+            "p_all": {"implement": TargetSelection(("t_all",)), "review": TargetSelection(("t_all",)), "consult": TargetSelection(("t_all",))},
+        },
+    )
+
+    # 1. Exact code match retries and succeeds
+    drivers = StreamingSequenceDrivers([
+        DriverResult("RETRYABLE", "", "", "something went wrong", "rate_limit"),
+        DriverResult("SUCCESS", "success on retry", "", "", ""),
+    ])
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "test code match", profile="p_match")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+        assert len(drivers.invocations) == 2
+        assert job.attempts == 2
+    finally:
+        await runtime.close()
+
+    # 2. Case-insensitive pattern match retries and succeeds
+    drivers2 = StreamingSequenceDrivers([
+        DriverResult("RETRYABLE", "", "", "Server is OverLoaded right now", "other_code"),
+        DriverResult("SUCCESS", "success on retry 2", "", "", ""),
+    ])
+    runtime2 = Runtime(catalog)
+    runtime2.drivers = drivers2
+    await runtime2.start()
+    try:
+        project2 = register_project(runtime2, str(root))
+        sub2 = await runtime2.submit(project2.id, "implement", "test pattern match", profile="p_match")
+        job2 = await runtime2.wait(sub2.job_id, 10)
+        assert job2.state == "succeeded"
+        assert len(drivers2.invocations) == 2
+        assert job2.attempts == 2
+    finally:
+        await runtime2.close()
+
+    # 3. Both lists empty allows all eligible transient failures
+    drivers3 = StreamingSequenceDrivers([
+        DriverResult("RETRYABLE", "", "", "unspecified temporary glitch", "arbitrary_transient"),
+        DriverResult("SUCCESS", "catchall success", "", "", ""),
+    ])
+    runtime3 = Runtime(catalog)
+    runtime3.drivers = drivers3
+    await runtime3.start()
+    try:
+        project3 = register_project(runtime3, str(root))
+        sub3 = await runtime3.submit(project3.id, "implement", "test catchall", profile="p_all")
+        job3 = await runtime3.wait(sub3.job_id, 10)
+        assert job3.state == "succeeded"
+        assert len(drivers3.invocations) == 2
+        assert job3.attempts == 2
+    finally:
+        await runtime3.close()
+
+    # 4. Unmatched error code and pattern invokes once without retrying
+    drivers4 = StreamingSequenceDrivers([
+        DriverResult("RETRYABLE", "", "", "unmatched message", "unmatched_code"),
+        DriverResult("SUCCESS", "should not run", "", "", ""),
+    ])
+    runtime4 = Runtime(catalog)
+    runtime4.drivers = drivers4
+    await runtime4.start()
+    try:
+        project4 = register_project(runtime4, str(root))
+        sub4 = await runtime4.submit(project4.id, "implement", "test unmatched", profile="p_match")
+        job4 = await runtime4.wait(sub4.job_id, 10)
+        assert job4.state == "failed"
+        assert len(drivers4.invocations) == 1
+        assert job4.attempts == 1
+    finally:
+        await runtime4.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_policy_bounded_attempts_and_budget_exhaustion(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    # retryAttempt = 2 permits at most 3 attempts (1 initial + 2 retries)
+    drivers = StreamingSequenceDrivers([
+        DriverResult("RETRYABLE", "", "", "transient 1", "rate_limit"),
+        DriverResult("RETRYABLE", "", "", "transient 2", "rate_limit"),
+        DriverResult("RETRYABLE", "", "", "transient 3 final", "rate_limit"),
+        DriverResult("SUCCESS", "should not reach attempt 4", "", "", ""),
+    ])
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "exhaustion test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "failed"
+        assert len(drivers.invocations) == 3
+        assert job.attempts == 3
+        assert job.result.metadata["failure_kind"] == "retryable"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_policy_exclusions_fatal_and_cancellation(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    # REQUEST_FATAL does not retry even if error_code matches
+    drivers = StreamingSequenceDrivers([
+        DriverResult("REQUEST_FATAL", "", "", "bad request", "rate_limit"),
+        DriverResult("SUCCESS", "should not run", "", "", ""),
+    ])
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "fatal test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "failed"
+        assert len(drivers.invocations) == 1
+        assert job.attempts == 1
+    finally:
+        await runtime.close()
+
+    # TARGET_FATAL does not retry even if error_code matches
+    drivers2 = StreamingSequenceDrivers([
+        DriverResult("TARGET_FATAL", "", "", "backend dead", "rate_limit"),
+        DriverResult("SUCCESS", "should not run", "", "", ""),
+    ])
+    runtime2 = Runtime(catalog)
+    runtime2.drivers = drivers2
+    await runtime2.start()
+    try:
+        project2 = register_project(runtime2, str(root))
+        sub2 = await runtime2.submit(project2.id, "implement", "target fatal test")
+        job2 = await runtime2.wait(sub2.job_id, 10)
+        assert job2.state == "failed"
+        assert len(drivers2.invocations) == 1
+        assert job2.attempts == 1
+    finally:
+        await runtime2.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_sequential_observability_streams_and_ask_tokens(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    observed_ask_tokens = []
+
+    class ObservabilityDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.attempt = 0
+
+        def supports_structured_streaming(self, target):
+            return True
+
+        async def execute(self, *, target, env=None, emitter=None, **kwargs):
+            self.attempt += 1
+            if env and "REFRACT_ASK_TOKEN" in env:
+                observed_ask_tokens.append((self.attempt, env["REFRACT_ASK_TOKEN"]))
+            if emitter:
+                emitter({"kind": "stream.message", "text": f"attempt-{self.attempt}"})
+            if self.attempt == 1:
+                return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
+            return DriverResult("SUCCESS", "sess-1", "attempt 2 success", "", "")
+
+    drivers = ObservabilityDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "observability test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+
+        # 1. Distinct ask tokens per attempt
+        assert len(observed_ask_tokens) == 2
+        assert observed_ask_tokens[0][0] == 1
+        assert observed_ask_tokens[1][0] == 2
+        assert observed_ask_tokens[0][1] != observed_ask_tokens[1][1]
+        assert not runtime.ask_registry._tokens
+
+        # 2. Sequential attempt finished events in DB
+        events = runtime.database.events(sub.job_id)
+        finish_events = [e for e in events if e["kind"] == "target.attempt_finished"]
+        assert len(finish_events) == 2
+        assert finish_events[0]["data"]["attempt"] == 1
+        assert finish_events[0]["data"]["outcome"] == "RETRYABLE"
+        assert finish_events[1]["data"]["attempt"] == 2
+        assert finish_events[1]["data"]["outcome"] == "SUCCESS"
+
+        # 3. Stream events boundary and per-attempt records
+        stream_events = runtime.database.stream_events(sub.job_id)
+        attempt_stream_finishes = [e for e in stream_events if e.kind == "attempt.finished"]
+        assert len(attempt_stream_finishes) == 2
+        assert attempt_stream_finishes[0].attempt == 1
+        assert attempt_stream_finishes[1].attempt == 2
+
+        # 4. Single turn stored in DB
+        turns = runtime.database.recent_turns(project.id, "implement", "implement", 10)
+        assert len(turns) == 1
+        assert turns[0]["response"] == "attempt 2 success"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_probe_and_capacity_held_and_final_only_health(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(1, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        breaker_failure_threshold=1,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    probe_during_retry = []
+    active_during_retry = []
+
+    class ProbeTrackingDrivers(FakeDrivers):
+        def __init__(self, target_key):
+            super().__init__()
+            self.target_key = target_key
+            self.attempt = 0
+
+        def supports_structured_streaming(self, target):
+            return True
+
+        async def execute(self, *, target, **kwargs):
+            self.attempt += 1
+            health = runtime.database.target_health(self.target_key)
+            probe_during_retry.append((self.attempt, health.get("probe_job_id")))
+            active_during_retry.append((self.attempt, runtime.target_executor._target_active.get(target.id)))
+            if self.attempt == 1:
+                return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
+            return DriverResult("SUCCESS", "recovered", "", "", "")
+
+    runtime = Runtime(catalog)
+    target = catalog.targets[0]
+    target_key = target_execution_key(target)
+    drivers = ProbeTrackingDrivers(target_key)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+
+        with runtime.database._connection:
+            runtime.database._connection.execute(
+                "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 60, '')",
+                (target_key,),
+            )
+
+        sub = await runtime.submit(project.id, "implement", "probe held test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+
+        # Probe was held continuously by job across both attempt 1 and attempt 2
+        assert len(probe_during_retry) == 2
+        assert probe_during_retry[0] == (1, sub.job_id)
+        assert probe_during_retry[1] == (2, sub.job_id)
+
+        # Capacity permit was held continuously across attempts
+        assert active_during_retry[0] == (1, 1)
+        assert active_during_retry[1] == (2, 1)
+
+        # Final target health: success reset circuit and cleared probe
+        final_health = runtime.database.target_health(target_key)
+        assert final_health["probe_job_id"] == ""
+        assert final_health["consecutive_failures"] == 0
+        assert final_health["circuit_open_until"] == ""
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_telemetry_rollover_cumulative_consumption(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    class TelemetryStreamingDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.attempt = 0
+
+        def supports_structured_streaming(self, target):
+            return True
+
+        async def execute(self, *, target, emitter=None, **kwargs):
+            self.attempt += 1
+            if emitter:
+                if self.attempt == 1:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {"input_tokens": 100, "output_tokens": 20, "source": "provider", "quality": "reported"},
+                    })
+                elif self.attempt == 2:
+                    emitter({
+                        "kind": "telemetry.updated",
+                        "data": {"input_tokens": 150, "output_tokens": 30, "source": "provider", "quality": "reported"},
+                    })
+            if self.attempt == 1:
+                return DriverResult("RETRYABLE", "", "", "rate limit", "rate_limit")
+            return DriverResult("SUCCESS", "done", "", "", "")
+
+    drivers = TelemetryStreamingDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "telemetry rollover test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+
+        telemetry = job.result.metadata.get("telemetry")
+        assert telemetry is not None
+        assert telemetry["attribution"]["attempt"] == 2
+        assert telemetry["completed_attempts"]["total_input_tokens"] == 100
+        assert telemetry["completed_attempts"]["total_output_tokens"] == 20
+        assert telemetry["total_input_tokens"]["value"] == 250
+        assert telemetry["total_output_tokens"]["value"] == 50
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_ten_attempts_budget_bound(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(9, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    drivers = StreamingSequenceDrivers([
+        DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
+        for _ in range(12)
+    ])
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "max budget test")
+        job = await runtime.wait(sub.job_id, 15)
+        assert job.state == "failed"
+        assert len(drivers.invocations) == 10
+        assert job.attempts == 10
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_tool_activity_after_truncation_blocks_replay(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    class TruncatedToolDriver(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.invocations = []
+
+        def supports_structured_streaming(self, target):
+            return True
+
+        async def execute(self, *, target, emitter=None, **kwargs):
+            self.invocations.append(target.id)
+            if emitter:
+                emitter({"kind": "stream.truncated", "data": {"reason": "quota"}})
+                emitter({"kind": "tool.started", "data": {"tool": "bash"}})
+            return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
+
+    drivers = TruncatedToolDriver()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "tool truncation test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "failed"
+        assert len(drivers.invocations) == 1
+        assert job.attempts == 1
+        assert job.result.metadata["failure_kind"] == "replay_blocked"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_unknown_observation_blocks_replay(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    class NonStreamingDriver(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.invocations = []
+
+        def supports_structured_streaming(self, target):
+            return False
+
+        async def execute(self, *, target, **kwargs):
+            self.invocations.append(target.id)
+            return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
+
+    drivers = NonStreamingDriver()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "unknown observation test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "failed"
+        assert len(drivers.invocations) == 1
+        assert job.attempts == 1
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_recovery_to_transient_to_success(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    invocations = []
+
+    class RecoveryRetryDriver(FakeDrivers):
+        def supports_structured_streaming(self, target):
+            return True
+
+        async def execute(self, *, target, prompt=None, session_id=None, **kwargs):
+            invocations.append((session_id, prompt))
+            if len(invocations) == 1:
+                return DriverResult("RETRYABLE", "s-initial", "", "ctx limit exceeded", "context_overflow")
+            elif len(invocations) == 2:
+                return DriverResult("RETRYABLE", "", "", "rate limit on reconstruct", "rate_limit")
+            return DriverResult("SUCCESS", "s-recovered", "recovered final answer", "", "")
+
+    drivers = RecoveryRetryDriver()
+    runtime = Runtime(catalog)
+    target = catalog.targets[0]
+    target_key = target_execution_key(target)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        runtime.database.append_turn(
+            project_id=project.id, context_key="implement", role="implement",
+            target_id="primary", target_key=target_key, session_id="s-initial",
+            prompt="turn 0 prompt", response="turn 0 response",
+        )
+
+        sub = await runtime.submit(project.id, "implement", "recovery retry test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+        assert job.attempts == 2
+        assert len(invocations) == 3
+
+        # Invocation 1 used s-initial and overflowed
+        assert invocations[0][0] == "s-initial"
+        # Invocation 2 used reconstruct (session empty) and failed transiently
+        assert invocations[1][0] == ""
+        # Invocation 3 (attempt 2) directly continued reconstruct without restarting s-initial
+        assert invocations[2][0] == ""
+
+        # Replacement event was emitted
+        events = runtime.database.events(sub.job_id)
+        replaced = [e for e in events if e["kind"] == "target.session_replaced"]
+        assert len(replaced) == 1
+        assert replaced[0]["data"]["phase"] == "reconstruct"
+
+        # Stored turn has replacement session
+        turns = runtime.database.recent_turns(project.id, "implement", "implement", 10)
+        assert len(turns) == 2
+        assert turns[-1]["prompt"] == "recovery retry test"
+        assert turns[-1]["response"] == "recovered final answer"
+        assert runtime.database.session(project.id, "implement", "implement", target_key) == "s-recovered"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_cancellation_before_retry_invocation_releases_resources(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    invocations = []
+    job_holder = []
+
+    class CancellingDriver(FakeDrivers):
+        def supports_structured_streaming(self, target):
+            return True
+
+        async def execute(self, *, target, **kwargs):
+            invocations.append(target.id)
+            if job_holder:
+                await runtime.cancel(job_holder[0])
+            return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
+
+    drivers = CancellingDriver()
+    runtime = Runtime(catalog)
+    target = catalog.targets[0]
+    target_key = target_execution_key(target)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        with runtime.database._connection:
+            runtime.database._connection.execute(
+                "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 60, '')",
+                (target_key,),
+            )
+        sub = await runtime.submit(project.id, "implement", "cancel prompt")
+        job_holder.append(sub.job_id)
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "cancelled"
+        assert len(invocations) == 1
+        assert runtime.database.target_health(target_key)["probe_job_id"] == ""
+        assert not runtime.target_executor._target_active
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_injected_cleanup_failures_releases_resources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(1, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    runtime = Runtime(catalog)
+    target = catalog.targets[0]
+    target_key = target_execution_key(target)
+    drivers = StreamingSequenceDrivers([DriverResult("SUCCESS", "ok", "", "", "")])
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+
+        # 1. Injected failure in prepare_session releases probe
+        with runtime.database._connection:
+            runtime.database._connection.execute(
+                "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 60, '')",
+                (target_key,),
+            )
+        async def failing_prepare(*_args, **_kwargs):
+            raise RuntimeError("prepare session injected error")
+        monkeypatch.setattr(runtime.target_executor, "_prepare_session", failing_prepare)
+        with pytest.raises(RuntimeError, match="prepare session injected error"):
+            await runtime.target_executor.execute(
+                job_id="fail-prep-job", project=project, workflow="implement", context_key="prep",
+                plan=plan, prompt="p", cwd=root, cancel_event=CancelEvent(),
+            )
+        assert runtime.database.target_health(target_key)["probe_job_id"] == ""
+        assert not runtime.target_executor._target_active
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_policy_lookup_failure_releases_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    target = catalog.targets[0]
+    target_key = target_execution_key(target)
+    runtime.drivers = FakeDrivers()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        runtime.database.create_job(job_id="policy-lookup-fault", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        with runtime.database._connection:
+            runtime.database._connection.execute(
+                "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 60, '')",
+                (target_key,),
+            )
+        monkeypatch.setattr(type(plan), "retry_policy", lambda _self, _target: (_ for _ in ()).throw(RuntimeError("policy lookup fault")))
+        with pytest.raises(RuntimeError, match="policy lookup fault"):
+            await runtime.target_executor.execute(
+                job_id="policy-lookup-fault", project=project, workflow="implement", context_key="ctx",
+                plan=plan, prompt="p", cwd=root, cancel_event=CancelEvent(),
+            )
+        assert runtime.database.target_health(target_key)["probe_job_id"] == ""
+        assert not runtime.target_executor._target_active
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_ask_token_issue_failure_propagates_without_driver_call(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    drivers = FakeDrivers()
+    runtime.drivers = drivers
+    class BrokenAskRegistry:
+        def issue_token(self, *_args, **_kwargs):
+            raise RuntimeError("issue token fault")
+        def revoke_token(self, *_args, **_kwargs):
+            pass
+    runtime.target_executor.ask_registry = BrokenAskRegistry()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        runtime.database.create_job(job_id="ask-issue-fault", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        with pytest.raises(RuntimeError, match="issue token fault"):
+            await runtime.target_executor.execute(
+                job_id="ask-issue-fault", project=project, workflow="implement", context_key="ctx",
+                plan=plan, prompt="p", cwd=root, cancel_event=CancelEvent(),
+            )
+        assert not drivers.sessions
+        assert not runtime.target_executor._target_active
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_driver_exception_does_not_reuse_previous_result(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
+    class ResultThenException(StreamingSequenceDrivers):
+        def __init__(self):
+            super().__init__([DriverResult("RETRYABLE", "", "", "transient", "rate_limit")])
+            self.calls = 0
+        async def execute(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return await super().execute(**kwargs)
+            raise RuntimeError("second invocation fault")
+    runtime = Runtime(catalog)
+    drivers = ResultThenException()
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "p")
+        job = await runtime.wait(sub.job_id, 10)
+        events = runtime.database.events(sub.job_id)
+        finishes = [event["data"] for event in events if event["kind"] == "target.attempt_finished"]
+        assert job.state == "failed"
+        assert len(finishes) == 2
+        assert finishes[0]["error_code"] == "rate_limit"
+        assert finishes[1]["error_code"] == "execution_error"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_accumulator_rollover_failure_releases_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
+    runtime = Runtime(catalog)
+    runtime.drivers = StreamingSequenceDrivers([DriverResult("RETRYABLE", "", "", "transient", "rate_limit")])
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        target_key = target_execution_key(catalog.targets[0])
+        job_id = "accumulator-rollover-fault"
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        with runtime.database._connection:
+            runtime.database._connection.execute(
+                "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 60, '')",
+                (target_key,),
+            )
+        def fail_rollover(*_args, **_kwargs): raise RuntimeError("accumulator rollover fault")
+        monkeypatch.setattr("refract.execution.TelemetryAccumulator.complete_attempt", fail_rollover)
+        with pytest.raises(RuntimeError, match="accumulator rollover fault"):
+            await runtime.target_executor.execute(
+                job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
+                prompt="p", cwd=root, cancel_event=CancelEvent(),
+            )
+        assert runtime.database.target_health(target_key)["probe_job_id"] == ""
+        assert not runtime.target_executor._target_active
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["revoke", "recorder", "health", "storage"])
+async def test_retry_finalization_faults_release_target_resources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    runtime.drivers = StreamingSequenceDrivers([DriverResult("SUCCESS", "session", "done", "", "")])
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        job_id = f"finalize-{fault}"
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        if fault == "revoke":
+            class RevokeFault:
+                def issue_token(self, *_args, **_kwargs): return "token"
+                def revoke_token(self, *_args, **_kwargs): raise RuntimeError("revoke fault")
+            runtime.target_executor.ask_registry = RevokeFault()
+        elif fault == "recorder":
+            async def fail_recorder(*_args, **_kwargs): raise RuntimeError("recorder fault")
+            monkeypatch.setattr(runtime.target_executor, "_finish_recorder", fail_recorder)
+        elif fault == "health":
+            def fail_health(*_args, **_kwargs): raise RuntimeError("health fault")
+            monkeypatch.setattr(runtime.database, "record_target_success", fail_health)
+        else:
+            async def fail_storage(*_args, **_kwargs): raise RuntimeError("storage fault")
+            monkeypatch.setattr(runtime.target_executor, "_store_turn", fail_storage)
+        with pytest.raises(RuntimeError, match=f"{fault} fault"):
+            await runtime.target_executor.execute(
+                job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
+                prompt="p", cwd=root, cancel_event=CancelEvent(),
+            )
+        assert not runtime.target_executor._target_active
+        assert runtime.target_executor._target_users.get("primary", 0) == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_cancellation_during_attempt_setup_prevents_driver_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
+    runtime = Runtime(catalog)
+    drivers = ScriptedRecoveryDrivers([
+        (DriverResult("RETRYABLE", "", "", "transient", "rate_limit"), False),
+        (DriverResult("SUCCESS", "session", "unexpected", "", ""), False),
+    ])
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        job_id = "cancel-setup-race"
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        cancel_event = CancelEvent()
+        starts = 0
+        original_start = runtime.target_executor._start_attempt
+        async def cancel_during_setup(*args, **kwargs):
+            nonlocal starts
+            starts += 1
+            value = await original_start(*args, **kwargs)
+            if starts == 2:
+                cancel_event.set()
+            return value
+        monkeypatch.setattr(runtime.target_executor, "_start_attempt", cancel_during_setup)
+        class TrackingAsk:
+            issued = 0
+            revoked = 0
+            def issue_token(self, *_args, **_kwargs):
+                self.issued += 1
+                return f"token-{self.issued}"
+            def revoke_token(self, *_args, **_kwargs):
+                self.revoked += 1
+        ask = TrackingAsk()
+        runtime.target_executor.ask_registry = ask
+        result = await runtime.target_executor.execute(
+            job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
+            prompt="p", cwd=root, cancel_event=cancel_event,
+        )
+        assert len(drivers.calls) == 1
+        assert result.result.outcome == "CANCELLED"
+        assert ask.issued == ask.revoked == 2
+        assert not runtime.target_executor._target_active
+        assert runtime.target_executor._target_users.get("primary", 0) == 0
+        attempt_finishes = [event for event in runtime.database.events(job_id) if event["kind"] == "target.attempt_finished"]
+        assert len(attempt_finishes) == 2
+        stream_finishes = [event for event in runtime.database.stream_events(job_id) if event.kind == "attempt.finished"]
+        assert len(stream_finishes) == 2
+        assert stream_finishes[-1].data["status"] == "cancelled"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_cancellation_during_recovery_bookkeeping_prevents_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
+    runtime = Runtime(catalog)
+    drivers = ScriptedRecoveryDrivers([
+        (DriverResult("RETRYABLE", "old-session", "", "context overflow", "context_overflow"), False),
+        (DriverResult("SUCCESS", "new-session", "unexpected", "", ""), False),
+    ])
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+        job_id = "cancel-recovery-event-race"
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        target_key = target_execution_key(catalog.targets[0])
+        runtime.database.append_turn(project_id=project.id, context_key="ctx", role="implement", target_id="primary", target_key=target_key, session_id="old-session", prompt="prior", response="history")
+        cancel_event = CancelEvent()
+        original_event = runtime.database.event
+        def cancel_on_recovery(job, kind, data):
+            result = original_event(job, kind, data)
+            if kind == "target.session_recovery_started":
+                cancel_event.set()
+            return result
+        monkeypatch.setattr(runtime.database, "event", cancel_on_recovery)
+        result = await runtime.target_executor.execute(
+            job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
+            prompt="p", cwd=root, cancel_event=cancel_event,
+        )
+        assert len(drivers.calls) == 1
+        assert result.result.outcome == "CANCELLED"
+        stream_finishes = [event for event in runtime.database.stream_events(job_id) if event.kind == "attempt.finished"]
+        assert len(stream_finishes) == 1
+        assert stream_finishes[0].data["status"] == "cancelled"
+        assert not runtime.target_executor._target_active
+        assert runtime.target_executor._target_users.get("primary", 0) == 0
     finally:
         await runtime.close()

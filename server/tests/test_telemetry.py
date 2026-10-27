@@ -302,6 +302,22 @@ def test_attempts_and_retry_aggregation():
     assert snap.attribution.attempt == 2
 
 
+def test_manual_to_automatic_rollover_retains_completed_measurement_without_next_usage():
+    first = TelemetryAccumulator()
+    first.record_consumption(attempt=1, invocation=1, input_tokens=100, output_tokens=20)
+    first.complete_attempt(1)
+
+    retried = TelemetryAccumulator(first.snapshot().model_dump(mode="json"))
+    retried.record_consumption(attempt=2, invocation=1, input_tokens=150, output_tokens=30)
+    retried.complete_attempt(2)
+    retried.complete_attempt(3)
+
+    snapshot = retried.snapshot()
+    assert snapshot.total_input_tokens.value == 250
+    assert snapshot.total_output_tokens.value == 50
+    assert snapshot.completed_attempts.total_input_tokens == 250
+
+
 def test_session_recovery_invocations():
     accumulator = TelemetryAccumulator()
 

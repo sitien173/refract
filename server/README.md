@@ -295,6 +295,78 @@ implement = "claude-opus-high-code"
 review = ["claude-sonnet-medium-review"]
 ```
 
+### Shared Retry Policies
+
+Operators define reusable retry policies under `retryPolicies`.
+Targets reference a policy by name via `retryPolicy`.
+
+```toml
+[retryPolicies.transient]
+retryAttempt = 2
+errorCodes = ["rate_limit"]
+errorPatterns = ["temporarily unavailable"]
+
+[[targets]]
+id = "primary"
+backend = "pi"
+retryPolicy = "transient"
+
+[[targets]]
+id = "secondary"
+backend = "codex"
+retryPolicy = "transient"
+```
+
+The example illustrates structure, not guaranteed backend codes.
+
+#### Retry Counts and Defaults
+
+`retryAttempt` counts retries after the initial attempt.
+It defaults to zero.
+Zero disables automatic retries entirely.
+`retryAttempt = 9` permits ten policy attempts.
+Context recovery has separate internal bounds.
+Manual retries receive fresh policy budgets.
+Cumulative attempt counters increment across sequential retries.
+
+#### Rule Matching and Exclusions
+
+Rules match normalized transient failures only.
+Matches use exact codes or case-insensitive substrings.
+Either error codes or error patterns may match.
+Empty rule lists permit all eligible transient failures.
+Configured rules cannot override safety exclusions.
+Fatal errors and cancellations are excluded from retries.
+Context overflow errors are also excluded from retries.
+Replay-blocked failures are strictly excluded from retries.
+Observed tool activity blocks automatic replay.
+Unknown replay safety blocks automatic retries.
+Automatic retries require trustworthy replay safety evidence.
+
+#### Observability and Token Consumption
+
+Each attempt records sequential logs and transcripts.
+Intermediate transient failures do not terminate jobs.
+Only the final successful response creates a turn.
+Job telemetry aggregates cumulative token consumption across attempts.
+Additional attempts increase token usage and execution time.
+
+#### Routing and Manual Fallback
+
+Automatic retries execute on the same target.
+Refract never switches targets automatically during retries.
+Manual retry and fallback behaviors remain unchanged.
+
+#### Dashboard Management
+
+Global `retryPolicies` definitions remain TOML-managed on disk.
+The dashboard provides no policy management screen.
+The target editor provides an optional `retryPolicy` input.
+An empty field clears the policy reference.
+Clearing the reference disables automatic target retries.
+Unknown policy names fail server validation safely.
+Validation failures do not discard operator form drafts.
+
 ### Database compatibility
 
 Schema v15 is the minimum and current supported database schema. New databases and empty, unversioned files initialize to v15. Existing v15 databases retain jobs, sessions, history, and stream events. Older and newer schemas fail before journal changes or schema writes. This server does not migrate them automatically.
@@ -373,7 +445,7 @@ The dashboard operates strictly on the local loopback interface (`127.0.0.1` or 
 
 The dashboard supports controlled editing of configurations:
 
-- **Editable targets, profiles, and overrides:** Operators can create, edit, and delete targets. Operators can create, edit, and delete global profiles. Operators can manage project-level profile overrides. Changes activate immediately for future jobs without daemon restart. Existing jobs preserve their historical execution plans.
+- **Editable targets, profiles, and overrides:** Operators can create, edit, and delete targets. Targets reference shared retry policies by name. Operators can create, edit, and delete global profiles. Operators can manage project-level profile overrides. Changes activate immediately for future jobs without daemon restart. Existing jobs preserve their historical execution plans.
 - **Loopback security and revisions:** Mutations require loopback origin and CSRF header tokens. Mutations send `If-Match` revisions to prevent lost updates.
 - **Integrity checks and deletion restrictions:** Deletion is blocked when other configurations reference the item. Integrity checks scan global profiles and registered projects. Deletion checks cannot inspect unregistered external workspaces.
 - **Editable context instructions:** Durable workflow context instructions remain editable. Updates require confirmation and apply to future jobs.

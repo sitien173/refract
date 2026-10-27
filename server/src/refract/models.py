@@ -159,7 +159,7 @@ class TargetReference(BaseModel):
 
 
 class TargetEditorData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: str
     backend: str = ""
@@ -171,6 +171,20 @@ class TargetEditorData(BaseModel):
     read_only: bool = False
     args: list[str] = Field(default_factory=list)
     max_concurrency: int = 1
+    retryPolicy: str = Field(default="", alias="retry_policy")
+
+    @property
+    def retry_policy(self) -> str:
+        return self.retryPolicy
+
+    @field_validator("retryPolicy", mode="before")
+    @classmethod
+    def _normalize_retry_policy(cls, value: Any) -> Any:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -183,6 +197,10 @@ class TargetEditorData(BaseModel):
             if "backend_profile" not in data and "profile" in data:
                 data = dict(data)
                 data["backend_profile"] = data.pop("profile")
+            if "retryPolicy" in data and "retry_policy" in data:
+                raise ValueError(
+                    "Use 'retryPolicy', not both 'retryPolicy' and 'retry_policy'"
+                )
         return data
 
 
