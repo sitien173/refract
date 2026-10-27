@@ -71,3 +71,48 @@ async def test_job_wait_schema_contract():
     assert _raw_argument_error(schema, {"job_id": "job-1", "extra": 1})
 
 
+@pytest.mark.asyncio
+async def test_job_report_error_schema_contract():
+    server = create_mcp()
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    assert "job_report_error" in tools
+    report_tool = tools["job_report_error"]
+    schema = report_tool.input_schema
+    assert schema["type"] == "object"
+    assert set(schema["required"]) == {"job_id", "category", "expected", "observed", "report_key"}
+    properties = schema["properties"]
+    assert properties["job_id"]["type"] == "string"
+    assert properties["job_id"]["minLength"] == 1
+    assert properties["category"]["type"] == "string"
+    assert set(properties["category"]["enum"]) == {"protocol", "output"}
+    assert properties["expected"]["type"] == "string"
+    assert properties["expected"]["minLength"] == 1
+    assert properties["expected"]["maxLength"] == 2048
+    assert properties["observed"]["type"] == "string"
+    assert properties["observed"]["minLength"] == 1
+    assert properties["observed"]["maxLength"] == 2048
+    assert properties["report_key"]["type"] == "string"
+    assert properties["report_key"]["minLength"] == 1
+    assert properties["report_key"]["maxLength"] == 128
+    assert not _raw_argument_error(schema, {
+        "job_id": "j1",
+        "category": "protocol",
+        "expected": "exp",
+        "observed": "obs",
+        "report_key": "k1",
+    })
+    assert _raw_argument_error(schema, {
+        "job_id": "j1",
+        "category": 123,
+        "expected": "exp",
+        "observed": "obs",
+        "report_key": "k1",
+    })
+    assert _raw_argument_error(schema, {
+        "job_id": "j1",
+        "category": "protocol",
+        "expected": "exp",
+        "observed": "obs",
+        "report_key": "k1",
+        "extra": "bad",
+    })

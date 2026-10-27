@@ -3,6 +3,7 @@ import { ConfigurationContext, useConfiguration } from './hooks/useConfiguration
 import AppShell from './components/AppShell'
 import PageHeader from './components/PageHeader'
 import ConfigHealth from './screens/ConfigHealth'
+import Diagnostics from './screens/Diagnostics'
 import JobDetail from './screens/JobDetail'
 import Jobs from './screens/Jobs'
 import Overview from './screens/Overview'
@@ -42,6 +43,9 @@ function parseLocation() {
     }
     return { name: 'jobs', projectId: '', jobId: '' }
   }
+  if (parts[0] === 'diagnostics') {
+    return { name: 'diagnostics', projectId: '', jobId: '' }
+  }
   if (parts[0] === 'settings') {
     return { name: 'settings', projectId: '', jobId: '' }
   }
@@ -76,6 +80,7 @@ export default function App() {
       window.history.pushState({}, '', targetPath)
     }
     setRoute(parseLocation())
+    window.dispatchEvent(new PopStateEvent('popstate'))
   }
 
   let content = null
@@ -106,6 +111,9 @@ export default function App() {
   } else if (route.name === 'job-detail') {
     title = 'Job details'
     content = <JobDetail jobId={route.jobId} onNavigate={navigate} />
+  } else if (route.name === 'diagnostics') {
+    title = 'Diagnostics'
+    content = <Diagnostics onNavigate={navigate} />
   } else if (route.name === 'settings') {
     title = 'Runtime settings'
     content = <RuntimeSettings />

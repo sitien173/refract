@@ -2,7 +2,7 @@
 
 Follow these rules for every Refract MCP call. Default endpoint is `http://127.0.0.1:8765/mcp`.
 
-## Eight tools
+## Nine tools
 
 | Tool | Parameters | Returns |
 |---|---|---|
@@ -14,6 +14,7 @@ Follow these rules for every Refract MCP call. Default endpoint is `http://127.0
 | `job_cancel` | `job_id` | `{job:summary}` |
 | `job_retry` | `job_id` | `{job:summary}` |
 | `job_answer` | `job_id`, `answer` | `{job:summary}` |
+| `job_report_error` | `job_id`, `category`, `expected`, `observed`, `report_key` | `{report:{id, job_id, category, created_at}, duplicate}` |
 
 Call only these tools with only these parameters; your client may prefix the names. Unknown tool arguments return `invalid_request`. Capture `project.id` and `job.id` from returned envelopes.
 
@@ -23,8 +24,6 @@ Call only these tools with only these parameters; your client may prefix the nam
 2. Call `task_guide(project_id)` once per phase.
 3. Call `job_submit` with a self-contained `prompt`.
 4. Call `job_wait(job_id)` until terminal, then page the result.
-
-A terminal one-page result takes four calls; resume, recovery, nonterminal waits, and paging add calls.
 
 ## Choosing workflow and profile
 
@@ -63,6 +62,10 @@ Responses stay below 30,000 characters and 9,000 UTF-8 bytes. If a response over
 `job_list` returns active jobs, the ten newest terminal jobs, and `more_recent` (older terminal job count, not a cursor). Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, created_at, updated_at`.
 
 If a saved job is absent from the list, call `job_wait(saved_id, timeout_s=0)` before treating it as unknown. Absence never authorizes duplicate submission.
+
+## Diagnostic reporting
+
+Call `job_report_error(job_id, category, expected, observed, report_key)` for anomalies. Summaries span 1 to 2048 characters; keys span 1 to 128 ASCII chars. Use unique opaque keys per observation. Reusing a key with different content returns `invalid_request`. Matching content returns duplicate acknowledgement. Reports are client observations; they never alter execution state. Redact secrets first; only correlation IDs are logged. Pruning follows `Database.prune_history` on `updated_at`. Reports vanish while jobs remain. Distinguish wait timeouts, pending questions, and partial pagination. Await complete terminal pagination before reporting missing output. Generic worker error text under `succeeded` is an output-report example. Require ERP only where the workflow demands it.
 
 ## Errors
 

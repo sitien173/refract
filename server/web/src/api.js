@@ -93,6 +93,27 @@ export async function getJobOutput(jobId, { after = 0, limit = 100 } = {}, signa
   return request(`/dashboard/api/jobs/${encodeURIComponent(jobId)}/output${qs}`, { signal })
 }
 
+export async function getDiagnostics(options = {}, signal) {
+  const params = new URLSearchParams()
+  const proj = options.projectId ?? options.project_id
+  const job = options.jobId ?? options.job_id
+  const cat = options.category
+  const before = options.before
+  const limit = options.limit
+  if (proj) params.set('project_id', String(proj).trim())
+  if (job) params.set('job_id', String(job).trim())
+  if (cat) params.set('category', String(cat).trim())
+  if (before !== undefined && before !== null && String(before).trim() !== '') {
+    params.set('before', String(before).trim())
+  }
+  if (limit !== undefined && limit !== null && String(limit).trim() !== '') {
+    params.set('limit', String(limit).trim())
+  }
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  const reqSignal = signal || options.signal
+  return request(`/dashboard/api/diagnostics${qs}`, reqSignal ? { signal: reqSignal } : {})
+}
+
 export async function getTaskGuide(projectId) {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
   return request(`/dashboard/api/task-guide${query}`)

@@ -335,7 +335,7 @@ def _normalize_tool_error(wire_result: Mapping[str, Any], tool_name: str, reques
             RefractError(
                 "invalid_request",
                 "The requested tool is not available.",
-                "Use one of the eight tools returned by tools/list.",
+                "Use one of the nine tools returned by tools/list.",
             )
         )
     log.warning(
@@ -419,6 +419,7 @@ _JOB_LIST_DESCRIPTION = "List all active jobs and up to 10 most recently updated
 _JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary}. Errors: unknown_job, response_too_large."
 _JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, targets_unavailable, response_too_large."
 _JOB_ANSWER_DESCRIPTION = "Deliver a coordinator answer (up to 8192 characters) to a running job's pending question. Returns {job:summary}. Errors: unknown_job, invalid_state, invalid_request, response_too_large."
+_JOB_REPORT_ERROR_DESCRIPTION = "Report an unexpected job protocol or output anomaly for offline investigation. Persists a durable diagnostic report event without altering execution state. Returns {report:{id,job_id,category,created_at},duplicate}. Errors: unknown_job, invalid_request, response_too_large."
 
 
 _INSTRUCTIONS = """Refract runs durable coding jobs (consult, implement, review, other) on external agents for a local project. Jobs persist across client disconnects and daemon restarts.
@@ -436,6 +437,7 @@ Rules:
 - On session resume, call job_list(project_id) and reconcile active jobs before submitting new ones.
 - Use job_cancel(job_id) to stop queued or running work. Use job_retry(job_id) for eligible terminal jobs.
 - Use job_answer(job_id, answer) to answer a running worker question returned in result.pending_question.
+- Use job_report_error(job_id, category, expected, observed, report_key) to record unexpected protocol or output anomalies.
 - On failed/cancelled job_wait, use result.metadata.next_target with job_submit(next_target=...) for a follow-up on the next healthy target; tokens are opaque and can expire after config changes. result.metadata.retryable reflects a live next target for routing failures.
 - targets_unavailable errors include retry_after_s; wait at least that many seconds before retrying.
 - Errors are JSON with code, message, next_action, retryable (and retry_after_s for targets_unavailable). Follow next_action."""
@@ -813,6 +815,57 @@ async def job_answer(
     )
 
 
+@_tool(
+    title="Report Job Error",
+    description=_JOB_REPORT_ERROR_DESCRIPTION,
+    annotations=_annotations("Report Job Error", read_only=False, destructive=False, idempotent=True, open_world=False),
+    structured_output=False,
+)
+@_logged_request("job_report_error")
+async def job_report_error(
+    job_id: Annotated[str, Field(description="Job ID returned by job_submit.", min_length=1)],
+    category: Annotated[Literal["protocol", "output"], Field(description="Anomaly category: 'protocol' or 'output'.")],
+    expected: Annotated[str, Field(description="Expected behavior summary (1-2048 characters).", min_length=1, max_length=2048)],
+    observed: Annotated[str, Field(description="Observed behavior summary (1-2048 characters).", min_length=1, max_length=2048)],
+    report_key: Annotated[str, Field(description="Client-generated unique opaque key for delivery retries (1-128 ASCII letters, digits, underscores, or hyphens).", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")],
+    ctx: Context,
+) -> str:
+    runtime = _runtime(ctx)
+    result = await runtime.report_error(
+        job_id=job_id,
+        category=category,
+        expected=expected,
+        observed=observed,
+        report_key=report_key,
+    )
+    report = result["report"]
+    duplicate = bool(result["duplicate"])
+    project_id = result.get("project_id", "")
+    request_id = _request_id(ctx)
+
+    if not duplicate:
+        log.info(
+            "Diagnostic error reported",
+            extra={
+                "event": "job.error_reported",
+                "report_id": report["id"],
+                "job_id": job_id,
+                "project_id": project_id,
+                "request_id": request_id,
+                "category": category,
+            },
+        )
+
+    return _render_payload(
+        {"report": report, "duplicate": duplicate},
+        applied=(
+            "Job error report",
+            report["id"],
+            f"Use report ID {report['id']} to inspect diagnostics; do not submit the same report again.",
+        ),
+    )
+
+
 def create_mcp(
     config: DaemonConfig | None = None,
     *,
@@ -900,6 +953,6 @@ mcp = create_mcp()
 
 
 __all__ = [
-    "RefractError", "create_application", "job_answer", "job_cancel", "job_list", "job_retry",
+    "RefractError", "create_application", "job_answer", "job_cancel", "job_list", "job_report_error", "job_retry",
     "job_submit", "job_wait", "mcp", "project_resolve", "task_guide",
 ]

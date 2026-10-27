@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { getDiagnostics } from '../api'
 import Alert from './Alert'
 import StatusBadge from './StatusBadge'
 import JobTranscript from './JobTranscript'
@@ -41,6 +42,7 @@ export default function JobDetails({
   refreshError = null,
   onRefresh,
   onBack,
+  onNavigate,
   headingRef,
   stream: providedStream,
 }) {
@@ -57,6 +59,71 @@ export default function JobDetails({
       .map((it) => it.text)
       .join('')
   }, [stream?.entities])
+
+  const [reports, setReports] = useState(null)
+  const [nextBefore, setNextBefore] = useState(null)
+  const [isReportsLoading, setIsReportsLoading] = useState(false)
+  const [reportsError, setReportsError] = useState(null)
+  const [reportsRefreshTrigger, setReportsRefreshTrigger] = useState(0)
+
+  const reportsRequestIdRef = useRef(0)
+  const reportsAbortControllerRef = useRef(null)
+  const lastJobIdRef = useRef(null)
+
+  useEffect(() => {
+    if (!job?.id) {
+      setReports(null)
+      setNextBefore(null)
+      setReportsError(null)
+      setIsReportsLoading(false)
+      lastJobIdRef.current = null
+      return
+    }
+
+    const isNewJob = lastJobIdRef.current !== job.id
+    lastJobIdRef.current = job.id
+
+    if (isNewJob) {
+      setReports(null)
+      setNextBefore(null)
+      setReportsError(null)
+    }
+
+    const reqId = ++reportsRequestIdRef.current
+    if (reportsAbortControllerRef.current) {
+      reportsAbortControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    reportsAbortControllerRef.current = controller
+
+    setIsReportsLoading(true)
+
+    getDiagnostics({ jobId: job.id, limit: 50 }, controller.signal)
+      .then((data) => {
+        if (reportsRequestIdRef.current !== reqId) return
+        setReports(data.reports || [])
+        setNextBefore(data.next_before || null)
+        setReportsError(null)
+        setIsReportsLoading(false)
+      })
+      .catch((err) => {
+        if (reportsRequestIdRef.current !== reqId || controller.signal.aborted) return
+        setReportsError(err)
+        setIsReportsLoading(false)
+      })
+
+    return () => {
+      controller.abort()
+      reportsRequestIdRef.current += 1
+    }
+  }, [job?.id, reportsRefreshTrigger])
+
+  function handleRefreshClick() {
+    setReportsRefreshTrigger((t) => t + 1)
+    if (onRefresh) {
+      onRefresh()
+    }
+  }
 
   if (error && !job) {
     return (
@@ -132,7 +199,7 @@ export default function JobDetails({
             <button
               type="button"
               className="button button-ghost button-sm"
-              onClick={onRefresh}
+              onClick={handleRefreshClick}
               disabled={isLoading}
               aria-label="Refresh job details"
             >
@@ -149,14 +216,25 @@ export default function JobDetails({
       )}
 
       <div className="job-details-title-row">
-        <h2
-          id="job-details-heading"
-          ref={headingRef}
-          tabIndex={-1}
-          className="job-details-heading"
-        >
-          Job {job.id}
-        </h2>
+        <div className="job-details-heading-group">
+          <h2
+            id="job-details-heading"
+            ref={headingRef}
+            tabIndex={-1}
+            className="job-details-heading"
+          >
+            Job {job.id}
+          </h2>
+          {job.suspect && (
+            <span
+              className="suspect-badge"
+              aria-label={`Job is suspect: ${job.diagnostic_count || 1} diagnostic report(s)`}
+            >
+              <span className="suspect-icon" aria-hidden="true">!</span>
+              <span>Suspect</span>
+            </span>
+          )}
+        </div>
         <p className="caption">
           Project: <strong>{job.project_id}</strong> · Workflow: <strong>{job.workflow}</strong>
         </p>
@@ -166,7 +244,18 @@ export default function JobDetails({
         <section className="panel job-meta-panel" aria-labelledby="job-metadata-heading">
           <div className="panel-header">
             <h3 id="job-metadata-heading">Execution status</h3>
-            <StatusBadge status={job.state} label={job.state} />
+            <div className="job-status-badges">
+              <StatusBadge status={job.state} label={job.state} />
+              {job.suspect && (
+                <span
+                  className="suspect-badge"
+                  aria-label={`Job is suspect: ${job.diagnostic_count || 1} diagnostic report(s)`}
+                >
+                  <span className="suspect-icon" aria-hidden="true">!</span>
+                  <span>Suspect</span>
+                </span>
+              )}
+            </div>
           </div>
           <div className="job-meta-rows">
             <div className="meta-row">
@@ -443,6 +532,79 @@ export default function JobDetails({
           </div>
         </section>
       )}
+
+      <section className="panel job-diagnostics-panel" aria-labelledby="job-diagnostics-heading">
+        <div className="panel-header">
+          <h3 id="job-diagnostics-heading">Diagnostic reports</h3>
+          {reports && reports.length > 0 && (
+            <span className="caption">{reports.length} report(s)</span>
+          )}
+        </div>
+        <p className="caption job-diagnostics-note">
+          Client observations, not verified server failures.
+        </p>
+        <div className="job-diagnostics-content">
+          {reportsError && (!reports || reports.length === 0) && (
+            <Alert tone="error" title="Unable to load diagnostic reports">
+              {reportsError.message || 'Failed to fetch diagnostic reports.'}
+            </Alert>
+          )}
+          {reportsError && reports && reports.length > 0 && (
+            <Alert tone="warning" title="Showing previously loaded diagnostic reports">
+              Background refresh failed. Displayed reports remain unchanged; retry when the daemon is available.
+            </Alert>
+          )}
+          {isReportsLoading && !reports && (
+            <p className="caption" role="status">Loading diagnostic reports…</p>
+          )}
+          {!isReportsLoading && !reportsError && reports && reports.length === 0 && (
+            <p className="empty-message">No diagnostic reports for this job.</p>
+          )}
+          {nextBefore && job?.id && (
+            <p className="caption diagnostics-subset-indicator">
+              Showing bounded newest subset.{' '}
+              <a
+                href={`/dashboard/diagnostics?job_id=${encodeURIComponent(job.id)}`}
+                onClick={(e) => {
+                  if (onNavigate) {
+                    e.preventDefault()
+                    onNavigate(`/dashboard/diagnostics?job_id=${encodeURIComponent(job.id)}`)
+                  }
+                }}
+              >
+                Inspect remaining reports
+              </a>
+            </p>
+          )}
+          {reports && reports.length > 0 && (
+            <div className="diagnostic-reports-list" role="feed" aria-label="Diagnostic reports list">
+              {reports.map((r) => (
+                <div key={r.id} className="diagnostic-report-card" tabIndex={0} role="article" aria-label={`Report ${r.id}: ${r.category}`}>
+                  <div className="diagnostic-report-header">
+                    <span className="eyebrow">Report ID:</span> <code className="cell-code">{r.id}</code>
+                    <span className="category-tag">{r.category}</span>
+                    <span className="caption">{r.created_at}</span>
+                    <div className="current-state-inline">
+                      <span className="sr-only">Current state: </span>
+                      <StatusBadge status={r.current_state} label={`Current: ${r.current_state}`} />
+                    </div>
+                  </div>
+                  <div className="diagnostic-report-body">
+                    <div>
+                      <span className="eyebrow">Expected</span>
+                      <div className="diagnostics-summary-box">{r.expected}</div>
+                    </div>
+                    <div>
+                      <span className="eyebrow">Observed</span>
+                      <div className="diagnostics-summary-box">{r.observed}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   )
 }

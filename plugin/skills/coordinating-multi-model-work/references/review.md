@@ -45,6 +45,16 @@ When specification or quality review returns blocking findings:
 Bound this to two automatic fix cycles. Return remaining findings after the
 second cycle.
 
+## Diagnostic anomalies
+
+Report protocol anomalies or confirmed output-contract anomalies before recovery.
+Call `job_report_error` preserving original job and project IDs.
+Generic worker error text under `succeeded` is reportable.
+Await complete terminal pagination before reporting missing output.
+Require ERP only where the workflow requires it.
+Reporting failure must never cause recursive reporting.
+Reporting failure must never block safe reconciliation.
+
 ## Finalize phase
 
 After both reviews pass and no job is active:

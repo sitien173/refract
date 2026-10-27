@@ -1022,3 +1022,457 @@ def test_database_reopen_preserves_telemetry_without_schema_upgrade(tmp_path) ->
     assert job.result.metadata["telemetry"]["total_input_tokens"]["value"] == 500
     db2.close()
 
+
+def test_record_error_report_validation_and_unknown_job(tmp_path) -> None:
+    from refract.runtime import OrchestrationError
+
+    path = tmp_path / "errors.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-val-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+
+    # Unknown job
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-missing",
+            category="protocol",
+            expected="exp",
+            observed="obs",
+            report_key="key-1",
+        )
+    assert exc.value.code == "unknown_job"
+
+    # Invalid category
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-val-1",
+            category="invalid_cat",
+            expected="exp",
+            observed="obs",
+            report_key="key-1",
+        )
+    assert exc.value.code == "invalid_request"
+
+    # Whitespace-only expected
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-val-1",
+            category="protocol",
+            expected="   \t\n  ",
+            observed="obs",
+            report_key="key-1",
+        )
+    assert exc.value.code == "invalid_request"
+
+    # Whitespace-only observed
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-val-1",
+            category="protocol",
+            expected="exp",
+            observed="   ",
+            report_key="key-1",
+        )
+    assert exc.value.code == "invalid_request"
+
+    # Expected exceeding 2048 chars before trimming
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-val-1",
+            category="protocol",
+            expected="a" * 2049,
+            observed="obs",
+            report_key="key-1",
+        )
+    assert exc.value.code == "invalid_request"
+
+    # Observed exceeding 2048 chars before trimming
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-val-1",
+            category="output",
+            expected="exp",
+            observed="b" * 2049,
+            report_key="key-1",
+        )
+    assert exc.value.code == "invalid_request"
+
+    # Invalid report_key (empty, invalid chars, exceeding 128 chars)
+    for bad_key in ["", "key with space", "key@invalid!", "k" * 129]:
+        with pytest.raises(OrchestrationError) as exc:
+            db.record_error_report(
+                job_id="job-val-1",
+                category="protocol",
+                expected="exp",
+                observed="obs",
+                report_key=bad_key,
+            )
+        assert exc.value.code == "invalid_request"
+
+    db.close()
+
+
+def test_record_error_report_redaction(tmp_path) -> None:
+    path = tmp_path / "redact.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-redact-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+
+    res = db.record_error_report(
+        job_id="job-redact-1",
+        category="protocol",
+        expected="Expected Bearer secret-token-123 and sk-abcdef1234567890",
+        observed="Observed password: supersecret and token=my-api-token",
+        report_key="key-redact-1",
+    )
+    assert res["duplicate"] is False
+
+    row = db._connection.execute(
+        "SELECT data_json FROM events WHERE job_id=? AND kind='job.error_reported'",
+        ("job-redact-1",),
+    ).fetchone()
+    assert row is not None
+    data = json.loads(row["data_json"])
+    assert "secret-token-123" not in data["expected"]
+    assert "[REDACTED]" in data["expected"]
+    assert "sk-abcdef1234567890" not in data["expected"]
+    assert "supersecret" not in data["observed"]
+    assert "my-api-token" not in data["observed"]
+    assert data["report_key"] == "key-redact-1"
+    assert data["version"] == 1
+    assert data["category"] == "protocol"
+
+    db.close()
+
+
+def test_record_error_report_duplicate_delivery(tmp_path) -> None:
+    path = tmp_path / "dup.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-dup-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+
+    res1 = db.record_error_report(
+        job_id="job-dup-1",
+        category="output",
+        expected="Valid output",
+        observed="Empty output",
+        report_key="key-dup-1",
+    )
+    assert res1["duplicate"] is False
+    report_id = res1["report"]["id"]
+    assert isinstance(report_id, str)
+    assert report_id.isdigit()
+    assert res1["report"]["job_id"] == "job-dup-1"
+    assert res1["report"]["category"] == "output"
+    assert res1["report"]["created_at"]
+
+    res2 = db.record_error_report(
+        job_id="job-dup-1",
+        category="output",
+        expected="Valid output",
+        observed="Empty output",
+        report_key="key-dup-1",
+    )
+    assert res2["duplicate"] is True
+    assert res2["report"]["id"] == report_id
+    assert res2["report"]["created_at"] == res1["report"]["created_at"]
+
+    count = db._connection.execute(
+        "SELECT COUNT(*) FROM events WHERE job_id=? AND kind='job.error_reported'",
+        ("job-dup-1",),
+    ).fetchone()[0]
+    assert count == 1
+
+    db.close()
+
+
+def test_record_error_report_conflict_same_key_different_content(tmp_path) -> None:
+    from refract.runtime import OrchestrationError
+
+    path = tmp_path / "conflict.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-conf-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+
+    res = db.record_error_report(
+        job_id="job-conf-1",
+        category="output",
+        expected="Expected text",
+        observed="Observed text",
+        report_key="key-conflict-1",
+    )
+    assert res["duplicate"] is False
+
+    # Same key, different category
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-conf-1",
+            category="protocol",
+            expected="Expected text",
+            observed="Observed text",
+            report_key="key-conflict-1",
+        )
+    assert exc.value.code == "invalid_request"
+
+    # Same key, different expected
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-conf-1",
+            category="output",
+            expected="Different expected",
+            observed="Observed text",
+            report_key="key-conflict-1",
+        )
+    assert exc.value.code == "invalid_request"
+
+    # Same key, different observed
+    with pytest.raises(OrchestrationError) as exc:
+        db.record_error_report(
+            job_id="job-conf-1",
+            category="output",
+            expected="Expected text",
+            observed="Different observed",
+            report_key="key-conflict-1",
+        )
+    assert exc.value.code == "invalid_request"
+
+    count = db._connection.execute(
+        "SELECT COUNT(*) FROM events WHERE job_id=? AND kind='job.error_reported'",
+        ("job-conf-1",),
+    ).fetchone()[0]
+    assert count == 1
+
+    db.close()
+
+
+def test_record_error_report_concurrent_insertions(tmp_path) -> None:
+    path = tmp_path / "concurrent.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-conc-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+
+    def submit_report(index: int) -> dict[str, Any]:
+        return db.record_error_report(
+            job_id="job-conc-1",
+            category="protocol",
+            expected="Consistent expected",
+            observed="Consistent observed",
+            report_key="stable-conc-key",
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(submit_report, range(4)))
+
+    duplicates = [r["duplicate"] for r in results]
+    assert duplicates.count(False) == 1
+    assert duplicates.count(True) == 3
+
+    report_ids = {r["report"]["id"] for r in results}
+    assert len(report_ids) == 1
+
+    count = db._connection.execute(
+        "SELECT COUNT(*) FROM events WHERE job_id=? AND kind='job.error_reported'",
+        ("job-conc-1",),
+    ).fetchone()[0]
+    assert count == 1
+
+    db.close()
+
+
+def test_record_error_report_failed_write_truthful(tmp_path) -> None:
+    path = tmp_path / "failed_write.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-fail-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+    db.close()
+
+    # Closed connection raises ProgrammingError truthfully
+    with pytest.raises(sqlite3.ProgrammingError):
+        db.record_error_report(
+            job_id="job-fail-1",
+            category="protocol",
+            expected="exp",
+            observed="obs",
+            report_key="key-1",
+        )
+
+
+def test_record_error_report_restart_persistence(tmp_path) -> None:
+    path = tmp_path / "restart.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+    db.create_job(
+        job_id="job-restart-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        context_key="k1",
+    )
+
+    res1 = db.record_error_report(
+        job_id="job-restart-1",
+        category="output",
+        expected="Restart expected",
+        observed="Restart observed",
+        report_key="key-restart-1",
+    )
+    assert res1["duplicate"] is False
+    original_id = res1["report"]["id"]
+    db.close()
+
+    # Reopen
+    db2 = Database(path)
+    res2 = db2.record_error_report(
+        job_id="job-restart-1",
+        category="output",
+        expected="Restart expected",
+        observed="Restart observed",
+        report_key="key-restart-1",
+    )
+    assert res2["duplicate"] is True
+    assert res2["report"]["id"] == original_id
+
+    events = db2.events("job-restart-1")
+    report_events = [e for e in events if e["kind"] == "job.error_reported"]
+    assert len(report_events) == 1
+    assert str(report_events[0]["id"]) == original_id
+
+    db2.close()
+
+
+def test_record_error_report_preserves_job_state_timestamps_and_execution_fields(tmp_path) -> None:
+    from refract.models import TERMINAL_STATES
+
+    path = tmp_path / "preserve.db"
+    db = Database(path)
+    project = db.upsert_project(project_id="p1", alias="p1", root="/p1")
+
+    # Set up target health
+    with db._connection:
+        db._connection.execute(
+            """INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id)
+               VALUES ('target-1', 2, '2026-10-27T12:00:00Z', 120, 'probe-1')"""
+        )
+
+    states = ["queued", "running", *sorted(TERMINAL_STATES)]
+    for i, state in enumerate(states):
+        job_id = f"job-state-{state}"
+        db.create_job(
+            job_id=job_id,
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="hello",
+            execution_plan_json='{"steps": []}',
+            context_key=f"k-{i}",
+        )
+        with db._connection:
+            db._connection.execute(
+                """UPDATE jobs SET state=?, attempts=?, result_text=?, target_id=?,
+                   error=?, result_metadata_json=?, created_at=?, updated_at=?
+                   WHERE id=?""",
+                (
+                    state,
+                    i + 1,
+                    f"result-{state}",
+                    "target-1",
+                    f"error-{state}",
+                    '{"custom": "data"}',
+                    "2026-10-20T10:00:00Z",
+                    "2026-10-20T10:30:00Z",
+                    job_id,
+                ),
+            )
+
+    before_records = {
+        f"job-state-{s}": db.job_record(f"job-state-{s}") for s in states
+    }
+    before_queued = db.queued_jobs()
+    before_health = db.target_health("target-1")
+
+    # Call record_error_report for every job
+    for s in states:
+        job_id = f"job-state-{s}"
+        res = db.record_error_report(
+            job_id=job_id,
+            category="protocol",
+            expected="Exp",
+            observed="Obs",
+            report_key=f"key-state-{s}",
+        )
+        assert res["duplicate"] is False
+
+    # Check after
+    for s in states:
+        job_id = f"job-state-{s}"
+        after = db.job_record(job_id)
+        before = before_records[job_id]
+        assert after is not None
+        assert before is not None
+        assert after["state"] == before["state"]
+        assert after["attempts"] == before["attempts"]
+        assert after["created_at"] == before["created_at"]
+        assert after["updated_at"] == before["updated_at"]
+        assert after["result_text"] == before["result_text"]
+        assert after["target_id"] == before["target_id"]
+        assert after["error"] == before["error"]
+        assert after["result_metadata_json"] == before["result_metadata_json"]
+
+    after_queued = db.queued_jobs()
+    assert after_queued == before_queued
+
+    after_health = db.target_health("target-1")
+    assert after_health == before_health
+
+    db.close()
+

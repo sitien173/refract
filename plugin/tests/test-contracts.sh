@@ -46,15 +46,17 @@ assert agy_version == plugin_version == market_version == codex_version == pi_ve
 
 contract = (root / "skills/coordinating-multi-model-work/references/tool-contract.md").read_text()
 contract_flat = " ".join(contract.split())
-tool_table = contract.split("## Eight tools", 1)[1].split("## ", 1)[0]
+tool_table = contract.split("## Nine tools", 1)[1].split("## ", 1)[0]
 tools = re.findall(r"^\| `([a-z_]+)` \|", tool_table, re.M)
-assert tools == ["project_resolve", "task_guide", "job_submit", "job_wait", "job_list", "job_cancel", "job_retry", "job_answer"]
+assert tools == ["project_resolve", "task_guide", "job_submit", "job_wait", "job_list", "job_cancel", "job_retry", "job_answer", "job_report_error"]
 for detail in (
     "`path`, `alias=\"\"`", "{project:{id, alias, path}}",
     "{workflows, profiles:{default, available}, guidance}",
     "{job:summary}", "{job:summary, result:{text, error, next_offset, metadata}}",
     "{active, recent, more_recent}", "{job:summary}",
     "`job_id`, `answer`",
+    "`job_id`, `category`, `expected`, `observed`, `report_key`",
+    "{report:{id, job_id, category, created_at}, duplicate}",
     "pending_question",
     "Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, created_at, updated_at`.",
     "Unknown tool arguments return `invalid_request`.",
@@ -134,6 +136,27 @@ assert f'"{default_endpoint}"' in (root / "pi/extensions/refract.ts").read_text(
 assert "dependent jobs" not in coordinator
 assert "consolidation procedure" in (root / "skills/executing-plans/SKILL.md").read_text()
 assert "consolidation procedure" in (root / "skills/coordinating-multi-model-work/references/review.md").read_text()
+
+review = (root / "skills/coordinating-multi-model-work/references/review.md").read_text()
+assert "job_report_error" in review
+assert "recursive reporting" in review
+assert "safe reconciliation" in review
+
+for diag_detail in (
+    "Database.prune_history",
+    "client observations",
+    "complete terminal pagination",
+    "Generic worker error text",
+):
+    assert diag_detail in contract, diag_detail
+
+readme = (repository / "server/README.md").read_text()
+assert "Nine self-describing MCP tools" in readme
+assert "job_report_error" in readme
+assert "### Diagnostic Reporting" in readme
+assert "correlation metadata" in readme
+assert "2048 characters" in readme
+assert "invalid_request" in readme
 
 for path in (root / "shared").glob("*.md"):
     match = re.search(r"refract-shared-version:\s*([^\s>]+)", path.read_text())

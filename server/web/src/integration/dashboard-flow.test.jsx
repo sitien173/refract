@@ -31,6 +31,7 @@ vi.mock('../api', () => ({
   createProjectProfileOverride: vi.fn(),
   updateProjectProfileOverride: vi.fn(),
   deleteProjectProfileOverride: vi.fn(),
+  getDiagnostics: vi.fn(),
 }))
 
 describe('Dashboard integrated user flows', () => {
@@ -85,6 +86,8 @@ describe('Dashboard integrated user flows', () => {
         target_id: 'worker-1',
         config_revision: 'rev-overall-001',
         created_at: '2026-09-04 15:00:00',
+        suspect: true,
+        diagnostic_count: 1,
       },
     ], more_recent: 0 })
 
@@ -99,6 +102,8 @@ describe('Dashboard integrated user flows', () => {
       attempts: 1,
       created_at: '2026-09-04 15:00:00',
       updated_at: '2026-09-04 15:01:00',
+      suspect: true,
+      diagnostic_count: 1,
       execution_plan: {
         profile: 'balanced',
         workflow: 'implement',
@@ -117,6 +122,22 @@ describe('Dashboard integrated user flows', () => {
       result: {
         output: 'Implementation completed without errors.',
       },
+    })
+
+    vi.mocked(api.getDiagnostics).mockResolvedValue({
+      reports: [
+        {
+          id: '888',
+          job_id: 'job-999',
+          category: 'protocol',
+          created_at: '2026-09-04 15:00:30',
+          expected: 'Valid protocol response',
+          observed: 'Malformed protocol header',
+          project_id: 'proj-alpha',
+          current_state: 'succeeded',
+        },
+      ],
+      next_before: null,
     })
 
     vi.mocked(api.getJobOutput).mockResolvedValue({
@@ -965,5 +986,35 @@ describe('Dashboard integrated user flows', () => {
     expect(screen.getByText('94.7%')).toBeInTheDocument()
     expect(screen.getByText('777')).toBeInTheDocument()
     expect(screen.getByText('88')).toBeInTheDocument()
+  })
+
+  it('navigates to diagnostics, filters observations, and links to job details with suspect badge', async () => {
+    window.history.pushState({}, '', '/dashboard/')
+    render(<App />)
+
+    // 1. Navigate to Diagnostics via sidebar
+    const diagNav = await screen.findByRole('button', { name: /^Diagnostics$/i })
+    fireEvent.click(diagNav)
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Diagnostics' })).toBeInTheDocument()
+    expect(screen.getByText('888')).toBeInTheDocument()
+    expect(screen.getByText('Valid protocol response')).toBeInTheDocument()
+    expect(screen.getByText('Malformed protocol header')).toBeInTheDocument()
+    expect(screen.getByText(/Current: succeeded/)).toBeInTheDocument()
+
+    // 2. Click job link to navigate to job details
+    const jobLink = screen.getByRole('link', { name: 'job-999' })
+    expect(jobLink).toHaveAttribute('href', '/dashboard/projects/proj-alpha/jobs/job-999')
+    fireEvent.click(jobLink)
+
+    // 3. Inspect job details: suspect badge and diagnostic reports panel
+    expect(await screen.findByText('Job job-999')).toBeInTheDocument()
+    const suspectBadges = screen.getAllByText('Suspect')
+    expect(suspectBadges.length).toBeGreaterThanOrEqual(1)
+
+    expect(screen.getByRole('heading', { name: 'Diagnostic reports' })).toBeInTheDocument()
+    expect(await screen.findByText('888')).toBeInTheDocument()
+    expect(screen.getByText('Valid protocol response')).toBeInTheDocument()
+    expect(screen.getByText('Malformed protocol header')).toBeInTheDocument()
   })
 })

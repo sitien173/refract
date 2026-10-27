@@ -132,3 +132,93 @@ def test_transcript_pruning_preserves_job_telemetry(tmp_path):
     finally:
         db.close()
 
+
+def test_diagnostic_report_event_pruning_and_deduplication_scope(tmp_path):
+    """Retention prunes report events for expired terminal jobs; deduplication lasts while retained."""
+    runtime = Runtime(DaemonConfig(home=tmp_path))
+    db = runtime.database
+    try:
+        db.upsert_project(project_id="proj", alias="proj", root="/proj")
+        # Job 1: Old terminal job
+        db.create_job(
+            job_id="old-job",
+            project_id="proj",
+            workflow="implement",
+            profile="balanced",
+            prompt="work",
+            execution_plan_json="{}",
+            context_key="k1",
+        )
+        db.finish_job("old-job", "succeeded")
+        with db._connection:
+            db._connection.execute("UPDATE jobs SET updated_at='2000-01-01' WHERE id='old-job'")
+
+        # Job 2: Recent terminal job
+        db.create_job(
+            job_id="recent-job",
+            project_id="proj",
+            workflow="review",
+            profile="balanced",
+            prompt="review",
+            execution_plan_json="{}",
+            context_key="k2",
+        )
+        db.finish_job("recent-job", "succeeded")
+
+        # Independent key usage across different jobs
+        res_old = db.record_error_report(
+            job_id="old-job",
+            category="protocol",
+            expected="Expected protocol",
+            observed="Observed anomaly",
+            report_key="shared-key",
+        )
+        res_recent = db.record_error_report(
+            job_id="recent-job",
+            category="output",
+            expected="Expected output",
+            observed="Observed output anomaly",
+            report_key="shared-key",
+        )
+        assert res_old["duplicate"] is False
+        assert res_recent["duplicate"] is False
+        assert res_old["report"]["id"] != res_recent["report"]["id"]
+
+        # Prune history older than 2010
+        runtime.prune_retained_transcripts()
+
+        # Report event for old-job is pruned
+        old_events = [e for e in db.events("old-job") if e["kind"] == "job.error_reported"]
+        assert old_events == []
+        assert db.diagnostic_counts(["old-job"]).get("old-job", 0) == 0
+        assert db.job_record("old-job")["state"] == "succeeded"
+
+        # Report event for recent-job is retained
+        recent_events = [e for e in db.events("recent-job") if e["kind"] == "job.error_reported"]
+        assert len(recent_events) == 1
+        assert str(recent_events[0]["id"]) == res_recent["report"]["id"]
+        assert db.diagnostic_counts(["recent-job"])["recent-job"] == 1
+
+        # Deduplication scope: recent-job duplicate returns True with original ID
+        dup_recent = db.record_error_report(
+            job_id="recent-job",
+            category="output",
+            expected="Expected output",
+            observed="Observed output anomaly",
+            report_key="shared-key",
+        )
+        assert dup_recent["duplicate"] is True
+        assert dup_recent["report"]["id"] == res_recent["report"]["id"]
+
+        # Deduplication scope: pruned old-job can accept same key again as new report
+        new_old = db.record_error_report(
+            job_id="old-job",
+            category="protocol",
+            expected="Expected protocol",
+            observed="Observed anomaly",
+            report_key="shared-key",
+        )
+        assert new_old["duplicate"] is False
+        assert new_old["report"]["id"] != res_old["report"]["id"]
+    finally:
+        db.close()

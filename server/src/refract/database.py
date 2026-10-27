@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from contextlib import closing, contextmanager
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from refract.config_inspection import utc_now
-from refract.logging_setup import get_logger
+from refract.logging_setup import get_logger, redact_text
 from refract.models import (
     TERMINAL_STATES,
     ContextStreamView,
@@ -474,6 +475,58 @@ class Database:
         rows = self._connection.execute("SELECT id, created_at, kind, data_json FROM events WHERE job_id=? ORDER BY id", (job_id,)).fetchall()
         return [{"id": row["id"], "created_at": row["created_at"], "kind": row["kind"], "data": json.loads(row["data_json"])} for row in rows]
 
+    def diagnostic_reports(
+        self, *, project_id: str = "", job_id: str = "", category: str = "",
+        before: int | None = None, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Read a bounded, allowlisted page of retained diagnostic reports."""
+        clauses = ["e.kind='job.error_reported'"]
+        params: list[Any] = []
+        if project_id:
+            clauses.append("j.project_id=?")
+            params.append(project_id)
+        if job_id:
+            clauses.append("e.job_id=?")
+            params.append(job_id)
+        if category:
+            clauses.append("json_extract(e.data_json, '$.category')=?")
+            params.append(category)
+        if before is not None:
+            clauses.append("e.id<?")
+            params.append(before)
+        params.append(limit + 1)
+        rows = self._connection.execute(
+            """SELECT e.id, e.job_id, e.created_at, e.data_json, j.project_id, j.state
+               FROM events e JOIN jobs j ON j.id=e.job_id WHERE """
+            + " AND ".join(clauses) + " ORDER BY e.id DESC LIMIT ?", params,
+        ).fetchall()
+        reports = []
+        for row in rows:
+            try:
+                payload = json.loads(row["data_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict) or payload.get("category") not in ("protocol", "output"):
+                continue
+            reports.append({
+                "id": str(row["id"]), "job_id": row["job_id"],
+                "category": payload["category"], "created_at": row["created_at"],
+                "expected": payload.get("expected", ""), "observed": payload.get("observed", ""),
+                "project_id": row["project_id"], "current_state": row["state"],
+            })
+        return reports
+
+    def diagnostic_counts(self, job_ids: list[str]) -> dict[str, int]:
+        """Count retained reports for a bounded set of dashboard jobs in one query."""
+        if not job_ids:
+            return {}
+        placeholders = ",".join("?" for _ in job_ids)
+        rows = self._connection.execute(
+            f"SELECT job_id, COUNT(*) AS count FROM events WHERE kind='job.error_reported' AND job_id IN ({placeholders}) GROUP BY job_id",
+            job_ids,
+        ).fetchall()
+        return {row["job_id"]: int(row["count"]) for row in rows}
+
     def job(self, job_id: str) -> JobView | None:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if row is None:
@@ -793,6 +846,147 @@ class Database:
                 (*terminal_states_tuple, older_than),
             )
             return cursor.rowcount
+
+    def record_error_report(
+        self,
+        *,
+        job_id: str,
+        category: str,
+        expected: str,
+        observed: str,
+        report_key: str,
+    ) -> dict[str, Any]:
+        trimmed_expected, trimmed_observed = _validate_error_report(
+            category, expected, observed, report_key
+        )
+        sanitized_expected = redact_text(trimmed_expected)
+        sanitized_observed = redact_text(trimmed_observed)
+
+        with self._connection:
+            if not self._connection.in_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT id, project_id FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                from refract.runtime import OrchestrationError
+
+                raise OrchestrationError(
+                    "Job does not exist.",
+                    code="unknown_job",
+                    next_action="Call job_list for the project and use a listed job ID.",
+                )
+            project_id = str(row["project_id"])
+
+            existing_rows = self._connection.execute(
+                """SELECT id, created_at, data_json FROM events
+                   WHERE job_id=? AND kind='job.error_reported'
+                   ORDER BY id ASC""",
+                (job_id,),
+            ).fetchall()
+
+            for erow in existing_rows:
+                try:
+                    payload = json.loads(erow["data_json"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(payload, dict) and payload.get("report_key") == report_key:
+                    if (
+                        payload.get("category") == category
+                        and payload.get("expected") == sanitized_expected
+                        and payload.get("observed") == sanitized_observed
+                    ):
+                        return {
+                            "report": {
+                                "id": str(erow["id"]),
+                                "job_id": job_id,
+                                "category": category,
+                                "created_at": erow["created_at"],
+                            },
+                            "duplicate": True,
+                            "project_id": project_id,
+                        }
+                    from refract.runtime import OrchestrationError
+
+                    raise OrchestrationError(
+                        "Report key is already in use with different content.",
+                        code="invalid_request",
+                        next_action="Use a new unique report_key for distinct reports.",
+                    )
+
+            now = utc_now()
+            event_payload = {
+                "version": 1,
+                "category": category,
+                "expected": sanitized_expected,
+                "observed": sanitized_observed,
+                "report_key": report_key,
+            }
+            cursor = self._connection.execute(
+                """INSERT INTO events(job_id, created_at, kind, data_json)
+                   VALUES (?, ?, 'job.error_reported', ?)""",
+                (job_id, now, json.dumps(event_payload, ensure_ascii=False)),
+            )
+            event_id = str(cursor.lastrowid)
+            return {
+                "report": {
+                    "id": event_id,
+                    "job_id": job_id,
+                    "category": category,
+                    "created_at": now,
+                },
+                "duplicate": False,
+                "project_id": project_id,
+            }
+
+
+def _validate_error_report(
+    category: str,
+    expected: str,
+    observed: str,
+    report_key: str,
+) -> tuple[str, str]:
+    from refract.runtime import OrchestrationError
+
+    if category not in ("protocol", "output"):
+        raise OrchestrationError(
+            "Category must be 'protocol' or 'output'.",
+            code="invalid_request",
+            next_action="Provide a valid error category ('protocol' or 'output').",
+        )
+    if not isinstance(expected, str) or len(expected) < 1 or len(expected) > 2048:
+        raise OrchestrationError(
+            "Expected summary must be between 1 and 2048 characters.",
+            code="invalid_request",
+            next_action="Provide an expected summary between 1 and 2048 characters.",
+        )
+    trimmed_expected = expected.strip()
+    if not trimmed_expected:
+        raise OrchestrationError(
+            "Expected summary cannot be whitespace-only.",
+            code="invalid_request",
+            next_action="Provide a non-empty expected summary.",
+        )
+    if not isinstance(observed, str) or len(observed) < 1 or len(observed) > 2048:
+        raise OrchestrationError(
+            "Observed summary must be between 1 and 2048 characters.",
+            code="invalid_request",
+            next_action="Provide an observed summary between 1 and 2048 characters.",
+        )
+    trimmed_observed = observed.strip()
+    if not trimmed_observed:
+        raise OrchestrationError(
+            "Observed summary cannot be whitespace-only.",
+            code="invalid_request",
+            next_action="Provide a non-empty observed summary.",
+        )
+    if not isinstance(report_key, str) or not re.fullmatch(r"^[A-Za-z0-9_-]{1,128}$", report_key):
+        raise OrchestrationError(
+            "Report key must contain 1 to 128 ASCII letters, digits, underscores, or hyphens.",
+            code="invalid_request",
+            next_action="Provide a valid report key.",
+        )
+    return trimmed_expected, trimmed_observed
 
 
 __all__ = ["Database", "utc_now"]

@@ -363,3 +363,14 @@ def test_progress_token_presence_formatter_rejects_non_boolean_and_redacts_secre
     ):
         assert secret not in json_output
         assert secret not in text_output
+
+
+def test_redact_text_sanitizes_bearer_tokens_and_api_keys() -> None:
+    from refract.logging_setup import redact_text
+
+    raw = "Expected Bearer my-secret-token and sk-1234567890abcdef and password: topsecret"
+    sanitized = redact_text(raw)
+    assert "my-secret-token" not in sanitized
+    assert "[REDACTED]" in sanitized
+    assert "1234567890abcdef" not in sanitized
+    assert "topsecret" not in sanitized

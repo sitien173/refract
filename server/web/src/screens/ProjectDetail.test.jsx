@@ -25,6 +25,7 @@ vi.mock('../api', () => {
     deleteProjectProfileOverride: vi.fn(),
     getConfigurationProfile: vi.fn(),
     getJob: vi.fn(),
+    getDiagnostics: vi.fn().mockResolvedValue({ reports: [], next_before: null }),
     DashboardApiError: MockDashboardApiError,
   }
 })
@@ -979,6 +980,52 @@ describe('ProjectDetail screen', () => {
     fireEvent.click(screen.getByRole('button', { name: /Clear filters/i }))
     expect(screen.getByText('job-alpha')).toBeInTheDocument()
     expect(screen.getByText('job-beta')).toBeInTheDocument()
+  })
+
+  it('renders a visually separate textual suspect badge in project jobs tab', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(mockProjectData)
+    vi.mocked(api.getProjectJobs).mockResolvedValue({
+      active: [],
+      recent: [
+        {
+          id: 'job-proj-suspect',
+          workflow: 'implement',
+          profile: 'balanced',
+          state: 'succeeded',
+          target_id: 'worker-primary',
+          config_revision: '',
+          created_at: '2026-10-27 14:00:00',
+          suspect: true,
+          diagnostic_count: 3,
+        },
+        {
+          id: 'job-proj-clean',
+          workflow: 'review',
+          profile: 'balanced',
+          state: 'succeeded',
+          target_id: 'worker-review',
+          config_revision: '',
+          created_at: '2026-10-27 14:05:00',
+          suspect: false,
+          diagnostic_count: 0,
+        },
+      ],
+      more_recent: 0,
+    })
+    vi.mocked(api.getTaskGuide).mockResolvedValue({ workflows: ['consult', 'implement', 'review', 'other'], guide: {}, source_path: '' })
+
+    render(<ProjectDetail projectId="proj-demo" />)
+    const jobsTab = await screen.findByRole('tab', { name: /Jobs/i })
+    fireEvent.click(jobsTab)
+
+    expect(await screen.findByText('job-proj-suspect')).toBeInTheDocument()
+    expect(screen.getByText('job-proj-clean')).toBeInTheDocument()
+
+    const suspectBadges = screen.getAllByText('Suspect')
+    expect(suspectBadges.length).toBe(1)
+    const badgeElement = suspectBadges[0].closest('.suspect-badge')
+    expect(badgeElement).toBeInTheDocument()
+    expect(badgeElement.querySelector('.suspect-icon')).toBeInTheDocument()
   })
 
   it('polls grouped project jobs only while the active group is nonempty', async () => {

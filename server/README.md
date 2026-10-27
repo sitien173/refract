@@ -11,7 +11,7 @@ It exposes AI agent workflows through Model Context Protocol tools.
 - One-job-per-project FIFO admission with multi-project concurrency bounded by global `max_jobs`.
 - Immutable execution plan snapshots for every job.
 - Multi-provider support for Antigravity, Codex, Pi, and Claude Code backends.
-- Eight self-describing MCP tools for project resolution, guidance, and durable job management.
+- Nine self-describing MCP tools for project resolution, guidance, and durable job management.
 - Isolated and read-only execution modes for sensitive tasks.
 - Per-project, per-workflow context instructions injected into every backend.
 
@@ -411,7 +411,7 @@ reference.
 
 ## MCP Tool Surface
 
-Refract exposes eight tools and no MCP resources:
+Refract exposes nine tools and no MCP resources:
 
 | Tool | Purpose |
 | --- | --- |
@@ -423,6 +423,7 @@ Refract exposes eight tools and no MCP resources:
 | `job_cancel(job_id)` | Cancel a queued or running job. |
 | `job_retry(job_id)` | Retry a failed, cancelled, or interrupted job. |
 | `job_answer(job_id, answer)` | Deliver an answer (up to 8192 characters) to a pending worker question. |
+| `job_report_error(job_id, category, expected, observed, report_key)` | Report unexpected job protocol or output anomalies for operator inspection. |
 
 The standard cycle is `project_resolve` → `task_guide` → `job_submit` → `job_wait` (four calls). Prompts must be self-contained. Jobs in a project are admitted one at a time in FIFO order; jobs in different projects can run concurrently up to global `max_jobs`. Job summaries do not expose provider or target identity.
 
@@ -472,6 +473,18 @@ The dashboard and MCP result metadata expose normalized live context and job con
 - **Partial totals:** When intermediate invocations or attempts have missing observations, consumption is labeled `partial` rather than fabricated or zeroed. Complete measurements require all attempts and invocations to be observed.
 - **Capability limits and unavailable metrics:** Unsupported backend capabilities remain explicitly `null` and render as `Unavailable` with quality `unavailable`. Historical jobs without telemetry omit the panel cleanly without fabricating metrics.
 - **Opt-in probe limitations:** Live model telemetry probes are strictly opt-in (`REFRACT_LIVE_TELEMETRY_OPT_IN=1`) and require execution authorization; missing prerequisites fail rather than report false passes.
+
+### Diagnostic Reporting
+
+Operators inspect client-reported anomalies through dashboard diagnostics.
+
+- **Client observation semantics:** Reports are client observations, not verified server failures. Reporting never modifies execution status or retry counts. Suspect badges remain separate from execution state.
+- **Reporting inputs and bounds:** Tool `job_report_error` accepts five required arguments. These are `job_id`, `category`, `expected`, `observed`, and `report_key`. Valid categories are `protocol` and `output`. Expected and observed summaries span 1 to 2048 characters. Summaries cannot be empty or whitespace only. Each `report_key` spans 1 to 128 ASCII characters. Allowed key characters are letters, digits, underscores, and hyphens. Use unique opaque keys for distinct observations.
+- **Deduplication and conflict behavior:** Successful calls return a compact acknowledgement payload. This returns `{report:{id, job_id, category, created_at}, duplicate}`. Reuse a `report_key` only for retrying submissions. Matching sanitized content returns the existing report with `duplicate: true`. Reusing a key with different content returns `invalid_request`. Deduplication persists only while job events remain retained. Retention follows `Database.prune_history` based on job `updated_at`. Pruning removes report events and deduplication records.
+- **Privacy and correlation logging:** Summaries are redacted before persistent event storage. Only correlation metadata is logged on report creation. Metadata includes report, job, project, and request IDs. Logs never contain summaries or client report keys. Redaction cannot identify every possible secret. Do not submit sensitive credentials or tokens.
+- **Anomaly detection boundaries:** Clients must distinguish normal timeouts from anomalies. Pending questions and partial pagination are not anomalies. Await complete terminal pagination before reporting missing output. Ensure `next_offset` is null before reporting output.
+- **Output contracts:** Require ERP only where the workflow demands it. Generic worker error text under `succeeded` is reportable. Reporting never rewrites job status automatically.
+- **Safe reconciliation:** Report genuine anomalies before executing recovery. Preserve original job and project identifiers. Reporting failure never causes recursive reporting. Reporting failure never blocks safe reconciliation.
 
 ## Development and Testing
 

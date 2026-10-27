@@ -345,6 +345,8 @@ class DashboardJob(BaseModel):
     updated_at: str
     result: JobResult = Field(default_factory=JobResult)
     execution_plan: dict[str, Any] = Field(default_factory=dict)
+    suspect: bool = False
+    diagnostic_count: int = 0
 
 
 StreamStatus = Literal["unavailable", "active", "complete", "truncated", "failed"]
@@ -380,6 +382,22 @@ class JobOutputResponse(BaseModel):
     stream_status: StreamStatus = "unavailable"
 
 
+class DiagnosticReport(BaseModel):
+    id: str
+    job_id: str
+    category: Literal["protocol", "output"]
+    created_at: str
+    expected: str
+    observed: str
+    project_id: str
+    current_state: JobState
+
+
+class DiagnosticReportResult(BaseModel):
+    report: DiagnosticReport
+    duplicate: bool
+
+
 __all__ = [
     "ActionResult",
     "ConfigHealth",
@@ -391,6 +409,8 @@ __all__ = [
     "ConfigurationHealth",
     "ContextStreamView",
     "DaemonStatusResult",
+    "DiagnosticReport",
+    "DiagnosticReportResult",
     "JobOutputResponse",
     "JobResult",
     "JobState",
