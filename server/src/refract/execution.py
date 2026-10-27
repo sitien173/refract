@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from refract.config import DaemonConfig, TargetConfig
+from refract.config import DaemonConfig, RetryPolicy, TargetConfig
 from refract.database import Database
 from refract.drivers import DriverRegistry, DriverResult, StreamBridge
 from refract.logging_setup import get_logger, log_context
@@ -59,7 +59,6 @@ class _ExecutionContext:
     target_key: str
     session_id: str
     effective_prompt: str
-    semaphore: asyncio.Semaphore
     accumulator: TelemetryAccumulator
 
 
@@ -121,34 +120,97 @@ class TargetExecutor:
             tel = self._safe_telemetry_dump(accumulator)
             return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
         target_key = target_execution_key(target)
-        session_id, effective_prompt = await self._prepare_session(
-            project, context_key, workflow, target_key, prompt, fresh_session
-        )
-        await run_sync(self.database.event, job_id, "target.selected", {"workflow": workflow, "target": target.id, "attempt": 1})
+        try:
+            session_id, effective_prompt = await self._prepare_session(
+                project, context_key, workflow, target_key, prompt, fresh_session
+            )
+            await run_sync(self.database.event, job_id, "target.selected", {"workflow": workflow, "target": target.id, "attempt": 1})
+        except BaseException as exc:
+            await self._release_probe(target_key, job_id)
+            self._attach_exception_metadata(exc, target, None, accumulator=accumulator)
+            raise
         semaphore = self._target_semaphores.setdefault(target.id, asyncio.Semaphore(target.max_concurrency))
         self._target_users[target.id] = self._target_users.get(target.id, 0) + 1
         self._target_active.setdefault(target.id, 0)
         try:
             acquired = await self._acquire_target(semaphore, cancel_event)
         except BaseException as exc:
-            self._release_capacity(target.id)
-            await run_sync(self.database.release_target_probe, target_key, job_id)
-            self._attach_exception_metadata(exc, None, None, accumulator=accumulator)
+            try:
+                self._release_capacity(target.id)
+            finally:
+                await self._release_probe(target_key, job_id)
+            self._attach_exception_metadata(exc, target, None, accumulator=accumulator)
             raise
         if not acquired:
-            self._release_capacity(target.id)
-            await run_sync(self.database.release_target_probe, target_key, job_id)
+            try:
+                self._release_capacity(target.id)
+            finally:
+                await self._release_probe(target_key, job_id)
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
             tel = self._safe_telemetry_dump(accumulator)
             return TargetExecutionResult(cancelled, target.id, target_key, self._result_metadata(cancelled, target, None, telemetry=tel))
-        return await self._execute_attempt(_ExecutionContext(
-            job_id=job_id, project=project, workflow=workflow,
-            context_key=context_key, plan=plan, prompt=prompt, cwd=cwd,
-            cancel_event=cancel_event, fresh_session=fresh_session,
-            target=target, target_key=target_key, session_id=session_id,
-            effective_prompt=effective_prompt, semaphore=semaphore,
-            accumulator=accumulator,
-        ))
+
+        self._target_active[target.id] += 1
+        try:
+            return await self._execute_attempt(_ExecutionContext(
+                job_id=job_id, project=project, workflow=workflow,
+                context_key=context_key, plan=plan, prompt=prompt, cwd=cwd,
+                cancel_event=cancel_event, fresh_session=fresh_session,
+                target=target, target_key=target_key, session_id=session_id,
+                effective_prompt=effective_prompt, accumulator=accumulator,
+            ))
+        finally:
+            try:
+                self._target_active[target.id] -= 1
+            finally:
+                try:
+                    semaphore.release()
+                finally:
+                    try:
+                        self._release_capacity(target.id)
+                    finally:
+                        await self._release_probe(target_key, job_id)
+
+    async def _release_probe(self, target_key: str, job_id: str) -> None:
+        try:
+            await run_sync(self.database.release_target_probe, target_key, job_id)
+        except Exception:
+            log.warning("Failed to release target probe", exc_info=True)
+
+    @staticmethod
+    def _matches_retry_policy(policy: RetryPolicy, result: DriverResult) -> bool:
+        if not policy.error_codes and not policy.error_patterns:
+            return True
+        if result.error_code and result.error_code in policy.error_codes:
+            return True
+        if result.error and policy.error_patterns:
+            err_lower = result.error.lower()
+            if any(pat.lower() in err_lower for pat in policy.error_patterns):
+                return True
+        return False
+
+    @classmethod
+    def _can_retry_attempt(
+        cls,
+        *,
+        policy: RetryPolicy,
+        policy_retries_done: int,
+        result: DriverResult,
+        replay_blocked: bool,
+        supports_streaming: bool,
+        cancel_event: CancelEvent,
+    ) -> bool:
+        if cancel_event.is_set():
+            return False
+        if policy_retries_done >= policy.retry_attempt:
+            return False
+        if result.outcome != "RETRYABLE":
+            return False
+        if result.error_code == "context_overflow":
+            return False
+        if replay_blocked or not supports_streaming:
+            return False
+        return cls._matches_retry_policy(policy, result)
 
     async def _prepare_session(
         self, project: ProjectView, context_key: str, workflow: str,
@@ -190,131 +252,215 @@ class TargetExecutor:
         context_key = context.context_key
         plan = context.plan
         prompt = context.prompt
+        cwd = context.cwd
         cancel_event = context.cancel_event
         fresh_session = context.fresh_session
         target = context.target
         target_key = context.target_key
-        session_id = context.session_id
-        semaphore = context.semaphore
-        self._target_active[target.id] += 1
-        try:
-            started_at, supports_streaming, recorder, attempt_number = await self._start_attempt(
-                job_id, target, plan, workflow, session_id
-            )
-        except BaseException:
-            self._target_active[target.id] -= 1
-            semaphore.release()
-            self._release_capacity(target.id)
-            await run_sync(self.database.release_target_probe, target_key, job_id)
-            raise
+        accumulator = context.accumulator
 
-        ask_env: dict[str, str] | None = None
-        if self.ask_registry is not None:
-            token = self.ask_registry.issue_token(
-                job_id,
-                workflow_timeout_s=plan.selection.timeout_s,
-                started_at=started_at,
-            )
-            ask_url = f"http://{self.config.host}:{self.config.port}/ask"
-            ask_env = {
-                "REFRACT_ASK_URL": ask_url,
-                "REFRACT_ASK_TOKEN": token,
-            }
+        policy = plan.retry_policy(target.id)
 
-        attempt = _TargetAttempt()
-        driver_exc: BaseException | None = None
-        try:
-            await self._recover_session(
-                attempt=attempt, context=context, recorder=recorder,
-                supports_streaming=supports_streaming, env=ask_env,
-                attempt_number=attempt_number,
-            )
-        except BaseException as exc:
-            driver_exc = exc
-            duration_ms = int((time.monotonic() - started_at) * 1000)
-            await run_sync(self.database.release_target_probe, target_key, job_id)
-            self._attach_exception_metadata(exc, target, duration_ms, accumulator=context.accumulator)
-            raise
-        finally:
-            if self.ask_registry is not None:
-                self.ask_registry.revoke_token(job_id)
-            if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+        phases = ("initial", "reconstruct", "fresh")
+        phase_idx = 0
+        phase_prompt = context.effective_prompt
+        phase_session = context.session_id
+        recovered = False
+        recovery_phase = ""
+
+        policy_retries_done = 0
+        overall_started_at = time.monotonic()
+
+        while True:
+            attempt = _TargetAttempt(recovered=recovered, recovery_phase=recovery_phase)
+            if cancel_event.is_set():
                 attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-            try:
-                await self._finish_recorder(recorder, attempt.result, driver_exc, cancel_event)
-            except BaseException as exc:
-                duration_ms = int((time.monotonic() - started_at) * 1000)
-                await run_sync(self.database.release_target_probe, target_key, job_id)
-                self._attach_exception_metadata(exc, target, duration_ms, accumulator=context.accumulator)
-                raise
-            finally:
-                self._target_active[target.id] -= 1
-                semaphore.release()
-                self._release_capacity(target.id)
-        duration_ms = int((time.monotonic() - started_at) * 1000)
-        return await self._complete_attempt(
-            attempt, job_id, project, workflow, context_key, target, target_key,
-            prompt, fresh_session, duration_ms,
-            attempt_number=attempt_number,
-            accumulator=context.accumulator,
-        )
+                break
 
-    async def _recover_session(
-        self, *, attempt: _TargetAttempt, context: _ExecutionContext,
-        recorder: StreamRecorder | None, supports_streaming: bool,
-        env: dict[str, str] | None = None,
-        attempt_number: int = 1,
-    ) -> None:
-        job_id = context.job_id
-        project = context.project
-        workflow = context.workflow
-        context_key = context.context_key
-        target = context.target
-        prompt = context.prompt
-        effective_prompt = context.effective_prompt
-        session_id = context.session_id
-        cwd = context.cwd
-        timeout_s = context.plan.selection.timeout_s
-        cancel_event = context.cancel_event
-        fresh_session = context.fresh_session
-        phase_prompt = effective_prompt
-        phase_session = session_id
-        for invocation_idx, phase in enumerate(("initial", "reconstruct", "fresh"), start=1):
-            details = {"workflow": workflow, "target": target.id}
-            if phase != "initial":
-                details["phase"] = phase
-                details["invocation"] = invocation_idx
-                context.accumulator.invalidate_context()
-                await run_sync(self.database.event, job_id, "target.session_recovery_started", details)
-            attempt.result, has_tool_activity = await self._run_target_invocation(
-                job_id=job_id,
-                attempt=attempt_number,
-                invocation=invocation_idx,
-                accumulator=context.accumulator,
-                target=target, prompt=phase_prompt, session_id=phase_session,
-                cwd=cwd, timeout_s=timeout_s, cancel_event=cancel_event,
-                recorder=recorder, supports_streaming=supports_streaming,
-                env=env,
-            )
-            last = attempt.result
-            await self._record_recovery_result(job_id, phase, details, last)
-            attempt.replay_blocked = has_tool_activity and last.outcome != "SUCCESS"
-            if last.outcome == "SUCCESS":
-                attempt.recovered = phase != "initial"
-                attempt.recovery_phase = phase if attempt.recovered else ""
+            try:
+                started_at, supports_streaming, recorder, attempt_number = await self._start_attempt(
+                    job_id, target, plan, workflow, phase_session
+                )
+            except BaseException as exc:
+                duration_ms = int((time.monotonic() - overall_started_at) * 1000)
+                self._attach_exception_metadata(exc, target, duration_ms, accumulator=accumulator)
+                raise
+
+            ask_env: dict[str, str] | None = None
+            driver_exc: BaseException | None = None
+            attempt_invocation = 1
+            try:
+                if self.ask_registry is not None:
+                    token = self.ask_registry.issue_token(
+                        job_id,
+                        workflow_timeout_s=plan.selection.timeout_s,
+                        started_at=started_at,
+                    )
+                    ask_url = f"http://{self.config.host}:{self.config.port}/ask"
+                    ask_env = {
+                        "REFRACT_ASK_URL": ask_url,
+                        "REFRACT_ASK_TOKEN": token,
+                    }
+                while phase_idx < len(phases):
+                    phase = phases[phase_idx]
+                    details = {"workflow": workflow, "target": target.id}
+                    if phase != "initial":
+                        details["phase"] = phase
+                        details["invocation"] = attempt_invocation
+                        accumulator.invalidate_context()
+                        await run_sync(self.database.event, job_id, "target.session_recovery_started", details)
+
+                    inv_result, has_tool_activity = await self._run_target_invocation(
+                        job_id=job_id,
+                        attempt=attempt_number,
+                        invocation=attempt_invocation,
+                        accumulator=accumulator,
+                        target=target,
+                        prompt=phase_prompt,
+                        session_id=phase_session,
+                        cwd=cwd,
+                        timeout_s=plan.selection.timeout_s,
+                        cancel_event=cancel_event,
+                        recorder=recorder,
+                        supports_streaming=supports_streaming,
+                        env=ask_env,
+                    )
+                    attempt.result = inv_result
+                    attempt.replay_blocked = has_tool_activity and inv_result.outcome != "SUCCESS"
+                    await self._record_recovery_result(job_id, phase, details, inv_result)
+
+                    if inv_result.outcome == "SUCCESS":
+                        attempt.recovered = (phase != "initial") or recovered
+                        attempt.recovery_phase = phase if (phase != "initial") else recovery_phase
+                        break
+
+                    if self._can_recover(inv_result, fresh_session, context.session_id, attempt.replay_blocked, cancel_event, phase):
+                        if phase == "initial":
+                            phase_prompt = await run_sync(self._with_history, project.id, context_key, workflow, prompt)
+                            phase_session = ""
+                            recovered = True
+                            recovery_phase = "reconstruct"
+                            phase_idx = 1
+                            attempt_invocation += 1
+                            continue
+                        elif phase == "reconstruct" and phase_prompt != prompt:
+                            phase_prompt = prompt
+                            recovered = True
+                            recovery_phase = "fresh"
+                            phase_idx = 2
+                            attempt_invocation += 1
+                            continue
+                        else:
+                            break
+                    else:
+                        break
+            except BaseException as exc:
+                driver_exc = exc
+            finally:
+                revoke_exc: BaseException | None = None
+                if self.ask_registry is not None:
+                    try:
+                        self.ask_registry.revoke_token(job_id)
+                    except BaseException as exc:
+                        revoke_exc = exc
+
+                if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+                    attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+
+                rec_exc: BaseException | None = None
+                try:
+                    await self._finish_recorder(recorder, attempt.result, driver_exc, cancel_event)
+                except BaseException as exc:
+                    rec_exc = exc
+
+                event_result = attempt.result
+                if driver_exc is not None and event_result is None:
+                    event_result = DriverResult("REQUEST_FATAL", "", "", str(driver_exc), "execution_error")
+                if event_result is not None:
+                    duration_ms = int((time.monotonic() - started_at) * 1000)
+                    try:
+                        await run_sync(
+                            self.database.event,
+                            job_id,
+                            "target.attempt_finished",
+                            {
+                                "workflow": workflow,
+                                "target": target.id,
+                                "attempt": attempt_number,
+                                "outcome": event_result.outcome,
+                                "error_code": event_result.error_code,
+                            },
+                        )
+                    except Exception:
+                        log.warning("Failed to emit attempt_finished event", exc_info=True)
+                    log.info(
+                        "Target attempt finished",
+                        extra={
+                            "event": "target.attempt_finished",
+                            "job_id": job_id,
+                            "target_id": target.id,
+                            "workflow": workflow,
+                            "attempt": attempt_number,
+                            "outcome": event_result.outcome,
+                            "error_code": event_result.error_code,
+                            "duration_ms": duration_ms,
+                        },
+                    )
+
+                primary_exc = driver_exc or rec_exc or revoke_exc
+                if primary_exc is not None:
+                    duration_ms = int((time.monotonic() - overall_started_at) * 1000)
+                    self._attach_exception_metadata(primary_exc, target, duration_ms, accumulator=accumulator)
+                    raise primary_exc
+
+            if attempt.result is None:
+                attempt.result = DriverResult("REQUEST_FATAL", "", "", "execution_failed", "execution_error")
+            if attempt.result.outcome == "SUCCESS":
                 break
-            if not self._can_recover(last, fresh_session, session_id, attempt.replay_blocked, cancel_event, phase):
-                break
-            if phase == "initial":
-                phase_prompt = await run_sync(self._with_history, project.id, context_key, workflow, prompt)
-                phase_session = ""
-            elif phase_prompt != prompt:
-                phase_prompt = prompt
+
+            if self._can_retry_attempt(
+                policy=policy,
+                policy_retries_done=policy_retries_done,
+                result=attempt.result,
+                replay_blocked=attempt.replay_blocked,
+                supports_streaming=supports_streaming,
+                cancel_event=cancel_event,
+            ):
+                policy_retries_done += 1
+                accumulator.complete_attempt(attempt_number)
+                continue
             else:
                 break
 
+        total_duration_ms = int((time.monotonic() - overall_started_at) * 1000)
+        last = attempt.result or DriverResult("REQUEST_FATAL", "", "", "execution_failed", "execution_error")
+        try:
+            if last.outcome == "SUCCESS":
+                await run_sync(self.database.record_target_success, target_key, self.config.breaker_base_cooldown_s)
+                if not fresh_session:
+                    await self._store_turn(attempt, job_id, project, workflow, context_key, target, target_key, prompt)
+            else:
+                await self._update_target_health(last, target_key, job_id, attempt.replay_blocked)
+        except BaseException as exc:
+            self._attach_exception_metadata(exc, target, total_duration_ms, accumulator=accumulator)
+            raise
+
+        telemetry = self._safe_telemetry_dump(accumulator)
+        return TargetExecutionResult(
+            last,
+            target.id,
+            target_key,
+            self._result_metadata(
+                last,
+                target,
+                total_duration_ms,
+                replay_blocked=attempt.replay_blocked,
+                telemetry=telemetry,
+            ),
+        )
+
     async def _record_recovery_result(
-        self, job_id: str, phase: str, details: dict[str, str], result: DriverResult,
+        self, job_id: str, phase: str, details: dict[str, Any], result: DriverResult,
     ) -> None:
         if phase != "initial":
             await run_sync(self.database.event, job_id, "target.session_recovery_finished", {
@@ -366,25 +512,6 @@ class TargetExecutor:
         finally:
             await recorder.close()
 
-    async def _complete_attempt(
-        self, attempt: _TargetAttempt, job_id: str, project: ProjectView,
-        workflow: str, context_key: str, target: TargetConfig, target_key: str,
-        prompt: str, fresh_session: bool, duration_ms: int,
-        attempt_number: int = 1,
-        accumulator: TelemetryAccumulator | None = None,
-    ) -> TargetExecutionResult:
-        last = attempt.result
-        await run_sync(self.database.event, job_id, "target.attempt_finished", {"workflow": workflow, "target": target.id, "attempt": attempt_number, "outcome": last.outcome, "error_code": last.error_code})
-        log.info("Target attempt finished", extra={"event": "target.attempt_finished", "job_id": job_id, "target_id": target.id, "workflow": workflow, "attempt": attempt_number, "outcome": last.outcome, "error_code": last.error_code, "duration_ms": duration_ms})
-        if last.outcome == "SUCCESS":
-            await run_sync(self.database.record_target_success, target_key, self.config.breaker_base_cooldown_s)
-            if not fresh_session:
-                await self._store_turn(attempt, job_id, project, workflow, context_key, target, target_key, prompt)
-        else:
-            await self._update_target_health(last, target_key, job_id, attempt.replay_blocked)
-        telemetry = self._safe_telemetry_dump(accumulator)
-        return TargetExecutionResult(last, target.id, target_key, self._result_metadata(last, target, duration_ms, replay_blocked=attempt.replay_blocked, telemetry=telemetry))
-
     async def _store_turn(
         self, attempt: _TargetAttempt, job_id: str, project: ProjectView,
         workflow: str, context_key: str, target: TargetConfig, target_key: str, prompt: str,
@@ -413,18 +540,15 @@ class TargetExecutor:
         health = await run_sync(self.database.target_health, target_key)
         held_probe = health.get("probe_job_id") == job_id
         if result.outcome in {"CANCELLED", "REQUEST_FATAL"}:
-            if held_probe:
-                await run_sync(self.database.release_target_probe, target_key, job_id)
             return
         if result.error_code == "context_overflow" or replay_blocked:
-            if held_probe:
-                await run_sync(self.database.release_target_probe, target_key, job_id)
+            return
         elif result.outcome == "TARGET_FATAL":
             await run_sync(self._record_failure, target_key, immediate=True, failed_probe=False)
         elif result.outcome == "RETRYABLE":
             await run_sync(self._record_failure, target_key, failed_probe=held_probe)
         elif held_probe:
-            await run_sync(self.database.release_target_probe, target_key, job_id)
+            return
 
     @classmethod
     def _attach_exception_metadata(

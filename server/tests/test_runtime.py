@@ -1004,3 +1004,58 @@ consult = "primary"
         assert runtime.database.session(project.id, "ctx_1", "implement", key_reconfigured) == "sess_historical_123"
     finally:
         runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_manual_retry_receives_fresh_policy_budget_with_cumulative_attempts(tmp_path) -> None:
+    from dataclasses import replace
+    from refract.config import RetryPolicy, TargetConfig, TargetSelection
+    from refract.drivers import DriverResult
+    from tests.orchestration_helpers import FakeDrivers, config, repository
+
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(1, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    class ManualRetrySequenceDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.invocations = []
+
+        def supports_structured_streaming(self, target):
+            return True
+
+        async def execute(self, *, target, **kwargs):
+            self.invocations.append(len(self.invocations) + 1)
+            attempt_idx = len(self.invocations)
+            if attempt_idx in {1, 2, 3}:
+                return DriverResult("RETRYABLE", "", "", f"transient {attempt_idx}", "rate_limit")
+            return DriverResult("SUCCESS", "sess-manual", "manual recovery done", "", "")
+
+    drivers = ManualRetrySequenceDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "manual retry budget test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "failed"
+        assert job.attempts == 2
+        assert len(drivers.invocations) == 2
+
+        # Explicit manual retry gets fresh policy budget
+        await runtime.retry(job.id)
+        job2 = await runtime.wait(job.id, 10)
+        assert job2.state == "succeeded"
+        assert job2.attempts == 4
+        assert len(drivers.invocations) == 4
+    finally:
+        await runtime.close()
