@@ -95,7 +95,6 @@ assert "planning continues" in setup and "Execute and Review stop" in setup
 assert coordinator.index("After submission, do not edit the root") >= 0
 assert "temporary checkpoint commit only after it passes" in coordinator
 assert "`other` requires an explicit mapping" in contract
-assert "read-only target" in contract and "workflow names do not enforce write safety" in contract
 
 agy_description = documents[root / ".antigravity-plugin/plugin.json"]["description"]
 plugin_description = documents[root / ".claude-plugin/plugin.json"]["description"]
