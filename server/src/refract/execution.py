@@ -24,6 +24,7 @@ from refract.planning import ExecutionPlan, parse_execution_plan, target_executi
 from refract.streaming import StreamRecorder
 from refract.scheduler import CancelEvent
 from refract.telemetry import TelemetryAccumulator, TelemetryData
+from refract.observability import Tracer, generation_observation, job_observation
 from refract.workers import run_sync
 
 
@@ -74,6 +75,7 @@ class TargetExecutor:
         *, on_stream_commit: Callable[[str, int], Any] | None = None,
         ask_registry: Any = None,
         environment_resolver: Callable[[ProjectView, str], tuple[dict[str, str], str]] | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self.config = config
         self.database = database
@@ -81,6 +83,7 @@ class TargetExecutor:
         self.on_stream_commit = on_stream_commit
         self.ask_registry = ask_registry
         self.environment_resolver = environment_resolver
+        self.tracer = tracer or Tracer()
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
         self._target_users: dict[str, int] = {}
@@ -313,9 +316,17 @@ class TargetExecutor:
                 self._attach_exception_metadata(exc, target, duration_ms, accumulator=accumulator)
                 raise
 
+            generation_cm = generation_observation(
+                self.tracer, name=f"attempt-{attempt_number}", model=target.model,
+                input_text=phase_prompt,
+                metadata={"target_id": target.id, "backend": target.backend, "attempt": attempt_number},
+                usage=None,
+            )
+            generation = generation_cm.__enter__()
             ask_env: dict[str, str] | None = None
             driver_exc: BaseException | None = None
             attempt_invocation = 1
+            generation_updated = False
             try:
                 if self.ask_registry is not None:
                     token = self.ask_registry.issue_token(
@@ -388,61 +399,82 @@ class TargetExecutor:
             except BaseException as exc:
                 driver_exc = exc
             finally:
-                revoke_exc: BaseException | None = None
-                if self.ask_registry is not None:
-                    try:
-                        self.ask_registry.revoke_token(job_id)
-                    except BaseException as exc:
-                        revoke_exc = exc
-
-                if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
-                    attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-
-                rec_exc: BaseException | None = None
                 try:
-                    await self._finish_recorder(recorder, attempt.result, driver_exc, cancel_event)
-                except BaseException as exc:
-                    rec_exc = exc
+                    revoke_exc: BaseException | None = None
+                    if self.ask_registry is not None:
+                        try:
+                            self.ask_registry.revoke_token(job_id)
+                        except BaseException as exc:
+                            revoke_exc = exc
 
-                event_result = attempt.result
-                if driver_exc is not None and event_result is None:
-                    event_result = DriverResult("REQUEST_FATAL", "", "", str(driver_exc), "execution_error")
-                if event_result is not None:
-                    duration_ms = int((time.monotonic() - started_at) * 1000)
+                    if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+                        attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+
+                    rec_exc: BaseException | None = None
                     try:
-                        await run_sync(
-                            self.database.event,
-                            job_id,
-                            "target.attempt_finished",
-                            {
+                        await self._finish_recorder(recorder, attempt.result, driver_exc, cancel_event)
+                    except BaseException as exc:
+                        rec_exc = exc
+
+                    event_result = attempt.result
+                    if driver_exc is not None and event_result is None:
+                        event_result = DriverResult("REQUEST_FATAL", "", "", str(driver_exc), "execution_error")
+                    if event_result is not None:
+                        duration_ms = int((time.monotonic() - started_at) * 1000)
+                        try:
+                            await run_sync(
+                                self.database.event,
+                                job_id,
+                                "target.attempt_finished",
+                                {
+                                    "workflow": workflow,
+                                    "target": target.id,
+                                    "attempt": attempt_number,
+                                    "outcome": event_result.outcome,
+                                    "error_code": event_result.error_code,
+                                },
+                            )
+                        except Exception:
+                            log.warning("Failed to emit attempt_finished event", exc_info=True)
+                        log.info(
+                            "Target attempt finished",
+                            extra={
+                                "event": "target.attempt_finished",
+                                "job_id": job_id,
+                                "target_id": target.id,
                                 "workflow": workflow,
-                                "target": target.id,
                                 "attempt": attempt_number,
                                 "outcome": event_result.outcome,
                                 "error_code": event_result.error_code,
+                                "duration_ms": duration_ms,
                             },
                         )
-                    except Exception:
-                        log.warning("Failed to emit attempt_finished event", exc_info=True)
-                    log.info(
-                        "Target attempt finished",
-                        extra={
-                            "event": "target.attempt_finished",
-                            "job_id": job_id,
-                            "target_id": target.id,
-                            "workflow": workflow,
-                            "attempt": attempt_number,
-                            "outcome": event_result.outcome,
-                            "error_code": event_result.error_code,
-                            "duration_ms": duration_ms,
-                        },
-                    )
 
-                primary_exc = driver_exc or rec_exc or revoke_exc
-                if primary_exc is not None:
-                    duration_ms = int((time.monotonic() - overall_started_at) * 1000)
-                    self._attach_exception_metadata(primary_exc, target, duration_ms, accumulator=accumulator)
-                    raise primary_exc
+                    status = event_result.error_code if event_result and event_result.outcome != "SUCCESS" else None
+                    level = "WARNING" if event_result and event_result.outcome == "CANCELLED" else ("ERROR" if driver_exc or (event_result and event_result.outcome not in {"SUCCESS", "CANCELLED"}) else None)
+                    generation.finish(
+                        output=event_result.text if event_result else None,
+                        level=level, status_message="cancelled" if level == "WARNING" else status,
+                        accumulator=accumulator, attempt=attempt_number,
+                        model=(event_result.model if event_result else None) or target.model,
+                    )
+                    generation_updated = True
+                    primary_exc = driver_exc or rec_exc or revoke_exc
+                    if primary_exc is not None:
+                        duration_ms = int((time.monotonic() - overall_started_at) * 1000)
+                        self._attach_exception_metadata(primary_exc, target, duration_ms, accumulator=accumulator)
+                        raise primary_exc
+                finally:
+                    if not generation_updated:
+                        task = asyncio.current_task()
+                        cancelled = cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError) or bool(task and task.cancelling())
+                        generation.finish(
+                            output=attempt.result.text if attempt.result else None,
+                            level="WARNING" if cancelled else "ERROR",
+                            status_message="cancelled" if cancelled else "attempt finalization failed",
+                            accumulator=accumulator, attempt=attempt_number, model=target.model,
+                        )
+                    generation_cm.__exit__(None, None, None)
 
             if attempt.result is None:
                 attempt.result = DriverResult("REQUEST_FATAL", "", "", "execution_failed", "execution_error")
@@ -926,12 +958,14 @@ class JobRunner:
         is_closing: Callable[[], bool],
         notifier: JobNotifier | None = None,
         on_terminal: JobTerminalCallback | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self.database = database
         self.targets = targets
         self.is_closing = is_closing
         self.notifier = notifier or _noop_notifier
         self.on_terminal = on_terminal or (lambda _job_id, _state: None)
+        self.tracer = tracer or Tracer()
 
     async def _notify(self, job_id: str) -> None:
         try:
@@ -965,6 +999,10 @@ class JobRunner:
             return
         root = Path(project.root)
         log.info("Job started", extra={"event": "job.started", "job_id": job_id, "project_id": project.id, "workflow": record["workflow"]})
+        observation_cm = job_observation(
+            self.tracer, job_id, f"{project.id}:{record['context_key']}", str(record["prompt"])
+        )
+        observation = observation_cm.__enter__()
         final_state = "failed"
         committed_state: str | None = None
         execution_metadata: dict[str, Any] | None = None
@@ -1001,8 +1039,22 @@ class JobRunner:
         except Exception as exc:
             await self._finish_failed_job(job_id, exc, final_state, committed_state, execution_metadata)
         finally:
-            completed = await run_sync(self.database.job, job_id)
-            log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
+            try:
+                completed = await run_sync(self.database.job, job_id)
+                final = completed.state if completed else "unknown"
+                metadata = completed.result.metadata.model_dump(mode="json") if completed else {}
+                failure = metadata.get("failure") if isinstance(metadata, dict) else None
+                observation.finish(
+                    output=completed.result.text if completed else None,
+                    metadata={"workflow": record["workflow"], "profile": record.get("profile"),
+                              "final_state": final,
+                              "failure.kind": failure.get("kind") if isinstance(failure, dict) else None},
+                    level="WARNING" if final in {"cancelled", "interrupted"} else ("ERROR" if final == "failed" else None),
+                    status_message="cancelled" if final in {"cancelled", "interrupted"} else None,
+                )
+                log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
+            finally:
+                observation_cm.__exit__(None, None, None)
 
     async def _prepare_job(self, job_id: str, project_id: str, cancel_event: CancelEvent) -> ProjectView | None:
         if self.is_closing():

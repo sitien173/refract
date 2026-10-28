@@ -1351,3 +1351,168 @@ def test_live_result_metadata_dynamic_routing_and_context_overflow(tmp_path) -> 
         assert live_overflow["retry"] == {"retryable": True, "next_target": None}
     finally:
         runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_tracer_lifecycle_start_and_close(tmp_path) -> None:
+    from unittest.mock import MagicMock
+    from refract.observability import Tracer
+
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+
+    await runtime.start()
+    assert isinstance(runtime.tracer, Tracer)
+    original_tracer = runtime.tracer
+
+    mock_flush = MagicMock()
+    mock_shutdown = MagicMock()
+    original_tracer.flush = mock_flush  # type: ignore[method-assign]
+    original_tracer.shutdown = mock_shutdown  # type: ignore[method-assign]
+
+    await runtime.close()
+    mock_flush.assert_called_once()
+    mock_shutdown.assert_called_once()
+
+
+def test_runtime_publish_configuration_rebuilds_tracer_on_langfuse_change(tmp_path, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    try:
+        initial_tracer = runtime.tracer
+
+        # Non-langfuse modification does not rebuild tracer
+        config_path.write_text(config_path.read_text(encoding="utf-8") + "\n# comment\n", encoding="utf-8")
+        runtime.publish_configuration()
+        assert runtime.tracer is initial_tracer
+
+        # Langfuse modification flushes old client and rebuilds tracer
+        mock_old_flush = MagicMock()
+        mock_old_shutdown = MagicMock()
+        initial_tracer.flush = mock_old_flush  # type: ignore[method-assign]
+        initial_tracer.shutdown = mock_old_shutdown  # type: ignore[method-assign]
+
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + "\n[langfuse]\nenabled = true\nsample_rate = 0.5\n",
+            encoding="utf-8",
+        )
+        with runtime.mutations.lock:
+            runtime._publish_configuration_locked()
+
+        mock_old_flush.assert_called_once()
+        mock_old_shutdown.assert_called_once()
+        assert runtime.tracer is not initial_tracer
+        assert runtime.tracer.config.enabled is True
+        assert runtime.tracer.config.sample_rate == 0.5
+    finally:
+        runtime.database.close()
+
+
+def test_catalog_reload_applies_tracer_disablement_before_publication(tmp_path, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer
+
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root))
+    applied = Tracer(LangfuseConfig(enabled=False))
+    applied._config = LangfuseConfig(enabled=True)
+    applied._is_active = True
+    applied.flush = MagicMock()
+    applied.shutdown = MagicMock()
+    runtime.tracer = applied
+    try:
+        runtime.catalog_for_project(project.id)
+        assert runtime.tracer.config.enabled is False
+        assert runtime.tracer is not applied
+        applied.flush.assert_called_once()
+        applied.shutdown.assert_called_once()
+        runtime.publish_configuration()
+        assert runtime.tracer.config.enabled is False
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_real_tracer_thread_identity_and_close_order(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("langfuse")
+    import threading
+    from unittest.mock import MagicMock
+    from refract.observability import Tracer
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + "\n[langfuse]\nenabled = true\n",
+        encoding="utf-8",
+    )
+    catalog = load_config(config_path)
+    runtime = Runtime(catalog)
+
+    # 1. Runtime.__init__ must only initialize an inactive holder, even when config is enabled
+    assert runtime.tracer.is_active is False
+
+    loop_thread_id = threading.get_ident()
+    call_order: list[tuple[str, int]] = []
+
+    # 2. Runtime.start builds configured client off event loop thread
+    await runtime.start()
+    assert runtime.tracer.is_active is True
+    first_tracer = runtime.tracer
+
+    first_tracer_flush = MagicMock(side_effect=lambda: call_order.append(("flush", threading.get_ident())))
+    first_tracer_shutdown = MagicMock(side_effect=lambda: call_order.append(("shutdown", threading.get_ident())))
+    original_flush = first_tracer.flush
+    original_shutdown = first_tracer.shutdown
+    first_tracer.flush = lambda: (first_tracer_flush(), original_flush())  # type: ignore[method-assign]
+    first_tracer.shutdown = lambda: (first_tracer_shutdown(), original_shutdown())  # type: ignore[method-assign]
+
+    # Exercise tracer replacement without restarting the unrelated scheduler.
+    await runtime.close()
+    runtime = Runtime(catalog)
+    await runtime.start()
+    assert runtime.tracer is not first_tracer
+    first_tracer_flush.assert_called_once()
+    first_tracer_shutdown.assert_called_once()
+    assert len(call_order) == 2
+    assert call_order[0][0] == "flush"
+    assert call_order[1][0] == "shutdown"
+    assert call_order[0][1] != loop_thread_id
+    assert call_order[1][1] != loop_thread_id
+
+    # 4. Runtime.close calls flush then shutdown via run_sync off the event loop thread
+    call_order.clear()
+    second_tracer = runtime.tracer
+    second_tracer_flush = MagicMock(side_effect=lambda: call_order.append(("flush", threading.get_ident())))
+    second_tracer_shutdown = MagicMock(side_effect=lambda: call_order.append(("shutdown", threading.get_ident())))
+    original_flush = second_tracer.flush
+    original_shutdown = second_tracer.shutdown
+    second_tracer.flush = lambda: (second_tracer_flush(), original_flush())  # type: ignore[method-assign]
+    second_tracer.shutdown = lambda: (second_tracer_shutdown(), original_shutdown())  # type: ignore[method-assign]
+
+    await runtime.close()
+    second_tracer_flush.assert_called_once()
+    second_tracer_shutdown.assert_called_once()
+    assert len(call_order) == 2
+    assert call_order[0][0] == "flush"
+    assert call_order[1][0] == "shutdown"
+    assert call_order[0][1] != loop_thread_id
+    assert call_order[1][1] != loop_thread_id

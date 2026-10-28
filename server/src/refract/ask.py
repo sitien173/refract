@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from refract.observability import Tracer, job_event
+
 NO_ANSWER_TEXT = "No answer from coordinator; use your best judgment or end with BLOCKED."
 
 
@@ -44,7 +46,8 @@ def _resolve_future(future: asyncio.Future[str], result: str, loop: asyncio.Abst
 class AskRegistry:
     """Thread-safe in-memory registry holding per-job tokens and pending questions."""
 
-    def __init__(self) -> None:
+    def __init__(self, tracer: Tracer | None = None) -> None:
+        self.tracer = tracer or Tracer()
         self._tokens: dict[str, str] = {}
         self._revoked_tokens: set[str] = set()
         self._pending: dict[str, PendingQuestion] = {}
@@ -168,6 +171,7 @@ class AskRegistry:
             self._pending[resolved_job_id] = pending
             waiters = self._question_waiters.pop(resolved_job_id, [])
 
+        job_event(self.tracer, resolved_job_id, "question", cleaned_question)
         for w in waiters:
             if not w.done():
                 loop = w.get_loop()
@@ -199,6 +203,7 @@ class AskRegistry:
 
         loop = pending.future.get_loop()
         _resolve_future(pending.future, answer, loop)
+        job_event(self.tracer, job_id, "answer", answer)
         return True
 
     def cancel(self, job_id: str) -> bool:

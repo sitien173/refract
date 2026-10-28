@@ -30,6 +30,248 @@ from tests.orchestration_helpers import register_project
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["success", "cancelled", "sdk_error"])
+async def test_runtime_job_and_attempt_are_exported_under_job_trace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str) -> None:
+    pytest.importorskip("langfuse")
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer, trace_id_for_job
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-execution-integration")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-execution-test")
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    runtime = Runtime(base)
+    runtime.drivers = BlockingDrivers() if scenario == "cancelled" else FakeDrivers()
+    await runtime.start()
+    exporter = InMemorySpanExporter()
+    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
+    assert tracer.is_active
+    runtime.tracer = tracer
+    runtime.ask_registry.tracer = tracer
+    runtime.target_executor.tracer = tracer
+    runtime.runner.tracer = tracer
+    try:
+        project = register_project(runtime, str(root))
+        if scenario == "sdk_error":
+            def fail_sdk(**kwargs):
+                raise RuntimeError("telemetry unavailable")
+            monkeypatch.setattr(tracer.client, "start_as_current_observation", fail_sdk)
+        submitted = await runtime.submit(project.id, "implement", "integration prompt")
+        if scenario == "cancelled":
+            await asyncio.wait_for(runtime.drivers.started.wait(), 5)
+            await runtime.cancel(submitted.job_id)
+        completed = await runtime.wait(submitted.job_id, 15)
+        assert completed.state == ("cancelled" if scenario == "cancelled" else "succeeded")
+        tracer.flush()
+        spans = exporter.get_finished_spans()
+        if scenario == "sdk_error":
+            assert completed.result.text == "response from primary"
+            assert not spans
+            return
+        root_span = next(span for span in spans if span.name == "job")
+        if scenario == "cancelled":
+            assert root_span.attributes["langfuse.observation.level"] == "WARNING"
+            assert root_span.attributes["langfuse.observation.status_message"] == "cancelled"
+        generation = next(span for span in spans if span.attributes.get("langfuse.observation.type") == "generation")
+        assert root_span.context.trace_id == int(trace_id_for_job(submitted.job_id), 16)
+        assert generation.parent.span_id == root_span.context.span_id
+        assert generation.attributes["langfuse.observation.model.name"] == base.targets[0].model
+        assert root_span.attributes["langfuse.observation.input"] == "integration prompt"
+        assert root_span.attributes["langfuse.observation.output"] == completed.result.text
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_job_observation_exits_when_final_job_read_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("langfuse")
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    import refract.execution as execution_module
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-final-read-failure")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase2-test")
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    runtime.drivers = FakeDrivers()
+    project = register_project(runtime, str(root))
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    job_id = "job-final-read-failure"
+    runtime.database.create_job(
+        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
+        prompt="final read", execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="context",
+    )
+    exporter = InMemorySpanExporter()
+    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
+    runtime.runner.tracer = runtime.target_executor.tracer = tracer
+    original_run_sync = execution_module.run_sync
+    retained_contexts = []
+    original_job_observation = execution_module.job_observation
+    def retain_job_context(*args, **kwargs):
+        context = original_job_observation(*args, **kwargs)
+        retained_contexts.append(context)
+        return context
+    monkeypatch.setattr(execution_module, "job_observation", retain_job_context)
+
+    async def fail_final_job_read(function, *args, **kwargs):
+        if getattr(function, "__self__", None) is runtime.database and getattr(function, "__name__", "") == "job":
+            raise RuntimeError("final job read failed")
+        return await original_run_sync(function, *args, **kwargs)
+
+    monkeypatch.setattr(execution_module, "run_sync", fail_final_job_read)
+    try:
+        with pytest.raises(RuntimeError, match="final job read failed"):
+            await runtime.runner.run(job_id, CancelEvent())
+        assert not trace.get_current_span().get_span_context().is_valid
+        tracer.flush()
+        spans = exporter.get_finished_spans()
+        assert [span.name for span in spans].count("job") == 1
+    finally:
+        tracer.shutdown()
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_job_observation_exits_when_final_job_read_is_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("langfuse")
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    import refract.execution as execution_module
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-final-read-cancel")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase2-test")
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    runtime.drivers = FakeDrivers()
+    project = register_project(runtime, str(root))
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    job_id = "job-final-read-cancel"
+    runtime.database.create_job(
+        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
+        prompt="cancel final read", execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="context",
+    )
+    exporter = InMemorySpanExporter()
+    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
+    runtime.runner.tracer = runtime.target_executor.tracer = tracer
+    original_run_sync = execution_module.run_sync
+    retained_contexts = []
+    original_job_observation = execution_module.job_observation
+    def retain_job_context(*args, **kwargs):
+        context = original_job_observation(*args, **kwargs)
+        retained_contexts.append(context)
+        return context
+    monkeypatch.setattr(execution_module, "job_observation", retain_job_context)
+    # The retained manager prevents GC from hiding a missing explicit context exit.
+    reached_final_read = asyncio.Event()
+
+    async def block_final_job_read(function, *args, **kwargs):
+        if getattr(function, "__self__", None) is runtime.database and getattr(function, "__name__", "") == "job":
+            reached_final_read.set()
+            await asyncio.Event().wait()
+        return await original_run_sync(function, *args, **kwargs)
+
+    monkeypatch.setattr(execution_module, "run_sync", block_final_job_read)
+
+    async def run_and_check_context() -> bool:
+        try:
+            await runtime.runner.run(job_id, CancelEvent())
+        except asyncio.CancelledError:
+            return trace.get_current_span().get_span_context().is_valid
+        return True
+
+    try:
+        task = asyncio.create_task(run_and_check_context())
+        await asyncio.wait_for(reached_final_read.wait(), 10)
+        task.cancel()
+        assert await task is False
+        assert runtime.database.job(job_id).state == "succeeded"
+        tracer.flush()
+        assert any(span.name == "job" for span in exporter.get_finished_spans())
+    finally:
+        tracer.shutdown()
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_generation_exits_when_attempt_finished_await_is_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("langfuse")
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    import refract.execution as execution_module
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-attempt-finish-cancel")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase2-test")
+    root = repository(tmp_path)
+    catalog = config(tmp_path / "home")
+    runtime = Runtime(catalog)
+    runtime.drivers = FakeDrivers()
+    project = register_project(runtime, str(root))
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    job_id = "attempt-finish-cancel"
+    runtime.database.create_job(
+        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
+        prompt="cancel finalization", execution_plan_json=json.dumps(execution_plan_data(plan)),
+        context_key="context",
+    )
+    exporter = InMemorySpanExporter()
+    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
+    runtime.runner.tracer = runtime.target_executor.tracer = tracer
+    original_run_sync = execution_module.run_sync
+    retained_contexts = []
+    original_generation_observation = execution_module.generation_observation
+    def retain_generation_context(*args, **kwargs):
+        context = original_generation_observation(*args, **kwargs)
+        retained_contexts.append(context)
+        return context
+    monkeypatch.setattr(execution_module, "generation_observation", retain_generation_context)
+    # The retained manager prevents GC from hiding a missing explicit context exit.
+    reached_final_event = asyncio.Event()
+
+    async def block_attempt_finished(function, *args, **kwargs):
+        if (getattr(function, "__self__", None) is runtime.database
+                and getattr(function, "__name__", "") == "event"
+                and len(args) > 1 and args[1] == "target.attempt_finished"):
+            reached_final_event.set()
+            await asyncio.Event().wait()
+        return await original_run_sync(function, *args, **kwargs)
+
+    monkeypatch.setattr(execution_module, "run_sync", block_attempt_finished)
+
+    async def run_and_check_context() -> bool:
+        try:
+            await runtime.runner.run(job_id, CancelEvent())
+        except asyncio.CancelledError:
+            return trace.get_current_span().get_span_context().is_valid
+        return True
+
+    try:
+        task = asyncio.create_task(run_and_check_context())
+        await asyncio.wait_for(reached_final_event.wait(), 10)
+        task.cancel()
+        context_leaked = await task
+        assert context_leaked is False
+        tracer.flush()
+        spans = exporter.get_finished_spans()
+        generation = next(span for span in spans if span.attributes.get("langfuse.observation.type") == "generation")
+        assert generation.attributes["langfuse.observation.level"] == "WARNING"
+        assert generation.attributes["langfuse.observation.status_message"] == "cancelled"
+    finally:
+        tracer.shutdown()
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
 async def test_legacy_snapshot_ignores_current_target_environment(tmp_path: Path) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
@@ -5172,6 +5414,59 @@ class StreamingSequenceDrivers(FakeDrivers):
                 raise item
             return item
         return DriverResult("SUCCESS", "ok", "", "", "")
+
+
+@pytest.mark.asyncio
+async def test_real_retry_generations_are_siblings_on_job_trace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("langfuse")
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer, trace_id_for_job
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-real-retry-integration")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-retry-test")
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    policy = RetryPolicy(1, ("rate_limit",), ())
+    target = replace(base.targets[0], retry_policy="transient")
+    catalog = replace(base, targets=(target,), retry_policies={"transient": policy})
+    runtime = Runtime(catalog)
+    class MeasuredRetries(StreamingSequenceDrivers):
+        async def execute(self, **kwargs):
+            number = len(self.invocations) + 1
+            kwargs["emitter"]({"kind": "telemetry.updated", "data": {
+                "input_tokens": number * 20, "output_tokens": number * 4,
+                "cache_read_tokens": number * 3,
+            }})
+            return await super().execute(**kwargs)
+
+    runtime.drivers = MeasuredRetries([
+        DriverResult("RETRYABLE", "", "", "temporary", "rate_limit"),
+        DriverResult("SUCCESS", "retry completed", "", "", ""),
+    ])
+    await runtime.start()
+    exporter = InMemorySpanExporter()
+    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
+    runtime.tracer = runtime.ask_registry.tracer = runtime.target_executor.tracer = runtime.runner.tracer = tracer
+    try:
+        project = register_project(runtime, str(root))
+        submitted = await runtime.submit(project.id, "implement", "retry integration")
+        completed = await runtime.wait(submitted.job_id, 15)
+        assert completed.state == "succeeded"
+        tracer.flush()
+        spans = exporter.get_finished_spans()
+        root_span = next(span for span in spans if span.name == "job")
+        generations = [span for span in spans if span.name.startswith("attempt-")]
+        assert len(generations) == 2
+        assert root_span.context.trace_id == int(trace_id_for_job(submitted.job_id), 16)
+        assert all(span.parent.span_id == root_span.context.span_id for span in generations)
+        usages = [json.loads(span.attributes["langfuse.observation.usage_details"]) for span in generations]
+        assert usages == [
+            {"input": 17, "output": 4, "input_cached_tokens": 3},
+            {"input": 34, "output": 8, "input_cached_tokens": 6},
+        ]
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio

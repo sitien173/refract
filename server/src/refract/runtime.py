@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from refract.ask import AskRegistry
-from refract.config import DaemonConfig, load_config, load_project_config, resolve_target_environment
+from refract.config import DaemonConfig, LangfuseConfig, load_config, load_project_config, resolve_target_environment
 from refract.config_inspection import bound_error, sanitize_config_error, utc_now
 from refract.config_mutation import ConfigurationMutationService
 from refract.database import Database
@@ -33,6 +33,7 @@ from refract.models import (
     TargetView,
 )
 from refract.notifications import send_job_notification
+from refract.observability import Tracer
 from refract.planning import (ExecutionPlan, execution_plan_data, parse_execution_plan, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target)
 from refract.scheduler import ProjectScheduler
 from refract.streaming import DEFAULT_RETENTION_DAYS, JobStreamHub
@@ -71,7 +72,8 @@ class Runtime:
         self.config = config
         self.config.home.mkdir(parents=True, exist_ok=True)
         self.database = Database(config.database_path, history_turns=config.history_turns)
-        self.ask_registry = AskRegistry()
+        self.tracer = Tracer(LangfuseConfig(enabled=False))
+        self.ask_registry = AskRegistry(self.tracer)
         self._retention_task: asyncio.Task[None] | None = None
         self.stream_hub = JobStreamHub()
         self._catalog = config
@@ -89,6 +91,7 @@ class Runtime:
             config, self.database, DriverRegistry(), on_stream_commit=self.stream_hub.publish,
             ask_registry=self.ask_registry,
             environment_resolver=self._resolve_target_environment,
+            tracer=self.tracer,
         )
         self.runner = JobRunner(
             self.database,
@@ -96,6 +99,7 @@ class Runtime:
             is_closing=lambda: self._closing,
             notifier=self._notify_job,
             on_terminal=self._job_terminal,
+            tracer=self.tracer,
         )
         self.scheduler = ProjectScheduler(config.max_jobs, self.runner.run)
         self.mutations = ConfigurationMutationService(self)
@@ -180,6 +184,13 @@ class Runtime:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._closing = False
+        if self.tracer.is_active:
+            await run_sync(self.tracer.flush)
+            await run_sync(self.tracer.shutdown)
+        self.tracer = await run_sync(Tracer, self._catalog.langfuse)
+        self.ask_registry.tracer = self.tracer
+        self.target_executor.tracer = self.tracer
+        self.runner.tracer = self.tracer
         await run_sync(self.prune_retained_transcripts)
         await run_sync(self.database.reset_orphaned_target_probes)
         interrupted = await run_sync(self.database.interrupt_active_jobs)
@@ -216,6 +227,8 @@ class Runtime:
             await asyncio.gather(self._retention_task, return_exceptions=True)
             self._retention_task = None
         await self.scheduler.close()
+        await run_sync(self.tracer.flush)
+        await run_sync(self.tracer.shutdown)
         await run_sync(self.database.close)
         log.info("Scheduler stopped", extra={"event": "scheduler.stopped"})
 
@@ -607,7 +620,7 @@ class Runtime:
             self._publish_configuration_locked()
 
     def _publish_configuration_locked(self) -> None:
-        """Publish a reloaded catalog; the caller holds the mutation lock."""
+        """Publish off-loop; the caller holds the mutation lock."""
         self._catalog_stat = None
         self._reload_catalog_locked()
 
@@ -756,6 +769,13 @@ class Runtime:
             last_known_good_revision=catalog.config_revision
             or previous.last_known_good_revision,
         )
+        if catalog.langfuse != self.tracer.config:
+            self.tracer.flush()
+            self.tracer.shutdown()
+            self.tracer = Tracer(catalog.langfuse)
+            self.ask_registry.tracer = self.tracer
+            self.target_executor.tracer = self.tracer
+            self.runner.tracer = self.tracer
         return self._catalog
 
 

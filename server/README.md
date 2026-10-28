@@ -86,6 +86,12 @@ max_bytes = 10485760
 backup_count = 5
 capture_warnings = true
 
+[langfuse]
+enabled = false
+base_url = "http://localhost:3000"
+environment = ""
+sample_rate = 1.0
+
 # pi backend configuration 
 [[targets]]
 id = "pi-openai-codex/gpt-5.6-luna-medium-code"
@@ -294,6 +300,18 @@ extends   = "base"
 implement = "claude-opus-high-code"
 review = ["claude-sonnet-medium-review"]
 ```
+
+### Langfuse observability
+
+Optional tracing exports job activity and MCP tool calls to a Langfuse server. Install the
+extra with `pip install 'refract[langfuse]'` or, when using uv, `uv sync --extra langfuse`.
+Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in the daemon environment; credentials
+are not read from the TOML configuration. Enable tracing with `[langfuse].enabled = true`.
+The other fields are `base_url` (HTTP(S) server URL), `environment` (optional environment
+label), and `sample_rate` (sampling fraction from 0.0 to 1.0).
+
+**Content warning:** Prompt and result text, including any repository code or secrets in
+them, is uploaded unredacted to the configured Langfuse server whenever tracing is enabled.
 
 ### Shared Retry Policies
 

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from refract.logging_setup import get_logger
 
@@ -87,6 +89,16 @@ class NotificationsConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class LangfuseConfig:
+    """Langfuse observability client configuration."""
+
+    enabled: bool = False
+    base_url: str = "http://localhost:3000"
+    environment: str = ""
+    sample_rate: float = 1.0
+
+
+@dataclass(slots=True, frozen=True)
 class DaemonConfig:
     home: Path
     host: str = "127.0.0.1"
@@ -107,6 +119,7 @@ class DaemonConfig:
     config_loaded_at: str = ""
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
     retry_policies: dict[str, RetryPolicy] = field(default_factory=dict)
     breaker_failure_threshold: int = 3
     breaker_base_cooldown_s: int = 60
@@ -686,6 +699,50 @@ def _notifications_config(raw: Any) -> NotificationsConfig:
     return NotificationsConfig(enabled=raw.get("enabled", False))
 
 
+def _langfuse_config(raw: Any) -> LangfuseConfig:
+    if raw is None:
+        return LangfuseConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("[langfuse] must be a TOML table")
+    unknown = set(raw) - {
+        "enabled",
+        "base_url",
+        "environment",
+        "sample_rate",
+    }
+    if unknown:
+        raise ValueError(f"Unsupported langfuse settings: {sorted(unknown)}")
+    if "enabled" in raw and not isinstance(raw["enabled"], bool):
+        raise ValueError("langfuse.enabled must be true or false")
+    enabled = raw.get("enabled", False)
+
+    base_url = raw.get("base_url", "http://localhost:3000")
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ValueError("langfuse.base_url must be an http or https URL")
+    base_url = base_url.strip()
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("langfuse.base_url must be an http or https URL")
+
+    environment = raw.get("environment", "")
+    if not isinstance(environment, str):
+        raise ValueError("langfuse.environment must be a string")
+
+    raw_sample_rate = raw.get("sample_rate", 1.0)
+    if isinstance(raw_sample_rate, bool) or not isinstance(raw_sample_rate, (int, float)):
+        raise ValueError("langfuse.sample_rate must be a number between 0.0 and 1.0")
+    sample_rate = float(raw_sample_rate)
+    if not (0.0 <= sample_rate <= 1.0) or not math.isfinite(sample_rate):
+        raise ValueError("langfuse.sample_rate must be between 0.0 and 1.0")
+
+    return LangfuseConfig(
+        enabled=enabled,
+        base_url=base_url,
+        environment=environment,
+        sample_rate=sample_rate,
+    )
+
+
 def load_config(path: Path | None = None) -> DaemonConfig:
     home = refract_home()
     config_path = path or home / "config.toml"
@@ -761,6 +818,7 @@ def _load_config_values(
         "notifications",
         "retryPolicies",
         "envs",
+        "langfuse",
     }
     if unsupported:
         raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
@@ -828,6 +886,7 @@ def _load_config_values(
         profile_declarations=profile_declarations,
         logging=_logging_config(raw.get("logging"), home),
         notifications=_notifications_config(raw.get("notifications")),
+        langfuse=_langfuse_config(raw.get("langfuse")),
         retry_policies=retry_policies,
         breaker_failure_threshold=_positive_int(daemon.get("breaker_failure_threshold"), 3, "[daemon].breaker_failure_threshold"),
         breaker_base_cooldown_s=breaker_base,
@@ -985,6 +1044,7 @@ def _load_project_config_values(
         config_loaded_at=base.config_loaded_at,
         logging=base.logging,
         notifications=base.notifications,
+        langfuse=base.langfuse,
         retry_policies=base.retry_policies,
         breaker_failure_threshold=base.breaker_failure_threshold,
         breaker_base_cooldown_s=base.breaker_base_cooldown_s,
@@ -1121,12 +1181,14 @@ def resolve_target_environment(
 
 __all__ = [
     "DaemonConfig",
+    "LangfuseConfig",
     "LoggingConfig",
     "NotificationsConfig",
     "ProfileDeclaration",
     "RetryPolicy",
     "TargetConfig",
     "TargetSelection",
+    "_langfuse_config",
     "load_config",
     "load_project_config",
     "load_task_guide",

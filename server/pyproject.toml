@@ -27,6 +27,16 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=7.1.0",
 ]
+langfuse = [
+    "langfuse>=4.15,<5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=7.1.0",
+]
 [project.scripts]
 refract = "refract.cli:main"
 

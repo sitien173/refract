@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added optional Langfuse tracing for job activity and MCP tool calls, with operator configuration and content-upload guidance.
+
 ## 2.0.0 - 2026-10-22
 
 - Removed the `job_submit` `depends_on` parameter and the `job_cancel` `cancelled_dependents` return field.

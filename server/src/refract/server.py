@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import inspect
 import secrets
 import time
 from importlib.metadata import version as package_version
@@ -27,6 +28,7 @@ from refract.config import DaemonConfig, load_config, load_task_guide
 from refract.dashboard import DashboardState, register_dashboard_routes
 from refract.logging_setup import configure as configure_logging, get_logger, log_context
 from refract.models import JobSummary, JobView, TERMINAL_STATES
+from refract.observability import record_tool_observation
 from refract.result_metadata import JobResultMetadata
 from refract.workers import run_sync
 from refract.runtime import OrchestrationError, Runtime
@@ -503,7 +505,18 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
             )
             request_id = _request_id(context)
             started_at = time.monotonic()
+            observation_started_ns = time.time_ns()
             extra: dict[str, Any] = {"operation": operation}
+            bound = inspect.signature(function).bind_partial(*args, **kwargs)
+            tool_input = {key: value for key, value in bound.arguments.items() if key != "ctx"}
+            runtime = None
+            if context is not None:
+                try:
+                    runtime = context.request_context.lifespan_context
+                except Exception:
+                    pass
+            tool_tracer = getattr(runtime, "tracer", None)
+            output: Any = None
             if operation == "job_wait":
                 extra["progress_token_present"] = _progress_token_present(context)
             outcome = "failed"
@@ -512,6 +525,7 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
                 log.info("MCP tool request started", extra={**extra, "event": "mcp.request_started"})
                 try:
                     result = await function(*args, **kwargs)
+                    output = result
                     outcome = "success"
                     return result
                 except asyncio.CancelledError:
@@ -535,6 +549,26 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
                         extra["error_type"] = error_type
                     log.log(logging.INFO if outcome == "success" else logging.WARNING,
                             "MCP tool request finished", extra=extra)
+                    job_id = tool_input.get("job_id")
+                    if operation == "job_submit" and isinstance(output, str):
+                        try:
+                            job_id = json.loads(output)["job"]["id"]
+                        except (KeyError, TypeError, json.JSONDecodeError):
+                            job_id = None
+                    project_id = tool_input.get("project_id")
+                    if operation == "project_resolve" and isinstance(output, str):
+                        try:
+                            project_id = json.loads(output)["project"]["id"]
+                        except (KeyError, TypeError, json.JSONDecodeError):
+                            project_id = None
+                    record_tool_observation(
+                        tool_tracer, name=operation, input=tool_input, output=output,
+                        metadata={"outcome": outcome, "error_type": error_type,
+                                  "duration_ms": extra["duration_ms"]},
+                        start_time_ns=observation_started_ns, end_time_ns=time.time_ns(),
+                        job_id=job_id if isinstance(job_id, str) else None,
+                        session_id=project_id if isinstance(project_id, str) else None,
+                    )
         return wrapped
     return decorate
 

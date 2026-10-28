@@ -425,6 +425,173 @@ async def test_project_resolve_reports_id_if_result_overflows_after_creation(tmp
 
 
 @pytest.mark.asyncio
+async def test_logged_request_exports_real_tool_calls_and_preserves_results(tmp_path, monkeypatch, caplog) -> None:
+    pytest.importorskip("langfuse")
+    from dataclasses import replace
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer, trace_id_for_job
+    from tests.orchestration_helpers import FakeDrivers, repository
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-phase3-server-integration")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase3-test")
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        exporter = InMemorySpanExporter()
+        config_path = runtime.config.home / "config.toml"
+        config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[langfuse]\nenabled = true\n", encoding="utf-8")
+        runtime.tracer.shutdown()
+        runtime.tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
+        runtime._catalog = replace(runtime._catalog, langfuse=LangfuseConfig(enabled=True))
+        runtime.ask_registry.tracer = runtime.tracer
+        runtime.runner.tracer = runtime.tracer
+        runtime.target_executor.tracer = runtime.tracer
+        runtime.drivers = FakeDrivers()
+        (runtime.config.home / "task_guide.json").write_text(json.dumps({"guidance": []}), encoding="utf-8")
+        resolved = await client.call_tool("project_resolve", {"path": str(repository(tmp_path))})
+        project_id = json.loads(resolved.content[0].text)["project"]["id"]
+        guide = await client.call_tool("task_guide", {"project_id": project_id})
+        submitted = await client.call_tool("job_submit", {
+            "project_id": project_id, "workflow": "consult", "prompt": "inspect",
+        })
+        job_id = json.loads(submitted.content[0].text)["job"]["id"]
+        waited = await client.call_tool("job_wait", {"job_id": job_id, "timeout_s": 5})
+        assert json.loads(waited.content[0].text)["result"]["text"] == "response from primary"
+        assert json.loads(guide.content[0].text)["profiles"]["default"] == "balanced"
+        runtime.tracer.flush()
+        spans = exporter.get_finished_spans()
+        tools = {span.name: span for span in spans if span.attributes.get("langfuse.observation.type") == "tool"}
+        assert {"project_resolve", "task_guide", "job_submit", "job_wait"} <= set(tools), ([(s.name, s.attributes.get("langfuse.observation.type")) for s in spans], [r.message for r in caplog.records if "Langfuse" in r.message])
+        expected_trace = int(trace_id_for_job(job_id), 16)
+        for name in ("job_submit", "job_wait"):
+            span = tools[name]
+            assert span.context.trace_id == expected_trace
+            assert span.attributes["langfuse.observation.input"]
+            assert span.attributes["langfuse.observation.output"]
+            metadata = json.loads(span.attributes.get("langfuse.observation.metadata", "{}"))
+            if not metadata:
+                metadata = {key.rsplit(".", 1)[-1]: value for key, value in span.attributes.items() if key.startswith("langfuse.observation.metadata.")}
+            assert metadata["outcome"] == "success"
+            assert metadata["error_type"] == ""
+            assert float(metadata["duration_ms"]) >= 0
+        resolve_span, guide_span = tools["project_resolve"], tools["task_guide"]
+        assert resolve_span.context.trace_id != expected_trace
+        assert guide_span.context.trace_id != expected_trace
+        assert resolve_span.attributes["session.id"] == project_id
+        assert guide_span.attributes["session.id"] == project_id
+        assert resolve_span.context.trace_id != guide_span.context.trace_id
+        assert all(span.attributes.get("session.id") != project_id for span in spans if span.name not in tools)
+        runtime.tracer.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_logged_request_error_and_export_failure_preserve_mcp_envelope(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("langfuse")
+    from dataclasses import replace
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-phase3-error-integration")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase3-test")
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        exporter = InMemorySpanExporter()
+        config_path = runtime.config.home / "config.toml"
+        config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[langfuse]\nenabled = true\n", encoding="utf-8")
+        runtime.tracer.shutdown()
+        runtime.tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
+        runtime._catalog = replace(runtime._catalog, langfuse=LangfuseConfig(enabled=True))
+        runtime.ask_registry.tracer = runtime.tracer
+        runtime.runner.tracer = runtime.tracer
+        runtime.target_executor.tracer = runtime.tracer
+        missing = await client.call_tool("job_wait", {"job_id": "absent-phase3", "timeout_s": 0})
+        assert missing.is_error
+        payload = json.loads(missing.content[0].text)
+        assert payload == {
+            "code": "unknown_job", "message": "Job does not exist.",
+            "next_action": "Call job_list for the project and use a listed job ID.",
+            "retryable": False,
+        }
+        runtime.tracer.flush()
+        error_spans = [s for s in exporter.get_finished_spans() if s.name == "job_wait"]
+        assert len(error_spans) == 1
+        metadata = error_spans[0].attributes
+        assert metadata["langfuse.observation.metadata.outcome"] == "failed"
+        assert metadata["langfuse.observation.metadata.error_type"] == "OrchestrationError"
+        original = runtime.tracer.client._create_observation_from_otel_span
+        runtime.tracer.client._create_observation_from_otel_span = lambda **_: (_ for _ in ()).throw(RuntimeError("synthetic conversion failure"))
+        same_error = await client.call_tool("job_wait", {"job_id": "absent-phase3", "timeout_s": 0})
+        assert same_error.is_error
+        assert json.loads(same_error.content[0].text) == payload
+        runtime.tracer.client._create_observation_from_otel_span = original
+
+        (runtime.config.home / "task_guide.json").write_text(json.dumps({"guidance": []}), encoding="utf-8")
+        project = register_project(runtime, str(tmp_path), "sdk-failure-project")
+        original = runtime.tracer.client._create_observation_from_otel_span
+        runtime.tracer.client._create_observation_from_otel_span = lambda **_: (_ for _ in ()).throw(RuntimeError("synthetic exporter conversion failure"))
+        guide = await client.call_tool("task_guide", {"project_id": project.id})
+        assert not guide.is_error
+        assert json.loads(guide.content[0].text)["profiles"]["default"] == "balanced"
+        runtime.tracer.client._create_observation_from_otel_span = original
+        runtime.tracer.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_logged_job_wait_creates_no_open_span_during_long_poll(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("langfuse")
+    from dataclasses import replace
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-phase3-long-poll")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase3-test")
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        exporter = InMemorySpanExporter()
+        config_path = runtime.config.home / "config.toml"
+        config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[langfuse]\nenabled = true\n", encoding="utf-8")
+        runtime.tracer.shutdown()
+        runtime.tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
+        runtime._catalog = replace(runtime._catalog, langfuse=LangfuseConfig(enabled=True))
+        started_spans = []
+        original_start = runtime.tracer.client._otel_tracer.start_span
+        def track_start(*args, **kwargs):
+            span = original_start(*args, **kwargs)
+            started_spans.append(span)
+            return span
+        runtime.tracer.client._otel_tracer.start_span = track_start
+        project = register_project(runtime, str(tmp_path), "long-poll-project")
+        runtime.database.create_job(
+            job_id="long-poll-phase3", project_id=project.id, workflow="consult", profile="balanced",
+            prompt="poll", execution_plan_json="{}", context_key="long-poll",
+        )
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def held_wait(job_id, timeout_s):
+            started.set()
+            await release.wait()
+
+        runtime.wait = held_wait
+        request = asyncio.create_task(client.call_tool("job_wait", {"job_id": "long-poll-phase3", "timeout_s": 5}))
+        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.sleep(0.05)
+        assert not [span for span in exporter.get_finished_spans() if span.name == "job_wait"]
+        assert started_spans == []
+        release.set()
+        response = await request
+        assert not response.is_error
+        runtime.tracer.flush()
+        tool_spans = [span for span in exporter.get_finished_spans() if span.name == "job_wait"]
+        assert len(tool_spans) == 1
+        span = tool_spans[0]
+        assert span.end_time >= span.start_time
+        assert len(started_spans) == 1
+        assert not started_spans[0].is_recording()
+        recorded_ms = float(span.attributes["langfuse.observation.metadata.duration_ms"])
+        assert abs((span.end_time - span.start_time) / 1_000_000 - recorded_ms) < 5
+        runtime.tracer.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_mcp_client_completes_v2_cycle_in_four_calls(tmp_path, monkeypatch) -> None:
     from tests.orchestration_helpers import FakeDrivers, repository
 

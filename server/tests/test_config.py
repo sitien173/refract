@@ -5,8 +5,10 @@ import json
 import pytest
 
 from refract.config import (
+    LangfuseConfig,
     NotificationsConfig,
     TargetConfig,
+    _langfuse_config,
     _notifications_config,
     load_config,
     load_project_config,
@@ -1076,3 +1078,100 @@ consult = "primary"
     assert catalog.envs["shared"]["KEY"] == "val"
     assert catalog.targets[0].envs_vars == ("shared",)
     assert catalog.targets[0].envs == {"LOCAL": "loc"}
+
+
+def test_langfuse_config_defaults_disabled_when_absent(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_explicit_config(), encoding="utf-8")
+
+    catalog = load_config(path)
+
+    assert catalog.langfuse.enabled is False
+    assert catalog.langfuse.base_url == "http://localhost:3000"
+    assert catalog.langfuse.environment == ""
+    assert catalog.langfuse.sample_rate == 1.0
+
+
+def test_langfuse_config_parses_custom_section(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _explicit_config()
+        + """
+[langfuse]
+enabled = true
+base_url = "https://langfuse.internal.net"
+environment = "staging"
+sample_rate = 0.5
+""",
+        encoding="utf-8",
+    )
+
+    catalog = load_config(path)
+
+    assert catalog.langfuse.enabled is True
+    assert catalog.langfuse.base_url == "https://langfuse.internal.net"
+    assert catalog.langfuse.environment == "staging"
+    assert catalog.langfuse.sample_rate == 0.5
+
+
+@pytest.mark.parametrize(
+    "invalid_section",
+    [
+        '[langfuse]\nsample_rate = -0.1\n',
+        '[langfuse]\nsample_rate = 1.1\n',
+        '[langfuse]\nsample_rate = "1.0"\n',
+        '[langfuse]\nsample_rate = true\n',
+        '[langfuse]\nbase_url = "localhost:3000"\n',
+        '[langfuse]\nbase_url = "ftp://localhost:3000"\n',
+        '[langfuse]\nbase_url = ""\n',
+        '[langfuse]\nbase_url = 123\n',
+        '[langfuse]\nenabled = "true"\n',
+        '[langfuse]\nenvironment = 123\n',
+        '[langfuse]\npublic_key = "pk-lf-123"\n',
+        '[langfuse]\nsecret_key = "sk-lf-123"\n',
+        'langfuse = 1\n',
+    ],
+)
+def test_langfuse_config_validation_rejects_invalid(tmp_path, invalid_section) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(f"{invalid_section}\n{_explicit_config()}", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_config(path)
+
+
+def test_langfuse_config_dataclass_defaults_and_immutability() -> None:
+    lf_config = LangfuseConfig()
+    assert lf_config.enabled is False
+    assert lf_config.base_url == "http://localhost:3000"
+    assert lf_config.environment == ""
+    assert lf_config.sample_rate == 1.0
+    with pytest.raises(AttributeError):
+        lf_config.enabled = True  # type: ignore[misc]
+
+
+def test_langfuse_config_helper_validation() -> None:
+    assert _langfuse_config(None) == LangfuseConfig()
+    assert _langfuse_config({}) == LangfuseConfig()
+    assert _langfuse_config({"enabled": True}) == LangfuseConfig(enabled=True)
+
+    with pytest.raises(ValueError, match=r"\[langfuse\] must be a TOML table"):
+        _langfuse_config("not a table")
+
+    with pytest.raises(ValueError, match=r"Unsupported langfuse settings"):
+        _langfuse_config({"public_key": "secret"})
+
+    with pytest.raises(ValueError, match="langfuse.enabled must be true or false"):
+        _langfuse_config({"enabled": "yes"})
+
+    with pytest.raises(ValueError, match="langfuse.sample_rate"):
+        _langfuse_config({"sample_rate": 1.5})
+
+    with pytest.raises(ValueError, match="langfuse.sample_rate"):
+        _langfuse_config({"sample_rate": -0.1})
+
+    with pytest.raises(ValueError, match="langfuse.base_url"):
+        _langfuse_config({"base_url": "ftp://example.com"})
+
+    with pytest.raises(ValueError, match="langfuse.base_url"):
+        _langfuse_config({"base_url": "example.com"})
