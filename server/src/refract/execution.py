@@ -762,6 +762,103 @@ class TargetExecutor:
                 await drain_task
             if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
                 attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+            # Backends retain normalized telemetry even when streaming is disabled.
+            # Reconcile it only when stream events did not already report consumption.
+            if not invocation_observed_consumption and attempt_result is not None and attempt_result.telemetry is not None:
+                try:
+                    telemetry = TelemetryData.model_validate(attempt_result.telemetry)
+                    measurements = (
+                        telemetry.total_input_tokens,
+                        telemetry.total_output_tokens,
+                        telemetry.cache_read_tokens,
+                        telemetry.cache_write_tokens,
+                    )
+                    if any(measurement.value is not None for measurement in measurements):
+                        primary = next(measurement for measurement in measurements if measurement.value is not None)
+                        q = primary.quality if primary.quality in ("reported", "derived", "estimated") else "reported"
+                        accumulator.reconcile_cumulative(
+                            attempt=attempt,
+                            invocation=invocation,
+                            total_input=telemetry.total_input_tokens.value,
+                            total_output=telemetry.total_output_tokens.value,
+                            cache_read=telemetry.cache_read_tokens.value,
+                            cache_write=telemetry.cache_write_tokens.value,
+                            source=primary.source or "result",
+                            quality=q,
+                            observed_at=primary.observed_at,
+                        )
+                        invocation_observed_consumption = True
+
+                    existing_ctx_ts = (
+                        accumulator._context_used_tokens.observed_at
+                        or accumulator._context_window_size.observed_at
+                    )
+                    ctx_ops: list[dict[str, Any]] = []
+                    if telemetry.context_window_size.value is not None:
+                        fb_ts = telemetry.context_window_size.observed_at
+                        if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
+                            q = (
+                                telemetry.context_window_size.quality
+                                if telemetry.context_window_size.quality
+                                in ("reported", "derived", "estimated")
+                                else "reported"
+                            )
+                            ctx_ops.append({
+                                "kwargs": {
+                                    "window_size": telemetry.context_window_size.value,
+                                    "source": telemetry.context_window_size.source or "result",
+                                    "quality": q,
+                                    "observed_at": fb_ts,
+                                    "attempt": attempt,
+                                    "invocation": invocation,
+                                },
+                                "ts": fb_ts or "",
+                            })
+                    if telemetry.context_used_tokens.value is not None:
+                        fb_ts = telemetry.context_used_tokens.observed_at
+                        if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
+                            q = (
+                                telemetry.context_used_tokens.quality
+                                if telemetry.context_used_tokens.quality
+                                in ("reported", "derived", "estimated")
+                                else "derived"
+                            )
+                            ctx_ops.append({
+                                "kwargs": {
+                                    "used_tokens": telemetry.context_used_tokens.value,
+                                    "source": telemetry.context_used_tokens.source or "result",
+                                    "quality": q,
+                                    "observed_at": fb_ts,
+                                    "attempt": attempt,
+                                    "invocation": invocation,
+                                },
+                                "ts": fb_ts or "",
+                            })
+                    if telemetry.context_remaining_percent.value is not None:
+                        fb_ts = telemetry.context_remaining_percent.observed_at
+                        if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
+                            q = (
+                                telemetry.context_remaining_percent.quality
+                                if telemetry.context_remaining_percent.quality
+                                in ("reported", "derived", "estimated")
+                                else "derived"
+                            )
+                            ctx_ops.append({
+                                "kwargs": {
+                                    "remaining_percent": telemetry.context_remaining_percent.value,
+                                    "source": telemetry.context_remaining_percent.source or "derived",
+                                    "quality": q,
+                                    "observed_at": fb_ts,
+                                    "attempt": attempt,
+                                    "invocation": invocation,
+                                },
+                                "ts": fb_ts or "",
+                            })
+                    ctx_ops.sort(key=lambda op: op["ts"])
+                    for op in ctx_ops:
+                        accumulator.record_context_snapshot(**op["kwargs"])
+                except Exception:
+                    log.warning("Ignoring malformed backend telemetry", exc_info=True)
             # Record unknown contribution and finalize even when the driver raises.
             if not invocation_observed_consumption:
                 accumulator.record_missing_contribution(attempt=attempt, invocation=invocation)
