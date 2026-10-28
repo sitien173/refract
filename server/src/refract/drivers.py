@@ -118,6 +118,7 @@ class DriverResult:
     error: str
     error_code: str
     model: str | None = None
+    telemetry: dict[str, Any] | None = None
 
 
 def _target_args(target: TargetConfig) -> tuple[str, ...]:
@@ -207,6 +208,7 @@ def _normalize(result: BackendResult) -> DriverResult:
         error=result.error,
         error_code=result.error_class,
         model=result.model,
+        telemetry=result.telemetry,
     )
 
 

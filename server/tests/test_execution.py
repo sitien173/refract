@@ -5290,12 +5290,13 @@ async def test_persisted_context_quality_is_derived_not_reported(tmp_path: Path)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend_name", ["claude", "pi", "codex", "agy"])
+@pytest.mark.parametrize("streaming", [False, True])
 async def test_real_adapter_observations_through_execution_persist_reported_consumption_alongside_derived_context(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_name: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_name: str, streaming: bool
 ) -> None:
     root = repository(tmp_path)
     monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
-    monkeypatch.setattr("refract.drivers.DriverRegistry._detect_structured_mode", lambda *a, **k: True)
+    monkeypatch.setattr("refract.drivers.DriverRegistry._detect_structured_mode", lambda *a, **k: streaming)
 
     if backend_name == "claude":
         c_lines = [
@@ -5385,6 +5386,9 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
         assert final_telemetry["total_output_tokens"]["quality"] == "reported"
         assert final_telemetry["context_used_tokens"]["quality"] == "derived"
         assert final_telemetry["context_used_tokens"]["value"] is not None
+        if backend_name == "pi":
+            assert final_telemetry["context_window_size"]["value"] is None
+            assert final_telemetry["context_remaining_percent"]["value"] is None
 
         db_job = runtime.database.job(submission.job_id)
         assert db_job is not None
@@ -5393,6 +5397,182 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
         assert db_telemetry["total_input_tokens"]["quality"] == "reported"
         assert db_telemetry["total_output_tokens"]["quality"] == "reported"
         assert db_telemetry["context_used_tokens"]["quality"] == "derived"
+        if backend_name == "pi":
+            assert db_telemetry["context_window_size"]["value"] is None
+            assert db_telemetry["context_remaining_percent"]["value"] is None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_streaming_enabled_does_not_double_count_returned_telemetry(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    target = TargetConfig(id="t_stream", backend="codex")
+    catalog = replace(
+        base,
+        targets=(target,),
+        profiles={"balanced": {"implement": TargetSelection((target.id,)), "review": TargetSelection((target.id,)), "consult": TargetSelection((target.id,))}},
+    )
+
+    backend_telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 100, "source": "turn", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
+        "total_output_tokens": {"value": 25, "source": "turn", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
+        "cache_read_tokens": {"value": 10, "source": "turn", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
+        "cache_write_tokens": {"value": None, "source": None, "quality": "unavailable", "observed_at": None},
+        "context_used_tokens": {"value": 50, "source": "session", "quality": "derived", "observed_at": "2026-10-28T12:00:00Z"},
+        "context_window_size": {"value": 128000, "source": "session", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
+        "context_remaining_percent": {"value": 99.96, "source": "derived", "quality": "derived", "observed_at": "2026-10-28T12:00:00Z"},
+        "attribution": {"attempt": 1, "invocation": 1},
+        "completed_attempts": {"total_input_tokens": 0, "total_output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
+    }
+
+    class StreamingDriver(FakeDrivers):
+        def supports_structured_streaming(self, target: Any) -> bool:
+            return True
+
+        async def execute(self, *, emitter: Any = None, **kwargs: Any) -> DriverResult:
+            if emitter:
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "total_input_tokens": 100,
+                        "total_output_tokens": 25,
+                        "cache_read_tokens": 10,
+                        "source": "stream",
+                        "quality": "reported",
+                        "observed_at": "2026-10-28T12:00:05Z",
+                    },
+                })
+                emitter({
+                    "kind": "telemetry.updated",
+                    "data": {
+                        "context_used_tokens": 125,
+                        "context_window_size": 128000,
+                        "source": "stream",
+                        "quality": "derived",
+                        "observed_at": "2026-10-28T12:00:05Z",
+                    },
+                })
+            return DriverResult("SUCCESS", "sess-1", "done", "", "", telemetry=backend_telemetry)
+
+    runtime = Runtime(catalog)
+    runtime.drivers = StreamingDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "test streaming double count")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+        tel = job.result.metadata.telemetry.model_dump(mode="json")
+        assert tel["total_input_tokens"]["value"] == 100
+        assert tel["total_output_tokens"]["value"] == 25
+        assert tel["context_used_tokens"]["value"] == 125
+        assert tel["total_input_tokens"]["source"] == "stream"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_fallback_preserves_cumulative_totals_across_retries(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    policy = RetryPolicy(1, ("rate_limit",), ())
+    target = TargetConfig(id="t_retry", backend="codex", retry_policy="transient")
+    catalog = replace(
+        base,
+        retry_policies={"transient": policy},
+        targets=(target,),
+        profiles={"balanced": {"implement": TargetSelection(("t_retry",)), "review": TargetSelection(("t_retry",)), "consult": TargetSelection(("t_retry",))}},
+    )
+
+    attempt_1_telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 100, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
+        "total_output_tokens": {"value": 20, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
+        "cache_read_tokens": {"value": 5, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
+        "cache_write_tokens": {"value": None, "source": None, "quality": "unavailable", "observed_at": None},
+        "context_used_tokens": {"value": 120, "source": "result", "quality": "derived", "observed_at": "2026-10-28T12:00:00Z"},
+        "context_window_size": {"value": 128000, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
+        "context_remaining_percent": {"value": 99.9, "source": "derived", "quality": "derived", "observed_at": "2026-10-28T12:00:00Z"},
+        "attribution": {"attempt": 1, "invocation": 1},
+        "completed_attempts": {"total_input_tokens": 0, "total_output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
+    }
+    attempt_2_telemetry = {
+        "version": 1,
+        "completeness": "complete",
+        "total_input_tokens": {"value": 150, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:01:00Z"},
+        "total_output_tokens": {"value": 30, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:01:00Z"},
+        "cache_read_tokens": {"value": 10, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:01:00Z"},
+        "cache_write_tokens": {"value": None, "source": None, "quality": "unavailable", "observed_at": None},
+        "context_used_tokens": {"value": 180, "source": "result", "quality": "derived", "observed_at": "2026-10-28T12:01:00Z"},
+        "context_window_size": {"value": 128000, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:01:00Z"},
+        "context_remaining_percent": {"value": 99.85, "source": "derived", "quality": "derived", "observed_at": "2026-10-28T12:01:00Z"},
+        "attribution": {"attempt": 1, "invocation": 1},
+        "completed_attempts": {"total_input_tokens": 0, "total_output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
+    }
+
+    class RetryFallbackDrivers(StreamingSequenceDrivers):
+        def __init__(self):
+            super().__init__([
+                DriverResult("RETRYABLE", "", "", "rate limit", "rate_limit", telemetry=attempt_1_telemetry),
+                DriverResult("SUCCESS", "sess-ok", "done", "", "", telemetry=attempt_2_telemetry),
+            ])
+
+    runtime = Runtime(catalog)
+    runtime.drivers = RetryFallbackDrivers()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "test retry fallback")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+        tel = job.result.metadata.telemetry.model_dump(mode="json")
+        assert tel["total_input_tokens"]["value"] == 250
+        assert tel["total_output_tokens"]["value"] == 50
+        assert tel["cache_read_tokens"]["value"] == 15
+        record = runtime.database.job_record(sub.job_id)
+        assert record is not None
+        state = json.loads(record["telemetry_state_json"])
+        assert state["attribution"]["attempt"] == 2
+        assert state["completed_attempts"]["total_input_tokens"] == 100
+        assert state["completed_attempts"]["total_output_tokens"] == 20
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_malformed_fallback_does_not_change_outcome(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+    target = TargetConfig(id="t_malformed", backend="codex")
+    catalog = replace(
+        base,
+        targets=(target,),
+        profiles={"balanced": {"implement": TargetSelection((target.id,)), "review": TargetSelection((target.id,)), "consult": TargetSelection((target.id,))}},
+    )
+
+    class MalformedDriver(FakeDrivers):
+        def supports_structured_streaming(self, target: Any) -> bool:
+            return False
+
+        async def execute(self, **kwargs: Any) -> DriverResult:
+            return DriverResult("SUCCESS", "sess-ok", "done", "", "", telemetry={"corrupt": "data", "total_input_tokens": "invalid"})
+
+    runtime = Runtime(catalog)
+    runtime.drivers = MalformedDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "test malformed telemetry")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+        tel = job.result.metadata.telemetry.model_dump(mode="json")
+        assert tel["total_input_tokens"]["value"] is None
+        assert tel["total_input_tokens"]["quality"] == "unavailable"
     finally:
         await runtime.close()
 
