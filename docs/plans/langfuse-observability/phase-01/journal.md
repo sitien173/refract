@@ -22,7 +22,31 @@ sections.
 
 ## Implementation Response
 
-<!-- Worker appends the full `# EXTERNAL RESPONSE` block here. -->
+### Dispatch blocked before implementation
+
+- Initial implementation job: ee5a1a76-6fd7-49a3-a444-876c4cf21f01.
+- Recovery implementation job: eadb2216-6c58-48b9-a383-3be77bb4dd67.
+- Both jobs were terminal succeeded but performed no implementation.
+- Both requested a worker-local focused goal. The parent goal was already confirmed and active.
+- Recovery clarified the worker role and parent goal. The worker repeated the blocker.
+- Diagnostic reports: 848 and the report returned for the recovery job.
+- No source or test changes were present after either job.
+- Phase verification: not run; implementation never started.
+- Independent quality review: not run; no implementation exists.
+- Coordinator stopped for user direction rather than bypassing the required implementation route.
+
+Recovery output:
+
+```text
+# EXTERNAL RESPONSE ERP
+
+- **STATUS:** BLOCKED
+- **RESULT:** No implementation work performed.
+- **BLOCKER:** This session has no focused goal. Goal work must wait for human focus.
+- **NEXT:** BLOCKED
+- **ACTION:** Run `/goal-focus`, `/goal-list`, or `/goal-resume`, then retry Phase 1.
+```
+
 
 ## Quality Review
 
@@ -30,7 +54,8 @@ sections.
 
 ## Review Result
 
-- Spec Status: PENDING
+- Spec Status: BLOCKED
+- Quality Status: NOT_RUN
 - Debt: none
 
 ## Final Checkpoint
