@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from refract.ask import AskRegistry
-from refract.config import DaemonConfig, load_config, load_project_config, resolve_target_environment
+from refract.config import DaemonConfig, LangfuseConfig, load_config, load_project_config, resolve_target_environment
 from refract.config_inspection import bound_error, sanitize_config_error, utc_now
 from refract.config_mutation import ConfigurationMutationService
 from refract.database import Database
@@ -33,6 +33,7 @@ from refract.models import (
     TargetView,
 )
 from refract.notifications import send_job_notification
+from refract.observability import Tracer
 from refract.planning import (ExecutionPlan, execution_plan_data, parse_execution_plan, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target)
 from refract.scheduler import ProjectScheduler
 from refract.streaming import DEFAULT_RETENTION_DAYS, JobStreamHub
@@ -99,6 +100,7 @@ class Runtime:
         )
         self.scheduler = ProjectScheduler(config.max_jobs, self.runner.run)
         self.mutations = ConfigurationMutationService(self)
+        self.tracer = Tracer(LangfuseConfig(enabled=False))
         log.debug("Runtime initialized", extra={"event": "runtime.initialized", "database": config.database_path.as_posix(), "max_jobs": config.max_jobs})
 
     async def _notify_job(self, job_id: str) -> None:
@@ -180,6 +182,10 @@ class Runtime:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._closing = False
+        if self.tracer.is_active:
+            await run_sync(self.tracer.flush)
+            await run_sync(self.tracer.shutdown)
+        self.tracer = await run_sync(Tracer, self._catalog.langfuse)
         await run_sync(self.prune_retained_transcripts)
         await run_sync(self.database.reset_orphaned_target_probes)
         interrupted = await run_sync(self.database.interrupt_active_jobs)
@@ -216,6 +222,8 @@ class Runtime:
             await asyncio.gather(self._retention_task, return_exceptions=True)
             self._retention_task = None
         await self.scheduler.close()
+        await run_sync(self.tracer.flush)
+        await run_sync(self.tracer.shutdown)
         await run_sync(self.database.close)
         log.info("Scheduler stopped", extra={"event": "scheduler.stopped"})
 
@@ -607,9 +615,14 @@ class Runtime:
             self._publish_configuration_locked()
 
     def _publish_configuration_locked(self) -> None:
-        """Publish a reloaded catalog; the caller holds the mutation lock."""
+        """Publish off-loop; the caller holds the mutation lock."""
+        old_langfuse = self._catalog.langfuse
         self._catalog_stat = None
         self._reload_catalog_locked()
+        if self._catalog.langfuse != old_langfuse:
+            self.tracer.flush()
+            self.tracer.shutdown()
+            self.tracer = Tracer(self._catalog.langfuse)
 
     @property
     def config_health(self) -> ConfigHealth:
