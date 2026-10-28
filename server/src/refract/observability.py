@@ -63,6 +63,13 @@ class Tracer:
             )
             return
 
+        if os.environ.get("LANGFUSE_TRACING_ENABLED", "true").lower() == "false":
+            log.warning(
+                "Langfuse tracing is disabled by LANGFUSE_TRACING_ENABLED",
+                extra={"event": "langfuse.error"},
+            )
+            return
+
         self._public_key = public_key
 
         try:

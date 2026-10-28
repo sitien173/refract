@@ -274,6 +274,33 @@ def test_zero_sampling_with_private_provider(monkeypatch: pytest.MonkeyPatch) ->
         tracer.shutdown()
 
 
+def test_sdk_environment_disablement_does_not_poison_same_key_recovery(monkeypatch) -> None:
+    pytest.importorskip("langfuse")
+    from langfuse._client.resource_manager import LangfuseResourceManager
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    key = "pk-disabled-recovery"
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", key)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "false")
+    disabled = Tracer(LangfuseConfig(enabled=True), span_exporter=InMemorySpanExporter())
+    try:
+        assert disabled.is_active is False
+        assert key not in LangfuseResourceManager._instances
+        monkeypatch.delenv("LANGFUSE_TRACING_ENABLED")
+        recovered = Tracer(LangfuseConfig(enabled=True), span_exporter=InMemorySpanExporter())
+        try:
+            assert recovered.is_active is True
+        finally:
+            recovered.shutdown()
+    finally:
+        disabled.shutdown()
+        # Clean up the pre-fix SDK leak so the RED run remains isolated.
+        resource = LangfuseResourceManager._instances.pop(key, None)
+        if resource is not None:
+            resource.shutdown()
+
+
 def test_tracer_constructor_parameters_forwarded(
     monkeypatch: pytest.MonkeyPatch
 ) -> None:

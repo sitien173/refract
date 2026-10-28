@@ -1417,6 +1417,35 @@ def test_runtime_publish_configuration_rebuilds_tracer_on_langfuse_change(tmp_pa
         runtime.database.close()
 
 
+def test_catalog_reload_applies_tracer_disablement_before_publication(tmp_path, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+    from refract.config import LangfuseConfig
+    from refract.observability import Tracer
+
+    config_path = tmp_path / "config.toml"
+    _config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root))
+    applied = Tracer(LangfuseConfig(enabled=False))
+    applied._config = LangfuseConfig(enabled=True)
+    applied._is_active = True
+    applied.flush = MagicMock()
+    applied.shutdown = MagicMock()
+    runtime.tracer = applied
+    try:
+        runtime.catalog_for_project(project.id)
+        assert runtime.tracer.config.enabled is False
+        assert runtime.tracer is not applied
+        applied.flush.assert_called_once()
+        applied.shutdown.assert_called_once()
+        runtime.publish_configuration()
+        assert runtime.tracer.config.enabled is False
+    finally:
+        runtime.database.close()
+
+
 @pytest.mark.asyncio
 async def test_runtime_real_tracer_thread_identity_and_close_order(
     tmp_path, monkeypatch: pytest.MonkeyPatch

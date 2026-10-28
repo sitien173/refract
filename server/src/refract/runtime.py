@@ -616,13 +616,8 @@ class Runtime:
 
     def _publish_configuration_locked(self) -> None:
         """Publish off-loop; the caller holds the mutation lock."""
-        old_langfuse = self._catalog.langfuse
         self._catalog_stat = None
         self._reload_catalog_locked()
-        if self._catalog.langfuse != old_langfuse:
-            self.tracer.flush()
-            self.tracer.shutdown()
-            self.tracer = Tracer(self._catalog.langfuse)
 
     @property
     def config_health(self) -> ConfigHealth:
@@ -769,6 +764,10 @@ class Runtime:
             last_known_good_revision=catalog.config_revision
             or previous.last_known_good_revision,
         )
+        if catalog.langfuse != self.tracer.config:
+            self.tracer.flush()
+            self.tracer.shutdown()
+            self.tracer = Tracer(catalog.langfuse)
         return self._catalog
 
 

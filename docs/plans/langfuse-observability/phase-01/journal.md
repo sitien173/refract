@@ -93,6 +93,17 @@ TASK_COMPLETE
 - Standard review job `1f2334c4-2e94-4c16-8a42-7cd724adb3cf` could not inspect source because its Codex tool session authentication failed. It returned no substantive findings. Report `909` records the output anomaly.
 - Under user-authorized alternate routing, an independent read-only background reviewer will inspect the exact checkpoint diff. No quality pass is claimed yet.
 
+### Independent Alternate Review
+
+- Reviewer task `d9480985591bee1379f8443e3080cdb81`, pinned to `openai-codex/gpt-6.1-sol`, returned verified `FAIL`.
+- High, `runtime.py:619–625`: catalog reloads can update `_catalog` before publication compares old/new catalog settings. An enabled tracer can remain active after configuration disablement. Reconcile applied tracer configuration on normal off-loop reload paths.
+- Medium, `observability.py:108–127`: `LANGFUSE_TRACING_ENABLED=false` lets the SDK create a disabled cached resource before provider identity is rejected. Cleanup discards the client without evicting its resource. Prevent SDK construction when its environment override disables tracing; verify same-key recovery.
+- Reviewer inspected the exact checkpoint diff and installed SDK. No tests were executed by the read-only reviewer. No prohibited files were accessed.
+- Fix cycle 1: both findings were batched. Behavioral RED task `b982517ae` failed twice as intended: the applied tracer remained enabled, and the disabled SDK singleton remained cached.
+- Reload now reconciles the applied tracer configuration in `_reload_catalog_locked`, covering publication, project catalog resolution, submission, and target environment reload. Production call sites run off-loop.
+- The wrapper checks the SDK tracing-disable override before construction, avoiding creation of rejected cached resources.
+- Fresh SDK-present subset task `bb0d836fe` passed: 163 passed in 4.27s, exit 0. SDK-absent full task `b33ec3965` passed: 1207 passed, 6 skipped, 15 deselected in 208.12s, exit 0. Direct recovery remains under the user's prior alternate-routing authorization.
+
 ## Coordinator Recovery and Fresh Evidence
 
 - User authorized autonomous routing after the first worker-local goal blocker.
@@ -141,8 +152,8 @@ TASK_COMPLETE
 
 ## Review Result
 
-- Spec Status: PASS
-- Quality Status: NOT_RUN
+- Spec Status: FAIL pending review corrections
+- Quality Status: FAIL
 - Debt: none
 
 ## Final Checkpoint
