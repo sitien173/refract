@@ -90,7 +90,8 @@ TASK_COMPLETE
 
 ## Quality Review
 
-<!-- Coordinator appends the independent review response here. -->
+- Standard review job `1f2334c4-2e94-4c16-8a42-7cd724adb3cf` could not inspect source because its Codex tool session authentication failed. It returned no substantive findings. Report `909` records the output anomaly.
+- Under user-authorized alternate routing, an independent read-only background reviewer will inspect the exact checkpoint diff. No quality pass is claimed yet.
 
 ## Coordinator Recovery and Fresh Evidence
 
