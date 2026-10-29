@@ -1,4 +1,4 @@
-# Refract 2.0.0
+# Refract 2.1.0
 
 Refract combines a Claude Code, Codex, Pi, and Antigravity CLI plugin with a local MCP orchestration server and dashboard. The plugin coordinates planning, implementation, and review. The server runs durable jobs through installed coding-agent CLIs.
 

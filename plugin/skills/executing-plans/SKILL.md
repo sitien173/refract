@@ -43,7 +43,9 @@ review, Git, and handover.
 6. **Prepare.** Require the plan `base` anchor. When it is missing, set
    `STALE_ANCHOR` and stop; never infer it from history. Create missing
    `phase-<NN>/prompt.md`, `notes.md`, and `journal.md` from the bundled
-   templates. Under `tracked`, checkpoint coordination files only; any other
+   templates. Write the phase `checklist` in handover per
+   [handover.md](../coordinating-multi-model-work/references/handover.md#checklist)
+   and keep it current through steps 8 and 9. Under `tracked`, checkpoint coordination files only; any other
    change blocks execution until the user resolves it. Under `untracked`, leave
    plan artifacts excluded.
 7. **Anchor.** Set `refs/plans/<slug>/phase-<NN>/base` to the clean checkpoint

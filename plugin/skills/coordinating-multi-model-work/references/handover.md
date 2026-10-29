@@ -20,6 +20,7 @@ guidance:
   review: { workflow: review, profile: <name|null> }
 job_refs: { phase: <N>, latest_implementation: <id|null>, latest_review: <id|null> }
 read_first: [<file>, ...]
+checklist: [{ phase, step, status: todo|doing|done|blocked }, ...]
 completed_tasks: [{ phase, task, summary }, ...]
 completed_phases: [{ phase, base_ref, impl_ref, summary }, ...]
 debt: [{ phase, item, owner }, ...]
@@ -42,3 +43,18 @@ debt: [{ phase, item, owner }, ...]
 - `read_first` lists paths a resumed session reads before acting. Drop a path
   that no longer exists and note it in the phase journal.
 - Under `BLOCKED`, `next_action` states the exact question or decision needed.
+
+## Checklist
+
+`checklist` tracks the steps of the current phase only. Write it when the
+phase starts, before the first job: one entry per `PLAN.md` task, then one per
+gate step such as implement job, spec review, quality review, and checkpoint.
+Write `step` as a short quoted imperative.
+
+- Keep at most one step `doing`. Set it before starting the step.
+- Set a step `done` as soon as its evidence exists, not at phase end.
+- Set a step `blocked` when handover `status` becomes `BLOCKED` because of it.
+- Add a step discovered mid-phase, such as a fix cycle, as `todo`.
+- When the phase finalizes, record it in `completed_phases` and replace
+  `checklist` with the next phase's steps, or `[]` after the final phase.
+- A resumed session continues from the first step that is not `done`.

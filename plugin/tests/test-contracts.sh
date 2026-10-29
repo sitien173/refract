@@ -78,7 +78,7 @@ for detail in ("isError", "retryable", "next_action", "request ID"):
     assert detail in " ".join(error_section.split()), detail
 assert "root job or project ID" in contract_flat
 assert "project_register" not in contract
-assert plugin_version == market_version == codex_version == "2.0.0"
+assert plugin_version == market_version == codex_version == "2.1.0"
 repository = root.parent
 server_version = re.search(r'^version = "([^"]+)"', (repository / "server/pyproject.toml").read_text(), re.M).group(1)
 web_version = json.loads((repository / "server/web/package.json").read_text())["version"]

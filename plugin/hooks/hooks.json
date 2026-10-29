@@ -8,6 +8,34 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/refract-session-start.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/refract-stats\" --hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/refract-stats\" --hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/refract-stats\" --hook",
+            "timeout": 5
           }
         ]
       }

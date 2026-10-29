@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 2.0.0 -->
+<!-- refract-shared-version: 2.1.0 -->
 # External Response Protocol (ERP)
 
 Worker-facing contract for the implementation response. This bundled file is

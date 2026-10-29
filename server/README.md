@@ -1,6 +1,6 @@
 # Refract
 
-Version 2.0.0 · [Repository](https://github.com/sitien173/refract)
+Version 2.1.0 · [Repository](https://github.com/sitien173/refract)
 
 Refract is a loopback HTTP orchestration daemon for durable coding jobs.
 It exposes AI agent workflows through Model Context Protocol tools.
