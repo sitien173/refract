@@ -540,6 +540,19 @@ The dashboard and MCP result metadata expose canonical grouped metadata and tele
 - **Partial totals:** When intermediate invocations or attempts have missing observations, consumption is labeled `partial` rather than fabricated or zeroed. Complete measurements require all attempts and invocations to be observed.
 - **Capability limits and unavailable metrics:** Unsupported backend capabilities remain explicitly `null` and render as `Unavailable` with quality `unavailable`. Historical jobs without telemetry omit the panel cleanly without fabricating metrics.
 - **Opt-in probe limitations:** Live model telemetry probes are strictly opt-in (`REFRACT_LIVE_TELEMETRY_OPT_IN=1`) and require execution authorization; missing prerequisites fail rather than report false passes.
+- **Configured target capacity:** Set an optional positive integer `contextWindow` on a global target. For example:
+
+  ```toml
+  [[targets]]
+  id = "primary"
+  backend = "codex"
+  model = "gpt-4o"
+  contextWindow = 200000
+  ```
+
+  The configured value overrides provider-reported capacity. If omitted, provider capacity may be used. In the dashboard, leaving the optional field blank and saving explicitly clears the configured override; clearing it allows provider capacity to be used again.
+- **Usage precedence and estimates:** A valid provider context-usage snapshot takes precedence. When no valid snapshot is available, context usage is estimated only when both cumulative job input and output totals are known; the totals are added without separately adding cache counters. Capacity alone does not imply zero usage or 100% remaining. The dashboard displays the server-provided measurement values, quality, and source rather than calculating percentages.
+- **Estimation limitations and history:** Cumulative input plus output is not actual occupied context and can overcount across turns, retries, and compaction. Estimated readings are labeled as estimates. Historical jobs retain their execution-time telemetry; changing or clearing a target capacity does not reinterpret past measurements.
 
 ### Diagnostic Reporting
 

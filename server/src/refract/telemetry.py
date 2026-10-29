@@ -24,6 +24,7 @@ VALID_SOURCES = frozenset({
     "turn",
     "step",
     "summary",
+    "target_config",
 })
 
 
@@ -213,6 +214,7 @@ class TelemetryAccumulator:
         self._context_used_tokens: Measurement = Measurement.unavailable()
         self._context_window_size: Measurement = Measurement.unavailable()
         self._context_remaining_percent: Measurement = Measurement.unavailable()
+        self._configured_capacity: Measurement = Measurement.unavailable()
 
         # Responses consumption keyed by (attempt, invocation, response_id) -> dict
         self._responses: dict[tuple[int, int, str], dict[str, Any]] = {}
@@ -250,6 +252,15 @@ class TelemetryAccumulator:
         self._context_used_tokens = telemetry.context_used_tokens.model_copy()
         self._context_window_size = telemetry.context_window_size.model_copy()
         self._context_remaining_percent = telemetry.context_remaining_percent.model_copy()
+        if telemetry.context_used_tokens.source == "derived" and telemetry.context_used_tokens.quality == "estimated":
+            self._context_used_tokens = Measurement.unavailable()
+        if telemetry.context_remaining_percent.source == "derived" and telemetry.context_remaining_percent.quality == "estimated":
+            self._context_remaining_percent = Measurement.unavailable()
+        if telemetry.context_window_size.source == "target_config":
+            self._configured_capacity = telemetry.context_window_size.model_copy()
+            self._context_window_size = Measurement.unavailable()
+            if telemetry.context_remaining_percent.source == "derived":
+                self._context_remaining_percent = Measurement.unavailable()
         if telemetry.total_input_tokens.value is not None:
             self._has_any_consumption = True
             self._loaded_total_input = telemetry.total_input_tokens.value
@@ -284,6 +295,15 @@ class TelemetryAccumulator:
             }
         if telemetry.completeness == "partial":
             self._has_missing_contribution = True
+
+    def set_configured_capacity(self, capacity: int | None) -> None:
+        value = _validate_token_count_value(capacity)
+        if value is not None and value <= 0:
+            raise ValueError("Configured capacity must be positive")
+        self._configured_capacity = (
+            Measurement.reported(value, source="target_config")
+            if value is not None else Measurement.unavailable()
+        )
 
     def finalize_invocation(self, *, attempt: int, invocation: int) -> None:
         self._finalized_invocations.add((attempt, invocation))
@@ -344,8 +364,10 @@ class TelemetryAccumulator:
             used = self._context_used_tokens.value
             cap = self._context_window_size.value
             derived_pct = round(max(0.0, min(100.0, (1.0 - (used / cap)) * 100.0)), 2)
-            self._context_remaining_percent = Measurement.derived(
-                derived_pct, source="derived", observed_at=ts
+            self._context_remaining_percent = Measurement(
+                value=derived_pct, source="derived",
+                quality="estimated" if self._context_used_tokens.quality == "estimated" else "derived",
+                observed_at=ts,
             )
         else:
             self._context_remaining_percent = Measurement.unavailable()
@@ -785,12 +807,28 @@ class TelemetryAccumulator:
         else:
             completeness = "complete"
 
+        used = self._context_used_tokens
+        window = self._configured_capacity if self._configured_capacity.value is not None else self._context_window_size
+        remaining = self._context_remaining_percent
+        if used.value is None and m_input.value is not None and m_output.value is not None:
+            used = Measurement.estimated(int(m_input.value) + int(m_output.value), source="derived")
+        if self._configured_capacity.value is not None:
+            if used.value is None:
+                remaining = Measurement.unavailable()
+            else:
+                pct = round(max(0.0, min(100.0, 100 * (1 - used.value / self._configured_capacity.value))), 2)
+                quality = "estimated" if used.quality == "estimated" else "derived"
+                remaining = Measurement(value=pct, source="derived", quality=quality)
+        elif remaining.value is None and window.value is not None and window.value > 0 and used.value is not None:
+            pct = round(max(0.0, min(100.0, 100 * (1 - used.value / window.value))), 2)
+            remaining = Measurement(value=pct, source="derived", quality="estimated" if used.quality == "estimated" else "derived")
+
         return TelemetryData(
             version=1,
             completeness=completeness,
-            context_remaining_percent=self._context_remaining_percent,
-            context_window_size=self._context_window_size,
-            context_used_tokens=self._context_used_tokens,
+            context_remaining_percent=remaining,
+            context_window_size=window,
+            context_used_tokens=used,
             total_input_tokens=m_input,
             total_output_tokens=m_output,
             cache_read_tokens=m_cr,

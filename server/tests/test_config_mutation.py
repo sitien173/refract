@@ -1141,6 +1141,31 @@ consult = "special"
 # ---------------------------------------------------------------------------
 
 
+def test_context_window_update_omission_preserves_and_null_clears_key(tmp_path: Path) -> None:
+    source = _global_source(tmp_path)
+    before = source.read_text(encoding="utf-8")
+    source.write_text(before.replace('id = "primary"', 'id = "primary"\ncontextWindow = 200000'), encoding="utf-8")
+    runtime = Runtime(load_config(source))
+    try:
+        service = runtime.mutations
+        initial_revision = service.source_read().revision
+        omitted = TargetEditorData.model_validate({"id": "primary", "backend": "codex", "model": "changed"})
+        result, projected = service.update_target("primary", omitted, expected_revision=initial_revision)
+        assert projected.context_window == 200000
+        retained = source.read_text(encoding="utf-8")
+        assert "contextWindow = 200000" in retained
+        assert "# operator comment" in retained
+        explicit_null = TargetEditorData.model_validate({"id": "primary", "backend": "codex", "contextWindow": None})
+        _, projected = service.update_target("primary", explicit_null, expected_revision=result.revision)
+        assert projected.context_window is None
+        cleared = source.read_text(encoding="utf-8")
+        assert "contextWindow" not in cleared
+        assert "# operator comment" in cleared
+        assert 'consult = "primary"' in cleared
+    finally:
+        runtime.database.close()
+
+
 def test_read_targets_and_get_target_expose_all_fields(tmp_path) -> None:
     source = _global_source(tmp_path)
     text = source.read_text(encoding="utf-8")

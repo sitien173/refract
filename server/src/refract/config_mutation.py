@@ -494,6 +494,7 @@ def target_to_editor_data(target: Any) -> TargetEditorData:
             args=list(target.args),
             max_concurrency=target.max_concurrency,
             retryPolicy=target.retry_policy,
+            contextWindow=target.context_window,
         )
     raw_args = target.get("args", [])
     args = [str(x) for x in raw_args] if isinstance(raw_args, (list, Array)) else []
@@ -519,6 +520,7 @@ def target_to_editor_data(target: Any) -> TargetEditorData:
         args=args,
         max_concurrency=int(target.get("max_concurrency", 1)),
         retryPolicy=retry_policy,
+        contextWindow=target.get("contextWindow"),
     )
 
 
@@ -895,6 +897,8 @@ class ConfigurationMutationService:
             table["max_concurrency"] = data.max_concurrency
         if data.retryPolicy:
             table["retryPolicy"] = data.retryPolicy
+        if data.context_window is not None:
+            table["contextWindow"] = data.context_window
         return table
 
     def create_target(
@@ -1005,6 +1009,11 @@ class ConfigurationMutationService:
             self._update_target_model_settings(target, data)
             self._update_target_execution_settings(target, data)
             self._update_target_retry_settings(target, data)
+            if "context_window" in data.model_fields_set or "contextWindow" in data.model_fields_set:
+                if data.context_window is None:
+                    target.pop("contextWindow", None)
+                else:
+                    target["contextWindow"] = data.context_window
             return target_to_editor_data(self.find_target(document, target_id) or target)
 
         return self._mutate(None, expected_revision, edit)

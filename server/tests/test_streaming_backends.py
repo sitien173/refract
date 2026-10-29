@@ -2765,8 +2765,9 @@ def test_codex_rollout_compaction_invalidates_stale_context(tmp_path: Path, monk
     res = codex_sync(BackendParams(PROMPT="test", cd=workspace))
     assert res.outcome == "OK"
     assert res.telemetry is not None
-    # Compaction invalidates context
-    assert res.telemetry["context_used_tokens"]["value"] is None
+    # Compaction invalidates provider context; cumulative consumption is estimated.
+    assert res.telemetry["context_used_tokens"]["value"] == 1020
+    assert res.telemetry["context_used_tokens"]["quality"] == "estimated"
     assert res.telemetry["context_window_size"]["value"] is None
 
 

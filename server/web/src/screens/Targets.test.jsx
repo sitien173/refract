@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import Targets from './Targets'
+import TargetEditor from '../components/TargetEditor'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal()
@@ -343,6 +344,7 @@ describe('Targets screen', () => {
           max_concurrency: 3,
           args: ['--second', '--first'],
           retryPolicy: '',
+          contextWindow: null,
         },
         'rev-001'
       )
@@ -901,5 +903,218 @@ describe('Targets screen', () => {
       expect(within(dialog).queryByText('Configuration conflict')).not.toBeInTheDocument()
     })
     expect(within(dialog).getByLabelText(/Retry policy/i)).toHaveValue('server-updated-policy')
+  })
+
+  it('submits integer contextWindow when creating a target with positive capacity', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTargets).mockResolvedValue({ revision: 'rev-001', targets: [] })
+    vi.mocked(api.createConfigurationTarget).mockResolvedValue({
+      revision: 'rev-002',
+      target: { id: 'capacity-target', backend: 'codex', model: 'gpt-4o', contextWindow: 200000 },
+    })
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create target$/i }))
+    const dialog = await screen.findByRole('dialog', { name: /Create target/i })
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
+
+    fireEvent.change(within(dialog).getByLabelText(/Identifier/i), { target: { value: 'capacity-target' } })
+    fireEvent.change(within(dialog).getByLabelText(/Context.*capacity|Context.*window/i), { target: { value: '200000' } })
+
+    const submitBtn = within(dialog).getByRole('button', { name: /^Create target$/i })
+    await waitFor(() => expect(submitBtn).toBeEnabled())
+    fireEvent.click(submitBtn)
+
+    await vi.waitFor(() => {
+      expect(api.createConfigurationTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'capacity-target',
+          contextWindow: 200000,
+        }),
+        'rev-001'
+      )
+    })
+  })
+
+  it('submits integer contextWindow when editing a target', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValue({
+      revision: 'rev-001',
+      target: { ...mockTargets[0], contextWindow: 64000 },
+    })
+    vi.mocked(api.updateConfigurationTarget).mockResolvedValue({
+      revision: 'rev-002',
+      target: { ...mockTargets[0], contextWindow: 96000 },
+    })
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('target-healthy').closest('tr'))
+    fireEvent.click(await screen.findByRole('button', { name: /Edit target/i }))
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit target: target-healthy/i })
+    const capacityInput = within(dialog).getByLabelText(/Context.*capacity|Context.*window/i)
+    await vi.waitFor(() => expect(capacityInput).toHaveValue(64000))
+    fireEvent.change(capacityInput, { target: { value: '96000' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save target/i }))
+
+    await vi.waitFor(() => {
+      expect(api.updateConfigurationTarget).toHaveBeenCalledWith(
+        'target-healthy', expect.objectContaining({ contextWindow: 96000 }), 'rev-001'
+      )
+    })
+  })
+
+  it('hydrates contextWindow in edit mode and clears it with explicit null when blanked', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValue({
+      revision: 'rev-001',
+      target: {
+        ...mockTargets[0],
+        contextWindow: 128000,
+      },
+    })
+    vi.mocked(api.updateConfigurationTarget).mockResolvedValue({
+      revision: 'rev-002',
+      target: { ...mockTargets[0], contextWindow: null },
+    })
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('target-healthy').closest('tr'))
+    const editBtn = await screen.findByRole('button', { name: /Edit target/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit target: target-healthy/i })
+    const capacityInput = within(dialog).getByLabelText(/Context.*capacity|Context.*window/i)
+    await vi.waitFor(() => {
+      expect(capacityInput.value).toBe('128000')
+    })
+
+    fireEvent.change(capacityInput, { target: { value: '' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /Save target/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
+    fireEvent.click(saveBtn)
+
+    await vi.waitFor(() => {
+      expect(api.updateConfigurationTarget).toHaveBeenCalledWith(
+        'target-healthy',
+        expect.objectContaining({
+          contextWindow: null,
+        }),
+        'rev-001'
+      )
+    })
+  })
+
+  it.each([
+    ['decimal', '12.5'],
+    ['negative', '-100'],
+    ['zero', '0'],
+    ['unsafe integer', '9007199254740992'],
+  ])('rejects %s contextWindow value without submitting or coercing to zero', async (_, invalidValue) => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTargets).mockResolvedValue({ revision: 'rev-001', targets: [] })
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create target$/i }))
+    const dialog = await screen.findByRole('dialog', { name: /Create target/i })
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement))
+
+    fireEvent.change(within(dialog).getByLabelText(/Identifier/i), { target: { value: 'invalid-capacity-target' } })
+    const capacityInput = within(dialog).getByLabelText(/Context.*capacity|Context.*window/i)
+    fireEvent.change(capacityInput, { target: { value: invalidValue } })
+
+    const form = dialog.querySelector('form')
+    fireEvent.submit(form)
+
+    expect(await within(dialog).findByText(/Validation error/i)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Context window must be a positive integer/i)).toBeInTheDocument()
+    expect(api.createConfigurationTarget).not.toHaveBeenCalled()
+    expect(capacityInput.value).toBe(invalidValue)
+  })
+
+  it('preserves dirty contextWindow draft when target and revision props refresh', async () => {
+    vi.mocked(api.updateConfigurationTarget).mockResolvedValue({
+      revision: 'rev-003',
+      target: { ...mockTargets[0], contextWindow: 80000 },
+    })
+    const initialTarget = { ...mockTargets[0], contextWindow: 64000 }
+    const props = { isOpen: true, mode: 'edit', revision: 'rev-001', target: initialTarget }
+    const { rerender } = render(<TargetEditor {...props} />)
+    const capacityInput = screen.getByLabelText(/Context.*capacity|Context.*window/i)
+    await vi.waitFor(() => expect(capacityInput).toHaveValue(64000))
+
+    fireEvent.change(capacityInput, { target: { value: '80000' } })
+    expect(capacityInput).toHaveValue(80000)
+
+    rerender(<TargetEditor {...props} revision="rev-002" target={{ ...initialTarget, contextWindow: 99000 }} />)
+
+    expect(capacityInput).toHaveValue(80000)
+    fireEvent.click(screen.getByRole('button', { name: /Save target/i }))
+    await vi.waitFor(() => {
+      expect(api.updateConfigurationTarget).toHaveBeenCalledWith(
+        'target-healthy', expect.objectContaining({ contextWindow: 80000 }), 'rev-001'
+      )
+    })
+  })
+
+  it('conflict reload updates contextWindow to freshly loaded configuration', async () => {
+    vi.mocked(api.getTargets).mockResolvedValue(mockTargets)
+    vi.mocked(api.getConfigurationTarget).mockResolvedValue({
+      revision: 'rev-targets-001',
+      target: { ...mockTargets[0], contextWindow: 50000 },
+    })
+    vi.mocked(api.updateConfigurationTarget).mockRejectedValueOnce(
+      new api.DashboardApiError('Conflict', 409, {
+        code: 'configuration_conflict',
+        unchanged: 'Configuration changed on server.',
+        recovery: 'Reload current configuration and retry.',
+        current: 'rev-targets-002',
+      })
+    )
+
+    render(<Targets />)
+    expect(await screen.findByText('target-healthy')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('target-healthy').closest('tr'))
+    const editBtn = await screen.findByRole('button', { name: /^Edit target$/i })
+    fireEvent.click(editBtn)
+
+    const dialog = await screen.findByRole('dialog', { name: /Edit target: target-healthy/i })
+    const capacityInput = within(dialog).getByLabelText(/Context.*capacity|Context.*window/i)
+    await vi.waitFor(() => {
+      expect(capacityInput.value).toBe('50000')
+    })
+
+    fireEvent.change(capacityInput, { target: { value: '60000' } })
+
+    const saveBtn = within(dialog).getByRole('button', { name: /^Save target$/i })
+    await waitFor(() => expect(saveBtn).toBeEnabled())
+    fireEvent.click(saveBtn)
+
+    expect(await within(dialog).findByText('Configuration conflict')).toBeInTheDocument()
+
+    vi.mocked(api.getConfigurationTarget).mockResolvedValueOnce({
+      revision: 'rev-targets-002',
+      target: {
+        ...mockTargets[0],
+        contextWindow: 75000,
+      },
+    })
+
+    const reloadBtn = within(dialog).getByRole('button', { name: /Reload current configuration/i })
+    fireEvent.click(reloadBtn)
+
+    await vi.waitFor(() => {
+      expect(within(dialog).queryByText('Configuration conflict')).not.toBeInTheDocument()
+    })
+    expect(within(dialog).getByLabelText(/Context.*capacity|Context.*window/i).value).toBe('75000')
   })
 })

@@ -1359,9 +1359,9 @@ def test_retry_preserves_completed_attempt_aggregate_and_totals(tmp_path) -> Non
     # Total consumption preserved in public telemetry
     assert telemetry.total_input_tokens.value == 150
     assert telemetry.total_output_tokens.value == 50
-    # Context snapshot is cleared (not carried over to new attempt)
-    assert telemetry.context_used_tokens.value is None
-    assert telemetry.context_used_tokens.quality == "unavailable"
+    # Invalidated provider context is replaced by qualified cumulative fallback.
+    assert telemetry.context_used_tokens.value == 200
+    assert telemetry.context_used_tokens.quality == "estimated"
     db.close()
 
 

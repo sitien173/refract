@@ -100,7 +100,8 @@ class TargetExecutor:
         if accumulator is None:
             return None
         try:
-            if accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None:
+            if (accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None
+                    or accumulator._configured_capacity.value is not None):
                 return accumulator.snapshot().model_dump(mode="json")
         except Exception:
             log.warning("Failed to serialize telemetry snapshot", exc_info=True)
@@ -124,13 +125,16 @@ class TargetExecutor:
             tel = self._safe_telemetry_dump(accumulator)
             return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
         target_key = target_execution_key(target)
+        accumulator.invalidate_context()
+        accumulator.set_configured_capacity(target.context_window)
+        await run_sync(self.database.merge_job_telemetry, job_id, accumulator.snapshot())
         bound_env: dict[str, str] = {}
         session_target_key = target_key
         session_context_key = context_key
         if target.id in plan.environment_targets:
             if self.environment_resolver is None:
                 await self._release_probe(target_key, job_id)
-                return self._configuration_failure(target, target_key, "Target environment configuration is unavailable")
+                return self._configuration_failure(target, target_key, "Target environment configuration is unavailable", accumulator)
             try:
                 bound_env, revision_context = await run_sync(self.environment_resolver, project, target.id)
                 opaque_revision = hashlib.sha256((project.id + revision_context).encode()).hexdigest()[:20]
@@ -141,7 +145,7 @@ class TargetExecutor:
                 raise
             except Exception:
                 await self._release_probe(target_key, job_id)
-                return self._configuration_failure(target, target_key, "Target environment configuration is invalid")
+                return self._configuration_failure(target, target_key, "Target environment configuration is invalid", accumulator)
         try:
             session_id, effective_prompt = await self._prepare_session(
                 project, session_context_key, workflow, session_target_key, prompt, fresh_session
@@ -195,9 +199,12 @@ class TargetExecutor:
                         await self._release_probe(target_key, job_id)
 
     @classmethod
-    def _configuration_failure(cls, target: TargetConfig, target_key: str, message: str) -> TargetExecutionResult:
+    def _configuration_failure(cls, target: TargetConfig, target_key: str, message: str,
+                               accumulator: TelemetryAccumulator | None = None) -> TargetExecutionResult:
         result = DriverResult("REQUEST_FATAL", "", "", message, "configuration_error")
-        return TargetExecutionResult(result, target.id, target_key, cls._result_metadata(result, target, None))
+        telemetry = cls._safe_telemetry_dump(accumulator)
+        return TargetExecutionResult(result, target.id, target_key,
+                                     cls._result_metadata(result, target, None, telemetry=telemetry))
 
     async def _release_probe(self, target_key: str, job_id: str) -> None:
         try:
@@ -826,7 +833,8 @@ class TargetExecutor:
                         or accumulator._context_window_size.observed_at
                     )
                     ctx_ops: list[dict[str, Any]] = []
-                    if telemetry.context_window_size.value is not None:
+                    if (telemetry.context_window_size.value is not None
+                            and telemetry.context_window_size.source != "target_config"):
                         fb_ts = telemetry.context_window_size.observed_at
                         if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
                             q = (
@@ -846,7 +854,9 @@ class TargetExecutor:
                                 },
                                 "ts": fb_ts or "",
                             })
-                    if telemetry.context_used_tokens.value is not None:
+                    if (telemetry.context_used_tokens.value is not None
+                            and not (telemetry.context_used_tokens.source == "derived"
+                                     and telemetry.context_used_tokens.quality == "estimated")):
                         fb_ts = telemetry.context_used_tokens.observed_at
                         if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
                             q = (
@@ -866,7 +876,9 @@ class TargetExecutor:
                                 },
                                 "ts": fb_ts or "",
                             })
-                    if telemetry.context_remaining_percent.value is not None:
+                    if (telemetry.context_remaining_percent.value is not None
+                            and not (telemetry.context_remaining_percent.source == "derived"
+                                     and telemetry.context_remaining_percent.quality == "estimated")):
                         fb_ts = telemetry.context_remaining_percent.observed_at
                         if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
                             q = (

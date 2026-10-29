@@ -370,6 +370,13 @@ export default function JobDetails({
                       label="Context used"
                       measurement={telemetry.context_used_tokens}
                     />
+                    {telemetry.context_used_tokens?.value != null &&
+                      telemetry.context_used_tokens.quality === 'estimated' &&
+                      telemetry.context_used_tokens.source === 'derived' && (
+                      <p className="caption telemetry-estimate-caption">
+                        Estimated from cumulative job input plus output; this may overcount across turns, retries, and compaction.
+                      </p>
+                    )}
                     <TelemetryRow
                       label="Context capacity"
                       measurement={telemetry.context_window_size}

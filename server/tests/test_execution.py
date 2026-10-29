@@ -4669,6 +4669,70 @@ async def test_terminal_desktop_notifications_disabled_does_not_lookup_job(
         await runtime.close()
 
 
+def test_configuration_failure_metadata_retains_selected_capacity():
+    from refract.telemetry import TelemetryAccumulator
+
+    target = TargetConfig(id="bad-environment", backend="codex", context_window=2048)
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(target.context_window)
+    result = TargetExecutor._configuration_failure(
+        target, "target-key", "invalid environment", accumulator,
+    )
+    telemetry = result.metadata["telemetry"]
+    assert telemetry["context_window_size"]["value"] == 2048
+    assert telemetry["context_window_size"]["source"] == "target_config"
+    assert telemetry["context_remaining_percent"]["value"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [True, False])
+async def test_selected_target_capacity_persists_before_stream_or_result_telemetry(tmp_path: Path, streaming: bool) -> None:
+    from refract.telemetry import Measurement, TelemetryData
+
+    root = repository(tmp_path)
+    target = TargetConfig(id="capacity-target", backend="codex", context_window=1000)
+    catalog = config(tmp_path / "home", (target,))
+    runtime = Runtime(catalog)
+
+    class CapacityDriver(FakeDrivers):
+        async def execute(self, **kwargs):
+            row = runtime.database._connection.execute(
+                "SELECT telemetry_state_json FROM jobs WHERE id=?", (job_id,),
+            ).fetchone()
+            persisted = json.loads(row[0])
+            assert persisted["context_window_size"]["value"] == 1000
+            assert persisted["context_remaining_percent"]["value"] is None
+            if streaming and kwargs.get("emitter"):
+                kwargs["emitter"]({"kind": "telemetry.updated", "data": {
+                    "total_input_tokens": 40, "total_output_tokens": 10,
+                    "source": "stream", "quality": "reported",
+                }})
+                return DriverResult("SUCCESS", "session", "done", "", "")
+            telemetry = TelemetryData(
+                context_used_tokens=Measurement(value=999, source="derived", quality="estimated"),
+                context_remaining_percent=Measurement(value=1, source="derived", quality="estimated"),
+                total_input_tokens=Measurement.reported(40, "result"),
+                total_output_tokens=Measurement.reported(10, "result"),
+            ).model_dump(mode="json")
+            return DriverResult("SUCCESS", "session", "done", "", "", telemetry=telemetry)
+
+    runtime.drivers = CapacityDriver()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "capacity")
+        job_id = submission.job_id
+        job = await runtime.wait(job_id, 5)
+        telemetry = job.result.metadata.telemetry
+        assert telemetry.context_window_size.value == 1000
+        assert telemetry.context_window_size.source == "target_config"
+        assert telemetry.context_used_tokens.value == 50
+        assert telemetry.context_used_tokens.quality == "estimated"
+        assert telemetry.context_remaining_percent.value == 95
+    finally:
+        await runtime.close()
+
+
 @pytest.mark.asyncio
 async def test_telemetry_updated_routes_through_execution_before_stream_recording(tmp_path: Path) -> None:
     root = repository(tmp_path)
@@ -4737,7 +4801,8 @@ async def test_context_invalidation_persists_nulls_without_clearing_consumption(
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         telemetry = job.result.metadata.telemetry
-        assert telemetry.context_used_tokens.value is None
+        assert telemetry.context_used_tokens.value == 120
+        assert telemetry.context_used_tokens.quality == "estimated"
         assert telemetry.context_window_size.value is None
         assert telemetry.context_remaining_percent.value is None
         assert telemetry.total_input_tokens.value == 100
@@ -4783,7 +4848,8 @@ async def test_codex_budget_exhaustion_keeps_context_unknown_through_persistence
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         telemetry = job.result.metadata.telemetry
-        assert telemetry.context_used_tokens.value is None
+        assert telemetry.context_used_tokens.value == 5700
+        assert telemetry.context_used_tokens.quality == "estimated"
         assert telemetry.context_window_size.value is None
         assert telemetry.total_input_tokens.value == 5000
         assert telemetry.total_output_tokens.value == 700

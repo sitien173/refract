@@ -88,6 +88,137 @@ def test_measurement_rejects_invalid_types_and_values():
         Measurement(value=10, source='{"tokens": 10}', quality="reported")
 
 
+def test_configured_capacity_resolves_estimated_usage_only_when_both_totals_known():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(100)
+    accumulator.reconcile_cumulative(attempt=1, invocation=1, total_input=0, total_output=0)
+    snap = accumulator.snapshot()
+    assert snap.context_window_size.value == 100
+    assert snap.context_window_size.source == "target_config"
+    assert snap.context_used_tokens.value == 0
+    assert snap.context_used_tokens.quality == "estimated"
+    assert snap.context_remaining_percent.value == 100
+    assert snap.context_remaining_percent.quality == "estimated"
+
+
+def test_fallback_requires_both_totals_and_provider_context_takes_precedence():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(100)
+    accumulator.reconcile_cumulative(attempt=1, invocation=1, total_input=20, total_output=None)
+    assert accumulator.snapshot().context_used_tokens.value is None
+    accumulator.record_context_snapshot(used_tokens=30, window_size=200, source="provider", quality="derived")
+    snap = accumulator.snapshot()
+    assert snap.context_used_tokens.value == 30
+    assert snap.context_used_tokens.source == "provider"
+    assert snap.context_used_tokens.quality == "derived"
+    assert snap.context_remaining_percent.value == 70
+    assert snap.context_remaining_percent.quality == "derived"
+
+
+def test_hydrated_estimated_context_tracks_updated_totals():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(1000)
+    accumulator.reconcile_cumulative(attempt=1, invocation=1, total_input=100, total_output=20)
+    restored = TelemetryAccumulator(accumulator.snapshot())
+    restored.reconcile_cumulative(attempt=1, invocation=2, total_input=50, total_output=10)
+    snap = restored.snapshot()
+    assert snap.context_used_tokens.value == 60
+    assert snap.context_used_tokens.quality == "estimated"
+    assert snap.context_remaining_percent.value == 94
+
+
+def test_clearing_hydrated_capacity_removes_old_override():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(1000)
+    restored = TelemetryAccumulator(accumulator.snapshot())
+    restored.set_configured_capacity(None)
+    assert restored.snapshot().context_window_size.value is None
+
+
+def test_provider_context_precedes_fallback_then_invalidation_reenables_fallback():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(1000)
+    accumulator.reconcile_cumulative(attempt=1, invocation=1, total_input=100, total_output=20)
+    accumulator.record_context_snapshot(used_tokens=400, source="provider", quality="derived")
+    assert accumulator.snapshot().context_used_tokens.value == 400
+    accumulator.invalidate_context()
+    assert accumulator.snapshot().context_used_tokens.value == 120
+    assert accumulator.snapshot().context_used_tokens.quality == "estimated"
+
+
+def test_clearing_hydrated_override_discards_its_derived_percentage():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(100)
+    accumulator.record_context_snapshot(used_tokens=25, window_size=200, source="provider", quality="reported")
+    restored = TelemetryAccumulator(accumulator.snapshot())
+    restored.set_configured_capacity(None)
+    snap = restored.snapshot()
+    assert snap.context_window_size.value is None
+    assert snap.context_remaining_percent.value is None
+
+
+def test_estimated_provider_usage_produces_estimated_remaining_after_roundtrip():
+    accumulator = TelemetryAccumulator()
+    accumulator.record_context_snapshot(used_tokens=25, window_size=100, source="provider", quality="estimated")
+    snap = accumulator.snapshot()
+    assert snap.context_remaining_percent.value == 75
+    assert snap.context_remaining_percent.quality == "estimated"
+    restored = TelemetryAccumulator(snap)
+    assert restored.snapshot().context_remaining_percent.quality == "estimated"
+
+
+def test_explicit_provider_percentage_is_retained_with_estimated_usage():
+    accumulator = TelemetryAccumulator()
+    accumulator.record_context_snapshot(
+        used_tokens=25, window_size=100, remaining_percent=70,
+        source="provider", quality="derived",
+    )
+    snap = accumulator.snapshot()
+    assert snap.context_remaining_percent.value == 70
+    assert snap.context_remaining_percent.source == "provider"
+    assert snap.context_remaining_percent.quality == "derived"
+    restored = TelemetryAccumulator(snap)
+    assert restored.snapshot().context_remaining_percent.value == 70
+    assert restored.snapshot().context_remaining_percent.source == "provider"
+    assert restored.snapshot().context_remaining_percent.quality == "derived"
+
+
+def test_configured_capacity_overrides_provider_capacity_and_percentage():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(100)
+    accumulator.record_context_snapshot(
+        used_tokens=25, window_size=200, remaining_percent=90,
+        source="provider", quality="reported",
+    )
+    snap = accumulator.snapshot()
+    assert snap.context_window_size.value == 100
+    assert snap.context_window_size.source == "target_config"
+    assert snap.context_remaining_percent.value == 75
+
+
+def test_fallback_excludes_cache_counters_and_rounds_percentage():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(1000)
+    accumulator.reconcile_cumulative(
+        attempt=1, invocation=1, total_input=100, total_output=1,
+        cache_read=900, cache_write=800,
+    )
+    snap = accumulator.snapshot()
+    assert snap.context_used_tokens.value == 101
+    assert snap.context_remaining_percent.value == 89.9
+    assert snap.context_remaining_percent.quality == "estimated"
+
+
+def test_configured_capacity_keeps_unknown_usage_unavailable_and_clamps_overflow():
+    accumulator = TelemetryAccumulator()
+    accumulator.set_configured_capacity(100)
+    assert accumulator.snapshot().context_remaining_percent.value is None
+    accumulator.reconcile_cumulative(attempt=1, invocation=1, total_input=80, total_output=70)
+    snap = accumulator.snapshot()
+    assert snap.context_used_tokens.value == 150
+    assert snap.context_remaining_percent.value == 0
+
+
 def test_telemetry_data_validation():
     # Token measurements must be non-negative ints or None, rejecting floats
     with pytest.raises((ValueError, ValidationError)):
@@ -302,7 +433,8 @@ def test_attempts_and_retry_aggregation():
     assert snap.completed_attempts.total_input_tokens == 150
     assert snap.completed_attempts.total_output_tokens == 60
     assert snap.total_input_tokens.value == 150
-    assert snap.context_used_tokens.value is None
+    assert snap.context_used_tokens.value == 210
+    assert snap.context_used_tokens.quality == "estimated"
 
     # Attempt 2 starts and records new consumption and context
     accumulator.record_context_snapshot(used_tokens=500, window_size=8000, attempt=2)

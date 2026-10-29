@@ -41,6 +41,7 @@ class TargetConfig:
     args: tuple[str, ...] = ()
     max_concurrency: int = 1
     retry_policy: str = ""
+    context_window: int | None = None
     envs_vars: tuple[str, ...] = field(default_factory=tuple, repr=False)
     envs: dict[str, str] = field(default_factory=dict, repr=False)
 
@@ -202,7 +203,7 @@ def load_task_guide(
     return value
 
 
-def _positive_int(value: Any, default: int, name: str) -> int:
+def _positive_int(value: Any, default: int | None, name: str) -> int | None:
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -619,6 +620,9 @@ def _targets(
                     f"Target {target_id!r} max_concurrency",
                 ),
                 retry_policy=retry_policy,
+                context_window=_positive_int(
+                    item.get("contextWindow"), None, f"Target {target_id!r} contextWindow"
+                ),
                 envs_vars=envs_vars,
                 envs=target_envs,
             )

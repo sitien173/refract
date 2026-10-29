@@ -30,6 +30,18 @@ describe('editor control labels', () => {
     expect(screen.getByRole('combobox', { name: 'custom-workflow target 1' })).toHaveValue('worker')
     expect(screen.getByText('Failover targets (evaluated in order)').closest('label')).toBeNull()
   })
+
+  it('associates context capacity input with visible label and help description', () => {
+    render(<TargetEditor isOpen mode="edit" revision="rev" target={{ id: 'demo' }} />)
+    const input = screen.getByLabelText(/context.*capacity|context.*window/i)
+    expect(input).toBeInTheDocument()
+    expect(input).toHaveAttribute('type', 'number')
+    expect(input).toHaveAttribute('min', '1')
+    expect(input).toHaveAttribute('step', '1')
+    const helpId = input.getAttribute('aria-describedby')
+    expect(helpId).toBeTruthy()
+    expect(document.getElementById(helpId)).toHaveTextContent(/blank to clear/i)
+  })
 })
 
 describe.each(cases)('%s editor safety', (name, Editor, method, props) => {

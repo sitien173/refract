@@ -57,6 +57,39 @@ def test_environment_session_revision_is_opaque_and_runtime_scoped(tmp_path) -> 
         asyncio.run(second_runtime.close())
 
 
+def test_capacity_only_global_edits_preserve_environment_session_revision(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('''[daemon]\ndefault_profile = "balanced"\n\n[envs.shared]\nENDPOINT = "synthetic-one"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\nenvs_vars = ["shared"]\n\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n''', encoding="utf-8")
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root))
+    try:
+        env_initial, revision_initial = runtime._resolve_target_environment(project, "primary")
+        assert env_initial == {"ENDPOINT": "synthetic-one"}
+        for context_window in (200000, 250000, None):
+            current = config_path.read_text(encoding="utf-8")
+            lines = [line for line in current.splitlines() if not line.startswith("contextWindow =")]
+            target_start = lines.index('id = "primary"')
+            if context_window is not None:
+                lines.insert(target_start + 1, f"contextWindow = {context_window}")
+            config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            runtime.publish_configuration()
+            env_values, revision = runtime._resolve_target_environment(project, "primary")
+            assert env_values == env_initial
+            assert revision == revision_initial
+
+        changed = config_path.read_text(encoding="utf-8").replace('ENDPOINT = "synthetic-one"', 'ENDPOINT = "synthetic-two"')
+        config_path.write_text(changed, encoding="utf-8")
+        runtime.publish_configuration()
+        changed_env, changed_revision = runtime._resolve_target_environment(project, "primary")
+        assert changed_env == {"ENDPOINT": "synthetic-two"}
+        assert changed_revision != revision_initial
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
 def test_runtime_resolves_current_project_environment_by_stored_target_id(tmp_path) -> None:
     base = make_config(tmp_path / "home")
     target = replace(base.targets[0], envs_vars=("shared",), args=("--safe",), max_concurrency=3)

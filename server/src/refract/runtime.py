@@ -675,9 +675,21 @@ class Runtime:
             after = _file_identity(config_path)
             if before != after:
                 continue
-            # Revision context uses the validated file identity, not a digest of secret-bearing values.
+            # Bind sessions to environment configuration, not unrelated target
+            # capacity. Environment values stay inside this keyed opaque digest.
+            environment_config = {
+                "envs": catalog.envs,
+                "targets": [
+                    {
+                        "id": target.id,
+                        "envs_vars": target.envs_vars,
+                        "envs": target.envs,
+                    }
+                    for target in sorted(catalog.targets, key=lambda item: item.id)
+                ],
+            }
             revision_payload = json.dumps(
-                [catalog.config_revision, after], separators=(",", ":")
+                [environment_config, after], sort_keys=True, separators=(",", ":")
             ).encode("utf-8")
             revision = hmac.new(
                 self._session_revision_secret, revision_payload, "sha256"

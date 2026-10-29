@@ -29,6 +29,7 @@ export default function TargetEditor({
     max_concurrency: 1,
     args: [],
     retryPolicy: '',
+    contextWindow: '',
   }
 
   const [formData, setFormData] = useState(initialForm)
@@ -72,6 +73,7 @@ export default function TargetEditor({
         max_concurrency: target.max_concurrency || 1,
         args: Array.isArray(target.args) ? [...target.args] : [],
         retryPolicy: target.retryPolicy || target.retry_policy || '',
+        contextWindow: target.contextWindow != null ? String(target.contextWindow) : '',
       })
     } else if (mode === 'create') {
       setFormData(initialForm)
@@ -132,6 +134,19 @@ export default function TargetEditor({
     if (inFlightRef.current || conflictData || !currentRevision) return
     setError(null)
     setConflictData(null)
+
+    let parsedContextWindow = null
+    const rawContextWindow = String(formData.contextWindow ?? '').trim()
+    if (rawContextWindow !== '') {
+      const num = Number(rawContextWindow)
+      if (!/^\d+$/.test(rawContextWindow) || !Number.isSafeInteger(num) || num <= 0) {
+        setError('Context window must be a positive integer.')
+        if (onAnnounce) onAnnounce('Validation error: Context window must be a positive integer.')
+        return
+      }
+      parsedContextWindow = num
+    }
+
     const targetPayload = {
       id: formData.id.trim(),
       backend: formData.backend.trim(),
@@ -144,6 +159,7 @@ export default function TargetEditor({
       max_concurrency: Number(formData.max_concurrency) || 1,
       args: formData.args,
       retryPolicy: formData.retryPolicy.trim(),
+      contextWindow: parsedContextWindow,
     }
 
     return submit({
@@ -173,6 +189,7 @@ export default function TargetEditor({
         max_concurrency: item.max_concurrency || 1,
         args: Array.isArray(item.args) ? [...item.args] : [],
         retryPolicy: item.retryPolicy || item.retry_policy || '',
+        contextWindow: item.contextWindow != null ? String(item.contextWindow) : '',
       }),
       mode,
       entity: 'Target',
@@ -342,6 +359,27 @@ export default function TargetEditor({
               disabled={isSubmitting}
               placeholder="e.g. transient, network-flake"
             />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="target-context-window" className="form-label">
+              Context window capacity <span className="caption">(optional)</span>
+            </label>
+            <input
+              id="target-context-window"
+              type="number"
+              min="1"
+              step="1"
+              className="search-input"
+              value={formData.contextWindow}
+              onChange={(e) => handleFieldChange('contextWindow', e.target.value)}
+              disabled={isSubmitting}
+              placeholder="e.g. 128000, 200000"
+              aria-describedby="target-context-window-help"
+            />
+            <span id="target-context-window-help" className="caption">
+              Configured target context window in tokens. Leave blank to clear.
+            </span>
           </div>
         </div>
 

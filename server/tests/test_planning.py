@@ -19,6 +19,31 @@ def test_plan_snapshots_one_workflow_selection(tmp_path) -> None:
     assert parse_execution_plan(data) == plan
 
 
+def test_plan_context_window_persists_without_affecting_identity(tmp_path) -> None:
+    from dataclasses import replace
+    from refract.planning import target_execution_key
+    catalog = config(tmp_path / "home")
+    original = catalog.targets[0]
+    configured = replace(original, context_window=200000)
+    catalog = replace(catalog, targets=(configured,))
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    stored = execution_plan_data(plan)
+    assert stored["targets"][0]["context_window"] == 200000
+    assert parse_execution_plan(stored).targets[0].context_window == 200000
+    assert target_execution_key(original) == target_execution_key(configured)
+    stored["targets"][0].pop("context_window")
+    assert parse_execution_plan(stored).targets[0].context_window is None
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "200000"])
+def test_plan_rejects_invalid_persisted_context_window_values(tmp_path, value) -> None:
+    catalog = config(tmp_path / "home")
+    data = execution_plan_data(resolve_execution_plan(get_workflow("implement"), catalog, "balanced"))
+    data["targets"][0]["context_window"] = value
+    with pytest.raises(ValueError, match="invalid target"):
+        parse_execution_plan(data)
+
+
 def test_other_plan_snapshot_round_trips(tmp_path) -> None:
     catalog = config(tmp_path / "home")
     plan = resolve_execution_plan(get_workflow("other"), catalog, "balanced")

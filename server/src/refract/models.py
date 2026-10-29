@@ -173,6 +173,14 @@ class TargetEditorData(BaseModel):
     args: list[str] = Field(default_factory=list)
     max_concurrency: int = 1
     retryPolicy: str = Field(default="", alias="retry_policy")
+    context_window: int | None = Field(default=None, alias="contextWindow", strict=True)
+
+    @field_validator("context_window")
+    @classmethod
+    def _positive_context_window(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("contextWindow must be a positive integer")
+        return value
 
     @property
     def retry_policy(self) -> str:

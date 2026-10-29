@@ -743,6 +743,279 @@ describe('JobDetails component', () => {
       expect(screen.getByText('Telemetry unavailable')).toBeInTheDocument()
       expect(screen.queryByText('Context used')).not.toBeInTheDocument()
     })
+
+    describe('Estimated context explanation and measurement rendering (Phase 3 Task 2)', () => {
+      it('renders estimated badges and explanatory caption for server-qualified estimated context', () => {
+        const estimatedContextJob = {
+          ...mockJob,
+          state: 'succeeded',
+          result: {
+            output: 'Done.',
+            metadata: {
+              execution: { model: 'claude-3-7-sonnet', duration_ms: 2400 },
+              failure: null,
+              retry: { retryable: false, next_target: null },
+              telemetry: {
+                completeness: 'complete',
+                context_remaining_percent: {
+                  value: 85.0,
+                  quality: 'estimated',
+                  source: 'derived',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_window_size: {
+                  value: 100000,
+                  quality: 'reported',
+                  source: 'target_config',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_used_tokens: {
+                  value: 15000,
+                  quality: 'estimated',
+                  source: 'derived',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                total_input_tokens: {
+                  value: 10000,
+                  quality: 'reported',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                total_output_tokens: {
+                  value: 5000,
+                  quality: 'reported',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+                cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              },
+            },
+          },
+        };
+        assertCanonicalMetadata(estimatedContextJob.result.metadata);
+        render(<JobDetails job={estimatedContextJob} />);
+
+        const estimatedBadges = screen.getAllByText('estimated');
+        expect(estimatedBadges.length).toBeGreaterThanOrEqual(2);
+        expect(screen.getByText('target_config')).toBeInTheDocument();
+
+        const caption = document.querySelector('.telemetry-estimate-caption');
+        expect(caption).toBeInTheDocument();
+        expect(caption.textContent).toContain('cumulative job input plus output');
+        expect(caption.textContent).toContain('overcount across turns, retries, and compaction');
+      });
+
+      it('excludes explanation caption when context usage is reported from provider snapshot', () => {
+        const providerContextJob = {
+          ...mockJob,
+          state: 'succeeded',
+          result: {
+            output: 'Done.',
+            metadata: {
+              execution: { model: 'claude-3-7-sonnet', duration_ms: 2400 },
+              failure: null,
+              retry: { retryable: false, next_target: null },
+              telemetry: {
+                completeness: 'complete',
+                context_remaining_percent: {
+                  value: 85.0,
+                  quality: 'derived',
+                  source: 'derived',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_window_size: {
+                  value: 100000,
+                  quality: 'reported',
+                  source: 'target_config',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_used_tokens: {
+                  value: 15000,
+                  quality: 'estimated',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                total_input_tokens: {
+                  value: 10000,
+                  quality: 'reported',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                total_output_tokens: {
+                  value: 5000,
+                  quality: 'reported',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+                cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              },
+            },
+          },
+        };
+        assertCanonicalMetadata(providerContextJob.result.metadata);
+        render(<JobDetails job={providerContextJob} />);
+
+        expect(document.querySelector('.telemetry-estimate-caption')).toBeNull();
+        expect(screen.queryByText(/cumulative job input plus output/i)).not.toBeInTheDocument();
+        expect(screen.getAllByText('estimated').length).toBeGreaterThan(0);
+      });
+
+      it('excludes explanation caption when consumption is estimated but context is reported provider snapshot', () => {
+        const estimatedConsumptionJob = {
+          ...mockJob,
+          state: 'running',
+          result: {
+            output: 'Running...',
+            metadata: {
+              execution: { model: 'claude-3-7-sonnet', duration_ms: 1000 },
+              failure: null,
+              retry: { retryable: null, next_target: null },
+              telemetry: {
+                completeness: 'partial',
+                context_remaining_percent: {
+                  value: 70.0,
+                  quality: 'derived',
+                  source: 'derived',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_window_size: {
+                  value: 100000,
+                  quality: 'reported',
+                  source: 'session',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_used_tokens: {
+                  value: 30000,
+                  quality: 'reported',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                total_input_tokens: {
+                  value: 25000,
+                  quality: 'estimated',
+                  source: 'stream',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                total_output_tokens: {
+                  value: 5000,
+                  quality: 'estimated',
+                  source: 'stream',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+                cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              },
+            },
+          },
+        };
+        assertCanonicalMetadata(estimatedConsumptionJob.result.metadata);
+        render(<JobDetails job={estimatedConsumptionJob} />);
+
+        expect(document.querySelector('.telemetry-estimate-caption')).toBeNull();
+        expect(screen.queryByText(/cumulative job input plus output/i)).not.toBeInTheDocument();
+      });
+
+      it('preserves provider percentage when usage is absent and no configured capacity exists', () => {
+        const percentageOnlyJob = {
+          ...fullTelemetryJob,
+          result: {
+            ...fullTelemetryJob.result,
+            metadata: {
+              ...fullTelemetryJob.result.metadata,
+              telemetry: {
+                ...fullTelemetryJob.result.metadata.telemetry,
+                context_remaining_percent: {
+                  value: 42.5,
+                  quality: 'reported',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_window_size: {
+                  value: 100000,
+                  quality: 'reported',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_used_tokens: {
+                  value: null,
+                  quality: 'unavailable',
+                  source: null,
+                  observed_at: null,
+                },
+              },
+            },
+          },
+        };
+        assertCanonicalMetadata(percentageOnlyJob.result.metadata);
+        render(<JobDetails job={percentageOnlyJob} />);
+        expect(screen.getByText('42.5%')).toBeInTheDocument();
+        expect(screen.getAllByText('provider').length).toBeGreaterThan(0);
+      });
+
+      it('renders unavailable remaining when capacity is known but usage is unavailable without displaying 100%', () => {
+        const capacityWithoutUsageJob = {
+          ...mockJob,
+          state: 'succeeded',
+          result: {
+            output: 'Done.',
+            metadata: {
+              execution: { model: 'claude-3-7-sonnet', duration_ms: 2400 },
+              failure: null,
+              retry: { retryable: false, next_target: null },
+              telemetry: {
+                completeness: 'partial',
+                context_remaining_percent: {
+                  value: null,
+                  quality: 'unavailable',
+                  source: null,
+                  observed_at: null,
+                },
+                context_window_size: {
+                  value: 200000,
+                  quality: 'reported',
+                  source: 'target_config',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                context_used_tokens: {
+                  value: null,
+                  quality: 'unavailable',
+                  source: null,
+                  observed_at: null,
+                },
+                total_input_tokens: {
+                  value: 1000,
+                  quality: 'reported',
+                  source: 'provider',
+                  observed_at: '2026-10-29T10:00:00Z',
+                },
+                total_output_tokens: {
+                  value: null,
+                  quality: 'unavailable',
+                  source: null,
+                  observed_at: null,
+                },
+                cache_read_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+                cache_write_tokens: { value: null, quality: 'unavailable', source: null, observed_at: null },
+              },
+            },
+          },
+        };
+        assertCanonicalMetadata(capacityWithoutUsageJob.result.metadata);
+        render(<JobDetails job={capacityWithoutUsageJob} />);
+
+        expect(screen.getByText('Context capacity')).toBeInTheDocument();
+        expect(screen.getByText('200000')).toBeInTheDocument();
+        expect(screen.getByText('target_config')).toBeInTheDocument();
+
+        expect(screen.getByText('Context remaining')).toBeInTheDocument();
+        expect(screen.queryByText('100%')).not.toBeInTheDocument();
+        expect(screen.queryByText('100.0%')).not.toBeInTheDocument();
+
+        expect(document.querySelector('.telemetry-estimate-caption')).toBeNull();
+      });
+    })
   })
 
   describe('Diagnostic reports and suspect indicator', () => {

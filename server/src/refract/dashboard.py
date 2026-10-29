@@ -68,6 +68,19 @@ class DashboardState:
 
 
 def _jsonable(value: Any) -> Any:
+    if isinstance(value, TargetEditorData):
+        data = value.model_dump(mode="json", exclude_none=True)
+        if "context_window" in data:
+            data["contextWindow"] = data.pop("context_window")
+        return data
+    if isinstance(value, TargetListResponse):
+        data = value.model_dump(mode="json", exclude_none=True)
+        data["targets"] = [_jsonable(target) for target in value.targets]
+        return data
+    if isinstance(value, TargetResponse):
+        data = value.model_dump(mode="json", exclude_none=True)
+        data["target"] = _jsonable(value.target)
+        return data
     if isinstance(
         value,
         (
@@ -289,6 +302,7 @@ def _safe_execution_plan(raw: Any) -> dict[str, Any]:
                 "isolated": target.isolated,
                 "read_only": target.read_only,
                 "max_concurrency": target.max_concurrency,
+                "contextWindow": target.context_window,
             }
             for target in plan.targets
         ],

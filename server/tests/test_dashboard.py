@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from refract.config import TargetConfig, load_config
+from refract.models import TargetEditorData
+from refract.dashboard import _jsonable, _safe_execution_plan
 from refract.planning import execution_plan_data, resolve_execution_plan
 from refract.runtime import Runtime
 from refract.server import create_application
@@ -401,7 +403,10 @@ async def test_dashboard_job_detail_omits_marked_environment_metadata(active_run
     snapshot["environment_targets"] = ["primary"]
     snapshot["targets"][0]["envs_vars"] = ["synthetic-template-marker"]
     snapshot["targets"][0]["envs"] = {"SECRET": "synthetic-secret-marker"}
-    safe = json.dumps(_safe_execution_plan(snapshot))
+    snapshot["targets"][0]["context_window"] = 200000
+    safe_plan = _safe_execution_plan(snapshot)
+    assert safe_plan["targets"][0]["contextWindow"] == 200000
+    safe = json.dumps(safe_plan)
     assert "environment_targets" not in safe
     assert "envs_vars" not in safe
     assert "envs" not in safe
@@ -732,6 +737,19 @@ async def test_runtime_targets_endpoint_remains_unchanged(active_runtime) -> Non
         assert "args" not in target
 
 
+@pytest.mark.parametrize("value", [True, 0, -1, 1.25, "200000"])
+def test_target_editor_rejects_invalid_context_window_values(value) -> None:
+    with pytest.raises(ValueError):
+        TargetEditorData.model_validate({"id": "demo", "backend": "codex", "contextWindow": value})
+
+
+def test_target_editor_json_uses_public_context_window_spelling() -> None:
+    rendered = _jsonable(TargetEditorData(id="demo", backend="codex", contextWindow=200000))
+    assert rendered["contextWindow"] == 200000
+    assert "context_window" not in rendered
+    assert rendered["retryPolicy"] == ""
+
+
 @pytest.mark.asyncio
 async def test_configuration_targets_read_loopback_only_and_no_store(active_runtime) -> None:
     app = create_application()
@@ -914,6 +932,7 @@ async def test_configuration_target_create_route(active_runtime) -> None:
         "backend_profile": "balanced",
         "args": ["--arg1"],
         "max_concurrency": 2,
+        "contextWindow": 200000,
     }
     status, res_headers, body = await request(
         app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(data).encode(), headers=headers
@@ -924,7 +943,12 @@ async def test_configuration_target_create_route(active_runtime) -> None:
     payload = json.loads(body)
     assert payload["target"]["id"] == "tertiary"
     assert payload["target"]["backend_profile"] == "balanced"
+    assert payload["target"]["contextWindow"] == 200000
     new_rev = payload["revision"]
+    _, _, listed_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
+    assert next(t for t in json.loads(listed_body)["targets"] if t["id"] == "tertiary")["contextWindow"] == 200000
+    _, _, read_body = await request(app, "/dashboard/api/configuration/targets/tertiary", headers=(("Host", "127.0.0.1"),))
+    assert json.loads(read_body)["target"]["contextWindow"] == 200000
 
     dup_headers = (
         ("Host", "127.0.0.1"),
@@ -985,6 +1009,7 @@ async def test_configuration_target_update_route(active_runtime) -> None:
         "backend_profile": "balanced",
         "args": ["--updated"],
         "max_concurrency": 5,
+        "contextWindow": 200000,
     }
     status, res_headers, body = await request(
         app, "/dashboard/api/configuration/targets/primary", method="PUT", body=json.dumps(update_data).encode(), headers=headers
@@ -994,6 +1019,7 @@ async def test_configuration_target_update_route(active_runtime) -> None:
     payload = json.loads(body)
     assert payload["target"]["model"] == "gpt-4o"
     assert payload["target"]["max_concurrency"] == 5
+    assert payload["target"]["contextWindow"] == 200000
     new_rev = payload["revision"]
 
     rename_headers = (

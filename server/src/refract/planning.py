@@ -38,6 +38,8 @@ def _target_data(target: TargetConfig) -> dict[str, Any]:
     value = _target_identity_data(target)
     if target.retry_policy:
         value["retry_policy"] = target.retry_policy
+    if target.context_window is not None:
+        value["context_window"] = target.context_window
     return value
 
 
@@ -98,6 +100,12 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
             if "retryPolicy" in value:
                 raise ValueError("Execution plan target has unsupported settings")
             raw_retry_policy = value.get("retry_policy", "")
+            context_window = value.get("context_window")
+            if (
+                context_window is not None
+                and (isinstance(context_window, bool) or not isinstance(context_window, int) or context_window < 1)
+            ):
+                raise ValueError
             if (
                 not isinstance(target_id, str)
                 or not target_id
@@ -129,6 +137,7 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
                     args=tuple(args),
                     max_concurrency=max_concurrency,
                     retry_policy=raw_retry_policy,
+                    context_window=context_window,
                 )
             )
         except (KeyError, TypeError, ValueError) as exc:
