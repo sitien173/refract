@@ -514,7 +514,7 @@ class Runtime:
         observed: str,
         report_key: str,
     ) -> dict[str, Any]:
-        return await run_sync(
+        acknowledgement = await run_sync(
             self.database.record_error_report,
             job_id=job_id,
             category=category,
@@ -522,6 +522,10 @@ class Runtime:
             observed=observed,
             report_key=report_key,
         )
+        job = await run_sync(self.database.job, job_id)
+        next_target = self._next_target_token(job) if job is not None and job.state == "succeeded" and category == "output" else None
+        acknowledgement["retry"] = {"retryable": next_target is not None, "next_target": next_target}
+        return acknowledgement
 
     async def cancel(self, job_id: str) -> ActionResult:
         self.ask_registry.revoke_token(job_id)

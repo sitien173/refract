@@ -56,7 +56,7 @@ for detail in (
     "{active, recent, more_recent}", "{job:summary}",
     "`job_id`, `answer`",
     "`job_id`, `category`, `expected`, `observed`, `report_key`",
-    "{report:{id, job_id, category, created_at}, duplicate}",
+    "{report:{id, job_id, category, created_at}, duplicate, retry:{retryable, next_target}}",
     "pending_question",
     "Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, created_at, updated_at`.",
     "Unknown tool arguments return `invalid_request`.",
@@ -149,6 +149,32 @@ for diag_detail in (
     "Generic worker error text",
 ):
     assert diag_detail in contract, diag_detail
+
+assert "## Reported successful output recovery" in contract
+recovery_contract = contract.split("## Reported successful output recovery", 1)[1].split("## Errors", 1)[0]
+recovery_flat = " ".join(recovery_contract.split())
+for recovery_detail in (
+    "acknowledgement-level `retry: {retryable, next_target}`",
+    "Only `succeeded` plus category `output`",
+    "`retryable: false` and `next_target: null`",
+    "Read every terminal page",
+    "Inspect partial local files and external effects",
+    "original job and project IDs",
+    "fresh_session: true",
+    "matching project, workflow, and profile",
+    "routing hint, not authorization",
+    "identical original report request",
+    "retained report event",
+    "Never omit `next_target` to restart the primary target",
+    "Do not recursively report a reporting failure",
+    "`job_wait` remains unchanged",
+    "`job_retry` remains restricted",
+):
+    assert recovery_detail in recovery_flat, recovery_detail
+assert "top-level `retry:" in recovery_flat
+
+review = (root / "skills/coordinating-multi-model-work/references/review.md").read_text()
+assert "authoritative recovery procedure" in review
 
 readme = (repository / "server/README.md").read_text()
 assert "Nine self-describing MCP tools" in readme

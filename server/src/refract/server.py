@@ -434,28 +434,21 @@ _JOB_LIST_DESCRIPTION = "List all active jobs and up to 10 most recently updated
 _JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary}. Errors: unknown_job, response_too_large."
 _JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, targets_unavailable, response_too_large."
 _JOB_ANSWER_DESCRIPTION = "Deliver a coordinator answer (up to 8192 characters) to a running job's pending question. Returns {job:summary}. Errors: unknown_job, invalid_state, invalid_request, response_too_large."
-_JOB_REPORT_ERROR_DESCRIPTION = "Report an unexpected job protocol or output anomaly for offline investigation. Persists a durable diagnostic report event without altering execution state. Returns {report:{id,job_id,category,created_at},duplicate}. Errors: unknown_job, invalid_request, response_too_large."
+_JOB_REPORT_ERROR_DESCRIPTION = "Report an unexpected job protocol or output anomaly for offline investigation. Persists/deduplicates a diagnostic event without altering execution state. Successful acknowledgements return {report:{id,job_id,category,created_at},duplicate,retry:{retryable,next_target}}. Only succeeded+output may expose a live fallback token; otherwise retry is {retryable:false,next_target:null}. Tokens are response-only routing hints, not replay authorization. Errors: unknown_job, invalid_request, response_too_large."
 
 
-_INSTRUCTIONS = """Refract runs durable coding jobs (consult, implement, review, other) on external agents for a local project. Jobs persist across client disconnects and daemon restarts.
+_INSTRUCTIONS = """
 
-Standard cycle, 4 calls:
-1. project_resolve(path=<Git root>) -> project.id. Idempotent; once per session.
-2. task_guide(project_id) -> choose workflow and profile from recommendations.
-3. job_submit(project_id, workflow, prompt, ...) -> job.id. The prompt must be self-contained; workers do not see this conversation.
-4. job_wait(job_id) -> blocks up to 3600 s with progress every 30 s. Read result.text. If result.next_offset is not null, call job_wait(job_id, timeout_s=0, result_offset=<next_offset>) for the next page.
+Standard cycle: project_resolve(path=<Git root>) -> project.id; task_guide(project_id) -> workflow/profile; job_submit(project_id, workflow, prompt, ...) -> job.id; job_wait(job_id) -> result. Prompts are self-contained. Wait up to 3600 s; read result.text and page with timeout_s=0, result_offset=<next_offset> until next_offset is null.
 
 Rules:
-- job_wait returning a non-terminal state is not an error. Call job_wait again.
-- A dropped connection may mean the daemon restarted. Jobs persist; call job_wait again.
-- Reuse context_key to continue a worker session; fresh_session=true starts over.
-- On session resume, call job_list(project_id) and reconcile active jobs before submitting new ones.
-- Use job_cancel(job_id) to stop queued or running work. Use job_retry(job_id) for eligible terminal jobs.
-- Use job_answer(job_id, answer) to answer a running worker question returned in result.pending_question.
-- Use job_report_error(job_id, category, expected, observed, report_key) to record unexpected protocol or output anomalies.
-- On failed/cancelled job_wait, use result.metadata.retry.next_target with job_submit(next_target=...) for a follow-up on the next healthy target; tokens are opaque and can expire after config changes. result.metadata.retry.retryable reflects a live next target for routing failures. Inspect result.metadata.failure.kind for failure classification.
-- targets_unavailable errors include retry_after_s; wait at least that many seconds before retrying.
-- Errors are JSON with code, message, next_action, retryable (and retry_after_s for targets_unavailable). Follow next_action."""
+- Nonterminal job_wait and dropped connections are normal; wait again on the same job.
+- Reuse context_key to resume; fresh_session=true starts over. On session resume, job_list(project_id) and reconcile active jobs before submission.
+- job_cancel stops queued/running work; job_retry handles eligible terminal jobs; job_answer answers result.pending_question.
+- job_report_error(job_id, category, expected, observed, report_key) records client-observed anomalies. Read every terminal page first and preserve original job/project IDs. Reports do not change execution state.
+- For failed/cancelled jobs, use result.metadata.retry.next_target in job_submit(next_target=...). Tokens are opaque/stale after config changes; result.metadata.retry.retryable indicates live routing. Inspect result.metadata.failure.kind.
+- For unusable succeeded output, use top-level acknowledgement retry.retryable/next_target from category=output reports, not job_wait metadata. Only succeeded+output can expose fallback; false/null means stop and request routing guidance. Inspect partial local and external effects before replay. If reconciled and safe, explicitly submit a new job with next_target, matching project/workflow/profile/task intent and fresh_session=true. Token is a routing hint, not replay authorization. Refresh stale tokens with the identical report request while retained; never omit next_target to restart primary. Reporting failure is not recursively reported and does not block reconciliation. job_wait remains unchanged; job_retry cannot retry succeeded jobs.
+- Wait retry_after_s on targets_unavailable. Follow error next_action."""
 
 
 _P = ParamSpec("_P")
@@ -906,7 +899,7 @@ async def job_report_error(
         )
 
     return _render_payload(
-        {"report": report, "duplicate": duplicate},
+        {"report": report, "duplicate": duplicate, "retry": result["retry"]},
         applied=(
             "Job error report",
             report["id"],
