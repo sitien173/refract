@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 2.1.0 -->
+<!-- refract-shared-version: 2.2.0 -->
 
 # Phase 1 Journal: Report acknowledgement recovery metadata
 
