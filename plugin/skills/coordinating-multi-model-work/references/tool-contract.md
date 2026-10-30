@@ -14,7 +14,7 @@ Follow these rules for every Refract MCP call. Default endpoint is `http://127.0
 | `job_cancel` | `job_id` | `{job:summary}` |
 | `job_retry` | `job_id` | `{job:summary}` |
 | `job_answer` | `job_id`, `answer` | `{job:summary}` |
-| `job_report_error` | `job_id`, `category`, `expected`, `observed`, `report_key` | `{report:{id, job_id, category, created_at}, duplicate}` |
+| `job_report_error` | `job_id`, `category`, `expected`, `observed`, `report_key` | `{report:{id, job_id, category, created_at}, duplicate, retry:{retryable, next_target}}` |
 
 Call only these tools with only these parameters; your client may prefix the names. Unknown tool arguments return `invalid_request`. Capture `project.id` and `job.id` from returned envelopes.
 
@@ -53,7 +53,7 @@ To read a terminal result, keep `result.text` and call `job_wait(job_id, timeout
 
 Every terminal page includes canonical grouped `result.metadata`: `execution` (`model`, `duration_ms`), `failure` (`null` or `{kind}`), `retry` (`retryable`, `next_target`), and `telemetry` (`completeness`, `context_remaining_percent`, `context_window_size`, `context_used_tokens`, `total_input_tokens`, `total_output_tokens`, `cache_read_tokens`, `cache_write_tokens`). Measurements contain value, source, quality, and observed_at. `failure.kind` is `cancelled`, `circuit_open`, `replay_blocked`, `context_overflow`, `request_fatal`, `target_fatal`, or `retryable`.
 
-On failure, pass `result.metadata.retry.next_target` unchanged to `job_submit(next_target=...)`; on `invalid_request`, resubmit without it. On `context_overflow`, summarize state and resubmit with `fresh_session=true`. Otherwise, report the failure.
+On a failed or cancelled job, pass `result.metadata.retry.next_target` unchanged to `job_submit(next_target=...)`; on `invalid_request`, resubmit without it. On `context_overflow`, summarize state and resubmit with `fresh_session=true`. Otherwise, report the failure. This failed-job route is separate from reported successful-output recovery below.
 
 Responses stay below 30,000 characters and 9,000 UTF-8 bytes. If a response overflows after an applied mutation, report the actual outcome and keep the root job or project ID. Never blindly resubmit.
 
@@ -64,8 +64,11 @@ Responses stay below 30,000 characters and 9,000 UTF-8 bytes. If a response over
 If a saved job is absent from the list, call `job_wait(saved_id, timeout_s=0)` before treating it as unknown. Absence never authorizes duplicate submission.
 
 ## Diagnostic reporting
-
 Call `job_report_error(job_id, category, expected, observed, report_key)` for anomalies. Summaries span 1 to 2048 characters; keys span 1 to 128 ASCII chars. Use unique opaque keys per observation. Reusing a key with different content returns `invalid_request`. Matching content returns duplicate acknowledgement. Reports are client observations; they never alter execution state. Redact secrets first; only correlation IDs are logged. Pruning follows `Database.prune_history` on `updated_at`. Reports vanish while jobs remain. Distinguish wait timeouts, pending questions, and partial pagination. Await complete terminal pagination before reporting missing output. Generic worker error text under `succeeded` is an output-report example. Require ERP only where the workflow demands it.
+## Reported successful output recovery
+Use the acknowledgement-level `retry: {retryable, next_target}` from `job_report_error` only after the original job is terminal. Read every terminal page until `next_offset` is null. Report the actual anomaly with original job and project IDs. Generic worker error under `succeeded` is an output anomaly, not proof of execution failure. Preserve the five report arguments, bounds, redaction, key-conflict behavior, and client-observation semantics; reports change no original execution state, result, attempts, session, target health, or stored result metadata.
+Only `succeeded` plus category `output` can expose top-level `retry: {retryable: true, next_target: "<opaque-token>"}` when a healthy candidate exists. All other combinations or unavailable fallback return `retryable: false` and `next_target: null`; stop and request routing guidance, never automatically retry or restart the primary. Inspect partial local files and external effects before replay. Reconcile safety first; the token is a routing hint, not authorization. When explicitly safe, submit a new `job_submit` with that `next_target`, matching project, workflow, and profile, plus original task intent, and `fresh_session: true`. Keep the original job ID for correlation; fresh sessions prevent reuse, not duplicate side effects.
+Fallback is live: if configuration/health changes make the token stale, repeat the identical original report request while the retained report event remains available; duplicates preserve the report ID and recompute routing. Never omit `next_target` to restart the primary target. Retention may remove events/deduplication, allowing a later report ID. Reporting failure permits safe reconciliation. Do not recursively report a reporting failure. Additive `retry` is ignorable by tolerant clients; exact-key clients must update. Tokens/eligibility are response-only; no schema/data migration or durable eligibility. `job_wait` remains unchanged (succeeded jobs gain no retry metadata); `job_retry` remains restricted and cannot retry succeeded jobs. The original succeeded job/result remains unchanged.
 
 ## Errors
 

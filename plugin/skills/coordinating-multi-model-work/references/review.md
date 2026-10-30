@@ -47,13 +47,7 @@ second cycle.
 
 ## Diagnostic anomalies
 
-Report protocol anomalies or confirmed output-contract anomalies before recovery.
-Call `job_report_error` preserving original job and project IDs.
-Generic worker error text under `succeeded` is reportable.
-Await complete terminal pagination before reporting missing output.
-Require ERP only where the workflow requires it.
-Reporting failure must never cause recursive reporting.
-Reporting failure must never block safe reconciliation.
+Report protocol anomalies or confirmed output-contract anomalies with `job_report_error` before recovery, preserving original job and project IDs. Generic worker error text under `succeeded` is reportable only after complete terminal pagination. Follow the [authoritative recovery procedure](tool-contract.md#reported-successful-output-recovery) for acknowledgement-based output recovery, replay reconciliation, and reporting failures. It prevents recursive reporting and preserves safe reconciliation. Require ERP only where the workflow requires it.
 
 ## Finalize phase
 

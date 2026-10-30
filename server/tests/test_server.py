@@ -2087,7 +2087,8 @@ async def test_job_report_error_mcp_validation_and_acknowledgement(tmp_path, mon
         assert not res.is_error
         data = json.loads(res.content[0].text)
         assert data["duplicate"] is False
-        assert set(data) == {"report", "duplicate"}
+        assert set(data) == {"report", "duplicate", "retry"}
+        assert data["retry"] == {"retryable": False, "next_target": None}
         assert set(data["report"]) == {"id", "job_id", "category", "created_at"}
         assert "expected" not in data["report"]
         assert "observed" not in data["report"]
@@ -2124,6 +2125,32 @@ async def test_job_report_error_mcp_validation_and_acknowledgement(tmp_path, mon
         assert unk_res.is_error
         unk_payload = json.loads(unk_res.content[0].text)
         assert unk_payload["code"] == "unknown_job"
+
+
+@pytest.mark.asyncio
+async def test_job_report_error_mcp_serializes_eligible_output_recovery(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        config_path = runtime.catalog.config_path
+        config_path.write_text('''[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "a"\nbackend = "codex"\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[profiles.balanced]\nconsult = ["a", "b"]\nreview = ["a", "b"]\n''', encoding="utf-8")
+        runtime.publish_configuration()
+        project = register_project(runtime, str(tmp_path), "eligible-proj")
+        runtime.database.create_job(job_id="mcp-output", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json="{}", context_key="mcp-output")
+        runtime.database.finish_job("mcp-output", "succeeded", target_id="a", text="private result")
+        args = {"job_id": "mcp-output", "category": "output", "expected": "private expected", "observed": "private observed", "report_key": "mcp-output-key"}
+        response = await client.call_tool("job_report_error", args)
+        assert not response.is_error
+        payload = json.loads(response.content[0].text)
+        assert set(payload) == {"report", "duplicate", "retry"}
+        assert payload["retry"]["retryable"] is True
+        assert payload["retry"]["next_target"].startswith("nt_")
+        assert payload["duplicate"] is False
+        assert "project_id" not in payload and "private expected" not in response.content[0].text
+        assert "private observed" not in response.content[0].text and "private result" not in response.content[0].text
+        duplicate = await client.call_tool("job_report_error", args)
+        dup_payload = json.loads(duplicate.content[0].text)
+        assert dup_payload["duplicate"] is True
+        assert dup_payload["report"]["id"] == payload["report"]["id"]
+        assert dup_payload["retry"] == payload["retry"]
 
 
 @pytest.mark.asyncio

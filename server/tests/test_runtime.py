@@ -13,6 +13,157 @@ from refract.result_metadata import JobResultMetadata, FailureMetadata, RetryMet
 from tests.orchestration_helpers import config as make_config, register_project
 
 
+@pytest.mark.asyncio
+async def test_report_acknowledgement_state_category_matrix_and_exhausted_fallback(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    _two_target_config(path)
+    runtime = Runtime(load_config(path))
+    root = tmp_path / "matrix"
+    root.mkdir()
+    project = register_project(runtime, str(root), "matrix")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    try:
+        for state in ("queued", "running", "failed", "cancelled", "interrupted", "succeeded"):
+            for category in ("protocol", "output"):
+                job_id = f"{state}-{category}"
+                runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
+                runtime.database._connection.execute("UPDATE jobs SET state=?, target_id='a' WHERE id=?", (state, job_id))
+                runtime.database._connection.commit()
+                result = await runtime.report_error(job_id=job_id, category=category, expected="expected", observed="observed", report_key=f"{job_id}-key")
+                eligible = state == "succeeded" and category == "output"
+                assert result["retry"]["retryable"] is eligible
+                assert bool(result["retry"]["next_target"]) is eligible
+        exhausted = "succeeded-output"
+        runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(plan.targets[1]),))
+        runtime.database._connection.commit()
+        result = await runtime.report_error(job_id=exhausted, category="output", expected="expected", observed="observed", report_key="exhausted-key")
+        assert result["retry"] == {"retryable": False, "next_target": None}
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_report_duplicate_refreshes_token_after_configuration_change(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('''[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "a"\nbackend = "codex"\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[[targets]]\nid = "c"\nbackend = "codex"\n\n[profiles.balanced]\nconsult = ["a", "b", "c"]\nreview = ["a", "b", "c"]\n\n[profiles.alternate]\nconsult = ["a", "b", "c"]\n''', encoding="utf-8")
+    runtime = Runtime(load_config(path))
+    root = tmp_path / "config-change"
+    root.mkdir()
+    project = register_project(runtime, str(root), "config-change")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    runtime.database.create_job(job_id="config-report", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="config-report")
+    runtime.database.finish_job("config-report", "succeeded", target_id="a", text="result")
+    try:
+        first = await runtime.report_error(job_id="config-report", category="output", expected="useful", observed="bad", report_key="config-key")
+        old_token = first["retry"]["next_target"]
+        changed = path.read_text(encoding="utf-8").replace('id = "b"\nbackend = "claude"', 'id = "b"\nbackend = "claude"\ncontextWindow = 200000')
+        path.write_text(changed, encoding="utf-8")
+        runtime.publish_configuration()
+        current_plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+        assert resolve_next_target(old_token, runtime.catalog.config_revision, project.id, current_plan) is None
+        duplicate = await runtime.report_error(job_id="config-report", category="output", expected="useful", observed="bad", report_key="config-key")
+        new_token = duplicate["retry"]["next_target"]
+        assert duplicate["duplicate"] and duplicate["report"]["id"] == first["report"]["id"]
+        assert new_token != old_token
+        assert resolve_next_target(new_token, runtime.catalog.config_revision, project.id, current_plan) == current_plan.targets[1]
+        runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(current_plan.targets[1]),))
+        runtime.database._connection.commit()
+        health_duplicate = await runtime.report_error(job_id="config-report", category="output", expected="useful", observed="bad", report_key="config-key")
+        assert health_duplicate["duplicate"] is True
+        assert health_duplicate["report"]["id"] == first["report"]["id"]
+        assert resolve_next_target(health_duplicate["retry"]["next_target"], runtime.catalog.config_revision, project.id, current_plan) == current_plan.targets[2]
+        assert resolve_next_target(health_duplicate["retry"]["next_target"], runtime.catalog.config_revision, "other-project", current_plan) is None
+        assert resolve_next_target(new_token, runtime.catalog.config_revision, project.id, resolve_execution_plan("review", runtime.catalog, "balanced")) is None
+        assert resolve_next_target(new_token, runtime.catalog.config_revision, project.id, resolve_execution_plan("consult", runtime.catalog, "alternate")) is None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_report_acknowledgement_routes_to_explicit_fresh_session_job(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    runtime.database.create_job(job_id="reported-original", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="reported-original")
+    runtime.database.finish_job("reported-original", "succeeded", target_id="a", text="unusable")
+    execution = []
+    class Drivers:
+        @staticmethod
+        def supports_structured_streaming(_target): return True
+        @staticmethod
+        def available(_target): return True
+        async def execute(self, *, target, session_id, **kwargs):
+            execution.append((target.id, session_id))
+            from refract.drivers import DriverResult
+            return DriverResult("SUCCESS", "new-session", "done", "", "")
+    runtime.drivers = Drivers()
+    await runtime.start()
+    try:
+        original = runtime.database.job_record("reported-original")
+        sessions_before = runtime.database._connection.execute("SELECT * FROM context_sessions ORDER BY project_id, context_key, role, target_key, lane").fetchall()
+        health_before = runtime.database._connection.execute("SELECT * FROM target_health ORDER BY target_id").fetchall()
+        result = await runtime.report_error(job_id="reported-original", category="output", expected="useful", observed="bad", report_key="integrated-key")
+        assert execution == [] and len(runtime.database.jobs(project.id)) == 1
+        assert runtime.database._connection.execute("SELECT * FROM context_sessions ORDER BY project_id, context_key, role, target_key, lane").fetchall() == sessions_before
+        assert runtime.database._connection.execute("SELECT * FROM target_health ORDER BY target_id").fetchall() == health_before
+        original_view = await runtime.wait("reported-original", 0)
+        assert runtime.live_result_metadata(original_view)["retry"] == {"retryable": None, "next_target": None}
+        with pytest.raises(OrchestrationError) as invalid_retry:
+            await runtime.retry("reported-original")
+        assert invalid_retry.value.code == "invalid_state"
+        submitted = await runtime.submit(project.id, "consult", "recover", profile="balanced", context_key="reported-original", fresh_session=True, next_target=result["retry"]["next_target"])
+        recovered = await runtime.wait(submitted.job_id, 5)
+        assert submitted.job_id != "reported-original" and recovered.target_id == "b"
+        assert runtime.database.job_record(submitted.job_id)["fresh_session"] == 1
+        assert execution == [("b", "")]
+        assert runtime.database.job_record("reported-original") == original
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_report_error_acknowledges_succeeded_output_with_live_fallback(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    _two_target_config(config_path)
+    runtime = Runtime(load_config(config_path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "project")
+    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
+    runtime.database.create_job(job_id="reported-output", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="reported-output")
+    runtime.database.finish_job("reported-output", "succeeded", target_id="a", text="unusable output")
+    before = runtime.database.job_record("reported-output")
+    try:
+        acknowledgement = await runtime.report_error(job_id="reported-output", category="output", expected="useful", observed="refusal", report_key="output-key")
+        assert set(acknowledgement) == {"report", "duplicate", "project_id", "retry"}
+        assert acknowledgement["retry"]["retryable"] is True
+        token = acknowledgement["retry"]["next_target"]
+        assert token is not None
+        duplicate = await runtime.report_error(job_id="reported-output", category="output", expected="useful", observed="refusal", report_key="output-key")
+        assert duplicate["duplicate"] is True
+        assert duplicate["report"]["id"] == acknowledgement["report"]["id"]
+        assert duplicate["retry"]["next_target"] == token
+        assert runtime.database.job_record("reported-output") == before
+        protocol = await runtime.report_error(job_id="reported-output", category="protocol", expected="useful", observed="refusal", report_key="protocol-key")
+        assert protocol["retry"] == {"retryable": False, "next_target": None}
+        event_count = runtime.database._connection.execute("SELECT COUNT(*) FROM events WHERE job_id=? AND kind='job.error_reported'", ("reported-output",)).fetchone()[0]
+        assert event_count == 2
+        health_before = runtime.database._connection.execute("SELECT * FROM target_health ORDER BY target_id").fetchall()
+        runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(plan.targets[1]),))
+        runtime.database._connection.commit()
+        refreshed = await runtime.report_error(job_id="reported-output", category="output", expected="useful", observed="refusal", report_key="output-key")
+        assert refreshed["report"]["id"] == acknowledgement["report"]["id"]
+        assert refreshed["retry"] == {"retryable": False, "next_target": None}
+        assert runtime.database._connection.execute("SELECT COUNT(*) FROM events WHERE job_id=? AND kind='job.error_reported'", ("reported-output",)).fetchone()[0] == event_count
+        assert health_before != runtime.database._connection.execute("SELECT * FROM target_health ORDER BY target_id").fetchall()
+    finally:
+        await runtime.close()
+
+
 def test_runtime_rejects_removed_marked_target_without_echoing_identifier(tmp_path) -> None:
     base = make_config(tmp_path / "home")
     target = replace(base.targets[0], envs={"LOCAL": "value"})
