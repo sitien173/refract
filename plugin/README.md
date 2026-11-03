@@ -41,12 +41,13 @@ agy plugin install https://github.com/sitien173/refract
 | `/refract:brainstorm <idea>` | Clarify intent and trade-offs; write `DESIGN.md`. |
 | `/refract:write-plan <design>` | Turn a confirmed design into a phase plan. |
 | `/refract:execute-plan [target]` | Run or resume one phase through all three gates. |
+| `/refract:execute-plan-all [target]` | Autonomously execute all phases through final audit and consolidation. |
 
 ## Skills
 
 - `using-refract`: entry point; decides when coordination applies.
 - `coordinating-multi-model-work`: Refract lifecycle, Git ownership, review, handover.
-- `brainstorming`, `writing-plans`, `executing-plans`: the three gates.
+- `brainstorming`, `writing-plans`, `executing-plans`, `executing-plans-autonomously`: the three gates and full-plan autonomous execution.
 - `systematic-debugging`, `test-driven-development`, `verifying-before-completion`: process discipline.
 - `using-git-worktrees`: optional isolated workspace before registration.
 

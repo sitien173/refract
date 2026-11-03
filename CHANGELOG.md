@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.2.0 - 2026-10-29
+## 2.3.0 - 2026-10-29
 
 - Added a `checklist` field to the `.handover.md` schema for tracking current-phase steps; `executing-plans` writes and maintains it.
 - Added `plugin/scripts/refract-stats` to summarize open plans, with `--statusline` and `--hook` modes, and SessionStart, PostToolUse, and Stop hooks that show the summary.

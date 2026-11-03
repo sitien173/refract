@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 2.2.0 -->
+<!-- refract-shared-version: 2.3.0 -->
 # Worker Contract
 
 Execution contract for the phase implementer. This bundled file is read

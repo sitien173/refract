@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 2.2.0 -->
+<!-- refract-shared-version: 2.3.0 -->
 
 # Phase 2 Journal: Coordinator recovery contract
 
