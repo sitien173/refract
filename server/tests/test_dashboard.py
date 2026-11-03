@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from refract.config import TargetConfig, load_config
-from refract.models import TargetEditorData
 from refract.dashboard import _jsonable, _safe_execution_plan
 from refract.planning import execution_plan_data, resolve_execution_plan
 from refract.runtime import Runtime
@@ -107,7 +106,7 @@ other = "primary"
     from refract.dashboard import DashboardState
     monkeypatch.setattr(
         server, "DashboardState",
-        lambda: DashboardState(runtime=runtime, csrf_token="test-token"),
+        lambda: DashboardState(runtime=runtime),
     )
     try:
         yield runtime
@@ -230,31 +229,9 @@ async def test_dashboard_reads_fail_closed_without_runtime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dashboard_bootstrap_is_loopback_only_and_not_cached(active_runtime) -> None:
-    app = create_application()
-
-    status, headers, body = await request(
-        app,
-        "/dashboard/api/bootstrap",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    remote, _, _ = await request(
-        app,
-        "/dashboard/api/bootstrap",
-        headers=(("Host", "127.0.0.1"),),
-        client_host="192.0.2.1",
-    )
-
-    assert status == 200
-    assert headers[b"cache-control"] == b"no-store"
-    assert json.loads(body)["csrf_token"] == "test-token"
-    assert remote == 403
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "path",
-    ["/dashboard/api/status", "/dashboard/api/projects", "/dashboard/api/jobs/missing/output", "/dashboard"],
+    ["/dashboard/api/overview", "/dashboard/api/projects", "/dashboard/api/jobs/missing/output", "/dashboard"],
 )
 async def test_dashboard_routes_reject_rebound_host_and_remote_client(active_runtime, path) -> None:
     app = create_application()
@@ -453,71 +430,15 @@ consult = "primary"
     app = create_application()
     responses: list[bytes] = []
     for endpoint in (
-        "/dashboard/api/configuration",
         "/dashboard/api/overview",
         "/dashboard/api/settings",
-        "/dashboard/api/configuration/targets",
-        "/dashboard/api/configuration/targets/primary",
-        "/dashboard/api/configuration/profiles",
+        "/dashboard/api/targets",
+        "/dashboard/api/profiles",
         f"/dashboard/api/projects/{project.id}",
-        f"/dashboard/api/projects/{project.id}/profile-overrides",
     ):
         status, _, body = await request(app, endpoint)
         assert status == 200, (endpoint, body)
         responses.append(body)
-
-    revision = runtime.mutations.source_read().revision
-    headers = (
-        ("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"), ("If-Match", f'"{revision}"'),
-    )
-    update_data = {"id": "primary", "backend": "codex", "model": "updated"}
-    status, _, body = await request(
-        app, "/dashboard/api/configuration/targets/primary", method="PUT",
-        body=json.dumps(update_data).encode(), headers=headers,
-    )
-    assert status == 200
-    responses.append(body)
-
-    stale_headers = (*headers[:-1], ("If-Match", '"stale-environment-revision"'))
-    status, _, body = await request(
-        app, "/dashboard/api/configuration/targets/primary", method="PUT",
-        body=json.dumps(update_data).encode(), headers=stale_headers,
-    )
-    assert status == 409
-    responses.append(body)
-
-    current_revision = runtime.mutations.source_read().revision
-    invalid_headers = (*headers[:-1], ("If-Match", f'"{current_revision}"'))
-    invalid_data = {"id": "primary", "backend": "invalid-backend"}
-    status, _, body = await request(
-        app, "/dashboard/api/configuration/targets/primary", method="PUT",
-        body=json.dumps(invalid_data).encode(), headers=invalid_headers,
-    )
-    assert status == 422
-    responses.append(body)
-
-    project_url = f"/dashboard/api/projects/{project.id}/profile-overrides"
-    _, _, project_read_body = await request(app, project_url)
-    project_revision = json.loads(project_read_body)["revision"]
-    project_headers = (
-        ("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"), ("If-Match", f'"{project_revision}"'),
-    )
-    project_update = {"id": "balanced", "consult": {"targets": ["fallback"]}}
-    status, _, body = await request(
-        app, f"{project_url}/balanced", method="PUT",
-        body=json.dumps(project_update).encode(), headers=project_headers,
-    )
-    assert status == 200
-    responses.append(body)
-    stale_project_headers = (*project_headers[:-1], ("If-Match", '"stale-project-revision"'))
-    status, _, body = await request(
-        app, f"{project_url}/balanced", method="PUT",
-        body=json.dumps(project_update).encode(), headers=stale_project_headers,
-    )
-    assert status == 409
-    responses.append(body)
 
     plan = execution_plan_data(resolve_execution_plan("consult", runtime.catalog, "balanced"))
     for job_id, marked in (("environment-legacy", False), ("environment-marked", True)):
@@ -735,946 +656,6 @@ async def test_runtime_targets_endpoint_remains_unchanged(active_runtime) -> Non
         }
         assert "system_prompt" not in target
         assert "args" not in target
-
-
-@pytest.mark.parametrize("value", [True, 0, -1, 1.25, "200000"])
-def test_target_editor_rejects_invalid_context_window_values(value) -> None:
-    with pytest.raises(ValueError):
-        TargetEditorData.model_validate({"id": "demo", "backend": "codex", "contextWindow": value})
-
-
-def test_target_editor_json_uses_public_context_window_spelling() -> None:
-    rendered = _jsonable(TargetEditorData(id="demo", backend="codex", contextWindow=200000))
-    assert rendered["contextWindow"] == 200000
-    assert "context_window" not in rendered
-    assert rendered["retryPolicy"] == ""
-
-
-@pytest.mark.asyncio
-async def test_configuration_targets_read_loopback_only_and_no_store(active_runtime) -> None:
-    app = create_application()
-    status, headers, body = await request(
-        app,
-        "/dashboard/api/configuration/targets",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    assert status == 200
-    assert headers[b"cache-control"] == b"no-store"
-    assert b"etag" in headers
-    assert headers[b"etag"].startswith(b'"') and headers[b"etag"].endswith(b'"')
-    payload = json.loads(body)
-    assert "revision" in payload
-    assert "source_path" in payload
-    assert "targets" in payload
-    primary = next(t for t in payload["targets"] if t["id"] == "primary")
-    assert primary["backend"] == "codex"
-    assert primary["backend_profile"] == "legacy-profile"
-    assert primary["system_prompt"] == "act safe"
-    assert primary["args"] == ["--flag"]
-
-    remote_status, _, remote_body = await request(
-        app,
-        "/dashboard/api/configuration/targets",
-        headers=(("Host", "127.0.0.1"),),
-        client_host="192.0.2.1",
-    )
-    assert remote_status == 403
-    assert json.loads(remote_body)["code"] == "forbidden"
-
-    host_status, _, host_body = await request(
-        app,
-        "/dashboard/api/configuration/targets",
-        headers=(("Host", "attacker.com"),),
-    )
-    assert host_status == 403
-    assert json.loads(host_body)["code"] == "forbidden"
-
-
-@pytest.mark.asyncio
-async def test_configuration_target_get_by_id_and_not_found(active_runtime) -> None:
-    app = create_application()
-    status, headers, body = await request(
-        app,
-        "/dashboard/api/configuration/targets/primary",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    assert status == 200
-    assert headers[b"cache-control"] == b"no-store"
-    assert b"etag" in headers
-    payload = json.loads(body)
-    assert payload["target"]["id"] == "primary"
-    assert payload["target"]["backend"] == "codex"
-    assert payload["target"]["system_prompt"] == "act safe"
-
-    slash_status, _, slash_body = await request(
-        app,
-        "/dashboard/api/configuration/targets/cc/opus-consult-reasoning",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    assert slash_status == 200
-    assert json.loads(slash_body)["target"]["id"] == "cc/opus-consult-reasoning"
-
-    missing_status, _, missing_body = await request(
-        app,
-        "/dashboard/api/configuration/targets/nonexistent",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    assert missing_status == 404
-    assert json.loads(missing_body)["code"] == "not_found"
-
-    remote_status, _, _ = await request(
-        app,
-        "/dashboard/api/configuration/targets/primary",
-        headers=(("Host", "127.0.0.1"),),
-        client_host="192.0.2.1",
-    )
-    assert remote_status == 403
-
-
-@pytest.mark.asyncio
-async def test_configuration_target_update_and_delete_accept_slash_id(active_runtime) -> None:
-    app = create_application()
-    _, _, list_body = await request(
-        app,
-        "/dashboard/api/configuration/targets",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    revision = json.loads(list_body)["revision"]
-    headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{revision}"'),
-    )
-    target_id = "cc/opus-consult-reasoning"
-    path = f"/dashboard/api/configuration/targets/{target_id}"
-    update_body = json.dumps(
-        {"id": target_id, "backend": "claude", "model": "claude-opus-5", "reasoning": "max"}
-    ).encode()
-
-    update_status, _, update_response = await request(
-        app,
-        path,
-        method="PUT",
-        body=update_body,
-        headers=headers,
-    )
-    assert update_status == 200
-    update_payload = json.loads(update_response)
-    assert update_payload["target"]["reasoning"] == "max"
-
-    delete_headers = (*headers[:-1], ("If-Match", f'"{update_payload["revision"]}"'))
-    delete_status, _, delete_response = await request(
-        app,
-        path,
-        method="DELETE",
-        headers=delete_headers,
-    )
-    assert delete_status == 200
-    assert json.loads(delete_response)["deleted"] == target_id
-
-
-@pytest.mark.asyncio
-async def test_configuration_target_mutations_require_security_headers(active_runtime) -> None:
-    app = create_application()
-    endpoints = [
-        ("POST", "/dashboard/api/configuration/targets", json.dumps({"id": "t1", "backend": "codex"}).encode()),
-        ("PUT", "/dashboard/api/configuration/targets/primary", json.dumps({"id": "primary", "backend": "codex"}).encode()),
-        ("DELETE", "/dashboard/api/configuration/targets/primary", b""),
-    ]
-    for method, path, body in endpoints:
-        st, _, bd = await request(
-            app, path, method=method, body=body,
-            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-Refract-CSRF", "test-token"), ("If-Match", '"123"')),
-            client_host="192.0.2.1",
-        )
-        assert st == 403
-        assert json.loads(bd)["code"] == "forbidden"
-
-        st, _, bd = await request(
-            app, path, method=method, body=body,
-            headers=(("Host", "127.0.0.1"), ("Origin", "http://evil.com"), ("X-Refract-CSRF", "test-token"), ("If-Match", '"123"')),
-        )
-        assert st == 403
-        assert json.loads(bd)["code"] == "forbidden"
-
-        st, _, bd = await request(
-            app, path, method=method, body=body,
-            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("If-Match", '"123"')),
-        )
-        assert st == 403
-        assert json.loads(bd)["code"] == "forbidden"
-
-        st, _, bd = await request(
-            app, path, method=method, body=body,
-            headers=(("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"), ("X-Refract-CSRF", "test-token")),
-        )
-        assert st == 428
-        assert json.loads(bd)["code"] == "revision_required"
-
-
-@pytest.mark.asyncio
-async def test_configuration_target_create_route(active_runtime) -> None:
-    app = create_application()
-    _, _, list_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
-    rev = json.loads(list_body)["revision"]
-
-    headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-
-    data = {
-        "id": "tertiary",
-        "backend": "codex",
-        "backend_profile": "balanced",
-        "args": ["--arg1"],
-        "max_concurrency": 2,
-        "contextWindow": 200000,
-    }
-    status, res_headers, body = await request(
-        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(data).encode(), headers=headers
-    )
-    assert status == 200
-    assert res_headers[b"cache-control"] == b"no-store"
-    assert b"etag" in res_headers
-    payload = json.loads(body)
-    assert payload["target"]["id"] == "tertiary"
-    assert payload["target"]["backend_profile"] == "balanced"
-    assert payload["target"]["contextWindow"] == 200000
-    new_rev = payload["revision"]
-    _, _, listed_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
-    assert next(t for t in json.loads(listed_body)["targets"] if t["id"] == "tertiary")["contextWindow"] == 200000
-    _, _, read_body = await request(app, "/dashboard/api/configuration/targets/tertiary", headers=(("Host", "127.0.0.1"),))
-    assert json.loads(read_body)["target"]["contextWindow"] == 200000
-
-    dup_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{new_rev}"'),
-    )
-    dup_status, _, dup_body = await request(
-        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(data).encode(), headers=dup_headers
-    )
-    assert dup_status == 422
-    assert json.loads(dup_body)["code"] == "configuration_invalid"
-
-    bad_data = {
-        "id": "extra_field_t",
-        "backend": "codex",
-        "unknown_extra": "rejected",
-    }
-    bad_status, _, bad_body = await request(
-        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(bad_data).encode(), headers=dup_headers
-    )
-    assert bad_status == 422
-    assert json.loads(bad_body)["code"] == "configuration_invalid"
-
-    stale_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", '"stale-revision"'),
-    )
-    fresh_data = {"id": "fresh", "backend": "codex"}
-    stale_status, _, stale_body = await request(
-        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(fresh_data).encode(), headers=stale_headers
-    )
-    assert stale_status == 409
-    stale_payload = json.loads(stale_body)
-    assert stale_payload["code"] == "configuration_conflict"
-    assert stale_payload["current"] == new_rev
-
-
-@pytest.mark.asyncio
-async def test_configuration_target_update_route(active_runtime) -> None:
-    app = create_application()
-    _, _, list_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
-    rev = json.loads(list_body)["revision"]
-
-    headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-
-    update_data = {
-        "id": "primary",
-        "backend": "codex",
-        "model": "gpt-4o",
-        "backend_profile": "balanced",
-        "args": ["--updated"],
-        "max_concurrency": 5,
-        "contextWindow": 200000,
-    }
-    status, res_headers, body = await request(
-        app, "/dashboard/api/configuration/targets/primary", method="PUT", body=json.dumps(update_data).encode(), headers=headers
-    )
-    assert status == 200
-    assert res_headers[b"cache-control"] == b"no-store"
-    payload = json.loads(body)
-    assert payload["target"]["model"] == "gpt-4o"
-    assert payload["target"]["max_concurrency"] == 5
-    assert payload["target"]["contextWindow"] == 200000
-    new_rev = payload["revision"]
-
-    rename_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{new_rev}"'),
-    )
-    rename_data = dict(update_data, id="renamed")
-    ren_status, _, ren_body = await request(
-        app, "/dashboard/api/configuration/targets/primary", method="PUT", body=json.dumps(rename_data).encode(), headers=rename_headers
-    )
-    assert ren_status == 422
-    assert json.loads(ren_body)["code"] == "configuration_invalid"
-
-    missing_data = {"id": "missing", "backend": "codex"}
-    mis_status, _, mis_body = await request(
-        app, "/dashboard/api/configuration/targets/missing", method="PUT", body=json.dumps(missing_data).encode(), headers=rename_headers
-    )
-    assert mis_status == 404
-    assert json.loads(mis_body)["code"] == "not_found"
-
-    stale_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-    stale_status, _, stale_body = await request(
-        app, "/dashboard/api/configuration/targets/primary", method="PUT", body=json.dumps(update_data).encode(), headers=stale_headers
-    )
-    assert stale_status == 409
-    assert json.loads(stale_body)["code"] == "configuration_conflict"
-
-
-@pytest.mark.asyncio
-async def test_configuration_target_delete_route(active_runtime) -> None:
-    app = create_application()
-    _, _, list_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
-    rev = json.loads(list_body)["revision"]
-
-    headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-    create_status, _, create_body = await request(
-        app, "/dashboard/api/configuration/targets", method="POST",
-        body=json.dumps({"id": "to_delete", "backend": "pi"}).encode(),
-        headers=headers,
-    )
-    assert create_status == 200
-    rev2 = json.loads(create_body)["revision"]
-
-    del_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev2}"'),
-    )
-    del_status, del_headers_res, del_body = await request(
-        app, "/dashboard/api/configuration/targets/to_delete", method="DELETE", headers=del_headers
-    )
-    assert del_status == 200
-    assert del_headers_res[b"cache-control"] == b"no-store"
-    assert json.loads(del_body)["deleted"] == "to_delete"
-    rev3 = json.loads(del_body)["revision"]
-
-    ref_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev3}"'),
-    )
-    ref_status, _, ref_body = await request(
-        app, "/dashboard/api/configuration/targets/primary", method="DELETE", headers=ref_headers
-    )
-    assert ref_status == 409
-    ref_payload = json.loads(ref_body)
-    assert ref_payload["code"] == "referenced"
-    assert "references" in ref_payload
-    assert len(ref_payload["references"]) > 0
-
-    mis_status, _, mis_body = await request(
-        app, "/dashboard/api/configuration/targets/missing", method="DELETE", headers=ref_headers
-    )
-    assert mis_status == 404
-    assert json.loads(mis_body)["code"] == "not_found"
-
-
-@pytest.mark.asyncio
-async def test_configuration_target_error_redaction(active_runtime) -> None:
-    app = create_application()
-    _, _, list_body = await request(app, "/dashboard/api/configuration/targets", headers=(("Host", "127.0.0.1"),))
-    rev = json.loads(list_body)["revision"]
-
-    headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-
-    bad_data = {
-        "id": "secret_target",
-        "backend": "codex",
-        "system_prompt": "SUPER_SECRET_OPERATOR_PROMPT_XYZ",
-        "args": ["--"],
-    }
-    status, _, body = await request(
-        app, "/dashboard/api/configuration/targets", method="POST", body=json.dumps(bad_data).encode(), headers=headers
-    )
-    assert status == 422
-    payload = json.loads(body)
-    assert payload["code"] == "configuration_invalid"
-    assert "SUPER_SECRET_OPERATOR_PROMPT_XYZ" not in body.decode("utf-8")
-    assert payload["error"] == "Target args cannot contain the reserved token"
-
-
-@pytest.mark.asyncio
-async def test_configuration_mutation_error_message_reaches_client(active_runtime) -> None:
-    app = create_application()
-    _, _, list_body = await request(app, "/dashboard/api/configuration/targets")
-    rev = json.loads(list_body)["revision"]
-    headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/targets",
-        method="POST",
-        body=json.dumps({"id": "primary", "backend": "codex"}).encode(),
-        headers=headers,
-    )
-
-    assert status == 422
-    assert json.loads(body)["error"] == "Target 'primary' already exists."
-
-
-@pytest.mark.asyncio
-async def test_configuration_profiles_read_and_security(active_runtime) -> None:
-    app = create_application()
-
-    # Non-loopback host rejected with 403
-    status, _, _ = await request(
-        app, "/dashboard/api/configuration/profiles", headers=(("Host", "attacker.com"),)
-    )
-    assert status == 403
-    # Non-loopback client rejected with 403
-    status, _, _ = await request(
-        app,
-        "/dashboard/api/configuration/profiles",
-        headers=(("Host", "127.0.0.1"),),
-        client_host="192.168.1.50",
-    )
-    assert status == 403
-    # Loopback read succeeds
-    status, headers, body = await request(
-        app, "/dashboard/api/configuration/profiles", headers=(("Host", "127.0.0.1"),)
-    )
-    assert status == 200
-    assert headers[b"cache-control"] == b"no-store"
-    assert b"etag" in headers
-    data = json.loads(body)
-    assert data["default_profile"] == "balanced"
-    assert "primary" in data["available_targets"]
-    assert len(data["profiles"]) == 1
-    prof = data["profiles"][0]
-    assert prof["id"] == "balanced"
-    assert prof["declared"]["implement"]["targets"] == ["primary"]
-    assert prof["effective"]["implement"]["targets"] == ["primary"]
-    assert prof["sources"]["implement"] == "declared"
-
-    # Single profile get
-    status, headers, body = await request(
-        app, "/dashboard/api/configuration/profiles/balanced", headers=(("Host", "127.0.0.1"),)
-    )
-    assert status == 200
-    assert headers[b"cache-control"] == b"no-store"
-    single = json.loads(body)
-    assert single["profile"]["id"] == "balanced"
-
-    # Missing profile get
-    status, _, body = await request(
-        app, "/dashboard/api/configuration/profiles/missing", headers=(("Host", "127.0.0.1"),)
-    )
-    assert status == 404
-    assert json.loads(body)["code"] == "not_found"
-
-
-@pytest.mark.asyncio
-async def test_configuration_profiles_crud_and_references(active_runtime) -> None:
-    app = create_application()
-    _, _, list_body = await request(
-        app, "/dashboard/api/configuration/profiles", headers=(("Host", "127.0.0.1"),)
-    )
-    rev = json.loads(list_body)["revision"]
-
-    # CSRF check
-    bad_csrf_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "wrong-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-    status, _, _ = await request(
-        app,
-        "/dashboard/api/configuration/profiles",
-        method="POST",
-        body=json.dumps({"id": "p1"}).encode(),
-        headers=bad_csrf_headers,
-    )
-    assert status == 403
-    # If-Match missing check
-    no_match_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-    )
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles",
-        method="POST",
-        body=json.dumps({"id": "p1"}).encode(),
-        headers=no_match_headers,
-    )
-    assert status == 428
-    assert json.loads(body)["code"] == "revision_required"
-
-    # If-Match stale check
-    stale_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", '"stale-rev"'),
-    )
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles",
-        method="POST",
-        body=json.dumps({"id": "p1"}).encode(),
-        headers=stale_headers,
-    )
-    assert status == 409
-    assert json.loads(body)["code"] == "configuration_conflict"
-
-    # Create profile "quality" extending "balanced"
-    headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-    payload = {
-        "id": "quality",
-        "extends": "balanced",
-        "implement": {
-            "targets": ["fallback", "primary"],
-            "timeout_s": 30,
-        },
-    }
-    status, res_headers, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles",
-        method="POST",
-        body=json.dumps(payload).encode(),
-        headers=headers,
-    )
-    assert status == 200
-    assert res_headers[b"cache-control"] == b"no-store"
-    res_data = json.loads(body)
-    new_rev = res_data["revision"]
-    q_prof = res_data["profile"]
-    assert q_prof["id"] == "quality"
-    assert q_prof["declared"]["implement"]["targets"] == ["fallback", "primary"]
-    assert q_prof["declared"]["implement"]["timeout_s"] == 30
-    assert "max_attempts" not in q_prof["declared"]["implement"]
-    # Undeclared workflows appear as null in declared
-    assert q_prof["declared"]["review"] is None
-    assert q_prof["declared"]["consult"] is None
-    assert q_prof["declared"]["other"] is None
-    # Inherited and effective policies
-    assert q_prof["inherited"]["review"]["targets"] == ["primary"]
-    assert q_prof["effective"]["review"]["targets"] == ["primary"]
-    assert q_prof["sources"]["review"] == "balanced"
-    assert q_prof["sources"]["implement"] == "declared"
-
-    # Update: rename rejection
-    update_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{new_rev}"'),
-    )
-    rename_data = dict(payload, id="renamed")
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles/quality",
-        method="PUT",
-        body=json.dumps(rename_data).encode(),
-        headers=update_headers,
-    )
-    assert status == 422
-    assert json.loads(body)["code"] == "configuration_invalid"
-
-    # Update: valid update adding review workflow
-    valid_update = {
-        "id": "quality",
-        "extends": "balanced",
-        "implement": {
-            "targets": ["fallback", "primary"],
-            "timeout_s": 30,
-        },
-        "review": {
-            "targets": ["primary"],
-        },
-    }
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles/quality",
-        method="PUT",
-        body=json.dumps(valid_update).encode(),
-        headers=update_headers,
-    )
-    assert status == 200
-    updated_rev = json.loads(body)["revision"]
-
-    # Delete blocked by default_profile: deleting balanced
-    del_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{updated_rev}"'),
-    )
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles/balanced",
-        method="DELETE",
-        headers=del_headers,
-    )
-    assert status == 409
-    ref_payload = json.loads(body)
-    assert ref_payload["code"] == "referenced"
-    assert any(ref["relationship"] == "default_profile" for ref in ref_payload["references"])
-
-    # Create child extending quality to verify extends blocking
-    child_payload = {
-        "id": "child",
-        "extends": "quality",
-    }
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles",
-        method="POST",
-        body=json.dumps(child_payload).encode(),
-        headers=del_headers,
-    )
-    assert status == 200
-    rev_after_child = json.loads(body)["revision"]
-
-    # Delete quality blocked by child extending it
-    del_q_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev_after_child}"'),
-    )
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles/quality",
-        method="DELETE",
-        headers=del_q_headers,
-    )
-    assert status == 409
-    ref_payload = json.loads(body)
-    assert ref_payload["code"] == "referenced"
-    assert any(ref["profile_id"] == "child" and ref["relationship"] == "extends" for ref in ref_payload["references"])
-
-    # Delete child
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles/child",
-        method="DELETE",
-        headers=del_q_headers,
-    )
-    assert status == 200
-    rev_after_child_del = json.loads(body)["revision"]
-
-    # Delete quality succeeds now
-    del_q2_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev_after_child_del}"'),
-    )
-    status, _, body = await request(
-        app,
-        "/dashboard/api/configuration/profiles/quality",
-        method="DELETE",
-        headers=del_q2_headers,
-    )
-    assert status == 200
-    assert json.loads(body)["deleted"] == "quality"
-
-
-@pytest.mark.asyncio
-async def test_project_profile_override_routes_crud_and_fallback(active_runtime) -> None:
-    app = create_application()
-    project_id = active_runtime.database.projects()[0].id
-    url_base = f"/dashboard/api/projects/{project_id}/profile-overrides"
-
-    # Security: non-loopback host rejected
-    status, _, _ = await request(app, url_base, headers=(("Host", "attacker.com"),))
-    assert status == 403
-    # Unknown project rejected
-    status, _, body = await request(
-        app,
-        "/dashboard/api/projects/unknown-proj/profile-overrides",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    assert status == 404
-
-    # Initial list before any project config file exists
-    status, headers, body = await request(app, url_base, headers=(("Host", "127.0.0.1"),))
-    assert status == 200
-    assert headers[b"cache-control"] == b"no-store"
-    list_data = json.loads(body)
-    assert list_data["overrides"] == []
-    assert list_data["global_default_profile"] == "balanced"
-    assert list_data["project_default_profile"] == "balanced"
-    rev = list_data["revision"]
-
-    # Create override for "balanced" - creating minimal project file on demand
-    create_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev}"'),
-    )
-    override_payload = {
-        "id": "balanced",
-        "extends": "balanced",
-        "implement": {"targets": ["fallback"]},
-    }
-    status, _, body = await request(
-        app,
-        url_base,
-        method="POST",
-        body=json.dumps(override_payload).encode(),
-        headers=create_headers,
-    )
-    assert status == 200
-    created_data = json.loads(body)
-    rev2 = created_data["revision"]
-    created_ov = created_data["override"]
-    assert created_ov["id"] == "balanced"
-    assert created_ov["declared"]["implement"]["targets"] == ["fallback"]
-    assert created_ov["effective"]["implement"]["targets"] == ["fallback"]
-    assert created_ov["effective"]["review"]["targets"] == ["primary"]
-    assert created_ov["sources"]["review"] == "global"
-
-    # Single override GET
-    status, _, body = await request(
-        app,
-        f"{url_base}/balanced",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    assert status == 200
-    assert json.loads(body)["override"]["id"] == "balanced"
-
-    # Update override
-    update_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev2}"'),
-    )
-    update_payload = {
-        "id": "balanced",
-        "extends": "balanced",
-        "implement": {"targets": ["fallback"]},
-        "review": {"targets": ["fallback"]},
-    }
-    status, _, body = await request(
-        app,
-        f"{url_base}/balanced",
-        method="PUT",
-        body=json.dumps(update_payload).encode(),
-        headers=update_headers,
-    )
-    assert status == 200
-    rev3 = json.loads(body)["revision"]
-
-    # DELETE override - returns resulting effective global fallback!
-    del_headers = (
-        ("Host", "127.0.0.1"),
-        ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"),
-        ("If-Match", f'"{rev3}"'),
-    )
-    status, del_h, body = await request(
-        app,
-        f"{url_base}/balanced",
-        method="DELETE",
-        headers=del_headers,
-    )
-    assert status == 200
-    del_data = json.loads(body)
-    assert del_data["deleted"] == "balanced"
-    fallback = del_data["fallback"]
-    assert fallback is not None
-    assert fallback["id"] == "balanced"
-    assert fallback["effective"]["implement"]["targets"] == ["primary"]
-    assert fallback["effective"]["review"]["targets"] == ["primary"]
-
-    # Existing runtime read endpoints remain compatible
-    status, _, body = await request(
-        app,
-        "/dashboard/api/profiles",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    assert status == 200
-    rt_profiles = json.loads(body)
-    assert rt_profiles["default"] == "balanced"
-    assert "balanced" in rt_profiles["available"]
-
-    status, _, body = await request(
-        app,
-        f"/dashboard/api/projects/{project_id}",
-        headers=(("Host", "127.0.0.1"),),
-    )
-    assert status == 200
-
-
-@pytest.mark.asyncio
-async def test_project_profile_override_conflict_and_validation(active_runtime) -> None:
-    app = create_application()
-    project_id = active_runtime.database.projects()[0].id
-    url_base = f"/dashboard/api/projects/{project_id}/profile-overrides"
-
-    # 1. Missing If-Match revision returns 428
-    status, _, body = await request(
-        app,
-        url_base,
-        method="POST",
-        body=json.dumps({"id": "custom", "implement": {"targets": ["fallback"]}}).encode(),
-        headers=(
-            ("Host", "127.0.0.1"),
-            ("Origin", "http://127.0.0.1"),
-            ("X-Refract-CSRF", "test-token"),
-        ),
-    )
-    assert status == 428
-    assert json.loads(body)["code"] == "revision_required"
-
-    # 2. Creating with non-matching revision when file does not exist returns 409 conflict
-    status, _, body = await request(
-        app,
-        url_base,
-        method="POST",
-        body=json.dumps({"id": "custom", "implement": {"targets": ["fallback"]}}).encode(),
-        headers=(
-            ("Host", "127.0.0.1"),
-            ("Origin", "http://127.0.0.1"),
-            ("X-Refract-CSRF", "test-token"),
-            ("If-Match", '"non-existent-rev"'),
-        ),
-    )
-    assert status == 409
-    assert json.loads(body)["code"] == "configuration_conflict"
-
-    # 3. Validation: empty profile id returns 422
-    status, _, body = await request(
-        app,
-        url_base,
-        method="POST",
-        body=json.dumps({"id": "   ", "implement": {"targets": ["fallback"]}}).encode(),
-        headers=(
-            ("Host", "127.0.0.1"),
-            ("Origin", "http://127.0.0.1"),
-            ("X-Refract-CSRF", "test-token"),
-            ("If-Match", '""'),
-        ),
-    )
-    assert status == 422
-    assert json.loads(body)["code"] == "configuration_invalid"
-
-    # 4. Successful creation on missing file with empty If-Match
-    status, _, body = await request(
-        app,
-        url_base,
-        method="POST",
-        body=json.dumps({
-            "id": "dev-profile",
-            "extends": "balanced",
-            "implement": {"targets": ["fallback"]},
-        }).encode(),
-        headers=(
-            ("Host", "127.0.0.1"),
-            ("Origin", "http://127.0.0.1"),
-            ("X-Refract-CSRF", "test-token"),
-            ("If-Match", '""'),
-        ),
-    )
-    assert status == 200
-    created = json.loads(body)
-    new_rev = created["revision"]
-    assert created["override"]["id"] == "dev-profile"
-
-    # 5. Stale revision update returns 409 with current revision
-    status, _, body = await request(
-        app,
-        f"{url_base}/dev-profile",
-        method="PUT",
-        body=json.dumps({
-            "id": "dev-profile",
-            "extends": "balanced",
-            "implement": {"targets": ["primary"]},
-        }).encode(),
-        headers=(
-            ("Host", "127.0.0.1"),
-            ("Origin", "http://127.0.0.1"),
-            ("X-Refract-CSRF", "test-token"),
-            ("If-Match", '"stale-revision-value"'),
-        ),
-    )
-    assert status == 409
-    conflict_err = json.loads(body)
-    assert conflict_err["code"] == "configuration_conflict"
-    assert conflict_err["current"] == new_rev
-
-    # 6. Conflict recovery: update with correct current revision succeeds
-    status, _, body = await request(
-        app,
-        f"{url_base}/dev-profile",
-        method="PUT",
-        body=json.dumps({
-            "id": "dev-profile",
-            "extends": "balanced",
-            "implement": {"targets": ["primary"]},
-        }).encode(),
-        headers=(
-            ("Host", "127.0.0.1"),
-            ("Origin", "http://127.0.0.1"),
-            ("X-Refract-CSRF", "test-token"),
-            ("If-Match", f'"{new_rev}"'),
-        ),
-    )
-    assert status == 200
-    assert json.loads(body)["override"]["effective"]["implement"]["targets"] == ["primary"]
 
 
 @pytest.mark.asyncio
@@ -2152,55 +1133,6 @@ async def test_project_jobs_are_grouped_bounded_and_keep_all_active(active_runti
 @pytest.mark.asyncio
 
 
-@pytest.mark.asyncio
-async def test_confirmed_removed_api_aliases_return_json_not_found(active_runtime, tmp_path) -> None:
-    runtime = active_runtime
-    project_root = tmp_path / "alias-project"
-    project_root.mkdir()
-    project = register_project(runtime, str(project_root), "alias-project")
-    config_dir = project_root / ".refract"
-    config_dir.mkdir()
-    project_config = config_dir / "config.toml"
-    project_config.write_text(
-        '[profiles.balanced]\nextends = "balanced"\nimplement = "fallback"\n',
-        encoding="utf-8",
-    )
-    source_read, _, _, _, _ = runtime.mutations.read_project_overrides(project_root)
-    app = create_application()
-    read_headers = (
-        ("Host", "127.0.0.1"), ("Origin", "http://127.0.0.1"),
-        ("X-Refract-CSRF", "test-token"), ("If-Match", f'"{source_read.revision}"'),
-    )
-    mutation_headers = read_headers
-    valid_body = json.dumps({"id": "balanced", "extends": "balanced", "implement": {"targets": ["fallback"]}}).encode()
-    requests = [
-        ("GET", f"/dashboard/api/projects/{project.id}/configuration/profiles", read_headers, b""),
-        ("POST", f"/dashboard/api/projects/{project.id}/configuration/profiles", mutation_headers, valid_body),
-        ("GET", f"/dashboard/api/projects/{project.id}/configuration/profiles/balanced", read_headers, b""),
-        ("PUT", f"/dashboard/api/projects/{project.id}/configuration/profiles/balanced", mutation_headers, valid_body),
-        ("DELETE", f"/dashboard/api/projects/{project.id}/configuration/profiles/balanced", mutation_headers, b""),
-    ]
-    for method, path, headers, body in requests:
-        status, response_headers, response_body = await request(app, path, method=method, headers=headers, body=body)
-        payload = json.loads(response_body)
-        assert status == 404
-        assert response_headers[b"content-type"].startswith(b"application/json")
-        assert payload["error"] == "Dashboard API route not found"
-    for path in (
-        "/dashboard/api/config",
-        "/dashboard/api/config/health",
-    ):
-        status, _, body = await request(app, path, headers=read_headers)
-        assert status == 404 and json.loads(body)["error"] == "Dashboard API route not found"
-    for path in (
-        "/dashboard/api/configuration",
-        "/dashboard/api/status", "/dashboard/api/overview",
-    ):
-        status, _, _ = await request(app, path, headers=read_headers)
-        assert status == 200
-
-
-@pytest.mark.asyncio
 async def test_rest_to_subscription_race_resolved_by_initial_cursor(active_runtime) -> None:
     runtime = active_runtime
     project = runtime.database.project("project")
@@ -3004,7 +1936,7 @@ other = "primary"
     from refract.dashboard import DashboardState
     monkeypatch.setattr(
         server, "DashboardState",
-        lambda: DashboardState(runtime=runtime2, csrf_token="test-token"),
+        lambda: DashboardState(runtime=runtime2),
     )
     try:
         app = create_application()
@@ -3096,7 +2028,7 @@ async def test_dashboard_and_mcp_project_same_live_retry_route(tmp_path, monkeyp
     root = tmp_path / "project"
     root.mkdir()
     project = register_project(runtime, str(root), "route-project")
-    monkeypatch.setattr(server, "DashboardState", lambda: DashboardState(runtime=runtime, csrf_token="test-token"))
+    monkeypatch.setattr(server, "DashboardState", lambda: DashboardState(runtime=runtime))
     job_id = "job-route-parity"
     runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="route", execution_plan_json="{}", context_key="route")
     runtime.database.finish_job(job_id, "failed", target_id="first", metadata={"failure": {"kind": "retryable"}, "retry": {"retryable": True}})
@@ -3111,6 +2043,58 @@ async def test_dashboard_and_mcp_project_same_live_retry_route(tmp_path, monkeyp
         assert actual["retry"]["next_target"].startswith("nt_")
     finally:
         runtime.database.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/dashboard/api/bootstrap",
+        "/dashboard/api/status",
+        "/dashboard/api/configuration",
+        "/dashboard/api/configuration/targets",
+        "/dashboard/api/configuration/targets/primary",
+        "/dashboard/api/configuration/profiles",
+        "/dashboard/api/configuration/profiles/balanced",
+        "/dashboard/api/projects/p1/profile-overrides",
+        "/dashboard/api/projects/p1/profile-overrides/balanced",
+        "/dashboard/api/task-guide",
+    ],
+)
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "DELETE"])
+async def test_deleted_dashboard_routes_return_json_404(active_runtime, path, method) -> None:
+    app = create_application()
+    status, headers, body = await request(app, path, method=method)
+    assert status == 404
+    data = json.loads(body)
+    assert data["code"] == "not_found"
+    assert data["error"] == "Dashboard API route not found"
+
+
+@pytest.mark.asyncio
+async def test_profiles_endpoint_enriched_with_profile_config_data(active_runtime) -> None:
+    app = create_application()
+    status, _, body = await request(app, "/dashboard/api/profiles")
+    assert status == 200
+    data = json.loads(body)
+    assert "default" in data
+    assert "available" in data
+    assert "profiles" in data
+    assert isinstance(data["profiles"], list)
+    assert len(data["profiles"]) > 0
+    for profile in data["profiles"]:
+        assert set(profile.keys()) == {
+            "id",
+            "parent",
+            "declared",
+            "inherited",
+            "effective",
+            "sources",
+        }
+        serialized = json.dumps(profile)
+        assert "system_prompt" not in serialized
+        assert '"args"' not in serialized
+
 
 
 

@@ -1,249 +1,102 @@
-let csrfToken = ''
+export const API_BASE = '/dashboard/api'
 
-export class DashboardApiError extends Error {
-  constructor(message, status, payload) {
-    super(message)
-    this.name = 'DashboardApiError'
-    this.status = status
-    this.payload = payload
-  }
+export const TERMINAL_STATES = Object.freeze([
+  'succeeded',
+  'failed',
+  'cancelled',
+  'interrupted',
+])
+
+export function isTerminalState(state) {
+  return TERMINAL_STATES.includes(state)
 }
 
-async function readPayload(response) {
-  try {
-    return await response.json()
-  } catch {
-    return {}
-  }
-}
-
-async function request(path, options = {}) {
-  const response = await fetch(path, {
+async function requestJson(path, options = {}) {
+  const url = path.startsWith('http') ? path : `${API_BASE}${path}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      ...options.headers,
+    },
     ...options,
-    headers: { Accept: 'application/json', ...(options.headers || {}) },
   })
-  const payload = await readPayload(response)
+
   if (!response.ok) {
-    throw new DashboardApiError(payload.error || 'Dashboard request failed', response.status, payload)
-  }
-  return payload
-}
-
-let bootstrapPromise = null
-
-export async function getBootstrap() {
-  if (!bootstrapPromise) {
-    bootstrapPromise = request('/dashboard/api/bootstrap')
-      .then((payload) => {
-        csrfToken = payload.csrf_token || ''
-        return payload
-      })
-      .finally(() => {
-        bootstrapPromise = null
-      })
-  }
-  return bootstrapPromise
-}
-
-export async function getOverview() {
-  return request('/dashboard/api/overview')
-}
-
-export async function getProjects() {
-  return request('/dashboard/api/projects')
-}
-
-export async function getTargets() {
-  return request('/dashboard/api/targets')
-}
-
-export async function getSettings() {
-  return request('/dashboard/api/settings')
-}
-
-export async function getProfiles() {
-  return request('/dashboard/api/profiles')
-}
-
-export async function getStatus() {
-  return request('/dashboard/api/status')
-}
-
-export async function getConfiguration() {
-  return request('/dashboard/api/configuration')
-}
-
-export async function getProject(projectId) {
-  return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}`)
-}
-
-export async function getProjectJobs(projectId) {
-  return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}/jobs`)
-}
-
-export async function getJob(jobId) {
-  return request(`/dashboard/api/jobs/${encodeURIComponent(jobId)}`)
-}
-
-export async function getJobOutput(jobId, { after = 0, limit = 100 } = {}, signal) {
-  const params = new URLSearchParams()
-  if (after !== undefined && after !== null) params.set('after', String(after))
-  if (limit !== undefined && limit !== null) params.set('limit', String(limit))
-  const qs = params.toString() ? `?${params.toString()}` : ''
-  return request(`/dashboard/api/jobs/${encodeURIComponent(jobId)}/output${qs}`, { signal })
-}
-
-export async function getDiagnostics(options = {}, signal) {
-  const params = new URLSearchParams()
-  const proj = options.projectId ?? options.project_id
-  const job = options.jobId ?? options.job_id
-  const cat = options.category
-  const before = options.before
-  const limit = options.limit
-  if (proj) params.set('project_id', String(proj).trim())
-  if (job) params.set('job_id', String(job).trim())
-  if (cat) params.set('category', String(cat).trim())
-  if (before !== undefined && before !== null && String(before).trim() !== '') {
-    params.set('before', String(before).trim())
-  }
-  if (limit !== undefined && limit !== null && String(limit).trim() !== '') {
-    params.set('limit', String(limit).trim())
-  }
-  const qs = params.toString() ? `?${params.toString()}` : ''
-  const reqSignal = signal || options.signal
-  return request(`/dashboard/api/diagnostics${qs}`, reqSignal ? { signal: reqSignal } : {})
-}
-
-export async function getTaskGuide(projectId) {
-  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
-  return request(`/dashboard/api/task-guide${query}`)
-}
-
-export async function mutateWithCsrf(path, { method = 'POST', body, expectedRevision } = {}) {
-  if (!csrfToken) await getBootstrap()
-  const headers = {
-    Accept: 'application/json',
-  }
-  if (body !== undefined) {
-    headers['Content-Type'] = 'application/json'
-  }
-  if (expectedRevision !== undefined && expectedRevision !== null) {
-    const rev = String(expectedRevision).trim()
-    headers['If-Match'] = rev.startsWith('"') && rev.endsWith('"') ? rev : `"${rev}"`
-  }
-  const payloadBody = body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
-
-  let response
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    response = await fetch(path, {
-      method,
-      headers: {
-        ...headers,
-        'X-Refract-CSRF': csrfToken,
-      },
-      body: payloadBody,
-    })
-    const payload = await readPayload(response)
-    if (response.status !== 403 || payload.code !== 'forbidden' || attempt === 1) {
-      if (!response.ok) {
-        throw new DashboardApiError(payload.error || 'Dashboard request failed', response.status, payload)
+    let message = response.statusText || `Request failed with status ${response.status}`
+    let errorDetails = null
+    try {
+      errorDetails = await response.json()
+      if (errorDetails && errorDetails.error) {
+        message = errorDetails.error
       }
-      return payload
+    } catch {
+      // response was not JSON
     }
-    await getBootstrap()
+    const err = new Error(message)
+    err.status = response.status
+    err.details = errorDetails
+    throw err
   }
-  throw new DashboardApiError('Dashboard request failed', 403, {})
+
+  return response.json()
 }
 
-export async function getConfigurationTargets() {
-  return request('/dashboard/api/configuration/targets')
+export async function fetchOverview() {
+  return requestJson('/overview')
 }
 
-export async function getConfigurationTarget(targetId) {
-  return request(`/dashboard/api/configuration/targets/${encodeURIComponent(targetId)}`)
+export async function fetchProjects() {
+  return requestJson('/projects')
 }
 
-export async function createConfigurationTarget(targetData, expectedRevision) {
-  return mutateWithCsrf('/dashboard/api/configuration/targets', {
-    method: 'POST',
-    body: targetData,
-    expectedRevision,
-  })
+export async function fetchProject(projectId) {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}`)
 }
 
-export async function updateConfigurationTarget(targetId, targetData, expectedRevision) {
-  return mutateWithCsrf(`/dashboard/api/configuration/targets/${encodeURIComponent(targetId)}`, {
-    method: 'PUT',
-    body: targetData,
-    expectedRevision,
-  })
+export async function fetchProjectJobs(projectId) {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}/jobs`)
 }
 
-export async function deleteConfigurationTarget(targetId, expectedRevision) {
-  return mutateWithCsrf(`/dashboard/api/configuration/targets/${encodeURIComponent(targetId)}`, {
-    method: 'DELETE',
-    expectedRevision,
-  })
+export async function fetchJob(jobId) {
+  return requestJson(`/jobs/${encodeURIComponent(jobId)}`)
 }
 
-export async function getConfigurationProfiles() {
-  return request('/dashboard/api/configuration/profiles')
+export async function fetchJobOutput(jobId, { after = 0, limit = 100 } = {}) {
+  const params = new URLSearchParams()
+  if (after !== undefined && after !== null) {
+    params.set('after', String(after))
+  }
+  if (limit !== undefined && limit !== null) {
+    params.set('limit', String(limit))
+  }
+  const query = params.toString() ? `?${params.toString()}` : ''
+  return requestJson(`/jobs/${encodeURIComponent(jobId)}/output${query}`)
 }
 
-export async function getConfigurationProfile(profileId) {
-  return request(`/dashboard/api/configuration/profiles/${encodeURIComponent(profileId)}`)
+export async function fetchDiagnostics(params = {}) {
+  const searchParams = new URLSearchParams()
+  for (const [key, val] of Object.entries(params)) {
+    if (val !== undefined && val !== null && val !== '') {
+      searchParams.set(key, String(val))
+    }
+  }
+  const query = searchParams.toString() ? `?${searchParams.toString()}` : ''
+  return requestJson(`/diagnostics${query}`)
 }
 
-export async function createConfigurationProfile(profileData, expectedRevision) {
-  return mutateWithCsrf('/dashboard/api/configuration/profiles', {
-    method: 'POST',
-    body: profileData,
-    expectedRevision,
-  })
+export async function fetchTargets() {
+  return requestJson('/targets')
 }
 
-export async function updateConfigurationProfile(profileId, profileData, expectedRevision) {
-  return mutateWithCsrf(`/dashboard/api/configuration/profiles/${encodeURIComponent(profileId)}`, {
-    method: 'PUT',
-    body: profileData,
-    expectedRevision,
-  })
+export async function fetchProfiles() {
+  return requestJson('/profiles')
 }
 
-export async function deleteConfigurationProfile(profileId, expectedRevision) {
-  return mutateWithCsrf(`/dashboard/api/configuration/profiles/${encodeURIComponent(profileId)}`, {
-    method: 'DELETE',
-    expectedRevision,
-  })
+export async function fetchSettings() {
+  return requestJson('/settings')
 }
 
-export async function getProjectProfileOverrides(projectId) {
-  return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides`)
-}
-
-export async function getProjectProfileOverride(projectId, profileId) {
-  return request(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides/${encodeURIComponent(profileId)}`)
-}
-
-export async function createProjectProfileOverride(projectId, overrideData, expectedRevision) {
-  return mutateWithCsrf(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides`, {
-    method: 'POST',
-    body: overrideData,
-    expectedRevision,
-  })
-}
-
-export async function updateProjectProfileOverride(projectId, profileId, overrideData, expectedRevision) {
-  return mutateWithCsrf(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides/${encodeURIComponent(profileId)}`, {
-    method: 'PUT',
-    body: overrideData,
-    expectedRevision,
-  })
-}
-
-export async function deleteProjectProfileOverride(projectId, profileId, expectedRevision) {
-  return mutateWithCsrf(`/dashboard/api/projects/${encodeURIComponent(projectId)}/profile-overrides/${encodeURIComponent(profileId)}`, {
-    method: 'DELETE',
-    expectedRevision,
-  })
+export function getJobOutputUpdatesUrl(jobId) {
+  return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/output/updates`
 }

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, Field
 
 from refract.telemetry import Measurement, TelemetryData
 from refract.result_metadata import JobResultMetadata
@@ -147,189 +147,6 @@ class DashboardError(BaseModel):
     code: str = ""
     unchanged: str = ""
     recovery: str = ""
-    source_path: str = ""
-    current: str | None = None
-    references: list[dict[str, Any]] | None = None
-
-
-class TargetReference(BaseModel):
-    scope: Literal["global", "project"]
-    project_id: str | None = None
-    profile_id: str
-    workflow: str
-
-
-class TargetEditorData(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    id: str
-    backend: str = ""
-    model: str = ""
-    backend_profile: str = ""
-    reasoning: str = ""
-    system_prompt: str = ""
-    isolated: bool = False
-    read_only: bool = False
-    args: list[str] = Field(default_factory=list)
-    max_concurrency: int = 1
-    retryPolicy: str = Field(default="", alias="retry_policy")
-    context_window: int | None = Field(default=None, alias="contextWindow", strict=True)
-
-    @field_validator("context_window")
-    @classmethod
-    def _positive_context_window(cls, value: int | None) -> int | None:
-        if value is not None and value < 1:
-            raise ValueError("contextWindow must be a positive integer")
-        return value
-
-    @property
-    def retry_policy(self) -> str:
-        return self.retryPolicy
-
-    @field_validator("retryPolicy", mode="before")
-    @classmethod
-    def _normalize_retry_policy(cls, value: Any) -> Any:
-        if value is None:
-            return ""
-        if isinstance(value, str):
-            return value.strip()
-        return value
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_profile(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            if "backend_profile" in data and "profile" in data:
-                raise ValueError(
-                    "Use 'backend_profile', not both 'backend_profile' and legacy 'profile'"
-                )
-            if "backend_profile" not in data and "profile" in data:
-                data = dict(data)
-                data["backend_profile"] = data.pop("profile")
-            if "retryPolicy" in data and "retry_policy" in data:
-                raise ValueError(
-                    "Use 'retryPolicy', not both 'retryPolicy' and 'retry_policy'"
-                )
-        return data
-
-
-class TargetListResponse(BaseModel):
-    revision: str
-    source_path: str
-    targets: list[TargetEditorData]
-
-
-class TargetResponse(BaseModel):
-    revision: str
-    source_path: str
-    target: TargetEditorData
-
-
-class TargetDeleteResponse(BaseModel):
-    revision: str
-    source_path: str
-    deleted: str
-
-
-class WorkflowPolicyData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    targets: list[str]
-    timeout_s: int = 0
-
-
-class ProfileEditorData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    extends: str | None = None
-    workflows: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_workflows(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            data = dict(data)
-            workflows = dict(data.get("workflows") or {})
-            for wf in ("consult", "implement", "review", "other"):
-                if wf in data and wf not in workflows:
-                    workflows[wf] = data.pop(wf)
-            if workflows:
-                data["workflows"] = workflows
-        return data
-
-    @field_validator("extends", mode="before")
-    @classmethod
-    def _normalize_extends(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            value = value.strip()
-            return value if value else None
-        return value
-
-
-class ProfileEditorResponse(BaseModel):
-    id: str
-    extends: str | None = None
-    workflows: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
-    declared: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
-    inherited: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
-    effective: dict[str, WorkflowPolicyData | None] = Field(default_factory=dict)
-    sources: dict[str, str] = Field(default_factory=dict)
-
-
-class ProfileReference(BaseModel):
-    scope: Literal["global", "project"]
-    project_id: str | None = None
-    profile_id: str | None = None
-    relationship: Literal["default_profile", "extends"]
-
-
-class ProfileListResponse(BaseModel):
-    revision: str
-    source_path: str
-    default_profile: str
-    available_targets: list[str]
-    profiles: list[ProfileEditorResponse]
-
-
-class ProfileResponse(BaseModel):
-    revision: str
-    source_path: str
-    default_profile: str
-    available_targets: list[str]
-    profile: ProfileEditorResponse
-
-
-class ProfileDeleteResponse(BaseModel):
-    revision: str
-    source_path: str
-    deleted: str
-
-
-class ProjectOverrideListResponse(BaseModel):
-    revision: str
-    source_path: str
-    global_default_profile: str
-    project_default_profile: str
-    available_targets: list[str]
-    overrides: list[ProfileEditorResponse]
-
-
-class ProjectOverrideResponse(BaseModel):
-    revision: str
-    source_path: str
-    override: ProfileEditorResponse
-
-
-class ProjectOverrideDeleteResponse(BaseModel):
-    revision: str
-    source_path: str
-    deleted: str
-    fallback: ProfileEditorResponse | None = None
-
-
-class DashboardBootstrap(BaseModel):
-    csrf_token: str
 
 
 class DashboardOverview(BaseModel):
@@ -410,7 +227,6 @@ class DiagnosticReportResult(BaseModel):
 __all__ = [
     "ActionResult",
     "ConfigHealth",
-    "DashboardBootstrap",
     "DashboardError",
     "DashboardJob",
     "DashboardOverview",
@@ -426,26 +242,11 @@ __all__ = [
     "JobStreamEvent",
     "JobSummary",
     "Measurement",
-    "ProfileDeleteResponse",
-    "ProfileEditorData",
-    "ProfileEditorResponse",
-    "ProfileListResponse",
-    "ProfileReference",
-    "ProfileResponse",
-    "ProjectOverrideDeleteResponse",
-    "ProjectOverrideListResponse",
-    "ProjectOverrideResponse",
     "ProjectView",
     "StreamStatus",
     "StreamTotals",
     "SubmissionResult",
     "TERMINAL_STATES",
-    "TargetDeleteResponse",
-    "TargetEditorData",
-    "TargetListResponse",
-    "TargetReference",
-    "TargetResponse",
     "TargetView",
     "TelemetryData",
-    "WorkflowPolicyData",
 ]

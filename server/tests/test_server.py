@@ -2218,3 +2218,20 @@ async def test_job_report_error_logging_behavior(tmp_path, monkeypatch, caplog) 
                 if getattr(r, "event", "") == "job.error_reported"
             ]
             assert len(records2) == 1
+
+
+@pytest.mark.asyncio
+async def test_server_task_guide_recovery_string_names_config_toml(tmp_path, monkeypatch) -> None:
+    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
+        root = tmp_path / "proj"
+        root.mkdir()
+        resolve = await client.call_tool("project_resolve", {"path": str(root), "alias": "p"})
+        assert not resolve.is_error
+        project_id = json.loads(resolve.content[0].text)["project"]["id"]
+        (runtime.config.home / "task_guide.json").write_text("{invalid", encoding="utf-8")
+        response = await client.call_tool("task_guide", {"project_id": project_id})
+        assert response.is_error
+        payload = json.loads(response.content[0].text)
+        assert payload["code"] == "config_invalid"
+        assert payload["next_action"] == "Fix the project guidance or configuration in .refract/config.toml."
+

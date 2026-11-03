@@ -1,0 +1,207 @@
+@import '../_shared/field-label/field-label.css';
+@import '../_shared/field-caption/field-caption.css';
+@import '../_shared/field-validation/field-validation.css';
+
+/* ============================================================
+   TextInput
+   Sizes:  small | medium (default) | large
+   States: rest | focus | disabled | read-only | filled
+   Validation: none | invalid | success
+   Options: inset, leadingVisual, trailingAction, caption (full width by default)
+   Figma: TextInput (96:3268)
+   ============================================================ */
+
+.tds-text-input {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+  font-family: var(--font-family);
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Alias — fields are full width by default */
+.tds-text-input--full-width {
+  width: 100%;
+}
+
+/* --- Input field container --- */
+
+.tds-text-input__field {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--surface-neutral-01);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-button);
+  box-shadow: var(--shadow-inset);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* Sizes */
+.tds-text-input__field--sm {
+  height: 28px;
+  padding: 0 var(--padding-sm);
+  font-size: var(--font-size-sm);
+}
+
+.tds-text-input__field--md,
+.tds-text-input__field:not([class*="__field--sm"]):not([class*="__field--lg"]) {
+  height: 32px;
+  padding: 0 var(--padding-sm);
+  font-size: var(--font-size-sm);
+}
+
+.tds-text-input__field--lg {
+  height: 40px;
+  padding: 0 var(--padding-md);
+  font-size: var(--font-size-sm);
+}
+
+/* --- Native input --- */
+
+.tds-text-input__native {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-sm);
+  color: var(--text-default);
+}
+
+.tds-text-input__native::placeholder {
+  color: var(--text-placeholder);
+}
+
+/* --- States --- */
+
+/* Focus */
+.tds-text-input__field:focus-within,
+.tds-text-input__field--focus {
+  border-color: var(--border-focus);
+  border-width: 2px;
+  box-shadow: none;
+}
+
+.tds-text-input__field--sm:focus-within,
+.tds-text-input__field--sm.tds-text-input__field--focus {
+  padding: 0 calc(var(--padding-sm) - 1px);
+}
+
+.tds-text-input__field--md:focus-within,
+.tds-text-input__field--md.tds-text-input__field--focus,
+.tds-text-input__field:not([class*="__field--sm"]):not([class*="__field--lg"]):focus-within,
+.tds-text-input__field:not([class*="__field--sm"]):not([class*="__field--lg"]).tds-text-input__field--focus {
+  padding: 0 calc(var(--padding-sm) - 1px);
+}
+
+.tds-text-input__field--lg:focus-within,
+.tds-text-input__field--lg.tds-text-input__field--focus {
+  padding: 0 calc(var(--padding-md) - 1px);
+}
+
+/* Disabled */
+.tds-text-input--disabled .tds-field-label {
+  color: var(--text-disabled);
+}
+
+.tds-text-input--disabled .tds-text-input__field {
+  background-color: var(--surface-disabled);
+  border-color: var(--border-subtle);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.tds-text-input--disabled .tds-text-input__native {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.tds-text-input--disabled .tds-text-input__native::placeholder {
+  color: var(--text-disabled);
+}
+
+/* Read-only */
+.tds-text-input--readonly .tds-text-input__field {
+  background-color: var(--surface-neutral-02);
+  border-color: var(--border-strong);
+  box-shadow: none;
+}
+
+/* --- Validation --- */
+
+.tds-text-input--invalid .tds-text-input__field {
+  border-color: var(--border-negative);
+}
+
+.tds-text-input--success .tds-text-input__field {
+  border-color: var(--border-positive);
+}
+
+/* --- Inset variant --- */
+
+.tds-text-input--inset .tds-text-input__field {
+  background-color: var(--surface-neutral-02);
+  border-color: var(--border-strong);
+}
+
+.tds-text-input--inset .tds-text-input__field:focus-within,
+.tds-text-input--inset .tds-text-input__field--focus {
+  background-color: var(--surface-neutral-02);
+  border-color: var(--border-focus);
+}
+
+/* --- Leading icon --- */
+
+.tds-text-input__leading-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--icon-faint);
+}
+
+.tds-text-input__leading-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* --- Trailing action (clear) --- */
+
+.tds-text-input__trailing-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: none;
+  color: var(--icon-faint);
+  cursor: pointer;
+  padding: 0;
+}
+
+.tds-text-input__trailing-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tds-text-input__trailing-action:hover {
+  color: var(--icon-default);
+}
+
+/* Footer: validation message first, caption second. */
+.tds-text-input__footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+}

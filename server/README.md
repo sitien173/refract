@@ -378,12 +378,11 @@ Manual retry and fallback behaviors remain unchanged.
 #### Dashboard Management
 
 Global `retryPolicies` definitions remain TOML-managed on disk.
-The dashboard provides no policy management screen.
-The target editor provides an optional `retryPolicy` input.
-An empty field clears the policy reference.
-Clearing the reference disables automatic target retries.
-Unknown policy names fail server validation safely.
-Validation failures do not discard operator form drafts.
+The dashboard provides strictly read-only inspection of target configurations.
+Configuration changes go through `~/.refract/config.toml` and `.refract/config.toml`.
+Omit `retryPolicy` from a target to disable automatic retries for it.
+An empty `retryPolicy` value fails server validation on load.
+Unknown policy names fail server validation on load.
 
 ### Database compatibility
 
@@ -498,26 +497,57 @@ The standard cycle is `project_resolve` → `task_guide` → `job_submit` → `j
 
 MCP tool results are bounded. Terminal result text adapts to the serialized response budget without losing characters. Oversized non-pageable metadata returns `response_too_large`; for operations already applied, the error identifies the created or affected ID. Use the dashboard to inspect oversized metadata rather than blindly repeating a mutation.
 
-## Admin Configuration Dashboard
+## Read-Only Dashboard
 
-Refract provides a local administration dashboard served at `/dashboard/`.
+Refract provides a local dashboard at `/dashboard/`.
 
 ### Access and Scope
 
-The dashboard operates strictly on the local loopback interface (`127.0.0.1` or `localhost`). It is intended solely for local operator observability and safe context management:
+The dashboard operates on the local loopback interface.
+All routes require a loopback client and Host.
+Remote administration is excluded by design.
+Configuration changes go through `~/.refract/config.toml` and `.refract/config.toml`.
+The server reloads configuration on file changes.
 
-- **Loopback scope:** Dashboard bootstrap and mutation endpoints require a loopback client and Host, a matching same-origin Origin, and a CSRF header. Read-only views expose no mutation surface.
-- **No remote administration support:** Refract does not support remote administration, public network access, or credentials authentication. Remote management is excluded by design.
+### Dashboard Views
 
-### Configuration Boundaries
+The dashboard presents five read-only views:
 
-The dashboard supports controlled editing of configurations:
+- **Live console:** displays active and recent jobs in a split pane. The feed shows running, queued, and recent terminal jobs. The inspector shows identity, workflow, profile, target, and telemetry. Tabs expose the live transcript, result, and execution plan.
+- **Projects:** lists registered projects. Selecting a project reveals default profiles and target chains.
+- **Targets and profiles:** lists targets with backend, model, and breaker state. Displays the profile routing matrix.
+- **Diagnostics:** lists client reports with project, category, and job filters. Supports `before` cursor pagination and expected versus observed comparisons.
+- **Runtime:** shows daemon health, configuration status, and logging settings.
 
-- **Editable targets, profiles, and overrides:** Operators can create, edit, and delete targets. Targets reference shared retry policies by name. Operators can create, edit, and delete global profiles. Operators can manage project-level profile overrides. Changes activate immediately for future jobs without daemon restart. Existing jobs preserve their historical execution plans.
-- **Loopback security and revisions:** Mutations require loopback origin and CSRF header tokens. Mutations send `If-Match` revisions to prevent lost updates.
-- **Integrity checks and deletion restrictions:** Deletion is blocked when other configurations reference the item. Integrity checks scan global profiles and registered projects. Deletion checks cannot inspect unregistered external workspaces.
-- **Editable context instructions:** Durable workflow context instructions remain editable. Updates require confirmation and apply to future jobs.
-- **External daemon settings:** Core daemon options remain managed on disk.
+### API Routes and Polling
+
+The dashboard client consumes read-only GET endpoints:
+
+| Route | View and Purpose |
+|---|---|
+| `GET /dashboard/api/overview` | Status strip and config health |
+| `GET /dashboard/api/settings` | Runtime view |
+| `GET /dashboard/api/targets` | Targets table view |
+| `GET /dashboard/api/profiles` | Enriched profile routing matrix |
+| `GET /dashboard/api/projects` | Workspace selector and projects list |
+| `GET /dashboard/api/projects/{project_id}` | Project detail and target chains |
+| `GET /dashboard/api/projects/{project_id}/jobs` | Live console active and recent feed |
+| `GET /dashboard/api/jobs/{job_id}` | Job inspector details and telemetry |
+| `GET /dashboard/api/jobs/{job_id}/output` | Transcript pagination pages |
+| `GET /dashboard/api/jobs/{job_id}/output/updates` | Transcript streaming SSE |
+| `GET /dashboard/api/diagnostics` | Diagnostics view and job reports |
+
+Polling and streaming follow defined intervals:
+
+- The client polls `overview` every 3 seconds.
+- Live view polls `projects/{project_id}/jobs` every 2 seconds.
+- The inspector polls `jobs/{job_id}` every 2 seconds.
+- Polling stops when the job reaches terminal state.
+- All polling pauses when the browser tab is hidden.
+- Unreachable endpoints back off to 10 seconds.
+- Active non-terminal jobs stream transcript updates via `EventSource`.
+- Each update pages `output` until exhaustion.
+- Reconnection uses exponential backoff from the last cursor.
 
 ### Worker Live Dashboard Streaming
 
@@ -550,7 +580,7 @@ The dashboard and MCP result metadata expose canonical grouped metadata and tele
   contextWindow = 200000
   ```
 
-  The configured value overrides provider-reported capacity. If omitted, provider capacity may be used. In the dashboard, leaving the optional field blank and saving explicitly clears the configured override; clearing it allows provider capacity to be used again.
+  The configured value overrides provider-reported capacity. If omitted, provider capacity may be used. In `~/.refract/config.toml` or `.refract/config.toml`, omitting `contextWindow` clears the configured override. Clearing it restores provider capacity.
 - **Usage precedence and estimates:** A valid provider context-usage snapshot takes precedence. When no valid snapshot is available, context usage is estimated only when both cumulative job input and output totals are known; the totals are added without separately adding cache counters. Capacity alone does not imply zero usage or 100% remaining. The dashboard displays the server-provided measurement values, quality, and source rather than calculating percentages.
 - **Estimation limitations and history:** Cumulative input plus output is not actual occupied context and can overcount across turns, retries, and compaction. Estimated readings are labeled as estimates. Historical jobs retain their execution-time telemetry; changing or clearing a target capacity does not reinterpret past measurements.
 

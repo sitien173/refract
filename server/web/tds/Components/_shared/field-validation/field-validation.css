@@ -1,0 +1,45 @@
+/* ============================================================
+   FieldValidation
+   Variants: error | success
+   Figma: FieldValidation (107:2078)
+   ============================================================ */
+
+.tds-field-validation {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  font-family: var(--font-family);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+  font-weight: var(--font-weight-figma);
+  font-variation-settings: var(--font-variation-figma-medium);
+}
+
+.tds-field-validation__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 11px;
+  height: 12px;
+}
+
+.tds-field-validation__icon svg {
+  display: block;
+  width: 11px;
+  height: 12px;
+}
+
+.tds-field-validation--error {
+  color: var(--text-negative);
+}
+
+.tds-field-validation--error .tds-field-validation__icon {
+  color: var(--icon-negative);
+}
+
+.tds-field-validation--success {
+  color: var(--text-positive);
+}
+
+.tds-field-validation--success .tds-field-validation__icon {
+  color: var(--icon-positive);
+}

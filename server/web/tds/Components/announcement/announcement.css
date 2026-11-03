@@ -1,0 +1,137 @@
+/* ============================================================
+   Announcement
+   Figma: Announcement (866:13118)
+   Variants: warning | error | info | success | neutral
+   Layout: stacked | inline
+   ============================================================ */
+
+.tds-announcement {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-8);
+  width: 100%;
+  padding: var(--padding-md) var(--padding-md) var(--padding-md) var(--padding-lg);
+  border-radius: var(--radius-card);
+  font-family: var(--font-family);
+  box-sizing: border-box;
+}
+
+.tds-announcement--inline {
+  align-items: center;
+  min-height: 44px;
+  padding: var(--spacing-8) var(--spacing-8) var(--spacing-8) var(--padding-lg);
+}
+
+/* --- Variants --- */
+
+.tds-announcement--warning {
+  background-color: var(--surface-intermediate);
+}
+
+.tds-announcement--error {
+  background-color: var(--surface-negative);
+}
+
+.tds-announcement--info {
+  background-color: var(--interactive-subtle);
+}
+
+.tds-announcement--success {
+  background-color: var(--surface-positive);
+}
+
+.tds-announcement--neutral {
+  background-color: var(--surface-neutral-02);
+}
+
+/* --- Icon --- */
+
+.tds-announcement__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.tds-announcement__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tds-announcement--warning .tds-announcement__icon {
+  color: var(--icon-intermediate);
+}
+
+.tds-announcement--error .tds-announcement__icon {
+  color: var(--icon-negative);
+}
+
+.tds-announcement--info .tds-announcement__icon {
+  color: var(--icon-interactive);
+}
+
+.tds-announcement--success .tds-announcement__icon {
+  color: var(--icon-positive);
+}
+
+.tds-announcement--neutral .tds-announcement__icon {
+  color: var(--icon-muted);
+}
+
+/* --- Content --- */
+
+.tds-announcement__content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tds-announcement--inline .tds-announcement__content {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-8);
+}
+
+.tds-announcement__title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+  font-weight: var(--font-weight-figma);
+  font-variation-settings: var(--font-variation-figma-medium);
+  color: var(--text-default);
+}
+
+.tds-announcement__message {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+  font-weight: var(--font-weight-regular);
+  color: var(--text-description);
+}
+
+.tds-announcement--inline .tds-announcement__message {
+  flex: 1;
+  color: var(--text-default);
+}
+
+.tds-announcement__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  padding-top: var(--spacing-4);
+}
+
+.tds-announcement--inline .tds-announcement__actions {
+  padding-top: 0;
+  flex-shrink: 0;
+}
+
+.tds-announcement__dismiss {
+  flex-shrink: 0;
+}

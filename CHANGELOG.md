@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased - 2026-11-03
+
+- Breaking: replaced the dashboard with a strictly read-only live job console built on React 19 and Vite.
+- Removed `GET /dashboard/api/bootstrap`.
+- Removed `GET /dashboard/api/status`.
+- Removed `GET /dashboard/api/configuration`.
+- Removed `GET /dashboard/api/configuration/targets`.
+- Removed `POST /dashboard/api/configuration/targets`.
+- Removed `GET /dashboard/api/configuration/targets/{target_id}`.
+- Removed `PUT /dashboard/api/configuration/targets/{target_id}`.
+- Removed `DELETE /dashboard/api/configuration/targets/{target_id}`.
+- Removed `GET /dashboard/api/configuration/profiles`.
+- Removed `POST /dashboard/api/configuration/profiles`.
+- Removed `GET /dashboard/api/configuration/profiles/{profile_id}`.
+- Removed `PUT /dashboard/api/configuration/profiles/{profile_id}`.
+- Removed `DELETE /dashboard/api/configuration/profiles/{profile_id}`.
+- Removed `GET /dashboard/api/projects/{project_id}/profile-overrides`.
+- Removed `POST /dashboard/api/projects/{project_id}/profile-overrides`.
+- Removed `GET /dashboard/api/projects/{project_id}/profile-overrides/{profile_id}`.
+- Removed `PUT /dashboard/api/projects/{project_id}/profile-overrides/{profile_id}`.
+- Removed `DELETE /dashboard/api/projects/{project_id}/profile-overrides/{profile_id}`.
+- Removed `GET /dashboard/api/task-guide`.
+- Removed the CSRF and If-Match mutation validation mechanisms.
+- Removed the `tomlkit` dependency.
+
 ## 2.4.0 - 2026-10-29
 
 - Added a `checklist` field to the `.handover.md` schema for tracking current-phase steps; `executing-plans` writes and maintains it.

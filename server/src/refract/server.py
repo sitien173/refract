@@ -629,7 +629,7 @@ async def task_guide(
     except ValueError as exc:
         raise OrchestrationError(
             "Project task guidance or configuration is unavailable.", code="config_invalid",
-            next_action="Fix the project guidance or configuration in the dashboard.",
+            next_action="Fix the project guidance or configuration in .refract/config.toml.",
         ) from exc
     return _render_payload({
         "workflows": sorted(BUILTIN_WORKFLOWS),
@@ -919,7 +919,6 @@ def create_mcp(
     @asynccontextmanager
     async def lifespan(_: MCPServer) -> AsyncIterator[Runtime]:
         runtime: Runtime | None = None
-        state.csrf_token = secrets.token_urlsafe(32)
         try:
             resolved = config if config is not None else await run_sync(load_config)
             if logging_overrides:
@@ -932,7 +931,6 @@ def create_mcp(
             yield runtime
         finally:
             state.runtime = None
-            state.csrf_token = ""
             if runtime is not None:
                 await runtime.close()
 

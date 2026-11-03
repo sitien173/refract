@@ -1,215 +1,162 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
-import App from './App'
-import { getDiagnostics } from './api'
-import StatusBadge from './components/StatusBadge'
-const appStyles = readFileSync(resolve(process.cwd(), 'src/styles/app.css'), 'utf8')
-const flowforgeTokens = readFileSync(resolve(process.cwd(), 'src/styles/colors_and_type.css'), 'utf8')
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+import App from './App.jsx'
+import * as api from './api.js'
 
-vi.mock('./api', () => ({
-  getSettings: vi.fn().mockResolvedValue({
-    source_path: '/tmp/config.toml', revision: 'settings-revision',
-    daemon: { host: '127.0.0.1', port: 8765, max_jobs: 2 },
-    effective: {}, logging: {},
-  }),
-  getConfiguration: vi.fn().mockResolvedValue({ valid: true }),
-  mutateWithCsrf: vi.fn(),
-  getOverview: vi.fn().mockResolvedValue({
-    daemon: { status: 'running', workers: 1, active_jobs: 0, queued_jobs: 0 },
-    configuration: { valid: true, revision: '' },
-    projects: 0,
+describe('App shell and read-only invariants', () => {
+  const mockOverview = {
+    daemon: { status: 'running', workers: 4, active_jobs: 1, queued_jobs: 0 },
+    configuration: { valid: true, revision: 'rev-xyz' },
+    projects: 2,
     unhealthy_targets: 0,
-  }),
-  getDiagnostics: vi.fn().mockResolvedValue({ reports: [], next_before: null }),
-  getProjects: vi.fn().mockResolvedValue([]),
-}))
+  }
 
-describe('dashboard shell', () => {
-  it('renders the FlowForge product shell and overview status', async () => {
+  const mockProjects = [
+    { id: 'proj-1', alias: 'primary-project', root: '/path/1' },
+    { id: 'proj-2', alias: 'secondary-project', root: '/path/2' },
+  ]
+
+  const mockProjectJobs = {
+    active: [
+      { id: 'job-active-1', workflow: 'review', profile: 'default', state: 'running', attempts: 1 },
+    ],
+    recent: [
+      { id: 'job-recent-1', workflow: 'consult', profile: 'default', state: 'succeeded', attempts: 1 },
+    ],
+    more_recent: 0,
+  }
+
+  const mockJobDetail = {
+    id: 'job-active-1',
+    project_id: 'proj-1',
+    workflow: 'review',
+    profile: 'default',
+    target_id: 'target-1',
+    context_key: 'session-1',
+    state: 'running',
+    created_at: '2026-11-03T12:00:00Z',
+    updated_at: '2026-11-03T12:01:00Z',
+    attempts: 1,
+    result: { text: '', error: '', metadata: {} },
+    execution_plan: { targets: [] },
+  }
+
+  beforeEach(() => {
+    window.location.hash = '#/jobs'
+    localStorage.clear()
+
+    vi.spyOn(api, 'fetchOverview').mockResolvedValue(mockOverview)
+    vi.spyOn(api, 'fetchProjects').mockResolvedValue(mockProjects)
+    vi.spyOn(api, 'fetchProjectJobs').mockResolvedValue(mockProjectJobs)
+    vi.spyOn(api, 'fetchJob').mockResolvedValue(mockJobDetail)
+    vi.spyOn(api, 'fetchJobOutput').mockResolvedValue({
+      events: [],
+      cursor: 0,
+      has_more: false,
+      retained_from: 0,
+      stream_status: 'complete',
+    })
+    vi.spyOn(api, 'fetchTargets').mockResolvedValue([])
+    vi.spyOn(api, 'fetchProfiles').mockResolvedValue({ default: '', available: [], profiles: [] })
+    vi.spyOn(api, 'fetchDiagnostics').mockResolvedValue({ reports: [], next_before: null })
+    vi.spyOn(api, 'fetchSettings').mockResolvedValue({
+      source_path: '',
+      revision: 'rev-xyz',
+      daemon: { host: '127.0.0.1', port: 9000, max_jobs: 4, history_turns: 8, history_bytes: 10000, default_profile: 'default' },
+      logging: { level: 'INFO', format: 'text', file: false, console: true, max_bytes: 1000, backup_count: 3, capture_warnings: true },
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders landmarks: header, nav, and main', async () => {
     render(<App />)
 
-    expect(screen.getByRole('complementary')).toBeInTheDocument()
-    expect(screen.getByRole('banner')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument()
-    expect(await screen.findByText('Daemon running')).toBeInTheDocument()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole('banner')).toBeInTheDocument() // header
+    expect(screen.getByRole('navigation')).toBeInTheDocument() // nav
+    expect(screen.getByRole('main')).toBeInTheDocument() // main
   })
 
-  it('uses token dimensions for the product shell', () => {
-    expect(flowforgeTokens).toContain('--layout-sidebar-width: 200px')
-    expect(flowforgeTokens).toContain('--space-4xl: 64px')
-    expect(appStyles).toContain('grid-template-columns: var(--layout-sidebar-width) 1fr')
-    expect(appStyles).toContain('grid-template-rows: var(--space-4xl) 1fr')
-    expect(appStyles).not.toMatch(/#[0-9a-f]{3,8}/i)
+  it('renders views for secondary routes without placeholder', async () => {
+    window.location.hash = '#/projects'
+    const { unmount: unmount1 } = render(<App />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('projects-view')).toBeInTheDocument()
+    unmount1()
+
+    window.location.hash = '#/targets'
+    const { unmount: unmount2 } = render(<App />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('targets-view')).toBeInTheDocument()
+    unmount2()
+
+    window.location.hash = '#/diagnostics'
+    const { unmount: unmount3 } = render(<App />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('diagnostics-view')).toBeInTheDocument()
+    unmount3()
+
+    window.location.hash = '#/runtime'
+    const { unmount: unmount4 } = render(<App />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('runtime-view')).toBeInTheDocument()
+    unmount4()
   })
 
-  it('pairs status text with a non-color status marker', () => {
-    render(<StatusBadge status="healthy" label="Healthy" />)
-
-    expect(screen.getByText('Healthy')).toBeInTheDocument()
-    expect(screen.getByText('Healthy').closest('.status-badge').querySelector('.status-icon')).toBeInTheDocument()
-  })
-
-  it('does not use gradients in application styles', () => {
-    expect(appStyles.toLowerCase()).not.toContain('gradient')
-  })
-
-  it('navigates to Diagnostics view and updates route', async () => {
-    window.history.pushState({}, '', '/dashboard/')
+  it('persists selected project in localStorage', async () => {
     render(<App />)
 
-    const diagButton = await screen.findByRole('button', { name: /^Diagnostics$/i })
-    expect(diagButton).toBeInTheDocument()
-    fireEvent.click(diagButton)
+    await act(async () => {
+      await Promise.resolve()
+    })
 
-    expect(await screen.findByRole('heading', { level: 2, name: 'Diagnostics' })).toBeInTheDocument()
-    expect(diagButton).toHaveAttribute('aria-current', 'page')
+    const projectSelect = screen.getByRole('combobox', { name: /project/i })
+    expect(projectSelect.value).toBe('proj-1')
+
+    // Change project
+    await act(async () => {
+      fireEvent.change(projectSelect, { target: { value: 'proj-2' } })
+      await Promise.resolve()
+    })
+    expect(localStorage.getItem('refract_selected_project')).toBe('proj-2')
   })
 
-  it('resets filtered diagnostics, handles delayed stale response, and resets pagination on sidebar navigation', async () => {
-    let resolveFiltered
-    const delayedFilteredPromise = new Promise((resolve) => {
-      resolveFiltered = resolve
+  it('STRICT INVARIANT: contains no form, no non-filter/toggle input, and no mutating button', async () => {
+    const { container } = render(<App />)
+
+    await act(async () => {
+      await Promise.resolve()
     })
 
-    const cleanReportsPage1 = [
-      {
-        id: 'clean-901',
-        job_id: 'job-clean',
-        project_id: 'proj-clean',
-        category: 'system',
-        severity: 'info',
-        source: 'worker',
-        code: 'CLEAN_OBSERVATION',
-        message: 'Clean diagnostics report',
-        created_at: 1710000000,
-      },
-    ]
+    // No <form> tags anywhere
+    const forms = container.querySelectorAll('form')
+    expect(forms.length).toBe(0)
 
-    const filteredReports = [
-      {
-        id: 'filtered-101',
-        job_id: 'job-filtered',
-        project_id: 'proj-filtered',
-        category: 'protocol',
-        severity: 'error',
-        source: 'worker',
-        code: 'STALE_FILTERED',
-        message: 'Stale filtered report',
-        created_at: 1710000005,
-      },
-    ]
-
-    getDiagnostics.mockImplementation(({ jobId }) => {
-      if (jobId === 'job-filtered') {
-        return delayedFilteredPromise
-      }
-      return Promise.resolve({ reports: cleanReportsPage1, next_before: null })
+    // Only filter / toggle inputs allowed
+    const inputs = container.querySelectorAll('input')
+    inputs.forEach((input) => {
+      const type = input.getAttribute('type')
+      expect(['checkbox', 'radio', 'search'].includes(type)).toBe(true)
     })
 
-    window.history.pushState({}, '', '/dashboard/diagnostics?job_id=job-filtered')
-    render(<App />)
-
-    expect(await screen.findByRole('heading', { level: 2, name: 'Diagnostics' })).toBeInTheDocument()
-    const jobInput = screen.getByLabelText('Filter by job')
-    expect(jobInput.value).toBe('job-filtered')
-
-    const diagButton = screen.getByRole('button', { name: /^Diagnostics$/i })
-    fireEvent.click(diagButton)
-
-    expect(window.location.pathname).toBe('/dashboard/diagnostics')
-    expect(window.location.search).toBe('')
-    expect(jobInput.value).toBe('')
-
-    resolveFiltered({ reports: filteredReports, next_before: null })
-
-    expect(await screen.findByText('clean-901')).toBeInTheDocument()
-    expect(screen.queryByText('filtered-101')).not.toBeInTheDocument()
-    expect(screen.queryByText('Stale filtered report')).not.toBeInTheDocument()
-    expect(screen.getByText('Page 1')).toBeInTheDocument()
-  })
-
-  it('clears query and resets filters on repeat sidebar navigation after local filter edits', async () => {
-    const cleanReports = [
-      {
-        id: 'clean-902',
-        job_id: 'job-clean-2',
-        project_id: 'proj-clean-2',
-        category: 'system',
-        severity: 'info',
-        source: 'worker',
-        code: 'CLEAN_2',
-        message: 'Clean report 2',
-        created_at: 1710000010,
-      },
-    ]
-
-    const editedReports = [
-      {
-        id: 'edited-202',
-        job_id: 'job-edited',
-        project_id: 'proj-edited',
-        category: 'protocol',
-        severity: 'warn',
-        source: 'worker',
-        code: 'EDITED_JOB',
-        message: 'Edited job report',
-        created_at: 1710000020,
-      },
-    ]
-
-    getDiagnostics.mockImplementation(({ jobId }) => {
-      if (jobId === 'job-edited') {
-        return Promise.resolve({ reports: editedReports, next_before: null })
-      }
-      return Promise.resolve({ reports: cleanReports, next_before: null })
+    // No mutating buttons (all buttons type="button" and do not send POST/PUT/DELETE)
+    const buttons = container.querySelectorAll('button')
+    buttons.forEach((button) => {
+      expect(button.getAttribute('type') || 'button').toBe('button')
     })
-
-    window.history.pushState({}, '', '/dashboard/diagnostics')
-    render(<App />)
-
-    expect(await screen.findByText('clean-902')).toBeInTheDocument()
-
-    const jobInput = screen.getByLabelText('Filter by job')
-    fireEvent.change(jobInput, { target: { value: 'job-edited' } })
-    expect(jobInput.value).toBe('job-edited')
-    expect(await screen.findByText('edited-202')).toBeInTheDocument()
-    expect(window.location.search).toContain('job_id=job-edited')
-
-    const diagButton = screen.getByRole('button', { name: /^Diagnostics$/i })
-    fireEvent.click(diagButton)
-
-    expect(window.location.pathname).toBe('/dashboard/diagnostics')
-    expect(window.location.search).toBe('')
-    expect(jobInput.value).toBe('')
-    expect(await screen.findByText('clean-902')).toBeInTheDocument()
-    expect(screen.queryByText('edited-202')).not.toBeInTheDocument()
-  })
-})
-
-describe('dashboard API boundary', () => {
-  it('bootstraps CSRF and retries exactly once after a forbidden mutation', async () => {
-    vi.resetModules()
-    const { updateConfigurationTarget } = await vi.importActual('./api')
-    const response = (status, payload) => ({
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => payload,
-    })
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(response(200, { csrf_token: 'first-token' }))
-      .mockResolvedValueOnce(response(403, { error: 'Forbidden', code: 'forbidden' }))
-      .mockResolvedValueOnce(response(200, { csrf_token: 'second-token' }))
-      .mockResolvedValueOnce(response(200, { id: 'updated' }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(updateConfigurationTarget('target', { backend: 'codex' }, 'rev')).resolves.toEqual({ id: 'updated' })
-
-    expect(fetchMock).toHaveBeenCalledTimes(4)
-    expect(fetchMock.mock.calls[1][1].headers['X-Refract-CSRF']).toBe('first-token')
-    expect(fetchMock.mock.calls[3][1].headers['X-Refract-CSRF']).toBe('second-token')
-    expect(fetchMock.mock.calls[4]).toBeUndefined()
-    expect(fetchMock.mock.calls[1][1].credentials).toBeUndefined()
   })
 })

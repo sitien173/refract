@@ -1,0 +1,180 @@
+/* ============================================================
+   DropdownPanel
+   Figma: DropdownPanel (320:21652)
+   The floating menu for Select, ActionList, NavList, etc.
+   MenuType: text | multiSelect | icon | flag
+   Options: showHeader, showHeaderLink
+
+   Positioning rules (dropdown-panel.js):
+   1. Content sizing — width: max-content by default.
+   2. Alignment — start or end edge of trigger; auto-flip to fit viewport.
+   3. Minimum width — never narrower than the triggering component.
+   4. Overflow — clamp to viewport width; keep min-width; flip alignment.
+   ============================================================ */
+
+.tds-dropdown-panel {
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  min-width: 0;
+  max-width: calc(100vw - var(--spacing-32));
+  max-height: 466px;
+  padding: var(--padding-sm);
+  background-color: var(--surface-neutral-01);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--elevation-xl);
+  overflow-y: auto;
+}
+
+/*
+ * Select / Combobox menu shells (fields are full width by default):
+ *   min-width matches trigger; panel grows for wider list items.
+ */
+
+.tds-select--full-width .tds-select__menu.tds-dropdown-panel--viewport,
+.tds-combobox--full-width .tds-combobox__menu.tds-dropdown-panel--viewport {
+  width: auto;
+  max-width: none;
+}
+
+.tds-dropdown-panel[hidden] {
+  display: none !important;
+}
+
+/* Viewport-aware floating position (applied by dropdown-panel.js) */
+.tds-dropdown-panel.tds-dropdown-panel--viewport,
+.tds-select__menu.tds-dropdown-panel--viewport,
+.tds-combobox__menu.tds-dropdown-panel--viewport {
+  position: fixed;
+  z-index: 100;
+}
+
+/* Portaled select/combobox menus leave .tds-select--open; keep them visible while floating */
+.tds-select__menu.tds-dropdown-panel--viewport,
+.tds-combobox__menu.tds-dropdown-panel--viewport {
+  display: block;
+}
+
+/*
+ * Horizontal alignment to trigger edge (static fallback + JS mirror):
+ *   data-dropdown-align="start" — panel left edge aligns to trigger left
+ *   data-dropdown-align="end"   — panel right edge aligns to trigger right
+ * Defaults: ButtonMenu/FilterButton = start, SortButton = end
+ */
+
+/* Extra class + :not() so these beat ActionList.Item --md (16px) when that
+   stylesheet loads after Select. Menu type is body/sm: 14/18 (Figma 320:21652). */
+.tds-dropdown-panel .tds-action-list-item.tds-action-list-item:not([class*="tds-action-list-item--lg"]) {
+  width: auto;
+  min-width: 100%;
+  align-self: stretch;
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+  font-weight: var(--font-weight-regular);
+  padding: 6px var(--padding-xs);
+  box-sizing: border-box;
+}
+
+.tds-dropdown-panel .tds-action-list-item.tds-action-list-item:not(:has(.tds-action-list-item__description)) {
+  height: 30px;
+  min-height: 30px;
+  max-height: 30px;
+  align-items: center;
+}
+
+.tds-dropdown-panel .tds-action-list-item.tds-action-list-item:has(.tds-action-list-item__description) {
+  align-items: flex-start;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.tds-dropdown-panel .tds-nav-item {
+  white-space: nowrap;
+  width: auto;
+  min-width: 100%;
+  align-self: stretch;
+  flex-shrink: 0;
+  height: 30px;
+  min-height: 30px;
+  max-height: 30px;
+  padding: 0 var(--padding-xs);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.tds-dropdown-panel .icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: block;
+}
+
+.tds-dropdown-panel .tds-action-list-item__label {
+  overflow: visible;
+  text-overflow: clip;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+  font-weight: var(--font-weight-regular);
+}
+
+.tds-dropdown-panel .tds-action-list-item__description {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+  font-weight: var(--font-weight-regular);
+}
+
+/* --- Header (GroupHeading) --- */
+
+.tds-dropdown-panel__header {
+  padding: var(--padding-xs);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--text-caption);
+}
+
+/* --- Header link (Clear all) --- */
+
+.tds-dropdown-panel__header-link,
+.tds-dropdown-panel__toolbar .tds-btn--link {
+  display: block;
+  width: 100%;
+  padding: var(--padding-xs);
+  border: none;
+  background: none;
+  font-family: var(--font-family);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-link);
+  text-align: right;
+  cursor: pointer;
+  appearance: none;
+}
+
+.tds-dropdown-panel__header-link:hover,
+.tds-dropdown-panel__toolbar .tds-btn--link:hover {
+  text-decoration: underline;
+}
+
+/* --- Toolbar (legacy — prefer __header-link) --- */
+
+.tds-dropdown-panel__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0;
+  border-bottom: none;
+}
+
+/* --- Divider --- */
+
+.tds-dropdown-panel__divider {
+  height: 1px;
+  margin: var(--spacing-4) 0;
+  background-color: var(--border-divider);
+}

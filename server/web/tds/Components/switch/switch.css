@@ -1,0 +1,165 @@
+/* ============================================================
+   Switch (Toggle)
+   Figma: Switch (96:3234)
+   Sizes: medium (64×32 track) | small (48×24 track)
+   States: on | off | disabled
+
+   Split-track: two equal halves — state indicator + pill handle
+   ============================================================ */
+
+.tds-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  cursor: pointer;
+}
+
+.tds-switch:has(.tds-switch__track--sm) {
+  gap: 6px;
+}
+
+.tds-switch__label-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+  font-weight: var(--font-weight-figma);
+  font-variation-settings: var(--font-variation-figma-medium);
+  color: var(--text-default);
+}
+
+.tds-switch:has(.tds-switch__track--sm) .tds-switch__label-group {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+  color: #212121;
+}
+
+.tds-switch__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--icon-faint);
+  font-size: var(--font-size-md);
+}
+
+.tds-switch__track {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background-color: var(--color-neutral-30);
+  border: none;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background-color 0.2s ease;
+}
+
+.tds-switch__track--md {
+  width: 64px;
+  height: 32px;
+}
+
+.tds-switch__track--sm {
+  width: 48px;
+  height: 24px;
+}
+
+.tds-switch__indicator,
+.tds-switch__handle {
+  flex: 1 0 0;
+  min-width: 0;
+  height: 100%;
+}
+
+.tds-switch__indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-button);
+}
+
+.tds-switch__handle {
+  border-radius: var(--radius-full);
+  background-color: var(--surface-neutral-01);
+  border: 1px solid transparent;
+  box-shadow: var(--shadow-switch-handle);
+  box-sizing: border-box;
+}
+
+/* OFF — handle left, empty indicator right */
+.tds-switch__track:not([aria-checked="true"]):not(.tds-switch__track--on) {
+  background-color: var(--color-neutral-30);
+}
+
+.tds-switch__track:not([aria-checked="true"]):not(.tds-switch__track--on) .tds-switch__handle {
+  order: 0;
+  border-color: var(--border-strong);
+}
+
+.tds-switch__track:not([aria-checked="true"]):not(.tds-switch__track--on) .tds-switch__indicator {
+  order: 1;
+}
+
+/* ON — indicator left with bar, handle right */
+.tds-switch__track[aria-checked="true"],
+.tds-switch__track.tds-switch__track--on {
+  background-color: var(--interactive-default);
+}
+
+.tds-switch__track[aria-checked="true"] .tds-switch__indicator,
+.tds-switch__track--on .tds-switch__indicator {
+  order: 0;
+}
+
+.tds-switch__track[aria-checked="true"] .tds-switch__handle,
+.tds-switch__track--on .tds-switch__handle {
+  order: 1;
+  border-color: transparent;
+}
+
+/* Disabled — overrides on/off track colors */
+.tds-switch--disabled {
+  cursor: not-allowed;
+}
+
+.tds-switch--disabled .tds-switch__track,
+.tds-switch--disabled .tds-switch__track[aria-checked="true"],
+.tds-switch--disabled .tds-switch__track.tds-switch__track--on {
+  background-color: var(--surface-disabled);
+  cursor: not-allowed;
+}
+
+.tds-switch--disabled .tds-switch__handle {
+  background-color: var(--surface-neutral-02);
+  border-color: var(--color-neutral-30);
+  box-shadow: var(--shadow-switch-handle);
+}
+
+.tds-switch--disabled .tds-switch__label-group {
+  color: var(--text-disabled);
+}
+
+/* Legacy label-after-track */
+.tds-switch__label {
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+  font-weight: var(--font-weight-figma);
+  font-variation-settings: var(--font-variation-figma-medium);
+  color: var(--text-default);
+}
+
+.tds-switch:has(.tds-switch__track--sm) .tds-switch__label {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+}
+
+.tds-switch--disabled .tds-switch__label {
+  color: var(--text-disabled);
+}

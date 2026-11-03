@@ -920,16 +920,16 @@ async def test_catalog_cache_reuses_parses_and_invalidates_on_changes(tmp_path, 
         await runtime.close()
 
 
-def test_config_mutation_service_exposes_shared_lock(tmp_path) -> None:
+def test_runtime_configuration_lock_is_reentrant(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     path = home / "config.toml"
     _config(path)
     runtime = Runtime(load_config(path))
     try:
-        assert runtime.mutations.lock is not None
-        # The lock is re-entrant so reloads inside a commit do not deadlock.
-        with runtime.mutations.lock:
+        assert runtime._lock is not None
+        # The lock is re-entrant so reloads inside a lock do not deadlock.
+        with runtime._lock:
             runtime.publish_configuration()
             runtime.publish_configuration()
     finally:
@@ -937,8 +937,6 @@ def test_config_mutation_service_exposes_shared_lock(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_project_override_runtime_activation_and_plan_preservation(tmp_path) -> None:
-    from refract.models import ProfileEditorData, WorkflowPolicyData
-
     home = tmp_path / "home"
     home.mkdir()
     path = home / "config.toml"
@@ -955,14 +953,11 @@ async def test_project_override_runtime_activation_and_plan_preservation(tmp_pat
     plan1_before = record1_before["execution_plan_json"]
 
     # Create project profile override without daemon restart
-    _, new_override = runtime.mutations.create_project_override(
-        project_root,
-        ProfileEditorData(
-            id="balanced",
-            extends="balanced",
-            workflows={"consult": WorkflowPolicyData(targets=["primary"], timeout_s=99)},
-        ),
-        expected_revision="",
+    override_path = project_root / ".refract" / "config.toml"
+    override_path.parent.mkdir(parents=True, exist_ok=True)
+    override_path.write_text(
+        '[profiles.balanced]\nextends = "balanced"\nconsult = { targets = ["primary"], timeout_s = 99 }\n',
+        encoding="utf-8",
     )
 
     # Runtime activation: project catalog immediately reflects the override
@@ -1589,7 +1584,7 @@ def test_runtime_publish_configuration_rebuilds_tracer_on_langfuse_change(tmp_pa
             + "\n[langfuse]\nenabled = true\nsample_rate = 0.5\n",
             encoding="utf-8",
         )
-        with runtime.mutations.lock:
+        with runtime._lock:
             runtime._publish_configuration_locked()
 
         mock_old_flush.assert_called_once()
@@ -1700,3 +1695,48 @@ async def test_runtime_real_tracer_thread_identity_and_close_order(
     assert call_order[1][0] == "shutdown"
     assert call_order[0][1] != loop_thread_id
     assert call_order[1][1] != loop_thread_id
+
+
+@pytest.mark.asyncio
+async def test_runtime_recovery_string_names_config_toml(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "t"\nbackend = "codex"\n\n[profiles.balanced]\nconsult = "t"\n',
+        encoding="utf-8",
+    )
+    runtime = Runtime(load_config(path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "project")
+    try:
+        from unittest.mock import MagicMock
+        monkeypatch.setattr("refract.runtime.resolve_execution_plan", MagicMock(side_effect=ValueError("malformed config")))
+        with pytest.raises(OrchestrationError) as raised:
+            await runtime.submit(project.id, "consult", "test prompt")
+        assert raised.value.code == "config_invalid"
+        assert raised.value.next_action == "Fix the project configuration in .refract/config.toml."
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_job_submission_succeeds_without_runtime_mutations(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "t"\nbackend = "codex"\n\n[profiles.balanced]\nconsult = "t"\n',
+        encoding="utf-8",
+    )
+    runtime = Runtime(load_config(path))
+    root = tmp_path / "project"
+    root.mkdir()
+    project = register_project(runtime, str(root), "project")
+    try:
+        assert not hasattr(runtime, "mutations")
+        result = await runtime.submit(project.id, "consult", "test prompt")
+        assert result.job_id
+        stored = runtime.database.job_record(result.job_id)
+        assert stored is not None
+        assert stored["state"] == "queued"
+    finally:
+        await runtime.close()
+

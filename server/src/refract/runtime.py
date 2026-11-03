@@ -13,11 +13,11 @@ from dataclasses import replace
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
 
 from refract.ask import AskRegistry
 from refract.config import DaemonConfig, LangfuseConfig, load_config, load_project_config, resolve_target_environment
 from refract.config_inspection import bound_error, sanitize_config_error, utc_now
-from refract.config_mutation import ConfigurationMutationService
 from refract.database import Database
 from refract.drivers import DriverRegistry
 from refract.execution import JobNotifier, JobRunner, TargetExecutor
@@ -102,7 +102,7 @@ class Runtime:
             tracer=self.tracer,
         )
         self.scheduler = ProjectScheduler(config.max_jobs, self.runner.run)
-        self.mutations = ConfigurationMutationService(self)
+        self._lock = threading.RLock()
         log.debug("Runtime initialized", extra={"event": "runtime.initialized", "database": config.database_path.as_posix(), "max_jobs": config.max_jobs})
 
     async def _notify_job(self, job_id: str) -> None:
@@ -350,7 +350,7 @@ class Runtime:
                 next_action="Correct the workflow or prompt and call job_submit again.",
             ) from exc
         try:
-            with self.mutations.lock:
+            with self._lock:
                 catalog = self._project_catalog(Path(project.root), self._reload_catalog_locked())
                 selected_profile = profile.strip() or catalog.default_profile
                 plan = resolve_execution_plan(workflow, catalog, selected_profile)
@@ -374,7 +374,7 @@ class Runtime:
             action = (
                 "Call task_guide and choose an available profile."
                 if code == "unknown_profile"
-                else "Fix the project configuration in the dashboard."
+                else "Fix the project configuration in .refract/config.toml."
             )
             raise OrchestrationError(
                 sanitize_config_error(exc), code=code, next_action=action
@@ -620,11 +620,11 @@ class Runtime:
         Reloading from the committed file keeps disk and memory consistent and
         reuses the exact byte buffer that was hashed for the revision.
         """
-        with self.mutations.lock:
+        with self._lock:
             self._publish_configuration_locked()
 
     def _publish_configuration_locked(self) -> None:
-        """Publish off-loop; the caller holds the mutation lock."""
+        """Publish off-loop; the caller holds the configuration lock."""
         self._catalog_stat = None
         self._reload_catalog_locked()
 
@@ -651,7 +651,7 @@ class Runtime:
         if project is None:
             raise OrchestrationError(f"Unknown project: {project_id}")
         try:
-            with self.mutations.lock:
+            with self._lock:
                 return self._project_catalog(Path(project.root), self._reload_catalog_locked())
         except ValueError as exc:
             raise OrchestrationError(sanitize_config_error(exc)) from exc
@@ -708,7 +708,7 @@ class Runtime:
 
     def _resolve_target_environment(self, project: ProjectView, target_id: str) -> tuple[dict[str, str], str]:
         """Resolve a marked target against the current project catalog off-loop."""
-        with self.mutations.lock:
+        with self._lock:
             catalog, revision = self._project_catalog_snapshot(
                 Path(project.root), self._reload_catalog_locked()
             )
@@ -717,10 +717,6 @@ class Runtime:
                 raise ValueError("Unknown target")
             resolved = resolve_target_environment(catalog, target)
             return resolved, revision
-
-    def _publish_project_configuration_locked(self, project_root: Path) -> None:
-        self._project_catalogs.pop(Path(project_root), None)
-        self._project_catalog(Path(project_root), self._catalog)
 
     def targets(self) -> list[TargetView]:
         views = self.target_executor.views(self._catalog.targets)

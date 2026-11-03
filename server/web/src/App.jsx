@@ -1,149 +1,181 @@
-import { useEffect, useState } from 'react'
-import { ConfigurationContext, useConfiguration } from './hooks/useConfiguration'
-import AppShell from './components/AppShell'
-import PageHeader from './components/PageHeader'
-import ConfigHealth from './screens/ConfigHealth'
-import Diagnostics from './screens/Diagnostics'
-import JobDetail from './screens/JobDetail'
-import Jobs from './screens/Jobs'
-import Overview from './screens/Overview'
-import Profiles from './screens/Profiles'
-import ProjectDetail from './screens/ProjectDetail'
-import Projects from './screens/Projects'
-import RuntimeSettings from './screens/RuntimeSettings'
-import Targets from './screens/Targets'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { useHashRoute, navigateTo } from './router.js'
+import { fetchProjects } from './api.js'
+import { useOverview, useProjectJobs, useJob } from './hooks/usePolling.js'
+import { StatusStrip } from './components/StatusStrip.jsx'
+import { ConfigInvalidBanner } from './components/ConfigInvalidBanner.jsx'
+import { NavRail } from './components/NavRail.jsx'
+import { JobFeed } from './components/JobFeed.jsx'
+import { JobInspector } from './components/JobInspector.jsx'
+import { ProjectsView } from './views/ProjectsView.jsx'
+import { TargetsView } from './views/TargetsView.jsx'
+import { DiagnosticsView } from './views/DiagnosticsView.jsx'
+import { RuntimeView } from './views/RuntimeView.jsx'
 
-function parseLocation() {
-  const pathname = window.location.pathname
-  const clean = pathname.replace(/^\/dashboard\/?/, '')
-  const parts = clean.split('/').filter(Boolean)
+const STORAGE_PROJECT_KEY = 'refract_selected_project'
 
-  if (parts.length === 0 || parts[0] === 'overview') {
-    return { name: 'overview', projectId: '', jobId: '' }
-  }
-  if (parts[0] === 'projects') {
-    if (parts.length > 1 && parts[1]) {
-      const projId = decodeURIComponent(parts[1])
-      if (parts.length > 3 && parts[2] === 'jobs' && parts[3]) {
-        return { name: 'project-detail', projectId: projId, jobId: decodeURIComponent(parts[3]) }
-      }
-      return { name: 'project-detail', projectId: projId, jobId: '' }
-    }
-    return { name: 'projects', projectId: '', jobId: '' }
-  }
-  if (parts[0] === 'targets') {
-    return { name: 'targets', projectId: '', jobId: '' }
-  }
-  if (parts[0] === 'profiles') {
-    return { name: 'profiles', projectId: '', jobId: '' }
-  }
-  if (parts[0] === 'jobs') {
-    if (parts.length > 1 && parts[1]) {
-      return { name: 'job-detail', projectId: '', jobId: decodeURIComponent(parts[1]) }
-    }
-    return { name: 'jobs', projectId: '', jobId: '' }
-  }
-  if (parts[0] === 'diagnostics') {
-    return { name: 'diagnostics', projectId: '', jobId: '' }
-  }
-  if (parts[0] === 'settings') {
-    return { name: 'settings', projectId: '', jobId: '' }
-  }
-  if (parts[0] === 'configuration' || parts[0] === 'config') {
-    return { name: 'configuration', projectId: '', jobId: '' }
-  }
+export function App() {
+  const { route, params } = useHashRoute()
 
-  return { name: 'not-found', projectId: '', jobId: '' }
-}
+  // Polling overview for status strip (3s)
+  const { data: overview, isStale: isOverviewStale, error: overviewError } = useOverview()
 
-export default function App() {
-  const [route, setRoute] = useState(parseLocation)
-  const configuration = useConfiguration()
+  // Projects list
+  const [projects, setProjects] = useState([])
+  const [selectedProjectId, setSelectedProjectId] = useState(() => {
+    return localStorage.getItem(STORAGE_PROJECT_KEY) || ''
+  })
 
   useEffect(() => {
-    function handlePopState() {
-      setRoute(parseLocation())
+    let active = true
+    fetchProjects()
+      .then((data) => {
+        if (!active) return
+        const list = Array.isArray(data) ? data : []
+        setProjects(list)
+        if (list.length > 0) {
+          const stored = localStorage.getItem(STORAGE_PROJECT_KEY)
+          if (!stored || !list.some((p) => p.id === stored)) {
+            setSelectedProjectId(list[0].id)
+            localStorage.setItem(STORAGE_PROJECT_KEY, list[0].id)
+          } else {
+            setSelectedProjectId(stored)
+          }
+        }
+      })
+      .catch(() => {})
+    return () => {
+      active = false
     }
-    window.addEventListener('popstate', handlePopState)
-    return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
-  function navigate(destination, options = {}) {
-    let targetPath = destination
-    if (!destination.startsWith('/')) {
-      if (destination === 'overview') targetPath = '/dashboard/'
-      else targetPath = `/dashboard/${destination}`
-    }
-    if (options.replace) {
-      window.history.replaceState({}, '', targetPath)
-    } else {
-      window.history.pushState({}, '', targetPath)
-    }
-    setRoute(parseLocation())
-    window.dispatchEvent(new PopStateEvent('popstate'))
-  }
+  const handleSelectProject = useCallback((projectId) => {
+    setSelectedProjectId(projectId)
+    localStorage.setItem(STORAGE_PROJECT_KEY, projectId)
+  }, [])
 
-  let content = null
-  let title = 'Overview'
-  const activeNav =
-    route.name === 'project-detail' || route.name === 'job-detail' || route.name === 'jobs'
-      ? 'projects'
-      : route.name
+  // Job listing for selected project (2s polling)
+  const isLiveView = route === 'jobs'
+  const {
+    data: projectJobsData,
+  } = useProjectJobs(selectedProjectId, { enabled: isLiveView })
 
-  if (route.name === 'overview') {
-    title = 'Overview'
-    content = <Overview onNavigate={navigate} />
-  } else if (route.name === 'projects') {
-    title = 'Projects'
-    content = <Projects onNavigate={navigate} />
-  } else if (route.name === 'project-detail') {
-    title = 'Project workspace'
-    content = <ProjectDetail projectId={route.projectId} jobId={route.jobId} onNavigate={navigate} />
-  } else if (route.name === 'targets') {
-    title = 'Targets'
-    content = <Targets />
-  } else if (route.name === 'profiles') {
-    title = 'Profiles'
-    content = <Profiles />
-  } else if (route.name === 'jobs') {
-    title = 'Jobs'
-    content = <Jobs onNavigate={navigate} />
-  } else if (route.name === 'job-detail') {
-    title = 'Job details'
-    content = <JobDetail jobId={route.jobId} onNavigate={navigate} />
-  } else if (route.name === 'diagnostics') {
-    title = 'Diagnostics'
-    content = <Diagnostics onNavigate={navigate} />
-  } else if (route.name === 'settings') {
-    title = 'Runtime settings'
-    content = <RuntimeSettings />
-  } else if (route.name === 'configuration') {
-    title = 'Configuration health'
-    content = <ConfigHealth />
-  } else {
-    title = 'Not found'
-    content = (
-      <div className="page">
-        <PageHeader title="Not found" description="That dashboard view does not exist." />
-        <section className="panel empty-panel">
-          <p>The requested page was not found.</p>
-          <button
-            type="button"
-            className="button button-secondary button-sm"
-            onClick={() => navigate('overview')}
-          >
-            Return to Overview
-          </button>
-        </section>
-      </div>
-    )
-  }
+  const activeJobs = useMemo(() => projectJobsData?.active || [], [projectJobsData])
+  const recentJobs = useMemo(() => projectJobsData?.recent || [], [projectJobsData])
+  const moreRecent = projectJobsData?.more_recent || 0
+
+  // Follow newest running job toggle
+  const [followNewestRunning, setFollowNewestRunning] = useState(false)
+
+  // Selected job id
+  const routeJobId = params?.id || null
+  const [localSelectedJobId, setLocalSelectedJobId] = useState(null)
+
+  // Auto-follow newest running job
+  useEffect(() => {
+    if (followNewestRunning && activeJobs.length > 0) {
+      const runningJob = activeJobs.find((j) => j.state === 'running')
+      if (runningJob && runningJob.id !== routeJobId) {
+        navigateTo(`jobs/${encodeURIComponent(runningJob.id)}`)
+      }
+    }
+  }, [followNewestRunning, activeJobs, routeJobId])
+
+  // Effective selected job id
+  const effectiveJobId = useMemo(() => {
+    if (routeJobId) return routeJobId
+    if (localSelectedJobId) return localSelectedJobId
+    if (activeJobs.length > 0) return activeJobs[0].id
+    if (recentJobs.length > 0) return recentJobs[0].id
+    return null
+  }, [routeJobId, localSelectedJobId, activeJobs, recentJobs])
+
+  const handleSelectJob = useCallback((jobId) => {
+    setLocalSelectedJobId(jobId)
+    navigateTo(`jobs/${encodeURIComponent(jobId)}`)
+  }, [])
+
+  // Polling selected job detail until terminal (2s)
+  const {
+    data: selectedJob,
+    isLoading: isJobLoading,
+    error: jobError,
+  } = useJob(effectiveJobId, { enabled: isLiveView && Boolean(effectiveJobId) })
+
+  const isJobNotFound = Boolean(jobError && (jobError.status === 404 || jobError.message?.includes('not found')))
 
   return (
-    <ConfigurationContext.Provider value={configuration}>
-      <AppShell route={activeNav} title={title} onNavigate={navigate}>
-        {content}
-      </AppShell>
-    </ConfigurationContext.Provider>
+    <div
+      data-testid="app-shell"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        width: '100vw',
+        overflow: 'hidden',
+        backgroundColor: 'var(--surface-neutral-01)',
+        fontFamily: 'var(--font-family)',
+      }}
+    >
+      <StatusStrip
+        overview={overview}
+        isStale={isOverviewStale}
+        error={overviewError}
+      />
+
+      <ConfigInvalidBanner configuration={overview?.configuration} />
+
+      <div
+        style={{
+          display: 'flex',
+          flex: 1,
+          overflow: 'hidden',
+        }}
+      >
+        <NavRail
+          currentRoute={route}
+          projects={projects}
+          selectedProjectId={selectedProjectId}
+          onSelectProject={handleSelectProject}
+        />
+
+        {isLiveView ? (
+          <div
+            style={{
+              display: 'flex',
+              flex: 1,
+              overflow: 'hidden',
+            }}
+          >
+            <JobFeed
+              activeJobs={activeJobs}
+              recentJobs={recentJobs}
+              moreRecent={moreRecent}
+              selectedJobId={effectiveJobId}
+              onSelectJob={handleSelectJob}
+              followNewestRunning={followNewestRunning}
+              onToggleFollowNewest={setFollowNewestRunning}
+            />
+
+            <JobInspector
+              job={selectedJob}
+              isLoading={isJobLoading && !selectedJob}
+              notFound={isJobNotFound}
+              jobId={effectiveJobId}
+            />
+          </div>
+        ) : route === 'projects' ? (
+          <ProjectsView projectId={params?.id || null} />
+        ) : route === 'targets' ? (
+          <TargetsView />
+        ) : route === 'diagnostics' ? (
+          <DiagnosticsView />
+        ) : route === 'runtime' ? (
+          <RuntimeView overview={overview} />
+        ) : null}
+      </div>
+    </div>
   )
 }
+
+export default App

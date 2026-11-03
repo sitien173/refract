@@ -18,15 +18,12 @@ async def test_applications_own_independent_runtimes_and_tokens(tmp_path, monkey
             second_runtime = second.state.runtime
             assert first_runtime is not second_runtime
             assert first.state.mcp is not second.state.mcp
-            assert first.state.refract_dashboard.csrf_token
-            assert first.state.refract_dashboard.csrf_token != second.state.refract_dashboard.csrf_token
             first_runtime.database.upsert_project(project_id="one", alias="one", root="/one")
             assert not second_runtime.database.projects()
         assert first.state.runtime is first_runtime
         assert second.state.runtime is None
         assert second.state.refract_dashboard.runtime is None
     assert first.state.runtime is None
-    assert not first.state.refract_dashboard.csrf_token
 
 
 def test_cli_logging_overrides_do_not_modify_environment(tmp_path, monkeypatch):

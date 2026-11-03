@@ -1,0 +1,352 @@
+/* ============================================================
+   Button
+   Figma: Button (96:2225)
+   Variants: primary | secondary | danger | invisible
+   Sizes:    small (24px) | medium (32px) | large (42px)
+   States:   rest | hover | focus | pressed | disabled | inactive | loading
+   ============================================================ */
+
+@import '../spinner/spinner.css';
+
+.tds-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-8);
+  border-radius: var(--radius-button);
+  font-family: var(--font-family);
+  font-weight: var(--font-weight-figma);
+  font-variation-settings: var(--font-variation-figma-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* --- Sizes --- */
+
+.tds-btn--sm {
+  height: 24px;
+  padding: var(--padding-xs) var(--padding-sm);
+  gap: var(--spacing-4);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+}
+
+.tds-btn--md,
+.tds-btn:not([class*="tds-btn--sm"]):not([class*="tds-btn--lg"]) {
+  height: 32px;
+  padding: var(--padding-sm) var(--padding-md);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.tds-btn--lg {
+  height: 42px;
+  padding: var(--padding-md) var(--padding-lg);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+/* Focus ring uses 2px border — compensate padding to avoid layout shift. */
+
+.tds-btn--sm:focus-visible,
+.tds-btn--sm.tds-btn--focus {
+  padding: calc(var(--padding-xs) - 1px) calc(var(--padding-sm) - 1px);
+}
+
+.tds-btn--md:focus-visible,
+.tds-btn--md.tds-btn--focus,
+.tds-btn:not([class*="tds-btn--sm"]):not([class*="tds-btn--lg"]):focus-visible,
+.tds-btn:not([class*="tds-btn--sm"]):not([class*="tds-btn--lg"]).tds-btn--focus {
+  padding: calc(var(--padding-sm) - 1px) calc(var(--padding-md) - 1px);
+}
+
+.tds-btn--lg:focus-visible,
+.tds-btn--lg.tds-btn--focus {
+  padding: calc(var(--padding-md) - 1px) calc(var(--padding-lg) - 1px);
+}
+
+/* --- Align content: start --- */
+
+.tds-btn--align-start {
+  justify-content: flex-start;
+}
+
+.tds-btn--align-start.tds-btn--sm { height: 24px; }
+.tds-btn--align-start.tds-btn--md,
+.tds-btn--align-start:not([class*="tds-btn--sm"]):not([class*="tds-btn--lg"]) { height: 32px; }
+.tds-btn--align-start.tds-btn--lg { height: 42px; }
+
+
+/* ============================================================
+   VARIANT: Secondary (default)
+   ============================================================ */
+
+.tds-btn--secondary,
+.tds-btn:not([class*="tds-btn--primary"]):not([class*="tds-btn--danger"]):not([class*="tds-btn--invisible"]) {
+  background-color: var(--surface-neutral-01);
+  border-color: var(--border-strong);
+  color: var(--text-default);
+  box-shadow: var(--shadow-button-resting);
+}
+
+.tds-btn--secondary:hover,
+.tds-btn:not([class*="tds-btn--primary"]):not([class*="tds-btn--danger"]):not([class*="tds-btn--invisible"]):hover {
+  background-color: var(--surface-neutral-02);
+  box-shadow: var(--shadow-button-elevated);
+}
+
+.tds-btn--secondary:focus-visible,
+.tds-btn--secondary.tds-btn--focus,
+.tds-btn:not([class*="tds-btn--primary"]):not([class*="tds-btn--danger"]):not([class*="tds-btn--invisible"]):focus-visible,
+.tds-btn:not([class*="tds-btn--primary"]):not([class*="tds-btn--danger"]):not([class*="tds-btn--invisible"]).tds-btn--focus {
+  border-color: var(--border-focus);
+  border-width: 2px;
+  outline: none;
+  box-shadow: none;
+}
+
+.tds-btn--secondary:active,
+.tds-btn:not([class*="tds-btn--primary"]):not([class*="tds-btn--danger"]):not([class*="tds-btn--invisible"]):active {
+  background-color: var(--surface-neutral-03);
+  box-shadow: var(--shadow-button-elevated);
+}
+
+.tds-btn--secondary:disabled,
+.tds-btn--secondary[aria-disabled="true"],
+.tds-btn:not([class*="tds-btn--primary"]):not([class*="tds-btn--danger"]):not([class*="tds-btn--invisible"]):disabled {
+  background-color: var(--surface-neutral-01);
+  border-color: var(--border-subtle);
+  color: var(--text-disabled);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+
+/* ============================================================
+   VARIANT: Primary
+   ============================================================ */
+
+.tds-btn--primary {
+  background-color: var(--interactive-default);
+  border-color: var(--interactive-default);
+  color: var(--text-inverse);
+  box-shadow: none;
+}
+
+.tds-btn--primary:hover {
+  background-color: var(--interactive-hover);
+  border-color: var(--interactive-hover);
+}
+
+.tds-btn--primary:focus-visible,
+.tds-btn--primary.tds-btn--focus {
+  border-color: var(--border-interactive);
+  border-width: 2px;
+  outline: none;
+}
+
+.tds-btn--primary:active {
+  background-color: var(--interactive-active);
+  border-color: var(--interactive-hover);
+}
+
+.tds-btn--primary:disabled,
+.tds-btn--primary[aria-disabled="true"] {
+  background-color: var(--interactive-disabled);
+  border-color: var(--border-subtle);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+
+/* ============================================================
+   VARIANT: Danger
+   ============================================================ */
+
+.tds-btn--danger {
+  background-color: var(--surface-neutral-01);
+  border-color: var(--border-negative);
+  color: var(--text-negative);
+  box-shadow: none;
+}
+
+.tds-btn--danger:hover {
+  background-color: var(--border-negative);
+  border-color: var(--border-negative);
+  color: var(--text-inverse);
+}
+
+.tds-btn--danger:focus-visible,
+.tds-btn--danger.tds-btn--focus {
+  border-color: var(--border-focus);
+  border-width: 2px;
+  outline: none;
+}
+
+.tds-btn--danger:active {
+  background-color: var(--border-negative);
+  border-color: var(--border-negative);
+  color: var(--text-inverse);
+}
+
+.tds-btn--danger:disabled,
+.tds-btn--danger[aria-disabled="true"] {
+  background-color: var(--surface-neutral-01);
+  border: none;
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+
+/* ============================================================
+   VARIANT: Invisible
+   ============================================================ */
+
+.tds-btn--invisible {
+  background-color: var(--surface-neutral-01);
+  border-color: transparent;
+  color: var(--interactive-default);
+  box-shadow: none;
+}
+
+.tds-btn--invisible:hover {
+  background-color: var(--surface-neutral-02);
+  color: var(--interactive-hover);
+}
+
+.tds-btn--invisible:focus-visible,
+.tds-btn--invisible.tds-btn--focus {
+  background-color: var(--surface-neutral-01);
+  border-color: var(--border-focus);
+  border-width: 2px;
+  outline: none;
+}
+
+.tds-btn--invisible:active {
+  background-color: var(--surface-neutral-03);
+  color: var(--interactive-default);
+}
+
+.tds-btn--invisible:disabled,
+.tds-btn--invisible[aria-disabled="true"] {
+  background-color: var(--surface-neutral-01);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+
+/* ============================================================
+   STATE: Inactive (all variants)
+   ============================================================ */
+
+.tds-btn--inactive {
+  background-color: var(--surface-neutral-02);
+  border-color: transparent;
+  color: var(--text-description);
+  box-shadow: none;
+}
+
+.tds-btn--inactive:hover,
+.tds-btn--inactive:active,
+.tds-btn--inactive:focus-visible {
+  background-color: var(--surface-neutral-02);
+  border-color: transparent;
+  color: var(--text-description);
+  box-shadow: none;
+}
+
+.tds-btn--primary.tds-btn--inactive:hover,
+.tds-btn--secondary.tds-btn--inactive:hover,
+.tds-btn--danger.tds-btn--inactive:hover,
+.tds-btn--invisible.tds-btn--inactive:hover {
+  background-color: var(--surface-neutral-02);
+  border-color: transparent;
+  color: var(--text-description);
+}
+
+
+/* ============================================================
+   Icon slots
+   ============================================================ */
+
+.tds-btn__leading-icon,
+.tds-btn__trailing-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--icon-faint);
+}
+
+.tds-btn__leading-icon svg,
+.tds-btn__trailing-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tds-btn__counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 18px;
+  padding: 0 var(--padding-xs);
+  border-radius: var(--radius-full);
+  font-weight: var(--font-weight-figma);
+  font-variation-settings: var(--font-variation-figma-medium);
+  background-color: var(--surface-neutral-03);
+  border: none;
+  color: var(--text-default);
+}
+
+.tds-btn--sm .tds-btn__counter {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+}
+
+.tds-btn--md .tds-btn__counter,
+.tds-btn:not([class*="tds-btn--sm"]):not([class*="tds-btn--lg"]) .tds-btn__counter {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.tds-btn--lg .tds-btn__counter {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+}
+
+.tds-btn--primary .tds-btn__counter {
+  background-color: var(--surface-neutral-03);
+}
+
+.tds-btn--primary .tds-btn__leading-icon,
+.tds-btn--primary .tds-btn__trailing-icon {
+  color: var(--icon-inverse);
+}
+
+.tds-btn--primary:disabled .tds-btn__leading-icon,
+.tds-btn--primary:disabled .tds-btn__trailing-icon,
+.tds-btn--primary[aria-disabled="true"] .tds-btn__leading-icon,
+.tds-btn--primary[aria-disabled="true"] .tds-btn__trailing-icon {
+  color: var(--icon-inverse);
+}
+
+/* --- Loading --- */
+
+.tds-btn--loading,
+.tds-btn[aria-busy="true"] {
+  cursor: wait;
+  pointer-events: none;
+}
+
+.tds-btn--loading .tds-spinner,
+.tds-btn[aria-busy="true"] .tds-spinner {
+  flex-shrink: 0;
+}
+

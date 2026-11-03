@@ -1,0 +1,30 @@
+/* ============================================================
+   Caret
+   Variants: default (up/down) | down | up
+   Figma: caret (640:9140)
+   ============================================================ */
+
+.tds-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--icon-faint);
+}
+
+.tds-caret svg {
+  display: block;
+}
+
+.tds-caret--default svg {
+  width: 8px;
+  height: 11px;
+}
+
+.tds-caret--down svg,
+.tds-caret--up svg {
+  width: 6px;
+  height: 4px;
+}
