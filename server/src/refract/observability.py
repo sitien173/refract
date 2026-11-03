@@ -20,7 +20,7 @@ def _get_refract_version() -> str:
 
         return version("refract")
     except Exception:
-        return "2.3.0"
+        return "2.4.0"
 
 
 def trace_id_for_job(job_id: str) -> str:

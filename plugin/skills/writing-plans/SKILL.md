@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: "Use when a confirmed design needs an implementation plan, or the user asks to break agreed work into phases. Produces a resumable phase plan with exact files, acceptance criteria, review checks, and verification commands. Without a confirmed design, use brainstorming first."
+description: "Use when a confirmed design needs an implementation plan, or the user asks to break agreed work into phases. Produces a resumable phase plan with baseline evidence, exact files, invariants, acceptance criteria, review checks, and verification commands. Without a confirmed design, use brainstorming first."
 ---
 
 # Writing Plans
@@ -24,21 +24,25 @@ first; it owns routing, execution, anchors, and Git.
 ## Workflow
 
 1. **Resume check.** Read `docs/plans/*/.handover.md`. When one matches the
-   topic and is not `DONE`, stop and offer `executing-plans` or a new slug.
+   topic and is not `DONE`, stop and offer `executing-plans`,
+   `executing-plans-autonomously`, or a new slug.
 2. **Inputs.** Require a confirmed `DESIGN.md`; without one, offer
    `brainstorming` and stop. Require the Coordinator's plan `base` anchor at
    clean HEAD before creating plan artifacts.
-3. **Scope.** Read the confirmed design and only enough code to name exact
-   files.
+3. **Scope & Baseline.** Read `DESIGN.md` and only enough code to name exact
+   files and reuse targets. Run the verification commands at `base` and record
+   their baseline results.
 4. **Phase.** Divide work into outcome-based phases of two to four related
    tasks. One phase is what one implementation job can safely own. Work too
    small for two tasks is a single phase.
-5. **Detail.** Fill the phase template for every phase. Done when each phase
-   has exact files, observable criteria, reviewer checks, and commands.
+5. **Detail.** Fill the plan header and phase template below. Done when each
+   phase has exact files, preserved invariants, observable criteria, reviewer
+   checks, and commands.
 6. **Commit.** Specify one Conventional Commit message for the completed plan.
 7. **Write.** Create `PLAN.md` and `.handover.md`. Under `tracked`, checkpoint
    the plan artifacts.
-8. **Confirm.** Ask the user to approve the plan before execution.
+8. **Confirm.** Ask the user to approve the plan before execution, then offer
+   `executing-plans` (phase-by-phase) or `executing-plans-autonomously` (full run).
 
 ## Storage
 
@@ -49,27 +53,34 @@ directories, never empty, only during execution.
 A documentation-only plan may use `docs/plans/<slug>-plan.md`. Convert a flat
 implementation plan to folder layout before execution.
 
-## Plan Commit
+## Plan and Phase Template
 
-Record one plan-level message before the phase sections:
+This sole branch commit replaces local phase checkpoints after every phase passes:
+
 ```markdown
+# <Topic> Plan
+
+**Design:** [DESIGN.md](DESIGN.md)
+**Context key:** `<slug>`
+**Base:** `refs/plans/<slug>/base` (`<sha>`)
 **Commit:** `type(scope): concise plan outcome`
-```
-This sole branch commit replaces local phase checkpoints after every phase passes.
 
-## Phase Template
+## Outcome & Scope
+<overall goal, preserved invariants, and out-of-scope boundaries>
 
-```markdown
+## Baseline Evidence
+- `<exact command>`: <pass/skip counts at plan base>
+
 ### Phase N: <outcome>
 
 **Task Guide Input:** <complete phase request and distinct use cases>
 **Goal:** <one outcome>
+**Invariants & Boundaries:** <what to preserve; what is out of scope>
 **Files:**
 - Modify: `path/to/file`
 - Create: `path/to/file`
 **Tasks:**
-1. <related task>
-2. <related task>
+1. <related TDD task>
 **Acceptance Criteria:**
 - <observable criterion>
 **Reviewer Checklist:**

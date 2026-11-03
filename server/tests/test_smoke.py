@@ -115,8 +115,8 @@ def test_refract_version_is_1_and_lock_matches_without_dependency_changes() -> N
     lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
     locked_refract = next(package for package in lock["package"] if package["name"] == "refract")
 
-    assert project["project"]["version"] == "2.3.0"
-    assert locked_refract["version"] == "2.3.0"
+    assert project["project"]["version"] == "2.4.0"
+    assert locked_refract["version"] == "2.4.0"
 
 
 def test_imports() -> None:

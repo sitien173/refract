@@ -1,12 +1,12 @@
-<!-- refract-shared-version: 2.3.0 -->
+<!-- refract-shared-version: 2.4.0 -->
 
 # Phase <N> — Journal: <phase title>
 
 <!--
 Phase Journal template. Copy to docs/plans/<slug>/phase-<NN>/journal.md at phase
 start, fill the META, then append the full `# EXTERNAL RESPONSE` block (see
-erp.md) under `## Implementation Response` after all tasks. Never overwrite earlier
-sections.
+erp.md) under `## Implementation Response` after all tasks (and after any `FIX:`
+batch). Never overwrite earlier sections.
 -->
 
 ## META
@@ -22,7 +22,7 @@ sections.
 
 ## Implementation Response
 
-<!-- Worker appends the full `# EXTERNAL RESPONSE` block here. -->
+<!-- Worker appends each full `# EXTERNAL RESPONSE` block here without overwriting prior blocks. -->
 
 ## Quality Review
 
@@ -31,6 +31,7 @@ sections.
 ## Review Result
 
 - Spec Status: PENDING
+- Quality Status: PENDING
 - Debt: none
 
 ## Final Checkpoint

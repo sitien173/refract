@@ -546,6 +546,6 @@ def test_tracer_constructor_parameters_forwarded(
         assert client._base_url == "http://localhost:3000"
         assert getattr(client._resources, "environment", None) == "production-prod"
         assert getattr(client._resources, "sample_rate", None) == 0.75
-        assert getattr(client._resources, "release", None) == "2.3.0"
+        assert getattr(client._resources, "release", None) == "2.4.0"
     finally:
         tracer.shutdown()
