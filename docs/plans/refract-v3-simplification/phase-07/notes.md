@@ -133,3 +133,11 @@ Execution mode: direct, per owner 2026-11-04. No coordinator, no Refract jobs, n
 ### Not done by this plan
 
 - The manual smoke run per real CLI and the cutover belong to the owner after consolidation, per PLAN.md "After Consolidation".
+
+## Post-merge fix: config_health property
+
+- Found at the first live start. `/dashboard/targets` returned 500 with `TypeError: 'ConfigHealth' object is not callable`.
+- Root cause: `Runtime.config_health` is a property, but the dashboard called it. The test fake used a lambda, so the tests matched the wrong shape.
+- RED: the fake now sets `config_health` to a value. `test_targets_page_shows_open_circuit_and_config_error` failed with the same TypeError.
+- GREEN: the dashboard reads the property. PYTEST 782 passed, 15 deselected. PLUGIN pass. Ruff F unchanged.
+- This commit follows the consolidated plan commit. Plan refs are unchanged.

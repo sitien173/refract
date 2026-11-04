@@ -225,7 +225,7 @@ def _dashboard(tmp_path, *, targets=(), health=None):
     runtime = SimpleNamespace(
         database=FakeDatabase(tmp_path, jobs, prompts),
         targets=lambda: list(targets),
-        config_health=lambda: health or ConfigHealth(valid=True, source_path="/cfg/config.toml"),
+        config_health=health or ConfigHealth(valid=True, source_path="/cfg/config.toml"),
     )
     return Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
 

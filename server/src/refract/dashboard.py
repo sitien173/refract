@@ -296,7 +296,7 @@ def _targets(runtime: Any) -> Response:
         ]
         for target in runtime.targets()
     ]
-    health = runtime.config_health()
+    health = runtime.config_health
     if health.valid:
         config = f"<p>Configuration is valid. Source: {escape(health.source_path)}. Revision: {escape(health.revision)}.</p>"
     else:
