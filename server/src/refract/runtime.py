@@ -10,13 +10,14 @@ import secrets
 import sqlite3
 from contextlib import suppress
 from dataclasses import replace
+import subprocess
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import threading
 
 from refract.ask import AskRegistry
-from refract.config import DaemonConfig, LangfuseConfig, load_config, load_project_config, resolve_target_environment
+from refract.config import DaemonConfig, load_config, load_project_config, resolve_target_environment
 from refract.config_inspection import bound_error, sanitize_config_error, utc_now
 from refract.database import Database
 from refract.drivers import DriverRegistry
@@ -33,16 +34,16 @@ from refract.models import (
     TargetView,
 )
 from refract.notifications import send_job_notification
-from refract.observability import Tracer
-from refract.planning import (ExecutionPlan, execution_plan_data, parse_execution_plan, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target)
+from refract.planning import (ExecutionPlan, execution_plan_data, resolve_execution_plan, target_execution_key)
+from refract.processes import kill_stale_group
 from refract.scheduler import ProjectScheduler
-from refract.streaming import DEFAULT_RETENTION_DAYS, JobStreamHub
 from refract.workflows import get_workflow, validate_request
 from refract.workers import run_sync
 
 
 log = get_logger("runtime")
 RETENTION_INTERVAL_S = 3600
+DEFAULT_RETENTION_DAYS = 7
 MAX_ANSWER_LENGTH = 8192
 
 
@@ -53,13 +54,11 @@ class OrchestrationError(ValueError):
         *,
         code: str = "internal_error",
         next_action: str = "Retry once, then report the request ID.",
-        retryable: bool = False,
         retry_after_s: int | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.next_action = next_action
-        self.retryable = retryable
         self.retry_after_s = retry_after_s
 
 
@@ -71,11 +70,9 @@ class Runtime:
     def __init__(self, config: DaemonConfig, *, notifier: JobNotifier | None = None) -> None:
         self.config = config
         self.config.home.mkdir(parents=True, exist_ok=True)
-        self.database = Database(config.database_path, history_turns=config.history_turns)
-        self.tracer = Tracer(LangfuseConfig(enabled=False))
-        self.ask_registry = AskRegistry(self.tracer)
+        self.database = Database(config.database_path)
+        self.ask_registry = AskRegistry()
         self._retention_task: asyncio.Task[None] | None = None
-        self.stream_hub = JobStreamHub()
         self._catalog = config
         # A per-runtime secret makes revision contexts opaque and prevents
         # session keys from becoming fingerprints of secret-bearing config hashes.
@@ -88,10 +85,9 @@ class Runtime:
         self._loop: asyncio.AbstractEventLoop | None = None
         self.notifier = notifier or _noop_notifier
         self.target_executor = TargetExecutor(
-            config, self.database, DriverRegistry(), on_stream_commit=self.stream_hub.publish,
+            config, self.database, DriverRegistry(),
             ask_registry=self.ask_registry,
             environment_resolver=self._resolve_target_environment,
-            tracer=self.tracer,
         )
         self.runner = JobRunner(
             self.database,
@@ -99,7 +95,6 @@ class Runtime:
             is_closing=lambda: self._closing,
             notifier=self._notify_job,
             on_terminal=self._job_terminal,
-            tracer=self.tracer,
         )
         self.scheduler = ProjectScheduler(config.max_jobs, self.runner.run)
         self._lock = threading.RLock()
@@ -140,7 +135,7 @@ class Runtime:
             project = await run_sync(self.database.project, job.project_id)
             if project is None:
                 return
-            ok = await run_sync(send_job_notification, job, project.alias)
+            ok = await run_sync(send_job_notification, job, Path(project.root).name)
             if not ok:
                 log.warning(
                     "Desktop notification failed",
@@ -161,16 +156,9 @@ class Runtime:
     def drivers(self, value: DriverRegistry) -> None:
         self.target_executor.drivers = value
 
-    def prune_retained_transcripts(self, days: int = DEFAULT_RETENTION_DAYS) -> int:
+    def prune_retained_transcripts(self, days: int = DEFAULT_RETENTION_DAYS) -> None:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        pruned = self.database.prune_terminal_stream_events(cutoff)
         self.database.prune_history(cutoff)
-        if pruned > 0:
-            log.info(
-                "Pruned expired stream transcripts",
-                extra={"event": "stream.retention_pruned", "deleted_events": pruned},
-            )
-        return pruned
 
     async def _retain_history(self) -> None:
         while True:
@@ -184,16 +172,13 @@ class Runtime:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._closing = False
-        if self.tracer.is_active:
-            await run_sync(self.tracer.flush)
-            await run_sync(self.tracer.shutdown)
-        self.tracer = await run_sync(Tracer, self._catalog.langfuse)
-        self.ask_registry.tracer = self.tracer
-        self.target_executor.tracer = self.tracer
-        self.runner.tracer = self.tracer
         await run_sync(self.prune_retained_transcripts)
         await run_sync(self.database.reset_orphaned_target_probes)
         interrupted = await run_sync(self.database.interrupt_active_jobs)
+        for job in interrupted:
+            if job["pgid"]:
+                killed = await run_sync(kill_stale_group, int(job["pgid"]), str(job["id"]))
+                log.info("Stale worker group checked", extra={"event": "job.worker_group", "job_id": job["id"], "pgid": job["pgid"], "killed": killed})
         for job in interrupted:
             await self._job_terminal(str(job["id"]), "interrupted")
         for job in interrupted:
@@ -217,7 +202,6 @@ class Runtime:
         )
 
     async def _job_terminal(self, job_id: str, _state: str) -> None:
-        self.stream_hub.publish(job_id, await run_sync(self.database.stream_high_water, job_id))
         self.scheduler.complete(job_id, signal=False)
 
     async def close(self) -> None:
@@ -227,20 +211,25 @@ class Runtime:
             await asyncio.gather(self._retention_task, return_exceptions=True)
             self._retention_task = None
         await self.scheduler.close()
-        await run_sync(self.tracer.flush)
-        await run_sync(self.tracer.shutdown)
         await run_sync(self.database.close)
         log.info("Scheduler stopped", extra={"event": "scheduler.stopped"})
 
-    def resolve_project(self, path: str, alias: str = "") -> ProjectView:
-        """Resolve a canonical directory idempotently, creating a unique alias if needed."""
-        resolved = Path(path).expanduser().resolve()
-        if not resolved.is_dir():
-            raise OrchestrationError(
-                "Project path must be an existing directory.",
-                code="invalid_path",
-                next_action="Pass the absolute Git root of an existing directory.",
+    def resolve_project(self, path: str) -> ProjectView:
+        """Resolve the canonical Git root idempotently."""
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(Path(path).expanduser()), "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, timeout=10, check=False,
             )
+        except (OSError, subprocess.TimeoutExpired):
+            completed = None
+        if completed is None or completed.returncode != 0 or not completed.stdout.strip():
+            raise OrchestrationError(
+                "Project path is not inside a Git repository.",
+                code="invalid_path",
+                next_action="Pass a path inside the project's Git repository.",
+            )
+        resolved = Path(completed.stdout.strip()).resolve()
         config_path = getattr(self.config, "config_path", None)
         if config_path is not None and (
             resolved / ".refract" / "config.toml"
@@ -251,72 +240,23 @@ class Runtime:
                 next_action="Register the project's own directory instead.",
             )
         root = resolved.as_posix()
-        projects = self.database.projects()
-        existing = next((project for project in projects if project.root == root), None)
+        existing = next((project for project in self.database.projects() if project.root == root), None)
         if existing is not None:
             return existing
+        try:
+            return self.database.upsert_project(project_id=str(uuid.uuid4()), root=root)
+        except sqlite3.IntegrityError:
+            existing = next((project for project in self.database.projects() if project.root == root), None)
+            if existing is None:
+                raise
+            return existing
 
-        explicit_alias = alias.strip()
-        if explicit_alias and any(project.alias == explicit_alias for project in projects):
-            raise OrchestrationError(
-                "Project alias is already in use.",
-                code="alias_taken",
-                next_action="Pass a unique alias or omit alias to use an available default.",
-            )
-        base_alias = explicit_alias or resolved.name
-        if not base_alias:
-            raise OrchestrationError(
-                "A project alias is required for this directory.",
-                code="invalid_path",
-                next_action="Pass a non-empty alias for the existing directory.",
-            )
-        return self._register_project(root, base_alias, explicit_alias)
-
-    def _upsert_project_alias(self, root: str, base_alias: str, explicit_alias: str) -> ProjectView:
-        with self.database.transaction():
-            projects = self.database.projects()
-            existing = next((project for project in projects if project.root == root), None)
-            if existing is not None:
-                return existing
-            aliases = {project.alias for project in projects}
-            if explicit_alias and explicit_alias in aliases:
-                raise OrchestrationError(
-                    "Project alias is already in use.",
-                    code="alias_taken",
-                    next_action="Pass a unique alias or omit alias to use an available default.",
-                )
-            candidate = explicit_alias or base_alias
-            suffix = 1
-            while candidate in aliases:
-                suffix += 1
-                candidate = f"{base_alias}-{suffix}"
-            return self.database.upsert_project(
-                project_id=str(uuid.uuid4()), alias=candidate, root=root,
-            )
-
-    def _register_project(self, root: str, base_alias: str, explicit_alias: str) -> ProjectView:
-        while True:
-            try:
-                return self._upsert_project_alias(root, base_alias, explicit_alias)
-            except sqlite3.IntegrityError:
-                projects = self.database.projects()
-                existing = next((project for project in projects if project.root == root), None)
-                if existing is not None:
-                    return existing
-                if explicit_alias:
-                    raise OrchestrationError(
-                        "Project alias is already in use.",
-                        code="alias_taken",
-                        next_action="Pass a unique alias or omit alias to use an available default.",
-                    ) from None
-
-    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False, next_target: str = "") -> SubmissionResult:
+    async def submit(self, project_id: str, workflow_name: str, prompt: str, *, session: str = "", profile: str = "", fresh: bool = False) -> SubmissionResult:
         job_id = str(uuid.uuid4())
         try:
             project, workflow, selected_profile = await run_sync(
                 self._prepare_submission, job_id, project_id, workflow_name, prompt,
-                context_key=context_key, profile=profile,
-                fresh_session=fresh_session, next_target=next_target,
+                session=session, profile=profile, fresh=fresh,
             )
         finally:
             # A cancelled request must not leave a committed job undispatched.
@@ -325,20 +265,19 @@ class Runtime:
         log.info("Job queued", extra={"event": "job.queued", "project_id": project.id, "job_id": job_id, "workflow": workflow, "profile": selected_profile})
         return SubmissionResult(job_id=job_id, state="queued")
 
-    def _prepare_submission(self, job_id: str, project_id: str, workflow_name: str, prompt: str, *, context_key: str = "", profile: str = "", fresh_session: bool = False, next_target: str = "") -> tuple[ProjectView, str, str]:
+    def _prepare_submission(self, job_id: str, project_id: str, workflow_name: str, prompt: str, *, session: str = "", profile: str = "", fresh: bool = False, retry_of: str = "", target: str = "", after: str = "") -> tuple[ProjectView, str, str]:
         if self._closing:
             raise OrchestrationError(
                 "The daemon is stopping.",
                 code="daemon_stopping",
-                next_action="Wait, then call project_resolve again.",
-                retryable=True,
+                next_action="Wait, then call submit again.",
             )
         project = self.database.project(project_id)
         if project is None:
             raise OrchestrationError(
                 "Project is not registered.",
                 code="unknown_project",
-                next_action="Call project_resolve with the Git root.",
+                next_action="Call submit with a path inside a Git repository.",
             )
         try:
             workflow = get_workflow(workflow_name)
@@ -347,23 +286,39 @@ class Runtime:
             raise OrchestrationError(
                 str(exc),
                 code="invalid_request",
-                next_action="Correct the workflow or prompt and call job_submit again.",
+                next_action="Correct the workflow or prompt and call submit again.",
             ) from exc
         try:
             with self._lock:
                 catalog = self._project_catalog(Path(project.root), self._reload_catalog_locked())
                 selected_profile = profile.strip() or catalog.default_profile
                 plan = resolve_execution_plan(workflow, catalog, selected_profile)
-                if next_target:
-                    target = resolve_next_target(next_target, catalog.config_revision, project.id, plan)
-                    if target is None:
-                        raise OrchestrationError("The next_target token is invalid or stale.", code="invalid_request", next_action="Resubmit without next_target.")
+                if retry_of:
+                    names = ", ".join(candidate.id for candidate in plan.targets)
+                    if not target:
+                        ids = [candidate.id for candidate in plan.targets]
+                        following = plan.targets[ids.index(after) + 1:] if after in ids else plan.targets
+                        if not following:
+                            raise OrchestrationError(
+                                "No target follows the job's target in profile order.",
+                                code="targets_unavailable",
+                                next_action=f"Call retry with target set to one of: {names}.",
+                            )
+                        self._ensure_candidates_available(replace(plan, targets=following))
+                        target = self._following_target(plan, after) or ""
+                    pinned = next((candidate for candidate in plan.targets if candidate.id == target), None)
+                    if pinned is None:
+                        raise OrchestrationError(
+                            f"Target {target!r} is not in profile {selected_profile}; profile targets: {names}.",
+                            code="invalid_request",
+                            next_action=f"Call retry with target set to one of: {names}.",
+                        )
                     plan = replace(
                         plan,
-                        selection=replace(plan.selection, targets=(target.id,)),
-                        targets=(target,),
+                        selection=replace(plan.selection, targets=(pinned.id,)),
+                        targets=(pinned,),
                         environment_targets=tuple(
-                            value for value in plan.environment_targets if value == target.id
+                            value for value in plan.environment_targets if value == pinned.id
                         ),
                     )
                 self._ensure_candidates_available(plan)
@@ -372,7 +327,7 @@ class Runtime:
         except ValueError as exc:
             code = "unknown_profile" if "Unknown profile" in str(exc) else "config_invalid"
             action = (
-                "Call task_guide and choose an available profile."
+                "Call list and choose an available profile."
                 if code == "unknown_profile"
                 else "Fix the project configuration in .refract/config.toml."
             )
@@ -386,41 +341,38 @@ class Runtime:
             profile=selected_profile,
             prompt=resolved_prompt,
             execution_plan_json=json.dumps(execution_plan_data(plan), ensure_ascii=False),
-            context_key=context_key.strip() or workflow,
-            config_revision=catalog.config_revision,
-            fresh_session=fresh_session,
+            session=session.strip() or workflow,
+            fresh=fresh,
+            retry_of=retry_of,
         )
         return project, workflow, selected_profile
 
-    def live_result_metadata(self, job: JobView) -> dict[str, object]:
-        metadata = job.result.metadata.model_dump(mode="json")
+    def live_routing(self, job: JobView) -> dict[str, object]:
+        kind = job.result.failure_kind
         if job.state == "succeeded":
-            metadata["retry"] = {"retryable": None, "next_target": None}
-            return metadata
-        failure = metadata.get("failure")
-        kind = failure.get("kind") if isinstance(failure, dict) else None
-        if kind in {"retryable", "target_fatal", "circuit_open", "cancelled", "context_overflow"}:
-            next_token = self._next_target_token(job)
-            retryable = metadata["retry"].get("retryable") if kind == "context_overflow" else next_token is not None
-            metadata["retry"] = {"retryable": retryable, "next_target": next_token}
-        return metadata
+            return {"failure_kind": kind, "retry": {"next_target": None}}
+        retry: dict[str, object] = {"next_target": None}
+        if kind in {"transient", "target_fatal", "circuit_open", "cancelled", "context_overflow"}:
+            retry["next_target"] = self._next_target(job)
+        return {"failure_kind": kind, "retry": retry}
 
-    def _next_target_token(self, job: JobView) -> str | None:
+    def _next_target(self, job: JobView) -> str | None:
         try:
-            project = self.database.project(job.project_id)
-            if not project:
-                return None
             catalog = self.catalog_for_project(job.project_id)
             plan = resolve_execution_plan(job.workflow, catalog, job.profile)
-            ids = [target.id for target in plan.targets]
-            start = ids.index(job.target_id) + 1 if job.target_id in ids else 0
-            now = datetime.now(timezone.utc)
-            for target in plan.targets[start:]:
-                health = self.database.target_health(target_execution_key(target))
-                if not self.target_executor.is_circuit_open(health.get("circuit_open_until", ""), now, health.get("probe_job_id", "")):
-                    return next_target_token(catalog.config_revision, project.id, job.profile, job.workflow, target)
         except (OrchestrationError, ValueError):
             return None
+        return self._following_target(plan, job.target_id)
+
+    def _following_target(self, plan: ExecutionPlan, after: str) -> str | None:
+        """Return the next target after ``after`` in profile order whose circuit is closed."""
+        ids = [target.id for target in plan.targets]
+        start = ids.index(after) + 1 if after in ids else 0
+        now = datetime.now(timezone.utc)
+        for target in plan.targets[start:]:
+            health = self.database.target_health(target_execution_key(target))
+            if not self.target_executor.is_circuit_open(health.get("circuit_open_until", ""), now, health.get("probe_job_id", "")):
+                return target.id
         return None
 
     async def wait(self, job_id: str, timeout_s: int = 0) -> JobView:
@@ -429,7 +381,7 @@ class Runtime:
             raise OrchestrationError(
                 "Job does not exist.",
                 code="unknown_job",
-                next_action="Call job_list for the project and use a listed job ID.",
+                next_action="Call list for the project and use a listed job ID.",
             )
         if job.state in TERMINAL_STATES:
             await self.scheduler.wait(job_id, timeout_s)
@@ -474,13 +426,13 @@ class Runtime:
             raise OrchestrationError(
                 "Job does not exist.",
                 code="unknown_job",
-                next_action="Call job_list for the project and use a listed job ID.",
+                next_action="Call list for the project and use a listed job ID.",
             )
         if job.state in TERMINAL_STATES:
             raise OrchestrationError(
                 f"Job {job_id} is in terminal state '{job.state}'.",
                 code="invalid_state",
-                next_action="Inspect using job_wait; use a new job if appropriate.",
+                next_action="Inspect using wait; use a new job if appropriate.",
             )
         cleaned_answer = answer if isinstance(answer, str) else ""
         if not cleaned_answer:
@@ -498,34 +450,11 @@ class Runtime:
         delivered = self.ask_registry.deliver_answer(job_id, cleaned_answer)
         if not delivered:
             raise OrchestrationError(
-                f"No question is pending for job {job_id}.",
+                f"No question is pending for job {job_id}, or it expired.",
                 code="invalid_state",
-                next_action="Inspect using job_wait; use a new job if appropriate.",
+                next_action="Inspect using wait; use a new job if appropriate.",
             )
-        await run_sync(self.database.event, job_id, "job.question_answered", {"answer": cleaned_answer})
         return ActionResult(success=True, job_id=job_id, state=job.state)
-
-    async def report_error(
-        self,
-        *,
-        job_id: str,
-        category: str,
-        expected: str,
-        observed: str,
-        report_key: str,
-    ) -> dict[str, Any]:
-        acknowledgement = await run_sync(
-            self.database.record_error_report,
-            job_id=job_id,
-            category=category,
-            expected=expected,
-            observed=observed,
-            report_key=report_key,
-        )
-        job = await run_sync(self.database.job, job_id)
-        next_target = self._next_target_token(job) if job is not None and job.state == "succeeded" and category == "output" else None
-        acknowledgement["retry"] = {"retryable": next_target is not None, "next_target": next_target}
-        return acknowledgement
 
     async def cancel(self, job_id: str) -> ActionResult:
         self.ask_registry.revoke_token(job_id)
@@ -536,7 +465,7 @@ class Runtime:
             raise OrchestrationError(
                 "Job does not exist.",
                 code="unknown_job",
-                next_action="Call job_list for the project and use a listed job ID.",
+                next_action="Call list for the project and use a listed job ID.",
             )
         if job.state == "queued":
             if location in {"queued", "missing"}:
@@ -545,12 +474,10 @@ class Runtime:
                 await self._notify_job(job_id)
                 return ActionResult(success=True, job_id=job_id, state="cancelled")
             if location == "running":
-                await run_sync(self.database.event, job_id, "job.cancellation_requested", {})
                 return ActionResult(success=True, job_id=job_id, state="running")
         if job.state == "cancelled" and location == "running":
             return ActionResult(success=True, job_id=job_id, state="cancelled")
         if job.state == "running" and location == "running":
-            await run_sync(self.database.event, job_id, "job.cancellation_requested", {})
             return ActionResult(success=True, job_id=job_id, state="running")
         return ActionResult(success=False, job_id=job_id, state=job.state, error=f"Job cannot be cancelled from {job.state}")
 
@@ -571,39 +498,37 @@ class Runtime:
             except ValueError:
                 delay = self._catalog.breaker_base_cooldown_s
             delays.append(delay)
-        raise OrchestrationError("All candidate targets are temporarily unavailable.", code="targets_unavailable", next_action="Wait for a target to recover, then retry.", retryable=True, retry_after_s=min(delays))
+        raise OrchestrationError("All candidate targets are temporarily unavailable.", code="targets_unavailable", next_action="Wait for a target to recover, then retry.", retry_after_s=min(delays))
 
-    async def retry(self, job_id: str) -> SubmissionResult:
+    async def retry(self, job_id: str, target: str = "") -> SubmissionResult:
+        new_id = str(uuid.uuid4())
         try:
-            await run_sync(self._prepare_retry, job_id)
+            await run_sync(self._prepare_retry, new_id, job_id, target)
         finally:
-            await self._enqueue_record(job_id)
-        await self._notify_job(job_id)
-        return SubmissionResult(job_id=job_id, state="queued")
+            await self._enqueue_record(new_id)
+        await self._notify_job(new_id)
+        return SubmissionResult(job_id=new_id, state="queued")
 
-    def _prepare_retry(self, job_id: str) -> None:
+    def _prepare_retry(self, new_id: str, job_id: str, target: str) -> None:
         job = self.database.job(job_id)
         if job is None:
             raise OrchestrationError(
                 "Job does not exist.",
                 code="unknown_job",
-                next_action="Call job_list for the project and use a listed job ID.",
+                next_action="Call list for the project and use a listed job ID.",
             )
-        if job.state not in {"failed", "cancelled", "interrupted"}:
+        if job.state not in {"succeeded", "failed", "cancelled", "interrupted"}:
             raise OrchestrationError(
                 f"Job cannot be retried from state {job.state}.",
                 code="invalid_state",
-                next_action="Call job_wait or submit a new job.",
+                next_action="Call wait or submit a new job.",
             )
-        record = self.database.job_record(job_id)
-        if record is not None:
-            try:
-                stored_plan = parse_execution_plan(json.loads(record["execution_plan_json"]))
-            except (ValueError, TypeError, json.JSONDecodeError):
-                stored_plan = None
-            if stored_plan is not None:
-                self._ensure_candidates_available(stored_plan)
-        self.database.reset_retry(job_id)
+        record = self.database.job_record(job_id) or {}
+        self._prepare_submission(
+            new_id, job.project_id, job.workflow, str(record.get("prompt", "")),
+            session=job.session, profile=job.profile, fresh=bool(record.get("fresh", 0)),
+            retry_of=job_id, target=target.strip(), after=job.target_id,
+        )
 
     def status(self) -> DaemonStatusResult:
         return DaemonStatusResult(status="stopping" if self._closing else "running", workers=self.scheduler.workers, active_jobs=self.scheduler.active_jobs, queued_jobs=self.scheduler.queued_jobs)
@@ -682,13 +607,8 @@ class Runtime:
             # Bind sessions to environment configuration, not unrelated target
             # capacity. Environment values stay inside this keyed opaque digest.
             environment_config = {
-                "envs": catalog.envs,
                 "targets": [
-                    {
-                        "id": target.id,
-                        "envs_vars": target.envs_vars,
-                        "envs": target.envs,
-                    }
+                    {"id": target.id, "env": target.env}
                     for target in sorted(catalog.targets, key=lambda item: item.id)
                 ],
             }
@@ -759,7 +679,6 @@ class Runtime:
             raise
         previous = self._config_health
         self._catalog = catalog
-        self.database.history_turns = catalog.history_turns
         self._catalog_stat = stat
         # Planning and execution must read the same settings after any reload.
         try:
@@ -781,13 +700,6 @@ class Runtime:
             last_known_good_revision=catalog.config_revision
             or previous.last_known_good_revision,
         )
-        if catalog.langfuse != self.tracer.config:
-            self.tracer.flush()
-            self.tracer.shutdown()
-            self.tracer = Tracer(catalog.langfuse)
-            self.ask_registry.tracer = self.tracer
-            self.target_executor.tracer = self.tracer
-            self.runner.tracer = self.tracer
         return self._catalog
 
 

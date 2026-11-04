@@ -3,10 +3,14 @@
 import json
 import shutil
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Literal
+
+from refract.telemetry import TOKEN_KEYS
+
+AsyncEventHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -30,7 +34,7 @@ class BackendResult:
     error: str
     error_class: str
     model: str | None = None
-    telemetry: dict[str, Any] | None = None
+    tokens: dict[str, int | None] = field(default_factory=lambda: dict.fromkeys(TOKEN_KEYS))
 
 
 _DEFAULT_FATAL_TOKENS = (
@@ -92,7 +96,7 @@ def classify_backend_output(
     fatal_tokens: Iterable[str] = _DEFAULT_FATAL_TOKENS,
     treat_missing_session_as_ok_warning: bool = True,
     model: str | None = None,
-    telemetry: dict[str, Any] | None = None,
+    tokens: dict[str, int | None] | None = None,
 ) -> BackendResult:
     """Shared classifier for all backends.
 
@@ -101,6 +105,8 @@ def classify_backend_output(
       * Empty agent_messages with no fatal tokens returns FATAL with descriptive error.
       * A successful run without an extracted SESSION_ID returns OK + warning.
     """
+    if tokens is None:
+        tokens = dict.fromkeys(TOKEN_KEYS)
     agent_messages_stripped = (agent_messages or "").strip()
     error_text_stripped = (error_text or "").strip()
 
@@ -114,7 +120,7 @@ def classify_backend_output(
             error=error_text_stripped or "fatal backend/auth failure",
             error_class="fatal_backend",
             model=model,
-            telemetry=telemetry,
+            tokens=tokens,
         )
 
     if not agent_messages_stripped:
@@ -126,7 +132,7 @@ def classify_backend_output(
             error=f"Failed to get output from the {backend_name} session.{extra}".strip(),
             error_class="no_agent_messages",
             model=model,
-            telemetry=telemetry,
+            tokens=tokens,
         )
 
     if not session_id and treat_missing_session_as_ok_warning:
@@ -137,7 +143,7 @@ def classify_backend_output(
             error="warning: no SESSION_ID",
             error_class="warning",
             model=model,
-            telemetry=telemetry,
+            tokens=tokens,
         )
 
     return BackendResult(
@@ -147,7 +153,7 @@ def classify_backend_output(
         error="",
         error_class="",
         model=model,
-        telemetry=telemetry,
+        tokens=tokens,
     )
 
 

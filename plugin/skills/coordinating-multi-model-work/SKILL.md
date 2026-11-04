@@ -26,7 +26,7 @@ request as direct, leave this skill and do the work with your own tools.
 
 - **Slug**: the plan identity in `docs/plans/<slug>/`. Lowercase kebab-case,
   confirmed with the user when the first plan artifact is written, fixed once
-  the plan `base` anchor exists. The slug is also the `context_key`.
+  the plan `base` anchor exists. The slug is also the `session`.
 - **`<N>` and `<NN>`**: the phase number, and the same number zero-padded to
   two digits.
 - **Clean root**: `git status --porcelain` prints nothing.
@@ -37,9 +37,9 @@ request as direct, leave this skill and do the work with your own tools.
 ## Refract Contract
 
 [tool-contract.md](references/tool-contract.md) owns routing, admission,
-privacy, session reuse, waiting, paging, and recovery rules. Apply it before
-submission or recovery. Canonical gates use `implement` and `review`;
-`brainstorming` uses `consult`. Use the plan slug as `context_key`.
+privacy, session reuse, waiting, result truncation, and recovery rules. Apply it
+before submission or recovery. Canonical gates use `implement` and `review`;
+`brainstorming` uses `consult`. Use the plan slug as `session`.
 
 ## Git Ownership
 
@@ -66,12 +66,12 @@ resets, or restores. Assume it did none of these.
 
 1. When the user wants an isolated workspace, run `using-git-worktrees` first
    and use that worktree's actual Git root.
-2. Pass the actual Git root to `project_resolve(path=...)`; it must exist and
-   Refract does not walk up to find a Git root. Retain the returned project ID.
-   If unavailable, report it once: planning continues; Execute and Review stop
-   until service is available.
+2. Pass the actual Git root, or any directory inside it, as `path` to
+   `list(path)`. Refract resolves the Git root; a path outside Git returns
+   `invalid_path`. If unavailable, report it once: planning continues;
+   Execute and Review stop until service is available.
 3. Resolve plan-artifact tracking as described below.
-4. Reconcile with `job_list(project_id)`, handover `job_refs`, and Git; act on
+4. Reconcile with `list(path)`, handover `job_refs`, and Git; act on
    the first match:
 
 | Handover | Jobs | Git | Action |
@@ -82,8 +82,9 @@ resets, or restores. Assume it did none of these.
 | Any | Active job absent from handover | Any | Stop. Report the job ID and ask. |
 | Any other combination | | | Stop. Report all three states and ask. |
 
-Use `job_wait` for the full result. Job records own job state; Git state lives
-only in the working tree.
+Use `wait` for the full result. When `result.truncated` is true, read the full
+text at `result.result_path`. Job records own job state; Git state lives only
+in the working tree.
 
 ### Plan-Artifact Tracking
 
@@ -113,8 +114,8 @@ are written in both modes, and the clean-root requirement is identical in both.
 
 ## Task Guidance
 
-For each new phase, call `task_guide(project_id)` once. Put the complete phase
-request in self-contained `job_submit.prompt`:
+Call `list(path)` once per phase. Put the complete phase request in
+self-contained `submit.prompt`:
 
 - repository change → `implement`
 - code-quality review → `review`
@@ -145,22 +146,26 @@ Emit:
 
 ## Waiting Rule
 
-Apply [tool-contract.md](references/tool-contract.md#waiting-paging-and-bounds)
-for every wait, reconnect, and terminal result page.
+Apply [tool-contract.md](references/tool-contract.md#waiting-and-results)
+for every wait, reconnect, and terminal result.
 
 ## Gate 2: Execute
 
-On a failed job, inspect `result.metadata.failure.kind`, `result.metadata.retry.retryable`, and `result.metadata.retry.next_target`. Resubmit with `next_target`, resubmit with `fresh_session=true` for `context_overflow`, or report.
+On a failed job, read `result.failure_kind` and apply Recovery in
+[tool-contract.md](references/tool-contract.md#recovery). After
+`context_overflow`, submit again with `fresh=true`. After `replay_blocked`,
+inspect the worktree before any retry. Otherwise, call `retry(job_id)` for
+`result.next_target`, or `retry(job_id, target=X)` to pin a target, or report.
 
 For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch with
 [implementer-prompt.md](../executing-plans/implementer-prompt.md).
 
 1. Submit one prompt-only `implement` job with the saved route. Its prompt
    names the absolute `phase-<NN>/prompt.md` path.
-2. Wait using the default heartbeat rule. If `result.pending_question` appears,
-   answer its `text` from the plan or user through `job_answer(job_id, answer)`,
-   then call `job_wait` again with the same job ID. Read the complete terminal
-   result from the wait response.
+2. Wait under the Waiting Rule. If `result.pending_question` appears,
+   answer its `text` from the plan or user through `answer(job_id, answer)`,
+   then call `wait` again with the same job ID. Read `result.text`; when
+   `result.truncated` is true, read the full text at `result.result_path`.
 3. Diff the working tree against the recorded HEAD. Compare it with ERP
    `FILES MODIFIED` and the phase file set. An undeclared or out-of-scope path
    is a specification failure for Gate 3.
@@ -172,7 +177,7 @@ For folder plans, `executing-plans` owns the phase-file checkpoint. Dispatch wit
 | `BLOCKED` | No checkpoint. Answer each `CLARIFICATIONS NEEDED` item from the plan or the user, then submit one resumed job carrying only the answers. |
 | `CONTINUE_CONTEXT` | Validate what exists and checkpoint if it passes. Submit one resumed job saying "Continue Phase <NN>". |
 | ERP block or `NEXT` missing | Submit one resumed job asking for the ERP response of the current state. |
-| Job failed, cancelled, or interrupted | Partial changes remain on disk. Reconcile and report them. Then `job_retry` once if the prompt and file set still hold; otherwise submit a new job. |
+| Job failed, cancelled, or interrupted | Partial changes remain on disk. Reconcile and report them. Then `retry(job_id)` once if the prompt and file set still hold; otherwise submit a new job. |
 
 Bounds: two `BLOCKED` rounds, two continuations, and one ERP re-request per
 phase. Past a bound, or on any unanswerable clarification, set handover

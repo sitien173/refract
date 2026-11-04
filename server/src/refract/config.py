@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import tomllib
-from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from refract.logging_setup import get_logger
 
 from refract.config_inspection import (
+    REMOVED_KEYS,
     ConfigSource,
     ConfigurationLoadError,
     read_config_source,
+    removed_key_message,
     sha256_bytes,
     utc_now,
 )
@@ -26,6 +25,18 @@ from refract.workflows import get_workflow
 log = get_logger("config")
 DEFAULT_PORT = 8765
 DEFAULT_ASK_TIMEOUT_S = 300
+_TARGET_KEYS = frozenset({
+    "id", "backend", "model", "backend_profile", "reasoning", "system_prompt",
+    "isolated", "read_only", "args", "max_concurrency", "context_window",
+    "retry", "env",
+})
+
+
+@dataclass(slots=True, frozen=True)
+class RetryPolicy:
+    attempts: int = 0
+    codes: tuple[str, ...] = ()
+    patterns: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -40,17 +51,9 @@ class TargetConfig:
     read_only: bool = False
     args: tuple[str, ...] = ()
     max_concurrency: int = 1
-    retry_policy: str = ""
     context_window: int | None = None
-    envs_vars: tuple[str, ...] = field(default_factory=tuple, repr=False)
-    envs: dict[str, str] = field(default_factory=dict, repr=False)
-
-
-@dataclass(slots=True, frozen=True)
-class RetryPolicy:
-    retry_attempt: int = 0
-    error_codes: tuple[str, ...] = ()
-    error_patterns: tuple[str, ...] = ()
+    retry: RetryPolicy = RetryPolicy()
+    env: dict[str, str] = field(default_factory=dict, repr=False)
 
 
 @dataclass(slots=True, frozen=True)
@@ -74,12 +77,9 @@ class LoggingConfig:
     """Application log sinks and retention policy."""
 
     level: str = "INFO"
-    format: str = "text"
     file: Path | None = None
-    console: bool = False
     max_bytes: int = 10 * 1024 * 1024
     backup_count: int = 5
-    capture_warnings: bool = True
 
 
 @dataclass(slots=True, frozen=True)
@@ -90,43 +90,25 @@ class NotificationsConfig:
 
 
 @dataclass(slots=True, frozen=True)
-class LangfuseConfig:
-    """Langfuse observability client configuration."""
-
-    enabled: bool = False
-    base_url: str = "http://localhost:3000"
-    environment: str = ""
-    sample_rate: float = 1.0
-
-
-@dataclass(slots=True, frozen=True)
 class DaemonConfig:
     home: Path
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
     max_jobs: int = 4
-    history_turns: int = 8
-    history_bytes: int = 65536
     default_profile: str = ""
     targets: tuple[TargetConfig, ...] = field(default_factory=tuple)
     profiles: dict[str, dict[str, TargetSelection]] = field(default_factory=dict)
     profile_declarations: dict[str, ProfileDeclaration] = field(default_factory=dict)
-    # Project declarations are retained separately so dashboard attribution
-    # does not infer provenance from value equality.
-    project_profile_declarations: dict[str, ProfileDeclaration] = field(default_factory=dict)
     config_path: Path | None = None
     config_revision: str = ""
     config_modification_time: str = ""
     config_loaded_at: str = ""
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
-    langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
-    retry_policies: dict[str, RetryPolicy] = field(default_factory=dict)
     breaker_failure_threshold: int = 3
     breaker_base_cooldown_s: int = 60
     breaker_max_cooldown_s: int = 900
     ask_timeout_s: int = DEFAULT_ASK_TIMEOUT_S
-    envs: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
     @property
     def database_path(self) -> Path:
@@ -144,62 +126,23 @@ def refract_home() -> Path:
     return Path(override).expanduser() if override else Path.home() / ".refract"
 
 
-def load_task_guide(
+def load_guidance(
     home: Path,
     project_root: Path | None = None,
-) -> dict[str, Any]:
-    project_path = (
-        project_root / ".refract" / "task_guide.json"
-        if project_root is not None
-        else None
-    )
-    legacy_project_path = (
-        project_root / ".refract" / "task_routes.json"
-        if project_root is not None
-        else None
-    )
-    if project_path is not None and project_path.exists():
-        path = project_path
-    elif legacy_project_path is not None and legacy_project_path.exists():
-        path = legacy_project_path
-    else:
-        path = home / "task_guide.json"
-        legacy_path = home / "task_routes.json"
-        if not path.exists() and legacy_path.exists():
-            path = legacy_path
+) -> dict[str, Any] | None:
+    path = home / "task_guide.json"
+    if project_root is not None:
+        project_path = project_root / ".refract" / "task_guide.json"
+        if project_path.exists():
+            path = project_path
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise ValueError(f"Missing task guide: {path}") from exc
+    except FileNotFoundError:
+        return None
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid task guide: {path}: {exc.msg}") from exc
     if not isinstance(value, dict) or not value:
         raise ValueError("Task guide must be a non-empty JSON object")
-    # Normalize the previous decision-table keys for current MCP clients.
-    legacy_recommendations = value.get("routes")
-    if isinstance(legacy_recommendations, list):
-        if "recommendations" not in value:
-            value = {**value, "recommendations": legacy_recommendations}
-        value.pop("routes", None)
-    recommendations = value.get("recommendations")
-    if isinstance(recommendations, list):
-        normalized: list[Any] = []
-        for recommendation in recommendations:
-            if not isinstance(recommendation, dict):
-                normalized.append(recommendation)
-                continue
-            item = dict(recommendation)
-            if "routing_profile" in item:
-                item.setdefault("profile", item["routing_profile"])
-                item.pop("routing_profile")
-            normalized.append(item)
-        value["recommendations"] = normalized
-    columns = value.get("columns")
-    if isinstance(columns, list):
-        value["columns"] = [
-            "profile" if column == "routing_profile" else column
-            for column in columns
-        ]
     return value
 
 
@@ -217,13 +160,6 @@ def _boolean(value: Any, default: bool, name: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{name} must be true or false")
     return value
-
-
-def _renamed_value(mapping: dict[str, Any], name: str, legacy: str) -> Any:
-    """Read a renamed setting while rejecting ambiguous mixed configuration."""
-    if name in mapping and legacy in mapping:
-        raise ValueError(f"Use {name!r}, not both {name!r} and legacy {legacy!r}")
-    return mapping.get(name, mapping.get(legacy))
 
 
 def _target_selection(
@@ -246,7 +182,9 @@ def _target_selection(
         selected = tuple(value.strip() for value in raw)
         timeout_s = 0
     elif isinstance(raw, dict):
-        allowed = {"targets", "max_attempts", "timeout_s"}
+        if "max_attempts" in raw:
+            raise ValueError(removed_key_message("profiles workflow max_attempts"))
+        allowed = {"targets", "timeout_s"}
         unknown_options = set(raw) - allowed
         if unknown_options:
             raise ValueError(
@@ -265,12 +203,6 @@ def _target_selection(
             selected = tuple(value.strip() for value in raw_targets)
         else:
             selected = ()
-        if "max_attempts" in raw:
-            # Accepted so older files still load; nothing reads the value.
-            log.warning(
-                "Deprecated profile workflow key max_attempts",
-                extra={"event": "config.deprecated_key", "profile": profile_id, "workflow": workflow, "key": "max_attempts"},
-            )
         raw_timeout = raw.get("timeout_s", 0)
         if (
             isinstance(raw_timeout, bool)
@@ -424,53 +356,6 @@ def validate_target_args(
         )
 
 
-def _retry_policies(raw: Any) -> dict[str, RetryPolicy]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError("[retryPolicies] must be a TOML table")
-    policies: dict[str, RetryPolicy] = {}
-    for policy_id, mapping in raw.items():
-        if not isinstance(policy_id, str) or not policy_id.strip():
-            raise ValueError("Invalid retry policy declaration")
-        if not isinstance(mapping, dict):
-            raise ValueError(f"Retry policy {policy_id!r} must be a TOML table")
-        unknown = set(mapping) - {"retryAttempt", "errorCodes", "errorPatterns"}
-        if unknown:
-            raise ValueError(
-                f"Retry policy {policy_id!r} has unsupported settings: {sorted(unknown)}"
-            )
-        raw_attempt = mapping.get("retryAttempt", 0)
-        if (
-            isinstance(raw_attempt, bool)
-            or not isinstance(raw_attempt, int)
-            or raw_attempt < 0
-        ):
-            raise ValueError(
-                f"Retry policy {policy_id!r} retryAttempt must be a non-negative integer"
-            )
-        raw_codes = mapping.get("errorCodes", [])
-        if not isinstance(raw_codes, list) or not all(
-            isinstance(value, str) and value for value in raw_codes
-        ):
-            raise ValueError(
-                f"Retry policy {policy_id!r} errorCodes must be a list of non-empty strings"
-            )
-        raw_patterns = mapping.get("errorPatterns", [])
-        if not isinstance(raw_patterns, list) or not all(
-            isinstance(value, str) and value for value in raw_patterns
-        ):
-            raise ValueError(
-                f"Retry policy {policy_id!r} errorPatterns must be a list of non-empty strings"
-            )
-        policies[policy_id] = RetryPolicy(
-            retry_attempt=raw_attempt,
-            error_codes=tuple(raw_codes),
-            error_patterns=tuple(raw_patterns),
-        )
-    return policies
-
-
 def _validate_env_mapping(mapping: Any, *, context: str) -> dict[str, str]:
     if not isinstance(mapping, dict):
         raise ValueError(f"{context} must be a TOML table")
@@ -488,39 +373,50 @@ def _validate_env_mapping(mapping: Any, *, context: str) -> dict[str, str]:
             raise ValueError(f"Environment values must be strings in {context}")
         if "\x00" in val:
             raise ValueError(f"Environment values cannot contain NUL bytes in {context}")
+        if "${" in val:
+            raise ValueError(removed_key_message("${NAME} in targets[].env"))
         result[key] = val
     return result
 
 
-def _envs(raw: Any) -> dict[str, dict[str, str]]:
+def _reject_removed(key: str) -> None:
+    if key in REMOVED_KEYS:
+        raise ValueError(removed_key_message(key))
+
+
+def _retry(raw: Any, target_id: str) -> RetryPolicy:
+    if raw is None:
+        return RetryPolicy()
+    error = ValueError(f"Target {target_id!r} has invalid retry settings")
+    if not isinstance(raw, dict) or set(raw) - {"attempts", "codes", "patterns"}:
+        raise error
+    attempts = raw.get("attempts", 0)
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+        raise error
+    rules: list[tuple[str, ...]] = []
+    for name in ("codes", "patterns"):
+        value = raw.get(name, [])
+        if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+            raise error
+        rules.append(tuple(value))
+    return RetryPolicy(attempts, *rules)
+
+
+def _target_env(raw: Any, target_id: str) -> dict[str, str]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise ValueError("[envs] must be a TOML table")
-    result: dict[str, dict[str, str]] = {}
-    for name, mapping in raw.items():
-        if not isinstance(name, str) or not name or "\x00" in name:
-            raise ValueError("Invalid environment set declaration")
-        if not isinstance(mapping, dict):
-            raise ValueError(f"Environment set {name!r} must be a TOML table")
-        result[name] = _validate_env_mapping(
-            mapping, context=f"Environment set {name!r}"
-        )
-    return result
+        raise ValueError(f"Target {target_id!r} env must be a TOML table")
+    return _validate_env_mapping(raw, context=f"Target {target_id!r} env")
 
 
-def _targets(
-    raw: Any,
-    retry_policies: dict[str, RetryPolicy] | None = None,
-    envs: dict[str, dict[str, str]] | None = None,
-) -> tuple[TargetConfig, ...]:
+def _targets(raw: Any) -> tuple[TargetConfig, ...]:
     if isinstance(raw, dict) and not raw:
         raise ValueError("[targets] must contain at least one target")
     if not isinstance(raw, list):
         raise ValueError("[targets] must be a TOML array of tables")
     if not raw:
         raise ValueError("[targets] must contain at least one target")
-    available_policies = retry_policies or {}
     targets: list[TargetConfig] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -533,27 +429,11 @@ def _targets(
             # Do not echo the complete declaration: it may contain prompts or
             # other operator-supplied sensitive values.
             raise ValueError("Invalid target declaration")
-        if "retry" in item or "retryAttempt" in item or "retry_attempt" in item:
-            raise ValueError(
-                f"Target {target_id!r} cannot declare inline retry settings"
-            )
-        if "retry_policy" in item:
-            raise ValueError(
-                f"Target {target_id!r} has unsupported settings: ['retry_policy']"
-            )
-        raw_retry_policy = item.get("retryPolicy")
-        if raw_retry_policy is not None:
-            if not isinstance(raw_retry_policy, str) or not raw_retry_policy.strip():
-                raise ValueError(
-                    f"Target {target_id!r} retryPolicy must be a non-empty string"
-                )
-            retry_policy = raw_retry_policy.strip()
-            if retry_policy not in available_policies:
-                raise ValueError(
-                    f"Target {target_id!r} references unknown retry policy: {retry_policy!r}"
-                )
-        else:
-            retry_policy = ""
+        for key in item:
+            _reject_removed(f"targets[].{key}")
+        unknown = set(item) - _TARGET_KEYS
+        if unknown:
+            raise ValueError(f"Unsupported target settings: {sorted(unknown)}")
         args = item.get("args", [])
         if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
             raise ValueError(f"Target {target_id!r} args must be a list of strings")
@@ -573,7 +453,7 @@ def _targets(
             raise ValueError(
                 f"Target {target_id!r} settings must be strings: {invalid_text}"
             )
-        raw_backend_profile = _renamed_value(item, "backend_profile", "profile")
+        raw_backend_profile = item.get("backend_profile")
         if raw_backend_profile is None:
             backend_profile = ""
         elif isinstance(raw_backend_profile, str):
@@ -583,26 +463,6 @@ def _targets(
                 f"Target {target_id!r} backend_profile must be a string"
             )
         validate_target_args(target_id, backend, tuple(args), isolated=isolated)
-        raw_envs_vars = item.get("envs_vars", [])
-        if not isinstance(raw_envs_vars, list) or not all(
-            isinstance(value, str) for value in raw_envs_vars
-        ):
-            raise ValueError(
-                f"Target {target_id!r} envs_vars must be a list of strings"
-            )
-        available_envs = envs or {}
-        for var_set in raw_envs_vars:
-            if var_set not in available_envs:
-                raise ValueError(
-                    f"Target {target_id!r} references unknown environment set: {var_set!r}"
-                )
-        envs_vars = tuple(raw_envs_vars)
-        raw_envs = item.get("envs", {})
-        if not isinstance(raw_envs, dict):
-            raise ValueError(f"Target {target_id!r} envs must be a TOML table")
-        target_envs = _validate_env_mapping(
-            raw_envs, context=f"Target {target_id!r} envs"
-        )
         targets.append(
             TargetConfig(
                 id=target_id,
@@ -619,12 +479,11 @@ def _targets(
                     1,
                     f"Target {target_id!r} max_concurrency",
                 ),
-                retry_policy=retry_policy,
                 context_window=_positive_int(
-                    item.get("contextWindow"), None, f"Target {target_id!r} contextWindow"
+                    item.get("context_window"), None, f"Target {target_id!r} context_window"
                 ),
-                envs_vars=envs_vars,
-                envs=target_envs,
+                retry=_retry(item.get("retry"), target_id),
+                env=_target_env(item.get("env"), target_id),
             )
         )
     if len({target.id for target in targets}) != len(targets):
@@ -637,23 +496,15 @@ def _logging_config(raw: Any, home: Path) -> LoggingConfig:
         raw = {}
     if not isinstance(raw, dict):
         raise ValueError("[logging] must be a TOML table")
-    unknown = set(raw) - {
-        "level",
-        "format",
-        "file",
-        "console",
-        "max_bytes",
-        "backup_count",
-        "capture_warnings",
-    }
+    for key in ("format", "console", "capture_warnings"):
+        if key in raw:
+            _reject_removed(f"[logging].{key}")
+    unknown = set(raw) - {"level", "file", "max_bytes", "backup_count"}
     if unknown:
         raise ValueError(f"Unsupported logging settings: {sorted(unknown)}")
     level = str(raw.get("level", "INFO")).strip().upper()
     if level not in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}:
         raise ValueError(f"Invalid logging level: {level!r}")
-    log_format = str(raw.get("format", "text")).strip().lower()
-    if log_format not in {"text", "json"}:
-        raise ValueError("Logging format must be 'text' or 'json'")
     raw_file = raw.get("file", "refract.log")
     if raw_file is None or raw_file is False or str(raw_file).strip().lower() in {
         "",
@@ -667,9 +518,6 @@ def _logging_config(raw: Any, home: Path) -> LoggingConfig:
         candidate = Path(raw_file).expanduser()
         log_file = candidate if candidate.is_absolute() else home / candidate
 
-    for name in ("console", "capture_warnings"):
-        if name in raw and not isinstance(raw[name], bool):
-            raise ValueError(f"logging.{name} must be true or false")
     try:
         max_bytes = int(raw.get("max_bytes", 10 * 1024 * 1024))
         backup_count = int(raw.get("backup_count", 5))
@@ -681,12 +529,9 @@ def _logging_config(raw: Any, home: Path) -> LoggingConfig:
         raise ValueError("logging.backup_count must be at least 0")
     return LoggingConfig(
         level=level,
-        format=log_format,
         file=log_file,
-        console=raw.get("console", False),
         max_bytes=max_bytes,
         backup_count=backup_count,
-        capture_warnings=raw.get("capture_warnings", True),
     )
 
 
@@ -701,50 +546,6 @@ def _notifications_config(raw: Any) -> NotificationsConfig:
     if "enabled" in raw and not isinstance(raw["enabled"], bool):
         raise ValueError("notifications.enabled must be true or false")
     return NotificationsConfig(enabled=raw.get("enabled", False))
-
-
-def _langfuse_config(raw: Any) -> LangfuseConfig:
-    if raw is None:
-        return LangfuseConfig()
-    if not isinstance(raw, dict):
-        raise ValueError("[langfuse] must be a TOML table")
-    unknown = set(raw) - {
-        "enabled",
-        "base_url",
-        "environment",
-        "sample_rate",
-    }
-    if unknown:
-        raise ValueError(f"Unsupported langfuse settings: {sorted(unknown)}")
-    if "enabled" in raw and not isinstance(raw["enabled"], bool):
-        raise ValueError("langfuse.enabled must be true or false")
-    enabled = raw.get("enabled", False)
-
-    base_url = raw.get("base_url", "http://localhost:3000")
-    if not isinstance(base_url, str) or not base_url.strip():
-        raise ValueError("langfuse.base_url must be an http or https URL")
-    base_url = base_url.strip()
-    parsed = urlsplit(base_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("langfuse.base_url must be an http or https URL")
-
-    environment = raw.get("environment", "")
-    if not isinstance(environment, str):
-        raise ValueError("langfuse.environment must be a string")
-
-    raw_sample_rate = raw.get("sample_rate", 1.0)
-    if isinstance(raw_sample_rate, bool) or not isinstance(raw_sample_rate, (int, float)):
-        raise ValueError("langfuse.sample_rate must be a number between 0.0 and 1.0")
-    sample_rate = float(raw_sample_rate)
-    if not (0.0 <= sample_rate <= 1.0) or not math.isfinite(sample_rate):
-        raise ValueError("langfuse.sample_rate must be between 0.0 and 1.0")
-
-    return LangfuseConfig(
-        enabled=enabled,
-        base_url=base_url,
-        environment=environment,
-        sample_rate=sample_rate,
-    )
 
 
 def load_config(path: Path | None = None) -> DaemonConfig:
@@ -814,27 +615,26 @@ def _load_config_source(
 def _load_config_values(
     config_path: Path, home: Path, raw: dict[str, Any], source: Any
 ) -> DaemonConfig:
+    for key in raw:
+        _reject_removed(f"[{key}]")
     unsupported = set(raw) - {
         "daemon",
         "logging",
         "targets",
         "profiles",
         "notifications",
-        "retryPolicies",
-        "envs",
-        "langfuse",
     }
     if unsupported:
         raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
     daemon = raw.get("daemon", {})
     if not isinstance(daemon, dict):
         raise ValueError("[daemon] must be a TOML table")
+    for key in daemon:
+        _reject_removed(f"[daemon].{key}")
     unsupported_daemon = set(daemon) - {
         "host",
         "port",
         "max_jobs",
-        "history_turns",
-        "history_bytes",
         "default_profile",
         "breaker_failure_threshold",
         "breaker_base_cooldown_s",
@@ -847,9 +647,7 @@ def _load_config_values(
         raise ValueError("Missing required [targets] section")
     if "profiles" not in raw:
         raise ValueError("Missing required [profiles] section")
-    shared_envs = _envs(raw.get("envs"))
-    retry_policies = _retry_policies(raw.get("retryPolicies"))
-    targets = _targets(raw["targets"], retry_policies, shared_envs)
+    targets = _targets(raw["targets"])
     profile_declarations = _profile_declarations(raw["profiles"], targets)
     profiles = _resolve_profile_maps(profile_declarations)
     default_profile = str(daemon.get("default_profile", "")).strip()
@@ -878,25 +676,16 @@ def _load_config_values(
         host=host.strip(),
         port=port,
         max_jobs=_positive_int(daemon.get("max_jobs"), 4, "[daemon].max_jobs"),
-        history_turns=_positive_int(
-            daemon.get("history_turns"), 8, "[daemon].history_turns"
-        ),
-        history_bytes=_positive_int(
-            daemon.get("history_bytes"), 65536, "[daemon].history_bytes"
-        ),
         default_profile=default_profile,
         targets=targets,
         profiles=profiles,
         profile_declarations=profile_declarations,
         logging=_logging_config(raw.get("logging"), home),
         notifications=_notifications_config(raw.get("notifications")),
-        langfuse=_langfuse_config(raw.get("langfuse")),
-        retry_policies=retry_policies,
         breaker_failure_threshold=_positive_int(daemon.get("breaker_failure_threshold"), 3, "[daemon].breaker_failure_threshold"),
         breaker_base_cooldown_s=breaker_base,
         breaker_max_cooldown_s=breaker_max,
         ask_timeout_s=_positive_int(daemon.get("ask_timeout_s"), DEFAULT_ASK_TIMEOUT_S, "[daemon].ask_timeout_s"),
-        envs=shared_envs,
     )
 
 
@@ -925,36 +714,13 @@ def _load_project_config_values(
         except FileNotFoundError:
             return base
     raw = tomllib.loads(data.decode("utf-8"))
-    unsupported = set(raw) - {
-        "project",
-        "profiles",
-        "envs",
-        "targets",
-    }
+    for key in raw:
+        _reject_removed(f"[{key}]")
+    unsupported = set(raw) - {"profiles", "targets"}
     if unsupported:
         raise ValueError(f"Unsupported project config sections: {sorted(unsupported)}")
 
-    project = raw.get("project", {})
-    if not isinstance(project, dict):
-        raise ValueError("[project] must be a TOML table")
-    unsupported_project = set(project) - {"default_profile"}
-    if unsupported_project:
-        raise ValueError(f"Unsupported project settings: {sorted(unsupported_project)}")
-
-    if "envs" in raw:
-        project_envs = _envs(raw["envs"])
-        merged_envs: dict[str, dict[str, str]] = {
-            k: dict(v) for k, v in base.envs.items()
-        }
-        for proj_set_name, proj_set_map in project_envs.items():
-            if proj_set_name in merged_envs:
-                merged_envs[proj_set_name].update(proj_set_map)
-            else:
-                merged_envs[proj_set_name] = dict(proj_set_map)
-    else:
-        merged_envs = {k: dict(v) for k, v in base.envs.items()}
-
-    targets = [replace(t, envs=dict(t.envs)) for t in base.targets]
+    targets = list(base.targets)
     target_by_id = {t.id: (i, t) for i, t in enumerate(base.targets)}
     if "targets" in raw:
         raw_targets = raw["targets"]
@@ -965,57 +731,27 @@ def _load_project_config_values(
             if not isinstance(item, dict):
                 raise ValueError("Each target must be a TOML table")
             raw_target_id = item.get("id")
-            if not isinstance(raw_target_id, str) or not raw_target_id.strip():
-                raise ValueError("Target override must specify an id string")
-            target_id = raw_target_id.strip()
+            target_id = raw_target_id.strip() if isinstance(raw_target_id, str) else ""
             if target_id not in target_by_id:
-                raise ValueError(f"Unknown project target override: {target_id!r}")
+                raise ValueError(f"Project config cannot add targets: {target_id!r}")
             if target_id in seen_target_ids:
                 raise ValueError(f"Duplicate project target override: {target_id!r}")
             seen_target_ids.add(target_id)
-            unsupported_fields = set(item) - {"id", "envs_vars", "envs"}
+            for key in item:
+                _reject_removed(f"targets[].{key}")
+            unsupported_fields = set(item) - {"id", "env"}
             if unsupported_fields:
                 raise ValueError(
-                    f"Project target override {target_id!r} has unsupported settings: {sorted(unsupported_fields)}"
+                    f"Unsupported project target settings: {sorted(unsupported_fields)}"
                 )
             idx, base_target = target_by_id[target_id]
-            if "envs_vars" in item:
-                raw_vars = item["envs_vars"]
-                if not isinstance(raw_vars, list) or not all(
-                    isinstance(v, str) for v in raw_vars
-                ):
-                    raise ValueError(
-                        f"Target {target_id!r} envs_vars must be a list of strings"
-                    )
-                for var_set in raw_vars:
-                    if var_set not in merged_envs:
-                        raise ValueError(
-                            f"Target {target_id!r} references unknown environment set: {var_set!r}"
-                        )
-                new_envs_vars = tuple(raw_vars)
-            else:
-                new_envs_vars = base_target.envs_vars
-            if "envs" in item:
-                raw_target_envs = item["envs"]
-                if not isinstance(raw_target_envs, dict):
-                    raise ValueError(f"Target {target_id!r} envs must be a TOML table")
-                proj_local = _validate_env_mapping(
-                    raw_target_envs, context=f"Target {target_id!r} envs"
-                )
-                new_envs = dict(base_target.envs)
-                new_envs.update(proj_local)
-            else:
-                new_envs = dict(base_target.envs)
-            targets[idx] = replace(
-                base_target,
-                envs_vars=new_envs_vars,
-                envs=new_envs,
-            )
+            env = dict(base_target.env)
+            env.update(_target_env(item.get("env"), target_id))
+            targets[idx] = replace(base_target, env=env)
 
     if "profiles" not in raw:
         profiles = {profile_id: dict(mapping) for profile_id, mapping in base.profiles.items()}
         profile_declarations = dict(base.profile_declarations)
-        project_declarations = {}
     else:
         project_declarations = _profile_declarations(raw["profiles"], tuple(targets))
         project_profiles = _resolve_profile_maps(
@@ -1027,175 +763,37 @@ def _load_project_config_values(
         profile_declarations = dict(base.profile_declarations)
         profile_declarations.update(project_declarations)
 
-    default_profile = str(project.get("default_profile", base.default_profile)).strip()
-    if default_profile not in profiles:
-        raise ValueError(f"Unknown project profile: {default_profile!r}")
-    return DaemonConfig(
-        home=base.home,
-        host=base.host,
-        port=base.port,
-        max_jobs=base.max_jobs,
-        history_turns=base.history_turns,
-        history_bytes=base.history_bytes,
-        default_profile=default_profile,
+    return replace(
+        base,
         targets=tuple(targets),
         profiles=profiles,
         profile_declarations=profile_declarations,
-        project_profile_declarations=project_declarations,
-        config_path=base.config_path,
-        config_revision=base.config_revision,
-        config_modification_time=base.config_modification_time,
-        config_loaded_at=base.config_loaded_at,
-        logging=base.logging,
-        notifications=base.notifications,
-        langfuse=base.langfuse,
-        retry_policies=base.retry_policies,
-        breaker_failure_threshold=base.breaker_failure_threshold,
-        breaker_base_cooldown_s=base.breaker_base_cooldown_s,
-        breaker_max_cooldown_s=base.breaker_max_cooldown_s,
-        ask_timeout_s=base.ask_timeout_s,
-        envs=merged_envs,
     )
-
-
-def _parse_env_template(template: str) -> tuple[list[tuple[bool, str]], set[str]]:
-    """Parse an environment value template into chunks of (is_ref, value) and refs."""
-    chunks: list[tuple[bool, str]] = []
-    refs: set[str] = set()
-    i = 0
-    n = len(template)
-    cur_literal: list[str] = []
-
-    def flush_literal() -> None:
-        if cur_literal:
-            chunks.append((False, "".join(cur_literal)))
-            cur_literal.clear()
-
-    while i < n:
-        if template[i:i + 2] == "$$":
-            cur_literal.append("$")
-            i += 2
-        elif template[i:i + 2] == "${":
-            close_idx = template.find("}", i + 2)
-            if close_idx == -1:
-                raise ValueError("Unterminated environment reference")
-            ref_name = template[i + 2:close_idx]
-            if not ref_name or not ref_name.strip():
-                raise ValueError("Empty environment reference")
-            if "=" in ref_name or "\x00" in ref_name:
-                raise ValueError("Malformed environment reference")
-            if ref_name.startswith("REFRACT_ASK_"):
-                raise ValueError("Protected environment reference")
-            flush_literal()
-            chunks.append((True, ref_name))
-            refs.add(ref_name)
-            i = close_idx + 1
-        elif template[i] == "$":
-            cur_literal.append("$")
-            i += 1
-        else:
-            cur_literal.append(template[i])
-            i += 1
-
-    flush_literal()
-    return chunks, refs
 
 
 def resolve_target_environment(
     catalog: DaemonConfig,
     target: TargetConfig | str,
-    inherited: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Resolve configured environment overrides for a target iteratively."""
+    """Return the literal environment overrides configured for a target."""
     if isinstance(target, str):
-        target_obj: TargetConfig | None = None
-        for t in catalog.targets:
-            if t.id == target:
-                target_obj = t
-                break
-        if target_obj is None:
+        target = next((item for item in catalog.targets if item.id == target), None)
+        if target is None:
             raise ValueError("Unknown target")
-    else:
-        target_obj = target
-
-    inherited_map: Mapping[str, str] = os.environ if inherited is None else inherited
-
-    # Merge configured namespace: selected shared sets in order, then target local envs
-    configured_raw: dict[str, str] = {}
-    for set_name in target_obj.envs_vars:
-        if set_name in catalog.envs:
-            configured_raw.update(catalog.envs[set_name])
-    configured_raw.update(target_obj.envs)
-
-    if not configured_raw:
-        return {}
-
-    parsed_chunks: dict[str, list[tuple[bool, str]]] = {}
-    unresolved_deps: dict[str, set[str]] = {}
-    dependents: dict[str, set[str]] = {k: set() for k in configured_raw}
-
-    for key, raw_val in configured_raw.items():
-        chunks, refs = _parse_env_template(raw_val)
-        parsed_chunks[key] = chunks
-
-        if key in refs:
-            raise ValueError("Environment reference cycle detected")
-
-        configured_deps: set[str] = set()
-        for ref in refs:
-            if ref in configured_raw:
-                configured_deps.add(ref)
-            elif ref in inherited_map:
-                pass
-            else:
-                raise ValueError("Missing environment reference")
-
-        unresolved_deps[key] = configured_deps
-        for dep in configured_deps:
-            dependents[dep].add(key)
-
-    ready: list[str] = [k for k, deps in unresolved_deps.items() if not deps]
-    resolved: dict[str, str] = {}
-
-    while ready:
-        curr = ready.pop()
-        parts: list[str] = []
-        for is_ref, val in parsed_chunks[curr]:
-            if is_ref:
-                if val in resolved:
-                    parts.append(resolved[val])
-                elif val in inherited_map:
-                    parts.append(inherited_map[val])
-                else:
-                    raise ValueError("Missing environment reference")
-            else:
-                parts.append(val)
-        resolved[curr] = "".join(parts)
-
-        for dep_key in dependents[curr]:
-            unresolved_deps[dep_key].discard(curr)
-            if not unresolved_deps[dep_key]:
-                ready.append(dep_key)
-
-    if len(resolved) < len(configured_raw):
-        raise ValueError("Environment reference cycle detected")
-
-    return resolved
+    return dict(target.env)
 
 
 __all__ = [
     "DaemonConfig",
-    "LangfuseConfig",
     "LoggingConfig",
     "NotificationsConfig",
     "ProfileDeclaration",
     "RetryPolicy",
     "TargetConfig",
     "TargetSelection",
-    "_langfuse_config",
     "load_config",
     "load_project_config",
-    "load_task_guide",
+    "load_guidance",
     "refract_home",
     "resolve_target_environment",
     "validate_target_args",

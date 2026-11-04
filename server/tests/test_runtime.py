@@ -8,165 +8,13 @@ import pytest
 
 from refract.config import load_config
 from refract.runtime import OrchestrationError, Runtime
-from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key, next_target_token, resolve_next_target
-from refract.result_metadata import JobResultMetadata, FailureMetadata, RetryMetadata
-from tests.orchestration_helpers import config as make_config, register_project
-
-
-@pytest.mark.asyncio
-async def test_report_acknowledgement_state_category_matrix_and_exhausted_fallback(tmp_path) -> None:
-    path = tmp_path / "config.toml"
-    _two_target_config(path)
-    runtime = Runtime(load_config(path))
-    root = tmp_path / "matrix"
-    root.mkdir()
-    project = register_project(runtime, str(root), "matrix")
-    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    try:
-        for state in ("queued", "running", "failed", "cancelled", "interrupted", "succeeded"):
-            for category in ("protocol", "output"):
-                job_id = f"{state}-{category}"
-                runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
-                runtime.database._connection.execute("UPDATE jobs SET state=?, target_id='a' WHERE id=?", (state, job_id))
-                runtime.database._connection.commit()
-                result = await runtime.report_error(job_id=job_id, category=category, expected="expected", observed="observed", report_key=f"{job_id}-key")
-                eligible = state == "succeeded" and category == "output"
-                assert result["retry"]["retryable"] is eligible
-                assert bool(result["retry"]["next_target"]) is eligible
-        exhausted = "succeeded-output"
-        runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(plan.targets[1]),))
-        runtime.database._connection.commit()
-        result = await runtime.report_error(job_id=exhausted, category="output", expected="expected", observed="observed", report_key="exhausted-key")
-        assert result["retry"] == {"retryable": False, "next_target": None}
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_report_duplicate_refreshes_token_after_configuration_change(tmp_path) -> None:
-    path = tmp_path / "config.toml"
-    path.write_text('''[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "a"\nbackend = "codex"\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[[targets]]\nid = "c"\nbackend = "codex"\n\n[profiles.balanced]\nconsult = ["a", "b", "c"]\nreview = ["a", "b", "c"]\n\n[profiles.alternate]\nconsult = ["a", "b", "c"]\n''', encoding="utf-8")
-    runtime = Runtime(load_config(path))
-    root = tmp_path / "config-change"
-    root.mkdir()
-    project = register_project(runtime, str(root), "config-change")
-    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    runtime.database.create_job(job_id="config-report", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="config-report")
-    runtime.database.finish_job("config-report", "succeeded", target_id="a", text="result")
-    try:
-        first = await runtime.report_error(job_id="config-report", category="output", expected="useful", observed="bad", report_key="config-key")
-        old_token = first["retry"]["next_target"]
-        changed = path.read_text(encoding="utf-8").replace('id = "b"\nbackend = "claude"', 'id = "b"\nbackend = "claude"\ncontextWindow = 200000')
-        path.write_text(changed, encoding="utf-8")
-        runtime.publish_configuration()
-        current_plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-        assert resolve_next_target(old_token, runtime.catalog.config_revision, project.id, current_plan) is None
-        duplicate = await runtime.report_error(job_id="config-report", category="output", expected="useful", observed="bad", report_key="config-key")
-        new_token = duplicate["retry"]["next_target"]
-        assert duplicate["duplicate"] and duplicate["report"]["id"] == first["report"]["id"]
-        assert new_token != old_token
-        assert resolve_next_target(new_token, runtime.catalog.config_revision, project.id, current_plan) == current_plan.targets[1]
-        runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(current_plan.targets[1]),))
-        runtime.database._connection.commit()
-        health_duplicate = await runtime.report_error(job_id="config-report", category="output", expected="useful", observed="bad", report_key="config-key")
-        assert health_duplicate["duplicate"] is True
-        assert health_duplicate["report"]["id"] == first["report"]["id"]
-        assert resolve_next_target(health_duplicate["retry"]["next_target"], runtime.catalog.config_revision, project.id, current_plan) == current_plan.targets[2]
-        assert resolve_next_target(health_duplicate["retry"]["next_target"], runtime.catalog.config_revision, "other-project", current_plan) is None
-        assert resolve_next_target(new_token, runtime.catalog.config_revision, project.id, resolve_execution_plan("review", runtime.catalog, "balanced")) is None
-        assert resolve_next_target(new_token, runtime.catalog.config_revision, project.id, resolve_execution_plan("consult", runtime.catalog, "alternate")) is None
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_report_acknowledgement_routes_to_explicit_fresh_session_job(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    _two_target_config(config_path)
-    runtime = Runtime(load_config(config_path))
-    root = tmp_path / "project"
-    root.mkdir()
-    project = register_project(runtime, str(root), "project")
-    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    runtime.database.create_job(job_id="reported-original", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="reported-original")
-    runtime.database.finish_job("reported-original", "succeeded", target_id="a", text="unusable")
-    execution = []
-    class Drivers:
-        @staticmethod
-        def supports_structured_streaming(_target): return True
-        @staticmethod
-        def available(_target): return True
-        async def execute(self, *, target, session_id, **kwargs):
-            execution.append((target.id, session_id))
-            from refract.drivers import DriverResult
-            return DriverResult("SUCCESS", "new-session", "done", "", "")
-    runtime.drivers = Drivers()
-    await runtime.start()
-    try:
-        original = runtime.database.job_record("reported-original")
-        sessions_before = runtime.database._connection.execute("SELECT * FROM context_sessions ORDER BY project_id, context_key, role, target_key, lane").fetchall()
-        health_before = runtime.database._connection.execute("SELECT * FROM target_health ORDER BY target_id").fetchall()
-        result = await runtime.report_error(job_id="reported-original", category="output", expected="useful", observed="bad", report_key="integrated-key")
-        assert execution == [] and len(runtime.database.jobs(project.id)) == 1
-        assert runtime.database._connection.execute("SELECT * FROM context_sessions ORDER BY project_id, context_key, role, target_key, lane").fetchall() == sessions_before
-        assert runtime.database._connection.execute("SELECT * FROM target_health ORDER BY target_id").fetchall() == health_before
-        original_view = await runtime.wait("reported-original", 0)
-        assert runtime.live_result_metadata(original_view)["retry"] == {"retryable": None, "next_target": None}
-        with pytest.raises(OrchestrationError) as invalid_retry:
-            await runtime.retry("reported-original")
-        assert invalid_retry.value.code == "invalid_state"
-        submitted = await runtime.submit(project.id, "consult", "recover", profile="balanced", context_key="reported-original", fresh_session=True, next_target=result["retry"]["next_target"])
-        recovered = await runtime.wait(submitted.job_id, 5)
-        assert submitted.job_id != "reported-original" and recovered.target_id == "b"
-        assert runtime.database.job_record(submitted.job_id)["fresh_session"] == 1
-        assert execution == [("b", "")]
-        assert runtime.database.job_record("reported-original") == original
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_report_error_acknowledges_succeeded_output_with_live_fallback(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    _two_target_config(config_path)
-    runtime = Runtime(load_config(config_path))
-    root = tmp_path / "project"
-    root.mkdir()
-    project = register_project(runtime, str(root), "project")
-    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    runtime.database.create_job(job_id="reported-output", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="reported-output")
-    runtime.database.finish_job("reported-output", "succeeded", target_id="a", text="unusable output")
-    before = runtime.database.job_record("reported-output")
-    try:
-        acknowledgement = await runtime.report_error(job_id="reported-output", category="output", expected="useful", observed="refusal", report_key="output-key")
-        assert set(acknowledgement) == {"report", "duplicate", "project_id", "retry"}
-        assert acknowledgement["retry"]["retryable"] is True
-        token = acknowledgement["retry"]["next_target"]
-        assert token is not None
-        duplicate = await runtime.report_error(job_id="reported-output", category="output", expected="useful", observed="refusal", report_key="output-key")
-        assert duplicate["duplicate"] is True
-        assert duplicate["report"]["id"] == acknowledgement["report"]["id"]
-        assert duplicate["retry"]["next_target"] == token
-        assert runtime.database.job_record("reported-output") == before
-        protocol = await runtime.report_error(job_id="reported-output", category="protocol", expected="useful", observed="refusal", report_key="protocol-key")
-        assert protocol["retry"] == {"retryable": False, "next_target": None}
-        event_count = runtime.database._connection.execute("SELECT COUNT(*) FROM events WHERE job_id=? AND kind='job.error_reported'", ("reported-output",)).fetchone()[0]
-        assert event_count == 2
-        health_before = runtime.database._connection.execute("SELECT * FROM target_health ORDER BY target_id").fetchall()
-        runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(plan.targets[1]),))
-        runtime.database._connection.commit()
-        refreshed = await runtime.report_error(job_id="reported-output", category="output", expected="useful", observed="refusal", report_key="output-key")
-        assert refreshed["report"]["id"] == acknowledgement["report"]["id"]
-        assert refreshed["retry"] == {"retryable": False, "next_target": None}
-        assert runtime.database._connection.execute("SELECT COUNT(*) FROM events WHERE job_id=? AND kind='job.error_reported'", ("reported-output",)).fetchone()[0] == event_count
-        assert health_before != runtime.database._connection.execute("SELECT * FROM target_health ORDER BY target_id").fetchall()
-    finally:
-        await runtime.close()
+from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key
+from tests.orchestration_helpers import config as make_config, git, register_project
 
 
 def test_runtime_rejects_removed_marked_target_without_echoing_identifier(tmp_path) -> None:
     base = make_config(tmp_path / "home")
-    target = replace(base.targets[0], envs={"LOCAL": "value"})
+    target = replace(base.targets[0], env={"LOCAL": "value"})
     runtime = Runtime(replace(base, targets=(target,)))
     root = tmp_path / "project"
     root.mkdir()
@@ -183,7 +31,7 @@ def test_runtime_rejects_removed_marked_target_without_echoing_identifier(tmp_pa
 
 def test_environment_session_revision_is_opaque_and_runtime_scoped(tmp_path) -> None:
     base = make_config(tmp_path / "home")
-    target = replace(base.targets[0], envs={"SECRET": "SYNTHETIC_REVISION_SECRET"})
+    target = replace(base.targets[0], env={"SECRET": "SYNTHETIC_REVISION_SECRET"})
     catalog = replace(base, targets=(target,))
     root = tmp_path / "project"
     root.mkdir()
@@ -210,7 +58,7 @@ def test_environment_session_revision_is_opaque_and_runtime_scoped(tmp_path) -> 
 
 def test_capacity_only_global_edits_preserve_environment_session_revision(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
-    config_path.write_text('''[daemon]\ndefault_profile = "balanced"\n\n[envs.shared]\nENDPOINT = "synthetic-one"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\nenvs_vars = ["shared"]\n\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n''', encoding="utf-8")
+    config_path.write_text('''[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\nenv = { ENDPOINT = "synthetic-one" }\n\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n''', encoding="utf-8")
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
@@ -220,10 +68,10 @@ def test_capacity_only_global_edits_preserve_environment_session_revision(tmp_pa
         assert env_initial == {"ENDPOINT": "synthetic-one"}
         for context_window in (200000, 250000, None):
             current = config_path.read_text(encoding="utf-8")
-            lines = [line for line in current.splitlines() if not line.startswith("contextWindow =")]
+            lines = [line for line in current.splitlines() if not line.startswith("context_window =")]
             target_start = lines.index('id = "primary"')
             if context_window is not None:
-                lines.insert(target_start + 1, f"contextWindow = {context_window}")
+                lines.insert(target_start + 1, f"context_window = {context_window}")
             config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             runtime.publish_configuration()
             env_values, revision = runtime._resolve_target_environment(project, "primary")
@@ -243,19 +91,19 @@ def test_capacity_only_global_edits_preserve_environment_session_revision(tmp_pa
 
 def test_runtime_resolves_current_project_environment_by_stored_target_id(tmp_path) -> None:
     base = make_config(tmp_path / "home")
-    target = replace(base.targets[0], envs_vars=("shared",), args=("--safe",), max_concurrency=3)
-    catalog = replace(base, targets=(target,), envs={"shared": {"ENDPOINT": "global"}})
+    target = replace(base.targets[0], env={"ENDPOINT": "global"}, args=("--safe",), max_concurrency=3)
+    catalog = replace(base, targets=(target,))
     root = tmp_path / "project"
     root.mkdir()
     runtime = Runtime(catalog)
     project = register_project(runtime, str(root))
     project_config = root / ".refract" / "config.toml"
     project_config.parent.mkdir()
-    project_config.write_text('[envs.shared]\nENDPOINT = "project-one"\n', encoding="utf-8")
+    project_config.write_text(f'[[targets]]\nid = "{target.id}"\nenv = {{ ENDPOINT = "project-one" }}\n', encoding="utf-8")
     try:
         first, first_revision = runtime._resolve_target_environment(project, target.id)
         stored_plan = resolve_execution_plan("implement", catalog, "balanced")
-        project_config.write_text('[envs.shared]\nENDPOINT = "project-two"\n', encoding="utf-8")
+        project_config.write_text(f'[[targets]]\nid = "{target.id}"\nenv = {{ ENDPOINT = "project-two" }}\n', encoding="utf-8")
         second, second_revision = runtime._resolve_target_environment(project, target.id)
         assert first == {"ENDPOINT": "project-one"}
         assert second == {"ENDPOINT": "project-two"}
@@ -265,7 +113,7 @@ def test_runtime_resolves_current_project_environment_by_stored_target_id(tmp_pa
         other_project = register_project(runtime, str(other_root))
         other_config = other_root / ".refract" / "config.toml"
         other_config.parent.mkdir()
-        other_config.write_text('[envs.shared]\nENDPOINT = "isolated-project"\n', encoding="utf-8")
+        other_config.write_text(f'[[targets]]\nid = "{target.id}"\nenv = {{ ENDPOINT = "isolated-project" }}\n', encoding="utf-8")
         other_values, other_revision = runtime._resolve_target_environment(other_project, target.id)
         assert other_values == {"ENDPOINT": "isolated-project"}
         assert other_revision != second_revision
@@ -280,26 +128,26 @@ def test_resolve_target_environment_derives_revision_from_catalog_snapshot_not_s
     import refract.runtime as runtime_module
 
     base = make_config(tmp_path / "home")
-    target = replace(base.targets[0], envs_vars=("shared",))
-    catalog = replace(base, targets=(target,), envs={"shared": {"ENDPOINT": "global"}})
+    target = replace(base.targets[0], env={"ENDPOINT": "global"})
+    catalog = replace(base, targets=(target,))
     root = tmp_path / "project"
     root.mkdir()
     runtime = Runtime(catalog)
     project = register_project(runtime, str(root))
     project_config = root / ".refract" / "config.toml"
     project_config.parent.mkdir()
-    project_config.write_text('[envs.shared]\nENDPOINT = "v1"\n', encoding="utf-8")
+    project_config.write_text(f'[[targets]]\nid = "{target.id}"\nenv = {{ ENDPOINT = "v1" }}\n', encoding="utf-8")
     try:
         original_resolve = runtime_module.resolve_target_environment
         edited = False
 
-        def edit_during_resolution(cat, tgt, inherited=None):
+        def edit_during_resolution(cat, tgt):
             nonlocal edited
-            res = original_resolve(cat, tgt, inherited=inherited)
+            res = original_resolve(cat, tgt)
             if not edited:
                 edited = True
                 # Simulate an external edit between catalog acquisition and revision generation
-                project_config.write_text('[envs.shared]\nENDPOINT = "v2"\n', encoding="utf-8")
+                project_config.write_text(f'[[targets]]\nid = "{target.id}"\nenv = {{ ENDPOINT = "v2" }}\n', encoding="utf-8")
             return res
 
         monkeypatch.setattr(runtime_module, "resolve_target_environment", edit_during_resolution)
@@ -327,7 +175,7 @@ def test_project_catalog_snapshot_retries_when_file_changes_during_load(tmp_path
     new_identity = (2000, 200, 2)
     identities = iter((old_identity, new_identity, new_identity, new_identity))
     loaded = []
-    catalog = replace(base, envs={"shared": {"ENDPOINT": "current"}})
+    catalog = replace(base, targets=(replace(base.targets[0], env={"ENDPOINT": "current"}),))
 
     def file_identity(path):
         return next(identities)
@@ -367,7 +215,7 @@ def test_project_catalog_snapshot_fails_safely_after_continuous_file_churn(tmp_p
     def load_project(root_path, base_catalog):
         nonlocal loads
         loads += 1
-        return replace(base_catalog, envs={"shared": {"TOKEN": "SYNTHETIC_SECRET"}})
+        return replace(base_catalog, targets=(replace(base_catalog.targets[0], env={"TOKEN": "SYNTHETIC_SECRET"}),))
 
     monkeypatch.setattr(runtime_module, "_file_identity", file_identity)
     monkeypatch.setattr(runtime_module, "load_project_config", load_project)
@@ -386,9 +234,9 @@ def test_resolve_target_environment_mocked_sequence_does_not_label_old_binding_w
     import refract.runtime as runtime_module
 
     base = make_config(tmp_path / "home")
-    target = replace(base.targets[0], envs_vars=("shared",))
-    catalog_old = replace(base, targets=(target,), envs={"shared": {"ENDPOINT": "old"}})
-    catalog_new = replace(base, targets=(target,), envs={"shared": {"ENDPOINT": "new"}})
+    target = base.targets[0]
+    catalog_old = replace(base, targets=(replace(target, env={"ENDPOINT": "old"}),))
+    catalog_new = replace(base, targets=(replace(target, env={"ENDPOINT": "new"}),))
 
     root = tmp_path / "project"
     root.mkdir()
@@ -422,47 +270,32 @@ def test_resolve_target_environment_mocked_sequence_does_not_label_old_binding_w
 
 
 @pytest.mark.asyncio
-async def test_submit_pins_valid_token_and_prechecks_all_open_targets(tmp_path) -> None:
+async def test_retry_pins_target_and_submit_prechecks_all_open_targets(tmp_path) -> None:
     path = tmp_path / "config.toml"
-    path.write_text('''[daemon]\ndefault_profile = "balanced"\nbreaker_base_cooldown_s = 7\n\n[[targets]]\nid = "a"\nbackend = "codex"\nenvs = { A = "SYNTHETIC_MARKER" }\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[profiles.balanced]\nconsult = ["a", "b"]\n''', encoding="utf-8")
+    path.write_text('''[daemon]\ndefault_profile = "balanced"\nbreaker_base_cooldown_s = 7\n\n[[targets]]\nid = "a"\nbackend = "codex"\nenv = { A = "SYNTHETIC_MARKER" }\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[profiles.balanced]\nconsult = ["a", "b"]\n''', encoding="utf-8")
     runtime = Runtime(load_config(path))
     root = tmp_path / "project"
     root.mkdir()
-    project = register_project(runtime, str(root), "project")
+    project = register_project(runtime, str(root))
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", plan.targets[1])
     try:
-        first = await runtime.submit(project.id, "consult", "hello", next_target=token)
+        source = await runtime.submit(project.id, "consult", "hello")
+        runtime.database.finish_job(source.job_id, "failed", target="a")
+        first = await runtime.retry(source.job_id, target="b")
         stored = runtime.database.job_record(first.job_id)
         stored_plan = json.loads(stored["execution_plan_json"])
         assert stored_plan["selection"]["targets"] == ["b"]
         assert "environment_targets" not in stored_plan
-        assert len(runtime.database.jobs(project.id)) == 1
+        assert len(runtime.database.jobs(project.id)) == 2
         for target in plan.targets:
             runtime.database.record_target_failure(target_execution_key(target), immediate=True, base_cooldown_s=7)
         with pytest.raises(OrchestrationError) as raised:
             await runtime.submit(project.id, "consult", "no row")
         assert raised.value.code == "targets_unavailable"
-        assert raised.value.retryable is True and type(raised.value.retry_after_s) is int
-        assert len(runtime.database.jobs(project.id)) == 1
+        assert type(raised.value.retry_after_s) is int
+        assert len(runtime.database.jobs(project.id)) == 2
     finally:
         await runtime.close()
-
-
-def test_next_target_token_is_bound_to_revision_project_profile_workflow_and_candidate(tmp_path) -> None:
-    path = tmp_path / "config.toml"
-    _config(path)
-    config = load_config(path)
-    plan = resolve_execution_plan("consult", config, "balanced")
-    first = plan.targets[0]
-    token = next_target_token(config.config_revision, "project", plan.profile, plan.workflow, first)
-
-    expected = "nt_" + hashlib.sha256(json.dumps([config.config_revision, "project", plan.profile, plan.workflow, target_execution_key(first)], separators=(",", ":")).encode()).hexdigest()[:16]
-    assert token == expected
-    assert token.startswith("nt_") and len(token) == 19
-    assert resolve_next_target(token, config.config_revision, "project", plan) == first
-    assert resolve_next_target(token, "changed-revision", "project", plan) is None
-    assert resolve_next_target(token, config.config_revision, "other-project", plan) is None
 
 
 @pytest.mark.asyncio
@@ -472,17 +305,15 @@ async def test_context_overflow_projects_read_time_route_to_next_healthy_target(
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "overflow-project"
     root.mkdir()
-    project = register_project(runtime, str(root), "overflow-project")
+    project = register_project(runtime, str(root))
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     try:
         job_id = "overflow-route"
-        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="overflow", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
-        runtime.database.finish_job(job_id, "failed", target_id="a", metadata={"failure": {"kind": "context_overflow"}, "retry": {"retryable": True}})
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="overflow", execution_plan_json=json.dumps(execution_plan_data(plan)), session=job_id)
+        runtime.database.finish_job(job_id, "failed", target="a", failure_kind="context_overflow")
         view = runtime.database.job(job_id)
-        result = runtime.live_result_metadata(view)
-        assert result["retry"]["retryable"] is True
-        assert result["retry"]["next_target"].startswith("nt_")
-        assert json.loads(runtime.database.job_record(job_id)["result_metadata_json"])["retry"]["next_target"] is None
+        result = runtime.live_routing(view)
+        assert result["retry"]["next_target"] == "b"
     finally:
         await runtime.close()
 
@@ -494,111 +325,20 @@ async def test_live_metadata_routes_after_failure_without_persisting_hint(tmp_pa
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = register_project(runtime, str(root), "project")
+    project = register_project(runtime, str(root))
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    metadata = JobResultMetadata(
-        failure=FailureMetadata(kind="retryable"),
-        retry=RetryMetadata(retryable=False, next_target=None),
-    )
     try:
         for target_b_open in (False, True):
             job_id = "live-route-open" if target_b_open else "live-route-closed"
-            runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="fail", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
-            runtime.database.finish_job(job_id, "failed", target_id="a", metadata=metadata)
+            runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="fail", execution_plan_json=json.dumps(execution_plan_data(plan)), session=job_id)
+            runtime.database.finish_job(job_id, "failed", target="a", failure_kind="transient")
             if target_b_open:
                 runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(plan.targets[1]),))
             else:
                 runtime.database.record_target_success(target_execution_key(plan.targets[1]))
             view = runtime.database.job(job_id)
-            result = runtime.live_result_metadata(view)
-            assert (result["retry"]["next_target"].startswith("nt_") and result["retry"]["retryable"] is True) if not target_b_open else (result["retry"]["next_target"] is None and result["retry"]["retryable"] is False)
-            assert json.loads(runtime.database.job_record(job_id)["result_metadata_json"])["retry"]["next_target"] is None
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_live_result_metadata_preserves_telemetry(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    _two_target_config(config_path)
-    runtime = Runtime(load_config(config_path))
-    root = tmp_path / "project"
-    root.mkdir()
-    project = register_project(runtime, str(root), "project")
-    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    telemetry = {
-        "version": 1,
-        "completeness": "complete",
-        "total_input_tokens": {"value": 250, "source": "provider", "quality": "reported"},
-        "context_used_tokens": {"value": 1500, "source": "provider", "quality": "reported"},
-    }
-    try:
-        job_id = "live-telemetry-test"
-        runtime.database.create_job(
-            job_id=job_id, project_id=project.id, workflow="consult",
-            profile="balanced", prompt="hi",
-            execution_plan_json=json.dumps(execution_plan_data(plan)),
-            context_key=job_id,
-        )
-        runtime.database.merge_job_telemetry(job_id, telemetry)
-        view = runtime.database.job(job_id)
-        result = runtime.live_result_metadata(view)
-        assert "telemetry" in result
-        assert result["telemetry"]["total_input_tokens"]["value"] == 250
-        assert result["telemetry"]["context_used_tokens"]["value"] == 1500
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_live_result_metadata_historical_empty_metadata(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    _two_target_config(config_path)
-    runtime = Runtime(load_config(config_path))
-    root = tmp_path / "project"
-    root.mkdir()
-    project = register_project(runtime, str(root), "project")
-    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    try:
-        job_id = "live-historical-test"
-        runtime.database.create_job(
-            job_id=job_id, project_id=project.id, workflow="consult",
-            profile="balanced", prompt="hi",
-            execution_plan_json=json.dumps(execution_plan_data(plan)),
-            context_key=job_id,
-        )
-        view = runtime.database.job(job_id)
-        result = runtime.live_result_metadata(view)
-        assert "telemetry" in result
-        assert result["telemetry"]["completeness"] == "unavailable"
-        assert result["execution"]["model"] is None
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_submit_rejects_foreign_profile_and_stale_revision_tokens_without_insert(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    _two_target_config(config_path)
-    runtime = Runtime(load_config(config_path))
-    root = tmp_path / "project"
-    root.mkdir()
-    project = register_project(runtime, str(root), "project")
-    original = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", original.targets[1])
-    try:
-        for selected_profile in ("alternate",):
-            with pytest.raises(OrchestrationError) as raised:
-                await runtime.submit(project.id, "consult", "x", profile=selected_profile, next_target=token)
-            assert raised.value.code == "invalid_request"
-            assert raised.value.next_action == "Resubmit without next_target."
-            assert runtime.database.jobs(project.id) == []
-        config_path.write_text(config_path.read_text(encoding="utf-8").replace('backend = "claude"', 'backend = "claude"\nmodel = "changed"'), encoding="utf-8")
-        with pytest.raises(OrchestrationError) as raised:
-            await runtime.submit(project.id, "consult", "x", next_target=token)
-        assert raised.value.code == "invalid_request"
-        assert raised.value.next_action == "Resubmit without next_target."
-        assert runtime.database.jobs(project.id) == []
+            result = runtime.live_routing(view)
+            assert result["retry"]["next_target"] == ("b" if not target_b_open else None)
     finally:
         await runtime.close()
 
@@ -610,30 +350,23 @@ async def test_retry_all_open_leaves_failed_job_untouched(tmp_path) -> None:
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = register_project(runtime, str(root), "project")
+    project = register_project(runtime, str(root))
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     job_id = "retry-open"
-    metadata = JobResultMetadata(
-        failure=FailureMetadata(kind="retryable"),
-        retry=RetryMetadata(retryable=False, next_target=None),
-    )
-    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="retry-open")
-    runtime.database.record_job_attempt(job_id, "a")
-    runtime.database.finish_job(job_id, "failed", target_id="a", metadata=metadata)
+    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), session="retry-open")
+    runtime.database.record_job_target(job_id, "a")
+    runtime.database.finish_job(job_id, "failed", target="a", failure_kind="transient")
     for target in plan.targets:
         runtime.database._connection.execute("INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')", (target_execution_key(target),))
     runtime.database._connection.commit()
     prior = runtime.database.job_record(job_id)
-    events = runtime.database.events(job_id)
     try:
         with pytest.raises(OrchestrationError) as raised:
             await runtime.retry(job_id)
         assert raised.value.code == "targets_unavailable"
-        assert raised.value.retryable is True and type(raised.value.retry_after_s) is int
+        assert type(raised.value.retry_after_s) is int
         after = runtime.database.job_record(job_id)
         assert after["state"] == prior["state"] == "failed"
-        assert after["attempts"] == prior["attempts"]
-        assert runtime.database.events(job_id) == events
     finally:
         await runtime.close()
 
@@ -647,10 +380,10 @@ async def test_retry_after_uses_reloaded_cooldown_for_held_probes(tmp_path) -> N
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = register_project(runtime, str(root), "project")
+    project = register_project(runtime, str(root))
     plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
     job_id = "retry-reloaded-cooldown"
-    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key=job_id)
+    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json=json.dumps(execution_plan_data(plan)), session=job_id)
     runtime.database.finish_job(job_id, "failed")
     changed = config_path.read_text(encoding="utf-8").replace("breaker_base_cooldown_s = 7", "breaker_base_cooldown_s = 23")
     config_path.write_text(changed, encoding="utf-8")
@@ -663,38 +396,6 @@ async def test_retry_after_uses_reloaded_cooldown_for_held_probes(tmp_path) -> N
             await runtime.retry(job_id)
         assert raised.value.code == "targets_unavailable"
         assert raised.value.retry_after_s == 23
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_submit_with_next_target_executes_second_candidate(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    _two_target_config(config_path)
-    runtime = Runtime(load_config(config_path))
-    root = tmp_path / "project"
-    root.mkdir()
-    project = register_project(runtime, str(root), "project")
-    plan = resolve_execution_plan("consult", runtime.catalog, "balanced")
-    token = next_target_token(runtime.catalog.config_revision, project.id, "balanced", "consult", plan.targets[1])
-    executed = []
-    class Drivers:
-        @staticmethod
-        def supports_structured_streaming(_target): return True
-        @staticmethod
-        def available(_target): return True
-        async def execute(self, *, target, **kwargs):
-            executed.append(target.id)
-            from refract.drivers import DriverResult
-            return DriverResult("SUCCESS", "session-b", "done", "", "")
-    runtime.drivers = Drivers()
-    await runtime.start()
-    try:
-        submitted = await runtime.submit(project.id, "consult", "run b", next_target=token)
-        job = await runtime.wait(submitted.job_id, 5)
-        assert job.state == "succeeded"
-        assert executed == ["b"]
-        assert runtime.database.job_record(job.id)["target_id"] == "b"
     finally:
         await runtime.close()
 
@@ -727,7 +428,7 @@ async def test_failed_reload_preserves_catalog_health_and_blocks_submission(tmp_
     runtime = Runtime(load_config(config_path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
+    project = register_project(runtime, str(project_root))
     original = runtime.catalog
     original_revision = original.config_revision
 
@@ -754,7 +455,7 @@ async def test_configuration_error_does_not_expose_secret(tmp_path) -> None:
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
+    project = register_project(runtime, str(project_root))
     secret = "SUPER_SECRET_CONFIGURATION_VALUE"
     path.write_text(path.read_text(encoding="utf-8").rstrip() + f'\n[logging]\nlevel = "{secret}"\n', encoding="utf-8")
 
@@ -776,7 +477,7 @@ async def test_configuration_identifiers_do_not_leak_from_errors(tmp_path, inval
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
+    project = register_project(runtime, str(project_root))
     content = path.read_text(encoding="utf-8")
     if invalid_kind == "profile":
         content += '[profiles."SECRET_PROFILE"]\n'
@@ -791,24 +492,6 @@ async def test_configuration_identifiers_do_not_leak_from_errors(tmp_path, inval
 
     assert "SECRET_" not in str(raised.value)
     assert "SECRET_" not in runtime.config_health.latest_error
-    await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_new_job_records_global_revision(tmp_path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    path = home / "config.toml"
-    _config(path)
-    runtime = Runtime(load_config(path))
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
-
-    submission = await runtime.submit(project.id, "consult", "question")
-
-    job = runtime.database.job(submission.job_id)
-    assert job and job.config_revision == hashlib.sha256(path.read_bytes()).hexdigest()
     await runtime.close()
 
 
@@ -875,7 +558,7 @@ async def test_catalog_cache_reuses_parses_and_invalidates_on_changes(tmp_path, 
     runtime = Runtime(load_config(path))
     root = tmp_path / "project"
     root.mkdir()
-    project = register_project(runtime, str(root), "project")
+    project = register_project(runtime, str(root))
     counts = {"global": 0, "project": 0}
     global_loader = module.load_config
     project_loader = module.load_project_config
@@ -944,7 +627,7 @@ async def test_project_override_runtime_activation_and_plan_preservation(tmp_pat
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
+    project = register_project(runtime, str(project_root))
 
     # Submit job 1 under initial configuration
     sub1 = await runtime.submit(project.id, "consult", "initial question")
@@ -988,7 +671,7 @@ async def test_runtime_start_prunes_expired_terminal_transcripts_without_pruning
     runtime = Runtime(load_config(path))
     project_root = tmp_path / "project"
     project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
+    project = register_project(runtime, str(project_root))
 
     # 1. Expired terminal job (10 days old)
     old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
@@ -999,14 +682,14 @@ async def test_runtime_start_prunes_expired_terminal_transcripts_without_pruning
         profile="balanced",
         prompt="p1",
         execution_plan_json="{}",
-        context_key="c1",
+        session="c1",
     )
     with runtime.database._connection:
         runtime.database._connection.execute(
             "UPDATE jobs SET state='succeeded', updated_at=? WHERE id='job-expired-term'",
             (old_ts,),
         )
-    runtime.database.append_stream_events("job-expired-term", [{
+    runtime.database.append_stream("job-expired-term", [{
         "kind": "assistant.text.delta",
         "entity_id": "msg-1",
         "data": {"text": "old terminal transcript"},
@@ -1021,14 +704,14 @@ async def test_runtime_start_prunes_expired_terminal_transcripts_without_pruning
         profile="balanced",
         prompt="p2",
         execution_plan_json="{}",
-        context_key="c2",
+        session="c2",
     )
     with runtime.database._connection:
         runtime.database._connection.execute(
             "UPDATE jobs SET state='succeeded', updated_at=? WHERE id='job-recent-term'",
             (recent_ts,),
         )
-    runtime.database.append_stream_events("job-recent-term", [{
+    runtime.database.append_stream("job-recent-term", [{
         "kind": "assistant.text.delta",
         "entity_id": "msg-1",
         "data": {"text": "recent terminal transcript"},
@@ -1042,261 +725,43 @@ async def test_runtime_start_prunes_expired_terminal_transcripts_without_pruning
         profile="balanced",
         prompt="p3",
         execution_plan_json="{}",
-        context_key="c3",
+        session="c3",
     )
     with runtime.database._connection:
         runtime.database._connection.execute(
             "UPDATE jobs SET state='running', updated_at=? WHERE id='job-old-running'",
             (old_ts,),
         )
-    runtime.database.append_stream_events("job-old-running", [{
+    runtime.database.append_stream("job-old-running", [{
         "kind": "assistant.text.delta",
         "entity_id": "msg-1",
         "data": {"text": "active running transcript"},
     }])
 
     # Verify initial stream data exists
-    assert runtime.database.stream_high_water("job-expired-term") > 0
-    assert runtime.database.stream_high_water("job-recent-term") > 0
-    assert runtime.database.stream_high_water("job-old-running") > 0
+    assert runtime.database.stream_path("job-expired-term").exists()
+    assert runtime.database.stream_path("job-recent-term").exists()
+    assert runtime.database.stream_path("job-old-running").exists()
 
     # Start runtime (triggers start retention cleanup)
     await runtime.start()
 
-    # Expired terminal transcript is pruned
-    assert runtime.database.stream_high_water("job-expired-term") == 0
+    # Expired terminal job is deleted with its stream file
+    assert runtime.database.job("job-expired-term") is None
+    assert not runtime.database.stream_path("job-expired-term").exists()
 
     # Recent terminal and active running transcripts are preserved
-    assert runtime.database.stream_high_water("job-recent-term") > 0
+    assert runtime.database.stream_path("job-recent-term").exists()
     # Note: runtime.start() interrupts active jobs upon restart, changing running -> interrupted,
     # but the stream events of active jobs prior to start were not pruned by the retention step!
-    assert runtime.database.stream_high_water("job-old-running") > 0
+    assert runtime.database.stream_path("job-old-running").exists()
 
-    # All job records themselves remain intact
-    assert runtime.database.job("job-expired-term") is not None
+    # Recent and active job records remain intact
     assert runtime.database.job("job-recent-term") is not None
     assert runtime.database.job("job-old-running") is not None
 
     await runtime.close()
 
-
-@pytest.mark.asyncio
-async def test_stream_durable_reload_reconstructs_cursor_and_events(tmp_path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    config_path = home / "config.toml"
-    _config(config_path)
-    runtime = Runtime(load_config(config_path))
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
-    job_id = "job-reload-test"
-    runtime.database.create_job(
-        job_id=job_id,
-        project_id=project.id,
-        workflow="consult",
-        profile="balanced",
-        prompt="hello",
-        execution_plan_json="{}",
-        context_key="c1",
-    )
-    events = [
-        {"kind": "assistant.message.started", "entity_id": "msg-1", "data": {}},
-        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "chunk 1"}},
-        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "chunk 2"}},
-        {"kind": "assistant.message.completed", "entity_id": "msg-1", "data": {}},
-    ]
-    persisted = runtime.database.append_stream_events(job_id, events)
-    expected_hw = persisted[-1].id
-    expected_retained = persisted[0].id
-    await runtime.close()
-
-    reopened = Runtime(load_config(config_path))
-    try:
-        assert reopened.database.stream_high_water(job_id) == expected_hw
-        assert reopened.database.stream_retained_from(job_id) == expected_retained
-        totals = reopened.database.stream_totals(job_id)
-        assert totals.events == 4
-        assert totals.bytes > 0
-        replayed = reopened.database.stream_events(job_id, after=0)
-        assert len(replayed) == 4
-        assert [e.id for e in replayed] == [p.id for p in persisted]
-        assert [e.kind for e in replayed] == [e["kind"] for e in events]
-        assert replayed[1].data["text"] == "chunk 1"
-        assert replayed[2].data["text"] == "chunk 2"
-    finally:
-        await reopened.close()
-
-
-@pytest.mark.asyncio
-async def test_stream_truncation_marker_durable_across_reload(tmp_path) -> None:
-    from refract.streaming import StreamRecorder
-
-    home = tmp_path / "home"
-    home.mkdir()
-    config_path = home / "config.toml"
-    _config(config_path)
-    runtime = Runtime(load_config(config_path))
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
-    job_id = "job-trunc-reload"
-    runtime.database.create_job(
-        job_id=job_id,
-        project_id=project.id,
-        workflow="consult",
-        profile="balanced",
-        prompt="hello",
-        execution_plan_json="{}",
-        context_key="c1",
-    )
-    recorder = StreamRecorder(
-        database=runtime.database,
-        job_id=job_id,
-        attempt=1,
-        target_id="primary",
-        backend="codex",
-        max_job_bytes=100,
-    )
-    await recorder.record({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "x" * 60}})
-    await recorder.record({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "y" * 60}})
-    await recorder.close()
-
-    assert runtime.database.stream_is_truncated(job_id) is True
-    await runtime.close()
-
-    reopened = Runtime(load_config(config_path))
-    try:
-        assert reopened.database.stream_is_truncated(job_id) is True
-        new_recorder = StreamRecorder(
-            database=reopened.database,
-            job_id=job_id,
-            attempt=1,
-            target_id="primary",
-            backend="codex",
-        )
-        assert new_recorder.truncated is True
-        await new_recorder.record({"kind": "assistant.text.delta", "entity_id": "msg-2", "data": {"text": "suppressed"}})
-        await new_recorder.close()
-
-        events = reopened.database.stream_events(job_id, after=0)
-        assert not any(e.data.get("text") == "suppressed" for e in events)
-        assert any(e.kind == "stream.truncated" for e in events)
-    finally:
-        await reopened.close()
-
-
-@pytest.mark.asyncio
-async def test_stream_persistence_failure_retains_prior_events(tmp_path) -> None:
-    from refract.streaming import StreamRecorder
-
-    home = tmp_path / "home"
-    home.mkdir()
-    config_path = home / "config.toml"
-    _config(config_path)
-    runtime = Runtime(load_config(config_path))
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
-    job_id = "job-persist-fail"
-    runtime.database.create_job(
-        job_id=job_id,
-        project_id=project.id,
-        workflow="consult",
-        profile="balanced",
-        prompt="hello",
-        execution_plan_json="{}",
-        context_key="c1",
-    )
-    runtime.database.append_stream_events(job_id, [
-        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "safe before failure"}}
-    ])
-    assert runtime.database.stream_high_water(job_id) > 0
-
-    recorder = StreamRecorder(
-        database=runtime.database,
-        job_id=job_id,
-        attempt=1,
-        target_id="primary",
-        backend="codex",
-    )
-
-    def broken_append(*args, **kwargs):
-        raise RuntimeError("simulated disk full error")
-
-    runtime.database.append_stream_events = broken_append
-    await recorder.record({"kind": "assistant.text.delta", "entity_id": "msg-2", "data": {"text": "will fail"}})
-    await recorder.flush()
-
-    assert recorder.failed is True
-    del runtime.database.append_stream_events
-    events = runtime.database.stream_events(job_id, after=0)
-    assert len(events) == 1
-    assert events[0].data["text"] == "safe before failure"
-    lifecycle = runtime.database.events(job_id)
-    assert any(e.get("kind") == "stream.persistence_failed" for e in lifecycle)
-    await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_stream_historical_fallback_for_jobs_without_events(tmp_path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    config_path = home / "config.toml"
-    _config(config_path)
-    runtime = Runtime(load_config(config_path))
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    project = register_project(runtime, str(project_root), "project")
-    job_id = "job-legacy"
-    runtime.database.create_job(
-        job_id=job_id,
-        project_id=project.id,
-        workflow="consult",
-        profile="balanced",
-        prompt="hello",
-        execution_plan_json="{}",
-        context_key="c1",
-    )
-    runtime.database.finish_job(job_id, "succeeded", text="authoritative historical result")
-
-    assert runtime.database.stream_high_water(job_id) == 0
-    assert runtime.database.stream_retained_from(job_id) == 0
-    assert runtime.database.stream_events(job_id, after=0) == []
-    assert runtime.database.stream_is_truncated(job_id) is False
-    job = runtime.database.job(job_id)
-    assert job is not None
-    assert job.result.text == "authoritative historical result"
-    await runtime.close()
-
-
-def test_resolve_project_is_canonical_idempotent_and_handles_alias_collisions(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    _config(config_path)
-    runtime = Runtime(load_config(config_path))
-    first_root = tmp_path / "one" / "shared"
-    second_root = tmp_path / "two" / "shared"
-    first_root.mkdir(parents=True)
-    second_root.mkdir(parents=True)
-    try:
-        first = runtime.resolve_project(str(first_root))
-        symlink_root = tmp_path / "shared-link"
-        symlink_root.symlink_to(first_root, target_is_directory=True)
-        repeated = runtime.resolve_project(str(symlink_root), alias="ignored-alias")
-        second = runtime.resolve_project(str(second_root))
-
-        assert repeated.id == first.id
-        assert repeated.alias == first.alias == "shared"
-        assert repeated.root == first_root.resolve().as_posix()
-        assert second.alias == "shared-2"
-
-        explicit_root = tmp_path / "explicit"
-        explicit_root.mkdir()
-        with pytest.raises(OrchestrationError) as raised:
-            runtime.resolve_project(str(explicit_root), alias="shared")
-        assert raised.value.code == "alias_taken"
-    finally:
-        runtime.database.close()
 
 def test_resolve_project_rereads_concurrent_root_winner(tmp_path, monkeypatch) -> None:
     import sqlite3
@@ -1306,6 +771,7 @@ def test_resolve_project_rereads_concurrent_root_winner(tmp_path, monkeypatch) -
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "raced-root"
     root.mkdir()
+    git(root, "init", "-q")
     original_upsert = runtime.database.upsert_project
     simulated_race = False
 
@@ -1313,11 +779,7 @@ def test_resolve_project_rereads_concurrent_root_winner(tmp_path, monkeypatch) -
         nonlocal simulated_race
         if kwargs["root"] == root.resolve().as_posix() and not simulated_race:
             simulated_race = True
-            winner = original_upsert(
-                project_id="concurrent-winner",
-                alias=kwargs["alias"],
-                root=kwargs["root"],
-            )
+            winner = original_upsert(project_id="concurrent-winner", root=kwargs["root"])
             raise sqlite3.IntegrityError("UNIQUE constraint failed: projects.root")
         return original_upsert(**kwargs)
 
@@ -1329,7 +791,7 @@ def test_resolve_project_rereads_concurrent_root_winner(tmp_path, monkeypatch) -
     finally:
         runtime.database.close()
 
-def test_resolve_project_preserves_alias_of_concurrent_canonical_winner(tmp_path, monkeypatch) -> None:
+def test_resolve_project_returns_concurrent_canonical_winner(tmp_path, monkeypatch) -> None:
     from refract.database import Database
 
     config_path = tmp_path / "config.toml"
@@ -1338,6 +800,7 @@ def test_resolve_project_preserves_alias_of_concurrent_canonical_winner(tmp_path
     other = Database(runtime.config.database_path)
     root = tmp_path / "real-race"
     root.mkdir()
+    git(root, "init", "-q")
     original_projects = runtime.database.projects
     inserted = False
 
@@ -1346,23 +809,22 @@ def test_resolve_project_preserves_alias_of_concurrent_canonical_winner(tmp_path
         rows = original_projects()
         if not inserted:
             inserted = True
-            other.upsert_project(project_id="race-winner", alias="winner", root=root.resolve().as_posix())
+            other.upsert_project(project_id="race-winner", root=root.resolve().as_posix())
         return rows
 
     monkeypatch.setattr(runtime.database, "projects", insert_winner_after_stale_read)
     try:
-        resolved = runtime.resolve_project(str(root), alias="loser")
+        resolved = runtime.resolve_project(str(root))
         stored = other.project("race-winner")
         assert resolved.id == "race-winner"
-        assert resolved.alias == "winner"
-        assert stored is not None and stored.alias == "winner"
+        assert stored is not None and stored.root == root.resolve().as_posix()
     finally:
         other.close()
         runtime.database.close()
 
 
 def test_target_execution_key_matches_literal_pre_change_fixture() -> None:
-    from refract.config import TargetConfig
+    from refract.config import RetryPolicy, TargetConfig
     from refract.planning import target_execution_key
 
     # Exact historical key fixture before Phase 1
@@ -1378,11 +840,11 @@ def test_target_execution_key_matches_literal_pre_change_fixture() -> None:
     )
     assert target_execution_key(target_with_args) == "native-with-custom-args:66e11d34a73875df"
 
-    # Adding or modifying retry_policy produces the EXACT same historical key
-    target_with_retry = TargetConfig(id="primary", backend="codex", retry_policy="transient")
+    # Adding or modifying retry produces the EXACT same historical key
+    target_with_retry = TargetConfig(id="primary", backend="codex", retry=RetryPolicy(2, ("rate_limit",), ()))
     assert target_execution_key(target_with_retry) == "primary:fcb7f648a676a587"
 
-    target_with_other_retry = TargetConfig(id="primary", backend="codex", retry_policy="aggressive")
+    target_with_other_retry = TargetConfig(id="primary", backend="codex", retry=RetryPolicy(3, (), ("overloaded",)))
     assert target_execution_key(target_with_other_retry) == "primary:fcb7f648a676a587"
 
 
@@ -1394,35 +856,28 @@ def test_retry_only_configuration_changes_preserve_existing_sessions(tmp_path) -
     runtime = Runtime(load_config(config_path))
     root = tmp_path / "project"
     root.mkdir()
-    project = register_project(runtime, str(root), "project")
+    project = register_project(runtime, str(root))
     try:
         target_initial = runtime.catalog.targets[0]
         key_initial = target_execution_key(target_initial)
-        runtime.database._upsert_session(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="ctx_1",
-            role="implement",
-            target_id=target_initial.id,
+            session="ctx_1",
+            workflow="implement",
             target_key=key_initial,
-            lane="",
-            session_id="sess_historical_123",
-            clear_sessions=False,
+            backend_session_id="sess_historical_123",
         )
         assert runtime.database.session(project.id, "ctx_1", "implement", key_initial) == "sess_historical_123"
 
-        # Reconfigure target with retryPolicy = "transient"
+        # Reconfigure target with an inline retry policy
         config_path.write_text(
             """[daemon]
 default_profile = "balanced"
 
-[retryPolicies.transient]
-retryAttempt = 2
-errorCodes = ["rate_limit"]
-
 [[targets]]
 id = "primary"
 backend = "codex"
-retryPolicy = "transient"
+retry = { attempts = 2, codes = ["rate_limit"] }
 
 [profiles.balanced]
 implement = "primary"
@@ -1441,7 +896,7 @@ consult = "primary"
 
 
 @pytest.mark.asyncio
-async def test_manual_retry_receives_fresh_policy_budget_with_cumulative_attempts(tmp_path) -> None:
+async def test_manual_retry_receives_fresh_policy_budget_on_new_job(tmp_path) -> None:
     from dataclasses import replace
     from refract.config import RetryPolicy, TargetConfig, TargetSelection
     from refract.drivers import DriverResult
@@ -1453,8 +908,7 @@ async def test_manual_retry_receives_fresh_policy_budget_with_cumulative_attempt
     policy = RetryPolicy(1, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -1482,219 +936,54 @@ async def test_manual_retry_receives_fresh_policy_budget_with_cumulative_attempt
         sub = await runtime.submit(project.id, "implement", "manual retry budget test")
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "failed"
-        assert job.attempts == 2
         assert len(drivers.invocations) == 2
 
         # Explicit manual retry gets fresh policy budget
-        await runtime.retry(job.id)
-        job2 = await runtime.wait(job.id, 10)
+        retried = await runtime.retry(job.id, target="primary")
+        job2 = await runtime.wait(retried.job_id, 10)
         assert job2.state == "succeeded"
-        assert job2.attempts == 4
         assert len(drivers.invocations) == 4
     finally:
         await runtime.close()
 
 
-def test_live_result_metadata_dynamic_routing_and_context_overflow(tmp_path) -> None:
+def test_live_routing_dynamic_routing_and_context_overflow(tmp_path) -> None:
     from refract.models import JobView, JobResult
-    from refract.result_metadata import JobResultMetadata, ExecutionMetadata, FailureMetadata, RetryMetadata
 
     config_path = tmp_path / "config.toml"
     _config(config_path)
     runtime = Runtime(load_config(config_path))
     try:
         # 1. Success job
-        succ_meta = JobResultMetadata(execution=ExecutionMetadata(model="m1", duration_ms=10))
         job_succ = JobView(
             id="j1", project_id="p1", workflow="consult", profile="balanced",
-            state="succeeded", context_key="c1", created_at="now", updated_at="now",
-            result=JobResult(metadata=succ_meta),
+            state="succeeded", session="c1", created_at="now", updated_at="now",
+            result=JobResult(model="m1", duration_ms=10),
         )
-        live_succ = runtime.live_result_metadata(job_succ)
-        assert set(live_succ) == {"execution", "failure", "retry", "telemetry"}
-        assert live_succ["retry"] == {"retryable": None, "next_target": None}
+        live_succ = runtime.live_routing(job_succ)
+        assert set(live_succ) == {"failure_kind", "retry"}
+        assert live_succ["retry"] == {"next_target": None}
 
         # 2. Context overflow job
-        overflow_meta = JobResultMetadata(
-            failure=FailureMetadata(kind="context_overflow"),
-            retry=RetryMetadata(retryable=True, next_target=None),
-        )
         job_overflow = JobView(
             id="j2", project_id="p1", workflow="consult", profile="balanced",
-            state="failed", context_key="c1", created_at="now", updated_at="now",
-            result=JobResult(metadata=overflow_meta),
+            state="failed", session="c1", created_at="now", updated_at="now",
+            result=JobResult(failure_kind="context_overflow"),
         )
-        live_overflow = runtime.live_result_metadata(job_overflow)
-        assert set(live_overflow) == {"execution", "failure", "retry", "telemetry"}
-        assert live_overflow["failure"]["kind"] == "context_overflow"
-        assert live_overflow["retry"] == {"retryable": True, "next_target": None}
+        live_overflow = runtime.live_routing(job_overflow)
+        assert set(live_overflow) == {"failure_kind", "retry"}
+        assert live_overflow["failure_kind"] == "context_overflow"
+        assert live_overflow["retry"] == {"next_target": None}
     finally:
         runtime.database.close()
 
 
-@pytest.mark.asyncio
-async def test_runtime_tracer_lifecycle_start_and_close(tmp_path) -> None:
-    from unittest.mock import MagicMock
-    from refract.observability import Tracer
-
-    config_path = tmp_path / "config.toml"
-    _config(config_path)
-    runtime = Runtime(load_config(config_path))
-
-    await runtime.start()
-    assert isinstance(runtime.tracer, Tracer)
-    original_tracer = runtime.tracer
-
-    mock_flush = MagicMock()
-    mock_shutdown = MagicMock()
-    original_tracer.flush = mock_flush  # type: ignore[method-assign]
-    original_tracer.shutdown = mock_shutdown  # type: ignore[method-assign]
-
-    await runtime.close()
-    mock_flush.assert_called_once()
-    mock_shutdown.assert_called_once()
 
 
-def test_runtime_publish_configuration_rebuilds_tracer_on_langfuse_change(tmp_path, monkeypatch) -> None:
-    from unittest.mock import MagicMock
-
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-    home = tmp_path / "home"
-    home.mkdir()
-    config_path = home / "config.toml"
-    _config(config_path)
-    runtime = Runtime(load_config(config_path))
-    try:
-        initial_tracer = runtime.tracer
-
-        # Non-langfuse modification does not rebuild tracer
-        config_path.write_text(config_path.read_text(encoding="utf-8") + "\n# comment\n", encoding="utf-8")
-        runtime.publish_configuration()
-        assert runtime.tracer is initial_tracer
-
-        # Langfuse modification flushes old client and rebuilds tracer
-        mock_old_flush = MagicMock()
-        mock_old_shutdown = MagicMock()
-        initial_tracer.flush = mock_old_flush  # type: ignore[method-assign]
-        initial_tracer.shutdown = mock_old_shutdown  # type: ignore[method-assign]
-
-        config_path.write_text(
-            config_path.read_text(encoding="utf-8")
-            + "\n[langfuse]\nenabled = true\nsample_rate = 0.5\n",
-            encoding="utf-8",
-        )
-        with runtime._lock:
-            runtime._publish_configuration_locked()
-
-        mock_old_flush.assert_called_once()
-        mock_old_shutdown.assert_called_once()
-        assert runtime.tracer is not initial_tracer
-        assert runtime.tracer.config.enabled is True
-        assert runtime.tracer.config.sample_rate == 0.5
-    finally:
-        runtime.database.close()
 
 
-def test_catalog_reload_applies_tracer_disablement_before_publication(tmp_path, monkeypatch) -> None:
-    from unittest.mock import MagicMock
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer
-
-    config_path = tmp_path / "config.toml"
-    _config(config_path)
-    runtime = Runtime(load_config(config_path))
-    root = tmp_path / "project"
-    root.mkdir()
-    project = register_project(runtime, str(root))
-    applied = Tracer(LangfuseConfig(enabled=False))
-    applied._config = LangfuseConfig(enabled=True)
-    applied._is_active = True
-    applied.flush = MagicMock()
-    applied.shutdown = MagicMock()
-    runtime.tracer = applied
-    try:
-        runtime.catalog_for_project(project.id)
-        assert runtime.tracer.config.enabled is False
-        assert runtime.tracer is not applied
-        applied.flush.assert_called_once()
-        applied.shutdown.assert_called_once()
-        runtime.publish_configuration()
-        assert runtime.tracer.config.enabled is False
-    finally:
-        runtime.database.close()
 
 
-@pytest.mark.asyncio
-async def test_runtime_real_tracer_thread_identity_and_close_order(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pytest.importorskip("langfuse")
-    import threading
-    from unittest.mock import MagicMock
-    from refract.observability import Tracer
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
-
-    config_path = tmp_path / "config.toml"
-    _config(config_path)
-    config_path.write_text(
-        config_path.read_text(encoding="utf-8") + "\n[langfuse]\nenabled = true\n",
-        encoding="utf-8",
-    )
-    catalog = load_config(config_path)
-    runtime = Runtime(catalog)
-
-    # 1. Runtime.__init__ must only initialize an inactive holder, even when config is enabled
-    assert runtime.tracer.is_active is False
-
-    loop_thread_id = threading.get_ident()
-    call_order: list[tuple[str, int]] = []
-
-    # 2. Runtime.start builds configured client off event loop thread
-    await runtime.start()
-    assert runtime.tracer.is_active is True
-    first_tracer = runtime.tracer
-
-    first_tracer_flush = MagicMock(side_effect=lambda: call_order.append(("flush", threading.get_ident())))
-    first_tracer_shutdown = MagicMock(side_effect=lambda: call_order.append(("shutdown", threading.get_ident())))
-    original_flush = first_tracer.flush
-    original_shutdown = first_tracer.shutdown
-    first_tracer.flush = lambda: (first_tracer_flush(), original_flush())  # type: ignore[method-assign]
-    first_tracer.shutdown = lambda: (first_tracer_shutdown(), original_shutdown())  # type: ignore[method-assign]
-
-    # Exercise tracer replacement without restarting the unrelated scheduler.
-    await runtime.close()
-    runtime = Runtime(catalog)
-    await runtime.start()
-    assert runtime.tracer is not first_tracer
-    first_tracer_flush.assert_called_once()
-    first_tracer_shutdown.assert_called_once()
-    assert len(call_order) == 2
-    assert call_order[0][0] == "flush"
-    assert call_order[1][0] == "shutdown"
-    assert call_order[0][1] != loop_thread_id
-    assert call_order[1][1] != loop_thread_id
-
-    # 4. Runtime.close calls flush then shutdown via run_sync off the event loop thread
-    call_order.clear()
-    second_tracer = runtime.tracer
-    second_tracer_flush = MagicMock(side_effect=lambda: call_order.append(("flush", threading.get_ident())))
-    second_tracer_shutdown = MagicMock(side_effect=lambda: call_order.append(("shutdown", threading.get_ident())))
-    original_flush = second_tracer.flush
-    original_shutdown = second_tracer.shutdown
-    second_tracer.flush = lambda: (second_tracer_flush(), original_flush())  # type: ignore[method-assign]
-    second_tracer.shutdown = lambda: (second_tracer_shutdown(), original_shutdown())  # type: ignore[method-assign]
-
-    await runtime.close()
-    second_tracer_flush.assert_called_once()
-    second_tracer_shutdown.assert_called_once()
-    assert len(call_order) == 2
-    assert call_order[0][0] == "flush"
-    assert call_order[1][0] == "shutdown"
-    assert call_order[0][1] != loop_thread_id
-    assert call_order[1][1] != loop_thread_id
 
 
 @pytest.mark.asyncio
@@ -1707,7 +996,7 @@ async def test_runtime_recovery_string_names_config_toml(tmp_path, monkeypatch) 
     runtime = Runtime(load_config(path))
     root = tmp_path / "project"
     root.mkdir()
-    project = register_project(runtime, str(root), "project")
+    project = register_project(runtime, str(root))
     try:
         from unittest.mock import MagicMock
         monkeypatch.setattr("refract.runtime.resolve_execution_plan", MagicMock(side_effect=ValueError("malformed config")))
@@ -1729,7 +1018,7 @@ async def test_job_submission_succeeds_without_runtime_mutations(tmp_path) -> No
     runtime = Runtime(load_config(path))
     root = tmp_path / "project"
     root.mkdir()
-    project = register_project(runtime, str(root), "project")
+    project = register_project(runtime, str(root))
     try:
         assert not hasattr(runtime, "mutations")
         result = await runtime.submit(project.id, "consult", "test prompt")

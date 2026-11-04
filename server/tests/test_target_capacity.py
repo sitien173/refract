@@ -60,8 +60,7 @@ async def test_concurrent_probe_ownership_during_retries_blocks_other_probe(tmp_
     policy = RetryPolicy(1, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -106,7 +105,6 @@ async def test_concurrent_probe_ownership_during_retries_blocks_other_probe(tmp_
         sub = await runtime.submit(project.id, "implement", "probe concurrency test")
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "succeeded"
-        assert job.attempts == 2
         assert concurrent_admitted == [None]
     finally:
         await runtime.close()

@@ -6,19 +6,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from refract.telemetry import Measurement, TelemetryData
-from refract.result_metadata import JobResultMetadata
-
-
 JobState = Literal[
     "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
 ]
 TERMINAL_STATES: frozenset[str] = frozenset(
     {"succeeded", "failed", "cancelled", "interrupted"}
 )
+FAILURE_KINDS = ("cancelled", "circuit_open", "context_overflow", "replay_blocked", "request_fatal", "target_fatal", "transient")
 class ProjectView(BaseModel):
     id: str
-    alias: str
     root: str
     created_at: str
 
@@ -26,7 +22,10 @@ class ProjectView(BaseModel):
 class JobResult(BaseModel):
     text: str = ""
     error: str = ""
-    metadata: JobResultMetadata = Field(default_factory=JobResultMetadata)
+    failure_kind: str | None = None
+    model: str | None = None
+    duration_ms: int | None = None
+    tokens: dict[str, int | None] | None = None
 
 
 class ConfigHealth(BaseModel):
@@ -76,11 +75,10 @@ class JobView(BaseModel):
     project_id: str
     workflow: str
     profile: str
-    config_revision: str = ""
     state: JobState
-    context_key: str
+    session: str
     target_id: str = ""
-    attempts: int = 0
+    retry_of: str = ""
     created_at: str
     updated_at: str
     result: JobResult = Field(default_factory=JobResult)
@@ -88,12 +86,13 @@ class JobView(BaseModel):
 
 class JobSummary(BaseModel):
     id: str
-    project_id: str
+    project: str
     workflow: str
     profile: str
+    target: str
+    session: str
     state: JobState
-    context_key: str
-    attempts: int = 0
+    retry_of: str = ""
     created_at: str
     updated_at: str
 
@@ -111,14 +110,6 @@ class TargetView(BaseModel):
     breaker_state: Literal["closed", "open", "half_open"]
     cooldown_s: int
     probing: bool
-
-
-class ContextStreamView(BaseModel):
-    project_id: str
-    context_key: str
-    role: str
-    turns: int
-    sessions: dict[str, str]
 
 
 class SubmissionResult(BaseModel):
@@ -163,65 +154,13 @@ class DashboardJob(BaseModel):
     profile: str
     prompt: str = ""
     state: JobState
-    context_key: str
-    config_revision: str = ""
+    session: str
     target_id: str = ""
-    attempts: int = 0
     created_at: str
     updated_at: str
     result: JobResult = Field(default_factory=JobResult)
     execution_plan: dict[str, Any] = Field(default_factory=dict)
     suspect: bool = False
-    diagnostic_count: int = 0
-
-
-StreamStatus = Literal["unavailable", "active", "complete", "truncated", "failed"]
-
-
-class JobStreamEvent(BaseModel):
-    id: int = 0
-    version: int = 1
-    job_id: str = ""
-    created_at: str = ""
-    attempt: int = 1
-    target_id: str = ""
-    backend: str = ""
-    kind: str = ""
-    entity_id: str = ""
-    parent_entity_id: str = ""
-    data: dict[str, Any] = Field(default_factory=dict)
-
-
-class StreamTotals(BaseModel):
-    events: int = 0
-    bytes: int = 0
-
-    def __iter__(self):
-        return iter((self.events, self.bytes))
-
-
-class JobOutputResponse(BaseModel):
-    events: list[JobStreamEvent] = Field(default_factory=list)
-    cursor: int = 0
-    has_more: bool = False
-    retained_from: int = 0
-    stream_status: StreamStatus = "unavailable"
-
-
-class DiagnosticReport(BaseModel):
-    id: str
-    job_id: str
-    category: Literal["protocol", "output"]
-    created_at: str
-    expected: str
-    observed: str
-    project_id: str
-    current_state: JobState
-
-
-class DiagnosticReportResult(BaseModel):
-    report: DiagnosticReport
-    duplicate: bool
 
 
 __all__ = [
@@ -232,21 +171,13 @@ __all__ = [
     "DashboardOverview",
     "ConfigHealthSnapshot",
     "ConfigurationHealth",
-    "ContextStreamView",
     "DaemonStatusResult",
-    "DiagnosticReport",
-    "DiagnosticReportResult",
-    "JobOutputResponse",
+    "FAILURE_KINDS",
     "JobResult",
     "JobState",
-    "JobStreamEvent",
     "JobSummary",
-    "Measurement",
     "ProjectView",
-    "StreamStatus",
-    "StreamTotals",
     "SubmissionResult",
     "TERMINAL_STATES",
     "TargetView",
-    "TelemetryData",
 ]

@@ -9,7 +9,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from refract.observability import Tracer, job_event
 
 NO_ANSWER_TEXT = "No answer from coordinator; use your best judgment or end with BLOCKED."
 
@@ -31,13 +30,26 @@ class PendingQuestion:
     question_id: str
     text: str
     future: asyncio.Future[str]
+    deadline: float = 0.0
     created_at: float = field(default_factory=time.monotonic)
+
+
+@dataclass(slots=True)
+class _Token:
+    value: str
+    deadline: float | None
 
 
 def _resolve_future(future: asyncio.Future[str], result: str, loop: asyncio.AbstractEventLoop) -> None:
     if future.done():
         return
-    if loop.is_running():
+    try:
+        same_loop = asyncio.get_running_loop() is loop
+    except RuntimeError:
+        same_loop = False
+    if same_loop:
+        future.set_result(result)
+    elif loop.is_running():
         loop.call_soon_threadsafe(lambda: not future.done() and future.set_result(result))
     else:
         future.set_result(result)
@@ -46,12 +58,9 @@ def _resolve_future(future: asyncio.Future[str], result: str, loop: asyncio.Abst
 class AskRegistry:
     """Thread-safe in-memory registry holding per-job tokens and pending questions."""
 
-    def __init__(self, tracer: Tracer | None = None) -> None:
-        self.tracer = tracer or Tracer()
-        self._tokens: dict[str, str] = {}
-        self._revoked_tokens: set[str] = set()
+    def __init__(self) -> None:
+        self._tokens: dict[str, _Token] = {}
         self._pending: dict[str, PendingQuestion] = {}
-        self._deadlines: dict[str, float] = {}
         self._question_waiters: dict[str, list[asyncio.Future[PendingQuestion | None]]] = {}
         self._lock = threading.Lock()
 
@@ -60,25 +69,18 @@ class AskRegistry:
     ) -> str:
         """Issue a fresh token bound to job_id and its optional workflow deadline."""
         token = secrets.token_urlsafe(32)
+        deadline = None
+        if workflow_timeout_s > 0:
+            deadline = (started_at if started_at is not None else time.monotonic()) + workflow_timeout_s
         with self._lock:
-            old_token = self._tokens.pop(job_id, None)
-            if old_token is not None:
-                self._revoked_tokens.add(old_token)
-            self._tokens[job_id] = token
-            if workflow_timeout_s > 0:
-                self._deadlines[job_id] = (started_at if started_at is not None else time.monotonic()) + workflow_timeout_s
-            else:
-                self._deadlines.pop(job_id, None)
+            self._tokens[job_id] = _Token(token, deadline)
         return token
 
     def revoke_token(self, job_id: str) -> None:
         """Revoke any active token for job_id and release any pending ask."""
         pending: PendingQuestion | None = None
         with self._lock:
-            old_token = self._tokens.pop(job_id, None)
-            if old_token is not None:
-                self._revoked_tokens.add(old_token)
-            self._deadlines.pop(job_id, None)
+            self._tokens.pop(job_id, None)
             pending = self._pending.pop(job_id, None)
 
         if pending is not None:
@@ -96,14 +98,11 @@ class AskRegistry:
 
         matched_job_id: str | None = None
         for j_id, bound_token in self._tokens.items():
-            if secrets.compare_digest(bound_token.encode("utf-8"), token_bytes):
+            if secrets.compare_digest(bound_token.value.encode("utf-8"), token_bytes):
                 matched_job_id = j_id
                 break
 
         if matched_job_id is None:
-            for rev_token in self._revoked_tokens:
-                if secrets.compare_digest(rev_token.encode("utf-8"), token_bytes):
-                    raise AskAuthError("Token has been revoked")
             raise AskAuthError("Token is unknown")
 
         if job_id is not None:
@@ -121,8 +120,8 @@ class AskRegistry:
     def validate_token(self, token: str, job_id: str | None = None) -> str:
         """Validate token against active tokens and optional job_id.
 
-        Returns the matching job_id on success. Raises AskAuthError if unknown,
-        revoked, or bound to a different job.
+        Returns the matching job_id on success. Raises AskAuthError if unknown
+        or bound to a different job.
         """
         with self._lock:
             return self._validate_token_locked(token, job_id)
@@ -164,14 +163,18 @@ class AskRegistry:
             resolved_job_id = self._validate_token_locked(token, job_id)
             if resolved_job_id in self._pending:
                 raise AskConflictError(f"A question is already pending for job {resolved_job_id}")
-            deadline = self._deadlines.get(resolved_job_id)
-            remaining = timeout_s if deadline is None else min(timeout_s, deadline - time.monotonic())
+            now = time.monotonic()
+            deadline = now + timeout_s
+            workflow_deadline = self._tokens[resolved_job_id].deadline
+            if workflow_deadline is not None:
+                deadline = min(deadline, workflow_deadline)
+            remaining = deadline - now
             if remaining <= 0:
                 return NO_ANSWER_TEXT
+            pending.deadline = deadline
             self._pending[resolved_job_id] = pending
             waiters = self._question_waiters.pop(resolved_job_id, [])
 
-        job_event(self.tracer, resolved_job_id, "question", cleaned_question)
         for w in waiters:
             if not w.done():
                 loop = w.get_loop()
@@ -194,16 +197,18 @@ class AskRegistry:
             raise
 
     def deliver_answer(self, job_id: str, answer: str) -> bool:
-        """Deliver an answer to the pending question for job_id."""
+        """Deliver an answer to the pending question for job_id.
+
+        Returns False when no question is pending or the question expired.
+        """
         with self._lock:
-            pending = self._pending.pop(job_id, None)
-
-        if pending is None:
-            return False
-
-        loop = pending.future.get_loop()
-        _resolve_future(pending.future, answer, loop)
-        job_event(self.tracer, job_id, "answer", answer)
+            pending = self._pending.get(job_id)
+            if pending is None:
+                return False
+            if pending.future.done() or time.monotonic() >= pending.deadline:
+                return False
+            del self._pending[job_id]
+            _resolve_future(pending.future, answer, pending.future.get_loop())
         return True
 
     def cancel(self, job_id: str) -> bool:

@@ -12,7 +12,7 @@ first; it owns routing, execution, anchors, and Git.
 
 ## Constraints
 
-- Do not call `task_guide`, register a project, or submit jobs while authoring.
+- Do not call `list` or `submit` while authoring.
 - Do not hard-code a default profile, target, model, or provider. Record a
   profile only when the user pins one.
 - Never replace matching active work: a plan for the same topic whose handover

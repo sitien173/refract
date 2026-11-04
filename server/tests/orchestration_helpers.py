@@ -15,9 +15,9 @@ def git(path: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
-def register_project(runtime, path: str, alias: str = "") -> ProjectView:
+def register_project(runtime, path: str) -> ProjectView:
     resolved = Path(path).expanduser().resolve()
-    return runtime.database.upsert_project(project_id=str(uuid.uuid4()), alias=alias or resolved.name, root=resolved.as_posix())
+    return runtime.database.upsert_project(project_id=str(uuid.uuid4()), root=resolved.as_posix())
 
 
 def repository(tmp_path: Path) -> Path:

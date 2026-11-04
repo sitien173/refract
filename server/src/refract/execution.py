@@ -14,17 +14,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from refract.backends._process import spawn_hook
 from refract.config import DaemonConfig, RetryPolicy, TargetConfig
 from refract.database import Database
-from refract.drivers import DriverRegistry, DriverResult, StreamBridge
+from refract.drivers import DriverRegistry, DriverResult
 from refract.logging_setup import get_logger, log_context
 from refract.models import ProjectView, TargetView, TERMINAL_STATES
-from refract.result_metadata import JobResultMetadata, ExecutionMetadata, FailureMetadata, RetryMetadata, PublicTelemetry
 from refract.planning import ExecutionPlan, parse_execution_plan, target_execution_key
-from refract.streaming import StreamRecorder
 from refract.scheduler import CancelEvent
-from refract.telemetry import TelemetryAccumulator, TelemetryData
-from refract.observability import Tracer, generation_observation, job_observation
+from refract.telemetry import CONSUMPTION_KEYS, TokenCounters
 from refract.workers import run_sync
 
 
@@ -36,16 +34,14 @@ class TargetExecutionResult:
     result: DriverResult
     target_id: str
     target_key: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
+    outcome: dict[str, Any] = field(default_factory=dict)
     session_key: str = ""
-    session_context_key: str = ""
+    scoped_session: str = ""
 
 
 @dataclass(slots=True)
 class _TargetAttempt:
     result: DriverResult | None = None
-    recovered: bool = False
-    recovery_phase: str = ""
     replay_blocked: bool = False
 
 
@@ -54,36 +50,61 @@ class _ExecutionContext:
     job_id: str
     project: ProjectView
     workflow: str
-    context_key: str
+    session: str
     plan: ExecutionPlan
     prompt: str
     cwd: Path
     cancel_event: CancelEvent
-    fresh_session: bool
+    fresh: bool
     target: TargetConfig
     target_key: str
     session_target_key: str
     session_id: str
-    effective_prompt: str
-    accumulator: TelemetryAccumulator
+    attempt_tokens: list[TokenCounters]
     bound_env: dict[str, str] = field(default_factory=dict)
+
+
+def _counters_from(values: dict[str, Any]) -> TokenCounters:
+    """Build one attempt's counters from a snapshot; a key absent from the snapshot is unknown."""
+    counters = TokenCounters()
+    counters.record_totals(
+        input=values.get("input"),
+        output=values.get("output"),
+        cache_read=values.get("cache_read"),
+        cache_write=values.get("cache_write"),
+    )
+    counters.record_context(used=values.get("context_used"), window=values.get("context_window"))
+    return counters
+
+
+def _job_tokens(attempt_tokens: list[TokenCounters], target: TargetConfig | None) -> dict[str, int | None] | None:
+    """Sum consumption over attempts; context and configured window come from the latest attempt."""
+    capacity = target.context_window if target is not None else None
+    if not attempt_tokens and capacity is None:
+        return None
+    tokens: dict[str, int | None] = {}
+    for key in CONSUMPTION_KEYS:
+        known = [value for value in (counters.as_dict()[key] for counters in attempt_tokens) if value is not None]
+        tokens[key] = sum(known) if known else None
+    latest = attempt_tokens[-1].as_dict() if attempt_tokens else {}
+    tokens["context_used"] = latest.get("context_used")
+    tokens["context_window"] = capacity if capacity is not None else latest.get("context_window")
+    if tokens["context_used"] is None and tokens["input"] is not None and tokens["output"] is not None:
+        tokens["context_used"] = tokens["input"] + tokens["output"]
+    return tokens
 
 
 class TargetExecutor:
     def __init__(
         self, config: DaemonConfig, database: Database, drivers: DriverRegistry,
-        *, on_stream_commit: Callable[[str, int], Any] | None = None,
-        ask_registry: Any = None,
+        *, ask_registry: Any = None,
         environment_resolver: Callable[[ProjectView, str], tuple[dict[str, str], str]] | None = None,
-        tracer: Tracer | None = None,
     ) -> None:
         self.config = config
         self.database = database
         self.drivers = drivers
-        self.on_stream_commit = on_stream_commit
         self.ask_registry = ask_registry
         self.environment_resolver = environment_resolver
-        self.tracer = tracer or Tracer()
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
         self._target_users: dict[str, int] = {}
@@ -95,65 +116,48 @@ class TargetExecutor:
             key: semaphore for key, semaphore in self._target_semaphores.items()
             if self._target_users.get(key, 0)
         }
-    @staticmethod
-    def _safe_telemetry_dump(accumulator: TelemetryAccumulator | None) -> dict[str, Any] | None:
-        if accumulator is None:
-            return None
-        try:
-            if (accumulator._has_any_consumption or accumulator._context_used_tokens.value is not None
-                    or accumulator._configured_capacity.value is not None):
-                return accumulator.snapshot().model_dump(mode="json")
-        except Exception:
-            log.warning("Failed to serialize telemetry snapshot", exc_info=True)
-        return None
-
-    async def execute(self, *, job_id: str, project: ProjectView, workflow: str, context_key: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: CancelEvent, fresh_session: bool = False) -> TargetExecutionResult:
-        record = await run_sync(self.database.job_record, job_id)
-        telemetry_state = json.loads(record.get("telemetry_state_json") or "{}") if record else {}
-        accumulator = TelemetryAccumulator(telemetry_state if telemetry_state else None)
+    async def execute(self, *, job_id: str, project: ProjectView, workflow: str, session: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: CancelEvent, fresh: bool = False) -> TargetExecutionResult:
+        attempt_tokens: list[TokenCounters] = []
 
         last = DriverResult("REQUEST_FATAL", "", "", "No admissible target", "circuit_open")
         if not plan.selection.targets:
-            tel = self._safe_telemetry_dump(accumulator)
-            return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
+            return TargetExecutionResult(last, "", outcome=self._outcome(last, None, None, circuit_open=True, attempt_tokens=attempt_tokens))
         if cancel_event.is_set():
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-            tel = self._safe_telemetry_dump(accumulator)
-            return TargetExecutionResult(cancelled, "", metadata=self._result_metadata(cancelled, None, None, telemetry=tel))
-        target = await run_sync(self._select_target, plan.selection.targets, plan, job_id)
+            return TargetExecutionResult(cancelled, "", outcome=self._outcome(cancelled, None, None, attempt_tokens=attempt_tokens))
+        order = plan.selection.targets
+        sticky = await run_sync(self.database.sticky_target, project.id, session, workflow)
+        if sticky in order:
+            order = (sticky, *(target_id for target_id in order if target_id != sticky))
+        target = await run_sync(self._select_target, order, plan, job_id)
         if target is None:
-            tel = self._safe_telemetry_dump(accumulator)
-            return TargetExecutionResult(last, "", metadata=self._result_metadata(last, None, None, circuit_open=True, telemetry=tel))
+            return TargetExecutionResult(last, "", outcome=self._outcome(last, None, None, circuit_open=True, attempt_tokens=attempt_tokens))
         target_key = target_execution_key(target)
-        accumulator.invalidate_context()
-        accumulator.set_configured_capacity(target.context_window)
-        await run_sync(self.database.merge_job_telemetry, job_id, accumulator.snapshot())
         bound_env: dict[str, str] = {}
         session_target_key = target_key
-        session_context_key = context_key
+        scoped_session = session
         if target.id in plan.environment_targets:
             if self.environment_resolver is None:
                 await self._release_probe(target_key, job_id)
-                return self._configuration_failure(target, target_key, "Target environment configuration is unavailable", accumulator)
+                return self._configuration_failure(target, target_key, "Target environment configuration is unavailable", attempt_tokens)
             try:
                 bound_env, revision_context = await run_sync(self.environment_resolver, project, target.id)
                 opaque_revision = hashlib.sha256((project.id + revision_context).encode()).hexdigest()[:20]
                 session_target_key = f"{target_key}:env:{opaque_revision}"
-                session_context_key = f"{context_key}:env:{opaque_revision}"
+                scoped_session = f"{session}:env:{opaque_revision}"
             except asyncio.CancelledError:
                 await self._release_probe(target_key, job_id)
                 raise
             except Exception:
                 await self._release_probe(target_key, job_id)
-                return self._configuration_failure(target, target_key, "Target environment configuration is invalid", accumulator)
+                return self._configuration_failure(target, target_key, "Target environment configuration is invalid", attempt_tokens)
         try:
-            session_id, effective_prompt = await self._prepare_session(
-                project, session_context_key, workflow, session_target_key, prompt, fresh_session
+            session_id = await self._prepare_session(
+                project, scoped_session, workflow, session_target_key, fresh
             )
-            await run_sync(self.database.event, job_id, "target.selected", {"workflow": workflow, "target": target.id, "attempt": 1})
         except BaseException as exc:
             await self._release_probe(target_key, job_id)
-            self._attach_exception_metadata(exc, target, None, accumulator=accumulator)
+            self._attach_outcome(exc, target, None, attempt_tokens=attempt_tokens)
             raise
         semaphore = self._target_semaphores.setdefault(target.id, asyncio.Semaphore(target.max_concurrency))
         self._target_users[target.id] = self._target_users.get(target.id, 0) + 1
@@ -165,7 +169,7 @@ class TargetExecutor:
                 self._release_capacity(target.id)
             finally:
                 await self._release_probe(target_key, job_id)
-            self._attach_exception_metadata(exc, target, None, accumulator=accumulator)
+            self._attach_outcome(exc, target, None, attempt_tokens=attempt_tokens)
             raise
         if not acquired:
             try:
@@ -173,17 +177,16 @@ class TargetExecutor:
             finally:
                 await self._release_probe(target_key, job_id)
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-            tel = self._safe_telemetry_dump(accumulator)
-            return TargetExecutionResult(cancelled, target.id, target_key, self._result_metadata(cancelled, target, None, telemetry=tel))
+            return TargetExecutionResult(cancelled, target.id, target_key, self._outcome(cancelled, target, None, attempt_tokens=attempt_tokens))
 
         self._target_active[target.id] += 1
         try:
             return await self._execute_attempt(_ExecutionContext(
                 job_id=job_id, project=project, workflow=workflow,
-                context_key=session_context_key, plan=plan, prompt=prompt, cwd=cwd,
-                cancel_event=cancel_event, fresh_session=fresh_session,
+                session=scoped_session, plan=plan, prompt=prompt, cwd=cwd,
+                cancel_event=cancel_event, fresh=fresh,
                 target=target, target_key=target_key, session_target_key=session_target_key, session_id=session_id,
-                effective_prompt=effective_prompt, accumulator=accumulator,
+                attempt_tokens=attempt_tokens,
                 bound_env=bound_env,
             ))
         finally:
@@ -200,11 +203,10 @@ class TargetExecutor:
 
     @classmethod
     def _configuration_failure(cls, target: TargetConfig, target_key: str, message: str,
-                               accumulator: TelemetryAccumulator | None = None) -> TargetExecutionResult:
+                               attempt_tokens: list[TokenCounters] | None = None) -> TargetExecutionResult:
         result = DriverResult("REQUEST_FATAL", "", "", message, "configuration_error")
-        telemetry = cls._safe_telemetry_dump(accumulator)
         return TargetExecutionResult(result, target.id, target_key,
-                                     cls._result_metadata(result, target, None, telemetry=telemetry))
+                                     cls._outcome(result, target, None, attempt_tokens=attempt_tokens))
 
     async def _release_probe(self, target_key: str, job_id: str) -> None:
         try:
@@ -214,13 +216,13 @@ class TargetExecutor:
 
     @staticmethod
     def _matches_retry_policy(policy: RetryPolicy, result: DriverResult) -> bool:
-        if not policy.error_codes and not policy.error_patterns:
+        if not policy.codes and not policy.patterns:
             return True
-        if result.error_code and result.error_code in policy.error_codes:
+        if result.error_code and result.error_code in policy.codes:
             return True
-        if result.error and policy.error_patterns:
+        if result.error and policy.patterns:
             err_lower = result.error.lower()
-            if any(pat.lower() in err_lower for pat in policy.error_patterns):
+            if any(pat.lower() in err_lower for pat in policy.patterns):
                 return True
         return False
 
@@ -237,7 +239,7 @@ class TargetExecutor:
     ) -> bool:
         if cancel_event.is_set():
             return False
-        if policy_retries_done >= policy.retry_attempt:
+        if policy_retries_done >= policy.attempts:
             return False
         if result.outcome != "RETRYABLE":
             return False
@@ -248,92 +250,63 @@ class TargetExecutor:
         return cls._matches_retry_policy(policy, result)
 
     async def _prepare_session(
-        self, project: ProjectView, context_key: str, workflow: str,
-        target_key: str, prompt: str, fresh_session: bool,
-    ) -> tuple[str, str]:
-        if fresh_session:
-            return "", prompt
-        session_id = await run_sync(self.database.session, project.id, context_key, workflow, target_key)
-        effective_prompt = prompt if session_id else await run_sync(self._with_history, project.id, context_key, workflow, prompt)
-        return session_id, effective_prompt
+        self, project: ProjectView, session: str, workflow: str,
+        target_key: str, fresh: bool,
+    ) -> str:
+        if fresh:
+            return ""
+        return await run_sync(self.database.session, project.id, session, workflow, target_key)
 
     async def _start_attempt(
         self, job_id: str, target: TargetConfig, plan: ExecutionPlan,
-        workflow: str, session_id: str,
-    ) -> tuple[float, bool, StreamRecorder | None, int]:
-        attempt_number = await run_sync(self.database.record_job_attempt, job_id, target.id)
+        workflow: str, session_id: str, attempt_number: int,
+    ) -> tuple[float, bool]:
+        await run_sync(self.database.record_job_target, job_id, target.id)
         started_at = time.monotonic()
         log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt_number, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
         supports_streaming = await run_sync(self.drivers.supports_structured_streaming, target)
-        recorder = None
-        if supports_streaming:
-            on_commit = None
-            if self.on_stream_commit:
-                on_commit = lambda cursor: self.on_stream_commit(job_id, cursor)
-            recorder = await run_sync(StreamRecorder,
-                database=self.database,
-                job_id=job_id,
-                attempt=attempt_number,
-                target_id=target.id,
-                backend=target.backend,
-                on_commit=on_commit,
-            )
-        return started_at, supports_streaming, recorder, attempt_number
+        return started_at, supports_streaming
 
     async def _execute_attempt(self, context: _ExecutionContext) -> TargetExecutionResult:
         job_id = context.job_id
         project = context.project
         workflow = context.workflow
-        context_key = context.context_key
+        session = context.session
         plan = context.plan
         prompt = context.prompt
         cwd = context.cwd
         cancel_event = context.cancel_event
-        fresh_session = context.fresh_session
+        fresh = context.fresh
         target = context.target
         target_key = context.target_key
         session_target_key = context.session_target_key
-        accumulator = context.accumulator
+        attempt_tokens = context.attempt_tokens
         bound_env = context.bound_env
 
-        policy = plan.retry_policy(target.id)
-
-        phases = ("initial", "reconstruct", "fresh")
-        phase_idx = 0
-        phase_prompt = context.effective_prompt
-        phase_session = context.session_id
-        recovered = False
-        recovery_phase = ""
+        policy = target.retry
 
         policy_retries_done = 0
+        attempt_number = 0
         overall_started_at = time.monotonic()
 
         while True:
-            attempt = _TargetAttempt(recovered=recovered, recovery_phase=recovery_phase)
+            attempt_number += 1
+            attempt = _TargetAttempt()
             if cancel_event.is_set():
                 attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
                 break
 
             try:
-                started_at, supports_streaming, recorder, attempt_number = await self._start_attempt(
-                    job_id, target, plan, workflow, phase_session
+                started_at, supports_streaming = await self._start_attempt(
+                    job_id, target, plan, workflow, context.session_id, attempt_number
                 )
             except BaseException as exc:
                 duration_ms = int((time.monotonic() - overall_started_at) * 1000)
-                self._attach_exception_metadata(exc, target, duration_ms, accumulator=accumulator)
+                self._attach_outcome(exc, target, duration_ms, attempt_tokens=attempt_tokens)
                 raise
 
-            generation_cm = generation_observation(
-                self.tracer, name=f"attempt-{attempt_number}", model=target.model,
-                input_text=phase_prompt,
-                metadata={"target_id": target.id, "backend": target.backend, "attempt": attempt_number},
-                usage=None,
-            )
-            generation = generation_cm.__enter__()
             ask_env: dict[str, str] | None = None
             driver_exc: BaseException | None = None
-            attempt_invocation = 1
-            generation_updated = False
             try:
                 if self.ask_registry is not None:
                     token = self.ask_registry.issue_token(
@@ -345,144 +318,72 @@ class TargetExecutor:
                     ask_env = {
                         "REFRACT_ASK_URL": ask_url,
                         "REFRACT_ASK_TOKEN": token,
+                        "REFRACT_ASK_TIMEOUT_S": str(self.config.ask_timeout_s),
                     }
-                while phase_idx < len(phases):
-                    phase = phases[phase_idx]
-                    details = {"workflow": workflow, "target": target.id}
-                    if phase != "initial":
-                        details["phase"] = phase
-                        details["invocation"] = attempt_invocation
-                        accumulator.invalidate_context()
-                        await run_sync(self.database.event, job_id, "target.session_recovery_started", details)
-
-                    if cancel_event.is_set():
-                        attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-                        break
-
+                if cancel_event.is_set():
+                    attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+                else:
                     inv_result, has_tool_activity = await self._run_target_invocation(
                         job_id=job_id,
                         attempt=attempt_number,
-                        invocation=attempt_invocation,
-                        accumulator=accumulator,
+                        invocation=1,
+                        attempt_tokens=attempt_tokens,
                         target=target,
-                        prompt=phase_prompt,
-                        session_id=phase_session,
+                        prompt=prompt,
+                        session_id=context.session_id,
                         cwd=cwd,
                         timeout_s=plan.selection.timeout_s,
                         cancel_event=cancel_event,
-                        recorder=recorder,
                         supports_streaming=supports_streaming,
-                        env={**bound_env, **(ask_env or {})} or None,
+                        env={**bound_env, **(ask_env or {}), "REFRACT_JOB_ID": job_id},
                     )
                     attempt.result = inv_result
                     attempt.replay_blocked = has_tool_activity and inv_result.outcome != "SUCCESS"
-                    await self._record_recovery_result(job_id, phase, details, inv_result)
-
-                    if inv_result.outcome == "SUCCESS":
-                        attempt.recovered = (phase != "initial") or recovered
-                        attempt.recovery_phase = phase if (phase != "initial") else recovery_phase
-                        break
-
-                    if self._can_recover(inv_result, fresh_session, context.session_id, attempt.replay_blocked, cancel_event, phase):
-                        if phase == "initial":
-                            phase_prompt = await run_sync(self._with_history, project.id, context_key, workflow, prompt)
-                            phase_session = ""
-                            recovered = True
-                            recovery_phase = "reconstruct"
-                            phase_idx = 1
-                            attempt_invocation += 1
-                            continue
-                        elif phase == "reconstruct" and phase_prompt != prompt:
-                            phase_prompt = prompt
-                            recovered = True
-                            recovery_phase = "fresh"
-                            phase_idx = 2
-                            attempt_invocation += 1
-                            continue
-                        else:
-                            break
-                    else:
-                        break
             except BaseException as exc:
                 driver_exc = exc
             finally:
-                try:
-                    revoke_exc: BaseException | None = None
-                    if self.ask_registry is not None:
-                        try:
-                            self.ask_registry.revoke_token(job_id)
-                        except BaseException as exc:
-                            revoke_exc = exc
-
-                    if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
-                        attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-
-                    rec_exc: BaseException | None = None
+                revoke_exc: BaseException | None = None
+                if self.ask_registry is not None:
                     try:
-                        await self._finish_recorder(recorder, attempt.result, driver_exc, cancel_event)
+                        self.ask_registry.revoke_token(job_id)
                     except BaseException as exc:
-                        rec_exc = exc
+                        revoke_exc = exc
 
-                    event_result = attempt.result
-                    if driver_exc is not None and event_result is None:
-                        event_result = DriverResult("REQUEST_FATAL", "", "", str(driver_exc), "execution_error")
-                    if event_result is not None:
-                        duration_ms = int((time.monotonic() - started_at) * 1000)
-                        try:
-                            await run_sync(
-                                self.database.event,
-                                job_id,
-                                "target.attempt_finished",
-                                {
-                                    "workflow": workflow,
-                                    "target": target.id,
-                                    "attempt": attempt_number,
-                                    "outcome": event_result.outcome,
-                                    "error_code": event_result.error_code,
-                                },
-                            )
-                        except Exception:
-                            log.warning("Failed to emit attempt_finished event", exc_info=True)
-                        log.info(
-                            "Target attempt finished",
-                            extra={
-                                "event": "target.attempt_finished",
-                                "job_id": job_id,
-                                "target_id": target.id,
-                                "workflow": workflow,
-                                "attempt": attempt_number,
-                                "outcome": event_result.outcome,
-                                "error_code": event_result.error_code,
-                                "duration_ms": duration_ms,
-                            },
-                        )
+                if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+                    attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
 
-                    status = event_result.error_code if event_result and event_result.outcome != "SUCCESS" else None
-                    level = "WARNING" if event_result and event_result.outcome == "CANCELLED" else ("ERROR" if driver_exc or (event_result and event_result.outcome not in {"SUCCESS", "CANCELLED"}) else None)
-                    generation.finish(
-                        output=event_result.text if event_result else None,
-                        level=level, status_message="cancelled" if level == "WARNING" else status,
-                        accumulator=accumulator, attempt=attempt_number,
-                        model=(event_result.model if event_result else None) or target.model,
+                rec_exc: BaseException | None = None
+                try:
+                    await self._record_attempt_finished(
+                        job_id, attempt_number, target, supports_streaming, attempt.result, driver_exc, cancel_event,
                     )
-                    generation_updated = True
-                    primary_exc = driver_exc or rec_exc or revoke_exc
-                    if primary_exc is not None:
-                        duration_ms = int((time.monotonic() - overall_started_at) * 1000)
-                        self._attach_exception_metadata(primary_exc, target, duration_ms, accumulator=accumulator)
-                        raise primary_exc
-                finally:
-                    if not generation_updated:
-                        task = asyncio.current_task()
-                        cancelled = cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError) or bool(task and task.cancelling())
-                        generation.finish(
-                            output=attempt.result.text if attempt.result else None,
-                            level="WARNING" if cancelled else "ERROR",
-                            status_message="cancelled" if cancelled else "attempt finalization failed",
-                            accumulator=accumulator, attempt=attempt_number, model=target.model,
-                        )
-                    generation_cm.__exit__(None, None, None)
+                except BaseException as exc:
+                    rec_exc = exc
 
+                event_result = attempt.result
+                if driver_exc is not None and event_result is None:
+                    event_result = DriverResult("REQUEST_FATAL", "", "", str(driver_exc), "execution_error")
+                if event_result is not None:
+                    duration_ms = int((time.monotonic() - started_at) * 1000)
+                    log.info(
+                        "Target attempt finished",
+                        extra={
+                            "event": "target.attempt_finished",
+                            "job_id": job_id,
+                            "target_id": target.id,
+                            "workflow": workflow,
+                            "attempt": attempt_number,
+                            "outcome": event_result.outcome,
+                            "error_code": event_result.error_code,
+                            "duration_ms": duration_ms,
+                        },
+                    )
+
+                primary_exc = driver_exc or rec_exc or revoke_exc
+                if primary_exc is not None:
+                    duration_ms = int((time.monotonic() - overall_started_at) * 1000)
+                    self._attach_outcome(primary_exc, target, duration_ms, attempt_tokens=attempt_tokens)
+                    raise primary_exc
             if attempt.result is None:
                 attempt.result = DriverResult("REQUEST_FATAL", "", "", "execution_failed", "execution_error")
             if attempt.result.outcome == "SUCCESS":
@@ -497,7 +398,6 @@ class TargetExecutor:
                 cancel_event=cancel_event,
             ):
                 policy_retries_done += 1
-                accumulator.complete_attempt(attempt_number)
                 continue
             else:
                 break
@@ -507,61 +407,40 @@ class TargetExecutor:
         try:
             if last.outcome == "SUCCESS":
                 await run_sync(self.database.record_target_success, target_key, self.config.breaker_base_cooldown_s)
-                if not fresh_session:
-                    await self._store_turn(attempt, job_id, project, workflow, context_key, target, session_target_key, prompt)
+                if not fresh:
+                    await run_sync(self.database.store_session,
+                        project_id=project.id,
+                        session=session,
+                        workflow=workflow,
+                        target_key=session_target_key,
+                        backend_session_id=last.session_id,
+                    )
             else:
                 await self._update_target_health(last, target_key, job_id, attempt.replay_blocked)
         except BaseException as exc:
-            self._attach_exception_metadata(exc, target, total_duration_ms, accumulator=accumulator)
+            self._attach_outcome(exc, target, total_duration_ms, attempt_tokens=attempt_tokens)
             raise
 
-        telemetry = self._safe_telemetry_dump(accumulator)
         return TargetExecutionResult(
             last,
             target.id,
             target_key,
-            self._result_metadata(
+            self._outcome(
                 last,
                 target,
                 total_duration_ms,
                 replay_blocked=attempt.replay_blocked,
-                telemetry=telemetry,
+                attempt_tokens=attempt_tokens,
             ),
             session_target_key,
-            context_key,
+            session,
         )
 
-    async def _record_recovery_result(
-        self, job_id: str, phase: str, details: dict[str, Any], result: DriverResult,
+    async def _record_attempt_finished(
+        self, job_id: str, attempt: int, target: TargetConfig, supports_streaming: bool,
+        result: DriverResult | None, driver_exc: BaseException | None, cancel_event: CancelEvent,
     ) -> None:
-        if phase != "initial":
-            await run_sync(self.database.event, job_id, "target.session_recovery_finished", {
-                **details, "outcome": result.outcome, "error_code": result.error_code,
-            })
-        if result.error_code == "context_overflow":
-            await run_sync(self.database.event, job_id, "target.context_overflow", {
-                **details, "error_code": "context_overflow",
-            })
-
-    @staticmethod
-    def _can_recover(
-        result: DriverResult, fresh_session: bool, session_id: str,
-        replay_blocked: bool, cancel_event: CancelEvent, phase: str,
-    ) -> bool:
-        return not (
-            fresh_session or not session_id or replay_blocked
-            or cancel_event.is_set()
-            or result.outcome in {"CANCELLED", "REQUEST_FATAL"}
-            or result.error_code != "context_overflow"
-            or phase == "fresh"
-        )
-
-    @staticmethod
-    async def _finish_recorder(
-        recorder: StreamRecorder | None, result: DriverResult | None,
-        driver_exc: BaseException | None, cancel_event: CancelEvent,
-    ) -> None:
-        if not recorder:
+        if not supports_streaming:
             return
         if result is None:
             err_msg = str(driver_exc) if driver_exc else "execution_failed"
@@ -572,38 +451,31 @@ class TargetExecutor:
             status = "succeeded"
         else:
             status = "failed"
-        try:
-            await recorder.record({
-                "kind": "attempt.finished",
-                "data": {
-                    "status": status,
-                    "outcome": result.outcome,
-                    "error_code": result.error_code,
-                },
-            })
-        finally:
-            await recorder.close()
+        await self._record_stream_event(job_id, attempt, target, {
+            "kind": "attempt.finished",
+            "data": {
+                "status": status,
+                "outcome": result.outcome,
+                "error_code": result.error_code,
+            },
+        })
 
-    async def _store_turn(
-        self, attempt: _TargetAttempt, job_id: str, project: ProjectView,
-        workflow: str, context_key: str, target: TargetConfig, target_key: str, prompt: str,
-    ) -> None:
-        await run_sync(self.database.append_turn,
-            project_id=project.id,
-            context_key=context_key,
-            role=workflow,
-            target_id=target.id,
-            target_key=target_key,
-            session_id=attempt.result.session_id,
-            prompt=prompt,
-            response=attempt.result.text,
-            clear_sessions=attempt.recovered,
-        )
-        if attempt.recovered:
-            await run_sync(self.database.event,
-                job_id,
-                "target.session_replaced",
-                {"workflow": workflow, "target": target.id, "phase": attempt.recovery_phase},
+    async def _record_stream_event(self, job_id: str, attempt: int, target: TargetConfig, event: dict[str, Any]) -> None:
+        try:
+            await run_sync(self.database.append_stream, job_id, [{
+                "attempt": attempt,
+                "target_id": target.id,
+                "backend": target.backend,
+                "kind": str(event.get("kind", "")),
+                "entity_id": str(event.get("entity_id", "")),
+                "parent_entity_id": str(event.get("parent_entity_id", "")),
+                "data": dict(event.get("data", {})),
+            }])
+        except Exception as exc:
+            log.error(
+                "Stream persistence failed",
+                exc_info=True,
+                extra={"event": "stream.persistence_failed", "job_id": job_id, "error": str(exc)},
             )
 
     async def _update_target_health(
@@ -623,13 +495,13 @@ class TargetExecutor:
             return
 
     @classmethod
-    def _attach_exception_metadata(
+    def _attach_outcome(
         cls,
         exc: BaseException,
         target: TargetConfig | None,
         duration_ms: int | None,
         *,
-        accumulator: TelemetryAccumulator | None = None,
+        attempt_tokens: list[TokenCounters] | None = None,
     ) -> None:
         cancelled = isinstance(exc, asyncio.CancelledError)
         result = DriverResult(
@@ -640,53 +512,49 @@ class TargetExecutor:
             "cancelled" if cancelled else "execution_error",
         )
         try:
-            telemetry = cls._safe_telemetry_dump(accumulator)
-            setattr(exc, "_refract_result_metadata", cls._result_metadata(result, target, duration_ms, telemetry=telemetry))
+            setattr(exc, "_refract_outcome", cls._outcome(result, target, duration_ms, attempt_tokens=attempt_tokens))
         except (AttributeError, TypeError):
             pass
 
     @staticmethod
-    def _result_metadata(
+    def _outcome(
         result: DriverResult,
         target: TargetConfig | None,
         duration_ms: int | None,
         *,
         replay_blocked: bool = False,
         circuit_open: bool = False,
-        telemetry: dict[str, Any] | None = None,
+        attempt_tokens: list[TokenCounters] | None = None,
     ) -> dict[str, Any]:
         if result.outcome == "SUCCESS":
-            failure_kind, retryable = None, None
+            failure_kind = None
         elif result.outcome == "CANCELLED":
-            failure_kind, retryable = "cancelled", False
+            failure_kind = "cancelled"
         elif circuit_open or result.error_code == "circuit_open":
-            failure_kind, retryable = "circuit_open", False
+            failure_kind = "circuit_open"
         elif replay_blocked:
-            failure_kind, retryable = "replay_blocked", False
+            failure_kind = "replay_blocked"
         elif result.error_code == "context_overflow":
-            failure_kind, retryable = "context_overflow", True
+            failure_kind = "context_overflow"
         elif result.error_code == "configuration_error":
-            failure_kind, retryable = "config_invalid", False
+            failure_kind = "request_fatal"
         elif result.outcome == "REQUEST_FATAL":
-            failure_kind, retryable = "request_fatal", False
+            failure_kind = "request_fatal"
         elif result.outcome == "TARGET_FATAL":
-            failure_kind, retryable = "target_fatal", False
+            failure_kind = "target_fatal"
         elif result.outcome == "RETRYABLE":
-            failure_kind, retryable = "retryable", False
+            failure_kind = "transient"
         else:
-            failure_kind, retryable = "request_fatal", False
+            failure_kind = "request_fatal"
         model_name = result.model
         if model_name is None and target is not None:
             model_name = target.model or None
-        canonical = JobResultMetadata(
-            execution=ExecutionMetadata(model=model_name, duration_ms=duration_ms),
-            failure=FailureMetadata(kind=failure_kind) if failure_kind else None,
-            retry=RetryMetadata(retryable=retryable, next_target=None),
-            telemetry=PublicTelemetry.from_internal(
-                TelemetryData.model_validate(telemetry)
-            ) if telemetry is not None else PublicTelemetry(),
-        )
-        return canonical.model_dump(mode="json")
+        return {
+            "failure_kind": failure_kind,
+            "model": model_name or "",
+            "duration_ms": duration_ms,
+            "tokens": _job_tokens(attempt_tokens or [], target),
+        }
 
     async def _run_target_invocation(
         self,
@@ -694,91 +562,50 @@ class TargetExecutor:
         job_id: str,
         attempt: int,
         invocation: int,
-        accumulator: TelemetryAccumulator,
+        attempt_tokens: list[TokenCounters],
         target: TargetConfig,
         prompt: str,
         session_id: str,
         cwd: Path,
         timeout_s: float,
         cancel_event: threading.Event,
-        recorder: StreamRecorder | None,
         supports_streaming: bool,
         env: dict[str, str] | None = None,
     ) -> tuple[DriverResult, bool]:
-        bridge = StreamBridge(queue_capacity=256) if supports_streaming else None
-        invocation_observed_consumption = False
+        attempt_tokens.append(TokenCounters())
+        consumed_tool_activity = False
+        streamed_consumption = False
 
         async def _handle_telemetry(event: dict[str, Any]) -> None:
-            nonlocal invocation_observed_consumption
+            nonlocal streamed_consumption
             data = event.get("data")
             if not isinstance(data, dict):
                 return
-            source = data.get("source", "stream")
-            quality = data.get("quality", "reported")
-            observed_at = data.get("observed_at")
+            attempt_tokens[-1] = _counters_from(data)
+            streamed_consumption = streamed_consumption or any(key in data for key in CONSUMPTION_KEYS)
 
-            if data.get("invalidate_context") is True:
-                accumulator.invalidate_context(observed_at=observed_at)
-            elif "context_used_tokens" in data or "context_window_size" in data or "context_remaining_percent" in data:
-                accumulator.record_context_snapshot(
-                    used_tokens=data.get("context_used_tokens"),
-                    window_size=data.get("context_window_size"),
-                    remaining_percent=data.get("context_remaining_percent"),
-                    source=source,
-                    quality=quality,
-                    observed_at=observed_at,
-                    attempt=attempt,
-                    invocation=invocation,
-                )
+        async def consume(event: dict[str, Any]) -> None:
+            """Apply one stream event to telemetry and the stream log."""
+            nonlocal consumed_tool_activity
+            if isinstance(event, dict) and event.get("kind") == "tool.started":
+                consumed_tool_activity = True
+            if isinstance(event, dict) and event.get("kind") == "telemetry.updated":
+                try:
+                    await _handle_telemetry(event)
+                except Exception:
+                    log.warning("Telemetry update failed", exc_info=True)
+            if supports_streaming:
+                await self._record_stream_event(job_id, attempt, target, event)
 
-            if "total_input_tokens" in data or "total_output_tokens" in data:
-                accumulator.reconcile_cumulative(
-                    attempt=attempt,
-                    invocation=invocation,
-                    total_input=data.get("total_input_tokens"),
-                    total_output=data.get("total_output_tokens"),
-                    cache_read=data.get("cache_read_tokens"),
-                    cache_write=data.get("cache_write_tokens"),
-                    source=source,
-                    quality=quality,
-                    observed_at=observed_at,
-                )
-                invocation_observed_consumption = True
-            elif "input_tokens" in data or "output_tokens" in data or "cache_read_tokens" in data or "cache_write_tokens" in data:
-                accumulator.record_consumption(
-                    attempt=attempt,
-                    invocation=invocation,
-                    response_id=data.get("response_id"),
-                    input_tokens=data.get("input_tokens"),
-                    output_tokens=data.get("output_tokens"),
-                    cache_read_tokens=data.get("cache_read_tokens"),
-                    cache_write_tokens=data.get("cache_write_tokens"),
-                    is_snapshot=bool(data.get("is_snapshot", False)),
-                    source=source,
-                    quality=quality,
-                    observed_at=observed_at,
-                )
-                invocation_observed_consumption = True
+        async def record_group(pgid: int) -> None:
+            try:
+                await run_sync(self.database.set_pgid, job_id, pgid)
+            except Exception:
+                log.warning("Worker process group not recorded", exc_info=True)
 
-            snap = accumulator.snapshot()
-            await run_sync(self.database.merge_job_telemetry, job_id, snap)
-
-        async def drain_stream() -> None:
-            if bridge:
-                async for event in bridge.consumer():
-                    if isinstance(event, dict) and event.get("kind") == "telemetry.updated":
-                        try:
-                            await _handle_telemetry(event)
-                        except Exception:
-                            log.warning("Telemetry update failed", exc_info=True)
-                    if recorder and supports_streaming:
-                        await recorder.record(event)
-                if recorder and supports_streaming:
-                    await recorder.flush()
-
-        drain_task = asyncio.create_task(drain_stream()) if bridge else None
         attempt_result: DriverResult | None = None
         driver_exc: BaseException | None = None
+        hook_token = spawn_hook.set(record_group)
         try:
             with log_context(target_id=target.id):
                 attempt_result = await self.drivers.execute(
@@ -788,136 +615,30 @@ class TargetExecutor:
                     session_id=session_id,
                     timeout_s=timeout_s,
                     cancel_event=cancel_event,
-                    emitter=bridge.emit if bridge else None,
+                    on_event=consume if supports_streaming else None,
                     env=env,
                 )
         except BaseException as exc:
             driver_exc = exc
             raise
         finally:
-            if bridge:
-                await bridge.close()
-            if drain_task:
-                await drain_task
+            spawn_hook.reset(hook_token)
             if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
                 attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-            # Backends retain normalized telemetry even when streaming is disabled.
-            # Reconcile it only when stream events did not already report consumption.
-            if not invocation_observed_consumption and attempt_result is not None and attempt_result.telemetry is not None:
+            # Returned counts apply only when stream events did not already report consumption.
+            if attempt_result is not None and not streamed_consumption:
                 try:
-                    telemetry = TelemetryData.model_validate(attempt_result.telemetry)
-                    measurements = (
-                        telemetry.total_input_tokens,
-                        telemetry.total_output_tokens,
-                        telemetry.cache_read_tokens,
-                        telemetry.cache_write_tokens,
-                    )
-                    if any(measurement.value is not None for measurement in measurements):
-                        primary = next(measurement for measurement in measurements if measurement.value is not None)
-                        q = primary.quality if primary.quality in ("reported", "derived", "estimated") else "reported"
-                        accumulator.reconcile_cumulative(
-                            attempt=attempt,
-                            invocation=invocation,
-                            total_input=telemetry.total_input_tokens.value,
-                            total_output=telemetry.total_output_tokens.value,
-                            cache_read=telemetry.cache_read_tokens.value,
-                            cache_write=telemetry.cache_write_tokens.value,
-                            source=primary.source or "result",
-                            quality=q,
-                            observed_at=primary.observed_at,
-                        )
-                        invocation_observed_consumption = True
-
-                    existing_ctx_ts = (
-                        accumulator._context_used_tokens.observed_at
-                        or accumulator._context_window_size.observed_at
-                    )
-                    ctx_ops: list[dict[str, Any]] = []
-                    if (telemetry.context_window_size.value is not None
-                            and telemetry.context_window_size.source != "target_config"):
-                        fb_ts = telemetry.context_window_size.observed_at
-                        if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
-                            q = (
-                                telemetry.context_window_size.quality
-                                if telemetry.context_window_size.quality
-                                in ("reported", "derived", "estimated")
-                                else "reported"
-                            )
-                            ctx_ops.append({
-                                "kwargs": {
-                                    "window_size": telemetry.context_window_size.value,
-                                    "source": telemetry.context_window_size.source or "result",
-                                    "quality": q,
-                                    "observed_at": fb_ts,
-                                    "attempt": attempt,
-                                    "invocation": invocation,
-                                },
-                                "ts": fb_ts or "",
-                            })
-                    if (telemetry.context_used_tokens.value is not None
-                            and not (telemetry.context_used_tokens.source == "derived"
-                                     and telemetry.context_used_tokens.quality == "estimated")):
-                        fb_ts = telemetry.context_used_tokens.observed_at
-                        if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
-                            q = (
-                                telemetry.context_used_tokens.quality
-                                if telemetry.context_used_tokens.quality
-                                in ("reported", "derived", "estimated")
-                                else "derived"
-                            )
-                            ctx_ops.append({
-                                "kwargs": {
-                                    "used_tokens": telemetry.context_used_tokens.value,
-                                    "source": telemetry.context_used_tokens.source or "result",
-                                    "quality": q,
-                                    "observed_at": fb_ts,
-                                    "attempt": attempt,
-                                    "invocation": invocation,
-                                },
-                                "ts": fb_ts or "",
-                            })
-                    if (telemetry.context_remaining_percent.value is not None
-                            and not (telemetry.context_remaining_percent.source == "derived"
-                                     and telemetry.context_remaining_percent.quality == "estimated")):
-                        fb_ts = telemetry.context_remaining_percent.observed_at
-                        if existing_ctx_ts is None or (fb_ts is not None and fb_ts >= existing_ctx_ts):
-                            q = (
-                                telemetry.context_remaining_percent.quality
-                                if telemetry.context_remaining_percent.quality
-                                in ("reported", "derived", "estimated")
-                                else "derived"
-                            )
-                            ctx_ops.append({
-                                "kwargs": {
-                                    "remaining_percent": telemetry.context_remaining_percent.value,
-                                    "source": telemetry.context_remaining_percent.source or "derived",
-                                    "quality": q,
-                                    "observed_at": fb_ts,
-                                    "attempt": attempt,
-                                    "invocation": invocation,
-                                },
-                                "ts": fb_ts or "",
-                            })
-                    ctx_ops.sort(key=lambda op: op["ts"])
-                    for op in ctx_ops:
-                        accumulator.record_context_snapshot(**op["kwargs"])
+                    current = attempt_tokens[-1].as_dict()
+                    reported = _counters_from(attempt_result.tokens or {}).as_dict()
+                    attempt_tokens[-1] = _counters_from({**current, **{k: v for k, v in reported.items() if v is not None}})
                 except Exception:
                     log.warning("Ignoring malformed backend telemetry", exc_info=True)
-            # Record unknown contribution and finalize even when the driver raises.
-            if not invocation_observed_consumption:
-                accumulator.record_missing_contribution(attempt=attempt, invocation=invocation)
-            accumulator.finalize_invocation(attempt=attempt, invocation=invocation)
-            try:
-                await run_sync(self.database.merge_job_telemetry, job_id, accumulator.snapshot())
-            except Exception:
-                log.warning("Could not persist final invocation telemetry", exc_info=True)
 
-        has_tool_activity = bridge.has_tool_activity if bridge else False
         if attempt_result is None:
             err_msg = str(driver_exc) if driver_exc else "execution_failed"
             attempt_result = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
 
-        return attempt_result, has_tool_activity
+        return attempt_result, consumed_tool_activity
 
     def _release_capacity(self, target_id: str) -> None:
         self._target_users[target_id] -= 1
@@ -1008,27 +729,6 @@ class TargetExecutor:
         except ValueError:
             return False
 
-    def _with_history(self, project_id: str, context_key: str, role: str, prompt: str) -> str:
-        turns = self.database.recent_turns(project_id, context_key, role, self.config.history_turns)
-        if not turns:
-            return prompt
-        blocks: list[str] = []
-        size = 0
-        for turn in reversed(turns):
-            block = f"User:\n{turn['prompt']}\n\nAssistant:\n{turn['response']}"
-            encoded = len(block.encode("utf-8"))
-            if size + encoded > self.config.history_bytes:
-                break
-            blocks.append(block)
-            size += encoded
-        if not blocks:
-            # Every stored turn exceeded the byte budget. Returning the
-            # unwrapped prompt keeps reconstruction identical to the original
-            # prompt so callers can skip a redundant prompt-only recovery.
-            return prompt
-        blocks.reverse()
-        return f"Previous context:\n\n{'\n\n---\n\n'.join(blocks)}\n\nCurrent request:\n\n{prompt}"
-
     def views(self, targets: tuple[TargetConfig, ...]) -> list[TargetView]:
         now = datetime.now(timezone.utc)
         result: list[TargetView] = []
@@ -1067,14 +767,12 @@ class JobRunner:
         is_closing: Callable[[], bool],
         notifier: JobNotifier | None = None,
         on_terminal: JobTerminalCallback | None = None,
-        tracer: Tracer | None = None,
     ) -> None:
         self.database = database
         self.targets = targets
         self.is_closing = is_closing
         self.notifier = notifier or _noop_notifier
         self.on_terminal = on_terminal or (lambda _job_id, _state: None)
-        self.tracer = tracer or Tracer()
 
     async def _notify(self, job_id: str) -> None:
         try:
@@ -1108,13 +806,9 @@ class JobRunner:
             return
         root = Path(project.root)
         log.info("Job started", extra={"event": "job.started", "job_id": job_id, "project_id": project.id, "workflow": record["workflow"]})
-        observation_cm = job_observation(
-            self.tracer, job_id, f"{project.id}:{record['context_key']}", str(record["prompt"])
-        )
-        observation = observation_cm.__enter__()
         final_state = "failed"
         committed_state: str | None = None
-        execution_metadata: dict[str, Any] | None = None
+        outcome: dict[str, Any] | None = None
         try:
             await run_sync(self.database.start_job, job_id)
             await self._notify(job_id)
@@ -1123,17 +817,17 @@ class JobRunner:
                 job_id=job_id,
                 project=project,
                 workflow=record["workflow"],
-                context_key=record["context_key"],
+                session=record["session"],
                 plan=plan,
                 prompt=record["prompt"],
                 cwd=root,
                 cancel_event=cancel_event,
-                fresh_session=bool(record.get("fresh_session", 0)),
+                fresh=bool(record.get("fresh", 0)),
             )
-            execution_metadata = execution.metadata
+            outcome = execution.outcome
             if execution.result.outcome != "SUCCESS" or cancel_event.is_set():
                 final_state = self._failure_state(cancel_event)
-                await run_sync(self.database.finish_job, job_id, final_state, error=execution.result.error or execution.result.outcome, metadata=execution_metadata)
+                await run_sync(self.database.finish_job, job_id, final_state, error=execution.result.error or execution.result.outcome, **outcome)
                 committed_state = final_state
                 await self._terminal(job_id, final_state)
                 await self._notify(job_id)
@@ -1146,24 +840,10 @@ class JobRunner:
             await self._finish_cancelled_job(job_id, exc, committed_state)
             raise
         except Exception as exc:
-            await self._finish_failed_job(job_id, exc, final_state, committed_state, execution_metadata)
+            await self._finish_failed_job(job_id, exc, final_state, committed_state, outcome)
         finally:
-            try:
-                completed = await run_sync(self.database.job, job_id)
-                final = completed.state if completed else "unknown"
-                metadata = completed.result.metadata.model_dump(mode="json") if completed else {}
-                failure = metadata.get("failure") if isinstance(metadata, dict) else None
-                observation.finish(
-                    output=completed.result.text if completed else None,
-                    metadata={"workflow": record["workflow"], "profile": record.get("profile"),
-                              "final_state": final,
-                              "failure.kind": failure.get("kind") if isinstance(failure, dict) else None},
-                    level="WARNING" if final in {"cancelled", "interrupted"} else ("ERROR" if final == "failed" else None),
-                    status_message="cancelled" if final in {"cancelled", "interrupted"} else None,
-                )
-                log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
-            finally:
-                observation_cm.__exit__(None, None, None)
+            completed = await run_sync(self.database.job, job_id)
+            log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
 
     async def _prepare_job(self, job_id: str, project_id: str, cancel_event: CancelEvent) -> ProjectView | None:
         if self.is_closing():
@@ -1193,21 +873,20 @@ class JobRunner:
         self, job_id: str, project: ProjectView, record: dict[str, Any],
         execution: TargetExecutionResult,
     ) -> None:
-        if bool(record.get("fresh_session", 0)):
+        if bool(record.get("fresh", 0)):
             await run_sync(self.database.finish_fresh_job_success,
                 job_id=job_id,
                 project_id=project.id,
-                context_key=execution.session_context_key or record["context_key"],
-                role=record["workflow"],
-                target_id=execution.target_id,
+                session=execution.scoped_session or record["session"],
+                workflow=record["workflow"],
+                target=execution.target_id,
                 target_key=execution.session_key or execution.target_key,
-                session_id=execution.result.session_id,
-                prompt=record["prompt"],
-                response=execution.result.text,
-                metadata=execution.metadata,
+                backend_session_id=execution.result.session_id,
+                text=execution.result.text,
+                **execution.outcome,
             )
         else:
-            await run_sync(self.database.finish_job, job_id, "succeeded", text=execution.result.text, target_id=execution.target_id, metadata=execution.metadata)
+            await run_sync(self.database.finish_job, job_id, "succeeded", text=execution.result.text, target=execution.target_id, **execution.outcome)
 
     async def _finish_cancelled_job(
         self, job_id: str, exc: asyncio.CancelledError, committed_state: str | None,
@@ -1218,18 +897,18 @@ class JobRunner:
             await self._terminal(job_id, committed_state)
         if committed_state is None:
             final_state = "interrupted" if self.is_closing() else "cancelled"
-            execution_metadata = (
-                getattr(exc, "_refract_result_metadata", None)
-                or self.targets._result_metadata(
+            outcome = (
+                getattr(exc, "_refract_outcome", None)
+                or self.targets._outcome(
                     DriverResult("CANCELLED", "", "", "cancelled", "cancelled"), None, None
                 )
             )
-            await run_sync(self.database.finish_job, job_id, final_state, error="execution task cancelled", metadata=execution_metadata)
+            await run_sync(self.database.finish_job, job_id, final_state, error="execution task cancelled", **outcome)
             await self._terminal(job_id, final_state)
 
     async def _finish_failed_job(
         self, job_id: str, exc: Exception, final_state: str,
-        committed_state: str | None, execution_metadata: dict[str, Any] | None,
+        committed_state: str | None, outcome: dict[str, Any] | None,
     ) -> None:
         if committed_state is not None:
             log.warning(
@@ -1238,10 +917,10 @@ class JobRunner:
                 exc_info=True,
             )
             return
-        execution_metadata = (
-            getattr(exc, "_refract_result_metadata", None)
-            or execution_metadata
-            or self.targets._result_metadata(
+        outcome = (
+            getattr(exc, "_refract_outcome", None)
+            or outcome
+            or self.targets._outcome(
                 DriverResult("REQUEST_FATAL", "", "", str(exc), "execution_error"), None, None
             )
         )
@@ -1249,7 +928,7 @@ class JobRunner:
             "Unexpected job failure",
             extra={"event": "job.exception", "job_id": job_id},
         )
-        await run_sync(self.database.finish_job, job_id, final_state, error=str(exc), metadata=execution_metadata)
+        await run_sync(self.database.finish_job, job_id, final_state, error=str(exc), **outcome)
         await self._terminal(job_id, final_state)
         await self._notify(job_id)
 

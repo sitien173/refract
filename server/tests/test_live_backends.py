@@ -45,7 +45,7 @@ async def test_live_codex_execute() -> None:
 @pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_claude_execute() -> None:
-    out = claude_execute(BackendParams(PROMPT=PROMPT, cd=Path.cwd()))
+    out = await claude_execute(BackendParams(PROMPT=PROMPT, cd=Path.cwd()))
     _assert_live_result("claude", out)
 
 
@@ -182,15 +182,12 @@ async def test_live_telemetry_probe(backend: str, tmp_path: Path) -> None:
         pytest.fail(f"{backend}: execution failed ({out.error_class}): {out.error}", pytrace=False)
 
     assert out.outcome == "SUCCESS", f"{backend} probe failed: outcome={out.outcome}"
-    telemetry = out.telemetry
-    assert isinstance(telemetry, dict), f"{backend}: telemetry object was not returned"
-    assert telemetry.get("version") == 1
-    assert telemetry.get("completeness") in {"complete", "partial", "unavailable"}
-    for field in ("context_used_tokens", "context_window_size", "total_input_tokens", "total_output_tokens"):
-        measurement = telemetry.get(field)
-        assert isinstance(measurement, dict) and "value" in measurement, f"{backend}: missing {field} measurement"
+    tokens = out.tokens
+    assert isinstance(tokens, dict), f"{backend}: token counters were not returned"
+    for field in ("context_used", "context_window", "input", "output"):
+        assert field in tokens, f"{backend}: missing {field} counter"
     assert any(
-        telemetry[field]["value"] is not None
-        for field in ("context_used_tokens", "total_input_tokens", "total_output_tokens")
+        tokens[field] is not None
+        for field in ("context_used", "input", "output")
     ), f"{backend}: probe returned no measured context or consumption"
 

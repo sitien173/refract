@@ -20,11 +20,11 @@ before writing them.
 
 ## Target fields
 
-`id` and `backend` are required. Optional: `model`, `reasoning`,
-`system_prompt`, `isolated`, `read_only`, `args`, `max_concurrency`,
-`contextWindow`, `retryPolicy`, `envs_vars`, `envs`. Credentials stay in each
-CLI's own store or in `[envs.<name>]`, never in `args`: target settings are
-snapshotted into job records.
+`id` and `backend` are required. Optional: `model`, `backend_profile`,
+`reasoning`, `system_prompt`, `isolated`, `read_only`, `args`,
+`max_concurrency`, `context_window`, `retry`, `env`. Credentials stay in each
+CLI's own store or in the target `env` table, never in `args`: target settings
+other than `env` are snapshotted into job records.
 
 ## Profile fields
 
@@ -35,7 +35,7 @@ mapping. `[daemon].default_profile` must name a declared profile.
 
 ## Full reference
 
-- Configuration examples, environments, retry policies:
+- Configuration examples, environments, target retry:
   <https://github.com/sitien173/refract/blob/main/server/README.md>
 - Per-backend CLI flags:
   <https://github.com/sitien173/refract/blob/main/server/CLI_ARGUMENTS.md>

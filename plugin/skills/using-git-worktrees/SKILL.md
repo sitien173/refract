@@ -119,8 +119,8 @@ target, or the README instruction. When none is found, ask.
 
 ## Step 4: Hand Off
 
-When the work is coordinated, return to the Coordinator's setup. It registers
-this worktree root with Refract, so the worktree gets its own `project_id` and
+When the work is coordinated, return to the Coordinator's setup. It passes this
+worktree root to Refract as `path`, so the worktree gets its own project and
 job queue. Plan anchors under `refs/plans/` live in the shared `.git` directory
 and resolve from every worktree. In `untracked` plan mode, a new worktree starts
 without `docs/plans/`; copy the plan directory in before resuming there.

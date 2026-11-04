@@ -18,6 +18,7 @@ assert specific["hookEventName"] == "SessionStart"
 context = specific["additionalContext"]
 assert os.environ["EXPECTED_ROOT"] in context
 assert "coordinating-multi-model-work" in context
+assert "mcp__plugin_refract_refract__list" in context
 assert "Do not treat" not in context
 PY
 }

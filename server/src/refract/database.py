@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
+import os
+import shutil
 import sqlite3
+import tempfile
 import threading
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -12,28 +14,95 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from refract.config_inspection import utc_now
-from refract.logging_setup import get_logger, redact_text
-from refract.models import (
-    TERMINAL_STATES,
-    ContextStreamView,
-    JobResult,
-    JobStreamEvent,
-    JobView,
-    ProjectView,
-    StreamTotals,
-)
-from refract.telemetry import TelemetryData, merge_telemetry, prepare_telemetry_for_retry
-from refract.result_metadata import convert_schema15_metadata, JobResultMetadata, PublicTelemetry, project_telemetry
+from refract.logging_setup import get_logger
+from refract.models import TERMINAL_STATES, JobResult, JobView, ProjectView
 
 log = get_logger("database")
-_SCHEMA_VERSION = 16
+_SCHEMA_VERSION = 18
+_TOKEN_COLUMNS = (
+    ("context_used", "tok_context_used"),
+    ("context_window", "tok_context_window"),
+    ("input", "tok_input"),
+    ("output", "tok_output"),
+    ("cache_read", "tok_cache_read"),
+    ("cache_write", "tok_cache_write"),
+)
+_SCHEMA = """
+CREATE TABLE projects (
+    id TEXT PRIMARY KEY,
+    root TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE jobs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    workflow TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    session TEXT NOT NULL,
+    fresh INTEGER NOT NULL DEFAULT 0,
+    prompt TEXT NOT NULL,
+    state TEXT NOT NULL,
+    retry_of TEXT NOT NULL DEFAULT '',
+    failure_kind TEXT,
+    error TEXT NOT NULL DEFAULT '',
+    model TEXT,
+    duration_ms INTEGER,
+    pgid INTEGER,
+    tok_context_used INTEGER,
+    tok_context_window INTEGER,
+    tok_input INTEGER,
+    tok_output INTEGER,
+    tok_cache_read INTEGER,
+    tok_cache_write INTEGER,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL,
+    execution_plan_json TEXT NOT NULL
+);
+CREATE TABLE sessions (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    session TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    sticky_target TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, session, workflow)
+);
+CREATE TABLE target_sessions (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    session TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    target_key TEXT NOT NULL,
+    backend_session_id TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, session, workflow, target_key)
+);
+CREATE TABLE target_health (
+    target_id TEXT PRIMARY KEY,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    circuit_open_until TEXT NOT NULL DEFAULT '',
+    last_success_at TEXT NOT NULL DEFAULT '',
+    cooldown_s INTEGER NOT NULL DEFAULT 0,
+    probe_job_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX jobs_state_idx ON jobs(state, created_at);
+CREATE INDEX jobs_project_idx ON jobs(project_id, updated_at);
+"""
+
+
+def _token_values(tokens: dict[str, int | None] | None) -> tuple[int | None, ...]:
+    """Return token counters in column order; a missing key stays NULL."""
+    tokens = tokens or {}
+    return tuple(tokens.get(key) for key, _column in _TOKEN_COLUMNS)
 
 
 class Database:
-    def __init__(self, path: Path, *, history_turns: int = 8) -> None:
-        self.history_turns = history_turns
+    def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
+        self.results_dir = path.parent / "results"
+        self.streams_dir = path.parent / "streams"
         self._local = threading.local()
         self._connections: list[sqlite3.Connection] = []
         self._connections_lock = threading.Lock()
@@ -86,273 +155,72 @@ class Database:
         log.info("Database closed", extra={"event": "database.closed"})
 
     def _initialize(self) -> None:
-        if self._path.exists():
-            # A writable connection can checkpoint an unsupported WAL on close.
-            with closing(sqlite3.connect(f"{self._path.resolve().as_uri()}?mode=ro", uri=True)) as probe:
-                empty_probe = self._validate_schema(probe)
-                if not empty_probe and int(probe.execute("PRAGMA user_version").fetchone()[0]) == 15:
-                    self._preflight_schema15(probe)
-        connection = self._connection
-        empty = self._validate_schema(connection)
-        if empty:
-            connection.execute("PRAGMA journal_mode=WAL")
+        version = self._probe_version()
+        if version is not None and version > _SCHEMA_VERSION:
+            raise ValueError(
+                f"The database at {self._path} uses schema {version}, which is newer than this Refract "
+                f"supports ({_SCHEMA_VERSION}). The database was not modified."
+            )
+        if version != _SCHEMA_VERSION:
+            if version is not None:
+                self._retire(version)
             self._create_schema()
-        elif int(connection.execute("PRAGMA user_version").fetchone()[0]) == 15:
-            self._migrate_schema15(connection)
-        connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute("PRAGMA journal_mode=WAL")
         log.debug(
             "Database schema is current",
             extra={"event": "database.schema_ready", "schema_version": _SCHEMA_VERSION},
         )
 
-    def _validate_schema(self, connection: sqlite3.Connection) -> bool:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        schema = connection.execute("SELECT name, type FROM sqlite_master").fetchall()
-        empty = version == 0 and not schema
-        if not empty and version not in (15, _SCHEMA_VERSION):
-            recovery = (
-                "Back up the database and upgrade it to schema 16 using a migration-capable "
-                "Refract version, or select a new state directory with REFRACT_HOME."
-                if version < _SCHEMA_VERSION
-                else f"Use a Refract version that supports schema {version}."
-            )
-            raise ValueError(
-                f"Unsupported database schema {version} at {self._path}; "
-                f"this version supports schema 15 or {_SCHEMA_VERSION} only. {recovery} "
-                "The database was not modified."
-            )
-        if not empty:
-            tables = {name for name, kind in schema if kind == "table"}
-            expected_tables = {"projects", "jobs", "events", "context_sessions", "context_turns", "target_health", "job_stream_events"}
-            if "jobs" not in tables:
-                raise ValueError(
-                    f"Database schema {version} at {self._path} is incomplete: jobs table missing. "
-                    "Restore a compatible backup. The database was not modified."
-                )
-            if not expected_tables <= tables:
-                missing = sorted(expected_tables - tables)
-                raise ValueError(
-                    f"Database schema {version} at {self._path} is incomplete: required tables missing ({', '.join(missing)}). "
-                    "Restore a compatible backup. The database was not modified."
-                )
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-            required_jobs = {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
-            if not required_jobs <= columns:
-                raise ValueError(
-                    f"Database schema {version} at {self._path} is incomplete: jobs columns missing. "
-                    "Restore a compatible backup. The database was not modified."
-                )
-            if version == 15 and "telemetry_state_json" in columns:
-                raise ValueError(
-                    f"Database schema 15 at {self._path} is incomplete: unexpected column telemetry_state_json. "
-                    "Restore a compatible backup. The database was not modified."
-                )
-            if version == 16 and "telemetry_state_json" not in columns:
-                raise ValueError(
-                    f"Database schema 16 at {self._path} is incomplete: telemetry_state_json column missing. "
-                    "Restore a compatible backup. The database was not modified."
-                )
-            expected_columns = {
-                "projects": {"id", "alias", "root", "created_at"},
-                "jobs": required_jobs | ({"telemetry_state_json"} if version == 16 else set()),
-                "events": {"id", "job_id", "created_at", "kind", "data_json"},
-                "context_sessions": {"project_id", "context_key", "role", "target_id", "target_key", "lane", "session_id", "updated_at"},
-                "context_turns": {"id", "project_id", "context_key", "role", "target_id", "prompt", "response", "created_at"},
-                "target_health": {"target_id", "consecutive_failures", "circuit_open_until", "last_success_at", "cooldown_s", "probe_job_id"},
-                "job_stream_events": {"id", "job_id", "created_at", "attempt", "target_id", "backend", "kind", "entity_id", "parent_entity_id", "data_json", "size_bytes"},
-            }
-            for table, expected in expected_columns.items():
-                actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-                if actual != expected:
-                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} columns are invalid. The database was not modified.")
-            expected_indexes = {
-                "jobs_state_idx": ("jobs", ("state", "created_at")),
-                "jobs_project_idx": ("jobs", ("project_id", "updated_at")),
-                "events_job_idx": ("events", ("job_id", "id")),
-                "context_turns_stream_idx": ("context_turns", ("project_id", "context_key", "role", "id")),
-                "job_stream_events_job_idx": ("job_stream_events", ("job_id", "id")),
-            }
-            index_rows = {row[1]: row for row in connection.execute("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type='index'")}
-            for name, (table, expected) in expected_indexes.items():
-                index = index_rows.get(name)
-                columns = tuple(row[2] for row in connection.execute(f"PRAGMA index_info({name})")) if index else ()
-                unique = bool(connection.execute(f"PRAGMA index_list({table})").fetchall() and next((row[2] for row in connection.execute(f"PRAGMA index_list({table})") if row[1] == name), 0))
-                if index is None or index[2] != table or columns != expected or unique:
-                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: index definition {name} is invalid. The database was not modified.")
-            not_null_columns = {
-                "projects": {"alias", "root", "created_at"},
-                "jobs": {"project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"} | ({"telemetry_state_json"} if version == 16 else set()),
-                "events": {"job_id", "created_at", "kind", "data_json"},
-                "context_sessions": {"project_id", "context_key", "role", "target_id", "target_key", "lane", "session_id", "updated_at"},
-                "context_turns": {"project_id", "context_key", "role", "target_id", "prompt", "response", "created_at"},
-                "target_health": {"consecutive_failures", "circuit_open_until", "last_success_at", "cooldown_s", "probe_job_id"},
-                "job_stream_events": {"job_id", "created_at", "attempt", "target_id", "backend", "kind", "entity_id", "parent_entity_id", "data_json", "size_bytes"},
-            }
-            for table, expected in not_null_columns.items():
-                actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})") if row[3]}
-                if not expected <= actual:
-                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} NOT NULL constraint is missing. The database was not modified.")
-            primary_keys = {
-                "projects": ("id",), "jobs": ("id",), "events": ("id",),
-                "context_sessions": ("project_id", "context_key", "role", "target_key", "lane"),
-                "context_turns": ("id",), "target_health": ("target_id",),
-                "job_stream_events": ("id",),
-            }
-            for table, expected in primary_keys.items():
-                actual = tuple(row[1] for row in sorted(connection.execute(f"PRAGMA table_info({table})"), key=lambda row: row[5]) if row[5])
-                if actual != expected:
-                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} primary-key constraint is invalid. The database was not modified.")
-            required_unique = {"projects": {("alias",), ("root",)}}
-            for table, expected_sets in required_unique.items():
-                actual_sets = set()
-                for index_row in connection.execute(f"PRAGMA index_list({table})"):
-                    if index_row[2]:
-                        actual_sets.add(tuple(row[2] for row in connection.execute(f"PRAGMA index_info({index_row[1]})")))
-                if not expected_sets <= actual_sets:
-                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} uniqueness constraint is missing. The database was not modified.")
-            foreign_keys = {
-                "jobs": {("projects", "project_id", "id", "NO ACTION")},
-                "events": {("jobs", "job_id", "id", "CASCADE")},
-                "context_sessions": {("projects", "project_id", "id", "CASCADE")},
-                "context_turns": {("projects", "project_id", "id", "CASCADE")},
-                "job_stream_events": {("jobs", "job_id", "id", "CASCADE")},
-            }
-            for table, expected in foreign_keys.items():
-                actual = {(row[2], row[3], row[4], row[6].upper()) for row in connection.execute(f"PRAGMA foreign_key_list({table})")}
-                if not expected <= actual:
-                    raise ValueError(f"Database schema {version} at {self._path} is incomplete: {table} foreign-key constraint is invalid. The database was not modified.")
-        return empty
-
-    def _preflight_schema15(self, connection: sqlite3.Connection) -> list[tuple[str, str, str]]:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-        required = {"id", "project_id", "workflow", "profile", "prompt", "execution_plan_json", "context_key", "state", "result_text", "target_id", "attempts", "error", "config_revision", "fresh_session", "result_metadata_json", "created_at", "updated_at"}
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        expected_tables = {"projects", "jobs", "events", "context_sessions", "context_turns", "target_health", "job_stream_events"}
-        if not required <= columns or not expected_tables <= tables or "telemetry_state_json" in columns:
-            raise ValueError("Database schema 15 is incomplete: required table or jobs structure is invalid. The database was not modified.")
-        prepared = []
-        for row in connection.execute("SELECT id, result_metadata_json FROM jobs ORDER BY id"):
-            try:
-                raw = json.loads(row[1] or "{}")
-                metadata, internal = convert_schema15_metadata(raw)
-                public_json = json.dumps(metadata.model_dump(mode="json"), ensure_ascii=False)
-                state_json = json.dumps(internal.model_dump(mode="json"), ensure_ascii=False) if internal else ""
-            except Exception as exc:
-                diagnostic = str(exc).splitlines()[0][:120]
-                raise ValueError(f"Schema 15 migration rejected job {row[0]} metadata field: {diagnostic}") from None
-            prepared.append((row[0], public_json, state_json))
-        return prepared
-
-    def _migrate_schema15(self, connection: sqlite3.Connection) -> None:
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            prepared = self._preflight_schema15(connection)
-            connection.execute("ALTER TABLE jobs ADD COLUMN telemetry_state_json TEXT NOT NULL DEFAULT ''")
-            for job_id, public_json, state_json in prepared:
-                connection.execute("UPDATE jobs SET result_metadata_json=?, telemetry_state_json=? WHERE id=?", (public_json, state_json, job_id))
-            connection.execute("PRAGMA user_version=16")
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-
     def _create_schema(self) -> None:
-        self._connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS projects (
-                id TEXT PRIMARY KEY,
-                alias TEXT NOT NULL UNIQUE,
-                root TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL REFERENCES projects(id),
-                workflow TEXT NOT NULL,
-                profile TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                execution_plan_json TEXT NOT NULL,
-                context_key TEXT NOT NULL,
-                state TEXT NOT NULL,
-                result_text TEXT NOT NULL DEFAULT '',
-                target_id TEXT NOT NULL DEFAULT '',
-                attempts INTEGER NOT NULL DEFAULT 0,
-                error TEXT NOT NULL DEFAULT '',
-                config_revision TEXT NOT NULL DEFAULT '',
-                fresh_session INTEGER NOT NULL DEFAULT 0,
-                result_metadata_json TEXT NOT NULL DEFAULT '{}',
-                telemetry_state_json TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            """
-        )
-        self._create_support_tables()
+        self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.executescript(_SCHEMA)
         self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
         self._connection.commit()
 
-    def _create_support_tables(self) -> None:
-        self._connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-                created_at TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                data_json TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS context_sessions (
-                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                context_key TEXT NOT NULL,
-                role TEXT NOT NULL,
-                target_id TEXT NOT NULL,
-                target_key TEXT NOT NULL,
-                lane TEXT NOT NULL DEFAULT '',
-                session_id TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY(project_id, context_key, role, target_key, lane)
-            );
-            CREATE TABLE IF NOT EXISTS context_turns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                context_key TEXT NOT NULL,
-                role TEXT NOT NULL,
-                target_id TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                response TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS target_health (
-                target_id TEXT PRIMARY KEY,
-                consecutive_failures INTEGER NOT NULL DEFAULT 0,
-                circuit_open_until TEXT NOT NULL DEFAULT '',
-                last_success_at TEXT NOT NULL DEFAULT '',
-                cooldown_s INTEGER NOT NULL DEFAULT 0,
-                probe_job_id TEXT NOT NULL DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS jobs_state_idx ON jobs(state, created_at);
-            CREATE INDEX IF NOT EXISTS jobs_project_idx ON jobs(project_id, updated_at);
-            CREATE INDEX IF NOT EXISTS events_job_idx ON events(job_id, id);
-            CREATE INDEX IF NOT EXISTS context_turns_stream_idx
-                ON context_turns(project_id, context_key, role, id);
-            CREATE TABLE IF NOT EXISTS job_stream_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-                created_at TEXT NOT NULL,
-                attempt INTEGER NOT NULL,
-                target_id TEXT NOT NULL,
-                backend TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                entity_id TEXT NOT NULL,
-                parent_entity_id TEXT NOT NULL,
-                data_json TEXT NOT NULL,
-                size_bytes INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS job_stream_events_job_idx
-                ON job_stream_events(job_id, id);
-            """
+    def _probe_version(self) -> int | None:
+        """Read user_version without writing; None when the file is missing or empty."""
+        if not self._path.exists() or self._path.stat().st_size == 0:
+            return None
+        # Probe a scratch copy: even a read-only SQLite connection rewrites the -shm file,
+        # which would change the bytes of the v2 backup. The copy includes the -wal.
+        with tempfile.TemporaryDirectory(prefix=".version-probe-", dir=self._path.parent) as scratch:
+            copy = Path(scratch) / "probe.db"
+            shutil.copyfile(self._path, copy)
+            wal = Path(f"{self._path}-wal")
+            if wal.exists():
+                shutil.copyfile(wal, Path(f"{copy}-wal"))
+            with closing(sqlite3.connect(f"{copy.as_uri()}?mode=ro", uri=True)) as probe:
+                return int(probe.execute("PRAGMA user_version").fetchone()[0])
+
+    def _retire(self, version: int) -> None:
+        """Rename a pre-v3 database and its -wal and -shm files to *.v2.bak, never deleting data."""
+        sources = [Path(f"{self._path}{suffix}") for suffix in ("", "-wal", "-shm")]
+        present = [source for source in sources if source.exists()]
+        backups = {source: Path(f"{source}.v2.bak") for source in present}
+        clashes = [backup for backup in backups.values() if backup.exists()]
+        if clashes:
+            raise ValueError(
+                f"Cannot retire the schema {version} database at {self._path}: backup {clashes[0]} already exists. "
+                "The database was not modified."
+            )
+        # Sidecars move first so a crash never leaves a -wal beside a missing database.
+        for source in reversed(present):
+            os.replace(source, backups[source])
+        log.info(
+            "Retired pre-v3 database",
+            extra={
+                "event": "database.v2_retired",
+                "database": self._path.as_posix(),
+                "schema_version": version,
+                "backups": [backup.as_posix() for backup in backups.values()],
+            },
         )
 
+    def stream_path(self, job_id: str) -> Path:
+        return self.streams_dir / f"{job_id}.jsonl"
+
+    def result_path(self, job_id: str) -> Path:
+        return self.results_dir / f"{job_id}.md"
 
     def interrupt_active_jobs(self) -> list[dict[str, Any]]:
         rows = [
@@ -366,35 +234,33 @@ class Database:
                 "UPDATE jobs SET state='interrupted', updated_at=? WHERE state='running'",
                 (utc_now(),),
             )
-        for row in rows:
-            self.event(row["id"], "job.interrupted", {})
         return rows
 
-    def upsert_project(self, *, project_id: str, alias: str, root: str) -> ProjectView:
+    def upsert_project(self, *, project_id: str, root: str) -> ProjectView:
         existing = self._connection.execute("SELECT id, created_at FROM projects WHERE root=?", (root,)).fetchone()
         created_at = existing["created_at"] if existing else utc_now()
         resolved_id = existing["id"] if existing else project_id
         with self._connection:
             self._connection.execute(
                 """
-                INSERT INTO projects(id, alias, root, created_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET alias=excluded.alias, root=excluded.root
+                INSERT INTO projects(id, root, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET root=excluded.root
                 """,
-                (resolved_id, alias, root, created_at),
+                (resolved_id, root, created_at),
             )
-        return ProjectView(id=resolved_id, alias=alias, root=root, created_at=created_at)
+        return ProjectView(id=resolved_id, root=root, created_at=created_at)
 
     def project(self, project_id: str) -> ProjectView | None:
-        row = self._connection.execute("SELECT * FROM projects WHERE id=? OR alias=?", (project_id, project_id)).fetchone()
+        row = self._connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         return self._project_view(row) if row else None
 
     def projects(self) -> list[ProjectView]:
-        return [self._project_view(row) for row in self._connection.execute("SELECT * FROM projects ORDER BY alias").fetchall()]
+        return [self._project_view(row) for row in self._connection.execute("SELECT * FROM projects ORDER BY root").fetchall()]
 
     @staticmethod
     def _project_view(row: sqlite3.Row) -> ProjectView:
-        return ProjectView(id=row["id"], alias=row["alias"], root=row["root"], created_at=row["created_at"])
+        return ProjectView(id=row["id"], root=row["root"], created_at=row["created_at"])
 
     def create_job(
         self,
@@ -405,24 +271,22 @@ class Database:
         profile: str,
         prompt: str,
         execution_plan_json: str,
-        context_key: str,
-        config_revision: str = "",
-        fresh_session: bool = False,
+        session: str,
+        fresh: bool = False,
+        retry_of: str = "",
     ) -> None:
         now = utc_now()
         with self._connection:
             self._connection.execute(
                 """INSERT INTO jobs(id, project_id, workflow, profile, prompt,
-                   execution_plan_json, context_key, state, config_revision,
-                   fresh_session, created_at, updated_at)
+                   execution_plan_json, session, state, fresh, retry_of, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)""",
                 (
                     job_id, project_id, workflow, profile, prompt,
-                    execution_plan_json, context_key, config_revision,
-                    1 if fresh_session else 0, now, now,
+                    execution_plan_json, session,
+                    1 if fresh else 0, retry_of, now, now,
                 ),
             )
-            self._event(job_id, "job.queued", {"workflow": workflow, "profile": profile})
 
     def queued_jobs(self) -> list[tuple[str, str]]:
         return [(row["id"], row["project_id"]) for row in self._connection.execute("SELECT id, project_id FROM jobs WHERE state='queued' ORDER BY created_at, id").fetchall()]
@@ -432,187 +296,120 @@ class Database:
         return dict(row) if row else None
 
     def start_job(self, job_id: str) -> None:
+        now = utc_now()
         with self._connection:
             self._connection.execute(
-                """UPDATE jobs SET state='running', result_text='',
-                   target_id='', error='', updated_at=? WHERE id=?""",
-                (utc_now(), job_id),
+                """UPDATE jobs SET state='running', target='', error='',
+                   started_at=?, updated_at=? WHERE id=?""",
+                (now, now, job_id),
             )
-            self._event(job_id, "job.running", {})
 
-    def record_job_attempt(self, job_id: str, target_id: str) -> int:
+    def set_pgid(self, job_id: str, pgid: int) -> None:
+        with self._connection:
+            self._connection.execute("UPDATE jobs SET pgid=? WHERE id=?", (pgid, job_id))
+
+    def record_job_target(self, job_id: str, target: str) -> None:
         with self._connection:
             self._connection.execute(
-                "UPDATE jobs SET target_id=?, attempts=attempts+1, updated_at=? WHERE id=?",
-                (target_id, utc_now(), job_id),
+                "UPDATE jobs SET target=?, updated_at=? WHERE id=?",
+                (target, utc_now(), job_id),
             )
-            row = self._connection.execute(
-                "SELECT attempts FROM jobs WHERE id=?", (job_id,)
-            ).fetchone()
-            return int(row["attempts"]) if row else 1
 
-    def merge_job_telemetry(self, job_id: str, telemetry: dict[str, Any] | TelemetryData) -> None:
-        try:
-            incoming = telemetry if isinstance(telemetry, TelemetryData) else TelemetryData.model_validate(telemetry)
-        except Exception:
-            return
+    def finish_job(
+        self,
+        job_id: str,
+        state: str,
+        *,
+        text: str = "",
+        target: str = "",
+        error: str = "",
+        failure_kind: str | None = None,
+        model: str = "",
+        duration_ms: int | None = None,
+        tokens: dict[str, int | None] | None = None,
+    ) -> None:
         with self._connection:
-            self._connection.execute("BEGIN IMMEDIATE")
-            row = self._connection.execute("SELECT state, result_metadata_json, telemetry_state_json FROM jobs WHERE id=?", (job_id,)).fetchone()
-            if row is None or row["state"] in TERMINAL_STATES:
-                return
-            state = TelemetryData.model_validate_json(row["telemetry_state_json"]) if row["telemetry_state_json"] else TelemetryData()
-            merged_state = TelemetryData.model_validate(merge_telemetry(state.model_dump(mode="json"), incoming.model_dump(mode="json")))
-            metadata = JobResultMetadata.model_validate_json(row["result_metadata_json"] or "{}")
-            metadata.telemetry = project_telemetry(merged_state)
-            self._connection.execute("UPDATE jobs SET result_metadata_json=?, telemetry_state_json=?, updated_at=? WHERE id=?", (metadata.model_dump_json(), merged_state.model_dump_json(), utc_now(), job_id))
+            self._finish(
+                job_id, state, text=text, target=target, error=error,
+                failure_kind=failure_kind, model=model, duration_ms=duration_ms, tokens=tokens,
+            )
 
-    def finish_job(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "", metadata: dict[str, Any] | None = None) -> None:
-        with self._connection:
-            self._finish(job_id, state, text=text, target_id=target_id, error=error, metadata=metadata)
-
-    def _finish(self, job_id: str, state: str, *, text: str = "", target_id: str = "", error: str = "", metadata: dict[str, Any] | None = None) -> None:
+    def _finish(
+        self,
+        job_id: str,
+        state: str,
+        *,
+        text: str,
+        target: str,
+        error: str,
+        failure_kind: str | None,
+        model: str,
+        duration_ms: int | None,
+        tokens: dict[str, int | None] | None,
+    ) -> None:
         if not self._connection.in_transaction:
             self._connection.execute("BEGIN IMMEDIATE")
-        row = self._connection.execute("SELECT result_metadata_json, telemetry_state_json FROM jobs WHERE id=?", (job_id,)).fetchone()
-        current = JobResultMetadata.model_validate_json(row["result_metadata_json"] or "{}") if row else JobResultMetadata()
-        if metadata is not None:
-            incoming = metadata if isinstance(metadata, JobResultMetadata) else JobResultMetadata.model_validate(metadata)
-            current.execution = incoming.execution
-            current.failure = incoming.failure
-            current.retry = incoming.retry.model_copy(update={"next_target": None})
-            if incoming.telemetry.completeness != "unavailable":
-                current.telemetry = incoming.telemetry
-        state_json = row["telemetry_state_json"] if row else ""
-        if state_json:
-            stored_state = TelemetryData.model_validate_json(state_json)
-            incoming_state_data = current.telemetry.model_dump(mode="json")
-            incoming_state_data["attribution"] = stored_state.attribution.model_dump(mode="json")
-            incoming_state_data["completed_attempts"] = stored_state.completed_attempts.model_dump(mode="json")
-            incoming_state = TelemetryData.model_validate(incoming_state_data)
-            retained = TelemetryData.model_validate(merge_telemetry(stored_state.model_dump(mode="json"), incoming_state.model_dump(mode="json")))
-            current.telemetry = project_telemetry(retained)
-            state_json = retained.model_dump_json()
-        elif current.telemetry.completeness != "unavailable":
-            state_json = TelemetryData.model_validate(current.telemetry.model_dump(mode="json")).model_dump_json()
+        row = self._connection.execute("SELECT project_id, session, workflow, target FROM jobs WHERE id=?", (job_id,)).fetchone()
         self._connection.execute(
-            """UPDATE jobs SET state=?, result_text=?, target_id=CASE WHEN ?='' THEN target_id ELSE ? END,
-               error=?, result_metadata_json=?, telemetry_state_json=?, updated_at=? WHERE id=?""",
-            (state, text, target_id, target_id, error, current.model_dump_json(), state_json, utc_now(), job_id),
+            """UPDATE jobs SET state=?, target=CASE WHEN ?='' THEN target ELSE ? END,
+               error=?, failure_kind=?, model=?, duration_ms=?,
+               tok_context_used=?, tok_context_window=?, tok_input=?, tok_output=?, tok_cache_read=?, tok_cache_write=?,
+               finished_at=?, updated_at=? WHERE id=?""",
+            (
+                state, target, target, error, failure_kind, model or None, duration_ms,
+                *_token_values(tokens), utc_now(), utc_now(), job_id,
+            ),
         )
         self._connection.execute("UPDATE target_health SET probe_job_id='' WHERE probe_job_id=?", (job_id,))
-        self._event(job_id, f"job.{state}", {"error": error} if error else {})
+        if state == "succeeded" and row and (target or row["target"]):
+            self._connection.execute(
+                """INSERT INTO sessions(project_id, session, workflow, sticky_target, updated_at) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, session, workflow) DO UPDATE SET
+                sticky_target=excluded.sticky_target, updated_at=excluded.updated_at""",
+                (row["project_id"], row["session"], row["workflow"], target or row["target"], utc_now()),
+            )
+        self._write_result(job_id, text)
+
+    def _write_result(self, job_id: str, text: str) -> None:
+        self.results_dir.mkdir(mode=0o700, exist_ok=True)
+        descriptor = os.open(self.result_path(job_id), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def sticky_target(self, project_id: str, session: str, workflow: str) -> str:
+        row = self._connection.execute(
+            "SELECT sticky_target FROM sessions WHERE project_id=? AND session=? AND workflow=?",
+            (project_id, session, workflow),
+        ).fetchone()
+        return row["sticky_target"] if row else ""
 
     def finish_fresh_job_success(
         self,
         *,
         job_id: str,
         project_id: str,
-        context_key: str,
-        role: str,
-        target_id: str,
+        session: str,
+        workflow: str,
+        target: str,
         target_key: str,
-        lane: str = "",
-        session_id: str,
-        prompt: str,
-        response: str,
-        metadata: dict[str, Any] | None = None,
+        backend_session_id: str,
+        text: str,
+        failure_kind: str | None = None,
+        model: str = "",
+        duration_ms: int | None = None,
+        tokens: dict[str, int | None] | None = None,
     ) -> None:
         with self._connection:
             if not self._connection.in_transaction:
                 self._connection.execute("BEGIN IMMEDIATE")
-            self._append_turn(
-                project_id=project_id, context_key=context_key, role=role,
-                target_id=target_id, target_key=target_key, lane=lane,
-                session_id=session_id, prompt=prompt, response=response,
-                clear_sessions=True,
+            self._upsert_target_session(
+                project_id=project_id, session=session, workflow=workflow,
+                target_key=target_key, backend_session_id=backend_session_id, clear_sessions=True,
             )
-            self._finish(job_id, "succeeded", text=response, target_id=target_id, metadata=metadata)
-
-    def reset_retry(self, job_id: str) -> None:
-        with self._connection:
-            if not self._connection.in_transaction:
-                self._connection.execute("BEGIN IMMEDIATE")
-            row = self._connection.execute("SELECT result_metadata_json, telemetry_state_json FROM jobs WHERE id=?", (job_id,)).fetchone()
-            current = JobResultMetadata.model_validate_json(row["result_metadata_json"] or "{}") if row else JobResultMetadata()
-            state_json = row["telemetry_state_json"] if row else ""
-            if state_json:
-                state = TelemetryData.model_validate_json(state_json)
-                state = TelemetryData.model_validate(prepare_telemetry_for_retry(state.model_dump(mode="json")))
-                state_json = state.model_dump_json()
-                current.telemetry = project_telemetry(state)
-            current.execution = current.execution.model_copy(update={"duration_ms": None})
-            current.failure = None
-            current.retry = current.retry.model_copy(update={"retryable": None, "next_target": None})
-            self._connection.execute(
-                """UPDATE jobs SET state='queued', result_text='', target_id='', error='',
-                   result_metadata_json=?, telemetry_state_json=?, updated_at=? WHERE id=?""",
-                (current.model_dump_json(), state_json, utc_now(), job_id),
+            self._finish(
+                job_id, "succeeded", text=text, target=target, error="",
+                failure_kind=failure_kind, model=model, duration_ms=duration_ms, tokens=tokens,
             )
-            self._event(job_id, "job.retried", {})
-
-    def event(self, job_id: str, kind: str, data: dict[str, Any]) -> None:
-        with self._connection:
-            self._event(job_id, kind, data)
-
-    def _event(self, job_id: str, kind: str, data: dict[str, Any]) -> None:
-        self._connection.execute("INSERT INTO events(job_id, created_at, kind, data_json) VALUES (?, ?, ?, ?)", (job_id, utc_now(), kind, json.dumps(data, ensure_ascii=False)))
-
-    def events(self, job_id: str) -> list[dict[str, Any]]:
-        rows = self._connection.execute("SELECT id, created_at, kind, data_json FROM events WHERE job_id=? ORDER BY id", (job_id,)).fetchall()
-        return [{"id": row["id"], "created_at": row["created_at"], "kind": row["kind"], "data": json.loads(row["data_json"])} for row in rows]
-
-    def diagnostic_reports(
-        self, *, project_id: str = "", job_id: str = "", category: str = "",
-        before: int | None = None, limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        """Read a bounded, allowlisted page of retained diagnostic reports."""
-        clauses = ["e.kind='job.error_reported'"]
-        params: list[Any] = []
-        if project_id:
-            clauses.append("j.project_id=?")
-            params.append(project_id)
-        if job_id:
-            clauses.append("e.job_id=?")
-            params.append(job_id)
-        if category:
-            clauses.append("json_extract(e.data_json, '$.category')=?")
-            params.append(category)
-        if before is not None:
-            clauses.append("e.id<?")
-            params.append(before)
-        params.append(limit + 1)
-        rows = self._connection.execute(
-            """SELECT e.id, e.job_id, e.created_at, e.data_json, j.project_id, j.state
-               FROM events e JOIN jobs j ON j.id=e.job_id WHERE """
-            + " AND ".join(clauses) + " ORDER BY e.id DESC LIMIT ?", params,
-        ).fetchall()
-        reports = []
-        for row in rows:
-            try:
-                payload = json.loads(row["data_json"])
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(payload, dict) or payload.get("category") not in ("protocol", "output"):
-                continue
-            reports.append({
-                "id": str(row["id"]), "job_id": row["job_id"],
-                "category": payload["category"], "created_at": row["created_at"],
-                "expected": payload.get("expected", ""), "observed": payload.get("observed", ""),
-                "project_id": row["project_id"], "current_state": row["state"],
-            })
-        return reports
-
-    def diagnostic_counts(self, job_ids: list[str]) -> dict[str, int]:
-        """Count retained reports for a bounded set of dashboard jobs in one query."""
-        if not job_ids:
-            return {}
-        placeholders = ",".join("?" for _ in job_ids)
-        rows = self._connection.execute(
-            f"SELECT job_id, COUNT(*) AS count FROM events WHERE kind='job.error_reported' AND job_id IN ({placeholders}) GROUP BY job_id",
-            job_ids,
-        ).fetchall()
-        return {row["job_id"]: int(row["count"]) for row in rows}
 
     def job(self, job_id: str) -> JobView | None:
         row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -627,7 +424,7 @@ class Database:
         ).fetchall()
         return [self.job_view(row) for row in rows]
 
-    def job_listing(
+    def job_overview(
         self, project_id: str, *, recent_limit: int = 10
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
         """Return active job records, the newest terminal records, and the count of older terminal jobs."""
@@ -648,77 +445,50 @@ class Database:
         ).fetchone()[0]
         return [dict(row) for row in active], [dict(row) for row in recent], max(0, int(total) - len(recent))
 
-    @staticmethod
-    def job_view(row: sqlite3.Row | dict[str, Any]) -> JobView:
+    def job_view(self, row: sqlite3.Row | dict[str, Any]) -> JobView:
         try:
-            metadata = json.loads(row["result_metadata_json"] or "{}")
-            if not isinstance(metadata, dict):
-                metadata = {}
-        except (json.JSONDecodeError, TypeError):
-            metadata = {}
-        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], config_revision=row["config_revision"], state=row["state"], context_key=row["context_key"], target_id=row["target_id"], attempts=row["attempts"], created_at=row["created_at"], updated_at=row["updated_at"], result=JobResult(text=row["result_text"], error=row["error"], metadata=metadata))
+            text = self.result_path(row["id"]).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+        tokens = {key: row[column] for key, column in _TOKEN_COLUMNS}
+        result = JobResult(
+            text=text,
+            error=row["error"],
+            failure_kind=row["failure_kind"],
+            model=row["model"],
+            duration_ms=row["duration_ms"],
+            tokens=tokens,
+        )
+        return JobView(id=row["id"], project_id=row["project_id"], workflow=row["workflow"], profile=row["profile"], state=row["state"], session=row["session"], target_id=row["target"], retry_of=row["retry_of"], created_at=row["created_at"], updated_at=row["updated_at"], result=result)
 
-    def session(self, project_id: str, context_key: str, role: str, target_key: str, lane: str = "") -> str:
-        row = self._connection.execute("SELECT session_id FROM context_sessions WHERE project_id=? AND context_key=? AND role=? AND target_key=? AND lane=?", (project_id, context_key, role, target_key, lane)).fetchone()
-        return row["session_id"] if row else ""
+    def session(self, project_id: str, session: str, workflow: str, target_key: str) -> str:
+        row = self._connection.execute(
+            "SELECT backend_session_id FROM target_sessions WHERE project_id=? AND session=? AND workflow=? AND target_key=?",
+            (project_id, session, workflow, target_key),
+        ).fetchone()
+        return row["backend_session_id"] if row else ""
 
-    def append_turn(self, *, project_id: str, context_key: str, role: str, target_id: str, target_key: str, lane: str = "", session_id: str, prompt: str, response: str, clear_sessions: bool = False) -> None:
+    def store_session(self, *, project_id: str, session: str, workflow: str, target_key: str, backend_session_id: str) -> None:
         with self._connection:
-            self._append_turn(
-                project_id=project_id, context_key=context_key, role=role,
-                target_id=target_id, target_key=target_key, lane=lane,
-                session_id=session_id, prompt=prompt, response=response,
-                clear_sessions=clear_sessions,
+            self._upsert_target_session(
+                project_id=project_id, session=session, workflow=workflow,
+                target_key=target_key, backend_session_id=backend_session_id, clear_sessions=False,
             )
 
-    def _upsert_session(self, *, project_id: str, context_key: str, role: str, target_id: str, target_key: str, lane: str, session_id: str, clear_sessions: bool) -> None:
+    def _upsert_target_session(self, *, project_id: str, session: str, workflow: str, target_key: str, backend_session_id: str, clear_sessions: bool) -> None:
         if clear_sessions:
             self._connection.execute(
-                "DELETE FROM context_sessions WHERE project_id=? AND context_key=? AND role=?",
-                (project_id, context_key, role),
+                "DELETE FROM target_sessions WHERE project_id=? AND session=? AND workflow=?",
+                (project_id, session, workflow),
             )
-        if session_id:
+        if backend_session_id:
             self._connection.execute(
-                """INSERT INTO context_sessions(project_id, context_key, role, target_id, target_key, lane, session_id, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(project_id, context_key, role, target_key, lane) DO UPDATE SET
-                target_id=excluded.target_id, session_id=excluded.session_id, updated_at=excluded.updated_at""",
-                (project_id, context_key, role, target_id, target_key, lane, session_id, utc_now()),
+                """INSERT INTO target_sessions(project_id, session, workflow, target_key, backend_session_id, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, session, workflow, target_key) DO UPDATE SET
+                backend_session_id=excluded.backend_session_id, updated_at=excluded.updated_at""",
+                (project_id, session, workflow, target_key, backend_session_id, utc_now()),
             )
-
-    def _append_turn(self, *, project_id: str, context_key: str, role: str, target_id: str, target_key: str, lane: str, session_id: str, prompt: str, response: str, clear_sessions: bool) -> None:
-        self._upsert_session(
-            project_id=project_id, context_key=context_key, role=role,
-            target_id=target_id, target_key=target_key, lane=lane,
-            session_id=session_id, clear_sessions=clear_sessions,
-        )
-        self._connection.execute("INSERT INTO context_turns(project_id, context_key, role, target_id, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (project_id, context_key, role, target_id, prompt, response, utc_now()))
-
-        self._connection.execute(
-            """DELETE FROM context_turns WHERE project_id=? AND context_key=? AND role=?
-               AND id NOT IN (SELECT id FROM context_turns
-                              WHERE project_id=? AND context_key=? AND role=?
-                              ORDER BY id DESC LIMIT ?)""",
-            (project_id, context_key, role, project_id, context_key, role, self.history_turns),
-        )
-
-    def recent_turns(self, project_id: str, context_key: str, role: str, limit: int) -> list[dict[str, str]]:
-        rows = self._connection.execute("SELECT target_id, prompt, response FROM context_turns WHERE project_id=? AND context_key=? AND role=? ORDER BY id DESC LIMIT ?", (project_id, context_key, role, limit)).fetchall()
-        return [dict(row) for row in reversed(rows)]
-
-    def context(self, project_id: str, context_key: str) -> list[ContextStreamView]:
-        rows = self._connection.execute("SELECT role, target_id, lane, session_id FROM context_sessions WHERE project_id=? AND context_key=? ORDER BY role, target_id, updated_at", (project_id, context_key)).fetchall()
-        roles: dict[str, dict[str, str]] = {}
-        for row in rows:
-            target = f"{row['target_id']}#{row['lane']}" if row["lane"] else row["target_id"]
-            roles.setdefault(row["role"], {})[target] = row["session_id"]
-        turn_rows = self._connection.execute(
-            """SELECT role, COUNT(*) AS turns FROM context_turns
-               WHERE project_id=? AND context_key=? GROUP BY role""",
-            (project_id, context_key),
-        ).fetchall()
-        turns = {row["role"]: row["turns"] for row in turn_rows}
-        return [ContextStreamView(project_id=project_id, context_key=context_key, role=role, turns=turns.get(role, 0), sessions=roles.get(role, {})) for role in sorted(roles.keys() | turns.keys())]
 
     def target_health(self, target_id: str) -> dict[str, Any]:
         row = self._connection.execute("SELECT * FROM target_health WHERE target_id=?", (target_id,)).fetchone()
@@ -764,316 +534,29 @@ class Database:
                 ON CONFLICT(target_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures, circuit_open_until=excluded.circuit_open_until, cooldown_s=excluded.cooldown_s, probe_job_id=''""", (target_id, failures, until, cooldown))
         return failures
 
-    def append_stream_events(
-        self,
-        job_id: str,
-        events: Sequence[dict[str, Any]],
-    ) -> list[JobStreamEvent]:
+    def append_stream(self, job_id: str, events: Sequence[dict[str, Any]]) -> None:
+        """Append events as JSON lines; an event's seq is its line number."""
         if not events:
-            return []
-        persisted: list[JobStreamEvent] = []
-        now = utc_now()
-        with self._connection:
-            for item in events:
-                created_at = item.get("created_at") or now
-                attempt = int(item.get("attempt", 1))
-                target_id = str(item.get("target_id", ""))
-                backend = str(item.get("backend", ""))
-                kind = str(item.get("kind", ""))
-                entity_id = str(item.get("entity_id", ""))
-                parent_entity_id = str(item.get("parent_entity_id", ""))
-                data = item.get("data", {})
-                data_json = json.dumps(data, ensure_ascii=False)
-                size_bytes = len(data_json.encode("utf-8"))
-                cursor = self._connection.execute(
-                    """INSERT INTO job_stream_events(
-                        job_id, created_at, attempt, target_id, backend,
-                        kind, entity_id, parent_entity_id, data_json, size_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        job_id,
-                        created_at,
-                        attempt,
-                        target_id,
-                        backend,
-                        kind,
-                        entity_id,
-                        parent_entity_id,
-                        data_json,
-                        size_bytes,
-                    ),
-                )
-                event_id = int(cursor.lastrowid)
-                persisted.append(
-                    JobStreamEvent(
-                        id=event_id,
-                        version=1,
-                        job_id=job_id,
-                        created_at=created_at,
-                        attempt=attempt,
-                        target_id=target_id,
-                        backend=backend,
-                        kind=kind,
-                        entity_id=entity_id,
-                        parent_entity_id=parent_entity_id,
-                        data=data,
-                    )
-                )
-        return persisted
-
-    def stream_events(
-        self,
-        job_id: str,
-        *,
-        after: int = 0,
-        limit: int = 100,
-    ) -> list[JobStreamEvent]:
-        safe_limit = max(1, min(limit, 500))
-        rows = self._connection.execute(
-            """SELECT id, job_id, created_at, attempt, target_id, backend,
-                      kind, entity_id, parent_entity_id, data_json
-               FROM job_stream_events
-               WHERE job_id=? AND id > ?
-               ORDER BY id ASC
-               LIMIT ?""",
-            (job_id, after, safe_limit),
-        ).fetchall()
-        return [
-            JobStreamEvent(
-                id=row["id"],
-                version=1,
-                job_id=row["job_id"],
-                created_at=row["created_at"],
-                attempt=row["attempt"],
-                target_id=row["target_id"],
-                backend=row["backend"],
-                kind=row["kind"],
-                entity_id=row["entity_id"],
-                parent_entity_id=row["parent_entity_id"],
-                data=json.loads(row["data_json"]),
-            )
-            for row in rows
-        ]
-
-    def stream_metadata(self, job_id: str) -> dict[str, Any]:
-        row = self._connection.execute(
-            """SELECT COALESCE(MAX(id), 0) AS high_water,
-                      COALESCE(MIN(id), 0) AS retained_from,
-                      EXISTS(SELECT 1 FROM job_stream_events
-                             WHERE job_id=:job_id AND kind='stream.truncated') AS truncated,
-                      EXISTS(SELECT 1 FROM events
-                             WHERE job_id=:job_id AND kind='stream.persistence_failed') AS failed
-               FROM job_stream_events WHERE job_id=:job_id""",
-            {"job_id": job_id},
-        ).fetchone()
-        return {"high_water": int(row["high_water"]), "retained_from": int(row["retained_from"]),
-                "truncated": bool(row["truncated"]), "failed": bool(row["failed"])}
-
-    def stream_high_water(self, job_id: str) -> int:
-        row = self._connection.execute(
-            "SELECT COALESCE(MAX(id), 0) AS high_water FROM job_stream_events WHERE job_id=?",
-            (job_id,),
-        ).fetchone()
-        return int(row["high_water"]) if row else 0
-
-    def stream_retained_from(self, job_id: str) -> int:
-        row = self._connection.execute(
-            "SELECT COALESCE(MIN(id), 0) AS retained_from FROM job_stream_events WHERE job_id=?",
-            (job_id,),
-        ).fetchone()
-        return int(row["retained_from"]) if row else 0
-
-    def stream_totals(self, job_id: str) -> StreamTotals:
-        row = self._connection.execute(
-            """SELECT COUNT(*) AS event_count, COALESCE(SUM(size_bytes), 0) AS total_bytes
-               FROM job_stream_events WHERE job_id=?""",
-            (job_id,),
-        ).fetchone()
-        if not row:
-            return StreamTotals(events=0, bytes=0)
-        return StreamTotals(events=int(row["event_count"]), bytes=int(row["total_bytes"]))
-
-    def stream_is_truncated(self, job_id: str) -> bool:
-        row = self._connection.execute(
-            "SELECT 1 FROM job_stream_events WHERE job_id=? AND kind='stream.truncated' LIMIT 1",
-            (job_id,),
-        ).fetchone()
-        return row is not None
+            return
+        self.streams_dir.mkdir(mode=0o700, exist_ok=True)
+        payload = "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events)
+        descriptor = os.open(self.stream_path(job_id), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+            handle.write(payload)
 
     def prune_history(self, older_than: str) -> None:
+        """Delete terminal jobs older than the cutoff with their stream and result files."""
         placeholders = ",".join("?" for _ in TERMINAL_STATES)
         with self._connection:
-            self._connection.execute(
-                f"""DELETE FROM events WHERE job_id IN (
-                    SELECT id FROM jobs WHERE state IN ({placeholders}) AND updated_at < ?
-                )""",
-                (*TERMINAL_STATES, older_than),
-            )
-            self._connection.execute(
-                """DELETE FROM context_turns WHERE id IN (
-                    SELECT id FROM (
-                        SELECT id, ROW_NUMBER() OVER (
-                            PARTITION BY project_id, context_key, role ORDER BY id DESC
-                        ) AS position FROM context_turns
-                    ) WHERE position > ?
-                )""",
-                (self.history_turns,),
-            )
+            job_ids = [
+                row["id"]
+                for row in self._connection.execute(
+                    f"SELECT id FROM jobs WHERE state IN ({placeholders}) AND updated_at < ?",
+                    (*TERMINAL_STATES, older_than),
+                ).fetchall()
+            ]
+            self._connection.executemany("DELETE FROM jobs WHERE id=?", [(job_id,) for job_id in job_ids])
+        for job_id in job_ids:
+            self.stream_path(job_id).unlink(missing_ok=True)
+            self.result_path(job_id).unlink(missing_ok=True)
 
-    def prune_terminal_stream_events(self, older_than: str) -> int:
-        terminal_states_tuple = tuple(TERMINAL_STATES)
-        placeholders = ",".join("?" for _ in terminal_states_tuple)
-        with self._connection:
-            cursor = self._connection.execute(
-                f"""DELETE FROM job_stream_events
-                    WHERE job_id IN (
-                        SELECT id FROM jobs
-                        WHERE state IN ({placeholders}) AND updated_at < ?
-                    )""",
-                (*terminal_states_tuple, older_than),
-            )
-            return cursor.rowcount
-
-    def record_error_report(
-        self,
-        *,
-        job_id: str,
-        category: str,
-        expected: str,
-        observed: str,
-        report_key: str,
-    ) -> dict[str, Any]:
-        trimmed_expected, trimmed_observed = _validate_error_report(
-            category, expected, observed, report_key
-        )
-        sanitized_expected = redact_text(trimmed_expected)
-        sanitized_observed = redact_text(trimmed_observed)
-
-        with self._connection:
-            if not self._connection.in_transaction:
-                self._connection.execute("BEGIN IMMEDIATE")
-            row = self._connection.execute(
-                "SELECT id, project_id FROM jobs WHERE id=?", (job_id,)
-            ).fetchone()
-            if row is None:
-                from refract.runtime import OrchestrationError
-
-                raise OrchestrationError(
-                    "Job does not exist.",
-                    code="unknown_job",
-                    next_action="Call job_list for the project and use a listed job ID.",
-                )
-            project_id = str(row["project_id"])
-
-            existing_rows = self._connection.execute(
-                """SELECT id, created_at, data_json FROM events
-                   WHERE job_id=? AND kind='job.error_reported'
-                   ORDER BY id ASC""",
-                (job_id,),
-            ).fetchall()
-
-            for erow in existing_rows:
-                try:
-                    payload = json.loads(erow["data_json"])
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                if isinstance(payload, dict) and payload.get("report_key") == report_key:
-                    if (
-                        payload.get("category") == category
-                        and payload.get("expected") == sanitized_expected
-                        and payload.get("observed") == sanitized_observed
-                    ):
-                        return {
-                            "report": {
-                                "id": str(erow["id"]),
-                                "job_id": job_id,
-                                "category": category,
-                                "created_at": erow["created_at"],
-                            },
-                            "duplicate": True,
-                            "project_id": project_id,
-                        }
-                    from refract.runtime import OrchestrationError
-
-                    raise OrchestrationError(
-                        "Report key is already in use with different content.",
-                        code="invalid_request",
-                        next_action="Use a new unique report_key for distinct reports.",
-                    )
-
-            now = utc_now()
-            event_payload = {
-                "version": 1,
-                "category": category,
-                "expected": sanitized_expected,
-                "observed": sanitized_observed,
-                "report_key": report_key,
-            }
-            cursor = self._connection.execute(
-                """INSERT INTO events(job_id, created_at, kind, data_json)
-                   VALUES (?, ?, 'job.error_reported', ?)""",
-                (job_id, now, json.dumps(event_payload, ensure_ascii=False)),
-            )
-            event_id = str(cursor.lastrowid)
-            return {
-                "report": {
-                    "id": event_id,
-                    "job_id": job_id,
-                    "category": category,
-                    "created_at": now,
-                },
-                "duplicate": False,
-                "project_id": project_id,
-            }
-
-
-def _validate_error_report(
-    category: str,
-    expected: str,
-    observed: str,
-    report_key: str,
-) -> tuple[str, str]:
-    from refract.runtime import OrchestrationError
-
-    if category not in ("protocol", "output"):
-        raise OrchestrationError(
-            "Category must be 'protocol' or 'output'.",
-            code="invalid_request",
-            next_action="Provide a valid error category ('protocol' or 'output').",
-        )
-    if not isinstance(expected, str) or len(expected) < 1 or len(expected) > 2048:
-        raise OrchestrationError(
-            "Expected summary must be between 1 and 2048 characters.",
-            code="invalid_request",
-            next_action="Provide an expected summary between 1 and 2048 characters.",
-        )
-    trimmed_expected = expected.strip()
-    if not trimmed_expected:
-        raise OrchestrationError(
-            "Expected summary cannot be whitespace-only.",
-            code="invalid_request",
-            next_action="Provide a non-empty expected summary.",
-        )
-    if not isinstance(observed, str) or len(observed) < 1 or len(observed) > 2048:
-        raise OrchestrationError(
-            "Observed summary must be between 1 and 2048 characters.",
-            code="invalid_request",
-            next_action="Provide an observed summary between 1 and 2048 characters.",
-        )
-    trimmed_observed = observed.strip()
-    if not trimmed_observed:
-        raise OrchestrationError(
-            "Observed summary cannot be whitespace-only.",
-            code="invalid_request",
-            next_action="Provide a non-empty observed summary.",
-        )
-    if not isinstance(report_key, str) or not re.fullmatch(r"^[A-Za-z0-9_-]{1,128}$", report_key):
-        raise OrchestrationError(
-            "Report key must contain 1 to 128 ASCII letters, digits, underscores, or hyphens.",
-            code="invalid_request",
-            next_action="Provide a valid report key.",
-        )
-    return trimmed_expected, trimmed_observed
-
-
-__all__ = ["Database", "utc_now"]

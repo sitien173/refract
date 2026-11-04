@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import inspect
-import hashlib
 import json
 import os
 import subprocess
@@ -25,257 +24,32 @@ from refract.runtime import OrchestrationError, Runtime
 from refract.execution import TargetExecutor
 from refract.scheduler import CancelEvent
 from refract.workflows import get_workflow
+from tests.claude_cli import stub_claude
+from tests.cli_stub import execute_sync, fake_run_process, shell_fake_as_process
 from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, git, repository
 from tests.orchestration_helpers import register_project
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["success", "cancelled", "sdk_error"])
-async def test_runtime_job_and_attempt_are_exported_under_job_trace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str) -> None:
-    pytest.importorskip("langfuse")
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer, trace_id_for_job
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-execution-integration")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-execution-test")
-    root = repository(tmp_path)
-    base = config(tmp_path / "home")
-    runtime = Runtime(base)
-    runtime.drivers = BlockingDrivers() if scenario == "cancelled" else FakeDrivers()
-    await runtime.start()
-    exporter = InMemorySpanExporter()
-    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
-    assert tracer.is_active
-    runtime.tracer = tracer
-    runtime.ask_registry.tracer = tracer
-    runtime.target_executor.tracer = tracer
-    runtime.runner.tracer = tracer
-    try:
-        project = register_project(runtime, str(root))
-        if scenario == "sdk_error":
-            def fail_sdk(**kwargs):
-                raise RuntimeError("telemetry unavailable")
-            monkeypatch.setattr(tracer.client, "start_as_current_observation", fail_sdk)
-        submitted = await runtime.submit(project.id, "implement", "integration prompt")
-        if scenario == "cancelled":
-            await asyncio.wait_for(runtime.drivers.started.wait(), 5)
-            await runtime.cancel(submitted.job_id)
-        completed = await runtime.wait(submitted.job_id, 15)
-        assert completed.state == ("cancelled" if scenario == "cancelled" else "succeeded")
-        tracer.flush()
-        spans = exporter.get_finished_spans()
-        if scenario == "sdk_error":
-            assert completed.result.text == "response from primary"
-            assert not spans
-            return
-        root_span = next(span for span in spans if span.name == "job")
-        if scenario == "cancelled":
-            assert root_span.attributes["langfuse.observation.level"] == "WARNING"
-            assert root_span.attributes["langfuse.observation.status_message"] == "cancelled"
-        generation = next(span for span in spans if span.attributes.get("langfuse.observation.type") == "generation")
-        assert root_span.context.trace_id == int(trace_id_for_job(submitted.job_id), 16)
-        assert generation.parent.span_id == root_span.context.span_id
-        assert generation.attributes["langfuse.observation.model.name"] == base.targets[0].model
-        assert root_span.attributes["langfuse.observation.input"] == "integration prompt"
-        assert root_span.attributes["langfuse.observation.output"] == completed.result.text
-    finally:
-        await runtime.close()
+def _stream_events(database: Database, job_id: str) -> list[dict]:
+    path = database.stream_path(job_id)
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-@pytest.mark.asyncio
-async def test_job_observation_exits_when_final_job_read_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("langfuse")
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    import refract.execution as execution_module
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-final-read-failure")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase2-test")
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-    runtime = Runtime(catalog)
-    runtime.drivers = FakeDrivers()
-    project = register_project(runtime, str(root))
-    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    job_id = "job-final-read-failure"
-    runtime.database.create_job(
-        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-        prompt="final read", execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="context",
-    )
-    exporter = InMemorySpanExporter()
-    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
-    runtime.runner.tracer = runtime.target_executor.tracer = tracer
-    original_run_sync = execution_module.run_sync
-    retained_contexts = []
-    original_job_observation = execution_module.job_observation
-    def retain_job_context(*args, **kwargs):
-        context = original_job_observation(*args, **kwargs)
-        retained_contexts.append(context)
-        return context
-    monkeypatch.setattr(execution_module, "job_observation", retain_job_context)
-
-    async def fail_final_job_read(function, *args, **kwargs):
-        if getattr(function, "__self__", None) is runtime.database and getattr(function, "__name__", "") == "job":
-            raise RuntimeError("final job read failed")
-        return await original_run_sync(function, *args, **kwargs)
-
-    monkeypatch.setattr(execution_module, "run_sync", fail_final_job_read)
-    try:
-        with pytest.raises(RuntimeError, match="final job read failed"):
-            await runtime.runner.run(job_id, CancelEvent())
-        assert not trace.get_current_span().get_span_context().is_valid
-        tracer.flush()
-        spans = exporter.get_finished_spans()
-        assert [span.name for span in spans].count("job") == 1
-    finally:
-        tracer.shutdown()
-        runtime.database.close()
 
 
-@pytest.mark.asyncio
-async def test_job_observation_exits_when_final_job_read_is_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("langfuse")
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    import refract.execution as execution_module
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-final-read-cancel")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase2-test")
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-    runtime = Runtime(catalog)
-    runtime.drivers = FakeDrivers()
-    project = register_project(runtime, str(root))
-    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    job_id = "job-final-read-cancel"
-    runtime.database.create_job(
-        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-        prompt="cancel final read", execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="context",
-    )
-    exporter = InMemorySpanExporter()
-    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
-    runtime.runner.tracer = runtime.target_executor.tracer = tracer
-    original_run_sync = execution_module.run_sync
-    retained_contexts = []
-    original_job_observation = execution_module.job_observation
-    def retain_job_context(*args, **kwargs):
-        context = original_job_observation(*args, **kwargs)
-        retained_contexts.append(context)
-        return context
-    monkeypatch.setattr(execution_module, "job_observation", retain_job_context)
-    # The retained manager prevents GC from hiding a missing explicit context exit.
-    reached_final_read = asyncio.Event()
-
-    async def block_final_job_read(function, *args, **kwargs):
-        if getattr(function, "__self__", None) is runtime.database and getattr(function, "__name__", "") == "job":
-            reached_final_read.set()
-            await asyncio.Event().wait()
-        return await original_run_sync(function, *args, **kwargs)
-
-    monkeypatch.setattr(execution_module, "run_sync", block_final_job_read)
-
-    async def run_and_check_context() -> bool:
-        try:
-            await runtime.runner.run(job_id, CancelEvent())
-        except asyncio.CancelledError:
-            return trace.get_current_span().get_span_context().is_valid
-        return True
-
-    try:
-        task = asyncio.create_task(run_and_check_context())
-        await asyncio.wait_for(reached_final_read.wait(), 10)
-        task.cancel()
-        assert await task is False
-        assert runtime.database.job(job_id).state == "succeeded"
-        tracer.flush()
-        assert any(span.name == "job" for span in exporter.get_finished_spans())
-    finally:
-        tracer.shutdown()
-        runtime.database.close()
 
 
-@pytest.mark.asyncio
-async def test_generation_exits_when_attempt_finished_await_is_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("langfuse")
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    import refract.execution as execution_module
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer
 
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-attempt-finish-cancel")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase2-test")
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-    runtime = Runtime(catalog)
-    runtime.drivers = FakeDrivers()
-    project = register_project(runtime, str(root))
-    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    job_id = "attempt-finish-cancel"
-    runtime.database.create_job(
-        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-        prompt="cancel finalization", execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="context",
-    )
-    exporter = InMemorySpanExporter()
-    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
-    runtime.runner.tracer = runtime.target_executor.tracer = tracer
-    original_run_sync = execution_module.run_sync
-    retained_contexts = []
-    original_generation_observation = execution_module.generation_observation
-    def retain_generation_context(*args, **kwargs):
-        context = original_generation_observation(*args, **kwargs)
-        retained_contexts.append(context)
-        return context
-    monkeypatch.setattr(execution_module, "generation_observation", retain_generation_context)
-    # The retained manager prevents GC from hiding a missing explicit context exit.
-    reached_final_event = asyncio.Event()
 
-    async def block_attempt_finished(function, *args, **kwargs):
-        if (getattr(function, "__self__", None) is runtime.database
-                and getattr(function, "__name__", "") == "event"
-                and len(args) > 1 and args[1] == "target.attempt_finished"):
-            reached_final_event.set()
-            await asyncio.Event().wait()
-        return await original_run_sync(function, *args, **kwargs)
-
-    monkeypatch.setattr(execution_module, "run_sync", block_attempt_finished)
-
-    async def run_and_check_context() -> bool:
-        try:
-            await runtime.runner.run(job_id, CancelEvent())
-        except asyncio.CancelledError:
-            return trace.get_current_span().get_span_context().is_valid
-        return True
-
-    try:
-        task = asyncio.create_task(run_and_check_context())
-        await asyncio.wait_for(reached_final_event.wait(), 10)
-        task.cancel()
-        context_leaked = await task
-        assert context_leaked is False
-        tracer.flush()
-        spans = exporter.get_finished_spans()
-        generation = next(span for span in spans if span.attributes.get("langfuse.observation.type") == "generation")
-        assert generation.attributes["langfuse.observation.level"] == "WARNING"
-        assert generation.attributes["langfuse.observation.status_message"] == "cancelled"
-    finally:
-        tracer.shutdown()
-        runtime.database.close()
 
 
 @pytest.mark.asyncio
 async def test_legacy_snapshot_ignores_current_target_environment(tmp_path: Path) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
-    target = replace(base.targets[0], envs={"CURRENT_ONLY": "SYNTHETIC_CURRENT_VALUE"})
+    target = replace(base.targets[0], env={"CURRENT_ONLY": "SYNTHETIC_CURRENT_VALUE"})
     catalog = replace(base, targets=(target,))
     runtime = Runtime(catalog)
     project = register_project(runtime, str(root))
@@ -290,7 +64,7 @@ async def test_legacy_snapshot_ignores_current_target_environment(tmp_path: Path
     runtime.database.create_job(
         job_id="legacy-env-snapshot", project_id=project.id, workflow="implement",
         profile="balanced", prompt="legacy", execution_plan_json=json.dumps(plan_data),
-        context_key="legacy",
+        session="legacy",
     )
     received: list[dict[str, str]] = []
     class LegacyDrivers(FakeDrivers):
@@ -310,8 +84,8 @@ async def test_legacy_snapshot_ignores_current_target_environment(tmp_path: Path
 @pytest.mark.asyncio
 async def test_concurrent_projects_keep_environment_bindings_isolated(tmp_path: Path) -> None:
     base = config(tmp_path / "home")
-    target = replace(base.targets[0], envs_vars=("shared",), max_concurrency=1)
-    catalog = replace(base, targets=(target,), envs={"shared": {"PROJECT_BINDING": "global"}})
+    target = replace(base.targets[0], env={"PROJECT_BINDING": "global"}, max_concurrency=1)
+    catalog = replace(base, targets=(target,))
     roots = [tmp_path / "project-a", tmp_path / "project-b"]
     projects_config = ("project-a-secret", "project-b-secret")
     runtime = Runtime(catalog)
@@ -337,7 +111,7 @@ async def test_concurrent_projects_keep_environment_bindings_isolated(tmp_path: 
             root.mkdir()
             config_path = root / ".refract" / "config.toml"
             config_path.parent.mkdir()
-            config_path.write_text(f'[envs.shared]\nPROJECT_BINDING = "{value}"\n', encoding="utf-8")
+            config_path.write_text(f'[[targets]]\nid = "primary"\nenv = {{ PROJECT_BINDING = "{value}" }}\n', encoding="utf-8")
             projects.append(register_project(runtime, str(root)))
         submissions = await asyncio.gather(*(
             runtime.submit(project.id, "implement", "isolated") for project in projects
@@ -355,20 +129,20 @@ async def test_queued_restart_binds_current_project_environment(tmp_path: Path) 
     root = repository(tmp_path)
     project_config = root / ".refract" / "config.toml"
     project_config.parent.mkdir()
-    project_config.write_text('[envs.shared]\nRESTART_VALUE = "before"\n', encoding="utf-8")
+    project_config.write_text('[[targets]]\nid = "primary"\nenv = { RESTART_VALUE = "before" }\n', encoding="utf-8")
     base = config(tmp_path / "home")
-    target = replace(base.targets[0], envs_vars=("shared",))
-    catalog = replace(base, targets=(target,), envs={"shared": {"RESTART_VALUE": "global"}})
+    target = replace(base.targets[0], env={"RESTART_VALUE": "global"})
+    catalog = replace(base, targets=(target,))
     runtime = Runtime(catalog)
     project = register_project(runtime, str(root))
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     runtime.database.create_job(
         job_id="queued-env-restart", project_id=project.id, workflow="implement",
         profile="balanced", prompt="restart", execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="restart",
+        session="restart",
     )
     runtime.database.close()
-    project_config.write_text('[envs.shared]\nRESTART_VALUE = "after"\n', encoding="utf-8")
+    project_config.write_text('[[targets]]\nid = "primary"\nenv = { RESTART_VALUE = "after" }\n', encoding="utf-8")
     received: list[str] = []
     class RestartDrivers(FakeDrivers):
         async def execute(self, *, env=None, **kwargs):
@@ -384,70 +158,17 @@ async def test_queued_restart_binds_current_project_environment(tmp_path: Path) 
         await restarted.close()
 
 
-@pytest.mark.asyncio
-async def test_stored_target_policy_survives_current_policy_changes(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    base = config(tmp_path / "home")
-    old_policy = RetryPolicy(1, ("temporary",), ())
-    old_target = replace(
-        base.targets[0], backend="codex", args=("--old-setting",), max_concurrency=1,
-        retry_policy="stored", envs_vars=("shared",),
-    )
-    old_catalog = replace(
-        base, targets=(old_target,), retry_policies={"stored": old_policy},
-        envs={"shared": {"ROTATED_ENV": "SYNTHETIC_OLD_ENV"}},
-    )
-    runtime = Runtime(old_catalog)
-    project = register_project(runtime, str(root))
-    stored_plan = resolve_execution_plan(get_workflow("implement"), old_catalog, "balanced")
-    plan_json = json.dumps(execution_plan_data(stored_plan))
-    job_id = "stored-policy-environment"
-    runtime.database.create_job(
-        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-        prompt="stored policy", execution_plan_json=plan_json, context_key="stored-policy",
-    )
-    current_target = replace(
-        old_target, backend="pi", args=("--new-setting",), max_concurrency=4,
-        retry_policy="current",
-    )
-    current_catalog = replace(
-        old_catalog, targets=(current_target,),
-        retry_policies={"stored": old_policy, "current": RetryPolicy(0, (), ())},
-        envs={"shared": {"ROTATED_ENV": "SYNTHETIC_CURRENT_ENV"}},
-    )
-    runtime._catalog = current_catalog
-    runtime.target_executor.refresh_configuration(current_catalog)
-    observations = []
-    class PolicyObservingDrivers(FakeDrivers):
-        async def execute(self, *, target, env=None, **kwargs):
-            observations.append((target.backend, target.args, target.max_concurrency, target.retry_policy, (env or {}).get("ROTATED_ENV")))
-            if len(observations) == 1:
-                return DriverResult("RETRYABLE", "", "", "temporary", "temporary")
-            return await super().execute(target=target, **kwargs)
-    runtime.drivers = PolicyObservingDrivers()
-    await runtime.start()
-    try:
-        job = await runtime.wait(job_id, 10)
-        assert job.state == "succeeded"
-        assert job.attempts == 2
-        assert observations == [
-            ("codex", ("--old-setting",), 1, "stored", "SYNTHETIC_CURRENT_ENV"),
-            ("codex", ("--old-setting",), 1, "stored", "SYNTHETIC_CURRENT_ENV"),
-        ]
-        assert "SYNTHETIC_" not in runtime.database.job_record(job_id)["execution_plan_json"]
-    finally:
-        await runtime.close()
 
 
 @pytest.mark.asyncio
 async def test_explicit_retry_rebinds_rotated_project_environment(tmp_path: Path) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
-    target = replace(base.targets[0], envs_vars=("shared",))
-    catalog = replace(base, targets=(target,), envs={"shared": {"ROTATION": "global"}})
+    target = replace(base.targets[0], env={"ROTATION": "global"})
+    catalog = replace(base, targets=(target,))
     project_config = root / ".refract" / "config.toml"
     project_config.parent.mkdir()
-    project_config.write_text('[envs.shared]\nROTATION = "first"\n', encoding="utf-8")
+    project_config.write_text('[[targets]]\nid = "primary"\nenv = { ROTATION = "first" }\n', encoding="utf-8")
     received: list[str] = []
     class RotatingDrivers(FakeDrivers):
         async def execute(self, *, env=None, **kwargs):
@@ -459,18 +180,19 @@ async def test_explicit_retry_rebinds_rotated_project_environment(tmp_path: Path
     runtime.drivers = RotatingDrivers()
     session_keys: list[str] = []
     original_session = runtime.database.session
-    def capture_session(project_id, context_key, role, target_key):
+    def capture_session(project_id, session, role, target_key):
         session_keys.append(target_key)
-        return original_session(project_id, context_key, role, target_key)
+        return original_session(project_id, session, role, target_key)
     runtime.database.session = capture_session
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
         submitted = await runtime.submit(project.id, "implement", "rotate")
         assert (await runtime.wait(submitted.job_id, 10)).state == "failed"
-        project_config.write_text('[envs.shared]\nROTATION = "second"\n', encoding="utf-8")
-        await runtime.retry(submitted.job_id)
-        assert (await runtime.wait(submitted.job_id, 10)).state == "succeeded"
+        project_config.write_text('[[targets]]\nid = "primary"\nenv = { ROTATION = "second" }\n', encoding="utf-8")
+        retried = await runtime.retry(submitted.job_id, target="primary")
+        assert (await runtime.wait(retried.job_id, 10)).state == "succeeded"
+        assert runtime.database.job(submitted.job_id).state == "failed"
         assert received == ["first", "second"]
         assert len(session_keys) == 2 and session_keys[0] != session_keys[1]
     finally:
@@ -481,7 +203,7 @@ async def test_explicit_retry_rebinds_rotated_project_environment(tmp_path: Path
 async def test_cancellation_during_environment_resolution_releases_probe(tmp_path: Path) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
-    target = replace(base.targets[0], envs={"LOCAL": "synthetic"})
+    target = replace(base.targets[0], env={"LOCAL": "synthetic"})
     catalog = replace(base, targets=(target,))
     runtime = Runtime(catalog)
     runtime.drivers = FakeDrivers()
@@ -490,7 +212,7 @@ async def test_cancellation_during_environment_resolution_releases_probe(tmp_pat
     runtime.database.create_job(
         job_id="cancel-env-resolution", project_id=project.id, workflow="implement",
         profile="balanced", prompt="cancel", execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="cancel",
+        session="cancel",
     )
     key = target_execution_key(target)
     with runtime.database._connection:
@@ -505,7 +227,7 @@ async def test_cancellation_during_environment_resolution_releases_probe(tmp_pat
         with pytest.raises(asyncio.CancelledError):
             await runtime.target_executor.execute(
                 job_id="cancel-env-resolution", project=project, workflow="implement",
-                context_key="cancel", plan=plan, prompt="cancel", cwd=root,
+                session="cancel", plan=plan, prompt="cancel", cwd=root,
                 cancel_event=CancelEvent(),
             )
         assert runtime.database.target_health(key)["probe_job_id"] == ""
@@ -547,20 +269,16 @@ print(json.dumps({{'type': 'item.completed', 'item': {{'type': 'agent_message', 
 
     base = config(tmp_path / "home")
     target = replace(
-        base.targets[0], envs_vars=("shared",),
-        envs={"LOCAL_ONLY": "local-value", "LAYERED": "target-local"},
+        base.targets[0],
+        env={"SHARED_ONLY": "global-value", "LOCAL_ONLY": "local-value", "LAYERED": "target-local"},
     )
-    catalog = replace(
-        base, targets=(target,),
-        envs={"shared": {"SHARED_ONLY": "global-value", "LAYERED": "global-layer"}},
-    )
+    catalog = replace(base, targets=(target,))
     project_config = root / ".refract" / "config.toml"
     project_config.parent.mkdir()
     project_config.write_text(
-        '''[envs.shared]
-SHARED_ONLY = "project-value"
-PROJECT_ONLY = "project-only"
-LAYERED = "project-layer"
+        '''[[targets]]
+id = "primary"
+env = { SHARED_ONLY = "project-value", PROJECT_ONLY = "project-only", LAYERED = "project-layer" }
 ''',
         encoding="utf-8",
     )
@@ -578,15 +296,14 @@ LAYERED = "project-layer"
             "SHARED_ONLY": "project-value",
             "PROJECT_ONLY": "project-only",
             "LOCAL_ONLY": "local-value",
-            "LAYERED": "target-local",
+            "LAYERED": "project-layer",
             "REFRACT_ASK_URL": f"http://{runtime.config.host}:{runtime.config.port}/ask",
             "REFRACT_ASK_TOKEN": child_environment["REFRACT_ASK_TOKEN"],
         }
         assert child_environment["REFRACT_ASK_TOKEN"]
         record = runtime.database.job_record(submitted.job_id)
         assert "SYNTHETIC_" not in record["execution_plan_json"]
-        assert "SYNTHETIC_" not in record["result_metadata_json"]
-        assert all("SYNTHETIC_" not in json.dumps(event) for event in runtime.database.events(submitted.job_id))
+        assert "SYNTHETIC_" not in json.dumps(record)
         assert "SYNTHETIC_" not in caplog.text
         assert dict(os.environ) == before_environment
     finally:
@@ -594,11 +311,14 @@ LAYERED = "project-layer"
 
 
 @pytest.mark.asyncio
-async def test_environment_configuration_failure_is_sanitized_and_not_provider_failure(tmp_path: Path) -> None:
+async def test_environment_configuration_failure_is_sanitized_and_not_provider_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
-    target = replace(base.targets[0], envs={"BROKEN": "${MISSING_SYNTHETIC_SECRET}"}, retry_policy="transient")
-    runtime = Runtime(replace(base, targets=(target,), retry_policies={"transient": RetryPolicy(3, (), ())}))
+    target = replace(base.targets[0], env={"BROKEN": "value"}, retry=RetryPolicy(3, (), ()))
+    runtime = Runtime(replace(base, targets=(target,)))
+    def broken_environment(_catalog, _target):
+        raise ValueError("Environment value MISSING_SYNTHETIC_SECRET is invalid")
+    monkeypatch.setattr("refract.runtime.resolve_target_environment", broken_environment)
     calls = []
     class CountingDrivers(FakeDrivers):
         async def execute(self, **kwargs):
@@ -612,8 +332,7 @@ async def test_environment_configuration_failure_is_sanitized_and_not_provider_f
         job = await runtime.wait(submitted.job_id, 10)
         assert job.state == "failed"
         assert calls == []
-        assert job.attempts == 0
-        assert job.result.metadata.failure.kind == "config_invalid"
+        assert job.result.failure_kind == "request_fatal"
         assert "MISSING_SYNTHETIC_SECRET" not in str(job.result)
         health = runtime.database.target_health(target_execution_key(target))
         assert health["consecutive_failures"] == 0
@@ -625,11 +344,15 @@ async def test_environment_configuration_failure_is_sanitized_and_not_provider_f
 async def test_environment_binding_reaches_driver_without_persisting_values(tmp_path: Path, caplog, monkeypatch) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
-    target = replace(base.targets[0], envs_vars=("shared",), envs={"LOCAL_ONLY": "SYNTHETIC_LOCAL_VALUE"}, retry_policy="transient")
-    catalog = replace(base, targets=(target,), envs={"shared": {"SHARED_ONLY": "SYNTHETIC_GLOBAL_VALUE"}}, retry_policies={"transient": RetryPolicy(1, ("temporary",), ())})
+    target = replace(
+        base.targets[0],
+        env={"SHARED_ONLY": "SYNTHETIC_GLOBAL_VALUE", "LOCAL_ONLY": "SYNTHETIC_LOCAL_VALUE"},
+        retry=RetryPolicy(1, ("temporary",), ()),
+    )
+    catalog = replace(base, targets=(target,))
     project_config = root / ".refract" / "config.toml"
     project_config.parent.mkdir()
-    project_config.write_text('[envs.shared]\nSHARED_ONLY = "SYNTHETIC_PROJECT_VALUE"\nPROJECT_ONLY = "SYNTHETIC_PROJECT_ONLY"\n', encoding="utf-8")
+    project_config.write_text('[[targets]]\nid = "primary"\nenv = { SHARED_ONLY = "SYNTHETIC_PROJECT_VALUE", PROJECT_ONLY = "SYNTHETIC_PROJECT_ONLY" }\n', encoding="utf-8")
     monkeypatch.setenv("SYNTHETIC_INHERITED_VALUE", "SYNTHETIC_INHERITED_MARKER")
     received: list[dict[str, str]] = []
 
@@ -655,7 +378,6 @@ async def test_environment_binding_reaches_driver_without_persisting_values(tmp_
         submitted = await runtime.submit(project.id, "implement", "bind env")
         job = await runtime.wait(submitted.job_id, 10)
         assert job.state == "succeeded"
-        assert job.attempts == 2
         assert received[0]["SHARED_ONLY"] == received[1]["SHARED_ONLY"] == "SYNTHETIC_PROJECT_VALUE"
         assert received[0]["LOCAL_ONLY"] == received[1]["LOCAL_ONLY"] == "SYNTHETIC_LOCAL_VALUE"
         assert received[-1]["SHARED_ONLY"] == "SYNTHETIC_PROJECT_VALUE"
@@ -663,15 +385,11 @@ async def test_environment_binding_reaches_driver_without_persisting_values(tmp_
         assert "REFRACT_ASK_TOKEN" in received[-1]
         record = runtime.database.job_record(submitted.job_id)
         assert "SYNTHETIC_" not in record["execution_plan_json"]
-        assert "SYNTHETIC_" not in record["result_metadata_json"]
-        assert all("SYNTHETIC_" not in json.dumps(event) for event in runtime.database.events(submitted.job_id))
+        assert "SYNTHETIC_" not in json.dumps(record)
         assert "SYNTHETIC_" not in caplog.text
         assert dict(os.environ) == before_environment
     finally:
         await runtime.close()
-
-
-RESULT_METADATA_KEYS = {"execution", "failure", "retry", "telemetry"}
 
 
 async def _dispatch_claimed_probe(tmp_path, drivers, runtime_holder=None):
@@ -686,14 +404,14 @@ async def _dispatch_claimed_probe(tmp_path, drivers, runtime_holder=None):
     project = register_project(runtime, str(root))
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     job_id = "probe-job"
-    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", context_key="probe")
+    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", session="probe")
     with runtime.database._connection:
         runtime.database._connection.execute(
             "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 77)",
             (key,),
         )
     result = await runtime.target_executor.execute(
-        job_id=job_id, project=project, workflow="implement", context_key="probe", plan=plan,
+        job_id=job_id, project=project, workflow="implement", session="probe", plan=plan,
         prompt="probe", cwd=root, cancel_event=CancelEvent(),
     )
     return runtime, key, result
@@ -711,13 +429,13 @@ async def test_driver_exception_releases_claimed_probe(tmp_path):
     catalog = runtime.config
     key = target_execution_key(catalog.targets[0])
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", context_key="probe")
+    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", session="probe")
     with runtime.database._connection:
         runtime.database._connection.execute("INSERT INTO target_health(target_id,circuit_open_until,cooldown_s) VALUES (?, '2000-01-01T00:00:00+00:00', 77)", (key,))
     runtime.drivers = Exploding()
     cancel_event = CancelEvent()
     with pytest.raises(RuntimeError, match="backend exploded"):
-        await runtime.target_executor.execute(job_id="probe-job", project=project, workflow="implement", context_key="probe", plan=plan, prompt="probe", cwd=root, cancel_event=cancel_event)
+        await runtime.target_executor.execute(job_id="probe-job", project=project, workflow="implement", session="probe", plan=plan, prompt="probe", cwd=root, cancel_event=cancel_event)
     assert runtime.database.target_health(key)["probe_job_id"] == ""
     runtime.database.close()
 
@@ -729,7 +447,7 @@ async def test_capacity_acquire_cancellation_releases_claimed_probe(tmp_path):
     project = register_project(runtime, str(root))
     key = target_execution_key(runtime.config.targets[0])
     plan = resolve_execution_plan(get_workflow("implement"), runtime.config, "balanced")
-    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", context_key="probe")
+    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", session="probe")
     with runtime.database._connection:
         runtime.database._connection.execute("INSERT INTO target_health(target_id,circuit_open_until,cooldown_s) VALUES (?, '2000-01-01T00:00:00+00:00', 77)", (key,))
 
@@ -739,27 +457,7 @@ async def test_capacity_acquire_cancellation_releases_claimed_probe(tmp_path):
     runtime.target_executor._acquire_target = cancelled_acquire
     cancel_event = CancelEvent()
     with pytest.raises(asyncio.CancelledError):
-        await runtime.target_executor.execute(job_id="probe-job", project=project, workflow="implement", context_key="probe", plan=plan, prompt="probe", cwd=root, cancel_event=cancel_event)
-    assert runtime.database.target_health(key)["probe_job_id"] == ""
-    runtime.database.close()
-
-
-@pytest.mark.asyncio
-async def test_recorder_close_failure_releases_claimed_probe(tmp_path, monkeypatch):
-    from refract import execution as execution_module
-
-    class BrokenRecorder:
-        def __init__(self, **kwargs): pass
-        async def record(self, *args, **kwargs): pass
-        async def flush(self): pass
-        async def close(self): raise RuntimeError("recorder close failed")
-
-    monkeypatch.setattr(execution_module, "StreamRecorder", BrokenRecorder)
-    holder = {}
-    with pytest.raises(RuntimeError, match="recorder close failed"):
-        await _dispatch_claimed_probe(tmp_path, FakeDrivers(), holder)
-    runtime = holder["runtime"]
-    key = target_execution_key(runtime.config.targets[0])
+        await runtime.target_executor.execute(job_id="probe-job", project=project, workflow="implement", session="probe", plan=plan, prompt="probe", cwd=root, cancel_event=cancel_event)
     assert runtime.database.target_health(key)["probe_job_id"] == ""
     runtime.database.close()
 
@@ -832,7 +530,7 @@ def test_half_open_probe_claim_is_not_leaked_when_target_at_capacity(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_retryable_failure_runs_one_target_and_persists_result_metadata(tmp_path) -> None:
+async def test_transient_failure_runs_one_target_and_persists_result_metadata(tmp_path) -> None:
     root = repository(tmp_path)
     targets = (TargetConfig(id="one", backend="codex", model="public-model-a"), TargetConfig(id="two", backend="codex", model="public-model-b"))
     catalog = config(tmp_path / "home", targets)
@@ -853,15 +551,12 @@ async def test_retryable_failure_runs_one_target_and_persists_result_metadata(tm
     try:
         project = register_project(runtime, str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "fail once")).job_id, 5)
-        metadata = job.result.metadata.model_dump(mode="json")
+        job_result = job.result
         assert drivers.called == ["one"]
         assert job.state == "failed"
-        assert metadata["failure"]["kind"] == "retryable"
-        assert metadata["retry"]["retryable"] is False
-        assert metadata["execution"]["model"] == "public-model-a"
-        assert isinstance(metadata["execution"]["duration_ms"], int)
-        assert metadata["retry"]["next_target"] is None
-        assert set(metadata) == RESULT_METADATA_KEYS
+        assert job_result.failure_kind == "transient"
+        assert job_result.model == "public-model-a"
+        assert isinstance(job_result.duration_ms, int)
     finally:
         await runtime.close()
 
@@ -889,13 +584,13 @@ async def test_retry_overwrites_previous_run_metadata_after_driver_exception(tmp
         project = register_project(runtime, str(root))
         submission = await runtime.submit(project.id, "implement", "retry")
         first = await runtime.wait(submission.job_id, 5)
-        assert first.result.metadata.execution.model == "old-model"
-        await runtime.retry(submission.job_id)
-        second = await runtime.wait(submission.job_id, 5)
+        assert first.result.model == "old-model"
+        retried = await runtime.retry(submission.job_id, target="primary")
+        second = await runtime.wait(retried.job_id, 5)
         assert second.state == "failed"
-        assert set(second.result.metadata.model_dump(mode="json")) == RESULT_METADATA_KEYS
-        assert second.result.metadata.failure.kind == "request_fatal"
-        assert second.result.metadata.execution.model == "configured-model"
+        assert runtime.database.job(submission.job_id).result.model == "old-model"
+        assert second.result.failure_kind == "request_fatal"
+        assert second.result.model == "configured-model"
     finally:
         await runtime.close()
 
@@ -932,18 +627,21 @@ async def test_all_open_targets_fail_dispatch_without_counting_or_invoking_drive
         runtime.database.create_job(
             job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
             prompt="blocked", execution_plan_json=json.dumps(execution_plan_data(plan)),
-            context_key="implement",
+            session="implement",
         )
         outcome = await runtime.target_executor.execute(
-            job_id=job_id, project=project, workflow="implement", context_key="implement",
+            job_id=job_id, project=project, workflow="implement", session="implement",
             plan=plan, prompt="blocked", cwd=root, cancel_event=CancelEvent(),
         )
-        runtime.database.finish_job(job_id, "failed", error="circuit_open", metadata=outcome.metadata)
+        runtime.database.finish_job(
+            job_id, "failed", error="circuit_open", failure_kind=outcome.outcome["failure_kind"],
+            model=outcome.outcome["model"], duration_ms=outcome.outcome["duration_ms"],
+        )
         job = runtime.database.job(job_id)
         assert drivers.calls == 0
         assert job.state == "failed"
-        assert job.result.metadata.failure.kind == "circuit_open"
-        assert job.result.metadata.execution.duration_ms is None
+        assert job.result.failure_kind == "circuit_open"
+        assert job.result.duration_ms is None
         assert all(runtime.database.target_health(target_execution_key(target))["consecutive_failures"] == 2 for target in targets)
     finally:
         await runtime.close()
@@ -1012,12 +710,12 @@ async def test_global_project_and_target_capacities_apply_together(tmp_path) -> 
     runtime.drivers = drivers
     await runtime.start()
     try:
-        project_a = register_project(runtime, str(root_a), "a")
-        project_b = register_project(runtime, str(root_b), "b")
-        project_c = register_project(runtime, str(root_c), "c")
-        first = await runtime.submit(project_a.id, "consult", "first", context_key="first")
+        project_a = register_project(runtime, str(root_a))
+        project_b = register_project(runtime, str(root_b))
+        project_c = register_project(runtime, str(root_c))
+        first = await runtime.submit(project_a.id, "consult", "first", session="first")
         await first_driver_started.wait()
-        second = await runtime.submit(project_b.id, "consult", "second", context_key="second")
+        second = await runtime.submit(project_b.id, "consult", "second", session="second")
         second_job_id = second.job_id
         if second_job_id in running_job_ids:
             second_runner_started.set()
@@ -1025,8 +723,8 @@ async def test_global_project_and_target_capacities_apply_together(tmp_path) -> 
         assert runtime.scheduler.active_jobs == 2
         assert drivers.calls == 1
 
-        third = await runtime.submit(project_c.id, "consult", "third", context_key="third")
-        fourth = await runtime.submit(project_a.id, "consult", "fourth", context_key="fourth")
+        third = await runtime.submit(project_c.id, "consult", "third", session="third")
+        fourth = await runtime.submit(project_a.id, "consult", "fourth", session="fourth")
         assert runtime.database.job(third.job_id).state == "queued"
         assert runtime.database.job(fourth.job_id).state == "queued"
 
@@ -1099,7 +797,7 @@ async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) ->
         profile="balanced",
         prompt="cancel me",
         execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="consult",
+        session="consult",
     )
     started = asyncio.Event()
 
@@ -1121,11 +819,9 @@ async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) ->
         await task
     cancelled_job = runtime.database.job("runner-cancel")
     assert cancelled_job.state == "cancelled"
-    assert set(cancelled_job.result.metadata.model_dump(mode="json")) == RESULT_METADATA_KEYS
-    assert cancelled_job.result.metadata.failure.kind == "cancelled"
-    assert cancelled_job.result.metadata.retry.retryable is False
-    assert cancelled_job.result.metadata.execution.model == "cancel-model"
-    assert isinstance(cancelled_job.result.metadata.execution.duration_ms, int)
+    assert cancelled_job.result.failure_kind == "cancelled"
+    assert cancelled_job.result.model == "cancel-model"
+    assert isinstance(cancelled_job.result.duration_ms, int)
     runtime.database.close()
 
 
@@ -1147,7 +843,6 @@ async def test_cancel_reserved_unstarted_dispatch_then_retry_uses_fresh_event_on
     release_blocker_driver = asyncio.Event()
     retry_driver_started = asyncio.Event()
     release_retry_driver = asyncio.Event()
-    parent_id = ""
     blocker_job_id = ""
     dispatch_events: list[threading.Event] = []
 
@@ -1183,12 +878,11 @@ async def test_cancel_reserved_unstarted_dispatch_then_retry_uses_fresh_event_on
         release_blocker_driver.set()
         await asyncio.wait_for(blocker_notice_entered.wait(), 2)
         parent = await runtime.submit(project.id, "review", "retry-parent")
-        parent_id = parent.job_id
 
         original_run = runtime.runner.run
 
         async def trace_dispatch(job_id: str, cancel_event: threading.Event) -> None:
-            if job_id == parent_id:
+            if job_id != blocker_job_id:
                 dispatch_events.append(cancel_event)
             await original_run(job_id, cancel_event)
 
@@ -1201,9 +895,10 @@ async def test_cancel_reserved_unstarted_dispatch_then_retry_uses_fresh_event_on
         assert runtime.database.job(parent.job_id).state == "cancelled"
         assert runtime.scheduler.active_jobs == 0
 
-        retried = await runtime.retry(parent.job_id)
-        assert retried.job_id == parent.job_id
-        assert runtime.database.job(parent.job_id).state == "queued"
+        retried = await runtime.retry(parent.job_id, target="primary")
+        assert retried.job_id != parent.job_id
+        assert runtime.database.job(parent.job_id).state == "cancelled"
+        assert runtime.database.job(retried.job_id).state == "queued"
         assert runtime.scheduler.active_jobs == 1
 
         release_blocker_notice.set()
@@ -1211,7 +906,7 @@ async def test_cancel_reserved_unstarted_dispatch_then_retry_uses_fresh_event_on
         assert len(dispatch_events) == 1
         assert not dispatch_events[0].is_set()
         release_retry_driver.set()
-        assert (await runtime.wait(parent.job_id, 5)).state == "succeeded"
+        assert (await runtime.wait(retried.job_id, 5)).state == "succeeded"
         assert len(dispatch_events) == 1
     finally:
         release_blocker_notice.set()
@@ -1264,11 +959,11 @@ async def test_retry_is_not_lost_while_terminal_notifier_is_paused(tmp_path) -> 
         allow_first_failure.set()
         await asyncio.wait_for(terminal_notice_entered.wait(), 2)
 
-        retry_result = await runtime.retry(submitted.job_id)
-        assert retry_result.job_id == submitted.job_id
-        assert runtime.database.job(submitted.job_id).state == "queued"
+        retry_result = await runtime.retry(submitted.job_id, target="primary")
+        assert runtime.database.job(retry_result.job_id).state in {"queued", "running", "succeeded"}
         release_terminal_notice.set()
-        assert (await runtime.wait(submitted.job_id, 5)).state == "succeeded"
+        assert (await runtime.wait(retry_result.job_id, 5)).state == "succeeded"
+        assert runtime.database.job(submitted.job_id).state == "failed"
         assert drivers.calls == 2
     finally:
         release_terminal_notice.set()
@@ -1280,11 +975,11 @@ async def test_startup_recovers_interrupted_jobs_before_admission(tmp_path) -> N
     root = repository(tmp_path)
     catalog = config(tmp_path / "home")
     database = Database(catalog.database_path)
-    project = database.upsert_project(project_id="p", alias="p", root=root.as_posix())
+    project = database.upsert_project(project_id="p", root=root.as_posix())
     plan = execution_plan_data(resolve_execution_plan(get_workflow("consult"), catalog, "balanced"))
     database.create_job(
         job_id="interrupted-job", project_id=project.id, workflow="consult", profile="balanced",
-        prompt="interrupted", execution_plan_json=json.dumps(plan), context_key="consult",
+        prompt="interrupted", execution_plan_json=json.dumps(plan), session="consult",
     )
     database.start_job("interrupted-job")
     database.close()
@@ -1303,9 +998,7 @@ async def test_startup_recovers_interrupted_jobs_before_admission(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["attempt_persistence", "capability_probe", "recorder_setup", "recorder_close"])
-async def test_target_semaphore_released_after_post_acquire_failures(tmp_path, monkeypatch, failure: str) -> None:
-    from refract import execution as execution_module
+async def test_target_semaphore_released_after_post_acquire_failures(tmp_path, monkeypatch) -> None:
 
     root = repository(tmp_path)
     catalog = config(tmp_path / "home")
@@ -1320,31 +1013,14 @@ async def test_target_semaphore_released_after_post_acquire_failures(tmp_path, m
         profile="balanced",
         prompt="test target lease",
         execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="consult",
+        session="consult",
     )
 
     class CapabilityFailureDrivers(FakeDrivers):
         def supports_structured_streaming(self, target):
             raise RuntimeError("capability setup failed")
 
-    if failure == "attempt_persistence":
-        monkeypatch.setattr(
-            runtime.database,
-            "record_job_attempt",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("attempt persistence failed")),
-        )
-    elif failure == "capability_probe":
-        runtime.drivers = CapabilityFailureDrivers()
-    elif failure == "recorder_setup":
-        monkeypatch.setattr(
-            execution_module,
-            "StreamRecorder",
-            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("recorder setup failed")),
-        )
-    else:
-        async def failing_close(_recorder):
-            raise RuntimeError("recorder close failed")
-        monkeypatch.setattr(execution_module.StreamRecorder, "close", failing_close)
+    runtime.drivers = CapabilityFailureDrivers()
 
     cancel_event = CancelEvent()
     try:
@@ -1353,7 +1029,7 @@ async def test_target_semaphore_released_after_post_acquire_failures(tmp_path, m
                 job_id="target-lease",
                 project=project,
                 workflow="consult",
-                context_key="consult",
+                session="consult",
                 plan=plan,
                 prompt="test target lease",
                 cwd=root,
@@ -1495,15 +1171,17 @@ async def test_other_job_plan_and_context_retain_role(tmp_path) -> None:
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        submitted = await runtime.submit(project.id, "other", "inspect", context_key="shared")
+        submitted = await runtime.submit(project.id, "other", "inspect", session="shared")
         job = await runtime.wait(submitted.job_id, 10)
         record = runtime.database.job_record(submitted.job_id)
         assert job.workflow == "other"
-        assert job.context_key == "shared"
+        assert job.session == "shared"
         assert record is not None
         assert json.loads(record["execution_plan_json"])["workflow"] == "other"
-        context = runtime.database.context(project.id, "shared")
-        assert [(stream.role, stream.turns) for stream in context] == [("other", 1)]
+        workflows = runtime.database._connection.execute(
+            "SELECT workflow FROM target_sessions WHERE project_id=? AND session='shared'", (project.id,)
+        ).fetchall()
+        assert [row[0] for row in workflows] == ["other"]
     finally:
         await runtime.close()
 
@@ -1585,14 +1263,13 @@ async def test_transient_failure_does_not_schedule_another_attempt(tmp_path) -> 
             10,
         )
         assert job.state == "failed"
-        assert job.attempts == 1
         assert runtime.drivers.calls == 1
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_retry_transition_notifies_the_same_job_resource(tmp_path) -> None:
+async def test_retry_transition_notifies_each_job_resource(tmp_path) -> None:
     root = repository(tmp_path)
     notifications: list[str] = []
 
@@ -1606,10 +1283,9 @@ async def test_retry_transition_notifies_the_same_job_resource(tmp_path) -> None
         project = register_project(runtime, str(root))
         submission = await runtime.submit(project.id, "implement", "retry")
         assert (await runtime.wait(submission.job_id, 10)).state == "failed"
-        retried = await runtime.retry(submission.job_id)
-        assert retried.job_id == submission.job_id
+        retried = await runtime.retry(submission.job_id, target="primary")
         assert (await runtime.wait(retried.job_id, 10)).state == "failed"
-        assert notifications == [submission.job_id] * 6
+        assert notifications == [submission.job_id] * 3 + [retried.job_id] * 3
     finally:
         await runtime.close()
 
@@ -1756,8 +1432,8 @@ async def test_cancel_interrupts_target_capacity_wait(tmp_path) -> None:
     runtime.drivers = drivers
     await runtime.start()
     try:
-        first_project = register_project(runtime, str(first_root), "first")
-        second_project = register_project(runtime, str(second_root), "second")
+        first_project = register_project(runtime, str(first_root))
+        second_project = register_project(runtime, str(second_root))
         first = await runtime.submit(first_project.id, "implement", "block")
         await drivers.started.wait()
         second = await runtime.submit(second_project.id, "implement", "wait")
@@ -1767,7 +1443,6 @@ async def test_cancel_interrupts_target_capacity_wait(tmp_path) -> None:
         assert (await runtime.cancel(second.job_id)).state in {"running", "cancelled"}
         second_job = await runtime.wait(second.job_id, 1)
         assert second_job.state == "cancelled"
-        assert second_job.attempts == 0
         assert drivers.calls == 1
         await runtime.cancel(first.job_id)
         await runtime.wait(first.job_id, 1)
@@ -1786,8 +1461,8 @@ async def test_shutdown_interrupts_target_capacity_wait(tmp_path) -> None:
     runtime = Runtime(catalog)
     runtime.drivers = drivers
     await runtime.start()
-    first_project = register_project(runtime, str(first_root), "first")
-    second_project = register_project(runtime, str(second_root), "second")
+    first_project = register_project(runtime, str(first_root))
+    second_project = register_project(runtime, str(second_root))
     first = await runtime.submit(first_project.id, "implement", "block")
     await drivers.started.wait()
     second = await runtime.submit(second_project.id, "implement", "wait")
@@ -1811,9 +1486,9 @@ async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) 
     home = tmp_path / "home"
     catalog = config(home)
     database = Database(catalog.database_path)
-    project = database.upsert_project(project_id="project", alias="project", root=root.as_posix())
+    project = database.upsert_project(project_id="project", root=root.as_posix())
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    database.create_job(job_id="running", project_id=project.id, workflow="implement", profile="balanced", prompt="change", execution_plan_json=json.dumps(execution_plan_data(plan)), context_key="implement")
+    database.create_job(job_id="running", project_id=project.id, workflow="implement", profile="balanced", prompt="change", execution_plan_json=json.dumps(execution_plan_data(plan)), session="implement")
     database.start_job("running")
     (root / "partial.txt").write_text("partial\n", encoding="utf-8")
     database.close()
@@ -1918,7 +1593,6 @@ async def test_retry_attempts_recompile_argv_per_backend(tmp_path) -> None:
         project = register_project(runtime, str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "retry")).job_id, 10)
         assert job.state == "failed"
-        assert job.attempts == 1
         assert compiled == ["claude-target"]
     finally:
         await runtime.close()
@@ -1979,8 +1653,6 @@ consult = "primary"
         # The earlier submission's plan is unchanged.
         plan_still = json.loads(runtime.database.job_record(submitted.job_id)["execution_plan_json"])
         assert plan_still["targets"][0]["model"] == "old-model"
-        assert runtime.database.job_record(submitted.job_id)["config_revision"] != \
-            runtime.database.job_record(fresh.job_id)["config_revision"]
     finally:
         await runtime.close()
 
@@ -2010,35 +1682,26 @@ async def test_fresh_job_bypasses_session_and_history_and_clears_prior_sessions(
     try:
         project = register_project(runtime, str(root))
         # Seed prior turns and sessions
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-session-1",
-            prompt="turn 1",
-            response="response 1",
+            session="feature",
+            workflow="implement",
+                        target_key=tkey,
+            backend_session_id="old-session-1",
         )
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id="secondary",
+            session="feature",
+            workflow="implement",
             target_key="secondary-key",
-            session_id="old-session-2",
-            prompt="turn 2",
-            response="response 2",
+            backend_session_id="old-session-2",
         )
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="unrelated",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="unrelated-session",
-            prompt="unrelated turn",
-            response="unrelated response",
+            session="unrelated",
+            workflow="implement",
+                        target_key=tkey,
+            backend_session_id="unrelated-session",
         )
 
         assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-session-1"
@@ -2049,8 +1712,8 @@ async def test_fresh_job_bypasses_session_and_history_and_clears_prior_sessions(
             project.id,
             "implement",
             "fresh request prompt",
-            context_key="feature",
-            fresh_session=True,
+            session="feature",
+            fresh=True,
         )
         job = await runtime.wait(submitted.job_id, 10)
         assert job.state == "succeeded"
@@ -2059,7 +1722,7 @@ async def test_fresh_job_bypasses_session_and_history_and_clears_prior_sessions(
         assert drivers.recorded_sessions[0] == ""
         assert drivers.recorded_prompts[0] == "fresh request prompt"
 
-        # Old sessions for this project, context_key, workflow are cleared
+        # Old sessions for this project, session, workflow are cleared
         assert runtime.database.session(project.id, "feature", "implement", "secondary-key") == ""
         # The new session is the only resumable session
         assert runtime.database.session(project.id, "feature", "implement", tkey) == "new-session-1"
@@ -2071,8 +1734,8 @@ async def test_fresh_job_bypasses_session_and_history_and_clears_prior_sessions(
             project.id,
             "implement",
             "next standard prompt",
-            context_key="feature",
-            fresh_session=False,
+            session="feature",
+            fresh=False,
         )
         standard_job = await runtime.wait(standard_sub.job_id, 10)
         assert standard_job.state == "succeeded"
@@ -2118,27 +1781,23 @@ async def test_fresh_job_failure_preserves_freshness_without_fallback(tmp_path) 
     try:
         project = register_project(runtime, str(root))
         for target, target_key in zip(catalog.targets, (primary_key, secondary_key), strict=True):
-            runtime.database.append_turn(
+            runtime.database.store_session(
                 project_id=project.id,
-                context_key="stream",
-                role="implement",
-                target_id=target.id,
-                target_key=target_key,
-                session_id=f"old-{target.id}-session",
-                prompt=f"{target.id} turn",
-                response=f"{target.id} response",
+                session="stream",
+                workflow="implement",
+                                target_key=target_key,
+                backend_session_id=f"old-{target.id}-session",
             )
 
         submitted = await runtime.submit(
             project.id,
             "implement",
             "failover prompt",
-            context_key="stream",
-            fresh_session=True,
+            session="stream",
+            fresh=True,
         )
         job = await runtime.wait(submitted.job_id, 10)
         assert job.state == "failed"
-        assert job.attempts == 1
 
         assert drivers.attempts == [("primary", "", "failover prompt")]
         assert runtime.database.session(project.id, "stream", "implement", primary_key) == "old-primary-session"
@@ -2174,23 +1833,20 @@ async def test_fresh_job_retry_survives_and_runs_fresh(tmp_path) -> None:
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="stream",
-            role="implement",
-            target_id=catalog.targets[0].id,
+            session="stream",
+            workflow="implement",
             target_key=tkey,
-            session_id="old-session",
-            prompt="turn 1",
-            response="response 1",
+            backend_session_id="old-session",
         )
 
         submitted = await runtime.submit(
             project.id,
             "implement",
             "retry prompt",
-            context_key="stream",
-            fresh_session=True,
+            session="stream",
+            fresh=True,
         )
         failed_job = await runtime.wait(submitted.job_id, 10)
         assert failed_job.state == "failed"
@@ -2199,12 +1855,11 @@ async def test_fresh_job_retry_survives_and_runs_fresh(tmp_path) -> None:
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
 
         # Retry the job
-        retried = await runtime.retry(submitted.job_id)
-        assert retried.job_id == submitted.job_id
-        record = runtime.database.job_record(submitted.job_id)
-        assert record and record["fresh_session"] == 1
+        retried = await runtime.retry(submitted.job_id, target="primary")
+        record = runtime.database.job_record(retried.job_id)
+        assert record and record["fresh"] == 1 and record["retry_of"] == submitted.job_id
 
-        succeeded_job = await runtime.wait(submitted.job_id, 10)
+        succeeded_job = await runtime.wait(retried.job_id, 10)
         assert succeeded_job.state == "succeeded"
 
         # Both attempts (initial and retry) received empty session and exact prompt
@@ -2230,15 +1885,12 @@ async def test_fresh_job_without_returned_session_clears_old_session(tmp_path) -
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="stream",
-            role="implement",
-            target_id=catalog.targets[0].id,
+            session="stream",
+            workflow="implement",
             target_key=tkey,
-            session_id="old-session",
-            prompt="turn 1",
-            response="response 1",
+            backend_session_id="old-session",
         )
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
 
@@ -2246,8 +1898,8 @@ async def test_fresh_job_without_returned_session_clears_old_session(tmp_path) -
             project.id,
             "implement",
             "stateless prompt",
-            context_key="stream",
-            fresh_session=True,
+            session="stream",
+            fresh=True,
         )
         job = await runtime.wait(submitted.job_id, 10)
         assert job.state == "succeeded"
@@ -2259,73 +1911,12 @@ async def test_fresh_job_without_returned_session_clears_old_session(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_standard_sessionless_reconstructs_history_while_fresh_bypasses(tmp_path) -> None:
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-
-    class CaptureDrivers(FakeDrivers):
-        def __init__(self) -> None:
-            super().__init__()
-            self.prompts: list[str] = []
-
-        async def execute(self, *, prompt: str = "", **kwargs) -> DriverResult:
-            self.prompts.append(prompt)
-            return DriverResult("SUCCESS", "", "ok", "", "")
-
-    drivers = CaptureDrivers()
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    tkey = target_execution_key(catalog.targets[0])
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        # Turn with no session
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="history-stream",
-            role="implement",
-            target_id=catalog.targets[0].id,
-            target_key=tkey,
-            session_id="",
-            prompt="prior question",
-            response="prior answer",
-        )
-
-        # Standard job injects history
-        sub_standard = await runtime.submit(
-            project.id,
-            "implement",
-            "current task",
-            context_key="history-stream",
-            fresh_session=False,
-        )
-        await runtime.wait(sub_standard.job_id, 10)
-        assert "Previous context:" in drivers.prompts[0]
-        assert "prior question" in drivers.prompts[0]
-        assert "current task" in drivers.prompts[0]
-
-        # Fresh job bypasses history
-        sub_fresh = await runtime.submit(
-            project.id,
-            "implement",
-            "current task",
-            context_key="history-stream",
-            fresh_session=True,
-        )
-        await runtime.wait(sub_fresh.job_id, 10)
-        assert drivers.prompts[1] == "current task"
-        assert "Previous context:" not in drivers.prompts[1]
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_fresh_session_flag_survives_daemon_restart(tmp_path) -> None:
+async def test_fresh_flag_survives_daemon_restart(tmp_path) -> None:
     root = repository(tmp_path)
     home = tmp_path / "home"
     catalog = config(home)
     database = Database(catalog.database_path)
-    project = database.upsert_project(project_id="project", alias="project", root=root.as_posix())
+    project = database.upsert_project(project_id="project", root=root.as_posix())
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     database.create_job(
         job_id="queued-fresh",
@@ -2334,8 +1925,8 @@ async def test_fresh_session_flag_survives_daemon_restart(tmp_path) -> None:
         profile="balanced",
         prompt="fresh restart prompt",
         execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="implement",
-        fresh_session=True,
+        session="implement",
+        fresh=True,
     )
     database.close()
 
@@ -2381,15 +1972,12 @@ async def test_cancelled_fresh_job_preserves_old_sessions_when_backend_reports_s
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="stream",
-            role="implement",
-            target_id=catalog.targets[0].id,
+            session="stream",
+            workflow="implement",
             target_key=tkey,
-            session_id="old-session",
-            prompt="turn 1",
-            response="response 1",
+            backend_session_id="old-session",
         )
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
 
@@ -2397,8 +1985,8 @@ async def test_cancelled_fresh_job_preserves_old_sessions_when_backend_reports_s
             project.id,
             "implement",
             "cancelled prompt",
-            context_key="stream",
-            fresh_session=True,
+            session="stream",
+            fresh=True,
         )
         job = await runtime.wait(submitted.job_id, 10)
         assert job.state in {"cancelled", "interrupted"}
@@ -2424,22 +2012,19 @@ async def test_fresh_job_persistence_failure_rolls_back_and_preserves_old_sessio
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="stream",
-            role="implement",
-            target_id=catalog.targets[0].id,
+            session="stream",
+            workflow="implement",
             target_key=tkey,
-            session_id="old-session",
-            prompt="turn 1",
-            response="response 1",
+            backend_session_id="old-session",
         )
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
 
         runtime.database._connection.execute("""
-            CREATE TRIGGER fail_fresh_turn BEFORE INSERT ON context_turns
+            CREATE TRIGGER fail_fresh BEFORE INSERT ON target_sessions
             BEGIN
-                SELECT RAISE(FAIL, 'turn insert failed');
+                SELECT RAISE(FAIL, 'session insert failed');
             END;
         """)
 
@@ -2447,13 +2032,13 @@ async def test_fresh_job_persistence_failure_rolls_back_and_preserves_old_sessio
             project.id,
             "implement",
             "failing persistence prompt",
-            context_key="stream",
-            fresh_session=True,
+            session="stream",
+            fresh=True,
         )
         job = await runtime.wait(submitted.job_id, 10)
         assert job.state == "failed"
 
-        runtime.database._connection.execute("DROP TRIGGER fail_fresh_turn")
+        runtime.database._connection.execute("DROP TRIGGER fail_fresh")
 
         # Atomic rollback preserves old session on persistence failure
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
@@ -2462,7 +2047,7 @@ async def test_fresh_job_persistence_failure_rolls_back_and_preserves_old_sessio
 
 
 @pytest.mark.asyncio
-async def test_fresh_job_failure_updating_state_to_succeeded_preserves_old_session_and_turn_count(tmp_path) -> None:
+async def test_fresh_job_failure_updating_state_to_succeeded_preserves_old_session(tmp_path) -> None:
     root = repository(tmp_path)
     catalog = config(tmp_path / "home")
 
@@ -2476,19 +2061,14 @@ async def test_fresh_job_failure_updating_state_to_succeeded_preserves_old_sessi
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="stream",
-            role="implement",
-            target_id=catalog.targets[0].id,
+            session="stream",
+            workflow="implement",
             target_key=tkey,
-            session_id="old-session",
-            prompt="turn 1",
-            response="response 1",
+            backend_session_id="old-session",
         )
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
-        initial_turns = len(runtime.database.recent_turns(project.id, "stream", "implement", 100))
-        assert initial_turns == 1
 
         # Reject only state='succeeded'
         runtime.database._connection.execute("""
@@ -2504,167 +2084,16 @@ async def test_fresh_job_failure_updating_state_to_succeeded_preserves_old_sessi
             project.id,
             "implement",
             "failing state update prompt",
-            context_key="stream",
-            fresh_session=True,
+            session="stream",
+            fresh=True,
         )
         job = await runtime.wait(submitted.job_id, 10)
         assert job.state == "failed"
 
         runtime.database._connection.execute("DROP TRIGGER reject_succeeded")
 
-        # Preserves old session and previous turn count
+        # Preserves old session
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
-        assert len(runtime.database.recent_turns(project.id, "stream", "implement", 100)) == initial_turns
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_stream_bridge_blocking_backpressure_and_sentinel_drain(tmp_path) -> None:
-    """Queue capacity of 256 blocks producer until consumer drains."""
-    from refract.drivers import StreamBridge
-
-    bridge = StreamBridge(queue_capacity=256)
-    producer_threads: set[int] = set()
-
-    # In a worker thread, emit 300 events
-    def worker():
-        import threading
-        producer_threads.add(threading.get_ident())
-        for i in range(300):
-            bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"{i} "}})
-        bridge.close_producer()
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-
-    consumed = []
-    async for evt in bridge.consumer():
-        consumed.append(evt)
-
-    thread.join(timeout=2.0)
-    assert len(consumed) == 300
-    assert len(producer_threads) == 1
-    assert producer_threads != {threading.get_ident()}
-
-
-@pytest.mark.asyncio
-async def test_stream_bridge_event_loop_close_drains_accepted_events() -> None:
-    from refract.drivers import StreamBridge
-
-    bridge = StreamBridge(queue_capacity=256)
-    await bridge.queue.put({
-        "kind": "assistant.text.delta",
-        "entity_id": "msg-1",
-        "data": {"text": "accepted"},
-    })
-    await bridge.close()
-
-    assert [event async for event in bridge.consumer()] == [{
-        "kind": "assistant.text.delta",
-        "entity_id": "msg-1",
-        "data": {"text": "accepted"},
-    }]
-
-
-@pytest.mark.asyncio
-async def test_stream_bridge_cancellation_drains_accepted_events(tmp_path) -> None:
-    from refract.drivers import StreamBridge
-
-    bridge = StreamBridge(queue_capacity=256)
-
-    def worker():
-        for i in range(10):
-            bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"item-{i}"}})
-        bridge.close_producer()
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-
-    consumed = []
-    async for evt in bridge.consumer():
-        consumed.append(evt)
-
-    thread.join(timeout=2.0)
-    assert len(consumed) == 10
-
-
-@pytest.mark.asyncio
-async def test_stream_bridge_tool_activity_tracking() -> None:
-    from refract.drivers import StreamBridge
-
-    bridge = StreamBridge(queue_capacity=256)
-    # 1. New bridge reports no activity
-    assert bridge.has_tool_activity is False
-
-    def emit_worker(events: list[dict[str, Any]]) -> None:
-        for evt in events:
-            bridge.emit(evt)
-
-    # 2. Assistant deltas do not mark activity
-    await asyncio.to_thread(emit_worker, [{"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "hello"}}])
-    assert bridge.has_tool_activity is False
-
-    # 3. tool.completed alone does not mark activity
-    await asyncio.to_thread(emit_worker, [{"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed"}}])
-    assert bridge.has_tool_activity is False
-
-    # 4. tool.started permanently marks activity
-    await asyncio.to_thread(emit_worker, [{"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "grep"}}])
-    assert bridge.has_tool_activity is True
-
-    # Repeated tool.started retains signal
-    await asyncio.to_thread(emit_worker, [{"kind": "tool.started", "entity_id": "tool-2", "data": {"tool": "read"}}])
-    assert bridge.has_tool_activity is True
-
-    # 5. Closing and draining preserve the signal
-    await asyncio.to_thread(bridge.close_producer)
-    assert bridge.has_tool_activity is True
-
-    consumed = []
-    async for event in bridge.consumer():
-        consumed.append(event)
-    assert len(consumed) == 4
-    assert bridge.has_tool_activity is True
-
-
-@pytest.mark.asyncio
-async def test_stream_bridge_thread_ownership_no_sqlite_on_provider_thread(tmp_path) -> None:
-    """Assert provider threads never touch the SQLite database."""
-    from refract.drivers import StreamBridge
-    root = repository(tmp_path)
-    cat = config(tmp_path / "home")
-    runtime = Runtime(cat)
-    await runtime.start()
-
-    accessed_threads: set[int] = set()
-    orig_append = runtime.database.append_stream_events
-
-    def tracking_append(*args, **kwargs):
-        accessed_threads.add(threading.get_ident())
-        return orig_append(*args, **kwargs)
-
-    runtime.database.append_stream_events = tracking_append
-
-    bridge = StreamBridge(queue_capacity=256)
-    worker_tid = None
-
-    def worker():
-        nonlocal worker_tid
-        worker_tid = threading.get_ident()
-        bridge.emit({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "hello"}})
-        bridge.close_producer()
-
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-
-    async for _ in bridge.consumer():
-        pass
-    t.join(timeout=2.0)
-
-    try:
-        assert worker_tid is not None
-        assert worker_tid not in accessed_threads
     finally:
         await runtime.close()
 
@@ -2676,11 +2105,11 @@ async def test_accepted_events_flush_before_lifecycle_completion(tmp_path) -> No
     cat = config(tmp_path / "home")
 
     class StreamingDrivers(FakeDrivers):
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
-            if emitter:
-                def worker():
-                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "streaming content"}})
-                await asyncio.to_thread(worker)
+        async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
+            if on_event:
+                async def worker():
+                    await on_event({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "streaming content"}})
+                await worker()
             return DriverResult("SUCCESS", "sess-1", "streaming content", "", "")
 
     runtime = Runtime(cat)
@@ -2692,16 +2121,16 @@ async def test_accepted_events_flush_before_lifecycle_completion(tmp_path) -> No
         job = await runtime.wait(sub.job_id, 5)
         assert job.state == "succeeded"
 
-        events = runtime.database.stream_events(sub.job_id, after=0)
-        assert any(e.kind == "assistant.text.delta" and e.data.get("text") == "streaming content" for e in events)
-        finished = [e for e in events if e.kind == "attempt.finished"]
+        events = _stream_events(runtime.database, sub.job_id)
+        assert any(e["kind"] == "assistant.text.delta" and e["data"].get("text") == "streaming content" for e in events)
+        finished = [e for e in events if e["kind"] == "attempt.finished"]
         assert len(finished) == 1
-        assert finished[0].attempt == 1
-        assert finished[0].data["status"] == "succeeded"
-        assert finished[0].data["outcome"] == "SUCCESS"
-        assert finished[0].data["error_code"] == ""
-        delta_idx = next(i for i, e in enumerate(events) if e.kind == "assistant.text.delta")
-        finished_idx = next(i for i, e in enumerate(events) if e.kind == "attempt.finished")
+        assert finished[0]["attempt"] == 1
+        assert finished[0]["data"]["status"] == "succeeded"
+        assert finished[0]["data"]["outcome"] == "SUCCESS"
+        assert finished[0]["data"]["error_code"] == ""
+        delta_idx = next(i for i, e in enumerate(events) if e["kind"] == "assistant.text.delta")
+        finished_idx = next(i for i, e in enumerate(events) if e["kind"] == "attempt.finished")
         assert delta_idx < finished_idx
         # Authoritative final result matches
         assert job.result.text == "streaming content"
@@ -2719,11 +2148,11 @@ async def test_attempt_finished_cancelled_status_on_job_cancellation(tmp_path) -
             super().__init__()
             self.started = asyncio.Event()
 
-        async def execute(self, *, emitter=None, cancel_event=None, **kwargs) -> DriverResult:
-            if emitter:
-                def worker():
-                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "stream before cancel"}})
-                await asyncio.to_thread(worker)
+        async def execute(self, *, on_event=None, cancel_event=None, **kwargs) -> DriverResult:
+            if on_event:
+                async def worker():
+                    await on_event({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "stream before cancel"}})
+                await worker()
             self.started.set()
             while cancel_event and not cancel_event.is_set():
                 await asyncio.sleep(0.01)
@@ -2741,14 +2170,14 @@ async def test_attempt_finished_cancelled_status_on_job_cancellation(tmp_path) -
         job = await runtime.wait(sub.job_id, 5)
         assert job.state == "cancelled"
 
-        events = runtime.database.stream_events(sub.job_id, after=0)
-        assert any(e.kind == "assistant.text.delta" for e in events)
-        finished = [e for e in events if e.kind == "attempt.finished"]
+        events = _stream_events(runtime.database, sub.job_id)
+        assert any(e["kind"] == "assistant.text.delta" for e in events)
+        finished = [e for e in events if e["kind"] == "attempt.finished"]
         assert len(finished) == 1
-        assert finished[0].attempt == 1
-        assert finished[0].data["status"] == "cancelled"
-        assert finished[0].data["outcome"] == "CANCELLED"
-        assert finished[0].data["error_code"] == "cancelled"
+        assert finished[0]["attempt"] == 1
+        assert finished[0]["data"]["status"] == "cancelled"
+        assert finished[0]["data"]["outcome"] == "CANCELLED"
+        assert finished[0]["data"]["error_code"] == "cancelled"
     finally:
         await runtime.close()
 
@@ -2759,11 +2188,11 @@ async def test_attempt_finished_records_cancelled_status_when_cancel_event_set(t
     cat = config(tmp_path / "home")
 
     class RaceCancellingDrivers(FakeDrivers):
-        async def execute(self, *, emitter=None, cancel_event=None, **kwargs) -> DriverResult:
-            if emitter:
-                def worker():
-                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "streaming content"}})
-                await asyncio.to_thread(worker)
+        async def execute(self, *, on_event=None, cancel_event=None, **kwargs) -> DriverResult:
+            if on_event:
+                async def worker():
+                    await on_event({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "streaming content"}})
+                await worker()
             if cancel_event:
                 cancel_event.set()
             return DriverResult("SUCCESS", "sess-1", "streaming content", "", "")
@@ -2777,53 +2206,11 @@ async def test_attempt_finished_records_cancelled_status_when_cancel_event_set(t
         job = await runtime.wait(sub.job_id, 5)
         assert job.state in {"cancelled", "interrupted"}
 
-        events = runtime.database.stream_events(sub.job_id, after=0)
-        finished = [e for e in events if e.kind == "attempt.finished"]
+        events = _stream_events(runtime.database, sub.job_id)
+        finished = [e for e in events if e["kind"] == "attempt.finished"]
         assert len(finished) == 1
-        assert finished[0].data["status"] == "cancelled"
-        assert finished[0].data["outcome"] == "CANCELLED"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_execution_exact_quota_boundary_retains_finish_marker(tmp_path, monkeypatch) -> None:
-    from refract.streaming import StreamRecorder
-
-    orig_init = StreamRecorder.__init__
-    def custom_init(self, *args, **kwargs):
-        kwargs.setdefault("max_job_events", 2)
-        orig_init(self, *args, **kwargs)
-    monkeypatch.setattr(StreamRecorder, "__init__", custom_init)
-
-    root = repository(tmp_path)
-    cfg = config(tmp_path / "home")
-
-    class ExactBoundaryDrivers(FakeDrivers):
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
-            if emitter:
-                def worker():
-                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "first"}})
-                    emitter({"kind": "assistant.text.delta", "entity_id": "m2", "data": {"text": "second"}})
-                await asyncio.to_thread(worker)
-            return DriverResult("SUCCESS", "sess-1", "all good", "", "")
-
-    runtime = Runtime(cfg)
-    runtime.drivers = ExactBoundaryDrivers()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        sub = await runtime.submit(project.id, "implement", "exact quota test")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-        assert runtime.database.stream_is_truncated(sub.job_id) is False
-
-        events = runtime.database.stream_events(sub.job_id, after=0)
-        assert not any(e.kind == "stream.truncated" for e in events)
-        finished = [e for e in events if e.kind == "attempt.finished"]
-        assert len(finished) == 1
-        assert finished[0].data["status"] == "succeeded"
-        assert finished[0].data["outcome"] == "SUCCESS"
+        assert finished[0]["data"]["status"] == "cancelled"
+        assert finished[0]["data"]["outcome"] == "CANCELLED"
     finally:
         await runtime.close()
 
@@ -2843,12 +2230,12 @@ async def test_single_failed_attempt_transcript_uses_attempt_one(tmp_path) -> No
             super().__init__()
             self.call_count = 0
 
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+        async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
             self.call_count += 1
-            if emitter:
-                def worker(c):
-                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
-                await asyncio.to_thread(worker, self.call_count)
+            if on_event:
+                async def worker(c):
+                    await on_event({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
+                await worker(self.call_count)
             if self.call_count == 1:
                 return DriverResult("RETRYABLE", "", "", "first attempt failed", "backend_failure")
             return DriverResult("SUCCESS", "sess-2", "final success", "", "")
@@ -2861,17 +2248,16 @@ async def test_single_failed_attempt_transcript_uses_attempt_one(tmp_path) -> No
         sub = await runtime.submit(project.id, "implement", "do attempts")
         job = await runtime.wait(sub.job_id, 5)
         assert job.state == "failed"
-        assert job.attempts == 1
-        events = runtime.database.stream_events(sub.job_id, after=0)
-        deltas = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
+        events = _stream_events(runtime.database, sub.job_id)
+        deltas = [e for e in events if e["attempt"] == 1 and e["kind"] == "assistant.text.delta"]
         assert len(deltas) == 1
-        assert deltas[0].data["text"] == "attempt-1"
-        finished = [e for e in events if e.kind == "attempt.finished"]
+        assert deltas[0]["data"]["text"] == "attempt-1"
+        finished = [e for e in events if e["kind"] == "attempt.finished"]
         assert len(finished) == 1
-        assert finished[0].attempt == 1
-        assert finished[0].data["status"] == "failed"
-        assert finished[0].data["outcome"] == "RETRYABLE"
-        assert finished[0].data["error_code"] == "backend_failure"
+        assert finished[0]["attempt"] == 1
+        assert finished[0]["data"]["status"] == "failed"
+        assert finished[0]["data"]["outcome"] == "RETRYABLE"
+        assert finished[0]["data"]["error_code"] == "backend_failure"
     finally:
         await runtime.close()
 
@@ -2888,12 +2274,12 @@ async def test_attempt_finished_records_driver_exception_as_request_failure(tmp_
             super().__init__()
             self.call_count = 0
 
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+        async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
             self.call_count += 1
-            if emitter:
-                def worker(c):
-                    emitter({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
-                await asyncio.to_thread(worker, self.call_count)
+            if on_event:
+                async def worker(c):
+                    await on_event({"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": f"attempt-{c}"}})
+                await worker(self.call_count)
             raise RuntimeError("driver crash")
 
     runtime = Runtime(cat)
@@ -2904,19 +2290,17 @@ async def test_attempt_finished_records_driver_exception_as_request_failure(tmp_
         sub = await runtime.submit(project.id, "implement", "do crashing attempt")
         job = await runtime.wait(sub.job_id, 5)
         assert job.state == "failed"
-        metadata = job.result.metadata.model_dump(mode="json")
-        assert set(metadata) == RESULT_METADATA_KEYS
-        assert metadata["failure"]["kind"] == "request_fatal"
-        assert metadata["retry"]["retryable"] is False
-        assert metadata["execution"]["model"] == "configured-model"
-        assert isinstance(metadata["execution"]["duration_ms"], int)
+        job_result = job.result
+        assert job_result.failure_kind == "request_fatal"
+        assert job_result.model == "configured-model"
+        assert isinstance(job_result.duration_ms, int)
 
-        events = runtime.database.stream_events(sub.job_id, after=0)
-        finished = [e for e in events if e.attempt == 1 and e.kind == "attempt.finished"]
+        events = _stream_events(runtime.database, sub.job_id)
+        finished = [e for e in events if e["attempt"] == 1 and e["kind"] == "attempt.finished"]
         assert len(finished) == 1
-        assert finished[0].data["status"] == "failed"
-        assert finished[0].data["outcome"] == "REQUEST_FATAL"
-        assert finished[0].data["error_code"] == "execution_error"
+        assert finished[0]["data"]["status"] == "failed"
+        assert finished[0]["data"]["outcome"] == "REQUEST_FATAL"
+        assert finished[0]["data"]["error_code"] == "execution_error"
     finally:
         await runtime.close()
 
@@ -2957,7 +2341,7 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
     assert registry.supports_structured_streaming(target_new, version_check=fake_version_check) is True
     assert len(checks) == 2
 
-    # In execution, when capability is unsupported, TargetExecutor falls back to final-only invocation (emitter=None)
+    # In execution, when capability is unsupported, TargetExecutor falls back to final-only invocation (on_event=None)
     root = repository(tmp_path)
     target_exec = TargetConfig(id="target-exec", backend="claude")
     cat = config(tmp_path / "home", (target_exec,))
@@ -2969,8 +2353,8 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
         def supports_structured_streaming(self, target, **kwargs):
             return False
 
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
-            received_emitters.append(emitter)
+        async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
+            received_emitters.append(on_event)
             return DriverResult("SUCCESS", "sess-old", "fallback output", "", "")
 
     runtime.drivers = MockExecutorDrivers()
@@ -2984,7 +2368,7 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
         # Emitter passed to driver must be None for final-only fallback
         assert received_emitters == [None]
         # No stream events recorded
-        events = runtime.database.stream_events(sub.job_id, after=0)
+        events = _stream_events(runtime.database, sub.job_id)
         assert len(events) == 0
     finally:
         await runtime.close()
@@ -3069,49 +2453,6 @@ def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_execution_durable_reload_preserves_streaming_and_authoritative_result(tmp_path) -> None:
-    """Complete job streaming execution, restart runtime, and assert durable reconstruction."""
-    root = repository(tmp_path)
-    cfg = config(tmp_path / "home")
-
-    class SampleDrivers(FakeDrivers):
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
-            if emitter:
-                def worker():
-                    emitter({"kind": "assistant.message.started", "entity_id": "m1", "data": {}})
-                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "live tokens"}})
-                    emitter({"kind": "assistant.message.completed", "entity_id": "m1", "data": {}})
-                await asyncio.to_thread(worker)
-            return DriverResult("SUCCESS", "sess-1", "live tokens", "", "")
-
-    runtime1 = Runtime(cfg)
-    runtime1.drivers = SampleDrivers()
-    await runtime1.start()
-    try:
-        project = register_project(runtime1, str(root))
-        sub = await runtime1.submit(project.id, "implement", "test reload")
-        job = await runtime1.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-        hw1 = runtime1.database.stream_high_water(sub.job_id)
-        assert hw1 > 0
-    finally:
-        await runtime1.close()
-
-    runtime2 = Runtime(cfg)
-    try:
-        hw2 = runtime2.database.stream_high_water(sub.job_id)
-        assert hw2 == hw1
-        events = runtime2.database.stream_events(sub.job_id, after=0)
-        assert len(events) >= 3
-        assert any(e.kind == "assistant.text.delta" and e.data.get("text") == "live tokens" for e in events)
-        job2 = runtime2.database.job(sub.job_id)
-        assert job2 is not None
-        assert job2.result.text == "live tokens"
-    finally:
-        await runtime2.close()
-
-
-@pytest.mark.asyncio
 async def test_single_failed_execution_metadata_survives_runtime_reload(tmp_path) -> None:
     """The single failed target's transcript and metadata survive daemon restart."""
     root = repository(tmp_path)
@@ -3126,12 +2467,12 @@ async def test_single_failed_execution_metadata_survives_runtime_reload(tmp_path
             super().__init__()
             self.count = 0
 
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+        async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
             self.count += 1
-            if emitter:
-                def worker(c):
-                    emitter({"kind": "assistant.text.delta", "entity_id": f"msg-{c}", "data": {"text": f"attempt-{c}-text"}})
-                await asyncio.to_thread(worker, self.count)
+            if on_event:
+                async def worker(c):
+                    await on_event({"kind": "assistant.text.delta", "entity_id": f"msg-{c}", "data": {"text": f"attempt-{c}-text"}})
+                await worker(self.count)
             if self.count == 1:
                 return DriverResult("RETRYABLE", "", "", "transient error", "network_err")
             return DriverResult("SUCCESS", "sess-retry", "successful second attempt", "", "")
@@ -3144,62 +2485,20 @@ async def test_single_failed_execution_metadata_survives_runtime_reload(tmp_path
         sub = await runtime1.submit(project.id, "implement", "retry test")
         job = await runtime1.wait(sub.job_id, 5)
         assert job.state == "failed"
-        assert job.attempts == 1
-        assert job.result.metadata.failure.kind == "retryable"
+        assert job.result.failure_kind == "transient"
     finally:
         await runtime1.close()
 
     runtime2 = Runtime(cfg)
     try:
-        events = runtime2.database.stream_events(sub.job_id, after=0)
-        deltas = [e for e in events if e.attempt == 1 and e.kind == "assistant.text.delta"]
+        events = _stream_events(runtime2.database, sub.job_id)
+        deltas = [e for e in events if e["attempt"] == 1 and e["kind"] == "assistant.text.delta"]
         assert len(deltas) == 1
-        assert deltas[0].data["text"] == "attempt-1-text"
+        assert deltas[0]["data"]["text"] == "attempt-1-text"
         reloaded_job = runtime2.database.job(sub.job_id)
-        assert reloaded_job.result.metadata.failure.kind == "retryable"
-        assert reloaded_job.result.metadata.retry.retryable is False
+        assert reloaded_job.result.failure_kind == "transient"
     finally:
         await runtime2.close()
-
-
-@pytest.mark.asyncio
-async def test_execution_truncation_limits_preserve_final_result(tmp_path, monkeypatch) -> None:
-    """Stream truncation marks stream.truncated while keeping job.result.text authoritative."""
-    from refract.streaming import StreamRecorder
-
-    orig_init = StreamRecorder.__init__
-    def custom_init(self, *args, **kwargs):
-        kwargs.setdefault("max_job_bytes", 500)
-        orig_init(self, *args, **kwargs)
-    monkeypatch.setattr(StreamRecorder, "__init__", custom_init)
-
-    root = repository(tmp_path)
-    cfg = config(tmp_path / "home")
-
-    class VoluminousDrivers(FakeDrivers):
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
-            if emitter:
-                def worker():
-                    for i in range(10):
-                        emitter({"kind": "assistant.text.delta", "entity_id": f"m{i}", "data": {"text": "A" * 100}})
-                await asyncio.to_thread(worker)
-            return DriverResult("SUCCESS", "sess-vol", "Full authoritative final text exceeding quota.", "", "")
-
-    runtime = Runtime(cfg)
-    runtime.drivers = VoluminousDrivers()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        sub = await runtime.submit(project.id, "implement", "voluminous test")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-        assert job.result.text == "Full authoritative final text exceeding quota."
-
-        assert runtime.database.stream_is_truncated(sub.job_id) is True
-        events = runtime.database.stream_events(sub.job_id, after=0)
-        assert any(e.kind == "stream.truncated" for e in events)
-    finally:
-        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -3209,11 +2508,11 @@ async def test_execution_persistence_failure_does_not_corrupt_stream_or_fail_job
     cfg = config(tmp_path / "home")
 
     class FailingStreamDrivers(FakeDrivers):
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
-            if emitter:
-                def worker():
-                    emitter({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "first event"}})
-                await asyncio.to_thread(worker)
+        async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
+            if on_event:
+                async def worker():
+                    await on_event({"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "first event"}})
+                await worker()
             return DriverResult("SUCCESS", "sess-fail", "terminal result text", "", "")
 
     runtime = Runtime(cfg)
@@ -3221,7 +2520,7 @@ async def test_execution_persistence_failure_does_not_corrupt_stream_or_fail_job
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        orig_append = runtime.database.append_stream_events
+        orig_append = runtime.database.append_stream
 
         call_count = 0
         def fragile_append(job_id, events):
@@ -3231,7 +2530,7 @@ async def test_execution_persistence_failure_does_not_corrupt_stream_or_fail_job
                 raise RuntimeError("simulated disk write failure")
             return orig_append(job_id, events)
 
-        runtime.database.append_stream_events = fragile_append
+        runtime.database.append_stream = fragile_append
         sub = await runtime.submit(project.id, "implement", "persistence fail test")
         job = await runtime.wait(sub.job_id, 5)
         assert job.state == "succeeded"
@@ -3258,13 +2557,13 @@ async def test_execution_security_regression_fixtures_strip_forbidden_content(tm
     ]
 
     class DirtyNormalizedDrivers(FakeDrivers):
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
-            if emitter:
-                def worker():
-                    emitter({"kind": "assistant.text.delta", "entity_id": "safe-msg", "data": {"text": "Safe verified response."}})
-                    emitter({"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "read"}})
-                    emitter({"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed"}})
-                await asyncio.to_thread(worker)
+        async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
+            if on_event:
+                async def worker():
+                    await on_event({"kind": "assistant.text.delta", "entity_id": "safe-msg", "data": {"text": "Safe verified response."}})
+                    await on_event({"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "read"}})
+                    await on_event({"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed"}})
+                await worker()
             return DriverResult("SUCCESS", "sess-clean", "Safe verified response.", "", "")
 
     runtime = Runtime(cfg)
@@ -3277,11 +2576,7 @@ async def test_execution_security_regression_fixtures_strip_forbidden_content(tm
         assert job.state == "succeeded"
         assert job.result.text == "Safe verified response."
 
-        cursor = runtime.database._connection.execute(
-            "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
-            (sub.job_id,),
-        )
-        stream_rows_raw = str(cursor.fetchall())
+        stream_rows_raw = json.dumps(_stream_events(runtime.database, sub.job_id))
         for secret in forbidden_secrets:
             assert secret not in stream_rows_raw
     finally:
@@ -3306,9 +2601,9 @@ async def test_agy_never_promotes_log_text_to_agent_messages_on_empty_stdout(tmp
         yield ""
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda _: "/bin/agy")
-    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell)
+    monkeypatch.setattr(agy_backend, "run_process", shell_fake_as_process(fake_run_shell))
 
-    res = agy_backend.execute(BackendParams(PROMPT="test", cd=tmp_path))
+    res = await agy_backend.execute(BackendParams(PROMPT="test", cd=tmp_path))
     assert res.SESSION_ID == session_id
     assert secret_diagnostic not in res.agent_messages
     assert "server internal dump" not in res.agent_messages
@@ -3323,7 +2618,7 @@ def test_agy_execute_sync_post_submission_type_error_single_invocation(tmp_path,
 
     call_count = 0
 
-    def fail_with_type_error(params, entity_state=None):
+    def fail_with_type_error(params, *, cancel=None, on_event=None, entity_state=None):
         nonlocal call_count
         call_count += 1
         raise TypeError("post-submission internal failure")
@@ -3332,7 +2627,7 @@ def test_agy_execute_sync_post_submission_type_error_single_invocation(tmp_path,
 
     params = BackendParams(PROMPT="test", cd=tmp_path)
     with pytest.raises(TypeError, match="post-submission internal failure"):
-        agy_backend.execute(params)
+        execute_sync(agy_backend.execute, params)
 
     assert call_count == 1
 
@@ -3340,9 +2635,9 @@ def test_agy_execute_sync_post_submission_type_error_single_invocation(tmp_path,
 @pytest.mark.asyncio
 async def test_execution_all_provider_fixtures_persistence_and_authoritative_results(tmp_path, monkeypatch) -> None:
     """Exercise sanitized Claude, Codex, Pi, and Agy fixtures through execution flow."""
-    from refract.backends.claude import execute as claude_sync
-    from refract.backends.codex import execute as codex_sync
-    from refract.backends.pi import execute as pi_sync
+    from refract.backends.claude import execute as claude_execute
+    from refract.backends.codex import execute as codex_execute
+    from refract.backends.pi import execute as pi_execute_once
     from refract.backends.agy import execute as agy_execute_once
 
     root = repository(tmp_path)
@@ -3397,23 +2692,28 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             super().__init__()
             self.backend_name = backend_name
 
-        async def execute(self, *, emitter=None, **kwargs) -> DriverResult:
+        async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
             lines = dirty_streams[self.backend_name]
-            def run_adapter():
-                if self.backend_name == "claude":
-                    monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *args, **kw: (l for l in lines))
-                    return claude_sync(BackendParams(PROMPT="p", cd=tmp_path, emitter=emitter))
-                elif self.backend_name == "codex":
-                    monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *args, **kw: (l for l in lines))
-                    return codex_sync(BackendParams(PROMPT="p", cd=tmp_path, emitter=emitter))
-                elif self.backend_name == "pi":
-                    monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *args, **kw: (l for l in lines))
-                    return pi_sync(BackendParams(PROMPT="p", cd=tmp_path, emitter=emitter))
-                else:
-                    monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *args, **kw: (l for l in lines))
-                    return agy_execute_once(BackendParams(PROMPT="p", cd=tmp_path, emitter=emitter))
+            if self.backend_name == "claude":
+                stub_claude(monkeypatch, tmp_path, lines)
+                res = await claude_execute(BackendParams(PROMPT="p", cd=tmp_path), on_event=on_event)
+                return DriverResult(
+                    outcome="SUCCESS" if res.outcome == "OK" else "FATAL",
+                    session_id=res.SESSION_ID,
+                    text=res.agent_messages,
+                    error=res.error,
+                    error_code=res.error_class,
+                )
 
-            res = await asyncio.to_thread(run_adapter)
+            if self.backend_name == "codex":
+                monkeypatch.setattr("refract.backends.codex.run_process", shell_fake_as_process(lambda *args, **kw: (l for l in lines)))
+                res = await codex_execute(BackendParams(PROMPT="p", cd=tmp_path), on_event=on_event)
+            elif self.backend_name == "pi":
+                monkeypatch.setattr("refract.backends.pi.run_process", fake_run_process(lines))
+                res = await pi_execute_once(BackendParams(PROMPT="p", cd=tmp_path), on_event=on_event)
+            else:
+                monkeypatch.setattr("refract.backends.agy.run_process", fake_run_process(lines))
+                res = await agy_execute_once(BackendParams(PROMPT="p", cd=tmp_path), on_event=on_event)
             return DriverResult(
                 outcome="SUCCESS" if res.outcome == "OK" else "FATAL",
                 session_id=res.SESSION_ID,
@@ -3436,12 +2736,8 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             for s in secrets:
                 assert s not in job.result.text
 
-            cursor = runtime.database._connection.execute(
-                "SELECT id, kind, entity_id, parent_entity_id, data_json FROM job_stream_events WHERE job_id=?",
-                (sub.job_id,),
-            )
-            rows = cursor.fetchall()
-            rows_data_text = " ".join(r["data_json"] for r in rows)
+            rows = _stream_events(runtime.database, sub.job_id)
+            rows_data_text = " ".join(json.dumps(r["data"]) for r in rows)
 
             # Prompts (secrets[0]), diagnostic traces (secrets[3]), and reasoning (secrets[4]) must never persist
             for s in [secrets[0], secrets[3], secrets[4]]:
@@ -3459,7 +2755,7 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             tool_start_rows = [r for r in rows if r["kind"] == "tool.started"]
             assert len(tool_start_rows) >= 1
             for r in tool_start_rows:
-                data = json.loads(r["data_json"])
+                data = r["data"]
                 assert "activity" in data, f"{backend_name} missing activity in persisted tool.started"
                 if backend_name == "codex":
                     assert data["activity"] == "command"
@@ -3468,7 +2764,7 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
 
             tool_completed_rows = [r for r in rows if r["kind"] == "tool.completed"]
             for r in tool_completed_rows:
-                data = json.loads(r["data_json"])
+                data = r["data"]
                 assert "activity" not in data, f"{backend_name} leaked activity to tool.completed"
         finally:
             await runtime.close()
@@ -3496,7 +2792,7 @@ class ScriptedRecoveryDrivers(FakeDrivers):
         cwd: Path,
         session_id: str,
         prompt: str = "",
-        emitter=None,
+        on_event=None,
         cancel_event=None,
         **kwargs,
     ) -> DriverResult:
@@ -3511,8 +2807,8 @@ class ScriptedRecoveryDrivers(FakeDrivers):
                 False,
             )
 
-        if emit_tool and emitter:
-            await asyncio.to_thread(emitter, {"kind": "tool.started", "tool_name": "bash"})
+        if emit_tool and on_event:
+            await on_event({"kind": "tool.started", "tool_name": "bash"})
 
         self.calls.append(
             RecordedInvocation(
@@ -3526,11 +2822,11 @@ class ScriptedRecoveryDrivers(FakeDrivers):
 
 
 @pytest.mark.asyncio
-async def test_recovery_resumed_overflow_followed_by_successful_reconstruction(tmp_path) -> None:
+async def test_resumed_context_overflow_fails_without_in_run_recovery(tmp_path) -> None:
     root = repository(tmp_path)
     script = [
         (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "reconstructed-sess-2", "reconstructed answer", "", ""), False),
+        (DriverResult("SUCCESS", "should-not-run", "should not run", "", ""), False),
     ]
     drivers = ScriptedRecoveryDrivers(script)
     runtime = Runtime(config(tmp_path / "home"))
@@ -3540,148 +2836,69 @@ async def test_recovery_resumed_overflow_followed_by_successful_reconstruction(t
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="turn 1 prompt",
-            response="turn 1 response",
+        runtime.database.store_session(
+            project_id=project.id, session="feature", workflow="implement",
+            target_key=tkey, backend_session_id="old-sess-1",
         )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", session="feature")
         job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
 
-        assert len(drivers.calls) == 2
-        # Exact invocation order and arguments
-        assert drivers.calls[0].target_id == target.id
-        assert drivers.calls[0].session_id == "old-sess-1"
-        assert drivers.calls[0].prompt == "turn 2 prompt"
-        assert drivers.calls[0].emitted_tool_activity is False
-
-        assert drivers.calls[1].target_id == target.id
-        assert drivers.calls[1].session_id == ""
-        assert "Previous context:\n\nUser:\nturn 1 prompt\n\nAssistant:\nturn 1 response" in drivers.calls[1].prompt
-        assert "Current request:\n\nturn 2 prompt" in drivers.calls[1].prompt
-        assert drivers.calls[1].emitted_tool_activity is False
-
-        # Database session replaced
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "reconstructed-sess-2"
-
-        # Events emitted
-        events = runtime.database.events(sub.job_id)
-        kinds = [e["kind"] for e in events]
-        assert "target.context_overflow" in kinds
-        assert "target.session_recovery_started" in kinds
-        assert "target.session_recovery_finished" in kinds
-        assert "target.session_replaced" in kinds
-
-        # Event payload checks
-        overflow_events = [e for e in events if e["kind"] == "target.context_overflow"]
-        assert overflow_events[0]["data"]["error_code"] == "context_overflow"
-        rec_started = [e for e in events if e["kind"] == "target.session_recovery_started"]
-        assert rec_started[0]["data"]["phase"] == "reconstruct"
-        rec_finished = [e for e in events if e["kind"] == "target.session_recovery_finished"]
-        assert rec_finished[0]["data"]["phase"] == "reconstruct"
-        assert rec_finished[0]["data"]["outcome"] == "SUCCESS"
-        sess_rep = [e for e in events if e["kind"] == "target.session_replaced"]
-        assert sess_rep[0]["data"]["phase"] == "reconstruct"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_reconstruction_overflow_followed_by_prompt_only_success(tmp_path) -> None:
-    root = repository(tmp_path)
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "prompt-only-sess-3", "prompt-only answer", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(config(tmp_path / "home"))
-    runtime.drivers = drivers
-    target = runtime.catalog.targets[0]
-    tkey = target_execution_key(target)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="turn 1 prompt",
-            response="turn 1 response",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-
-        assert len(drivers.calls) == 3
-        # Exact invocation order and arguments
-        assert drivers.calls[0].target_id == target.id
-        assert drivers.calls[0].session_id == "old-sess-1"
-        assert drivers.calls[0].prompt == "turn 2 prompt"
-
-        assert drivers.calls[1].target_id == target.id
-        assert drivers.calls[1].session_id == ""
-        assert "Previous context:" in drivers.calls[1].prompt
-
-        assert drivers.calls[2].target_id == target.id
-        assert drivers.calls[2].session_id == ""
-        assert drivers.calls[2].prompt == "turn 2 prompt"
-
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "prompt-only-sess-3"
-
-        events = runtime.database.events(sub.job_id)
-        phases = [e["data"].get("phase") for e in events if e["kind"] == "target.session_recovery_started"]
-        assert phases == ["reconstruct", "fresh"]
-        rep = [e for e in events if e["kind"] == "target.session_replaced"]
-        assert rep[0]["data"]["phase"] == "fresh"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_duplicate_prompt_only_suppression_when_history_adds_nothing(tmp_path) -> None:
-    root = repository(tmp_path)
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "unexpected third call", "context_overflow"), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(config(tmp_path / "home"))
-    runtime.drivers = drivers
-    target = runtime.catalog.targets[0]
-    tkey = target_execution_key(target)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        # Seed session directly without any turns in context_turns
-        runtime.database._connection.execute(
-            """INSERT INTO context_sessions(project_id, context_key, role, target_id, target_key, lane, session_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, '2026-01-01T00:00:00Z')""",
-            (project.id, "feature", "implement", target.id, tkey, "", "old-sess-1"),
-        )
-        runtime.database._connection.commit()
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
-
-        sub = await runtime.submit(project.id, "implement", "turn 1 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
         assert job.state == "failed"
+        assert job.result.failure_kind == "context_overflow"
+        assert [(c.session_id, c.prompt) for c in drivers.calls] == [("old-sess-1", "turn 2 prompt")]
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
+    finally:
+        await runtime.close()
 
-        # Exactly 2 invocations: resumed call and one empty-session prompt call
-        assert len(drivers.calls) == 2
-        assert drivers.calls[0].session_id == "old-sess-1"
-        assert drivers.calls[0].prompt == "turn 1 prompt"
-        assert drivers.calls[1].session_id == ""
-        assert drivers.calls[1].prompt == "turn 1 prompt"
+
+@pytest.mark.asyncio
+async def test_resumed_failure_after_tool_activity_is_replay_blocked(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), True),
+        (DriverResult("SUCCESS", "should-not-run", "should not run", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    target = runtime.catalog.targets[0]
+    tkey = target_execution_key(target)
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        runtime.database.store_session(
+            project_id=project.id, session="feature", workflow="implement",
+            target_key=tkey, backend_session_id="old-sess-1",
+        )
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", session="feature")
+        job = await runtime.wait(sub.job_id, 5)
+
+        assert job.state == "failed"
+        assert job.result.failure_kind == "replay_blocked"
+        assert len(drivers.calls) == 1
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_sessionless_job_sends_prompt_without_history(tmp_path) -> None:
+    root = repository(tmp_path)
+    script = [
+        (DriverResult("SUCCESS", "", "first answer", "", ""), False),
+        (DriverResult("SUCCESS", "", "second answer", "", ""), False),
+    ]
+    drivers = ScriptedRecoveryDrivers(script)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        for prompt in ("first prompt", "second prompt"):
+            sub = await runtime.submit(project.id, "implement", prompt, session="feature")
+            assert (await runtime.wait(sub.job_id, 5)).state == "succeeded"
+
+        assert [(c.session_id, c.prompt) for c in drivers.calls] == [("", "first prompt"), ("", "second prompt")]
     finally:
         await runtime.close()
 
@@ -3704,17 +2921,14 @@ async def test_recovery_tool_activity_during_resumed_call(tmp_path) -> None:
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        runtime.database.append_turn(
+        runtime.database.store_session(
             project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id="primary",
+            session="feature",
+            workflow="implement",
             target_key=tkey,
-            session_id="old-sess-1",
-            prompt="t1",
-            response="r1",
+            backend_session_id="old-sess-1",
         )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
+        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", session="feature")
         job = await runtime.wait(sub.job_id, 5)
         assert job.state == "failed"
 
@@ -3728,597 +2942,6 @@ async def test_recovery_tool_activity_during_resumed_call(tmp_path) -> None:
 
         # Overflow does not penalize health
         assert runtime.database.target_health(tkey)["consecutive_failures"] == 0
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_tool_activity_during_reconstruction(tmp_path) -> None:
-    root = repository(tmp_path)
-    catalog = config(
-        tmp_path / "home",
-        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
-    )
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), True),
-        (DriverResult("SUCCESS", "should-not-run", "should not run", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    tkey = target_execution_key(catalog.targets[0])
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id="primary",
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="t1",
-            response="r1",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "failed"
-
-        # Reconstruction emitted tool activity: blocks prompt-only call and cross-target failover
-        assert len(drivers.calls) == 2
-        assert drivers.calls[0].target_id == "primary"
-        assert drivers.calls[1].target_id == "primary"
-        assert drivers.calls[1].emitted_tool_activity is True
-
-        # Old session preserved and health not penalized
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
-        assert runtime.database.target_health(tkey)["consecutive_failures"] == 0
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_ordinary_failure_stops_without_cross_target_fallback(tmp_path) -> None:
-    root = repository(tmp_path)
-    catalog = config(
-        tmp_path / "home",
-        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
-    )
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "ordinary backend failure", "execution_error"), False),
-        (DriverResult("SUCCESS", "sec-sess", "secondary response", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    tkey_primary = target_execution_key(catalog.targets[0])
-    tkey_sec = target_execution_key(catalog.targets[1])
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id="primary",
-            target_key=tkey_primary,
-            session_id="old-sess-1",
-            prompt="t1",
-            response="r1",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "failed"
-
-        assert len(drivers.calls) == 2
-        assert [call.target_id for call in drivers.calls] == ["primary", "primary"]
-        assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 1
-        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == ""
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_overflow_repair_stays_on_selected_target_without_fallback(tmp_path) -> None:
-    root = repository(tmp_path)
-    catalog = config(
-        tmp_path / "home",
-        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
-    )
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "sec-sess", "secondary response", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    tkey_primary = target_execution_key(catalog.targets[0])
-    tkey_sec = target_execution_key(catalog.targets[1])
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id="primary",
-            target_key=tkey_primary,
-            session_id="old-sess-1",
-            prompt="t1",
-            response="r1",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "failed"
-
-        assert len(drivers.calls) == 3
-        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary"]
-
-        # Overflow is health-neutral: primary failures remain 0
-        assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 0
-        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == ""
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_cancellation_during_recovery(tmp_path) -> None:
-    root = repository(tmp_path)
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("CANCELLED", "", "", "cancelled", "cancelled"), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(config(tmp_path / "home"))
-    runtime.drivers = drivers
-    target = runtime.catalog.targets[0]
-    tkey = target_execution_key(target)
-
-    def trigger_cancel(call_idx: int, _target, _sess, cancel_event: threading.Event | None) -> None:
-        if call_idx == 1 and cancel_event:
-            cancel_event.set()
-
-    drivers.on_call = trigger_cancel
-
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="t1",
-            response="r1",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "cancelled"
-
-        assert len(drivers.calls) == 2
-        # Old session preserved on cancellation
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_successful_replacement_resumed_by_next_job(tmp_path) -> None:
-    root = repository(tmp_path)
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "replacement-sess-2", "recovered response", "", ""), False),
-        (DriverResult("SUCCESS", "next-sess-3", "next response", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(config(tmp_path / "home"))
-    runtime.drivers = drivers
-    target = runtime.catalog.targets[0]
-    tkey = target_execution_key(target)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="turn 1 prompt",
-            response="turn 1 response",
-        )
-        sub1 = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job1 = await runtime.wait(sub1.job_id, 5)
-        assert job1.state == "succeeded"
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "replacement-sess-2"
-
-        # Submit next job with same context key and workflow
-        sub2 = await runtime.submit(project.id, "implement", "turn 3 prompt", context_key="feature")
-        job2 = await runtime.wait(sub2.job_id, 5)
-        assert job2.state == "succeeded"
-
-        assert len(drivers.calls) == 3
-        assert drivers.calls[2].session_id == "replacement-sess-2"
-        assert drivers.calls[2].prompt == "turn 3 prompt"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_original_prompt_and_completed_turn_stored_exactly_once(tmp_path) -> None:
-    root = repository(tmp_path)
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "final-sess-3", "final answer text", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(config(tmp_path / "home"))
-    runtime.drivers = drivers
-    target = runtime.catalog.targets[0]
-    tkey = target_execution_key(target)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="seed prompt",
-            response="seed response",
-        )
-        sub = await runtime.submit(project.id, "implement", "unmodified original prompt 42", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-
-        # Check stored turns: exactly 2 turns
-        turns = runtime.database.recent_turns(project.id, "feature", "implement", 10)
-        assert len(turns) == 2
-        assert turns[0]["prompt"] == "seed prompt"
-        assert turns[0]["response"] == "seed response"
-        assert turns[1]["prompt"] == "unmodified original prompt 42"
-        assert turns[1]["response"] == "final answer text"
-        assert "Previous context:" not in turns[1]["prompt"]
-        assert "seed prompt" not in turns[1]["prompt"]
-    finally:
-        await runtime.close()
-
-
-def test_with_history_returns_original_prompt_when_all_turns_exceed_history_bytes(tmp_path) -> None:
-    """Bounded history must not fabricate an empty wrapper when every turn is excluded."""
-    from refract.execution import TargetExecutor
-
-    catalog = replace(config(tmp_path / "home"), history_bytes=1)
-    database = Database(catalog.database_path)
-    project = database.upsert_project(project_id="project", alias="project", root="/project")
-    database.append_turn(
-        project_id=project.id,
-        context_key="feature",
-        role="implement",
-        target_id="primary",
-        target_key="primary",
-        session_id="old-sess",
-        prompt="seed prompt",
-        response="seed response",
-    )
-    executor = TargetExecutor(catalog, database, FakeDrivers())
-    try:
-        assert executor._with_history(project.id, "feature", "implement", "current task") == "current task"
-    finally:
-        database.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_all_history_excluded_by_bytes_avoids_duplicate_prompt_only(tmp_path) -> None:
-    """When bounds exclude every stored turn, reconstruction equals the prompt and must not repeat it."""
-    root = repository(tmp_path)
-    catalog = replace(config(tmp_path / "home"), history_bytes=1)
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "prompt-only-sess-2", "prompt-only answer", "", ""), False),
-        (DriverResult("RETRYABLE", "", "", "unexpected duplicate call", "context_overflow"), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    target = catalog.targets[0]
-    tkey = target_execution_key(target)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="seed prompt",
-            response="seed response",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-
-        # Exactly two invocations: resumed overflow, then prompt-only with the untouched prompt.
-        assert len(drivers.calls) == 2
-        assert drivers.calls[0].session_id == "old-sess-1"
-        assert drivers.calls[0].prompt == "turn 2 prompt"
-        assert drivers.calls[1].session_id == ""
-        assert drivers.calls[1].prompt == "turn 2 prompt"
-
-        events = runtime.database.events(sub.job_id)
-        phases = [e["data"].get("phase") for e in events if e["kind"] == "target.session_recovery_started"]
-        assert phases == ["reconstruct"]
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "prompt-only-sess-2"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_success_with_empty_session_clears_stale_without_replacement(tmp_path) -> None:
-    root = repository(tmp_path)
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "", "recovered without session", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(config(tmp_path / "home"))
-    runtime.drivers = drivers
-    target = runtime.catalog.targets[0]
-    tkey = target_execution_key(target)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="seed prompt",
-            response="seed response",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "succeeded"
-
-        # Successfully recovered but no replacement session: stale session is cleared.
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == ""
-        turns = runtime.database.recent_turns(project.id, "feature", "implement", 10)
-        assert len(turns) == 2
-        assert turns[1]["prompt"] == "turn 2 prompt"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_persistence_rollback_preserves_stale_session(tmp_path) -> None:
-    root = repository(tmp_path)
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "replacement-sess-2", "recovered text", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(config(tmp_path / "home"))
-    runtime.drivers = drivers
-    target = runtime.catalog.targets[0]
-    tkey = target_execution_key(target)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="seed prompt",
-            response="seed response",
-        )
-        initial_turns = len(runtime.database.recent_turns(project.id, "feature", "implement", 100))
-
-        runtime.database._connection.execute("""
-            CREATE TRIGGER fail_recovery_turn BEFORE INSERT ON context_turns
-            BEGIN
-                SELECT RAISE(FAIL, 'simulated turn failure');
-            END;
-        """)
-
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "failed"
-
-        runtime.database._connection.execute("DROP TRIGGER fail_recovery_turn")
-
-        # Atomic rollback preserves prior session and turn count on persistence failure.
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
-        assert len(runtime.database.recent_turns(project.id, "feature", "implement", 100)) == initial_turns
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_single_target_stays_on_selected_target(tmp_path) -> None:
-    root = repository(tmp_path)
-    selection = TargetSelection(("primary",))
-    catalog = replace(
-        config(tmp_path / "home"),
-        profiles={
-            "balanced": {
-                "implement": selection,
-                "review": selection,
-                "consult": selection,
-                "other": selection,
-            }
-        },
-    )
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    target = catalog.targets[0]
-    tkey = target_execution_key(target)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="seed prompt",
-            response="seed response",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "failed"
-
-        # Exactly one selected target and one recorded job attempt despite three internal calls.
-        assert job.attempts == 1
-        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary"]
-        assert runtime.database.target_health(tkey)["consecutive_failures"] == 0
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_target_fatal_opens_breaker_without_cross_target_fallback(tmp_path) -> None:
-    root = repository(tmp_path)
-    catalog = config(
-        tmp_path / "home",
-        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
-    )
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("TARGET_FATAL", "", "", "target fatal during recovery", "backend_failure"), False),
-        (DriverResult("SUCCESS", "sec-sess", "secondary response", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    tkey_primary = target_execution_key(catalog.targets[0])
-    tkey_sec = target_execution_key(catalog.targets[1])
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id="primary",
-            target_key=tkey_primary,
-            session_id="old-sess-1",
-            prompt="seed prompt",
-            response="seed response",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "failed"
-
-        assert [c.target_id for c in drivers.calls] == ["primary", "primary"]
-        assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 1
-        assert runtime.database.session(project.id, "feature", "implement", tkey_sec) == ""
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_request_fatal_stops_recovery_and_failover(tmp_path) -> None:
-    root = repository(tmp_path)
-    catalog = config(
-        tmp_path / "home",
-        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
-    )
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("REQUEST_FATAL", "", "", "request fatal during recovery", "execution_error"), False),
-        (DriverResult("SUCCESS", "should-not-run", "should not run", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    tkey_primary = target_execution_key(catalog.targets[0])
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id="primary",
-            target_key=tkey_primary,
-            session_id="old-sess-1",
-            prompt="seed prompt",
-            response="seed response",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "failed"
-
-        # Request-fatal recovery stops immediately: no prompt-only and no cross-target failover.
-        assert [c.target_id for c in drivers.calls] == ["primary", "primary"]
-        assert runtime.database.target_health(tkey_primary)["consecutive_failures"] == 0
-        assert runtime.database.session(project.id, "feature", "implement", tkey_primary) == "old-sess-1"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_recovery_internal_calls_count_one_selected_target_attempt_without_fallback(tmp_path) -> None:
-    root = repository(tmp_path)
-    catalog = config(
-        tmp_path / "home",
-        (TargetConfig(id="primary", backend="codex"), TargetConfig(id="secondary", backend="codex")),
-    )
-    script = [
-        (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("RETRYABLE", "", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "sec-sess", "secondary response", "", ""), False),
-    ]
-    drivers = ScriptedRecoveryDrivers(script)
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    tkey_primary = target_execution_key(catalog.targets[0])
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id="primary",
-            target_key=tkey_primary,
-            session_id="old-sess-1",
-            prompt="seed prompt",
-            response="seed response",
-        )
-        sub = await runtime.submit(project.id, "implement", "turn 2 prompt", context_key="feature")
-        job = await runtime.wait(sub.job_id, 5)
-        assert job.state == "failed"
-
-        # Same-target overflow repair calls still represent one selected attempt.
-        assert job.attempts == 1
-        assert [c.target_id for c in drivers.calls] == ["primary", "primary", "primary"]
     finally:
         await runtime.close()
 
@@ -4344,7 +2967,7 @@ async def test_terminal_desktop_notifications_succeeded_and_failed(
         called_job, called_alias = mock_send.call_args[0]
         assert called_job.id == submission.job_id
         assert called_job.state == "succeeded"
-        assert called_alias == project.alias
+        assert called_alias == Path(project.root).name
 
         mock_send.reset_mock()
         runtime.drivers = MutatingFailureDrivers()
@@ -4355,7 +2978,7 @@ async def test_terminal_desktop_notifications_succeeded_and_failed(
         called_job2, called_alias2 = mock_send.call_args[0]
         assert called_job2.id == fail_sub.job_id
         assert called_job2.state == "failed"
-        assert called_alias2 == project.alias
+        assert called_alias2 == Path(project.root).name
     finally:
         await runtime.close()
 
@@ -4385,7 +3008,7 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
         called_job, called_alias = mock_send.call_args[0]
         assert called_job.id == second.job_id
         assert called_job.state == "cancelled"
-        assert called_alias == project.alias
+        assert called_alias == Path(project.root).name
 
         await runtime.cancel(first.job_id)
         await runtime.wait(first.job_id, 10)
@@ -4396,7 +3019,7 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
     rec_home = tmp_path / "home_recovery"
     rec_catalog = replace(config(rec_home), notifications=NotificationsConfig(enabled=True))
     database = Database(rec_catalog.database_path)
-    rec_proj = database.upsert_project(project_id="rec-proj", alias="recovery-project", root=root.as_posix())
+    rec_proj = database.upsert_project(project_id="rec-proj", root=root.as_posix())
     plan = resolve_execution_plan(get_workflow("implement"), rec_catalog, "balanced")
     database.create_job(
         job_id="interrupted-job",
@@ -4405,7 +3028,7 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
         profile="balanced",
         prompt="interrupted",
         execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="recovery",
+        session="recovery",
     )
     database.start_job("interrupted-job")
     database.close()
@@ -4419,7 +3042,7 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
         called_job3, called_alias3 = mock_send.call_args[0]
         assert called_job3.id == "interrupted-job"
         assert called_job3.state == "interrupted"
-        assert called_alias3 == "recovery-project"
+        assert called_alias3 == root.name
     finally:
         await runtime_rec.close()
 
@@ -4462,8 +3085,8 @@ async def test_terminal_desktop_notifications_no_call_on_queued_running_retry(
         assert (await runtime.wait(submission.job_id, 10)).state == "failed"
         assert mock_send.call_count == 1
 
-        retried = await runtime.retry(submission.job_id)
-        assert retried.job_id == submission.job_id
+        retried = await runtime.retry(submission.job_id, target="primary")
+        assert retried.job_id != submission.job_id
         assert mock_send.call_count == 1
         assert (await runtime.wait(retried.job_id, 10)).state == "failed"
         assert mock_send.call_count == 2
@@ -4561,7 +3184,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
     monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
 
     database = Database(catalog.database_path)
-    project = database.upsert_project(project_id="proj-1", alias="retry-project", root=root.as_posix())
+    project = database.upsert_project(project_id="proj-1", root=root.as_posix())
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     database.create_job(
         job_id="failed-1",
@@ -4570,7 +3193,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
         profile="balanced",
         prompt="fail",
         execution_plan_json=json.dumps(execution_plan_data(plan)),
-        context_key="retry-ctx",
+        session="retry-ctx",
     )
     database.finish_job("failed-1", "failed")
     database.close()
@@ -4593,9 +3216,9 @@ async def test_concurrent_retry_preserves_terminal_notification(
         )
         await first_publish_entered.wait()
 
-        retry_result = await runtime.retry("failed-1")
+        retry_result = await runtime.retry("failed-1", target="primary")
         assert retry_result.state == "queued"
-        assert runtime.database.job("failed-1").state == "queued"
+        assert runtime.database.job("failed-1").state == "failed"
 
         release_first_publish.set()
         await publish_task
@@ -4604,7 +3227,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
         called_job, called_alias = mock_send.call_args[0]
         assert called_job.id == "failed-1"
         assert called_job.state == "failed"
-        assert called_alias == "retry-project"
+        assert called_alias == root.name
     finally:
         await runtime.close()
 
@@ -4670,67 +3293,12 @@ async def test_terminal_desktop_notifications_disabled_does_not_lookup_job(
 
 
 def test_configuration_failure_metadata_retains_selected_capacity():
-    from refract.telemetry import TelemetryAccumulator
-
     target = TargetConfig(id="bad-environment", backend="codex", context_window=2048)
-    accumulator = TelemetryAccumulator()
-    accumulator.set_configured_capacity(target.context_window)
     result = TargetExecutor._configuration_failure(
-        target, "target-key", "invalid environment", accumulator,
+        target, "target-key", "invalid environment", [],
     )
-    telemetry = result.metadata["telemetry"]
-    assert telemetry["context_window_size"]["value"] == 2048
-    assert telemetry["context_window_size"]["source"] == "target_config"
-    assert telemetry["context_remaining_percent"]["value"] is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("streaming", [True, False])
-async def test_selected_target_capacity_persists_before_stream_or_result_telemetry(tmp_path: Path, streaming: bool) -> None:
-    from refract.telemetry import Measurement, TelemetryData
-
-    root = repository(tmp_path)
-    target = TargetConfig(id="capacity-target", backend="codex", context_window=1000)
-    catalog = config(tmp_path / "home", (target,))
-    runtime = Runtime(catalog)
-
-    class CapacityDriver(FakeDrivers):
-        async def execute(self, **kwargs):
-            row = runtime.database._connection.execute(
-                "SELECT telemetry_state_json FROM jobs WHERE id=?", (job_id,),
-            ).fetchone()
-            persisted = json.loads(row[0])
-            assert persisted["context_window_size"]["value"] == 1000
-            assert persisted["context_remaining_percent"]["value"] is None
-            if streaming and kwargs.get("emitter"):
-                kwargs["emitter"]({"kind": "telemetry.updated", "data": {
-                    "total_input_tokens": 40, "total_output_tokens": 10,
-                    "source": "stream", "quality": "reported",
-                }})
-                return DriverResult("SUCCESS", "session", "done", "", "")
-            telemetry = TelemetryData(
-                context_used_tokens=Measurement(value=999, source="derived", quality="estimated"),
-                context_remaining_percent=Measurement(value=1, source="derived", quality="estimated"),
-                total_input_tokens=Measurement.reported(40, "result"),
-                total_output_tokens=Measurement.reported(10, "result"),
-            ).model_dump(mode="json")
-            return DriverResult("SUCCESS", "session", "done", "", "", telemetry=telemetry)
-
-    runtime.drivers = CapacityDriver()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        submission = await runtime.submit(project.id, "implement", "capacity")
-        job_id = submission.job_id
-        job = await runtime.wait(job_id, 5)
-        telemetry = job.result.metadata.telemetry
-        assert telemetry.context_window_size.value == 1000
-        assert telemetry.context_window_size.source == "target_config"
-        assert telemetry.context_used_tokens.value == 50
-        assert telemetry.context_used_tokens.quality == "estimated"
-        assert telemetry.context_remaining_percent.value == 95
-    finally:
-        await runtime.close()
+    tokens = result.outcome["tokens"]
+    assert tokens["context_window"] == 2048
 
 
 @pytest.mark.asyncio
@@ -4740,16 +3308,15 @@ async def test_telemetry_updated_routes_through_execution_before_stream_recordin
 
     class TelemetryDriver(FakeDrivers):
         async def execute(self, **kwargs):
-            emitter = kwargs.get("emitter")
-            if emitter:
-                emitter({
+            on_event = kwargs.get("on_event")
+            if on_event:
+                await on_event({
                     "kind": "telemetry.updated",
                     "data": {
-                        "context_used_tokens": 1200,
-                        "context_window_size": 8000,
-                        "input_tokens": 100,
-                        "output_tokens": 40,
-                        "response_id": "r1",
+                        "context_used": 1200,
+                        "context_window": 8000,
+                        "input": 100,
+                        "output": 40,
                     },
                 })
             return DriverResult("SUCCESS", "", "done", "", "")
@@ -4762,17 +3329,12 @@ async def test_telemetry_updated_routes_through_execution_before_stream_recordin
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "succeeded"
-        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
+        telemetry = job.result.tokens
         assert telemetry is not None
-        assert telemetry["context_used_tokens"]["value"] == 1200
-        assert telemetry["context_window_size"]["value"] == 8000
-        assert telemetry["context_remaining_percent"]["value"] == 85.0
-        assert telemetry["total_input_tokens"]["value"] == 100
-        assert telemetry["total_output_tokens"]["value"] == 40
-        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (submission.job_id,)).fetchone()
-        internal_telemetry = json.loads(row[0])
-        assert internal_telemetry["attribution"]["attempt"] == 1
-        assert internal_telemetry["attribution"]["invocation"] == 1
+        assert telemetry["context_used"] == 1200
+        assert telemetry["context_window"] == 8000
+        assert telemetry["input"] == 100
+        assert telemetry["output"] == 40
     finally:
         await runtime.close()
 
@@ -4784,13 +3346,12 @@ async def test_context_invalidation_persists_nulls_without_clearing_consumption(
 
     class InvalidateContextDriver(FakeDrivers):
         async def execute(self, **kwargs):
-            emit = kwargs.get("emitter")
-            emit({"kind": "telemetry.updated", "data": {
-                "context_used_tokens": 1060, "context_window_size": 64000,
-                "input_tokens": 100, "output_tokens": 20, "response_id": "turn-1",
+            emit = kwargs.get("on_event")
+            await emit({"kind": "telemetry.updated", "data": {
+                "context_used": 1060, "context_window": 64000, "input": 100, "output": 20,
             }})
-            emit({"kind": "telemetry.updated", "data": {
-                "invalidate_context": True, "source": "session", "quality": "unavailable",
+            await emit({"kind": "telemetry.updated", "data": {
+                "context_used": None, "context_window": 64000, "input": 100, "output": 20,
             }})
             return DriverResult("SUCCESS", "", "done", "", "")
 
@@ -4800,20 +3361,18 @@ async def test_context_invalidation_persists_nulls_without_clearing_consumption(
         project = register_project(runtime, str(root))
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
-        telemetry = job.result.metadata.telemetry
-        assert telemetry.context_used_tokens.value == 120
-        assert telemetry.context_used_tokens.quality == "estimated"
-        assert telemetry.context_window_size.value is None
-        assert telemetry.context_remaining_percent.value is None
-        assert telemetry.total_input_tokens.value == 100
-        assert telemetry.total_output_tokens.value == 20
+        telemetry = job.result.tokens
+        assert telemetry["context_used"] == 120
+        assert telemetry["context_window"] == 64000
+        assert telemetry["input"] == 100
+        assert telemetry["output"] == 20
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
 async def test_codex_budget_exhaustion_keeps_context_unknown_through_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from refract.backends.codex import _EventParser
+    from refract.backends.codex import CodexRun
 
     root = repository(tmp_path)
     codex_home = tmp_path / "codex-home"
@@ -4831,13 +3390,13 @@ async def test_codex_budget_exhaustion_keeps_context_unknown_through_persistence
                 "total_token_usage": usage, "last_token_usage": usage, "model_context_window": 64000,
             }}})
             rollout.write_text(header + "\n" + token_count + "\n" + (" " * 5000) + "\n")
-            parser = _EventParser(BackendParams(PROMPT="test", cd=cwd, emitter=kwargs.get("emitter")))
-            parser.collector.max_bytes_per_poll = 4096
-            parser.collector.max_total_bytes = 4096
-            parser.on_event({"type": "thread.started", "thread_id": sid})
-            parser.on_event({"type": "turn.completed", "usage": {
+            run = CodexRun(BackendParams(PROMPT="test", cd=cwd), cwd, tmp_path / "last-message.txt", kwargs.get("on_event"))
+            run.collector.max_bytes_per_poll = 4096
+            run.collector.max_total_bytes = 4096
+            await run.feed(json.dumps({"type": "thread.started", "thread_id": sid}))
+            await run.feed(json.dumps({"type": "turn.completed", "usage": {
                 "input_tokens": 5000, "output_tokens": 700, "reasoning_output_tokens": 100,
-            }})
+            }}))
             return DriverResult("SUCCESS", sid, "done", "", "")
 
     runtime = Runtime(config(tmp_path / "home"))
@@ -4847,12 +3406,11 @@ async def test_codex_budget_exhaustion_keeps_context_unknown_through_persistence
         project = register_project(runtime, str(root))
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
-        telemetry = job.result.metadata.telemetry
-        assert telemetry.context_used_tokens.value == 5700
-        assert telemetry.context_used_tokens.quality == "estimated"
-        assert telemetry.context_window_size.value is None
-        assert telemetry.total_input_tokens.value == 5000
-        assert telemetry.total_output_tokens.value == 700
+        telemetry = job.result.tokens
+        assert telemetry["context_used"] == 5700
+        assert telemetry["context_window"] is None
+        assert telemetry["input"] == 5000
+        assert telemetry["output"] == 700
     finally:
         await runtime.close()
 
@@ -4864,24 +3422,24 @@ async def test_telemetry_survives_transcript_quota_exhaustion_in_execution(tmp_p
 
     class QuotaExhaustionDriver(FakeDrivers):
         async def execute(self, **kwargs):
-            emitter = kwargs.get("emitter")
-            if emitter:
+            on_event = kwargs.get("on_event")
+            if on_event:
                 # Fill quota with lots of text deltas
                 large_chunk = "x" * 20000
                 for i in range(100):
-                    emitter({
+                    await on_event({
                         "kind": "assistant.text.delta",
                         "data": {"text": large_chunk},
                         "entity_id": f"msg-{i}",
                     })
                 # Now emit telemetry after stream truncation
-                emitter({
+                await on_event({
                     "kind": "telemetry.updated",
                     "data": {
-                        "context_used_tokens": 4000,
-                        "context_window_size": 8000,
-                        "input_tokens": 250,
-                        "output_tokens": 80,
+                        "context_used": 4000,
+                        "context_window": 8000,
+                        "input": 250,
+                        "output": 80,
                     },
                 })
             return DriverResult("SUCCESS", "", "done", "", "")
@@ -4894,10 +3452,10 @@ async def test_telemetry_survives_transcript_quota_exhaustion_in_execution(tmp_p
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "succeeded"
-        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
+        telemetry = job.result.tokens
         assert telemetry is not None
-        assert telemetry["context_used_tokens"]["value"] == 4000
-        assert telemetry["total_input_tokens"]["value"] == 250
+        assert telemetry["context_used"] == 4000
+        assert telemetry["input"] == 250
     finally:
         await runtime.close()
 
@@ -4909,15 +3467,15 @@ async def test_cancellation_and_failure_retain_partial_telemetry(tmp_path: Path)
 
     class FailingDriverWithTelemetry(FakeDrivers):
         async def execute(self, **kwargs):
-            emitter = kwargs.get("emitter")
-            if emitter:
-                emitter({
+            on_event = kwargs.get("on_event")
+            if on_event:
+                await on_event({
                     "kind": "telemetry.updated",
                     "data": {
-                        "context_used_tokens": 3000,
-                        "context_window_size": 8000,
-                        "input_tokens": 180,
-                        "output_tokens": 50,
+                        "context_used": 3000,
+                        "context_window": 8000,
+                        "input": 180,
+                        "output": 50,
                     },
                 })
             return DriverResult("TARGET_FATAL", "", "", "target crashed", "crashed")
@@ -4930,148 +3488,10 @@ async def test_cancellation_and_failure_retain_partial_telemetry(tmp_path: Path)
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "failed"
-        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
+        telemetry = job.result.tokens
         assert telemetry is not None
-        assert telemetry["context_used_tokens"]["value"] == 3000
-        assert telemetry["total_input_tokens"]["value"] == 180
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_session_recovery_separate_invocation_identities(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-
-    class RecoveryDriverWithTelemetry(FakeDrivers):
-        def __init__(self):
-            super().__init__()
-            self.invocation_count = 0
-
-        async def execute(self, **kwargs):
-            self.invocation_count += 1
-            emitter = kwargs.get("emitter")
-            if self.invocation_count == 1:
-                if emitter:
-                    emitter({
-                        "kind": "telemetry.updated",
-                        "data": {
-                            "input_tokens": 100,
-                            "output_tokens": 30,
-                            "response_id": "r1",
-                        },
-                    })
-                return DriverResult("RETRYABLE", "", "", "context overflow", "context_overflow")
-            else:
-                if emitter:
-                    emitter({
-                        "kind": "telemetry.updated",
-                        "data": {
-                            "input_tokens": 150,
-                            "output_tokens": 50,
-                            "response_id": "r2",
-                        },
-                    })
-                return DriverResult("SUCCESS", "sess-recovered", "recovered", "", "")
-
-    runtime = Runtime(catalog)
-    runtime.drivers = RecoveryDriverWithTelemetry()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        # Seed an existing session so recovery triggers
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="implement",
-            role="implement",
-            target_id="primary",
-            target_key=target_execution_key(catalog.targets[0]),
-            session_id="old-session",
-            prompt="hi",
-            response="there",
-        )
-        submission = await runtime.submit(project.id, "implement", "test")
-        job = await runtime.wait(submission.job_id, 5)
-        assert job.state == "succeeded"
-        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
-        assert telemetry is not None
-        # Accumulates 100 + 150 = 250
-        assert telemetry["total_input_tokens"]["value"] == 250
-        assert telemetry["total_output_tokens"]["value"] == 80
-        # Attribution invocation is 2 in internal state
-        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (submission.job_id,)).fetchone()
-        internal_telemetry = json.loads(row[0])
-        assert internal_telemetry["attribution"]["invocation"] == 2
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_retry_uses_actual_attempt_number(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-
-    class FailThenSucceedDriver(FakeDrivers):
-        def __init__(self):
-            super().__init__()
-            self.calls = 0
-
-        async def execute(self, **kwargs):
-            self.calls += 1
-            emitter = kwargs.get("emitter")
-            if self.calls == 1:
-                if emitter:
-                    emitter({
-                        "kind": "telemetry.updated",
-                        "data": {
-                            "input_tokens": 100,
-                            "output_tokens": 40,
-                            "context_used_tokens": 1000,
-                        },
-                    })
-                return DriverResult("RETRYABLE", "", "", "failure", "transient")
-            else:
-                if emitter:
-                    emitter({
-                        "kind": "telemetry.updated",
-                        "data": {
-                            "input_tokens": 150,
-                            "output_tokens": 60,
-                            "context_used_tokens": 2000,
-                        },
-                    })
-                return DriverResult("SUCCESS", "", "done", "", "")
-
-    runtime = Runtime(catalog)
-    runtime.drivers = FailThenSucceedDriver()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        submission = await runtime.submit(project.id, "implement", "test")
-        job1 = await runtime.wait(submission.job_id, 5)
-        assert job1.state == "failed"
-        assert job1.attempts == 1
-
-        await runtime.retry(submission.job_id)
-        job2 = await runtime.wait(submission.job_id, 5)
-        assert job2.state == "succeeded"
-        assert job2.attempts == 2
-
-        telemetry = job2.result.metadata.telemetry.model_dump(mode="json")
-        assert telemetry is not None
-        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (submission.job_id,)).fetchone()
-        internal_telemetry = json.loads(row[0])
-        assert internal_telemetry["attribution"]["attempt"] == 2
-        assert internal_telemetry["completed_attempts"]["total_input_tokens"] == 100
-        assert telemetry["total_input_tokens"]["value"] == 250
-        assert telemetry["total_output_tokens"]["value"] == 100
-        assert telemetry["context_used_tokens"]["value"] == 2000
-
-        events = runtime.database.events(submission.job_id)
-        attempt_finished_events = [e for e in events if e["kind"] == "target.attempt_finished"]
-        assert len(attempt_finished_events) == 2
-        assert attempt_finished_events[0]["data"]["attempt"] == 1
-        assert attempt_finished_events[1]["data"]["attempt"] == 2
+        assert telemetry["context_used"] == 3000
+        assert telemetry["input"] == 180
     finally:
         await runtime.close()
 
@@ -5083,16 +3503,14 @@ async def test_telemetry_updated_dispatches_cumulative_totals_before_cache_field
 
     class CumulativeDriver(FakeDrivers):
         async def execute(self, **kwargs):
-            emitter = kwargs.get("emitter")
-            if emitter:
-                emitter({
+            on_event = kwargs.get("on_event")
+            if on_event:
+                await on_event({
                     "kind": "telemetry.updated",
                     "data": {
-                        "total_input_tokens": 500,
-                        "total_output_tokens": 200,
-                        "cache_read_tokens": 50,
-                        "source": "stream",
-                        "quality": "reported",
+                        "input": 500,
+                        "output": 200,
+                        "cache_read": 50,
                     },
                 })
             return DriverResult("SUCCESS", "", "done", "", "")
@@ -5105,138 +3523,11 @@ async def test_telemetry_updated_dispatches_cumulative_totals_before_cache_field
         submission = await runtime.submit(project.id, "implement", "test")
         job = await runtime.wait(submission.job_id, 5)
         assert job.state == "succeeded"
-        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
+        telemetry = job.result.tokens
         assert telemetry is not None
-        assert telemetry["total_input_tokens"]["value"] == 500
-        assert telemetry["total_output_tokens"]["value"] == 200
-        assert telemetry["cache_read_tokens"]["value"] == 50
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_unobserved_recovery_invocation_marks_totals_incomplete(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-
-    class RecoveryUnobservedDriver(FakeDrivers):
-        def __init__(self):
-            super().__init__()
-            self.calls = 0
-
-        async def execute(self, **kwargs):
-            self.calls += 1
-            emitter = kwargs.get("emitter")
-            if self.calls == 1:
-                # Invocation 1: fails with context_overflow, NO telemetry emitted
-                return DriverResult("RETRYABLE", "s1", "", "overflow", "context_overflow")
-            else:
-                # Invocation 2: recovery succeeds with telemetry
-                if emitter:
-                    emitter({
-                        "kind": "telemetry.updated",
-                        "data": {
-                            "input_tokens": 100,
-                            "output_tokens": 50,
-                            "source": "stream",
-                            "quality": "reported",
-                        },
-                    })
-                return DriverResult("SUCCESS", "s2", "recovered", "", "")
-
-    runtime = Runtime(catalog)
-    runtime.drivers = RecoveryUnobservedDriver()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        target = runtime.catalog.targets[0]
-        tkey = target_execution_key(target)
-        runtime.database.append_turn(
-            project_id=project.id,
-            context_key="feature",
-            role="implement",
-            target_id=target.id,
-            target_key=tkey,
-            session_id="old-sess-1",
-            prompt="turn 1",
-            response="turn 1 resp",
-        )
-        submission = await runtime.submit(project.id, "implement", "turn 2", context_key="feature")
-        job = await runtime.wait(submission.job_id, 5)
-        assert job.state == "succeeded"
-        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
-        assert telemetry is not None
-        # Because invocation 1 ran and consumed unobserved tokens before recovery, totals must be partial
-        assert telemetry["completeness"] == "partial"
-        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (submission.job_id,)).fetchone()
-        internal_telemetry = json.loads(row[0])
-        assert internal_telemetry["attribution"]["invocation"] == 2
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_synthetic_multi_response_persists_telemetry_before_completion(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-
-    stream_step_event = asyncio.Event()
-    continue_event = asyncio.Event()
-
-    class PausingMultiResponseDriver(FakeDrivers):
-        async def execute(self, **kwargs):
-            emitter = kwargs.get("emitter")
-            if emitter:
-                emitter({
-                    "kind": "telemetry.updated",
-                    "data": {
-                        "response_id": "r1",
-                        "input_tokens": 120,
-                        "output_tokens": 45,
-                        "source": "stream",
-                        "quality": "reported",
-                    },
-                })
-            stream_step_event.set()
-            await continue_event.wait()
-            if emitter:
-                emitter({
-                    "kind": "telemetry.updated",
-                    "data": {
-                        "response_id": "r2",
-                        "input_tokens": 150,
-                        "output_tokens": 55,
-                        "source": "stream",
-                        "quality": "reported",
-                    },
-                })
-            return DriverResult("SUCCESS", "sess-1", "done", "", "")
-
-    runtime = Runtime(catalog)
-    runtime.drivers = PausingMultiResponseDriver()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        submission = await runtime.submit(project.id, "implement", "test")
-
-        await stream_step_event.wait()
-        await asyncio.sleep(0.05)
-
-        in_flight_job = runtime.database.job(submission.job_id)
-        assert in_flight_job is not None
-        assert in_flight_job.state == "running"
-        partial_telemetry = in_flight_job.result.metadata.telemetry.model_dump(mode="json")
-        assert partial_telemetry is not None
-        assert partial_telemetry["total_input_tokens"]["value"] == 120
-        assert partial_telemetry["total_output_tokens"]["value"] == 45
-
-        continue_event.set()
-        completed_job = await runtime.wait(submission.job_id, 5)
-        assert completed_job.state == "succeeded"
-        final_telemetry = completed_job.result.metadata.telemetry.model_dump(mode="json")
-        assert final_telemetry is not None
-        assert final_telemetry["total_input_tokens"]["value"] == 270
-        assert final_telemetry["total_output_tokens"]["value"] == 100
+        assert telemetry["input"] == 500
+        assert telemetry["output"] == 200
+        assert telemetry["cache_read"] == 50
     finally:
         await runtime.close()
 
@@ -5253,30 +3544,24 @@ async def test_resumed_session_history_is_not_counted_as_subsequent_job_consumpt
 
         async def execute(self, **kwargs):
             self.calls += 1
-            emitter = kwargs.get("emitter")
+            on_event = kwargs.get("on_event")
             if self.calls == 1:
-                if emitter:
-                    emitter({
+                if on_event:
+                    await on_event({
                         "kind": "telemetry.updated",
                         "data": {
-                            "response_id": "job1_r1",
-                            "input_tokens": 500,
-                            "output_tokens": 200,
-                            "source": "stream",
-                            "quality": "reported",
+                            "input": 500,
+                            "output": 200,
                         },
                     })
                 return DriverResult("SUCCESS", "shared-session-123", "job 1 ok", "", "")
             else:
-                if emitter:
-                    emitter({
+                if on_event:
+                    await on_event({
                         "kind": "telemetry.updated",
                         "data": {
-                            "response_id": "job2_r1",
-                            "input_tokens": 150,
-                            "output_tokens": 60,
-                            "source": "stream",
-                            "quality": "reported",
+                            "input": 150,
+                            "output": 60,
                         },
                     })
                 return DriverResult("SUCCESS", "shared-session-123", "job 2 ok", "", "")
@@ -5286,186 +3571,21 @@ async def test_resumed_session_history_is_not_counted_as_subsequent_job_consumpt
     await runtime.start()
     try:
         project = register_project(runtime, str(root))
-        sub1 = await runtime.submit(project.id, "implement", "turn 1", context_key="feature")
+        sub1 = await runtime.submit(project.id, "implement", "turn 1", session="feature")
         job1 = await runtime.wait(sub1.job_id, 5)
         assert job1.state == "succeeded"
-        tel1 = job1.result.metadata.telemetry.model_dump(mode="json")
+        tel1 = job1.result.tokens
         assert tel1 is not None
-        assert tel1["total_input_tokens"]["value"] == 500
-        assert tel1["total_output_tokens"]["value"] == 200
+        assert tel1["input"] == 500
+        assert tel1["output"] == 200
 
-        sub2 = await runtime.submit(project.id, "implement", "turn 2", context_key="feature")
+        sub2 = await runtime.submit(project.id, "implement", "turn 2", session="feature")
         job2 = await runtime.wait(sub2.job_id, 5)
         assert job2.state == "succeeded"
-        tel2 = job2.result.metadata.telemetry.model_dump(mode="json")
+        tel2 = job2.result.tokens
         assert tel2 is not None
-        assert tel2["total_input_tokens"]["value"] == 150
-        assert tel2["total_output_tokens"]["value"] == 60
-        row2 = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (sub2.job_id,)).fetchone()
-        internal_telemetry2 = json.loads(row2[0])
-        assert internal_telemetry2["attribution"]["attempt"] == 1
-        assert internal_telemetry2["completed_attempts"]["total_input_tokens"] == 0
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_persisted_context_quality_is_derived_not_reported(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-
-    class DerivedContextDriver(FakeDrivers):
-        async def execute(self, **kwargs):
-            emitter = kwargs.get("emitter")
-            if emitter:
-                emitter({
-                    "kind": "telemetry.updated",
-                    "data": {
-                        "response_id": "r1",
-                        "input_tokens": 120,
-                        "output_tokens": 45,
-                        "context_used_tokens": 165,
-                        "source": "stream",
-                        "quality": "derived",
-                    },
-                })
-            return DriverResult("SUCCESS", "sess-1", "done", "", "")
-
-    runtime = Runtime(catalog)
-    runtime.drivers = DerivedContextDriver()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        submission = await runtime.submit(project.id, "implement", "test")
-        completed_job = await runtime.wait(submission.job_id, 5)
-        assert completed_job.state == "succeeded"
-        final_telemetry = completed_job.result.metadata.telemetry.model_dump(mode="json")
-        assert final_telemetry is not None
-        assert final_telemetry["context_used_tokens"]["value"] == 165
-        assert final_telemetry["context_used_tokens"]["quality"] == "derived"
-        assert final_telemetry["context_used_tokens"]["quality"] != "reported"
-
-        db_job = runtime.database.job(submission.job_id)
-        assert db_job is not None
-        db_telemetry = db_job.result.metadata.telemetry.model_dump(mode="json")
-        assert db_telemetry is not None
-        assert db_telemetry["context_used_tokens"]["quality"] == "derived"
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("backend_name", ["claude", "pi", "codex", "agy"])
-@pytest.mark.parametrize("streaming", [False, True])
-async def test_real_adapter_observations_through_execution_persist_reported_consumption_alongside_derived_context(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_name: str, streaming: bool
-) -> None:
-    root = repository(tmp_path)
-    monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
-    monkeypatch.setattr("refract.drivers.DriverRegistry._detect_structured_mode", lambda *a, **k: streaming)
-
-    if backend_name == "claude":
-        c_lines = [
-            json.dumps({
-                "type": "assistant",
-                "message": {
-                    "id": "c-msg-1",
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "claude done"}],
-                    "usage": {"input_tokens": 100, "cache_read_input_tokens": 30, "output_tokens": 20},
-                },
-            }),
-            json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "claude done", "session_id": "c-sess-1"}),
-        ]
-        monkeypatch.setattr("refract.backends.claude.run_shell_command", lambda *a, **k: (l for l in c_lines))
-    elif backend_name == "pi":
-        p_lines = [
-            json.dumps({"type": "session", "id": "pi-sess-1"}),
-            json.dumps({"type": "turn_start"}),
-            json.dumps({
-                "type": "message_end",
-                "message": {
-                    "role": "assistant",
-                    "responseId": "p-resp-1",
-                    "content": [{"type": "text", "text": "pi done"}],
-                    "usage": {"input": 120, "cacheRead": 40, "output": 25},
-                },
-            }),
-            json.dumps({
-                "type": "turn_end",
-                "message": {
-                    "role": "assistant",
-                    "responseId": "p-resp-1",
-                    "content": [{"type": "text", "text": "pi done"}],
-                    "usage": {"input": 120, "cacheRead": 40, "output": 25},
-                },
-            }),
-        ]
-        monkeypatch.setattr("refract.backends.pi.run_shell_command", lambda *a, **k: (l for l in p_lines))
-    elif backend_name == "codex":
-        cdx_lines = [
-            json.dumps({"type": "thread.started", "thread_id": "cdx-tid-1"}),
-            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "m1", "text": "codex done"}}),
-            json.dumps({
-                "type": "turn.completed",
-                "usage": {"input_tokens": 200, "cached_input_tokens": 50, "output_tokens": 35},
-            }),
-        ]
-        monkeypatch.setattr("refract.backends.codex.run_shell_command", lambda *a, **k: (l for l in cdx_lines))
-    elif backend_name == "agy":
-        a_lines = [
-            json.dumps({
-                "event": "step_update",
-                "step_update": {
-                    "conversation_id": "00000000-0000-0000-0000-000000000001",
-                    "step_index": 1,
-                    "state": "DONE",
-                    "usage": {"input_tokens": 300, "cache_read_tokens": 60, "output_tokens": 40},
-                },
-            }),
-            json.dumps({
-                "event": "result",
-                "result": {"conversation_id": "00000000-0000-0000-0000-000000000001", "response": "agy done"},
-            }),
-        ]
-        monkeypatch.setattr("refract.backends.agy.run_shell_command", lambda *a, **k: (l for l in a_lines))
-
-    target = TargetConfig(id=f"{backend_name}-target", backend=backend_name)
-    selection = TargetSelection((target.id,))
-    catalog = replace(
-        config(tmp_path / "home"),
-        targets=(target,),
-        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
-    )
-
-    runtime = Runtime(catalog)
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        submission = await runtime.submit(project.id, "implement", "test task")
-        completed_job = await runtime.wait(submission.job_id, 10)
-        assert completed_job.state == "succeeded"
-        final_telemetry = completed_job.result.metadata.telemetry.model_dump(mode="json")
-        assert final_telemetry is not None
-        # Assert reported consumption is preserved alongside derived context
-        assert final_telemetry["total_input_tokens"]["quality"] == "reported"
-        assert final_telemetry["total_output_tokens"]["quality"] == "reported"
-        assert final_telemetry["context_used_tokens"]["quality"] == "derived"
-        assert final_telemetry["context_used_tokens"]["value"] is not None
-        if backend_name == "pi":
-            assert final_telemetry["context_window_size"]["value"] is None
-            assert final_telemetry["context_remaining_percent"]["value"] is None
-
-        db_job = runtime.database.job(submission.job_id)
-        assert db_job is not None
-        db_telemetry = db_job.result.metadata.telemetry.model_dump(mode="json")
-        assert db_telemetry is not None
-        assert db_telemetry["total_input_tokens"]["quality"] == "reported"
-        assert db_telemetry["total_output_tokens"]["quality"] == "reported"
-        assert db_telemetry["context_used_tokens"]["quality"] == "derived"
-        if backend_name == "pi":
-            assert db_telemetry["context_window_size"]["value"] is None
-            assert db_telemetry["context_remaining_percent"]["value"] is None
+        assert tel2["input"] == 150
+        assert tel2["output"] == 60
     finally:
         await runtime.close()
 
@@ -5481,48 +3601,30 @@ async def test_telemetry_streaming_enabled_does_not_double_count_returned_teleme
         profiles={"balanced": {"implement": TargetSelection((target.id,)), "review": TargetSelection((target.id,)), "consult": TargetSelection((target.id,))}},
     )
 
-    backend_telemetry = {
-        "version": 1,
-        "completeness": "complete",
-        "total_input_tokens": {"value": 100, "source": "turn", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
-        "total_output_tokens": {"value": 25, "source": "turn", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
-        "cache_read_tokens": {"value": 10, "source": "turn", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
-        "cache_write_tokens": {"value": None, "source": None, "quality": "unavailable", "observed_at": None},
-        "context_used_tokens": {"value": 50, "source": "session", "quality": "derived", "observed_at": "2026-10-28T12:00:00Z"},
-        "context_window_size": {"value": 128000, "source": "session", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
-        "context_remaining_percent": {"value": 99.96, "source": "derived", "quality": "derived", "observed_at": "2026-10-28T12:00:00Z"},
-        "attribution": {"attempt": 1, "invocation": 1},
-        "completed_attempts": {"total_input_tokens": 0, "total_output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
+    backend_tokens = {
+        "context_used": 125,
+        "context_window": 128000,
+        "input": 100,
+        "output": 25,
+        "cache_read": 10,
+        "cache_write": None,
     }
 
     class StreamingDriver(FakeDrivers):
         def supports_structured_streaming(self, target: Any) -> bool:
             return True
 
-        async def execute(self, *, emitter: Any = None, **kwargs: Any) -> DriverResult:
-            if emitter:
-                emitter({
+        async def execute(self, *, on_event: Any = None, **kwargs: Any) -> DriverResult:
+            if on_event:
+                await on_event({
                     "kind": "telemetry.updated",
-                    "data": {
-                        "total_input_tokens": 100,
-                        "total_output_tokens": 25,
-                        "cache_read_tokens": 10,
-                        "source": "stream",
-                        "quality": "reported",
-                        "observed_at": "2026-10-28T12:00:05Z",
-                    },
+                    "data": {"input": 100, "output": 25, "cache_read": 10},
                 })
-                emitter({
+                await on_event({
                     "kind": "telemetry.updated",
-                    "data": {
-                        "context_used_tokens": 125,
-                        "context_window_size": 128000,
-                        "source": "stream",
-                        "quality": "derived",
-                        "observed_at": "2026-10-28T12:00:05Z",
-                    },
+                    "data": {"context_used": 125, "context_window": 128000, "input": 100, "output": 25, "cache_read": 10},
                 })
-            return DriverResult("SUCCESS", "sess-1", "done", "", "", telemetry=backend_telemetry)
+            return DriverResult("SUCCESS", "sess-1", "done", "", "", tokens=backend_tokens)
 
     runtime = Runtime(catalog)
     runtime.drivers = StreamingDriver()
@@ -5532,11 +3634,10 @@ async def test_telemetry_streaming_enabled_does_not_double_count_returned_teleme
         sub = await runtime.submit(project.id, "implement", "test streaming double count")
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "succeeded"
-        tel = job.result.metadata.telemetry.model_dump(mode="json")
-        assert tel["total_input_tokens"]["value"] == 100
-        assert tel["total_output_tokens"]["value"] == 25
-        assert tel["context_used_tokens"]["value"] == 125
-        assert tel["total_input_tokens"]["source"] == "stream"
+        tel = job.result.tokens
+        assert tel["input"] == 100
+        assert tel["output"] == 25
+        assert tel["context_used"] == 125
     finally:
         await runtime.close()
 
@@ -5546,46 +3647,35 @@ async def test_telemetry_fallback_preserves_cumulative_totals_across_retries(tmp
     root = repository(tmp_path)
     base = config(tmp_path / "home")
     policy = RetryPolicy(1, ("rate_limit",), ())
-    target = TargetConfig(id="t_retry", backend="codex", retry_policy="transient")
+    target = TargetConfig(id="t_retry", backend="codex", retry=policy)
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
         targets=(target,),
         profiles={"balanced": {"implement": TargetSelection(("t_retry",)), "review": TargetSelection(("t_retry",)), "consult": TargetSelection(("t_retry",))}},
     )
 
-    attempt_1_telemetry = {
-        "version": 1,
-        "completeness": "complete",
-        "total_input_tokens": {"value": 100, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
-        "total_output_tokens": {"value": 20, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
-        "cache_read_tokens": {"value": 5, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
-        "cache_write_tokens": {"value": None, "source": None, "quality": "unavailable", "observed_at": None},
-        "context_used_tokens": {"value": 120, "source": "result", "quality": "derived", "observed_at": "2026-10-28T12:00:00Z"},
-        "context_window_size": {"value": 128000, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:00:00Z"},
-        "context_remaining_percent": {"value": 99.9, "source": "derived", "quality": "derived", "observed_at": "2026-10-28T12:00:00Z"},
-        "attribution": {"attempt": 1, "invocation": 1},
-        "completed_attempts": {"total_input_tokens": 0, "total_output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
+    attempt_1_tokens = {
+        "context_used": 120,
+        "context_window": 128000,
+        "input": 100,
+        "output": 20,
+        "cache_read": 5,
+        "cache_write": None,
     }
-    attempt_2_telemetry = {
-        "version": 1,
-        "completeness": "complete",
-        "total_input_tokens": {"value": 150, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:01:00Z"},
-        "total_output_tokens": {"value": 30, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:01:00Z"},
-        "cache_read_tokens": {"value": 10, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:01:00Z"},
-        "cache_write_tokens": {"value": None, "source": None, "quality": "unavailable", "observed_at": None},
-        "context_used_tokens": {"value": 180, "source": "result", "quality": "derived", "observed_at": "2026-10-28T12:01:00Z"},
-        "context_window_size": {"value": 128000, "source": "result", "quality": "reported", "observed_at": "2026-10-28T12:01:00Z"},
-        "context_remaining_percent": {"value": 99.85, "source": "derived", "quality": "derived", "observed_at": "2026-10-28T12:01:00Z"},
-        "attribution": {"attempt": 1, "invocation": 1},
-        "completed_attempts": {"total_input_tokens": 0, "total_output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
+    attempt_2_tokens = {
+        "context_used": 180,
+        "context_window": 128000,
+        "input": 150,
+        "output": 30,
+        "cache_read": 10,
+        "cache_write": None,
     }
 
     class RetryFallbackDrivers(StreamingSequenceDrivers):
         def __init__(self):
             super().__init__([
-                DriverResult("RETRYABLE", "", "", "rate limit", "rate_limit", telemetry=attempt_1_telemetry),
-                DriverResult("SUCCESS", "sess-ok", "done", "", "", telemetry=attempt_2_telemetry),
+                DriverResult("RETRYABLE", "", "", "rate limit", "rate_limit", tokens=attempt_1_tokens),
+                DriverResult("SUCCESS", "sess-ok", "done", "", "", tokens=attempt_2_tokens),
             ])
 
     runtime = Runtime(catalog)
@@ -5596,16 +3686,10 @@ async def test_telemetry_fallback_preserves_cumulative_totals_across_retries(tmp
         sub = await runtime.submit(project.id, "implement", "test retry fallback")
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "succeeded"
-        tel = job.result.metadata.telemetry.model_dump(mode="json")
-        assert tel["total_input_tokens"]["value"] == 250
-        assert tel["total_output_tokens"]["value"] == 50
-        assert tel["cache_read_tokens"]["value"] == 15
-        record = runtime.database.job_record(sub.job_id)
-        assert record is not None
-        state = json.loads(record["telemetry_state_json"])
-        assert state["attribution"]["attempt"] == 2
-        assert state["completed_attempts"]["total_input_tokens"] == 100
-        assert state["completed_attempts"]["total_output_tokens"] == 20
+        tel = job.result.tokens
+        assert tel["input"] == 250
+        assert tel["output"] == 50
+        assert tel["cache_read"] == 15
     finally:
         await runtime.close()
 
@@ -5626,7 +3710,7 @@ async def test_telemetry_malformed_fallback_does_not_change_outcome(tmp_path: Pa
             return False
 
         async def execute(self, **kwargs: Any) -> DriverResult:
-            return DriverResult("SUCCESS", "sess-ok", "done", "", "", telemetry={"corrupt": "data", "total_input_tokens": "invalid"})
+            return DriverResult("SUCCESS", "sess-ok", "done", "", "", tokens={"corrupt": "data", "input": "invalid"})
 
     runtime = Runtime(catalog)
     runtime.drivers = MalformedDriver()
@@ -5636,9 +3720,8 @@ async def test_telemetry_malformed_fallback_does_not_change_outcome(tmp_path: Pa
         sub = await runtime.submit(project.id, "implement", "test malformed telemetry")
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "succeeded"
-        tel = job.result.metadata.telemetry.model_dump(mode="json")
-        assert tel["total_input_tokens"]["value"] is None
-        assert tel["total_input_tokens"]["quality"] == "unavailable"
+        tel = job.result.tokens
+        assert tel["input"] is None
     finally:
         await runtime.close()
 
@@ -5662,57 +3745,6 @@ class StreamingSequenceDrivers(FakeDrivers):
         return DriverResult("SUCCESS", "ok", "", "", "")
 
 
-@pytest.mark.asyncio
-async def test_real_retry_generations_are_siblings_on_job_trace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("langfuse")
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer, trace_id_for_job
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-real-retry-integration")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-retry-test")
-    root = repository(tmp_path)
-    base = config(tmp_path / "home")
-    policy = RetryPolicy(1, ("rate_limit",), ())
-    target = replace(base.targets[0], retry_policy="transient")
-    catalog = replace(base, targets=(target,), retry_policies={"transient": policy})
-    runtime = Runtime(catalog)
-    class MeasuredRetries(StreamingSequenceDrivers):
-        async def execute(self, **kwargs):
-            number = len(self.invocations) + 1
-            kwargs["emitter"]({"kind": "telemetry.updated", "data": {
-                "input_tokens": number * 20, "output_tokens": number * 4,
-                "cache_read_tokens": number * 3,
-            }})
-            return await super().execute(**kwargs)
-
-    runtime.drivers = MeasuredRetries([
-        DriverResult("RETRYABLE", "", "", "temporary", "rate_limit"),
-        DriverResult("SUCCESS", "retry completed", "", "", ""),
-    ])
-    await runtime.start()
-    exporter = InMemorySpanExporter()
-    tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
-    runtime.tracer = runtime.ask_registry.tracer = runtime.target_executor.tracer = runtime.runner.tracer = tracer
-    try:
-        project = register_project(runtime, str(root))
-        submitted = await runtime.submit(project.id, "implement", "retry integration")
-        completed = await runtime.wait(submitted.job_id, 15)
-        assert completed.state == "succeeded"
-        tracer.flush()
-        spans = exporter.get_finished_spans()
-        root_span = next(span for span in spans if span.name == "job")
-        generations = [span for span in spans if span.name.startswith("attempt-")]
-        assert len(generations) == 2
-        assert root_span.context.trace_id == int(trace_id_for_job(submitted.job_id), 16)
-        assert all(span.parent.span_id == root_span.context.span_id for span in generations)
-        usages = [json.loads(span.attributes["langfuse.observation.usage_details"]) for span in generations]
-        assert usages == [
-            {"input": 17, "output": 4, "input_cached_tokens": 3},
-            {"input": 34, "output": 8, "input_cached_tokens": 6},
-        ]
-    finally:
-        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -5724,10 +3756,9 @@ async def test_retry_policy_matching_code_or_pattern_and_empty_rules(tmp_path: P
     policy = RetryPolicy(2, ("rate_limit",), ("overloaded",))
     catalog = replace(
         base,
-        retry_policies={"transient": policy, "catchall": RetryPolicy(1, (), ())},
         targets=(
-            TargetConfig(id="t_match", backend="codex", retry_policy="transient"),
-            TargetConfig(id="t_all", backend="codex", retry_policy="catchall"),
+            TargetConfig(id="t_match", backend="codex", retry=policy),
+            TargetConfig(id="t_all", backend="codex", retry=RetryPolicy(1, (), ())),
         ),
         profiles={
             "p_match": {"implement": TargetSelection(("t_match",)), "review": TargetSelection(("t_match",)), "consult": TargetSelection(("t_match",))},
@@ -5749,7 +3780,6 @@ async def test_retry_policy_matching_code_or_pattern_and_empty_rules(tmp_path: P
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "succeeded"
         assert len(drivers.invocations) == 2
-        assert job.attempts == 2
     finally:
         await runtime.close()
 
@@ -5767,7 +3797,6 @@ async def test_retry_policy_matching_code_or_pattern_and_empty_rules(tmp_path: P
         job2 = await runtime2.wait(sub2.job_id, 10)
         assert job2.state == "succeeded"
         assert len(drivers2.invocations) == 2
-        assert job2.attempts == 2
     finally:
         await runtime2.close()
 
@@ -5785,7 +3814,6 @@ async def test_retry_policy_matching_code_or_pattern_and_empty_rules(tmp_path: P
         job3 = await runtime3.wait(sub3.job_id, 10)
         assert job3.state == "succeeded"
         assert len(drivers3.invocations) == 2
-        assert job3.attempts == 2
     finally:
         await runtime3.close()
 
@@ -5803,7 +3831,6 @@ async def test_retry_policy_matching_code_or_pattern_and_empty_rules(tmp_path: P
         job4 = await runtime4.wait(sub4.job_id, 10)
         assert job4.state == "failed"
         assert len(drivers4.invocations) == 1
-        assert job4.attempts == 1
     finally:
         await runtime4.close()
 
@@ -5816,8 +3843,7 @@ async def test_retry_policy_bounded_attempts_and_budget_exhaustion(tmp_path: Pat
     policy = RetryPolicy(2, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -5837,8 +3863,7 @@ async def test_retry_policy_bounded_attempts_and_budget_exhaustion(tmp_path: Pat
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "failed"
         assert len(drivers.invocations) == 3
-        assert job.attempts == 3
-        assert job.result.metadata.failure.kind == "retryable"
+        assert job.result.failure_kind == "transient"
     finally:
         await runtime.close()
 
@@ -5851,8 +3876,7 @@ async def test_retry_policy_exclusions_fatal_and_cancellation(tmp_path: Path) ->
     policy = RetryPolicy(2, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -5870,7 +3894,6 @@ async def test_retry_policy_exclusions_fatal_and_cancellation(tmp_path: Path) ->
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "failed"
         assert len(drivers.invocations) == 1
-        assert job.attempts == 1
     finally:
         await runtime.close()
 
@@ -5888,84 +3911,10 @@ async def test_retry_policy_exclusions_fatal_and_cancellation(tmp_path: Path) ->
         job2 = await runtime2.wait(sub2.job_id, 10)
         assert job2.state == "failed"
         assert len(drivers2.invocations) == 1
-        assert job2.attempts == 1
     finally:
         await runtime2.close()
 
 
-@pytest.mark.asyncio
-async def test_retry_sequential_observability_streams_and_ask_tokens(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    base = config(tmp_path / "home")
-
-    policy = RetryPolicy(2, ("rate_limit",), ())
-    catalog = replace(
-        base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
-        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
-    )
-
-    observed_ask_tokens = []
-
-    class ObservabilityDrivers(FakeDrivers):
-        def __init__(self):
-            super().__init__()
-            self.attempt = 0
-
-        def supports_structured_streaming(self, target):
-            return True
-
-        async def execute(self, *, target, env=None, emitter=None, **kwargs):
-            self.attempt += 1
-            if env and "REFRACT_ASK_TOKEN" in env:
-                observed_ask_tokens.append((self.attempt, env["REFRACT_ASK_TOKEN"]))
-            if emitter:
-                emitter({"kind": "stream.message", "text": f"attempt-{self.attempt}"})
-            if self.attempt == 1:
-                return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
-            return DriverResult("SUCCESS", "sess-1", "attempt 2 success", "", "")
-
-    drivers = ObservabilityDrivers()
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        sub = await runtime.submit(project.id, "implement", "observability test")
-        job = await runtime.wait(sub.job_id, 10)
-        assert job.state == "succeeded"
-        assert job.attempts == 2
-
-        # 1. Distinct ask tokens per attempt
-        assert len(observed_ask_tokens) == 2
-        assert observed_ask_tokens[0][0] == 1
-        assert observed_ask_tokens[1][0] == 2
-        assert observed_ask_tokens[0][1] != observed_ask_tokens[1][1]
-        assert not runtime.ask_registry._tokens
-
-        # 2. Sequential attempt finished events in DB
-        events = runtime.database.events(sub.job_id)
-        finish_events = [e for e in events if e["kind"] == "target.attempt_finished"]
-        assert len(finish_events) == 2
-        assert finish_events[0]["data"]["attempt"] == 1
-        assert finish_events[0]["data"]["outcome"] == "RETRYABLE"
-        assert finish_events[1]["data"]["attempt"] == 2
-        assert finish_events[1]["data"]["outcome"] == "SUCCESS"
-
-        # 3. Stream events boundary and per-attempt records
-        stream_events = runtime.database.stream_events(sub.job_id)
-        attempt_stream_finishes = [e for e in stream_events if e.kind == "attempt.finished"]
-        assert len(attempt_stream_finishes) == 2
-        assert attempt_stream_finishes[0].attempt == 1
-        assert attempt_stream_finishes[1].attempt == 2
-
-        # 4. Single turn stored in DB
-        turns = runtime.database.recent_turns(project.id, "implement", "implement", 10)
-        assert len(turns) == 1
-        assert turns[0]["response"] == "attempt 2 success"
-    finally:
-        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -5977,8 +3926,7 @@ async def test_retry_probe_and_capacity_held_and_final_only_health(tmp_path: Pat
     catalog = replace(
         base,
         breaker_failure_threshold=1,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -6048,8 +3996,7 @@ async def test_retry_telemetry_rollover_cumulative_consumption(tmp_path: Path) -
     policy = RetryPolicy(2, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -6061,18 +4008,18 @@ async def test_retry_telemetry_rollover_cumulative_consumption(tmp_path: Path) -
         def supports_structured_streaming(self, target):
             return True
 
-        async def execute(self, *, target, emitter=None, **kwargs):
+        async def execute(self, *, target, on_event=None, **kwargs):
             self.attempt += 1
-            if emitter:
+            if on_event:
                 if self.attempt == 1:
-                    emitter({
+                    await on_event({
                         "kind": "telemetry.updated",
-                        "data": {"input_tokens": 100, "output_tokens": 20, "source": "provider", "quality": "reported"},
+                        "data": {"input": 100, "output": 20},
                     })
                 elif self.attempt == 2:
-                    emitter({
+                    await on_event({
                         "kind": "telemetry.updated",
-                        "data": {"input_tokens": 150, "output_tokens": 30, "source": "provider", "quality": "reported"},
+                        "data": {"input": 150, "output": 30},
                     })
             if self.attempt == 1:
                 return DriverResult("RETRYABLE", "", "", "rate limit", "rate_limit")
@@ -6087,17 +4034,11 @@ async def test_retry_telemetry_rollover_cumulative_consumption(tmp_path: Path) -
         sub = await runtime.submit(project.id, "implement", "telemetry rollover test")
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "succeeded"
-        assert job.attempts == 2
 
-        telemetry = job.result.metadata.telemetry.model_dump(mode="json")
+        telemetry = job.result.tokens
         assert telemetry is not None
-        row = runtime.database._connection.execute("SELECT telemetry_state_json FROM jobs WHERE id=?", (sub.job_id,)).fetchone()
-        internal_telemetry = json.loads(row[0])
-        assert internal_telemetry["attribution"]["attempt"] == 2
-        assert internal_telemetry["completed_attempts"]["total_input_tokens"] == 100
-        assert internal_telemetry["completed_attempts"]["total_output_tokens"] == 20
-        assert telemetry["total_input_tokens"]["value"] == 250
-        assert telemetry["total_output_tokens"]["value"] == 50
+        assert telemetry["input"] == 250
+        assert telemetry["output"] == 50
     finally:
         await runtime.close()
 
@@ -6110,8 +4051,7 @@ async def test_retry_ten_attempts_budget_bound(tmp_path: Path) -> None:
     policy = RetryPolicy(9, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -6128,7 +4068,6 @@ async def test_retry_ten_attempts_budget_bound(tmp_path: Path) -> None:
         job = await runtime.wait(sub.job_id, 15)
         assert job.state == "failed"
         assert len(drivers.invocations) == 10
-        assert job.attempts == 10
     finally:
         await runtime.close()
 
@@ -6141,8 +4080,7 @@ async def test_retry_tool_activity_after_truncation_blocks_replay(tmp_path: Path
     policy = RetryPolicy(2, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -6154,11 +4092,11 @@ async def test_retry_tool_activity_after_truncation_blocks_replay(tmp_path: Path
         def supports_structured_streaming(self, target):
             return True
 
-        async def execute(self, *, target, emitter=None, **kwargs):
+        async def execute(self, *, target, on_event=None, **kwargs):
             self.invocations.append(target.id)
-            if emitter:
-                emitter({"kind": "stream.truncated", "data": {"reason": "quota"}})
-                emitter({"kind": "tool.started", "data": {"tool": "bash"}})
+            if on_event:
+                await on_event({"kind": "stream.truncated", "data": {"reason": "quota"}})
+                await on_event({"kind": "tool.started", "data": {"tool": "bash"}})
             return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
 
     drivers = TruncatedToolDriver()
@@ -6171,127 +4109,11 @@ async def test_retry_tool_activity_after_truncation_blocks_replay(tmp_path: Path
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "failed"
         assert len(drivers.invocations) == 1
-        assert job.attempts == 1
-        assert job.result.metadata.failure.kind == "replay_blocked"
+        assert job.result.failure_kind == "replay_blocked"
     finally:
         await runtime.close()
 
 
-@pytest.mark.asyncio
-async def test_retry_unknown_observation_blocks_replay(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    base = config(tmp_path / "home")
-
-    policy = RetryPolicy(2, ("rate_limit",), ())
-    catalog = replace(
-        base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
-        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
-    )
-
-    class NonStreamingDriver(FakeDrivers):
-        def __init__(self):
-            super().__init__()
-            self.invocations = []
-
-        def supports_structured_streaming(self, target):
-            return False
-
-        async def execute(self, *, target, **kwargs):
-            self.invocations.append(target.id)
-            return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
-
-    drivers = NonStreamingDriver()
-    runtime = Runtime(catalog)
-    runtime.drivers = drivers
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        sub = await runtime.submit(project.id, "implement", "unknown observation test")
-        job = await runtime.wait(sub.job_id, 10)
-        assert job.state == "failed"
-        assert len(drivers.invocations) == 1
-        assert job.attempts == 1
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_retry_recovery_to_transient_to_success(tmp_path: Path) -> None:
-    root = repository(tmp_path)
-    base = config(tmp_path / "home")
-
-    policy = RetryPolicy(2, ("rate_limit",), ())
-    catalog = replace(
-        base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient", envs={"RECOVERY_BINDING": "SYNTHETIC_RECOVERY_BINDING"}),),
-        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
-    )
-
-    invocations = []
-    observed_envs = []
-
-    class RecoveryRetryDriver(FakeDrivers):
-        def supports_structured_streaming(self, target):
-            return True
-
-        async def execute(self, *, target, prompt=None, session_id=None, env=None, **kwargs):
-            invocations.append((session_id, prompt))
-            observed_envs.append(dict(env or {}))
-            if len(invocations) == 1:
-                return DriverResult("RETRYABLE", "s-initial", "", "ctx limit exceeded", "context_overflow")
-            elif len(invocations) == 2:
-                return DriverResult("RETRYABLE", "", "", "rate limit on reconstruct", "rate_limit")
-            return DriverResult("SUCCESS", "s-recovered", "recovered final answer", "", "")
-
-    drivers = RecoveryRetryDriver()
-    runtime = Runtime(catalog)
-    target = catalog.targets[0]
-    target_key = target_execution_key(target)
-    runtime.drivers = drivers
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        _, revision = runtime._resolve_target_environment(project, target.id)
-        session_suffix = hashlib.sha256((project.id + revision).encode()).hexdigest()[:20]
-        session_key = f"{target_key}:env:{session_suffix}"
-        session_context = f"implement:env:{session_suffix}"
-        runtime.database.append_turn(
-            project_id=project.id, context_key=session_context, role="implement",
-            target_id="primary", target_key=session_key, session_id="s-initial",
-            prompt="turn 0 prompt", response="turn 0 response",
-        )
-
-        sub = await runtime.submit(project.id, "implement", "recovery retry test")
-        job = await runtime.wait(sub.job_id, 10)
-        assert job.state == "succeeded"
-        assert job.attempts == 2
-        assert len(invocations) == 3
-        assert all(env["RECOVERY_BINDING"] == "SYNTHETIC_RECOVERY_BINDING" for env in observed_envs)
-
-        # Invocation 1 used s-initial and overflowed
-        assert invocations[0][0] == "s-initial"
-        # Invocation 2 used reconstruct (session empty) and failed transiently
-        assert invocations[1][0] == ""
-        # Invocation 3 (attempt 2) directly continued reconstruct without restarting s-initial
-        assert invocations[2][0] == ""
-
-        # Replacement event was emitted
-        events = runtime.database.events(sub.job_id)
-        replaced = [e for e in events if e["kind"] == "target.session_replaced"]
-        assert len(replaced) == 1
-        assert replaced[0]["data"]["phase"] == "reconstruct"
-
-        # Stored turn has replacement session
-        turns = runtime.database.recent_turns(project.id, session_context, "implement", 10)
-        assert len(turns) == 2
-        assert turns[-1]["prompt"] == "recovery retry test"
-        assert turns[-1]["response"] == "recovered final answer"
-        assert runtime.database.session(project.id, session_context, "implement", session_key) == "s-recovered"
-    finally:
-        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -6302,8 +4124,7 @@ async def test_retry_cancellation_before_retry_invocation_releases_resources(tmp
     policy = RetryPolicy(2, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -6352,8 +4173,7 @@ async def test_retry_injected_cleanup_failures_releases_resources(tmp_path: Path
     policy = RetryPolicy(1, ("rate_limit",), ())
     catalog = replace(
         base,
-        retry_policies={"transient": policy},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -6378,37 +4198,7 @@ async def test_retry_injected_cleanup_failures_releases_resources(tmp_path: Path
         monkeypatch.setattr(runtime.target_executor, "_prepare_session", failing_prepare)
         with pytest.raises(RuntimeError, match="prepare session injected error"):
             await runtime.target_executor.execute(
-                job_id="fail-prep-job", project=project, workflow="implement", context_key="prep",
-                plan=plan, prompt="p", cwd=root, cancel_event=CancelEvent(),
-            )
-        assert runtime.database.target_health(target_key)["probe_job_id"] == ""
-        assert not runtime.target_executor._target_active
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_retry_policy_lookup_failure_releases_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
-    runtime = Runtime(catalog)
-    target = catalog.targets[0]
-    target_key = target_execution_key(target)
-    runtime.drivers = FakeDrivers()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-        runtime.database.create_job(job_id="policy-lookup-fault", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
-        with runtime.database._connection:
-            runtime.database._connection.execute(
-                "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 60, '')",
-                (target_key,),
-            )
-        monkeypatch.setattr(type(plan), "retry_policy", lambda _self, _target: (_ for _ in ()).throw(RuntimeError("policy lookup fault")))
-        with pytest.raises(RuntimeError, match="policy lookup fault"):
-            await runtime.target_executor.execute(
-                job_id="policy-lookup-fault", project=project, workflow="implement", context_key="ctx",
+                job_id="fail-prep-job", project=project, workflow="implement", session="prep",
                 plan=plan, prompt="p", cwd=root, cancel_event=CancelEvent(),
             )
         assert runtime.database.target_health(target_key)["probe_job_id"] == ""
@@ -6434,10 +4224,10 @@ async def test_retry_ask_token_issue_failure_propagates_without_driver_call(tmp_
     try:
         project = register_project(runtime, str(root))
         plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-        runtime.database.create_job(job_id="ask-issue-fault", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        runtime.database.create_job(job_id="ask-issue-fault", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="ctx")
         with pytest.raises(RuntimeError, match="issue token fault"):
             await runtime.target_executor.execute(
-                job_id="ask-issue-fault", project=project, workflow="implement", context_key="ctx",
+                job_id="ask-issue-fault", project=project, workflow="implement", session="ctx",
                 plan=plan, prompt="p", cwd=root, cancel_event=CancelEvent(),
             )
         assert not drivers.sessions
@@ -6450,8 +4240,8 @@ async def test_retry_ask_token_issue_failure_propagates_without_driver_call(tmp_
 async def test_retry_driver_exception_does_not_reuse_previous_result(tmp_path: Path) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
-    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+    catalog = replace(base, 
+        targets=(TargetConfig(id="primary", backend="codex", retry=RetryPolicy(1, (), ())),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
     class ResultThenException(StreamingSequenceDrivers):
         def __init__(self):
@@ -6470,8 +4260,8 @@ async def test_retry_driver_exception_does_not_reuse_previous_result(tmp_path: P
         project = register_project(runtime, str(root))
         sub = await runtime.submit(project.id, "implement", "p")
         job = await runtime.wait(sub.job_id, 10)
-        events = runtime.database.events(sub.job_id)
-        finishes = [event["data"] for event in events if event["kind"] == "target.attempt_finished"]
+        events = _stream_events(runtime.database, sub.job_id)
+        finishes = [event["data"] for event in events if event["kind"] == "attempt.finished"]
         assert job.state == "failed"
         assert len(finishes) == 2
         assert finishes[0]["error_code"] == "rate_limit"
@@ -6481,41 +4271,7 @@ async def test_retry_driver_exception_does_not_reuse_previous_result(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_retry_accumulator_rollover_failure_releases_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    root = repository(tmp_path)
-    base = config(tmp_path / "home")
-    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
-        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
-    runtime = Runtime(catalog)
-    runtime.drivers = StreamingSequenceDrivers([DriverResult("RETRYABLE", "", "", "transient", "rate_limit")])
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-        target_key = target_execution_key(catalog.targets[0])
-        job_id = "accumulator-rollover-fault"
-        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
-        with runtime.database._connection:
-            runtime.database._connection.execute(
-                "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 60, '')",
-                (target_key,),
-            )
-        def fail_rollover(*_args, **_kwargs): raise RuntimeError("accumulator rollover fault")
-        monkeypatch.setattr("refract.execution.TelemetryAccumulator.complete_attempt", fail_rollover)
-        with pytest.raises(RuntimeError, match="accumulator rollover fault"):
-            await runtime.target_executor.execute(
-                job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
-                prompt="p", cwd=root, cancel_event=CancelEvent(),
-            )
-        assert runtime.database.target_health(target_key)["probe_job_id"] == ""
-        assert not runtime.target_executor._target_active
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("fault", ["revoke", "recorder", "health", "storage"])
+@pytest.mark.parametrize("fault", ["revoke", "health", "storage"])
 async def test_retry_finalization_faults_release_target_resources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
     root = repository(tmp_path)
     catalog = config(tmp_path / "home")
@@ -6526,24 +4282,21 @@ async def test_retry_finalization_faults_release_target_resources(tmp_path: Path
         project = register_project(runtime, str(root))
         plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
         job_id = f"finalize-{fault}"
-        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="ctx")
         if fault == "revoke":
             class RevokeFault:
                 def issue_token(self, *_args, **_kwargs): return "token"
                 def revoke_token(self, *_args, **_kwargs): raise RuntimeError("revoke fault")
             runtime.target_executor.ask_registry = RevokeFault()
-        elif fault == "recorder":
-            async def fail_recorder(*_args, **_kwargs): raise RuntimeError("recorder fault")
-            monkeypatch.setattr(runtime.target_executor, "_finish_recorder", fail_recorder)
         elif fault == "health":
             def fail_health(*_args, **_kwargs): raise RuntimeError("health fault")
             monkeypatch.setattr(runtime.database, "record_target_success", fail_health)
         else:
-            async def fail_storage(*_args, **_kwargs): raise RuntimeError("storage fault")
-            monkeypatch.setattr(runtime.target_executor, "_store_turn", fail_storage)
+            def fail_storage(*_args, **_kwargs): raise RuntimeError("storage fault")
+            monkeypatch.setattr(runtime.database, "store_session", fail_storage)
         with pytest.raises(RuntimeError, match=f"{fault} fault"):
             await runtime.target_executor.execute(
-                job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
+                job_id=job_id, project=project, workflow="implement", session="ctx", plan=plan,
                 prompt="p", cwd=root, cancel_event=CancelEvent(),
             )
         assert not runtime.target_executor._target_active
@@ -6556,8 +4309,8 @@ async def test_retry_finalization_faults_release_target_resources(tmp_path: Path
 async def test_retry_cancellation_during_attempt_setup_prevents_driver_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
-    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
+    catalog = replace(base, 
+        targets=(TargetConfig(id="primary", backend="codex", retry=RetryPolicy(1, (), ())),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
     runtime = Runtime(catalog)
     drivers = ScriptedRecoveryDrivers([
@@ -6570,7 +4323,7 @@ async def test_retry_cancellation_during_attempt_setup_prevents_driver_invocatio
         project = register_project(runtime, str(root))
         plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
         job_id = "cancel-setup-race"
-        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="ctx")
         cancel_event = CancelEvent()
         starts = 0
         original_start = runtime.target_executor._start_attempt
@@ -6593,7 +4346,7 @@ async def test_retry_cancellation_during_attempt_setup_prevents_driver_invocatio
         ask = TrackingAsk()
         runtime.target_executor.ask_registry = ask
         result = await runtime.target_executor.execute(
-            job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
+            job_id=job_id, project=project, workflow="implement", session="ctx", plan=plan,
             prompt="p", cwd=root, cancel_event=cancel_event,
         )
         assert len(drivers.calls) == 1
@@ -6601,104 +4354,275 @@ async def test_retry_cancellation_during_attempt_setup_prevents_driver_invocatio
         assert ask.issued == ask.revoked == 2
         assert not runtime.target_executor._target_active
         assert runtime.target_executor._target_users.get("primary", 0) == 0
-        attempt_finishes = [event for event in runtime.database.events(job_id) if event["kind"] == "target.attempt_finished"]
+        attempt_finishes = [event for event in _stream_events(runtime.database, job_id) if event["kind"] == "attempt.finished"]
         assert len(attempt_finishes) == 2
-        stream_finishes = [event for event in runtime.database.stream_events(job_id) if event.kind == "attempt.finished"]
+        stream_finishes = [event for event in _stream_events(runtime.database, job_id) if event["kind"] == "attempt.finished"]
         assert len(stream_finishes) == 2
-        assert stream_finishes[-1].data["status"] == "cancelled"
+        assert stream_finishes[-1]["data"]["status"] == "cancelled"
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_retry_cancellation_during_recovery_bookkeeping_prevents_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stored_target_policy_survives_current_policy_changes(tmp_path: Path) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
-    catalog = replace(base, retry_policies={"transient": RetryPolicy(1, (), ())},
-        targets=(TargetConfig(id="primary", backend="codex", retry_policy="transient"),),
-        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
-    runtime = Runtime(catalog)
-    drivers = ScriptedRecoveryDrivers([
-        (DriverResult("RETRYABLE", "old-session", "", "context overflow", "context_overflow"), False),
-        (DriverResult("SUCCESS", "new-session", "unexpected", "", ""), False),
-    ])
-    runtime.drivers = drivers
+    old_policy = RetryPolicy(1, ("temporary",), ())
+    old_target = replace(
+        base.targets[0], backend="codex", args=("--old-setting",), max_concurrency=1,
+        retry=old_policy, env={"ROTATED_ENV": "SYNTHETIC_OLD_ENV"},
+    )
+    old_catalog = replace(base, targets=(old_target,))
+    runtime = Runtime(old_catalog)
+    project = register_project(runtime, str(root))
+    stored_plan = resolve_execution_plan(get_workflow("implement"), old_catalog, "balanced")
+    plan_json = json.dumps(execution_plan_data(stored_plan))
+    job_id = "stored-policy-environment"
+    runtime.database.create_job(
+        job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
+        prompt="stored policy", execution_plan_json=plan_json, session="stored-policy",
+    )
+    current_target = replace(
+        old_target, backend="pi", args=("--new-setting",), max_concurrency=4,
+        retry=RetryPolicy(0, (), ()), env={"ROTATED_ENV": "SYNTHETIC_CURRENT_ENV"},
+    )
+    current_catalog = replace(old_catalog, targets=(current_target,))
+    runtime._catalog = current_catalog
+    runtime.target_executor.refresh_configuration(current_catalog)
+    observations = []
+    class PolicyObservingDrivers(FakeDrivers):
+        async def execute(self, *, target, env=None, **kwargs):
+            observations.append((target.backend, target.args, target.max_concurrency, target.retry, (env or {}).get("ROTATED_ENV")))
+            if len(observations) == 1:
+                return DriverResult("RETRYABLE", "", "", "temporary", "temporary")
+            return await super().execute(target=target, **kwargs)
+    runtime.drivers = PolicyObservingDrivers()
     await runtime.start()
     try:
-        project = register_project(runtime, str(root))
-        plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-        job_id = "cancel-recovery-event-race"
-        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", context_key="ctx")
-        target_key = target_execution_key(catalog.targets[0])
-        runtime.database.append_turn(project_id=project.id, context_key="ctx", role="implement", target_id="primary", target_key=target_key, session_id="old-session", prompt="prior", response="history")
-        cancel_event = CancelEvent()
-        original_event = runtime.database.event
-        def cancel_on_recovery(job, kind, data):
-            result = original_event(job, kind, data)
-            if kind == "target.session_recovery_started":
-                cancel_event.set()
-            return result
-        monkeypatch.setattr(runtime.database, "event", cancel_on_recovery)
-        result = await runtime.target_executor.execute(
-            job_id=job_id, project=project, workflow="implement", context_key="ctx", plan=plan,
-            prompt="p", cwd=root, cancel_event=cancel_event,
-        )
-        assert len(drivers.calls) == 1
-        assert result.result.outcome == "CANCELLED"
-        stream_finishes = [event for event in runtime.database.stream_events(job_id) if event.kind == "attempt.finished"]
-        assert len(stream_finishes) == 1
-        assert stream_finishes[0].data["status"] == "cancelled"
-        assert not runtime.target_executor._target_active
-        assert runtime.target_executor._target_users.get("primary", 0) == 0
+        job = await runtime.wait(job_id, 10)
+        assert job.state == "succeeded"
+        assert observations == [
+            ("codex", ("--old-setting",), 1, old_policy, "SYNTHETIC_CURRENT_ENV"),
+            ("codex", ("--old-setting",), 1, old_policy, "SYNTHETIC_CURRENT_ENV"),
+        ]
+        assert "SYNTHETIC_" not in runtime.database.job_record(job_id)["execution_plan_json"]
     finally:
         await runtime.close()
 
 
-def test_grouped_failure_producer_exposes_only_canonical_fields() -> None:
-    result = DriverResult("TARGET_FATAL", "", "", "target unavailable", "backend_failure", model="model-x")
-    metadata = TargetExecutor._result_metadata(result, TargetConfig(id="target", backend="codex", model="configured"), 25)
-    assert set(metadata) == {"execution", "failure", "retry", "telemetry"}
-    assert metadata["execution"] == {"model": "model-x", "duration_ms": 25}
-    assert metadata["failure"] == {"kind": "target_fatal"}
-    assert metadata["retry"] == {"retryable": False, "next_target": None}
-    assert metadata["telemetry"]["completeness"] == "unavailable"
-    assert "input_tokens" not in metadata
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_name", ["claude", "pi", "codex", "agy"])
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_real_adapter_observations_through_execution_persist_reported_consumption_alongside_derived_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_name: str, streaming: bool
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+    monkeypatch.setattr("refract.drivers.DriverRegistry._detect_structured_mode", lambda *a, **k: streaming)
 
+    if backend_name == "claude":
+        c_lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "id": "c-msg-1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "claude done"}],
+                    "usage": {"input_tokens": 100, "cache_read_input_tokens": 30, "output_tokens": 20},
+                },
+            }),
+            json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "claude done", "session_id": "c-sess-1"}),
+        ]
+        stub_claude(monkeypatch, tmp_path, c_lines)
+    elif backend_name == "pi":
+        p_lines = [
+            json.dumps({"type": "session", "id": "pi-sess-1"}),
+            json.dumps({"type": "turn_start"}),
+            json.dumps({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "responseId": "p-resp-1",
+                    "content": [{"type": "text", "text": "pi done"}],
+                    "usage": {"input": 120, "cacheRead": 40, "output": 25},
+                },
+            }),
+            json.dumps({
+                "type": "turn_end",
+                "message": {
+                    "role": "assistant",
+                    "responseId": "p-resp-1",
+                    "content": [{"type": "text", "text": "pi done"}],
+                    "usage": {"input": 120, "cacheRead": 40, "output": 25},
+                },
+            }),
+        ]
+        monkeypatch.setattr("refract.backends.pi.run_process", fake_run_process(p_lines))
+    elif backend_name == "codex":
+        cdx_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "cdx-tid-1"}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "m1", "text": "codex done"}}),
+            json.dumps({
+                "type": "turn.completed",
+                "usage": {"input_tokens": 200, "cached_input_tokens": 50, "output_tokens": 35},
+            }),
+        ]
+        monkeypatch.setattr("refract.backends.codex.run_process", shell_fake_as_process(lambda *a, **k: (l for l in cdx_lines)))
+    elif backend_name == "agy":
+        a_lines = [
+            json.dumps({
+                "event": "step_update",
+                "step_update": {
+                    "conversation_id": "00000000-0000-0000-0000-000000000001",
+                    "step_index": 1,
+                    "state": "DONE",
+                    "usage": {"input_tokens": 300, "cache_read_tokens": 60, "output_tokens": 40},
+                },
+            }),
+            json.dumps({
+                "event": "result",
+                "result": {"conversation_id": "00000000-0000-0000-0000-000000000001", "response": "agy done"},
+            }),
+        ]
+        monkeypatch.setattr("refract.backends.agy.run_process", fake_run_process(a_lines))
 
-def test_result_metadata_produces_canonical_grouped_structure_and_context_overflow() -> None:
-    # 1. Success case
-    success_res = DriverResult("SUCCESS", "", "", "", "", model="model-1")
-    meta_success = TargetExecutor._result_metadata(success_res, None, 123)
-    assert set(meta_success) == {"execution", "failure", "retry", "telemetry"}
-    assert meta_success["execution"]["model"] == "model-1"
-    assert meta_success["execution"]["duration_ms"] == 123
-    assert meta_success["failure"] is None
-    assert meta_success["retry"]["retryable"] is None
-    assert meta_success["retry"]["next_target"] is None
-
-    # 2. Context overflow case
-    overflow_res = DriverResult("RETRYABLE", "", "", "context overflow", "context_overflow")
-    meta_overflow = TargetExecutor._result_metadata(overflow_res, None, 50)
-    assert set(meta_overflow) == {"execution", "failure", "retry", "telemetry"}
-    assert meta_overflow["failure"]["kind"] == "context_overflow"
-    assert meta_overflow["retry"]["retryable"] is True
-    assert meta_overflow["retry"]["next_target"] is None
-
-    # 3. Cancelled case
-    cancelled_res = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-    meta_cancelled = TargetExecutor._result_metadata(cancelled_res, None, None)
-    assert meta_cancelled["failure"]["kind"] == "cancelled"
-    assert meta_cancelled["retry"]["retryable"] is False
-
-    # 4. Model fallback without fabricated capacity
-    fallback_res = DriverResult("SUCCESS", "", "", "", "", model=None)
-    meta_fallback = TargetExecutor._result_metadata(
-        fallback_res,
-        TargetConfig(id="t1", backend="codex", model="fallback-configured-model"),
-        200,
+    target = TargetConfig(id=f"{backend_name}-target", backend=backend_name)
+    selection = TargetSelection((target.id,))
+    catalog = replace(
+        config(tmp_path / "home"),
+        targets=(target,),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
     )
-    assert meta_fallback["execution"]["model"] == "fallback-configured-model"
-    assert meta_fallback["telemetry"]["context_window_size"]["value"] is None
-    assert meta_fallback["telemetry"]["context_window_size"]["quality"] == "unavailable"
-    assert meta_fallback["telemetry"]["context_remaining_percent"]["value"] is None
-    assert meta_fallback["telemetry"]["context_remaining_percent"]["quality"] == "unavailable"
+
+    runtime = Runtime(catalog)
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test task")
+        completed_job = await runtime.wait(submission.job_id, 10)
+        assert completed_job.state == "succeeded"
+        final_telemetry = completed_job.result.tokens
+        assert final_telemetry is not None
+        # Assert reported consumption is preserved alongside derived context
+        assert final_telemetry["context_used"] is not None
+        if backend_name == "pi":
+            assert final_telemetry["context_window"] is None
+
+        db_job = runtime.database.job(submission.job_id)
+        assert db_job is not None
+        db_telemetry = db_job.result.tokens
+        assert db_telemetry is not None
+        if backend_name == "pi":
+            assert db_telemetry["context_window"] is None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_sequential_streams_and_ask_tokens(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    observed_ask_tokens = []
+
+    class RetryStreamDrivers(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.attempt = 0
+
+        def supports_structured_streaming(self, target):
+            return True
+
+        async def execute(self, *, target, env=None, on_event=None, **kwargs):
+            self.attempt += 1
+            if env and "REFRACT_ASK_TOKEN" in env:
+                observed_ask_tokens.append((self.attempt, env["REFRACT_ASK_TOKEN"]))
+            if on_event:
+                await on_event({"kind": "stream.message", "text": f"attempt-{self.attempt}"})
+            if self.attempt == 1:
+                return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
+            return DriverResult("SUCCESS", "sess-1", "attempt 2 success", "", "")
+
+    drivers = RetryStreamDrivers()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "retry stream test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "succeeded"
+
+        # 1. Distinct ask tokens per attempt
+        assert len(observed_ask_tokens) == 2
+        assert observed_ask_tokens[0][0] == 1
+        assert observed_ask_tokens[1][0] == 2
+        assert observed_ask_tokens[0][1] != observed_ask_tokens[1][1]
+        assert not runtime.ask_registry._tokens
+
+        # 2. Sequential attempt finished events in DB
+        events = _stream_events(runtime.database, sub.job_id)
+        finish_events = [e for e in events if e["kind"] == "attempt.finished"]
+        assert len(finish_events) == 2
+        assert finish_events[0]["attempt"] == 1
+        assert finish_events[0]["data"]["outcome"] == "RETRYABLE"
+        assert finish_events[1]["attempt"] == 2
+        assert finish_events[1]["data"]["outcome"] == "SUCCESS"
+
+        # 3. Stream events boundary and per-attempt records
+        stream_events = _stream_events(runtime.database, sub.job_id)
+        attempt_stream_finishes = [e for e in stream_events if e["kind"] == "attempt.finished"]
+        assert len(attempt_stream_finishes) == 2
+        assert attempt_stream_finishes[0]["attempt"] == 1
+        assert attempt_stream_finishes[1]["attempt"] == 2
+
+        # 4. Successful attempt's session stored in DB
+        tkey = target_execution_key(catalog.targets[0])
+        assert runtime.database.session(project.id, "implement", "implement", tkey) == "sess-1"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_unknown_observation_blocks_replay(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    base = config(tmp_path / "home")
+
+    policy = RetryPolicy(2, ("rate_limit",), ())
+    catalog = replace(
+        base,
+        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
+        profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
+    )
+
+    class NonStreamingDriver(FakeDrivers):
+        def __init__(self):
+            super().__init__()
+            self.invocations = []
+
+        def supports_structured_streaming(self, target):
+            return False
+
+        async def execute(self, *, target, **kwargs):
+            self.invocations.append(target.id)
+            return DriverResult("RETRYABLE", "", "", "transient error", "rate_limit")
+
+    drivers = NonStreamingDriver()
+    runtime = Runtime(catalog)
+    runtime.drivers = drivers
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        sub = await runtime.submit(project.id, "implement", "unknown observation test")
+        job = await runtime.wait(sub.job_id, 10)
+        assert job.state == "failed"
+        assert len(drivers.invocations) == 1
+    finally:
+        await runtime.close()

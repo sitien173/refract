@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from refract.config import DaemonConfig, load_config
+from refract.config import DEFAULT_ASK_TIMEOUT_S, DaemonConfig, load_config
 from refract.logging_setup import configure as configure_logging, get_logger, resolve_config
 
 
@@ -37,21 +37,9 @@ def _parser() -> argparse.ArgumentParser:
         help="Override the configured application log level",
     )
     serve.add_argument(
-        "--log-format",
-        choices=("text", "json"),
-        default=None,
-        help="Override the configured application log format",
-    )
-    serve.add_argument(
         "--log-file",
         default=None,
         help="Override the log path; use '-' to disable file logging",
-    )
-    serve.add_argument(
-        "--log-console",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable or disable stderr application logs",
     )
     commands.add_parser("doctor", help="Inspect daemon prerequisites")
     ask = commands.add_parser("ask", help="Ask the coordinator during a worker job")
@@ -69,13 +57,14 @@ def _ask(question: str) -> int:
         sys.stderr.write("Question must not be empty.\n")
         return 1
     try:
+        timeout_s = int(os.environ.get("REFRACT_ASK_TIMEOUT_S", DEFAULT_ASK_TIMEOUT_S)) + 10
         request = Request(
             url,
             data=json.dumps({"token": token, "question": question}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urlopen(request) as response:
+        with urlopen(request, timeout=timeout_s) as response:
             answer = json.load(response)["answer"]
         if not isinstance(answer, str):
             raise TypeError("Invalid answer")
@@ -117,9 +106,7 @@ def _doctor(config: DaemonConfig | None = None) -> int:
         "home_writable": home_writable,
         "logging": {
             "level": logging_config.level,
-            "format": logging_config.format,
             "file": logging_config.file.as_posix() if logging_config.file else "",
-            "console": logging_config.console,
         },
         "targets": targets,
     }
@@ -137,14 +124,9 @@ def _doctor(config: DaemonConfig | None = None) -> int:
 def _logging_overrides(args: argparse.Namespace) -> dict[str, str]:
     overrides = {
         "REFRACT_LOG_LEVEL": getattr(args, "log_level", None),
-        "REFRACT_LOG_FORMAT": getattr(args, "log_format", None),
         "REFRACT_LOG_FILE": getattr(args, "log_file", None),
     }
-    resolved = {name: str(value) for name, value in overrides.items() if value is not None}
-    console = getattr(args, "log_console", None)
-    if console is not None:
-        resolved["REFRACT_LOG_CONSOLE"] = "true" if console else "false"
-    return resolved
+    return {name: str(value) for name, value in overrides.items() if value is not None}
 
 
 def _is_loopback_bind(host: str) -> bool:

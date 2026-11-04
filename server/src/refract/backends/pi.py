@@ -2,57 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
-import threading
-from collections.abc import Generator
+import time
 from typing import Any
 
-from . import BackendParams, BackendResult, classify_backend_output, classify_tool_activity, preflight
-from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
-from refract.telemetry import TelemetryAccumulator
+from refract.telemetry import TokenCounters
+
+from . import AsyncEventHandler, BackendParams, BackendResult, classify_backend_output, parse_json_object, preflight
+from ._common import EventBuffer, is_fatal_line, read_usage, tool_started
+from ._process import ProcessOutcome, run_process
 
 log = get_logger("pi")
 
-
-def _as_int(val: Any) -> int | None:
-    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
-        return None
-    return val
-
-
-def _parse_token_component(usage: dict[str, Any], key: str) -> tuple[int | None, bool]:
-    if key not in usage:
-        return None, False
-    val = usage[key]
-    if val is None:
-        return None, False
-    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
-        return None, True
-    return val, False
-
-
-def run_shell_command(
-    cmd: list[str],
-    cwd: str | None = None,
-    timeout_s: int = 0,
-    cancel_event: threading.Event | None = None,
-    env: dict[str, str] | None = None,
-) -> Generator[str, None, None]:
-    """Run Pi and yield its combined output one line at a time."""
-    yield from stream_shell_command_lines(
-        cmd,
-        executable_name="pi",
-        errors="replace",
-        cwd=cwd,
-        timeout_s=timeout_s,
-        line_transform=lambda line: line.rstrip("\r\n"),
-        terminate_wait_s=5,
-        cancel_event=cancel_event,
-        check_returncode=True,
-        env=env,
-    )
+MAX_DIAGNOSTICS = 50
+_PI_USAGE_KEYS = {"input_key": "input", "output_key": "output", "cache_read_key": "cacheRead", "cache_write_key": "cacheWrite"}
+_CONTEXT_OVERFLOW_PATTERN = re.compile(r"\bcontext_length_exceeded\b")
 
 
 def _message_text(message: Any) -> str:
@@ -75,9 +42,6 @@ def _message_text(message: Any) -> str:
     return "".join(parts)
 
 
-_CONTEXT_OVERFLOW_PATTERN = re.compile(r"\bcontext_length_exceeded\b")
-
-
 def _is_context_overflow(diagnostic: str) -> bool:
     """Return True if diagnostic material matches the confirmed context overflow signature."""
     if not diagnostic:
@@ -85,84 +49,20 @@ def _is_context_overflow(diagnostic: str) -> bool:
     return bool(_CONTEXT_OVERFLOW_PATTERN.search(diagnostic))
 
 
-class _OutputParser:
-    """Collect final replies and errors without mixing diagnostic output."""
-
-    def __init__(self) -> None:
-        self.session_id = ""
-        self.agent_message = ""
-        self.diagnostics: list[str] = []
-        self.structured_error = ""
-
-    def record_message_error(self, message: Any) -> None:
-        if not isinstance(message, dict) or message.get("stopReason") != "error":
-            return
-        error = message.get("errorMessage")
-        if isinstance(error, str) and error:
-            self.diagnostics.append(error)
-            self.structured_error = error
-        else:
-            self.structured_error = "error"
-
-    def message_end(self, message: Any) -> None:
-        text = _message_text(message)
-        if text:
-            self.agent_message = text
-        self.record_message_error(message)
-
-    def agent_end(self, messages: Any) -> None:
-        if not isinstance(messages, list):
-            return
-        for message in reversed(messages):
-            if not self.structured_error:
-                self.record_message_error(message)
-            text = _message_text(message)
-            if text:
-                self.agent_message = text
-                break
-
-    def on_event(self, event: dict[str, Any]) -> None:
-        event_type = event.get("type")
-        if event_type == "session" and isinstance(event.get("id"), str):
-            self.session_id = event["id"]
-        if event_type in {"message_end", "message"}:
-            self.message_end(event.get("message"))
-        if event_type == "agent_end":
-            self.agent_end(event.get("messages"))
-        if event_type in {"error", "server_error"}:
-            error = event.get("error") or event.get("message")
-            if isinstance(error, str) and error:
-                self.diagnostics.append(error)
-
-
-def _extract_output(stream: StreamOutcome) -> tuple[str, str, str, str]:
-    """Return Pi's final reply, session ID, non-JSON/error output, and structured error."""
-    parser = _OutputParser()
-    for line, event in zip(stream.lines, stream.events):
-        if event is None:
-            if line.strip():
-                parser.diagnostics.append(line)
-        else:
-            parser.on_event(event)
-    return parser.agent_message, parser.session_id, "\n".join(parser.diagnostics).strip(), parser.structured_error
-
-
-def _extract_model(stream: StreamOutcome) -> str | None:
-    for event in reversed(stream.events):
-        if not isinstance(event, dict):
-            continue
-        msg = event.get("message")
-        if isinstance(msg, dict) and msg.get("role") == "assistant":
-            model = msg.get("model")
-            if isinstance(model, str) and model:
-                return model
-        messages = event.get("messages")
-        if isinstance(messages, list):
-            for m in reversed(messages):
-                if isinstance(m, dict) and m.get("role") == "assistant":
-                    model = m.get("model")
-                    if isinstance(model, str) and model:
-                        return model
+def _event_model(event: dict[str, Any]) -> str | None:
+    """Return the model named by one event: its assistant message, else its last assistant message."""
+    msg = event.get("message")
+    if isinstance(msg, dict) and msg.get("role") == "assistant":
+        model = msg.get("model")
+        if isinstance(model, str) and model:
+            return model
+    messages = event.get("messages")
+    if isinstance(messages, list):
+        for m in reversed(messages):
+            if isinstance(m, dict) and m.get("role") == "assistant":
+                model = m.get("model")
+                if isinstance(model, str) and model:
+                    return model
     return None
 
 
@@ -170,57 +70,142 @@ def _tool_call_id(event: dict[str, Any]) -> str:
     return str(event.get("toolCallId") or event.get("tool_call_id") or event.get("id") or "")
 
 
-class _EventParser:
-    """Normalize Pi text deltas and correlate tool lifecycle and telemetry events."""
+class PiRun:
+    """Parse one Pi run line by line with bounded diagnostics. Raw lines are never retained.
 
-    def __init__(self, params: BackendParams) -> None:
+    Diagnostics keep the first ``MAX_DIAGNOSTICS`` lines. The first fatal-token line and the first
+    context-overflow line are also kept when they fall beyond that bound, so classification
+    matches an unbounded run. Response IDs are kept only for usage de-duplication.
+    """
+
+    def __init__(self, params: BackendParams, on_event: AsyncEventHandler | None) -> None:
         self.params = params
+        self.events = EventBuffer(on_event)
+        self.session_id = ""
+        self.agent_message = ""
+        self.structured_error = ""
+        self.diagnostics: list[str] = []
+        self._fatal_kept = False
+        self._overflow_kept = False
+        self.model: str | None = None
         self.entity_counter = 0
         self.raw_to_entity: dict[str, str] = {}
-        self.accumulator = TelemetryAccumulator()
+        self.counters = TokenCounters()
         self.recorded_responses: set[str] = set()
         self.turn_counter = 0
         self.turn_completed_in_current_turn = False
 
-    def emit(self, event: dict[str, Any]) -> None:
-        if self.params.emitter is not None:
-            self.params.emitter(event)
+    async def feed(self, line: str) -> None:
+        event = parse_json_object(line.strip())
+        if event is None:
+            if line.strip():
+                self._keep_diagnostic(line)
+        else:
+            model = _event_model(event)
+            if model:
+                self.model = model
+            self._output(event)
+            self._telemetry(event)
+        await self.events.flush()
 
-    def emit_text(self, text: Any) -> None:
+    def _keep_diagnostic(self, text: str) -> None:
+        fatal = not self._fatal_kept and is_fatal_line(text)
+        overflow = not self._overflow_kept and _is_context_overflow(text)
+        if len(self.diagnostics) < MAX_DIAGNOSTICS or fatal or overflow:
+            self.diagnostics.append(text)
+            self._fatal_kept = self._fatal_kept or fatal
+            self._overflow_kept = self._overflow_kept or overflow
+
+    def _record_message_error(self, message: Any) -> None:
+        if not isinstance(message, dict) or message.get("stopReason") != "error":
+            return
+        error = message.get("errorMessage")
+        if isinstance(error, str) and error:
+            self._keep_diagnostic(error)
+            self.structured_error = error
+        else:
+            self.structured_error = "error"
+
+    def _message_end(self, message: Any) -> None:
+        text = _message_text(message)
+        if text:
+            self.agent_message = text
+        self._record_message_error(message)
+
+    def _agent_end(self, messages: Any) -> None:
+        if not isinstance(messages, list):
+            return
+        for message in reversed(messages):
+            if not self.structured_error:
+                self._record_message_error(message)
+            text = _message_text(message)
+            if text:
+                self.agent_message = text
+                break
+
+    def _output(self, event: dict[str, Any]) -> None:
+        """Collect the final reply, session ID, and error diagnostics from one event."""
+        event_type = event.get("type")
+        if event_type == "session" and isinstance(event.get("id"), str):
+            self.session_id = event["id"]
+        if event_type in {"message_end", "message"}:
+            self._message_end(event.get("message"))
+        if event_type == "agent_end":
+            self._agent_end(event.get("messages"))
+        if event_type in {"error", "server_error"}:
+            error = event.get("error") or event.get("message")
+            if isinstance(error, str) and error:
+                self._keep_diagnostic(error)
+
+    def _telemetry(self, event: dict[str, Any]) -> None:
+        event_type = event.get("type", "")
+        if self.events.enabled:
+            if event_type == "message_update":
+                self._message_update(event)
+            elif event_type == "text_delta":
+                text = event.get("text")
+                self._emit_text(text if isinstance(text, str) else event.get("delta"))
+            elif event_type in {"tool_execution_start", "tool_call"}:
+                self._start_tool(event)
+            elif event_type in {"tool_execution_end", "tool_result"}:
+                self._complete_tool(event)
+
+        if event_type == "turn_start":
+            self.turn_counter += 1
+            self.turn_completed_in_current_turn = False
+        elif event_type in ("message_end", "turn_end"):
+            self._message_usage(event.get("message"))
+        elif event_type in ("agent_end", "summary"):
+            self._summary_usage(event.get("usage") or event.get("totalUsage"))
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        self.events.emit(event)
+
+    def _emit_text(self, text: Any) -> None:
         if isinstance(text, str) and text:
-            self.emit({
+            self._emit({
                 "kind": "assistant.text.delta",
                 "entity_id": "msg-1",
                 "data": {"text": text},
             })
 
-    def message_update(self, event: dict[str, Any]) -> None:
+    def _message_update(self, event: dict[str, Any]) -> None:
         update = event.get("assistantMessageEvent")
         if not isinstance(update, dict) or update.get("type") != "text_delta":
             return
         delta = update.get("delta")
-        self.emit_text(delta if isinstance(delta, str) else update.get("text"))
+        self._emit_text(delta if isinstance(delta, str) else update.get("text"))
 
-    def start_tool(self, event: dict[str, Any]) -> None:
+    def _start_tool(self, event: dict[str, Any]) -> None:
         self.entity_counter += 1
         raw_id = _tool_call_id(event)
         entity_id = f"tool-{self.entity_counter}"
         if raw_id:
             self.raw_to_entity[raw_id] = entity_id
         tool_name = str(event.get("toolName") or event.get("tool_name") or event.get("tool") or event.get("name") or "")
-        tool_data: dict[str, Any] = {
-            "tool": tool_name,
-            "activity": classify_tool_activity("pi", tool_name),
-        }
-        if "args" in event:
-            tool_data["input"] = event["args"]
-        self.emit({
-            "kind": "tool.started",
-            "entity_id": entity_id,
-            "data": tool_data,
-        })
+        self._emit(tool_started(entity_id, "pi", tool_name, has_input="args" in event, tool_input=event.get("args")))
 
-    def complete_tool(self, event: dict[str, Any]) -> None:
+    def _complete_tool(self, event: dict[str, Any]) -> None:
         entity_id = self.raw_to_entity.get(_tool_call_id(event)) or f"tool-{self.entity_counter or 1}"
         is_error = event.get("isError")
         if is_error is True:
@@ -232,179 +217,125 @@ class _EventParser:
         tool_data: dict[str, Any] = {"status": status}
         if "result" in event:
             tool_data["output"] = event["result"]
-        self.emit({
+        self._emit({
             "kind": "tool.completed",
             "entity_id": entity_id,
             "data": tool_data,
         })
 
-    def on_event(self, event: dict[str, Any]) -> None:
-        event_type = event.get("type", "")
-        if self.params.emitter is not None:
-            if event_type == "message_update":
-                self.message_update(event)
-            elif event_type == "text_delta":
-                text = event.get("text")
-                self.emit_text(text if isinstance(text, str) else event.get("delta"))
-            elif event_type in {"tool_execution_start", "tool_call"}:
-                self.start_tool(event)
-            elif event_type in {"tool_execution_end", "tool_result"}:
-                self.complete_tool(event)
+    def _message_usage(self, msg: Any) -> None:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            return
+        resp_id = str(msg.get("responseId") or msg.get("id") or "")
+        if resp_id:
+            if resp_id in self.recorded_responses:
+                return
+            assigned_id = resp_id
+        else:
+            if self.turn_counter == 0:
+                self.turn_counter = 1
+                self.turn_completed_in_current_turn = False
+            elif self.turn_completed_in_current_turn:
+                return
+            assigned_id = f"turn_{self.turn_counter}"
+            if assigned_id in self.recorded_responses:
+                return
 
-        if event_type == "turn_start":
-            self.turn_counter += 1
-            self.turn_completed_in_current_turn = False
-        elif event_type in ("message_end", "turn_end"):
-            msg = event.get("message")
-            if isinstance(msg, dict) and msg.get("role") == "assistant":
-                resp_id = str(msg.get("responseId") or msg.get("id") or "")
-                if resp_id:
-                    if resp_id in self.recorded_responses:
-                        return
-                    assigned_id = resp_id
-                else:
-                    if self.turn_counter == 0:
-                        self.turn_counter = 1
-                        self.turn_completed_in_current_turn = False
-                    elif self.turn_completed_in_current_turn:
-                        return
-                    assigned_id = f"turn_{self.turn_counter}"
-                    if assigned_id in self.recorded_responses:
-                        return
+        self.recorded_responses.add(assigned_id)
+        self.turn_completed_in_current_turn = True
 
-                self.recorded_responses.add(assigned_id)
-                self.turn_completed_in_current_turn = True
+        u = msg.get("usage")
+        if not isinstance(u, dict):
+            return
+        tok = read_usage(u, **_PI_USAGE_KEYS)
+        if not tok.observed:
+            return
+        self.counters.record_response(
+            assigned_id,
+            input=tok.input,
+            output=tok.output,
+            cache_read=tok.cache_read,
+            cache_write=tok.cache_write,
+        )
+        if tok.input is not None:
+            self.counters.record_context(used=tok.input + (tok.output or 0))
+        self._emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
 
-                u = msg.get("usage")
-                if isinstance(u, dict):
-                    raw_in, raw_in_bad = _parse_token_component(u, "input")
-                    raw_out, raw_out_bad = _parse_token_component(u, "output")
-                    cr, cr_bad = _parse_token_component(u, "cacheRead")
-                    cw, cw_bad = _parse_token_component(u, "cacheWrite")
-                    if raw_in_bad or cr_bad or cw_bad or raw_in is None:
-                        norm_in = None
-                    else:
-                        norm_in = raw_in + (cr or 0) + (cw or 0)
-                    norm_out = raw_out
-                    if any(v is not None for v in (norm_in, norm_out, cr, cw)) or raw_in_bad or raw_out_bad or cr_bad or cw_bad:
-                        self.accumulator.record_consumption(
-                            attempt=1,
-                            invocation=1,
-                            response_id=assigned_id,
-                            input_tokens=norm_in,
-                            output_tokens=norm_out,
-                            cache_read_tokens=cr,
-                            cache_write_tokens=cw,
-                            source="response",
-                            quality="reported",
-                        )
-                        ctx_used = None
-                        if norm_in is not None:
-                            ctx_used = norm_in + (norm_out or 0)
-                            self.accumulator.record_context_snapshot(
-                                used_tokens=ctx_used,
-                                source="derived",
-                                quality="derived",
-                            )
-                        if self.params.emitter is not None:
-                            self.params.emitter({
-                                "kind": "telemetry.updated",
-                                "data": {
-                                    "response_id": assigned_id,
-                                    "input_tokens": norm_in,
-                                    "output_tokens": norm_out,
-                                    "cache_read_tokens": cr,
-                                    "cache_write_tokens": cw,
-                                    "source": "response",
-                                    "quality": "reported",
-                                },
-                            })
-                            if ctx_used is not None:
-                                self.params.emitter({
-                                    "kind": "telemetry.updated",
-                                    "data": {
-                                        "context_used_tokens": ctx_used,
-                                        "source": "derived",
-                                        "quality": "derived",
-                                    },
-                                })
-        elif event_type in ("agent_end", "summary"):
-            u = event.get("usage") or event.get("totalUsage")
-            if isinstance(u, dict):
-                raw_in, raw_in_bad = _parse_token_component(u, "input")
-                raw_out, raw_out_bad = _parse_token_component(u, "output")
-                cr, cr_bad = _parse_token_component(u, "cacheRead")
-                cw, cw_bad = _parse_token_component(u, "cacheWrite")
-                if raw_in_bad or cr_bad or cw_bad or raw_in is None:
-                    norm_in = None
-                else:
-                    norm_in = raw_in + (cr or 0) + (cw or 0)
-                norm_out = raw_out
-                if any(v is not None for v in (norm_in, norm_out, cr, cw)) or raw_in_bad or raw_out_bad or cr_bad or cw_bad:
-                    self.accumulator.reconcile_cumulative(
-                        attempt=1,
-                        invocation=1,
-                        total_input=norm_in,
-                        total_output=norm_out,
-                        cache_read=cr,
-                        cache_write=cw,
-                        source="summary",
-                        quality="reported",
-                    )
-                    if self.params.emitter is not None:
-                        self.params.emitter({
-                            "kind": "telemetry.updated",
-                            "data": {
-                                "total_input_tokens": norm_in,
-                                "total_output_tokens": norm_out,
-                                "cache_read_tokens": cr,
-                                "cache_write_tokens": cw,
-                                "source": "summary",
-                                "quality": "reported",
-                            },
-                        })
+    def _summary_usage(self, u: Any) -> None:
+        if not isinstance(u, dict):
+            return
+        tok = read_usage(u, **_PI_USAGE_KEYS)
+        if not tok.observed:
+            return
+        self.counters.record_totals(
+            input=tok.input,
+            output=tok.output,
+            cache_read=tok.cache_read,
+            cache_write=tok.cache_write,
+        )
+        self._emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
 
-
-def _apply_errors(
-    result: BackendResult,
-    params: BackendParams,
-    stream: StreamOutcome,
-    error_text: str,
-    structured_error: str,
-) -> None:
-    command_error, command_error_class = stream.error, stream.error_class
-    # Precedence 1: Cancellation remains cancelled
-    if (params.cancel_event is not None and params.cancel_event.is_set()) or command_error_class == "cancelled":
-        result.outcome = "FATAL"
-        result.error_class = "cancelled"
-        result.error = "backend command cancelled"
-    # Precedence 2: Confirmed context overflow becomes context_overflow (overrides execution_error & partial output)
-    elif _is_context_overflow(error_text):
-        result.outcome = "FATAL"
-        result.error_class = "context_overflow"
-        result.error = error_text or "context_length_exceeded"
-    # Precedence 3: Existing fatal authentication and model handling remains unchanged (fatal_backend)
-    elif result.error_class == "fatal_backend":
-        pass
-    # Precedence 4: Other structured assistant failures remain failures (partial text cannot hide failure)
-    elif structured_error:
-        if result.outcome == "OK":
+    def _apply_errors(self, result: BackendResult, command_error: str, command_error_class: str, error_text: str) -> None:
+        # Precedence 1: Cancellation remains cancelled
+        if command_error_class == "cancelled":
             result.outcome = "FATAL"
-            result.error_class = command_error_class or "execution_error"
-            result.error = structured_error or error_text
-        elif command_error:
+            result.error_class = "cancelled"
+            result.error = "backend command cancelled"
+        # Precedence 2: Confirmed context overflow becomes context_overflow (overrides execution_error & partial output)
+        elif _is_context_overflow(error_text):
+            result.outcome = "FATAL"
+            result.error_class = "context_overflow"
+            result.error = error_text or "context_length_exceeded"
+        # Precedence 3: Existing fatal authentication and model handling remains unchanged (fatal_backend)
+        elif result.error_class == "fatal_backend":
+            pass
+        # Precedence 4: Other structured assistant failures remain failures (partial text cannot hide failure)
+        elif self.structured_error:
+            if result.outcome == "OK":
+                result.outcome = "FATAL"
+                result.error_class = command_error_class or "execution_error"
+                result.error = self.structured_error or error_text
+            elif command_error:
+                result.outcome = "FATAL"
+                result.error_class = command_error_class
+                result.error = command_error
+        # Precedence 5: Ordinary process failures remain execution_error
+        elif command_error and result.outcome == "OK":
             result.outcome = "FATAL"
             result.error_class = command_error_class
             result.error = command_error
-    # Precedence 5: Ordinary process failures remain execution_error
-    elif command_error and result.outcome == "OK":
-        result.outcome = "FATAL"
-        result.error_class = command_error_class
-        result.error = command_error
+
+    def outcome(self, process: ProcessOutcome) -> BackendResult:
+        """Normalize the parsed stream and the transport outcome into a backend result."""
+        command_error, command_error_class = process.error, process.error_class
+        if command_error_class == "timeout":
+            command_error = f"pi subprocess timed out after {self.params.timeout_s}s"
+        diagnostics = "\n".join(self.diagnostics).strip()
+        session_id = self.session_id or self.params.SESSION_ID
+        error_text = "\n".join(part for part in (command_error, diagnostics) if part).strip()
+        result = classify_backend_output(
+            backend_name="pi",
+            agent_messages=self.agent_message,
+            session_id=session_id,
+            error_text=error_text,
+            model=self.model,
+        )
+
+        result.tokens = self.counters.as_dict()
+        self._apply_errors(result, command_error, command_error_class, error_text)
+        return result
 
 
-def execute(params: BackendParams) -> BackendResult:
-    """Execute a Pi non-interactive session and return a normalized result."""
+async def execute(
+    params: BackendParams,
+    *,
+    cancel: asyncio.Event | None = None,
+    on_event: AsyncEventHandler | None = None,
+) -> BackendResult:
+    """Execute a Pi non-interactive session and return a normalized result.
+
+    A set ``on_event`` receives each normalized event in order. A set ``cancel`` kills the child process.
+    """
     cd, failure = preflight(params, "pi", "Pi")
     if failure is not None:
         return failure
@@ -413,7 +344,7 @@ def execute(params: BackendParams) -> BackendResult:
     cmd = ["pi", *params.args, "--mode", "json"]
     if params.SESSION_ID:
         cmd.extend(["--session", params.SESSION_ID])
-    cmd.append(params.PROMPT)
+    # The prompt goes on stdin: Pi reads piped stdin when no prompt argument is given.
 
     log.info(
         "pi.execute start cwd=%s session_id=%s prompt_len=%d args=%d timeout_s=%s",
@@ -422,24 +353,15 @@ def execute(params: BackendParams) -> BackendResult:
     )
     log.debug("pi command prepared args=%d", len(cmd))
 
-    parser = _EventParser(params)
-    stream = consume_stream(run_shell_command, cmd, params, cwd=os.fspath(cd), name="pi", on_event=parser.on_event)
-    command_error = stream.error
-    agent_messages, extracted_session_id, diagnostics, structured_error = _extract_output(stream)
-    session_id = extracted_session_id or params.SESSION_ID
-    error_text = "\n".join(part for part in (command_error, diagnostics) if part).strip()
-    model = _extract_model(stream)
-    result = classify_backend_output(
-        backend_name="pi",
-        agent_messages=agent_messages,
-        session_id=session_id,
-        error_text=error_text,
-        model=model,
-    )
+    deadline = time.monotonic() + params.timeout_s if params.timeout_s and params.timeout_s > 0 else None
+    run = PiRun(params, on_event)
+    process = await run_process(cmd, params.PROMPT, params.env, os.fspath(cd), deadline, cancel, run.feed)
+    result = run.outcome(process)
+    if cancel is not None and cancel.is_set():
+        result.outcome = "FATAL"
+        result.error_class = "cancelled"
+        result.error = "backend command cancelled"
 
-    if parser.accumulator._has_any_consumption or parser.accumulator._context_used_tokens.value is not None:
-        result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
-    _apply_errors(result, params, stream, error_text, structured_error)
     log.info(
         "pi.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",
         result.outcome, result.SESSION_ID or "", result.error_class, len(result.agent_messages),
@@ -447,4 +369,4 @@ def execute(params: BackendParams) -> BackendResult:
     return result
 
 
-__all__ = ["execute", "run_shell_command"]
+__all__ = ["execute"]

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import faulthandler
-import json
 import logging
 import logging.handlers
 import os
-import queue
 from contextvars import Context
 from pathlib import Path
 
@@ -29,7 +27,6 @@ default_profile = "balanced"
 [[targets]]
 id = "primary"
 backend = "codex"
-capabilities = ["code", "review", "consult"]
 
 [profiles.balanced]
 implement = "primary"
@@ -56,12 +53,9 @@ def test_logging_config_loads_relative_to_refract_home(tmp_path, monkeypatch) ->
         _strict_config(
             """
 level = "debug"
-format = "json"
-file = "logs/service.jsonl"
-console = true
+file = "logs/service.log"
 max_bytes = 4096
 backup_count = 7
-capture_warnings = false
 """,
         ),
         encoding="utf-8",
@@ -71,19 +65,14 @@ capture_warnings = false
     settings = load_config(path).logging
 
     assert settings.level == "DEBUG"
-    assert settings.format == "json"
-    assert settings.file == home / "logs" / "service.jsonl"
-    assert settings.console is True
+    assert settings.file == home / "logs" / "service.log"
     assert settings.max_bytes == 4096
     assert settings.backup_count == 7
-    assert settings.capture_warnings is False
 
 
 def test_logging_environment_overrides_configuration(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REFRACT_LOG_LEVEL", "ERROR")
-    monkeypatch.setenv("REFRACT_LOG_FORMAT", "json")
     monkeypatch.setenv("REFRACT_LOG_FILE", "off")
-    monkeypatch.setenv("REFRACT_LOG_CONSOLE", "yes")
     monkeypatch.setenv("REFRACT_LOG_MAX_BYTES", "1234")
     monkeypatch.setenv("REFRACT_LOG_BACKUP_COUNT", "2")
     options = LoggingConfig(file=tmp_path / "ignored.log")
@@ -91,9 +80,7 @@ def test_logging_environment_overrides_configuration(tmp_path, monkeypatch) -> N
     settings = resolve_config(options)
 
     assert settings.level == "ERROR"
-    assert settings.format == "json"
     assert settings.file is None
-    assert settings.console is True
     assert settings.max_bytes == 1234
     assert settings.backup_count == 2
 
@@ -111,41 +98,28 @@ def test_relative_environment_log_file_uses_refract_home(
     assert settings.file == home / "logs" / "application.log"
 
 
-def test_json_logging_has_context_structure_and_redaction(tmp_path) -> None:
-    path = tmp_path / "application.jsonl"
-    configure(
-        LoggingConfig(
-            level="INFO",
-            format="json",
-            file=path,
-            capture_warnings=False,
-        )
-    )
+def test_text_logging_has_context_and_redaction(tmp_path) -> None:
+    path = tmp_path / "application.log"
+    configure(LoggingConfig(level="INFO", file=path))
     logger = get_logger("test")
 
     with log_context(project_id="project-1", job_id="job-1", stage_id="review"):
         logger.warning(
             "request failed authorization=Bearer secret-token-value",
-            extra={
-                "event": "test.failed",
-                "target_id": "target-1",
-                "api_key": "sk-thismustnotappear",
-                "duration_ms": 12.5,
-            },
+            extra={"event": "test.failed", "target_id": "target-1"},
         )
     shutdown()
 
-    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    record = next(item for item in records if item.get("event") == "test.failed")
-    assert record["timestamp"].endswith("Z")
-    assert record["logger"] == "refract.test"
-    assert record["project_id"] == "project-1"
-    assert record["job_id"] == "job-1"
-    assert record["stage_id"] == "review"
-    assert record["target_id"] == "target-1"
-    assert record["api_key"] == "[REDACTED]"
-    assert record["duration_ms"] == 12.5
-    assert "secret-token-value" not in json.dumps(record)
+    line = next(
+        item for item in path.read_text(encoding="utf-8").splitlines()
+        if "request failed" in item
+    )
+    assert "Z WARNING refract.test:" in line
+    assert "project_id=project-1" in line
+    assert "job_id=job-1" in line
+    assert "stage_id=review" in line
+    assert "target_id=target-1" in line
+    assert "secret-token-value" not in line
 
 
 def test_log_context_default_is_immutable_and_scopes_are_restored() -> None:
@@ -166,7 +140,7 @@ def test_log_context_default_is_immutable_and_scopes_are_restored() -> None:
 
 def test_configure_retries_a_degraded_file_sink(tmp_path, monkeypatch) -> None:
     path = tmp_path / "recovered.log"
-    options = LoggingConfig(file=path, capture_warnings=False)
+    options = LoggingConfig(file=path)
     real_handler = logging.handlers.RotatingFileHandler
     attempts = 0
 
@@ -188,31 +162,13 @@ def test_configure_retries_a_degraded_file_sink(tmp_path, monkeypatch) -> None:
     assert "file sink recovered" in path.read_text(encoding="utf-8")
 
 
-def test_bounded_queue_summarizes_dropped_records() -> None:
-    records: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=1)
-    handler = logging_setup._BoundedQueueHandler(records)
-    first = logging.makeLogRecord({"msg": "first"})
-    second = logging.makeLogRecord({"msg": "second"})
-
-    handler.emit(first)
-    handler.emit(second)
-    assert records.get_nowait().getMessage() == "first"
-
-    handler.emit_drop_notice(block=False)
-    notice = records.get_nowait()
-    assert notice.event == "logging.records_dropped"
-    assert notice.dropped_records == 1
-
-
 def test_configure_is_idempotent_and_rotates_files(tmp_path) -> None:
     path = tmp_path / "application.log"
     options = LoggingConfig(
         level="INFO",
-        format="text",
         file=path,
         max_bytes=300,
         backup_count=2,
-        capture_warnings=False,
     )
     configure(options)
     configure(options)
@@ -234,7 +190,7 @@ def test_configure_is_idempotent_and_rotates_files(tmp_path) -> None:
 def test_log_files_stay_private_across_rotation_without_changing_parent(tmp_path) -> None:
     tmp_path.chmod(0o755)
     path = tmp_path / "application.log"
-    configure(LoggingConfig(file=path, max_bytes=300, backup_count=2, capture_warnings=False))
+    configure(LoggingConfig(file=path, max_bytes=300, backup_count=2))
     logger = get_logger("privacy")
     for index in range(30):
         logger.info("private record %s %s", index, "x" * 40)
@@ -246,10 +202,9 @@ def test_log_files_stay_private_across_rotation_without_changing_parent(tmp_path
     assert tmp_path.stat().st_mode & 0o777 == 0o755
 
 
-@pytest.mark.parametrize("log_format", ["text", "json"])
-def test_queued_exceptions_are_reported_and_redacted(tmp_path, log_format) -> None:
+def test_exceptions_are_reported_and_redacted(tmp_path) -> None:
     path = tmp_path / "exceptions.log"
-    configure(LoggingConfig(file=path, format=log_format, capture_warnings=False))
+    configure(LoggingConfig(file=path))
     try:
         raise ValueError("token=exception-secret")
     except ValueError:
@@ -261,9 +216,6 @@ def test_queued_exceptions_are_reported_and_redacted(tmp_path, log_format) -> No
     assert "Traceback" in output
     assert "exception-secret" not in output
     assert "message-secret" not in output
-    if log_format == "json":
-        records = [json.loads(line) for line in output.splitlines()]
-        assert "ValueError" in records[-1]["exception"]
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -275,7 +227,7 @@ def test_logging_does_not_manage_process_fault_handler(tmp_path, monkeypatch, en
 
     monkeypatch.setattr(faulthandler, "enable", unexpected)
     monkeypatch.setattr(faulthandler, "disable", unexpected)
-    configure(LoggingConfig(file=tmp_path / "application.log", capture_warnings=False))
+    configure(LoggingConfig(file=tmp_path / "application.log"))
     shutdown()
 
     assert not (tmp_path / "application.crash.log").exists()
@@ -285,40 +237,11 @@ def test_invalid_logging_configuration_is_rejected(tmp_path, monkeypatch) -> Non
     home = tmp_path / "state"
     home.mkdir()
     path = home / "config.toml"
-    path.write_text(_strict_config("format = 'xml'"), encoding="utf-8")
+    path.write_text(_strict_config("level = 'loud'"), encoding="utf-8")
     monkeypatch.setenv("REFRACT_HOME", str(home))
 
-    with pytest.raises(ValueError, match="format"):
+    with pytest.raises(ValueError, match="level"):
         load_config(path)
-
-
-def test_shutdown_restores_warning_logger(tmp_path) -> None:
-    warnings_logger = logging.getLogger("py.warnings")
-    original_handlers = list(warnings_logger.handlers)
-    original_level = warnings_logger.level
-    original_propagate = warnings_logger.propagate
-
-    configure(LoggingConfig(file=tmp_path / "warning.log", capture_warnings=True))
-    shutdown()
-
-    assert warnings_logger.handlers == original_handlers
-    assert warnings_logger.level == original_level
-    assert warnings_logger.propagate is original_propagate
-
-
-@pytest.mark.parametrize("present", [True, False])
-def test_progress_token_presence_boolean_is_visible_in_json_formatter(present: bool) -> None:
-    record = logging.makeLogRecord(
-        {
-            "msg": "MCP tool request started",
-            "operation": "job_wait",
-            "progress_token_present": present,
-        }
-    )
-
-    json_output = logging_setup._JsonFormatter().format(record)
-
-    assert json.loads(json_output)["progress_token_present"] is present
 
 
 @pytest.mark.parametrize("present", [True, False])
@@ -326,12 +249,12 @@ def test_progress_token_presence_boolean_is_visible_in_text_formatter(present: b
     record = logging.makeLogRecord(
         {
             "msg": "MCP tool request started",
-            "operation": "job_wait",
+            "operation": "wait",
             "progress_token_present": present,
         }
     )
 
-    text_output = logging_setup._formatter("text").format(record)
+    text_output = logging_setup._formatter().format(record)
 
     assert f"progress_token_present={present}" in text_output
 
@@ -340,20 +263,15 @@ def test_progress_token_presence_formatter_rejects_non_boolean_and_redacts_secre
     record = logging.makeLogRecord(
         {
             "msg": "request token=message-secret-value",
-            "operation": "job_wait",
+            "operation": "wait",
             "progress_token_present": "raw-progress-token-value",
             "progress_token": "another-secret-token-value",
             "api_key": "api-secret-value",
         }
     )
 
-    json_output = logging_setup._JsonFormatter().format(record)
-    text_output = logging_setup._formatter("text").format(record)
-    payload = json.loads(json_output)
+    text_output = logging_setup._formatter().format(record)
 
-    assert payload["progress_token_present"] == "[REDACTED]"
-    assert payload["progress_token"] == "[REDACTED]"
-    assert payload["api_key"] == "[REDACTED]"
     assert "progress_token_present" not in text_output
     for secret in (
         "message-secret-value",
@@ -361,7 +279,6 @@ def test_progress_token_presence_formatter_rejects_non_boolean_and_redacts_secre
         "another-secret-token-value",
         "api-secret-value",
     ):
-        assert secret not in json_output
         assert secret not in text_output
 
 

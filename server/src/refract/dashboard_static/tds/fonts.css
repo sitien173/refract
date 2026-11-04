@@ -1,0 +1,48 @@
+/* Base typography for the dashboard, built only from TDS semantic tokens (tds rules RULE 7). */
+/* TDS ships no font files; Inter falls back to the system sans-serif face. */
+body {
+  margin: 0;
+  padding: var(--padding-xl);
+  background: var(--surface-neutral-02);
+  color: var(--text-default);
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xl);
+}
+nav {
+  display: flex;
+  gap: var(--gap-lg);
+  margin-bottom: var(--gap-xl);
+}
+a {
+  color: var(--text-link);
+}
+h1 {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+}
+h2 {
+  margin: 0 0 var(--gap-sm);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+pre {
+  margin: 0;
+  padding: var(--padding-md);
+  max-height: 32rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface-neutral-01);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  color: var(--text-default);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}

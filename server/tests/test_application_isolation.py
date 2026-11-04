@@ -18,7 +18,7 @@ async def test_applications_own_independent_runtimes_and_tokens(tmp_path, monkey
             second_runtime = second.state.runtime
             assert first_runtime is not second_runtime
             assert first.state.mcp is not second.state.mcp
-            first_runtime.database.upsert_project(project_id="one", alias="one", root="/one")
+            first_runtime.database.upsert_project(project_id="one", root="/one")
             assert not second_runtime.database.projects()
         assert first.state.runtime is first_runtime
         assert second.state.runtime is None
@@ -30,11 +30,10 @@ def test_cli_logging_overrides_do_not_modify_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("REFRACT_LOG_LEVEL", "ERROR")
     before = dict(os.environ)
     args = cli._parser().parse_args([
-        "serve", "--log-level", "DEBUG", "--log-file", "-", "--log-format", "json",
+        "serve", "--log-level", "DEBUG", "--log-file", "-",
     ])
     overrides = cli._logging_overrides(args)
     resolved = resolve_config(config(tmp_path).logging, overrides=overrides)
     assert resolved.level == "DEBUG"
-    assert resolved.format == "json"
     assert resolved.file is None
     assert dict(os.environ) == before

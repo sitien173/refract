@@ -18,7 +18,7 @@ def test_database_workers_have_independent_connections_and_transactions(tmp_path
     def write(i):
         connection = db._connection
         barrier.wait(timeout=5)
-        db.upsert_project(project_id=str(i), alias=str(i), root=f"/{i}")
+        db.upsert_project(project_id=str(i), root=f"/{i}")
         return connection
 
     try:

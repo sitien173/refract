@@ -2,32 +2,32 @@
 
 Follow these rules for every Refract MCP call. Default endpoint is `http://127.0.0.1:8765/mcp`.
 
-## Nine tools
+## Six tools
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `project_resolve` | `path`, `alias=""` | `{project:{id, alias, path}}` |
-| `task_guide` | `project_id` | `{workflows, profiles:{default, available}, guidance}` |
-| `job_submit` | `project_id`, `workflow`, `prompt`, `profile=""`, `context_key=""`, `fresh_session=false`, `next_target=""` | `{job:summary}` |
-| `job_wait` | `job_id`, `timeout_s=3600`, `result_offset=0` | `{job:summary, result:{text, error, next_offset, metadata}}` |
-| `job_list` | `project_id` | `{active, recent, more_recent}` |
-| `job_cancel` | `job_id` | `{job:summary}` |
-| `job_retry` | `job_id` | `{job:summary}` |
-| `job_answer` | `job_id`, `answer` | `{job:summary}` |
-| `job_report_error` | `job_id`, `category`, `expected`, `observed`, `report_key` | `{report:{id, job_id, category, created_at}, duplicate, retry:{retryable, next_target}}` |
+| `submit` | `path`, `workflow`, `prompt`, `profile=""`, `session=""`, `fresh=false` | `{job}` |
+| `wait` | `job_id`, `timeout_s=3600` | `{job, result}` |
+| `answer` | `job_id`, `answer` | `{job}` |
+| `cancel` | `job_id` | `{job}` |
+| `retry` | `job_id`, `target=""` | `{job}` for a new job with `retry_of` set |
+| `list` | `path` | `{active, recent, workflows, profiles, guidance}` |
 
-Call only these tools with only these parameters; your client may prefix the names. Unknown tool arguments return `invalid_request`. Capture `project.id` and `job.id` from returned envelopes.
+Call only these tools with only these parameters; your client may prefix the names. Unknown tool arguments return `invalid_request`. Capture `job.id` from returned envelopes.
+
+- `job`: `id, project, workflow, profile, target, session, state, retry_of, created_at, updated_at`. `project` is the Git root path.
+- `result`: `text, truncated, result_path, pending_question, failure_kind, next_target, model, duration_ms, tokens`.
+- `tokens`: `context_used, context_window, input, output, cache_read, cache_write`, each an integer or null.
 
 ## Standard cycle
 
-1. Call `project_resolve(path=...)` with the existing Git-root directory. Refract never walks up to find the root. Omit `alias` unless needed.
-2. Call `task_guide(project_id)` once per phase.
-3. Call `job_submit` with a self-contained `prompt`.
-4. Call `job_wait(job_id)` until terminal, then page the result.
+1. Call `list(path)` once per phase. `path` is any directory inside the project; Refract resolves its Git root. A path outside Git returns `invalid_path`.
+2. Call `submit` with the same `path` and a self-contained `prompt`.
+3. Call `wait(job_id)` until the job is terminal, then read `result.text`.
 
 ## Choosing workflow and profile
 
-- `task_guide` takes no phase argument. Put the complete request in `job_submit.prompt`.
+- `list` takes no phase argument. Put the complete request in `submit.prompt`.
 - Choose `workflow` from `workflows` and `profile` from `profiles.available`. Omit `profile` to use `profiles.default`.
 - Profiles may be partial. `other` requires an explicit mapping and never falls back. Follow returned guidance or error for unsupported mappings; never invent a replacement.
 
@@ -37,50 +37,49 @@ At most one job per project runs at a time. Jobs within each project are admitte
 
 ## Sessions
 
-- Always start every phase with `fresh_session=true`, summarizing prior state and including full role contracts plus the phase prompt path. Also start with `fresh_session=true` when `context_overflow` occurred or when `result.metadata.telemetry.context_used_tokens.value` exceeds 150,000 tokens.
-- For follow-up jobs within the same phase, workflow, and `context_key`: if `context_used_tokens.value` is below 150,000 tokens, or if `value` is null or unavailable, omit `fresh_session` and send only the delta; do not invent usage.
-- A fresh job runs your prompt without stored history and replaces the stored session on success.
-- A resumed job uses the stored session, or bounded turn history when none exists. `job_retry` keeps the original `fresh_session` setting.
-- Changing project, `context_key`, workflow, or configured target starts a separate session.
+- Always start every phase with `fresh=true`, summarizing prior state and including full role contracts plus the phase prompt path. Also start with `fresh=true` after `failure_kind` `context_overflow` or when `result.tokens.context_used` exceeds 150,000.
+- For follow-up jobs within the same phase, workflow, and `session`: if `context_used` is below 150,000 or null, omit `fresh` and send only the delta; do not invent usage.
+- A fresh job runs your prompt without a stored session and replaces the stored session on success.
+- A resumed job uses the stored worker session. Refract stores no prompt or response history.
+- A successful job makes its target the session's preferred target; later jobs in that session try it first, then profile order.
+- Changing project, `session`, or workflow starts a separate session.
 
-## Waiting, paging, and bounds
+## Waiting and results
 
-- Call `job_wait` with its 3600-second heartbeat default. `timeout_s` accepts 0..3600. `result_offset` is a nonnegative Unicode code-point offset, default 0.
+- Call `wait` with its 3600-second default. `timeout_s` accepts 0..3600.
 - Treat timeouts as normal; repeat only while nonterminal. Wait sequentially, one call per job, without polling or overlapping calls. Re-wait on the same job ID after dropped connections.
-- When `job_wait` returns early with `result.pending_question` (`{question_id, text}`), call `job_answer(job_id, answer)` (max 8192 characters). For large context, write it to a file and tell the worker to read the path. Calling `job_answer` without a pending question or on a terminal job returns `invalid_state`.
+- When `wait` returns early with `result.pending_question` (`{question_id, text}`), call `answer(job_id, answer)` (max 8192 characters). For large context, write it to a file and tell the worker to read the path. `answer` without a pending question, after the question expired, or on a terminal job returns `invalid_state`.
+- Every terminal job writes its full text to `result.result_path`. When `result.truncated` is true, read the full text from that file.
+- `failure_kind` is null on success, else one of `cancelled`, `circuit_open`, `replay_blocked`, `context_overflow`, `request_fatal`, `target_fatal`, `transient`.
 
-To read a terminal result, keep `result.text` and call `job_wait(job_id, timeout_s=0, result_offset=<result.next_offset>)` until `next_offset` is null. Concatenate all pages.
+Responses stay below 30,000 characters and 9,000 UTF-8 bytes. If a mutation response overflows, report the actual outcome and keep the job ID. Never blindly resubmit.
 
-Every terminal page includes canonical grouped `result.metadata`: `execution` (`model`, `duration_ms`), `failure` (`null` or `{kind}`), `retry` (`retryable`, `next_target`), and `telemetry` (`completeness`, `context_remaining_percent`, `context_window_size`, `context_used_tokens`, `total_input_tokens`, `total_output_tokens`, `cache_read_tokens`, `cache_write_tokens`). Measurements contain value, source, quality, and observed_at. `failure.kind` is `cancelled`, `circuit_open`, `replay_blocked`, `context_overflow`, `request_fatal`, `target_fatal`, or `retryable`.
+## Recovery
 
-On a failed or cancelled job, pass `result.metadata.retry.next_target` unchanged to `job_submit(next_target=...)`; on `invalid_request`, resubmit without it. On `context_overflow`, summarize state and resubmit with `fresh_session=true`. Otherwise, report the failure. This failed-job route is separate from reported successful-output recovery below.
-
-Responses stay below 30,000 characters and 9,000 UTF-8 bytes. If a response overflows after an applied mutation, report the actual outcome and keep the root job or project ID. Never blindly resubmit.
+- `retry(job_id)` creates a new job on `result.next_target`, the next healthy target in profile order after the job's target. It never changes the source job. It accepts `succeeded`, `failed`, `cancelled`, and `interrupted` jobs.
+- The new job from `retry` keeps the source job's `session` and `fresh` values.
+- `retry(job_id, target=X)` pins target X, including the same target. An unknown target returns `invalid_request` that lists the profile's targets.
+- On `context_overflow`, summarize state and `submit` again with `fresh=true`.
+- On `replay_blocked`, the worker already changed files. Inspect the worktree before any retry.
+- Otherwise, report the failure.
 
 ## Listing and lost jobs
 
-`job_list` returns active jobs, the ten newest terminal jobs, and `more_recent` (older terminal job count, not a cursor). Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, created_at, updated_at`.
-
-If a saved job is absent from the list, call `job_wait(saved_id, timeout_s=0)` before treating it as unknown. Absence never authorizes duplicate submission.
-
-## Diagnostic reporting
-Call `job_report_error(job_id, category, expected, observed, report_key)` for anomalies. Summaries span 1 to 2048 characters; keys span 1 to 128 ASCII chars. Use unique opaque keys per observation. Reusing a key with different content returns `invalid_request`. Matching content returns duplicate acknowledgement. Reports are client observations; they never alter execution state. Redact secrets first; only correlation IDs are logged. Pruning follows `Database.prune_history` on `updated_at`. Reports vanish while jobs remain. Distinguish wait timeouts, pending questions, and partial pagination. Await complete terminal pagination before reporting missing output. Generic worker error text under `succeeded` is an output-report example. Require ERP only where the workflow demands it.
+`list` returns active jobs and the newest terminal jobs. If a saved job is absent from the list, call `wait(saved_id, timeout_s=0)` before treating it as unknown. Absence never authorizes duplicate submission.
 
 ## Errors
 
-Expected failures return compact JSON with `isError: true` and `code`, `message`, `retryable`, `next_action`. Follow `next_action` and retry only when `retryable` is true.
+Expected failures return compact JSON with `isError: true` and `code`, `message`, `next_action`. `targets_unavailable` also carries `retry_after_s`. Follow `next_action`.
 
 | Code | Safe next action |
 |---|---|
-| `unknown_project` | Resolve the Git root with `project_resolve`. |
-| `invalid_path` | Supply an existing absolute directory. |
-| `alias_taken` | Choose a unique alias or omit it. |
-| `unknown_job` | Reconcile with `job_list`; do not duplicate. |
-| `unknown_profile` | Call `task_guide` and select a listed profile. |
-| `invalid_state` | Inspect with `job_wait`; submit a new job if needed. |
+| `invalid_path` | Supply a directory inside a Git repository. |
+| `unknown_job` | Reconcile with `list`; do not duplicate. |
+| `unknown_profile` | Call `list` and select a listed profile. |
+| `invalid_state` | Inspect with `wait`; submit a new job if needed. |
 | `config_invalid` | Report for correction in the dashboard. |
-| `daemon_stopping` | Wait, then resolve the Git root again. |
-| `invalid_request` | Match the schema; omit stale `next_target`. |
+| `daemon_stopping` | Wait, then call `list` again. |
+| `invalid_request` | Match the schema; pick a listed target. |
 | `targets_unavailable` | Wait at least `retry_after_s` seconds before retrying. |
-| `response_too_large` | Honor applied outcome and root ID; do not blindly retry. |
+| `response_too_large` | Honor the applied outcome and job ID; do not blindly retry. |
 | `internal_error` | Retry once, then report the request ID only. |

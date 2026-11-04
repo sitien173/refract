@@ -1,620 +1,125 @@
-"""Transport-agnostic codex backend (plain-text stdout mode)."""
+"""Codex CLI backend: Codex JSONL on stdout, the final message in a file, and an exact session ID."""
 
 from __future__ import annotations
 
-import json
+import asyncio
 import os
 import re
-import stat as stat_module
 import tempfile
-import threading
 import time
-from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
-from . import BackendParams, BackendResult, classify_backend_output, classify_tool_activity, preflight
-from ._shell import StreamOutcome, consume_stream, stream_shell_command_lines
 from refract.logging_setup import get_logger
-from refract.telemetry import TelemetryAccumulator
+from refract.telemetry import TokenCounters
+
+from . import AsyncEventHandler, BackendParams, BackendResult, classify_backend_output, classify_tool_activity, parse_json_object, preflight
+from ._common import EventBuffer, as_int, is_fatal_line, read_and_unlink
+from ._process import ProcessOutcome, run_process
+from .codex_rollout import _CodexRolloutCollector
 
 log = get_logger("codex")
 
-
-class _CodexRolloutCollector:
-    """Bounded exact-session Codex rollout collector."""
-
-    MAX_DISCOVERY_ENTRIES = 50
-    MAX_DISCOVERY_RETRIES = 3
-    MAX_DISCOVERY_DEPTH = 3
-
-    def __init__(
-        self,
-        *,
-        cwd: Path,
-        session_id: str = "",
-        accumulator: TelemetryAccumulator,
-        emitter: Any = None,
-    ) -> None:
-        self.cwd = cwd
-        self.session_id = session_id.strip()
-        self.accumulator = accumulator
-        self.emitter = emitter
-        self.session_file: Path | None = None
-        self.file_verified = False
-        self.file_dev: int | None = None
-        self.file_ino: int | None = None
-        self.header_verified = False
-        self.has_verified_context = False
-        self.pending_context: tuple[int, int | None] | None = None
-        self.budget_exhausted = False
-        self.offset = 0
-        self.partial_buffer = ""
-        self.model_name: str | None = None
-        self.is_compacted = False
-        self.max_bytes_per_poll = 65536
-        self.max_total_bytes = 1048576
-        self.total_bytes_read = 0
-        self.missing_discovery_retries = 0
-
-    def set_session_id(self, session_id: str) -> None:
-        sid = session_id.strip()
-        if sid and sid != self.session_id:
-            if self.session_id:
-                self._emit_invalidation()
-            self.session_id = sid
-            self._reset_file_state()
-            self.total_bytes_read = 0
-            self.missing_discovery_retries = 0
-            self.is_compacted = False
-
-    def _reset_file_state(self) -> None:
-        self.session_file = None
-        self.file_verified = False
-        self.file_dev = None
-        self.file_ino = None
-        self.header_verified = False
-        self.has_verified_context = False
-        self.pending_context = None
-        self.budget_exhausted = False
-        self.offset = 0
-        self.partial_buffer = ""
-
-    def _emit_invalidation(self, is_compaction: bool = False) -> None:
-        self.pending_context = None
-        self.has_verified_context = False
-        self.accumulator.invalidate_context()
-        if is_compaction:
-            self.is_compacted = True
-        if self.emitter is not None:
-            self.emitter({
-                "kind": "telemetry.updated",
-                "data": {
-                    "context_used_tokens": None,
-                    "context_window_size": None,
-                    "context_remaining_percent": None,
-                    "invalidate_context": True,
-                    "source": "session",
-                    "quality": "unavailable",
-                },
-            })
-
-    def _find_exact_file(self) -> Path | None:
-        if not self.session_id or not _SESSION_ID_RE.fullmatch(self.session_id):
-            return None
-        if self.missing_discovery_retries >= self.MAX_DISCOVERY_RETRIES:
-            return None
-
-        sessions_dir = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
-        if not sessions_dir.is_dir() or sessions_dir.is_symlink():
-            self.missing_discovery_retries += 1
-            return None
-
-        try:
-            resolved_sessions_dir = sessions_dir.resolve()
-        except OSError:
-            self.missing_discovery_retries += 1
-            return None
-
-        entries_inspected = 0
-        dirs_to_visit = [(sessions_dir, 0)]
-        found_file: Path | None = None
-
-        while dirs_to_visit and entries_inspected < self.MAX_DISCOVERY_ENTRIES:
-            current_dir, depth = dirs_to_visit.pop(0)
-            try:
-                with os.scandir(current_dir) as it:
-                    for entry in it:
-                        entries_inspected += 1
-                        if entries_inspected >= self.MAX_DISCOVERY_ENTRIES:
-                            break
-
-                        try:
-                            if entry.is_symlink():
-                                continue
-                            if entry.is_dir(follow_symlinks=False):
-                                if depth < self.MAX_DISCOVERY_DEPTH:
-                                    dirs_to_visit.append((Path(entry.path), depth + 1))
-                                continue
-                            if not entry.is_file(follow_symlinks=False):
-                                continue
-                        except OSError:
-                            continue
-
-                        name = entry.name
-                        if not (name.endswith(".jsonl") and self.session_id in name):
-                            continue
-
-                        file_path = Path(entry.path)
-                        try:
-                            if file_path.is_symlink():
-                                continue
-                            resolved_file = file_path.resolve()
-                            if not resolved_file.is_relative_to(resolved_sessions_dir):
-                                continue
-
-                            stat = file_path.stat()
-                            if stat.st_size < 10:
-                                continue
-
-                            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-                            fd = os.open(file_path, flags)
-                            try:
-                                opened = os.fstat(fd)
-                                if not stat_module.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (stat.st_dev, stat.st_ino):
-                                    continue
-                                with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as f:
-                                    fd = -1
-                                    first_line = f.readline(4096)
-                            finally:
-                                if fd >= 0:
-                                    os.close(fd)
-                            if not first_line:
-                                continue
-
-                            parsed = json.loads(first_line)
-                            if not isinstance(parsed, dict) or parsed.get("type") != "session_meta":
-                                continue
-
-                            payload = parsed.get("payload")
-                            if not isinstance(payload, dict):
-                                continue
-
-                            payload_id = str(payload.get("id") or "").strip()
-                            payload_cwd = payload.get("cwd")
-                            if payload_id == self.session_id and _same_path(payload_cwd, self.cwd):
-                                self.file_dev = opened.st_dev
-                                self.file_ino = opened.st_ino
-                                found_file = file_path
-                                break
-                        except (OSError, json.JSONDecodeError):
-                            continue
-            except OSError:
-                continue
-
-            if found_file is not None:
-                break
-
-        if found_file is None:
-            self.missing_discovery_retries += 1
-            return None
-
-        return found_file
-
-    def poll(self) -> None:
-        try:
-            self._poll_internal()
-        except Exception:
-            log.warning("codex: rollout poll error", exc_info=True)
-
-    def _poll_internal(self) -> None:
-        if not self.session_id:
-            return
-        if self.session_file is None:
-            self.session_file = self._find_exact_file()
-            if self.session_file is None:
-                return
-            try:
-                st = self.session_file.stat()
-                if self.file_dev is None or self.file_ino is None:
-                    self.file_dev = st.st_dev
-                    self.file_ino = st.st_ino
-                self.file_verified = True
-            except OSError:
-                self._reset_file_state()
-                return
-
-        if not self.file_verified:
-            return
-
-        try:
-            stat = self.session_file.stat()
-        except OSError:
-            self._emit_invalidation()
-            self._reset_file_state()
-            return
-
-        if self.file_dev is not None and self.file_ino is not None:
-            if (stat.st_dev, stat.st_ino) != (self.file_dev, self.file_ino):
-                self._emit_invalidation()
-                self._reset_file_state()
-                return
-
-        if stat.st_size < self.offset:
-            self._emit_invalidation()
-            self.header_verified = False
-            self.offset = 0
-            self.partial_buffer = ""
-        elif stat.st_size > self.offset and self.has_verified_context:
-            self._emit_invalidation()
-
-        if stat.st_size == self.offset and not self.partial_buffer:
-            return
-
-        if self.total_bytes_read >= self.max_total_bytes:
-            if not self.budget_exhausted:
-                self._emit_invalidation()
-                self.budget_exhausted = True
-            return
-
-        read_size = min(self.max_bytes_per_poll, self.max_total_bytes - self.total_bytes_read)
-        if read_size <= 0:
-            return
-
-        try:
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-            fd = os.open(self.session_file, flags)
-            try:
-                opened = os.fstat(fd)
-                if not stat_module.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (self.file_dev, self.file_ino):
-                    self._emit_invalidation()
-                    self._reset_file_state()
-                    return
-                with os.fdopen(fd, "rb") as f:
-                    fd = -1
-                    if not self.header_verified:
-                        first_line = f.readline(4096)
-                        try:
-                            header = json.loads(first_line)
-                            header_payload = header.get("payload") if isinstance(header, dict) else None
-                            self.header_verified = (
-                                isinstance(header, dict)
-                                and header.get("type") == "session_meta"
-                                and isinstance(header_payload, dict)
-                                and str(header_payload.get("id") or "").strip() == self.session_id
-                                and _same_path(header_payload.get("cwd"), self.cwd)
-                            )
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            self.header_verified = False
-                        if not self.header_verified:
-                            self._emit_invalidation()
-                            self._reset_file_state()
-                            return
-                    f.seek(self.offset)
-                    chunk = f.read(read_size)
-            finally:
-                if fd >= 0:
-                    os.close(fd)
-        except OSError:
-            self._emit_invalidation()
-            self._reset_file_state()
-            return
-
-        if not chunk:
-            return
-
-        self.offset += len(chunk)
-        self.total_bytes_read += len(chunk)
-
-        text = self.partial_buffer + chunk.decode("utf-8", errors="replace")
-        lines = text.split("\n")
-        self.partial_buffer = lines.pop()
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except Exception:
-                continue
-            if not isinstance(record, dict):
-                continue
-            self._process_record(record)
-
-        if self.offset >= stat.st_size and not self.partial_buffer and self.pending_context is not None:
-            used, window = self.pending_context
-            if window is not None:
-                self.accumulator.record_context_snapshot(window_size=window, source="session", quality="reported")
-            self.accumulator.record_context_snapshot(used_tokens=used, source="session", quality="derived")
-            self.has_verified_context = True
-            if self.emitter is not None:
-                if window is not None:
-                    self.emitter({"kind": "telemetry.updated", "data": {"context_window_size": window, "source": "session", "quality": "reported"}})
-                self.emitter({"kind": "telemetry.updated", "data": {"context_used_tokens": used, "source": "session", "quality": "derived"}})
-            self.pending_context = None
-
-        if self.total_bytes_read >= self.max_total_bytes and stat.st_size > self.offset and not self.budget_exhausted:
-            self._emit_invalidation()
-            self.budget_exhausted = True
-
-    def _process_record(self, record: dict[str, Any]) -> None:
-        rec_type = record.get("type", "")
-        payload = record.get("payload")
-
-        if rec_type == "session_meta":
-            if isinstance(payload, dict):
-                sid = str(payload.get("id") or "").strip()
-                scwd = payload.get("cwd")
-                if sid != self.session_id or not _same_path(scwd, self.cwd):
-                    self.file_verified = False
-            return
-
-        if not self.file_verified:
-            return
-
-        if rec_type == "event_msg" and isinstance(payload, dict):
-            p_type = payload.get("type", "")
-            if p_type == "token_count":
-                info = payload.get("info")
-                if not isinstance(info, dict):
-                    return
-                usage = info.get("last_token_usage")
-                window = _as_int(info.get("model_context_window"))
-                if not isinstance(usage, dict):
-                    return
-                input_tokens = _as_int(usage.get("input_tokens"))
-                output_tokens = _as_int(usage.get("output_tokens"))
-                reasoning_tokens = _as_int(usage.get("reasoning_output_tokens"))
-                if input_tokens is None or output_tokens is None or reasoning_tokens is None:
-                    return
-                used = input_tokens + output_tokens - reasoning_tokens
-                if used < 0:
-                    return
-                self.pending_context = (used, window)
-            elif p_type == "context_compacted":
-                self._emit_invalidation(is_compaction=True)
-            elif p_type in ("session_configured", "model_reroute"):
-                model = payload.get("model") or payload.get("to_model")
-                if model:
-                    model_str = str(model)
-                    if self.model_name and self.model_name != model_str:
-                        self._emit_invalidation(is_compaction=False)
-                    self.model_name = model_str
-        elif rec_type == "context_compacted":
-            self._emit_invalidation(is_compaction=True)
-
-
-
-def _as_int(val: Any) -> int | None:
-    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
-        return None
-    return val
-
-
-def run_shell_command(
-    cmd: list[str],
-    cwd: str | None = None,
-    timeout_s: int = 0,
-    cancel_event: threading.Event | None = None,
-    stdin_text: str | None = None,
-    env: dict[str, str] | None = None,
-) -> Generator[str, None, None]:
-    """Execute a command and stream its stdout lines until EOF or timeout.
-
-    A non-zero ``timeout_s`` enforces an overall wall-clock budget; on
-    expiry the process is terminated and ``subprocess.TimeoutExpired``
-    is raised after best-effort cleanup.
-    """
-    yield from stream_shell_command_lines(
-        cmd,
-        executable_name="codex",
-        errors="replace",
-        cwd=cwd,
-        timeout_s=timeout_s,
-        line_transform=lambda line: line.rstrip("\r\n"),
-        terminate_wait_s=5,
-        cancel_event=cancel_event,
-        check_returncode=True,
-        stdin_text=stdin_text,
-        env=env,
-    )
-
-
+MAX_DIAGNOSTICS = 50
 _SESSION_ID_STDOUT_RE = re.compile(
     r"^\s*session id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
-_SESSION_ID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-    re.IGNORECASE,
-)
 
-def _extract_session_id_from_stdout(text: str) -> str:
-    if not text:
-        return ""
+
+def _session_id_line(text: str) -> str:
+    """Return the ID of the first ``session id: <uuid>`` line in ``text``, or ""."""
     match = _SESSION_ID_STDOUT_RE.search(text)
     return match.group(1) if match else ""
 
 
-def _same_path(left: Any, right: Path) -> bool:
-    if not isinstance(left, str) or not left.strip():
-        return False
-    try:
-        return Path(left).resolve() == right.resolve()
-    except (OSError, ValueError, TypeError):
-        try:
-            return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
-                os.path.abspath(os.fspath(right))
-            )
-        except Exception:
-            return False
-
-
-def _extract_session_id_from_latest_session(cwd: Path, prompt: str, started_at: float) -> str:
-    sessions_dir = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
-    if not sessions_dir.exists():
-        return ""
-
-    prompt_hint = prompt.strip().splitlines()[0][:80] if prompt.strip() else ""
-
-    try:
-        session_files = sorted(
-            sessions_dir.rglob("*.jsonl"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-    except OSError:
-        return ""
-
-    cwd_match_without_prompt = ""
-    for session_path in session_files[:50]:
-        try:
-            stat = session_path.stat()
-        except OSError:
-            continue
-        if stat.st_mtime < started_at - 30:
-            break
-
-        try:
-            with session_path.open(encoding="utf-8", errors="ignore") as handle:
-                first_line = handle.readline()
-                head = handle.read(65536)
-        except OSError:
-            continue
-
-        meta = {}
-        for line in (first_line, *head.splitlines()[:10]):
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            if parsed.get("type") == "session_meta":
-                meta = parsed
-                break
-        if not meta:
-            continue
-
-        payload = meta.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        session_id = payload.get("id", "")
-        session_cwd = payload.get("cwd", "")
-        if (
-            not session_id
-            or not _SESSION_ID_RE.fullmatch(session_id)
-            or not session_cwd
-            or not _same_path(session_cwd, cwd)
-        ):
-            continue
-        if prompt_hint and prompt_hint not in head:
-            if not cwd_match_without_prompt:
-                cwd_match_without_prompt = session_id
-            continue
-        return session_id
-
-    return cwd_match_without_prompt
-
-
-def _resolve_session_id(
-    *,
-    parsed_session_id: str,
-    last_message: str,
-    stdout_text: str,
-    cwd: Path,
-    prompt: str,
-    started_at: float,
-    fallback_session_id: str,
-) -> tuple[str, str]:
+def _resolve_session_id(thread_session_id: str, last_message: str, stdout_session_id: str) -> tuple[str, str]:
+    """Return the first exact session ID and its source. No exact source returns ("", "")."""
     candidates = (
-        ("stdout-jsonl:thread.started", parsed_session_id.strip),
-        ("last-message:session-id-line", lambda: _extract_session_id_from_stdout(last_message)),
-        ("stdout:session-id-line", lambda: _extract_session_id_from_stdout(stdout_text)),
-        ("codex-jsonl", lambda: _extract_session_id_from_latest_session(cwd, prompt, started_at)),
-        ("params:SESSION_ID", fallback_session_id.strip),
+        ("stdout-jsonl:thread.started", thread_session_id.strip()),
+        ("last-message:session-id-line", _session_id_line(last_message)),
+        ("stdout:session-id-line", stdout_session_id),
     )
-    for source, resolve in candidates:
-        value = resolve()
+    for source, value in candidates:
         if value:
             return value, source
     return "", ""
 
 
-def _classify(*, agent_messages: str, session_id: str, error_text: str, model: str | None = None) -> BackendResult:
-    return classify_backend_output(
+def _classify(*, agent_messages: str, session_id: str, error_text: str, model: str | None) -> BackendResult:
+    """Classify a codex run. Empty output without a fatal token is ``request_fatal``, never the raw stream."""
+    result = classify_backend_output(
         backend_name="codex",
         agent_messages=agent_messages,
         session_id=session_id,
         error_text=error_text,
         model=model,
     )
+    if result.error_class == "no_agent_messages":
+        return BackendResult(
+            outcome="FATAL",
+            SESSION_ID=session_id,
+            agent_messages="",
+            error="no agent message",
+            error_class="request_fatal",
+            model=model,
+        )
+    return result
 
 
-def _extract_output(stream: StreamOutcome) -> tuple[str, str]:
-    """Return the thread ID and the concatenated agent messages from Codex JSONL."""
-    session_id = ""
-    agent_messages = ""
-    for line, event in zip(stream.lines, stream.events):
-        if event is None:
-            if line.strip():
-                log.debug("codex: skipping non-JSON stdout line len=%d", len(line.strip()))
-            continue
-        event_type = event.get("type", "")
-        if event_type == "thread.started" and event.get("thread_id"):
-            session_id = str(event.get("thread_id"))
-            continue
-        if event_type != "item.completed":
-            continue
-        item = event.get("item", {})
-        if isinstance(item, dict) and item.get("type") == "agent_message" and item.get("text"):
-            agent_messages += str(item.get("text"))
-    return session_id, agent_messages
+class CodexRun:
+    """Parse one Codex run line by line with bounded state. Raw lines are never retained.
 
+    The answer is the last-message file when it has text, else the concatenated ``agent_message``
+    items. Diagnostics keep the first ``MAX_DIAGNOSTICS`` non-JSON lines and the first fatal-token
+    line, so classification matches an unbounded run when there is no agent output.
+    """
 
-def _read_last_message(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        log.warning("codex: could not read --output-last-message file %s: %s", path, exc)
-        return ""
-    finally:
-        try:
-            path.unlink()
-        except OSError:
-            pass
-
-
-class _EventParser:
-    """Normalize Codex item lifecycle events and correlate entity IDs."""
-
-    def __init__(self, params: BackendParams, cwd: Path | None = None) -> None:
+    def __init__(self, params: BackendParams, cwd: Path, last_message_path: Path, on_event: AsyncEventHandler | None) -> None:
         self.params = params
-        self.cwd = cwd or (params.cd if isinstance(params.cd, Path) else Path(params.cd))
+        self.last_message_path = last_message_path
+        self.events = EventBuffer(on_event)
+        self.thread_session_id = ""
+        self.stdout_session_id = ""
+        self.agent_messages: list[str] = []
+        self.diagnostics: list[str] = []
+        self._fatal_kept = False
         self.entity_counter = 0
         self.raw_to_entity: dict[str, str] = {}
-        self.accumulator = TelemetryAccumulator()
+        self.counters = TokenCounters()
         self.turn_counter = 0
         self.collector = _CodexRolloutCollector(
-            cwd=self.cwd,
+            cwd=cwd,
             session_id=str(params.SESSION_ID or ""),
-            accumulator=self.accumulator,
-            emitter=self.params.emitter,
+            counters=self.counters,
+            emitter=self.events.emit,
         )
 
-    def emit(self, event: dict[str, Any]) -> None:
-        if self.params.emitter is not None:
-            self.params.emitter(event)
+    async def feed(self, line: str) -> None:
+        if not self.stdout_session_id:
+            self.stdout_session_id = _session_id_line(line)
+        event = parse_json_object(line)
+        if event is None:
+            if line.strip():
+                self._keep_diagnostic(line)
+        else:
+            self._on_event(event)
+        await self.events.flush()
 
-    def start_item(self, item: dict[str, Any], raw_id: str) -> None:
+    def _keep_diagnostic(self, text: str) -> None:
+        fatal = not self._fatal_kept and is_fatal_line(text)
+        if len(self.diagnostics) < MAX_DIAGNOSTICS or fatal:
+            self.diagnostics.append(text)
+            self._fatal_kept = self._fatal_kept or fatal
+
+    def _start_item(self, item: dict[str, Any], raw_id: str) -> None:
         item_type = item.get("type", "")
         if item_type == "agent_message":
             self.entity_counter += 1
             entity_id = f"msg-{self.entity_counter}"
             if raw_id:
                 self.raw_to_entity[raw_id] = entity_id
-            self.emit({
+            self.events.emit({
                 "kind": "assistant.message.started",
                 "entity_id": entity_id,
                 "data": {},
@@ -631,24 +136,26 @@ class _EventParser:
             }
             if "input" in item:
                 tool_data["input"] = item["input"]
-            self.emit({
+            self.events.emit({
                 "kind": "tool.started",
                 "entity_id": entity_id,
                 "data": tool_data,
             })
 
-    def complete_item(self, item: dict[str, Any], raw_id: str) -> None:
+    def _complete_item(self, item: dict[str, Any], raw_id: str) -> None:
         item_type = item.get("type", "")
         if item_type == "agent_message":
+            if item.get("text"):
+                self.agent_messages.append(str(item.get("text")))
             entity_id = self.raw_to_entity.get(raw_id) or f"msg-{self.entity_counter or 1}"
             msg_text = str(item.get("text", ""))
             if msg_text:
-                self.emit({
+                self.events.emit({
                     "kind": "assistant.text.delta",
                     "entity_id": entity_id,
                     "data": {"text": msg_text},
                 })
-            self.emit({
+            self.events.emit({
                 "kind": "assistant.message.completed",
                 "entity_id": entity_id,
                 "data": {},
@@ -658,15 +165,16 @@ class _EventParser:
             tool_data = {"status": str(item.get("status", "completed"))}
             if "output" in item:
                 tool_data["output"] = item["output"]
-            self.emit({
+            self.events.emit({
                 "kind": "tool.completed",
                 "entity_id": entity_id,
                 "data": tool_data,
             })
 
-    def on_event(self, parsed: dict[str, Any]) -> None:
+    def _on_event(self, parsed: dict[str, Any]) -> None:
         event_type = parsed.get("type", "")
         if event_type == "thread.started" and parsed.get("thread_id"):
+            self.thread_session_id = str(parsed.get("thread_id"))
             self.collector.set_session_id(str(parsed.get("thread_id")))
         self.collector.poll()
 
@@ -674,74 +182,42 @@ class _EventParser:
         if isinstance(item, dict):
             raw_id = str(item.get("id", ""))
             if event_type == "item.started":
-                self.start_item(item, raw_id)
+                self._start_item(item, raw_id)
             elif event_type == "item.completed":
-                self.complete_item(item, raw_id)
+                self._complete_item(item, raw_id)
 
         if event_type == "turn.completed":
             self.collector.poll()
             u = parsed.get("usage")
             if isinstance(u, dict):
                 try:
-                    raw_in = _as_int(u.get("input_tokens"))
-                    cached_in = _as_int(u.get("cached_input_tokens"))
-                    cw = _as_int(u.get("cache_write_input_tokens"))
-                    raw_out = _as_int(u.get("output_tokens"))
-                    reasoning_out = _as_int(u.get("reasoning_output_tokens"))
+                    raw_in = as_int(u.get("input_tokens"))
+                    cached_in = as_int(u.get("cached_input_tokens"))
+                    cw = as_int(u.get("cache_write_input_tokens"))
+                    raw_out = as_int(u.get("output_tokens"))
+                    reasoning_out = as_int(u.get("reasoning_output_tokens"))
                     if any(v is not None for v in (raw_in, cached_in, cw, raw_out, reasoning_out)):
                         # Codex input_tokens already includes cached_input_tokens
                         norm_in = raw_in
                         norm_out = raw_out
                         self.turn_counter += 1
                         turn_id = f"turn_{self.turn_counter}"
-                        self.accumulator.record_consumption(
-                            attempt=1,
-                            invocation=1,
-                            response_id=turn_id,
-                            input_tokens=norm_in,
-                            output_tokens=norm_out,
-                            cache_read_tokens=cached_in,
-                            cache_write_tokens=cw,
-                            source="turn",
-                            quality="reported",
+                        self.counters.record_response(
+                            turn_id,
+                            input=norm_in,
+                            output=norm_out,
+                            cache_read=cached_in,
+                            cache_write=cw,
                         )
-                        ctx_used = None
                         if norm_in is not None and norm_out is not None:
                             try:
                                 val = norm_in + norm_out - (reasoning_out or 0)
-                                if val >= 0:
-                                    ctx_used = val
-                                    if not self.collector.is_compacted and not self.collector.has_verified_context and not self.collector.budget_exhausted:
-                                        self.accumulator.record_context_snapshot(
-                                            used_tokens=ctx_used,
-                                            source="derived",
-                                            quality="derived",
-                                        )
+                                if val >= 0 and not self.collector.is_compacted and not self.collector.has_verified_context and not self.collector.budget_exhausted:
+                                    self.counters.record_context(used=val)
                             except Exception:
                                 log.warning("codex: could not derive context snapshot", exc_info=True)
 
-                        if self.params.emitter is not None:
-                            self.params.emitter({
-                                "kind": "telemetry.updated",
-                                "data": {
-                                    "response_id": turn_id,
-                                    "input_tokens": norm_in,
-                                    "output_tokens": norm_out,
-                                    "cache_read_tokens": cached_in,
-                                    "cache_write_tokens": cw,
-                                    "source": "turn",
-                                    "quality": "reported",
-                                },
-                            })
-                            if ctx_used is not None and not self.collector.is_compacted and not self.collector.has_verified_context and not self.collector.budget_exhausted:
-                                self.params.emitter({
-                                    "kind": "telemetry.updated",
-                                    "data": {
-                                        "context_used_tokens": ctx_used,
-                                        "source": "derived",
-                                        "quality": "derived",
-                                    },
-                                })
+                        self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
                 except Exception:
                     log.warning("codex: turn usage processing failed", exc_info=True)
             self.collector.poll()
@@ -749,63 +225,72 @@ class _EventParser:
             self.collector.poll()
             u = parsed.get("usage")
             if isinstance(u, dict):
-                raw_in = _as_int(u.get("input_tokens"))
-                cached_in = _as_int(u.get("cached_input_tokens"))
-                cw = _as_int(u.get("cache_write_input_tokens"))
-                raw_out = _as_int(u.get("output_tokens"))
+                raw_in = as_int(u.get("input_tokens"))
+                cached_in = as_int(u.get("cached_input_tokens"))
+                cw = as_int(u.get("cache_write_input_tokens"))
+                raw_out = as_int(u.get("output_tokens"))
                 if any(v is not None for v in (raw_in, cached_in, cw, raw_out)):
                     norm_in = raw_in
                     norm_out = raw_out
                     if not self.params.SESSION_ID:
-                        self.accumulator.reconcile_cumulative(
-                            attempt=1,
-                            invocation=1,
-                            total_input=norm_in,
-                            total_output=norm_out,
+                        self.counters.record_totals(
+                            input=norm_in,
+                            output=norm_out,
                             cache_read=cached_in,
                             cache_write=cw,
-                            source="result",
-                            quality="reported",
                         )
-                        if self.params.emitter is not None:
-                            self.params.emitter({
-                                "kind": "telemetry.updated",
-                                "data": {
-                                    "total_input_tokens": norm_in,
-                                    "total_output_tokens": norm_out,
-                                    "cache_read_tokens": cached_in,
-                                    "cache_write_tokens": cw,
-                                    "source": "result",
-                                    "quality": "reported",
-                                },
-                            })
-                    else:
-                        self.accumulator.record_missing_contribution(attempt=1, invocation=1)
+                        self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
             self.collector.poll()
 
+    def outcome(self, process: ProcessOutcome) -> BackendResult:
+        """Normalize the parsed stream and the transport outcome into a backend result."""
+        last_message = read_and_unlink(self.last_message_path, errors="replace")
+        last_message_text = last_message.strip()
+        agent_messages = last_message_text or "".join(self.agent_messages).strip()
+
+        command_error, command_error_class = process.error, process.error_class
+        if command_error_class == "timeout":
+            command_error = f"codex subprocess timed out after {self.params.timeout_s}s"
+
+        session_id, session_id_source = _resolve_session_id(self.thread_session_id, last_message, self.stdout_session_id)
+        if session_id:
+            log.info("codex: resolved session id via %s", session_id_source)
+            self.collector.set_session_id(session_id)
+            self.collector.poll()
+        else:
+            log.warning("codex: no exact session id from thread, last-message, or stdout (last_msg_len=%d)", len(last_message))
+
+        # Diagnostics stand in for the error text only when the run produced no agent output.
+        error_text = command_error
+        if not agent_messages:
+            diagnostics = "\n".join(self.diagnostics).strip()
+            error_text = "\n".join(part for part in (command_error, diagnostics) if part)
+
+        result = _classify(
+            agent_messages=agent_messages,
+            session_id=session_id,
+            error_text=error_text,
+            model=self.collector.model_name,
+        )
+        if command_error:
+            result.outcome = "FATAL"
+            result.error_class = command_error_class
+            result.error = command_error
+        result.agent_messages = agent_messages
+        result.tokens = self.counters.as_dict()
+        return result
 
 
-def _agent_messages(last_message: str, parsed_agent_messages: str, stdout_text: str) -> str:
-    last_message_text = last_message.strip()
-    parsed_agent_messages = parsed_agent_messages.strip()
-    if last_message_text:
-        agent_messages = last_message_text
-        source = "last_message_file"
-    elif parsed_agent_messages:
-        agent_messages = parsed_agent_messages
-        source = "stdout_jsonl_fallback"
-    else:
-        agent_messages = stdout_text
-        source = "stdout_fallback"
-    log.debug(
-        "codex: last_message_len=%d parsed_msg_len=%d stdout_len=%d using=%s",
-        len(last_message), len(parsed_agent_messages), len(stdout_text), source,
-    )
-    return agent_messages
+async def execute(
+    params: BackendParams,
+    *,
+    cancel: asyncio.Event | None = None,
+    on_event: AsyncEventHandler | None = None,
+) -> BackendResult:
+    """Execute a Codex CLI session and return a normalized result.
 
-
-def execute(params: BackendParams) -> BackendResult:
-    """Execute a Codex CLI session and return normalized backend result."""
+    A set ``on_event`` receives each normalized event in order. A set ``cancel`` kills the child process.
+    """
     cd, failure = preflight(params, "codex", "Codex CLI")
     if failure is not None:
         return failure
@@ -844,67 +329,15 @@ def execute(params: BackendParams) -> BackendResult:
     )
     log.debug("codex command prepared args=%d", len(cmd))
 
-    started_at = time.time()
-    parser = _EventParser(params, cwd=cd)
-
-    stream = consume_stream(
-        run_shell_command, cmd, params, cwd=os.fspath(cd), name="codex", on_event=parser.on_event, stdin_text=params.PROMPT,
-    )
-    stdout_text = "\n".join(stream.lines)
-    parsed_session_id, parsed_agent_messages = _extract_output(stream)
-    last_message = _read_last_message(last_message_path)
-
-    last_message_text = last_message.strip()
-    agent_messages = _agent_messages(last_message, parsed_agent_messages, stdout_text)
-
-    session_id, session_id_source = _resolve_session_id(
-        parsed_session_id=parsed_session_id,
-        last_message=last_message,
-        stdout_text=stdout_text,
-        cwd=cd,
-        prompt=params.PROMPT,
-        started_at=started_at,
-        fallback_session_id=params.SESSION_ID,
-    )
-
-    if session_id:
-        log.info("codex: resolved session id via %s", session_id_source)
-        parser.collector.set_session_id(session_id)
-        parser.collector.poll()
-    else:
-        log.warning(
-            "codex: no session id found from stdout/session-file/params "
-            "(last_msg_len=%d stdout_len=%d).",
-            len(last_message), len(stdout_text),
-        )
-
-    # error_text carries only true error signal — not the entire stdout when it
-    # also happened to be the agent's message. Stdout is only surfaced when we
-    # genuinely have no agent output to attribute as success.
-    error_text = stream.error
-    if not agent_messages.strip() and stdout_text and not last_message_text:
-        if error_text:
-            error_text = f"{error_text}\n\n[stdout]\n{stdout_text}".strip()
-        else:
-            error_text = stdout_text
-
-    result = _classify(
-        agent_messages=agent_messages,
-        session_id=session_id,
-        error_text=error_text,
-        model=parser.collector.model_name,
-    )
-    if stream.error:
+    deadline = time.monotonic() + params.timeout_s if params.timeout_s and params.timeout_s > 0 else None
+    run = CodexRun(params, cd, last_message_path, on_event)
+    process = await run_process(cmd, params.PROMPT, params.env, os.fspath(cd), deadline, cancel, run.feed)
+    result = run.outcome(process)
+    if cancel is not None and cancel.is_set():
         result.outcome = "FATAL"
-        result.error_class = stream.error_class
-        result.error = stream.error
-    result.agent_messages = agent_messages
-    if (
-        parser.accumulator._has_any_consumption
-        or parser.accumulator._context_used_tokens.value is not None
-        or parser.accumulator._context_window_size.value is not None
-    ):
-        result.telemetry = parser.accumulator.snapshot().model_dump(mode="json")
+        result.error_class = "cancelled"
+        result.error = "backend command cancelled"
+
     log.info(
         "codex.execute done outcome=%s session_id=%s error_class=%s msg_len=%d",
         result.outcome,
@@ -912,13 +345,7 @@ def execute(params: BackendParams) -> BackendResult:
         result.error_class,
         len(result.agent_messages),
     )
-    if result.error:
-        log.warning(
-            "codex.execute returned error class=%s len=%d",
-            result.error_class,
-            len(result.error),
-        )
     return result
 
 
-__all__ = ["execute", "run_shell_command"]
+__all__ = ["execute"]

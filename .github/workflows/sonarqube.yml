@@ -19,10 +19,6 @@ jobs:
         with:
           name: python-coverage
           path: server
-      - uses: actions/download-artifact@v4
-        with:
-          name: web-coverage
-          path: server/web/coverage
       - uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

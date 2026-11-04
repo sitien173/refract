@@ -11,12 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 from refract.config import load_config
-from refract.models import JobResult, JobSummary, JobView, SubmissionResult
-from refract.result_metadata import JobResultMetadata
+from refract.models import JobSummary, JobView, SubmissionResult
 from refract.runtime import OrchestrationError, Runtime
 from refract.scheduler import _Dispatch
-from refract.server import RefractError, job_answer, job_wait, mcp
-from tests.orchestration_helpers import register_project
+from refract.server import RefractError, answer, mcp, wait
+from tests.orchestration_helpers import git, register_project
 
 
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
@@ -68,17 +67,14 @@ async def _connected_client(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_v2_tool_surface_lists_exact_contract() -> None:
+async def test_tool_surface_lists_exact_v3_contract() -> None:
     expected = {
-        "project_resolve": {"path", "alias"},
-        "task_guide": {"project_id"},
-        "job_submit": {"project_id", "workflow", "prompt", "profile", "context_key", "fresh_session", "next_target"},
-        "job_wait": {"job_id", "timeout_s", "result_offset"},
-        "job_list": {"project_id"},
-        "job_cancel": {"job_id"},
-        "job_retry": {"job_id"},
-        "job_answer": {"job_id", "answer"},
-        "job_report_error": {"job_id", "category", "expected", "observed", "report_key"},
+        "submit": {"path", "workflow", "prompt", "profile", "session", "fresh"},
+        "wait": {"job_id", "timeout_s"},
+        "answer": {"job_id", "answer"},
+        "cancel": {"job_id"},
+        "retry": {"job_id", "target"},
+        "list": {"path"},
     }
     tools = {tool.name: tool for tool in await mcp.list_tools()}
 
@@ -98,11 +94,11 @@ async def test_v2_tool_surface_lists_exact_contract() -> None:
 def test_targets_unavailable_error_schema_carries_retry_delay_only_for_that_code() -> None:
     from refract.server import RefractError, _valid_refract_error
 
-    payload = RefractError("targets_unavailable", "open", "wait", True, 8).to_payload()
+    payload = RefractError("targets_unavailable", "open", "wait", 8).to_payload()
     assert payload["retry_after_s"] == 8
     assert _valid_refract_error(payload) == payload
     assert _valid_refract_error({**payload, "retry_after_s": True}) is None
-    assert _valid_refract_error({"code": "invalid_request", "message": "x", "next_action": "x", "retryable": False, "retry_after_s": 8}) is None
+    assert _valid_refract_error({"code": "invalid_request", "message": "x", "next_action": "x", "retry_after_s": 8}) is None
 
 
 def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
@@ -207,40 +203,28 @@ def test_serve_refuses_non_loopback_host_without_opt_in(tmp_path, monkeypatch, c
 
 
 @pytest.mark.asyncio
-async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
+async def test_tool_schema_limits_and_annotations_are_v3() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
-    assert set(tools) == {
-        "project_resolve", "task_guide", "job_submit", "job_wait",
-        "job_list", "job_cancel", "job_retry", "job_answer", "job_report_error",
-    }
+    assert set(tools) == {"submit", "wait", "answer", "cancel", "retry", "list"}
     from refract.workflows import BUILTIN_WORKFLOWS
 
-    assert tools["job_submit"].input_schema["properties"]["workflow"]["enum"] == list(BUILTIN_WORKFLOWS)
-    assert tools["job_wait"].input_schema["properties"]["timeout_s"]["minimum"] == 0
-    assert tools["job_wait"].input_schema["properties"]["timeout_s"]["maximum"] == 3600
-    assert tools["job_wait"].input_schema["properties"]["result_offset"]["minimum"] == 0
-    assert tools["job_submit"].input_schema["properties"]["fresh_session"]["default"] is False
-    assert tools["job_report_error"].input_schema["properties"]["category"]["enum"] == ["protocol", "output"]
-    assert tools["job_report_error"].input_schema["properties"]["expected"]["maxLength"] == 2048
-    assert tools["job_report_error"].input_schema["properties"]["observed"]["maxLength"] == 2048
-    assert tools["job_report_error"].input_schema["properties"]["report_key"]["maxLength"] == 128
-    assert tools["job_cancel"].annotations is not None
-    assert tools["job_cancel"].annotations.idempotent_hint is True
-    assert tools["project_resolve"].annotations.idempotent_hint is True
-    assert tools["task_guide"].annotations.read_only_hint is True
-    assert tools["job_wait"].annotations.read_only_hint is True
-    assert tools["job_submit"].annotations.destructive_hint is True
-    assert tools["job_retry"].annotations.idempotent_hint is False
+    assert tools["submit"].input_schema["properties"]["workflow"]["enum"] == list(BUILTIN_WORKFLOWS)
+    assert tools["wait"].input_schema["properties"]["timeout_s"]["minimum"] == 0
+    assert tools["wait"].input_schema["properties"]["timeout_s"]["maximum"] == 3600
+    assert tools["submit"].input_schema["properties"]["fresh"]["default"] is False
+    assert tools["answer"].input_schema["properties"]["answer"]["maxLength"] == 8192
+    assert tools["cancel"].annotations is not None
+    assert tools["cancel"].annotations.idempotent_hint is True
+    assert tools["wait"].annotations.read_only_hint is True
+    assert tools["submit"].annotations.destructive_hint is True
+    assert tools["retry"].annotations.idempotent_hint is False
     expected_annotations = {
-        "project_resolve": (False, False, True, False),
-        "task_guide": (True, False, True, False),
-        "job_submit": (False, True, False, True),
-        "job_wait": (True, False, True, False),
-        "job_list": (True, False, True, False),
-        "job_cancel": (False, True, True, False),
-        "job_retry": (False, True, False, True),
-        "job_answer": (False, False, False, False),
-        "job_report_error": (False, False, True, False),
+        "submit": (False, True, False, True),
+        "wait": (True, False, True, False),
+        "answer": (False, False, False, False),
+        "cancel": (False, True, True, False),
+        "retry": (False, True, False, True),
+        "list": (True, False, True, False),
     }
     for name, expected_hints in expected_annotations.items():
         annotations = tools[name].annotations
@@ -253,8 +237,7 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
         assert annotations.title == tools[name].title
         assert all(prop.get("description") for prop in tools[name].input_schema["properties"].values())
     assert set(JobSummary.model_fields) == {
-        "id", "project_id", "workflow", "profile", "state", "context_key",
-        "attempts", "created_at", "updated_at",
+        "id", "project", "workflow", "profile", "target", "session", "state", "retry_of", "created_at", "updated_at",
     }
     assert "resource_uri" not in SubmissionResult.model_fields
 
@@ -263,17 +246,16 @@ async def test_v2_tool_schema_limits_annotations_and_no_legacy_tools() -> None:
 async def test_inprocess_client_receives_compact_json_errors(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, _runtime):
         malformed = await client.call_tool(
-            "job_wait", {"job_id": "job", "timeout_s": -1}
+            "wait", {"job_id": "job", "timeout_s": -1}
         )
         assert malformed.is_error
         malformed_payload = json.loads(malformed.content[0].text)
-        assert set(malformed_payload) == {"code", "message", "next_action", "retryable"}
+        assert set(malformed_payload) == {"code", "message", "next_action"}
         assert malformed_payload["code"] == "invalid_request"
-        assert malformed_payload["retryable"] is False
         assert malformed_payload["next_action"]
 
         unknown = await client.call_tool(
-            "job_wait", {"job_id": "missing-job", "timeout_s": 0}
+            "wait", {"job_id": "missing-job", "timeout_s": 0}
         )
         assert unknown.is_error
         unknown_payload = json.loads(unknown.content[0].text)
@@ -282,48 +264,18 @@ async def test_inprocess_client_receives_compact_json_errors(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_job_submit_rejects_depends_on_and_summary_has_reduced_fields(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        root = tmp_path / "reduced-summary-project"
-        root.mkdir()
-        project = register_project(runtime, str(root), "reduced-summary")
-        rejected = await client.call_tool(
-            "job_submit",
-            {"project_id": project.id, "workflow": "consult", "prompt": "x", "depends_on": []},
-        )
-        assert rejected.is_error
-        assert json.loads(rejected.content[0].text)["code"] == "invalid_request"
-
-        submitted = await client.call_tool(
-            "job_submit", {"project_id": project.id, "workflow": "consult", "prompt": "x"}
-        )
-        assert not submitted.is_error
-        summary_fields = {
-            "id", "project_id", "workflow", "profile", "state", "context_key",
-            "attempts", "created_at", "updated_at",
-        }
-        submitted_summary = json.loads(submitted.content[0].text)["job"]
-        assert set(submitted_summary) == summary_fields
-        cancelled = await client.call_tool("job_cancel", {"job_id": submitted_summary["id"]})
-        assert not cancelled.is_error
-        cancelled_payload = json.loads(cancelled.content[0].text)
-        assert set(cancelled_payload) == {"job"}
-        assert set(cancelled_payload["job"]) == summary_fields
-
-
-@pytest.mark.asyncio
 async def test_inprocess_client_sanitizes_unexpected_tool_exception(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "internal-error-project"
         root.mkdir()
-        project = register_project(runtime, str(root))
+        git(root, "init", "-q")
         secret = "provider-secret-that-must-not-escape"
 
         def fail_listing(_project_id: str):
             raise RuntimeError(secret)
 
-        runtime.database.job_listing = fail_listing
-        response = await client.call_tool("job_list", {"project_id": project.id})
+        runtime.database.job_overview = fail_listing
+        response = await client.call_tool("list", {"path": str(root)})
 
         assert response.is_error
         payload = json.loads(response.content[0].text)
@@ -336,65 +288,15 @@ async def test_inprocess_client_sanitizes_unexpected_tool_exception(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_job_wait_pages_complete_text_without_loss_and_bounds_wire_envelope(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        project_root = tmp_path / "page-project"
-        project_root.mkdir()
-        project = register_project(runtime, str(project_root), "pages")
-        runtime.database.create_job(
-            job_id="paged-job", project_id=project.id, workflow="review",
-            profile="balanced", prompt="large output", execution_plan_json="{}",
-            context_key="paging",
-        )
-        original_text = ('quote="slash=\\ carriage=\r\n emoji=🙂 star=✨\n') * 1800
-        runtime.database.finish_job("paged-job", "succeeded", text=original_text)
-
-        collected: list[str] = []
-        offset = 0
-        pages = 0
-        while True:
-            response = await client.call_tool(
-                "job_wait",
-                {"job_id": "paged-job", "timeout_s": 0, "result_offset": offset},
-            )
-            assert not response.is_error
-            payload = json.loads(response.content[0].text)
-            assert set(payload) == {"job", "result"}
-            assert payload["job"]["id"] == "paged-job"
-            page = payload["result"]
-            collected.append(page["text"])
-            pages += 1
-            envelope = json.dumps(
-                response.model_dump(by_alias=True, mode="json", exclude_none=True),
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            assert len(envelope) < 30000
-            assert len(envelope.encode("utf-8")) < 9000
-            next_offset = page["next_offset"]
-            if next_offset is None:
-                break
-            assert next_offset == offset + len(page["text"])
-            assert next_offset > offset
-            offset = next_offset
-
-        assert pages > 1
-        assert "".join(collected) == original_text
-        assert not (await client.call_tool(
-            "job_wait", {"job_id": "paged-job", "timeout_s": 0, "result_offset": len(original_text) + 1}
-        )).is_error
-
-
-@pytest.mark.asyncio
-async def test_unpageable_guidance_overflow_returns_actionable_error(tmp_path, monkeypatch) -> None:
+async def test_list_guidance_overflow_returns_actionable_error(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "guide-project"
         root.mkdir()
-        project = register_project(runtime, str(root), "guide")
+        git(root, "init", "-q")
         (runtime.config.home / "task_guide.json").write_text(
             json.dumps({"guidance": "g" * 12000}), encoding="utf-8"
         )
-        result = await client.call_tool("task_guide", {"project_id": project.id})
+        result = await client.call_tool("list", {"path": str(root)})
 
         assert result.is_error
         payload = json.loads(result.content[0].text)
@@ -405,194 +307,7 @@ async def test_unpageable_guidance_overflow_returns_actionable_error(tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_project_resolve_reports_id_if_result_overflows_after_creation(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        project_root = tmp_path / "applied-project"
-        project_root.mkdir()
-        result = await client.call_tool(
-            "project_resolve",
-            {"path": str(project_root), "alias": "alias-" + "a" * 10000},
-        )
-
-        assert result.is_error
-        payload = json.loads(result.content[0].text)
-        assert payload["code"] == "response_too_large"
-        assert payload["next_action"]
-        assert "applied" in payload["message"].lower()
-        project = runtime.database.project("alias-" + "a" * 10000)
-        assert project is not None
-        assert project.id in payload["message"] or project.id in payload["next_action"]
-
-
-@pytest.mark.asyncio
-async def test_logged_request_exports_real_tool_calls_and_preserves_results(tmp_path, monkeypatch, caplog) -> None:
-    pytest.importorskip("langfuse")
-    from dataclasses import replace
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer, trace_id_for_job
-    from tests.orchestration_helpers import FakeDrivers, repository
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-phase3-server-integration")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase3-test")
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        exporter = InMemorySpanExporter()
-        config_path = runtime.config.home / "config.toml"
-        config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[langfuse]\nenabled = true\n", encoding="utf-8")
-        runtime.tracer.shutdown()
-        runtime.tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
-        runtime._catalog = replace(runtime._catalog, langfuse=LangfuseConfig(enabled=True))
-        runtime.ask_registry.tracer = runtime.tracer
-        runtime.runner.tracer = runtime.tracer
-        runtime.target_executor.tracer = runtime.tracer
-        runtime.drivers = FakeDrivers()
-        (runtime.config.home / "task_guide.json").write_text(json.dumps({"guidance": []}), encoding="utf-8")
-        resolved = await client.call_tool("project_resolve", {"path": str(repository(tmp_path))})
-        project_id = json.loads(resolved.content[0].text)["project"]["id"]
-        guide = await client.call_tool("task_guide", {"project_id": project_id})
-        submitted = await client.call_tool("job_submit", {
-            "project_id": project_id, "workflow": "consult", "prompt": "inspect",
-        })
-        job_id = json.loads(submitted.content[0].text)["job"]["id"]
-        waited = await client.call_tool("job_wait", {"job_id": job_id, "timeout_s": 5})
-        assert json.loads(waited.content[0].text)["result"]["text"] == "response from primary"
-        assert json.loads(guide.content[0].text)["profiles"]["default"] == "balanced"
-        runtime.tracer.flush()
-        spans = exporter.get_finished_spans()
-        tools = {span.name: span for span in spans if span.attributes.get("langfuse.observation.type") == "tool"}
-        assert {"project_resolve", "task_guide", "job_submit", "job_wait"} <= set(tools), ([(s.name, s.attributes.get("langfuse.observation.type")) for s in spans], [r.message for r in caplog.records if "Langfuse" in r.message])
-        expected_trace = int(trace_id_for_job(job_id), 16)
-        for name in ("job_submit", "job_wait"):
-            span = tools[name]
-            assert span.context.trace_id == expected_trace
-            assert span.attributes["langfuse.observation.input"]
-            assert span.attributes["langfuse.observation.output"]
-            metadata = json.loads(span.attributes.get("langfuse.observation.metadata", "{}"))
-            if not metadata:
-                metadata = {key.rsplit(".", 1)[-1]: value for key, value in span.attributes.items() if key.startswith("langfuse.observation.metadata.")}
-            assert metadata["outcome"] == "success"
-            assert metadata["error_type"] == ""
-            assert float(metadata["duration_ms"]) >= 0
-        resolve_span, guide_span = tools["project_resolve"], tools["task_guide"]
-        assert resolve_span.context.trace_id != expected_trace
-        assert guide_span.context.trace_id != expected_trace
-        assert resolve_span.attributes["session.id"] == project_id
-        assert guide_span.attributes["session.id"] == project_id
-        assert resolve_span.context.trace_id != guide_span.context.trace_id
-        assert all(span.attributes.get("session.id") != project_id for span in spans if span.name not in tools)
-        runtime.tracer.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_logged_request_error_and_export_failure_preserve_mcp_envelope(tmp_path, monkeypatch) -> None:
-    pytest.importorskip("langfuse")
-    from dataclasses import replace
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-phase3-error-integration")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase3-test")
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        exporter = InMemorySpanExporter()
-        config_path = runtime.config.home / "config.toml"
-        config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[langfuse]\nenabled = true\n", encoding="utf-8")
-        runtime.tracer.shutdown()
-        runtime.tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
-        runtime._catalog = replace(runtime._catalog, langfuse=LangfuseConfig(enabled=True))
-        runtime.ask_registry.tracer = runtime.tracer
-        runtime.runner.tracer = runtime.tracer
-        runtime.target_executor.tracer = runtime.tracer
-        missing = await client.call_tool("job_wait", {"job_id": "absent-phase3", "timeout_s": 0})
-        assert missing.is_error
-        payload = json.loads(missing.content[0].text)
-        assert payload == {
-            "code": "unknown_job", "message": "Job does not exist.",
-            "next_action": "Call job_list for the project and use a listed job ID.",
-            "retryable": False,
-        }
-        runtime.tracer.flush()
-        error_spans = [s for s in exporter.get_finished_spans() if s.name == "job_wait"]
-        assert len(error_spans) == 1
-        metadata = error_spans[0].attributes
-        assert metadata["langfuse.observation.metadata.outcome"] == "failed"
-        assert metadata["langfuse.observation.metadata.error_type"] == "OrchestrationError"
-        original = runtime.tracer.client._create_observation_from_otel_span
-        runtime.tracer.client._create_observation_from_otel_span = lambda **_: (_ for _ in ()).throw(RuntimeError("synthetic conversion failure"))
-        same_error = await client.call_tool("job_wait", {"job_id": "absent-phase3", "timeout_s": 0})
-        assert same_error.is_error
-        assert json.loads(same_error.content[0].text) == payload
-        runtime.tracer.client._create_observation_from_otel_span = original
-
-        (runtime.config.home / "task_guide.json").write_text(json.dumps({"guidance": []}), encoding="utf-8")
-        project = register_project(runtime, str(tmp_path), "sdk-failure-project")
-        original = runtime.tracer.client._create_observation_from_otel_span
-        runtime.tracer.client._create_observation_from_otel_span = lambda **_: (_ for _ in ()).throw(RuntimeError("synthetic exporter conversion failure"))
-        guide = await client.call_tool("task_guide", {"project_id": project.id})
-        assert not guide.is_error
-        assert json.loads(guide.content[0].text)["profiles"]["default"] == "balanced"
-        runtime.tracer.client._create_observation_from_otel_span = original
-        runtime.tracer.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_logged_job_wait_creates_no_open_span_during_long_poll(tmp_path, monkeypatch) -> None:
-    pytest.importorskip("langfuse")
-    from dataclasses import replace
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    from refract.config import LangfuseConfig
-    from refract.observability import Tracer
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-phase3-long-poll")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-phase3-test")
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        exporter = InMemorySpanExporter()
-        config_path = runtime.config.home / "config.toml"
-        config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[langfuse]\nenabled = true\n", encoding="utf-8")
-        runtime.tracer.shutdown()
-        runtime.tracer = Tracer(LangfuseConfig(enabled=True), span_exporter=exporter)
-        runtime._catalog = replace(runtime._catalog, langfuse=LangfuseConfig(enabled=True))
-        started_spans = []
-        original_start = runtime.tracer.client._otel_tracer.start_span
-        def track_start(*args, **kwargs):
-            span = original_start(*args, **kwargs)
-            started_spans.append(span)
-            return span
-        runtime.tracer.client._otel_tracer.start_span = track_start
-        project = register_project(runtime, str(tmp_path), "long-poll-project")
-        runtime.database.create_job(
-            job_id="long-poll-phase3", project_id=project.id, workflow="consult", profile="balanced",
-            prompt="poll", execution_plan_json="{}", context_key="long-poll",
-        )
-        started, release = asyncio.Event(), asyncio.Event()
-
-        async def held_wait(job_id, timeout_s):
-            started.set()
-            await release.wait()
-
-        runtime.wait = held_wait
-        request = asyncio.create_task(client.call_tool("job_wait", {"job_id": "long-poll-phase3", "timeout_s": 5}))
-        await asyncio.wait_for(started.wait(), 2)
-        await asyncio.sleep(0.05)
-        assert not [span for span in exporter.get_finished_spans() if span.name == "job_wait"]
-        assert started_spans == []
-        release.set()
-        response = await request
-        assert not response.is_error
-        runtime.tracer.flush()
-        tool_spans = [span for span in exporter.get_finished_spans() if span.name == "job_wait"]
-        assert len(tool_spans) == 1
-        span = tool_spans[0]
-        assert span.end_time >= span.start_time
-        assert len(started_spans) == 1
-        assert not started_spans[0].is_recording()
-        recorded_ms = float(span.attributes["langfuse.observation.metadata.duration_ms"])
-        assert abs((span.end_time - span.start_time) / 1_000_000 - recorded_ms) < 5
-        runtime.tracer.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_mcp_client_completes_v2_cycle_in_four_calls(tmp_path, monkeypatch) -> None:
+async def test_mcp_client_completes_v3_cycle_in_three_calls(tmp_path, monkeypatch) -> None:
     from tests.orchestration_helpers import FakeDrivers, repository
 
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
@@ -601,16 +316,14 @@ async def test_mcp_client_completes_v2_cycle_in_four_calls(tmp_path, monkeypatch
         guide_path.write_text(json.dumps({"guidance": []}), encoding="utf-8")
         runtime.drivers = FakeDrivers()
 
-        resolved = await client.call_tool("project_resolve", {"path": str(root)})
-        project_id = json.loads(resolved.content[0].text)["project"]["id"]
-        guide = await client.call_tool("task_guide", {"project_id": project_id})
-        assert json.loads(guide.content[0].text)["profiles"]["default"] == "balanced"
+        listed = await client.call_tool("list", {"path": str(root)})
+        assert json.loads(listed.content[0].text)["profiles"]["default"] == "balanced"
         submitted = await client.call_tool(
-            "job_submit",
-            {"project_id": project_id, "workflow": "consult", "prompt": "inspect"},
+            "submit",
+            {"path": str(root), "workflow": "consult", "prompt": "inspect"},
         )
         job_id = json.loads(submitted.content[0].text)["job"]["id"]
-        waited = await client.call_tool("job_wait", {"job_id": job_id, "timeout_s": 5})
+        waited = await client.call_tool("wait", {"job_id": job_id, "timeout_s": 5})
         result = json.loads(waited.content[0].text)
         assert result["job"]["state"] == "succeeded"
         assert result["result"]["text"] == "response from primary"
@@ -621,46 +334,22 @@ async def test_actual_client_rejects_sdk_coercions_before_dispatch(tmp_path, mon
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "coercion-project"
         root.mkdir()
-        project = register_project(runtime, str(root), "coercion")
+        git(root, "init", "-q")
+        project = register_project(runtime, str(root))
         before = runtime.database.jobs(project.id)
         invalid_calls = [
-            ("job_wait", {"job_id": "missing", "timeout_s": True}),
-            ("job_wait", {"job_id": "missing", "timeout_s": "0"}),
-            ("job_wait", {"job_id": "missing", "timeout_s": 0, "result_offset": True}),
-            ("job_submit", {"project_id": project.id, "workflow": "implement", "prompt": "must not queue", "fresh_session": 1}),
-            ("job_submit", {"project_id": project.id, "workflow": "implement", "prompt": "must not queue", "fresh_session": "false"}),
+            ("wait", {"job_id": "missing", "timeout_s": True}),
+            ("wait", {"job_id": "missing", "timeout_s": "0"}),
+            ("submit", {"path": str(root), "workflow": "implement", "prompt": "must not queue", "fresh": 1}),
+            ("submit", {"path": str(root), "workflow": "implement", "prompt": "must not queue", "fresh": "false"}),
         ]
         for name, arguments in invalid_calls:
             response = await client.call_tool(name, arguments)
             payload = json.loads(response.content[0].text)
             assert response.is_error
             assert payload["code"] == "invalid_request"
-            assert payload["retryable"] is False
             assert "schema" in payload["next_action"].lower()
         assert runtime.database.jobs(project.id) == before
-
-
-def test_terminal_page_with_tight_metadata_advances_or_errors() -> None:
-    from refract.server import RefractError, _page_terminal_result
-
-    job = _job_view("succeeded")
-    job.result = JobResult(text="😀😀")
-    job.context_key = "x" * 9000
-    summary = JobSummary(
-        id=job.id, project_id=job.project_id, workflow=job.workflow, profile=job.profile,
-        state=job.state, context_key=job.context_key,
-        attempts=0,
-        created_at=job.created_at, updated_at=job.updated_at,
-    ).model_dump(mode="json")
-    empty_page = json.dumps(
-        {"job": summary, "result": {"text": "", "error": "", "next_offset": 0, "metadata": {}}},
-        ensure_ascii=False, separators=(",", ":"),
-    )
-    from refract.server import _fits_response
-    assert not _fits_response(empty_page)
-    with pytest.raises(RefractError) as raised:
-        _page_terminal_result(job, summary, 0)
-    assert raised.value.code == "response_too_large"
 
 
 @pytest.mark.asyncio
@@ -668,7 +357,8 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "errors-project"
         root.mkdir()
-        project = register_project(runtime, str(root), "errors")
+        git(root, "init", "-q")
+        project = register_project(runtime, str(root))
 
         forbidden = {"target_id", "backend", "model", "resource_uri", "config_revision"}
 
@@ -685,7 +375,7 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
             response = await client.call_tool(name, arguments)
             assert response.is_error
             payload = json.loads(response.content[0].text)
-            assert set(payload) == {"code", "message", "next_action", "retryable"}
+            assert set(payload) == {"code", "message", "next_action"}
             assert payload["code"] == code
             assert payload["next_action"]
             assert_private(payload)
@@ -694,91 +384,54 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
             assert len(wire) < 30000 and len(wire.encode("utf-8")) < 9000
             return payload
 
-        await check("project_resolve", {"path": str(root / "missing")}, "invalid_path")
-        await check("task_guide", {"project_id": "unknown-project"}, "unknown_project")
-        await check("job_list", {"project_id": "unknown-project"}, "unknown_project")
-        await check("job_wait", {"job_id": "missing-job", "timeout_s": 0}, "unknown_job")
-        await check("job_cancel", {"job_id": "missing-job"}, "unknown_job")
-        other = tmp_path / "alias-collision"
-        other.mkdir()
-        await check("project_resolve", {"path": str(other), "alias": "errors"}, "alias_taken")
-        await check("job_submit", {"project_id": project.id, "workflow": "implement", "prompt": "x", "profile": "missing-profile"}, "unknown_profile")
+        await check("list", {"path": str(root / "missing")}, "invalid_path")
+        await check("wait", {"job_id": "missing-job", "timeout_s": 0}, "unknown_job")
+        await check("cancel", {"job_id": "missing-job"}, "unknown_job")
+        await check("submit", {"path": str(root), "workflow": "implement", "prompt": "x", "profile": "missing-profile"}, "unknown_profile")
 
         runtime.database.create_job(
             job_id="failed-parent", project_id=project.id, workflow="review", profile="balanced",
-            prompt="parent", execution_plan_json="{}", context_key="parent",
+            prompt="parent", execution_plan_json="{}", session="parent",
         )
         runtime.database.finish_job("failed-parent", "failed")
-        await check("job_retry", {"job_id": "missing-job"}, "unknown_job")
+        await check("retry", {"job_id": "missing-job"}, "unknown_job")
 
         runtime.database.create_job(
             job_id="queued-invalid-retry", project_id=project.id, workflow="review", profile="balanced",
-            prompt="queued", execution_plan_json="{}", context_key="queued",
+            prompt="queued", execution_plan_json="{}", session="queued",
         )
-        await check("job_retry", {"job_id": "queued-invalid-retry"}, "invalid_state")
+        await check("retry", {"job_id": "queued-invalid-retry"}, "invalid_state")
         (runtime.config.home / "task_guide.json").write_text("{invalid", encoding="utf-8")
-        await check("task_guide", {"project_id": project.id}, "config_invalid")
+        await check("list", {"path": str(root)}, "config_invalid")
         (runtime.config.home / "task_guide.json").write_text(json.dumps({"guidance": "g" * 12000}), encoding="utf-8")
-        await check("task_guide", {"project_id": project.id}, "response_too_large")
+        await check("list", {"path": str(root)}, "response_too_large")
 
         runtime._closing = True
-        await check("job_submit", {"project_id": project.id, "workflow": "implement", "prompt": "stopping"}, "daemon_stopping")
+        await check("submit", {"path": str(root), "workflow": "implement", "prompt": "stopping"}, "daemon_stopping")
         runtime._closing = False
 
 
 @pytest.mark.asyncio
-async def test_mcp_job_submit_all_open_returns_retry_delay(tmp_path, monkeypatch) -> None:
+async def test_mcp_submit_all_open_returns_retry_delay(tmp_path, monkeypatch) -> None:
     from refract.planning import target_execution_key
 
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "submit-all-open"
         root.mkdir()
-        project = register_project(runtime, str(root), "submit-all-open")
+        git(root, "init", "-q")
+        project = register_project(runtime, str(root))
         target = runtime.catalog.targets[0]
         runtime.database._connection.execute(
             "INSERT OR REPLACE INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s, probe_job_id) VALUES (?, 1, '2999-01-01T00:00:00+00:00', 60, '')",
             (target_execution_key(target),),
         )
         runtime.database._connection.commit()
-        response = await client.call_tool("job_submit", {"project_id": project.id, "workflow": "consult", "prompt": "blocked"})
+        response = await client.call_tool("submit", {"path": str(root), "workflow": "consult", "prompt": "blocked"})
         assert response.is_error
         payload = json.loads(response.content[0].text)
         assert payload["code"] == "targets_unavailable"
-        assert payload["retryable"] is True and type(payload["retry_after_s"]) is int
+        assert type(payload["retry_after_s"]) is int
         assert runtime.database.jobs(project.id) == []
-
-
-@pytest.mark.asyncio
-async def test_multipage_terminal_wait_has_metadata_and_stays_private_and_bounded(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        root = tmp_path / "multipage-terminal"
-        root.mkdir()
-        project = register_project(runtime, str(root), "multipage-terminal")
-        runtime.database.create_job(job_id="multi-terminal", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json="{}", context_key="multi")
-        runtime.database.finish_job("multi-terminal", "succeeded", text="z" * 40_000)
-        offset = 0
-        pages = 0
-        forbidden = {"target_id", "backend"}
-        while True:
-            response = await client.call_tool("job_wait", {"job_id": "multi-terminal", "timeout_s": 0, "result_offset": offset})
-            assert not response.is_error
-            wire = response.model_dump(by_alias=True, mode="json", exclude_none=True)
-            serialized = json.dumps(wire, ensure_ascii=False, separators=(",", ":"))
-            assert len(serialized.encode("utf-8")) < 9000
-            payload = json.loads(response.content[0].text)
-            assert set(payload["result"]["metadata"]) == {"execution", "failure", "retry", "telemetry"}
-            def inspect_private(value):
-                if isinstance(value, dict):
-                    assert forbidden.isdisjoint(key.casefold() for key in value)
-                    for item in value.values(): inspect_private(item)
-                elif isinstance(value, list):
-                    for item in value: inspect_private(item)
-            inspect_private(payload)
-            pages += 1
-            next_offset = payload["result"]["next_offset"]
-            if next_offset is None: break
-            offset = next_offset
-        assert pages > 1
 
 
 @pytest.mark.asyncio
@@ -788,40 +441,38 @@ async def test_all_tool_success_payloads_are_private_and_single_text_content(tmp
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "privacy-project"
         root.mkdir()
+        git(root, "init", "-q")
+        project = register_project(runtime, str(root))
         responses = []
-        resolved = await client.call_tool("project_resolve", {"path": str(root)})
-        responses.append(resolved)
-        project_id = json.loads(resolved.content[0].text)["project"]["id"]
         (runtime.config.home / "task_guide.json").write_text(json.dumps({"guidance": []}), encoding="utf-8")
-        responses.append(await client.call_tool("task_guide", {"project_id": project_id}))
+        responses.append(await client.call_tool("list", {"path": str(root)}))
         runtime.drivers = FakeDrivers()
-        submitted = await client.call_tool("job_submit", {"project_id": project_id, "workflow": "consult", "prompt": "inspect"})
+        submitted = await client.call_tool("submit", {"path": str(root), "workflow": "consult", "prompt": "inspect"})
         responses.append(submitted)
         submitted_id = json.loads(submitted.content[0].text)["job"]["id"]
-        responses.append(await client.call_tool("job_wait", {"job_id": submitted_id, "timeout_s": 5}))
-        responses.append(await client.call_tool("job_list", {"project_id": project_id}))
+        responses.append(await client.call_tool("wait", {"job_id": submitted_id, "timeout_s": 5}))
+        responses.append(await client.call_tool("list", {"path": str(root)}))
         runtime.database.create_job(
-            job_id="privacy-cancel", project_id=project_id, workflow="review", profile="balanced",
-            prompt="cancel", execution_plan_json="{}", context_key="cancel",
+            job_id="privacy-cancel", project_id=project.id, workflow="review", profile="balanced",
+            prompt="cancel", execution_plan_json="{}", session="cancel",
         )
-        responses.append(await client.call_tool("job_cancel", {"job_id": "privacy-cancel"}))
+        responses.append(await client.call_tool("cancel", {"job_id": "privacy-cancel"}))
         runtime.database.create_job(
-            job_id="privacy-retry", project_id=project_id, workflow="review", profile="balanced",
-            prompt="retry", execution_plan_json="{}", context_key="retry",
+            job_id="privacy-retry", project_id=project.id, workflow="review", profile="balanced",
+            prompt="retry", execution_plan_json="{}", session="retry",
         )
         runtime.database.finish_job("privacy-retry", "failed")
-        responses.append(await client.call_tool("job_retry", {"job_id": "privacy-retry"}))
+        responses.append(await client.call_tool("retry", {"job_id": "privacy-retry"}))
 
-        forbidden = {"access_mode", "target_id", "backend", "model", "resource_uri", "config_revision"}
-        def visit(value, in_metadata: bool = False):
+        forbidden = {"access_mode", "target_id", "backend", "resource_uri", "config_revision"}
+        def visit(value):
             if isinstance(value, dict):
-                current_forbidden = forbidden - {"model"} if in_metadata else forbidden
-                assert current_forbidden.isdisjoint(key.casefold() for key in value)
-                for k, item in value.items():
-                    visit(item, in_metadata=(in_metadata or k == "metadata"))
+                assert forbidden.isdisjoint(key.casefold() for key in value)
+                for item in value.values():
+                    visit(item)
             elif isinstance(value, list):
                 for item in value:
-                    visit(item, in_metadata=in_metadata)
+                    visit(item)
         for response in responses:
             assert not response.is_error
             assert len(response.content) == 1 and response.content[0].type == "text"
@@ -835,11 +486,12 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "mutation-overflow"
         root.mkdir()
-        project = register_project(runtime, str(root), "overflow")
+        git(root, "init", "-q")
+        project = register_project(runtime, str(root))
 
-        submitted = await client.call_tool("job_submit", {
-            "project_id": project.id, "workflow": "implement", "prompt": "submit",
-            "context_key": "s" * 10000,
+        submitted = await client.call_tool("submit", {
+            "path": str(root), "workflow": "implement", "prompt": "submit",
+            "session": "s" * 10000,
         })
         assert submitted.is_error
         submit_error = json.loads(submitted.content[0].text)
@@ -849,21 +501,22 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
 
         runtime.database.create_job(
             job_id="retry-overflow", project_id=project.id, workflow="review", profile="balanced",
-            prompt="retry", execution_plan_json="{}", context_key="r" * 10000,
+            prompt="retry", execution_plan_json="{}", session="r" * 10000,
         )
         runtime.database.finish_job("retry-overflow", "failed")
-        retried = await client.call_tool("job_retry", {"job_id": "retry-overflow"})
+        retried = await client.call_tool("retry", {"job_id": "retry-overflow"})
         assert retried.is_error
         retry_error = json.loads(retried.content[0].text)
-        assert retry_error["code"] == "response_too_large" and "retry-overflow" in retry_error["message"]
-        assert "applied" in retry_error["message"]
-        assert runtime.database.job("retry-overflow") is not None
+        retried_id = retry_error["message"].split("ID: ", 1)[1].rstrip(".")
+        assert retry_error["code"] == "response_too_large" and "applied" in retry_error["message"]
+        assert runtime.database.job(retried_id).retry_of == "retry-overflow"
+        assert runtime.database.job("retry-overflow").state == "failed"
 
         runtime.database.create_job(
             job_id="cancel-overflow", project_id=project.id, workflow="review", profile="balanced",
-            prompt="cancel", execution_plan_json="{}", context_key="c" * 10000,
+            prompt="cancel", execution_plan_json="{}", session="c" * 10000,
         )
-        cancelled = await client.call_tool("job_cancel", {"job_id": "cancel-overflow"})
+        cancelled = await client.call_tool("cancel", {"job_id": "cancel-overflow"})
         assert cancelled.is_error
         cancel_error = json.loads(cancelled.content[0].text)
         assert cancel_error["code"] == "response_too_large" and "cancel-overflow" in cancel_error["message"]
@@ -894,16 +547,16 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "private-failure-project"
         root.mkdir()
-        project = register_project(runtime, str(root), "private-failure")
+        git(root, "init", "-q")
         runtime.drivers = PrivateFailureDrivers()
-        submitted = await client.call_tool("job_submit", {
-            "project_id": project.id, "workflow": "implement", "prompt": "fail safely",
+        submitted = await client.call_tool("submit", {
+            "path": str(root), "workflow": "implement", "prompt": "fail safely",
         })
         job_id = json.loads(submitted.content[0].text)["job"]["id"]
-        response = await client.call_tool("job_wait", {"job_id": job_id, "timeout_s": 10})
+        response = await client.call_tool("wait", {"job_id": job_id, "timeout_s": 10})
         assert not response.is_error
         payload = json.loads(response.content[0].text)
-        assert payload["result"]["error"]
+        assert payload["result"]["failure_kind"] == "target_fatal"
         assert marker not in response.content[0].text
         assert "provider-secret-model-backend-detail" not in response.content[0].text
         envelope = json.dumps(response.model_dump(by_alias=True, mode="json", exclude_none=True), separators=(",", ":"))
@@ -914,103 +567,6 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
 
 
 
-@pytest.mark.asyncio
-async def test_public_terminal_error_preserves_execution_task_cancellation(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        root = tmp_path / "cancel-error"
-        root.mkdir()
-        project = register_project(runtime, str(root), "cancel-error")
-        runtime.database.create_job(
-            job_id="cancel-cause", project_id=project.id, workflow="review", profile="balanced",
-            prompt="cancelled", execution_plan_json="{}", context_key="cancel-cause",
-        )
-        runtime.database.finish_job("cancel-cause", "cancelled", error="execution task cancelled")
-
-        response = await client.call_tool("job_wait", {"job_id": "cancel-cause", "timeout_s": 0})
-
-        assert json.loads(response.content[0].text)["result"]["error"] == "execution task cancelled"
-
-
-@pytest.mark.asyncio
-async def test_empty_and_eof_result_metadata_overflow_is_bounded(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        root = tmp_path / "empty-eof-overflow"
-        root.mkdir()
-        project = register_project(runtime, str(root), "empty-eof-overflow")
-        runtime.database.create_job(
-            job_id="empty-output", project_id=project.id, workflow="review", profile="balanced",
-            prompt="empty", execution_plan_json="{}", context_key="e" * 10000,
-        )
-        runtime.database.finish_job("empty-output", "succeeded", text="")
-        runtime.database.create_job(
-            job_id="eof-output", project_id=project.id, workflow="review", profile="balanced",
-            prompt="eof", execution_plan_json="{}", context_key="f" * 10000,
-        )
-        runtime.database.finish_job("eof-output", "succeeded", text="done")
-        for job_id, offset in (("empty-output", 0), ("eof-output", 4)):
-            response = await client.call_tool("job_wait", {
-                "job_id": job_id, "timeout_s": 0, "result_offset": offset,
-            })
-            assert response.is_error
-            assert json.loads(response.content[0].text)["code"] == "response_too_large"
-            envelope = json.dumps(response.model_dump(by_alias=True, mode="json", exclude_none=True), separators=(",", ":"))
-            assert len(envelope) < 30000 and len(envelope.encode("utf-8")) < 9000
-
-        runtime.database.create_job(
-            job_id="empty-fitting", project_id=project.id, workflow="review", profile="balanced",
-            prompt="empty", execution_plan_json="{}", context_key="short",
-        )
-        runtime.database.finish_job("empty-fitting", "succeeded", text="")
-        empty_ok = await client.call_tool("job_wait", {"job_id": "empty-fitting", "timeout_s": 0})
-        assert not empty_ok.is_error
-        assert json.loads(empty_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None, "metadata": JobResultMetadata().model_dump(mode="json")}
-
-        runtime.database.create_job(
-            job_id="eof-fitting", project_id=project.id, workflow="review", profile="balanced",
-            prompt="eof", execution_plan_json="{}", context_key="short-eof",
-        )
-        runtime.database.finish_job("eof-fitting", "succeeded", text="done")
-        eof_ok = await client.call_tool("job_wait", {"job_id": "eof-fitting", "timeout_s": 0, "result_offset": 4})
-        assert not eof_ok.is_error
-        assert json.loads(eof_ok.content[0].text)["result"] == {"text": "", "error": "", "next_offset": None, "metadata": JobResultMetadata().model_dump(mode="json")}
-
-
-@pytest.mark.parametrize(("result_text", "offset"), [("", 0), ("done", 4)])
-def test_empty_or_eof_page_fit_loop_has_finite_sentinel(monkeypatch, result_text, offset) -> None:
-    from refract import server
-
-    job = _job_view("succeeded")
-    job.result = JobResult(text=result_text)
-    calls = 0
-
-    def bounded_never_fits(_text, *, is_error=False):
-        nonlocal calls
-        calls += 1
-        if calls > 8:
-            raise AssertionError("page fit loop failed to terminate")
-        return False
-
-    monkeypatch.setattr(server, "_fits_response", bounded_never_fits)
-    with pytest.raises(server.RefractError) as raised:
-        server._page_terminal_result(job, {"id": job.id}, offset)
-    assert raised.value.code == "response_too_large"
-
-
-def test_public_data_filters_unvalidated_metadata_and_preserves_canonical_execution_model() -> None:
-    from refract.server import _public_data
-    from refract.result_metadata import JobResultMetadata, ExecutionMetadata
-
-    arbitrary = {"metadata": {"backend": "synthetic-private-backend", "execution": {"model": "unvalidated-private-model"}}}
-    filtered = _public_data(arbitrary)
-    assert filtered == {"metadata": {"execution": {}}}
-    canonical = JobResultMetadata(execution=ExecutionMetadata(model="allowed-model"))
-    public = _public_data({"metadata": canonical})
-    assert public["metadata"]["execution"]["model"] == "allowed-model"
-    assert set(public["metadata"]) == {"execution", "failure", "retry", "telemetry"}
-    assert public["metadata"]["failure"] is None
-    assert public["metadata"]["telemetry"]["completeness"] == "unavailable"
-
-
 def _job_view(state: str) -> JobView:
     return JobView(
         id="job-1",
@@ -1018,31 +574,24 @@ def _job_view(state: str) -> JobView:
         workflow="implement",
         profile="balanced",
         state=state,
-        context_key="implement",
+        session="implement",
         created_at="2026-01-01T00:00:00+00:00",
         updated_at="2026-01-01T00:00:00+00:00",
     )
 
 
-def test_terminal_page_rejects_malformed_canonical_metadata_and_keeps_unavailable_shape() -> None:
-    from refract.server import _page_terminal_result
-
-    job = _job_view("succeeded")
-    with pytest.raises(ValueError):
-        _page_terminal_result(job, {"id": job.id}, 0, metadata={"execution": {}, "retry": {"legacy": True}})
-    payload = json.loads(_page_terminal_result(job, {"id": job.id}, 0))
-    metadata = payload["result"]["metadata"]
-    assert set(metadata) == {"execution", "failure", "retry", "telemetry"}
-    assert metadata["failure"] is None
-    assert metadata["telemetry"]["completeness"] == "unavailable"
-    assert metadata["telemetry"]["total_input_tokens"] == {"value": None, "source": None, "quality": "unavailable", "observed_at": None}
+def _stub_project(_project_id: str) -> None:
+    return None
 
 
-def _stub_job_record(_job_id: str) -> dict[str, str]:
-    return {}
+def _stub_result_path(job_id: str) -> str:
+    return f"{job_id}.md"
 
 
-def test_job_wait_constants() -> None:
+_STUB_ASK_REGISTRY = SimpleNamespace(get_pending=lambda _job_id: None)
+
+
+def test_wait_constants() -> None:
     from refract import server
 
     assert server._MCP_WAIT_TIMEOUT_S == 3600
@@ -1051,7 +600,7 @@ def test_job_wait_constants() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("timeout_s", [0, 5, 30, 3600])
-async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -> None:
+async def test_wait_uses_timeout_and_returns_result_shape(timeout_s: int) -> None:
     initial = _job_view("running")
     latest = _job_view("succeeded")
     waits: list[tuple[str, int]] = []
@@ -1062,12 +611,14 @@ async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -
             assert job_id == initial.id
             return state["job"]
 
-        job_record = staticmethod(_stub_job_record)
+        project = staticmethod(_stub_project)
+        result_path = staticmethod(_stub_result_path)
 
     class Runtime:
         database = Database()
+        ask_registry = _STUB_ASK_REGISTRY
 
-        def live_result_metadata(self, job: JobView):
+        def live_routing(self, job: JobView):
             return job.result.metadata
 
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
@@ -1084,16 +635,17 @@ async def test_job_wait_uses_timeout_and_returns_v2_page_shape(timeout_s: int) -
         request_context=SimpleNamespace(lifespan_context=Runtime()),
         report_progress=report_progress,
     )
-    result = json.loads(await job_wait(initial.id, ctx, timeout_s=timeout_s))
+    result = json.loads(await wait(initial.id, ctx, timeout_s=timeout_s))
 
     assert waits == ([] if timeout_s == 0 else [(initial.id, timeout_s)])
     assert result["job"]["state"] == ("running" if timeout_s == 0 else "succeeded")
-    assert result["result"] == ({"text": "", "error": "", "next_offset": None} if timeout_s == 0 else {"text": "", "error": "", "next_offset": None, "metadata": JobResultMetadata().model_dump(mode="json")})
+    assert result["result"]["text"] == "" and result["result"]["truncated"] is False
+    assert result["result"]["pending_question"] is None
     assert json.loads(progress_messages[0]) == {"state": "running"}
 
 
 @pytest.mark.asyncio
-async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypatch) -> None:
+async def test_wait_heartbeat_loop_reports_progress_until_terminal(monkeypatch) -> None:
     from refract import server
 
     monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
@@ -1106,12 +658,14 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
             assert job_id == current_job.id
             return current_job
 
-        job_record = staticmethod(_stub_job_record)
+        project = staticmethod(_stub_project)
+        result_path = staticmethod(_stub_result_path)
 
     class Runtime:
         database = Database()
+        ask_registry = _STUB_ASK_REGISTRY
 
-        def live_result_metadata(self, job: JobView):
+        def live_routing(self, job: JobView):
             return job.result.metadata
 
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
@@ -1129,7 +683,7 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
         report_progress=report_progress,
     )
 
-    result = json.loads(await job_wait(current_job.id, ctx, timeout_s=3600))
+    result = json.loads(await wait(current_job.id, ctx, timeout_s=3600))
     assert result["job"]["state"] == "succeeded"
     assert [report[:2] for report in progress_reports] == [
         (0.0, None),
@@ -1140,19 +694,19 @@ async def test_job_wait_heartbeat_loop_reports_progress_until_terminal(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_job_wait_rejects_negative_timeout_before_job_lookup(tmp_path, monkeypatch) -> None:
+async def test_wait_rejects_negative_timeout_before_job_lookup(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         def unexpected_lookup(job_id):
             raise AssertionError("job lookup should not happen")
 
         monkeypatch.setattr(runtime.database, "job", unexpected_lookup)
-        result = await client.call_tool("job_wait", {"job_id": "job-1", "timeout_s": -1})
+        result = await client.call_tool("wait", {"job_id": "job-1", "timeout_s": -1})
         assert result.is_error
         assert json.loads(result.content[0].text)["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio
-async def test_job_wait_non_terminal_timeout(monkeypatch) -> None:
+async def test_wait_non_terminal_timeout(monkeypatch) -> None:
     from refract import server
 
     monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
@@ -1165,12 +719,14 @@ async def test_job_wait_non_terminal_timeout(monkeypatch) -> None:
             assert job_id == current_job.id
             return current_job
 
-        job_record = staticmethod(_stub_job_record)
+        project = staticmethod(_stub_project)
+        result_path = staticmethod(_stub_result_path)
 
     class Runtime:
         database = Database()
+        ask_registry = _STUB_ASK_REGISTRY
 
-        def live_result_metadata(self, job: JobView):
+        def live_routing(self, job: JobView):
             return job.result.metadata
 
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
@@ -1187,15 +743,14 @@ async def test_job_wait_non_terminal_timeout(monkeypatch) -> None:
         report_progress=report_progress,
     )
 
-    result = json.loads(await job_wait(current_job.id, ctx, timeout_s=10))
+    result = json.loads(await wait(current_job.id, ctx, timeout_s=10))
     assert result["job"]["state"] == "running"
     assert result["result"]["text"] == ""
-    assert result["next_action"] == "Call job_wait again with the same job_id."
     assert len(progress_messages) == 3
 
 
 @pytest.mark.asyncio
-async def test_job_wait_cancellation_cleanup() -> None:
+async def test_wait_cancellation_cleanup() -> None:
     current_job = _job_view("running")
     wait_started = asyncio.Event()
     wait_cancelled = asyncio.Event()
@@ -1205,12 +760,14 @@ async def test_job_wait_cancellation_cleanup() -> None:
             assert job_id == current_job.id
             return current_job
 
-        job_record = staticmethod(_stub_job_record)
+        project = staticmethod(_stub_project)
+        result_path = staticmethod(_stub_result_path)
 
     class Runtime:
         database = Database()
+        ask_registry = _STUB_ASK_REGISTRY
 
-        def live_result_metadata(self, job: JobView):
+        def live_routing(self, job: JobView):
             return job.result.metadata
 
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
@@ -1226,7 +783,7 @@ async def test_job_wait_cancellation_cleanup() -> None:
         report_progress=lambda **kwargs: asyncio.sleep(0),
     )
 
-    task = asyncio.create_task(job_wait(current_job.id, ctx, timeout_s=3600))
+    task = asyncio.create_task(wait(current_job.id, ctx, timeout_s=3600))
     await wait_started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1235,7 +792,7 @@ async def test_job_wait_cancellation_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_wait_propagates_cancellation_during_child_cleanup(monkeypatch) -> None:
+async def test_wait_propagates_cancellation_during_child_cleanup(monkeypatch) -> None:
     from refract import server
 
     monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
@@ -1246,12 +803,14 @@ async def test_job_wait_propagates_cancellation_during_child_cleanup(monkeypatch
         def job(self, job_id: str) -> JobView:
             return current_job
 
-        job_record = staticmethod(_stub_job_record)
+        project = staticmethod(_stub_project)
+        result_path = staticmethod(_stub_result_path)
 
     class Runtime:
         database = Database()
+        ask_registry = _STUB_ASK_REGISTRY
 
-        def live_result_metadata(self, job: JobView):
+        def live_routing(self, job: JobView):
             return job.result.metadata
 
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
@@ -1267,7 +826,7 @@ async def test_job_wait_propagates_cancellation_during_child_cleanup(monkeypatch
         request_context=SimpleNamespace(lifespan_context=Runtime()),
         report_progress=lambda **kwargs: asyncio.sleep(0),
     )
-    task = asyncio.create_task(job_wait(current_job.id, ctx, timeout_s=3600))
+    task = asyncio.create_task(wait(current_job.id, ctx, timeout_s=3600))
     try:
         await asyncio.wait_for(cleanup_started.wait(), 2)
         task.cancel()
@@ -1279,7 +838,28 @@ async def test_job_wait_propagates_cancellation_during_child_cleanup(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_job_wait_returns_terminal_job_without_waiting() -> None:
+async def test_wait_response_truncates_long_text_and_keeps_result_path() -> None:
+    from refract import server
+    from refract.models import JobResult
+
+    terminal = _job_view("succeeded").model_copy(update={"result": JobResult(text="x" * 200_000)})
+
+    class Database:
+        project = staticmethod(_stub_project)
+        result_path = staticmethod(_stub_result_path)
+
+    class Runtime:
+        database = Database()
+        ask_registry = _STUB_ASK_REGISTRY
+
+    payload = json.loads(await server._wait_response(Runtime(), terminal))
+    assert payload["result"]["truncated"] is True
+    assert 0 < len(payload["result"]["text"]) < 200_000
+    assert payload["result"]["result_path"] == "job-1.md"
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_terminal_job_without_waiting() -> None:
     terminal = _job_view("failed")
     waits: list[str] = []
     progress_messages: list[str] = []
@@ -1289,13 +869,18 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
         def job(job_id: str) -> JobView:
             return terminal
 
-        job_record = staticmethod(_stub_job_record)
+        project = staticmethod(_stub_project)
+        result_path = staticmethod(_stub_result_path)
 
     class Runtime:
         database = Database()
+        ask_registry = _STUB_ASK_REGISTRY
 
-        def live_result_metadata(self, job: JobView):
+        def live_routing(self, job: JobView):
             return job.result.metadata
+
+        def _next_target(self, _job: JobView) -> None:
+            return None
 
         async def wait(self, job_id: str, timeout_s: int) -> JobView:
             waits.append(job_id)
@@ -1309,7 +894,7 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
         report_progress=report_progress,
     )
 
-    result = json.loads(await job_wait(terminal.id, ctx))
+    result = json.loads(await wait(terminal.id, ctx))
     assert result["job"]["state"] == "failed"
     assert waits == []
     assert json.loads(progress_messages[0]) == {"state": "failed"}
@@ -1331,7 +916,7 @@ async def test_job_wait_returns_terminal_job_without_waiting() -> None:
         (None, False),
     ],
 )
-async def test_job_wait_logs_progress_token_presence(caplog, wire_meta, expected_present) -> None:
+async def test_wait_logs_progress_token_presence(caplog, wire_meta, expected_present) -> None:
     import logging
     from mcp.server.runner import _extract_meta
 
@@ -1342,12 +927,14 @@ async def test_job_wait_logs_progress_token_presence(caplog, wire_meta, expected
         def job(job_id: str) -> JobView:
             return terminal
 
-        job_record = staticmethod(_stub_job_record)
+        project = staticmethod(_stub_project)
+        result_path = staticmethod(_stub_result_path)
 
     class Runtime:
         database = Database()
+        ask_registry = _STUB_ASK_REGISTRY
 
-        def live_result_metadata(self, job: JobView):
+        def live_routing(self, job: JobView):
             return job.result.metadata
 
     params = {"_meta": wire_meta} if wire_meta is not None else {}
@@ -1371,13 +958,13 @@ async def test_job_wait_logs_progress_token_presence(caplog, wire_meta, expected
     )
 
     with caplog.at_level(logging.INFO, logger="refract.server"):
-        result = json.loads(await job_wait(terminal.id, ctx))
+        result = json.loads(await wait(terminal.id, ctx))
 
     assert result["job"]["state"] == "succeeded"
     records = [
         record
         for record in caplog.records
-        if getattr(record, "operation", "") == "job_wait"
+        if getattr(record, "operation", "") == "wait"
     ]
     assert len(records) >= 2  # started and finished
     for record in records:
@@ -1474,14 +1061,14 @@ async def test_application_lifespan_clears_state_when_runtime_close_fails(monkey
 
 
 @pytest.mark.asyncio
-async def test_runtime_wait_and_job_wait_wake_early_with_pending_question(tmp_path) -> None:
+async def test_runtime_wait_and_wait_tool_wake_early_with_pending_question(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     config_path = home / "config.toml"
     config_path.write_text(_serve_config(), encoding="utf-8")
     runtime = Runtime(load_config(config_path))
     try:
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-q-1",
             project_id=project.id,
@@ -1489,7 +1076,7 @@ async def test_runtime_wait_and_job_wait_wake_early_with_pending_question(tmp_pa
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-q-1'")
@@ -1511,22 +1098,21 @@ async def test_runtime_wait_and_job_wait_wake_early_with_pending_question(tmp_pa
         assert job.state == "running"
         assert runtime.ask_registry.has_pending("job-q-1")
 
-        # 2. Test job_wait returns pending_question
+        # 2. Test wait returns pending_question
         ctx = SimpleNamespace(
             request_context=SimpleNamespace(lifespan_context=runtime),
             report_progress=lambda **kwargs: asyncio.sleep(0),
         )
-        res_str = await job_wait("job-q-1", ctx, timeout_s=10)
+        res_str = await wait("job-q-1", ctx, timeout_s=10)
         res = json.loads(res_str)
         assert res["job"]["state"] == "running"
         assert "pending_question" in res["result"]
         pq = res["result"]["pending_question"]
         assert pq["text"] == "Need input on schema"
         assert pq["question_id"].startswith("q_")
-        assert res["next_action"] == "Call job_answer to answer the pending question."
 
-        # 3. Test job_answer delivers answer
-        ans_str = await job_answer("job-q-1", "Use v2 schema", ctx)
+        # 3. Test answer delivers answer
+        ans_str = await answer("job-q-1", "Use v2 schema", ctx)
         ans = json.loads(ans_str)
         assert ans["job"]["id"] == "job-q-1"
         assert not runtime.ask_registry.has_pending("job-q-1")
@@ -1539,14 +1125,14 @@ async def test_runtime_wait_and_job_wait_wake_early_with_pending_question(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_job_answer_errors(tmp_path) -> None:
+async def test_answer_errors(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     config_path = home / "config.toml"
     config_path.write_text(_serve_config(), encoding="utf-8")
     runtime = Runtime(load_config(config_path))
     try:
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-running",
             project_id=project.id,
@@ -1554,7 +1140,7 @@ async def test_job_answer_errors(tmp_path) -> None:
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         runtime.database.create_job(
             job_id="job-succeeded",
@@ -1563,7 +1149,7 @@ async def test_job_answer_errors(tmp_path) -> None:
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-running'")
@@ -1576,31 +1162,31 @@ async def test_job_answer_errors(tmp_path) -> None:
 
         # 1. Unknown job -> unknown_job error
         with pytest.raises(RefractError) as exc_info:
-            await job_answer("job-nonexistent", "ans", ctx)
+            await answer("job-nonexistent", "ans", ctx)
         assert exc_info.value.code == "unknown_job"
 
         # 2. Terminal job -> invalid_state error
         with pytest.raises(RefractError) as exc_info:
-            await job_answer("job-succeeded", "ans", ctx)
+            await answer("job-succeeded", "ans", ctx)
         assert exc_info.value.code == "invalid_state"
 
         # 3. Running job with no question pending -> invalid_state error
         with pytest.raises(RefractError) as exc_info:
-            await job_answer("job-running", "ans", ctx)
+            await answer("job-running", "ans", ctx)
         assert exc_info.value.code == "invalid_state"
     finally:
         runtime.database.close()
 
 
 @pytest.mark.asyncio
-async def test_job_wait_nonterminal_without_question(tmp_path) -> None:
+async def test_wait_nonterminal_without_question(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     config_path = home / "config.toml"
     config_path.write_text(_serve_config(), encoding="utf-8")
     runtime = Runtime(load_config(config_path))
     try:
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-running-no-q",
             project_id=project.id,
@@ -1608,7 +1194,7 @@ async def test_job_wait_nonterminal_without_question(tmp_path) -> None:
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-running-no-q'")
@@ -1618,20 +1204,19 @@ async def test_job_wait_nonterminal_without_question(tmp_path) -> None:
             report_progress=lambda **kwargs: asyncio.sleep(0),
         )
 
-        res_str = await job_wait("job-running-no-q", ctx, timeout_s=0)
+        res_str = await wait("job-running-no-q", ctx, timeout_s=0)
         res = json.loads(res_str)
         assert res["job"]["state"] == "running"
-        assert res["result"] == {"text": "", "error": "", "next_offset": None}
-        assert "pending_question" not in res["result"]
-        assert res["next_action"] == "Call job_wait again with the same job_id."
+        assert res["result"]["text"] == "" and res["result"]["truncated"] is False
+        assert res["result"]["pending_question"] is None
     finally:
         runtime.database.close()
 
 
 @pytest.mark.asyncio
-async def test_connected_client_job_answer_and_wait(tmp_path, monkeypatch) -> None:
+async def test_connected_client_answer_and_wait(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-client-test",
             project_id=project.id,
@@ -1639,7 +1224,7 @@ async def test_connected_client_job_answer_and_wait(tmp_path, monkeypatch) -> No
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-client-test'")
@@ -1652,15 +1237,15 @@ async def test_connected_client_job_answer_and_wait(tmp_path, monkeypatch) -> No
 
         task = asyncio.create_task(_ask_later())
 
-        # job_wait wakes early
-        wait_res = await client.call_tool("job_wait", {"job_id": "job-client-test", "timeout_s": 10})
+        # wait wakes early
+        wait_res = await client.call_tool("wait", {"job_id": "job-client-test", "timeout_s": 10})
         assert not wait_res.is_error
         wait_data = json.loads(wait_res.content[0].text)
         assert wait_data["job"]["state"] == "running"
         assert wait_data["result"]["pending_question"]["text"] == "Question via client"
 
-        # job_answer delivers
-        ans_res = await client.call_tool("job_answer", {"job_id": "job-client-test", "answer": "Answer via client"})
+        # answer delivers
+        ans_res = await client.call_tool("answer", {"job_id": "job-client-test", "answer": "Answer via client"})
         assert not ans_res.is_error
         ans_data = json.loads(ans_res.content[0].text)
         assert ans_data["job"]["id"] == "job-client-test"
@@ -1670,9 +1255,9 @@ async def test_connected_client_job_answer_and_wait(tmp_path, monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_job_answer_bounds_and_unicode_acceptance(tmp_path, monkeypatch) -> None:
+async def test_answer_bounds_and_unicode_acceptance(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-bounds-test",
             project_id=project.id,
@@ -1680,7 +1265,7 @@ async def test_job_answer_bounds_and_unicode_acceptance(tmp_path, monkeypatch) -
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-bounds-test'")
@@ -1700,7 +1285,7 @@ async def test_job_answer_bounds_and_unicode_acceptance(tmp_path, monkeypatch) -
         assert runtime.ask_registry.has_pending("job-bounds-test")
 
         # 2. MCP client rejection for answer > 8192 chars
-        mcp_res = await client.call_tool("job_answer", {"job_id": "job-bounds-test", "answer": oversized})
+        mcp_res = await client.call_tool("answer", {"job_id": "job-bounds-test", "answer": oversized})
         assert mcp_res.is_error
         err_payload = json.loads(mcp_res.content[0].text)
         assert err_payload["code"] == "invalid_request"
@@ -1716,14 +1301,14 @@ async def test_job_answer_bounds_and_unicode_acceptance(tmp_path, monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_job_wait_oversized_pending_question_raises_response_too_large(tmp_path) -> None:
+async def test_wait_oversized_pending_question_raises_response_too_large(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     config_path = home / "config.toml"
     config_path.write_text(_serve_config(), encoding="utf-8")
     runtime = Runtime(load_config(config_path))
     try:
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-oversized-q",
             project_id=project.id,
@@ -1731,7 +1316,7 @@ async def test_job_wait_oversized_pending_question_raises_response_too_large(tmp
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-oversized-q'")
@@ -1748,14 +1333,14 @@ async def test_job_wait_oversized_pending_question_raises_response_too_large(tmp
             report_progress=lambda **kwargs: asyncio.sleep(0),
         )
         with pytest.raises(RefractError) as exc_info:
-            await job_wait("job-oversized-q", ctx, timeout_s=0)
+            await wait("job-oversized-q", ctx, timeout_s=0)
         assert exc_info.value.code == "response_too_large"
     finally:
         runtime.database.close()
 
 
 @pytest.mark.asyncio
-async def test_real_asgi_ask_and_mcp_job_wait_job_answer_integration(tmp_path, monkeypatch) -> None:
+async def test_real_asgi_ask_and_mcp_wait_answer_integration(tmp_path, monkeypatch) -> None:
     from starlette.applications import Starlette
     from refract.dashboard import register_dashboard_routes
 
@@ -1768,7 +1353,7 @@ async def test_real_asgi_ask_and_mcp_job_wait_job_answer_integration(tmp_path, m
         dash_state.runtime = runtime
         app = Starlette(routes=register_dashboard_routes(dash_state))
 
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-asgi-1",
             project_id=project.id,
@@ -1776,7 +1361,7 @@ async def test_real_asgi_ask_and_mcp_job_wait_job_answer_integration(tmp_path, m
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-asgi-1'")
@@ -1814,15 +1399,15 @@ async def test_real_asgi_ask_and_mcp_job_wait_job_answer_integration(tmp_path, m
         }
         asgi_task = asyncio.create_task(app(scope, receive, send))
 
-        # 2. Call job_wait via MCP -> wakes early with pending_question
-        wait_res = await client.call_tool("job_wait", {"job_id": "job-asgi-1", "timeout_s": 15})
+        # 2. Call wait via MCP -> wakes early with pending_question
+        wait_res = await client.call_tool("wait", {"job_id": "job-asgi-1", "timeout_s": 15})
         assert not wait_res.is_error
         wait_data = json.loads(wait_res.content[0].text)
         assert wait_data["job"]["state"] == "running"
         assert wait_data["result"]["pending_question"]["text"] == "Need ASGI confirmation?"
 
-        # 3. Call job_answer via MCP -> delivers answer
-        ans_res = await client.call_tool("job_answer", {"job_id": "job-asgi-1", "answer": "Confirmed via MCP"})
+        # 3. Call answer via MCP -> delivers answer
+        ans_res = await client.call_tool("answer", {"job_id": "job-asgi-1", "answer": "Confirmed via MCP"})
         assert not ans_res.is_error
         ans_data = json.loads(ans_res.content[0].text)
         assert ans_data["job"]["id"] == "job-asgi-1"
@@ -1843,7 +1428,7 @@ async def test_runtime_wait_scheduler_exception_and_task_cleanup(tmp_path) -> No
     config_path.write_text(_serve_config(), encoding="utf-8")
     runtime = Runtime(load_config(config_path))
     try:
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-err-1",
             project_id=project.id,
@@ -1851,7 +1436,7 @@ async def test_runtime_wait_scheduler_exception_and_task_cleanup(tmp_path) -> No
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-err-1'")
@@ -1879,7 +1464,7 @@ async def test_runtime_wait_indefinite_on_timeout_zero_until_question(tmp_path) 
     config_path.write_text(_serve_config(), encoding="utf-8")
     runtime = Runtime(load_config(config_path))
     try:
-        project = register_project(runtime, str(tmp_path), "test-proj")
+        project = register_project(runtime, str(tmp_path))
         runtime.database.create_job(
             job_id="job-t0-1",
             project_id=project.id,
@@ -1887,7 +1472,7 @@ async def test_runtime_wait_indefinite_on_timeout_zero_until_question(tmp_path) 
             profile="balanced",
             prompt="Do work",
             execution_plan_json="{}",
-            context_key="c1",
+            session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-t0-1'")
@@ -1938,298 +1523,13 @@ async def test_question_waiter_cleanup_on_timeout_and_cancellation(tmp_path) -> 
 
 
 @pytest.mark.asyncio
-async def test_job_wait_running_returns_persisted_synthetic_telemetry(tmp_path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    config_path = home / "config.toml"
-    config_path.write_text(_serve_config(), encoding="utf-8")
-    runtime = Runtime(load_config(config_path))
-    try:
-        project = register_project(runtime, str(tmp_path), "test-proj")
-        runtime.database.create_job(
-            job_id="job-running-tel",
-            project_id=project.id,
-            workflow="consult",
-            profile="balanced",
-            prompt="Do work",
-            execution_plan_json="{}",
-            context_key="c1",
-        )
-        with runtime.database._connection:
-            runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-running-tel'")
-
-        synthetic_telemetry = {
-            "version": 1,
-            "completeness": "complete",
-            "context_used_tokens": {"value": 1500, "source": "provider", "quality": "reported"},
-            "context_window_size": {"value": 8000, "source": "provider", "quality": "reported"},
-            "total_input_tokens": {"value": 300, "source": "provider", "quality": "reported"},
-            "total_output_tokens": {"value": 100, "source": "provider", "quality": "reported"},
-        }
-        runtime.database.merge_job_telemetry("job-running-tel", synthetic_telemetry)
-
-        ctx = SimpleNamespace(
-            request_context=SimpleNamespace(lifespan_context=runtime),
-            report_progress=lambda **kwargs: asyncio.sleep(0),
-        )
-
-        res_str = await job_wait("job-running-tel", ctx, timeout_s=0)
-        res = json.loads(res_str)
-        assert res["job"]["state"] == "running"
-        assert "metadata" in res["result"]
-        tel = res["result"]["metadata"]["telemetry"]
-        assert tel["context_used_tokens"]["value"] == 1500
-        assert tel["total_input_tokens"]["value"] == 300
-    finally:
-        runtime.database.close()
-
-
-@pytest.mark.asyncio
-async def test_job_wait_paginated_retains_identical_telemetry(tmp_path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    config_path = home / "config.toml"
-    config_path.write_text(_serve_config(), encoding="utf-8")
-    runtime = Runtime(load_config(config_path))
-    try:
-        project = register_project(runtime, str(tmp_path), "test-proj")
-        long_text = "word " * 15000  # large enough to paginate across multiple pages
-        runtime.database.create_job(
-            job_id="job-paged-tel",
-            project_id=project.id,
-            workflow="consult",
-            profile="balanced",
-            prompt="Do work",
-            execution_plan_json="{}",
-            context_key="c1",
-        )
-        synthetic_telemetry = {
-            "completeness": "complete",
-            "context_used_tokens": {"value": 2500, "source": "provider", "quality": "reported", "observed_at": "2026-01-01T00:00:00Z"},
-            "total_input_tokens": {"value": 600, "source": "provider", "quality": "reported", "observed_at": "2026-01-01T00:00:00Z"},
-        }
-        runtime.database.finish_job(
-            "job-paged-tel",
-            "succeeded",
-            text=long_text,
-            metadata={"telemetry": synthetic_telemetry},
-        )
-
-        ctx = SimpleNamespace(
-            request_context=SimpleNamespace(lifespan_context=runtime),
-            report_progress=lambda **kwargs: asyncio.sleep(0),
-        )
-
-        page1_str = await job_wait("job-paged-tel", ctx, timeout_s=0, result_offset=0)
-        page1 = json.loads(page1_str)
-        next_offset = page1["result"]["next_offset"]
-        assert next_offset is not None
-        assert page1["result"]["metadata"]["telemetry"]["context_used_tokens"]["value"] == 2500
-
-        page2_str = await job_wait("job-paged-tel", ctx, timeout_s=0, result_offset=next_offset)
-        page2 = json.loads(page2_str)
-        assert page2["result"]["metadata"]["telemetry"]["context_used_tokens"]["value"] == 2500
-        assert page1["result"]["metadata"]["telemetry"] == page2["result"]["metadata"]["telemetry"]
-    finally:
-        runtime.database.close()
-
-
-@pytest.mark.asyncio
-async def test_job_report_error_mcp_validation_and_acknowledgement(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        project = register_project(runtime, str(tmp_path), "test-proj")
-        runtime.database.create_job(
-            job_id="job-rep-1",
-            project_id=project.id,
-            workflow="consult",
-            profile="balanced",
-            prompt="Hello",
-            execution_plan_json="{}",
-            context_key="k1",
-        )
-
-        # Missing required parameter -> invalid_request
-        bad_args = await client.call_tool(
-            "job_report_error",
-            {"job_id": "job-rep-1", "category": "protocol"},
-        )
-        assert bad_args.is_error
-        bad_payload = json.loads(bad_args.content[0].text)
-        assert bad_payload["code"] == "invalid_request"
-
-        # Extra parameter -> invalid_request
-        extra_args = await client.call_tool(
-            "job_report_error",
-            {
-                "job_id": "job-rep-1",
-                "category": "protocol",
-                "expected": "exp",
-                "observed": "obs",
-                "report_key": "k-1",
-                "extra": "forbidden",
-            },
-        )
-        assert extra_args.is_error
-        extra_payload = json.loads(extra_args.content[0].text)
-        assert extra_payload["code"] == "invalid_request"
-
-        # Valid call returns compact acknowledgement without summaries
-        res = await client.call_tool(
-            "job_report_error",
-            {
-                "job_id": "job-rep-1",
-                "category": "protocol",
-                "expected": "Expected behavior Bearer secret-123",
-                "observed": "Observed behavior sk-456",
-                "report_key": "k-1",
-            },
-        )
-        assert not res.is_error
-        data = json.loads(res.content[0].text)
-        assert data["duplicate"] is False
-        assert set(data) == {"report", "duplicate", "retry"}
-        assert data["retry"] == {"retryable": False, "next_target": None}
-        assert set(data["report"]) == {"id", "job_id", "category", "created_at"}
-        assert "expected" not in data["report"]
-        assert "observed" not in data["report"]
-        assert "secret-123" not in res.content[0].text
-        assert "sk-456" not in res.content[0].text
-
-        # Duplicate delivery
-        dup_res = await client.call_tool(
-            "job_report_error",
-            {
-                "job_id": "job-rep-1",
-                "category": "protocol",
-                "expected": "Expected behavior Bearer secret-123",
-                "observed": "Observed behavior sk-456",
-                "report_key": "k-1",
-            },
-        )
-        assert not dup_res.is_error
-        dup_data = json.loads(dup_res.content[0].text)
-        assert dup_data["duplicate"] is True
-        assert dup_data["report"]["id"] == data["report"]["id"]
-
-        # Unknown job
-        unk_res = await client.call_tool(
-            "job_report_error",
-            {
-                "job_id": "job-missing",
-                "category": "protocol",
-                "expected": "exp",
-                "observed": "obs",
-                "report_key": "k-2",
-            },
-        )
-        assert unk_res.is_error
-        unk_payload = json.loads(unk_res.content[0].text)
-        assert unk_payload["code"] == "unknown_job"
-
-
-@pytest.mark.asyncio
-async def test_job_report_error_mcp_serializes_eligible_output_recovery(tmp_path, monkeypatch) -> None:
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        config_path = runtime.catalog.config_path
-        config_path.write_text('''[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "a"\nbackend = "codex"\n\n[[targets]]\nid = "b"\nbackend = "claude"\n\n[profiles.balanced]\nconsult = ["a", "b"]\nreview = ["a", "b"]\n''', encoding="utf-8")
-        runtime.publish_configuration()
-        project = register_project(runtime, str(tmp_path), "eligible-proj")
-        runtime.database.create_job(job_id="mcp-output", project_id=project.id, workflow="consult", profile="balanced", prompt="x", execution_plan_json="{}", context_key="mcp-output")
-        runtime.database.finish_job("mcp-output", "succeeded", target_id="a", text="private result")
-        args = {"job_id": "mcp-output", "category": "output", "expected": "private expected", "observed": "private observed", "report_key": "mcp-output-key"}
-        response = await client.call_tool("job_report_error", args)
-        assert not response.is_error
-        payload = json.loads(response.content[0].text)
-        assert set(payload) == {"report", "duplicate", "retry"}
-        assert payload["retry"]["retryable"] is True
-        assert payload["retry"]["next_target"].startswith("nt_")
-        assert payload["duplicate"] is False
-        assert "project_id" not in payload and "private expected" not in response.content[0].text
-        assert "private observed" not in response.content[0].text and "private result" not in response.content[0].text
-        duplicate = await client.call_tool("job_report_error", args)
-        dup_payload = json.loads(duplicate.content[0].text)
-        assert dup_payload["duplicate"] is True
-        assert dup_payload["report"]["id"] == payload["report"]["id"]
-        assert dup_payload["retry"] == payload["retry"]
-
-
-@pytest.mark.asyncio
-async def test_job_report_error_logging_behavior(tmp_path, monkeypatch, caplog) -> None:
-    import logging
-
-    async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        project = register_project(runtime, str(tmp_path), "test-proj")
-        runtime.database.create_job(
-            job_id="job-log-1",
-            project_id=project.id,
-            workflow="consult",
-            profile="balanced",
-            prompt="Hello",
-            execution_plan_json="{}",
-            context_key="k1",
-        )
-
-        with caplog.at_level(logging.INFO, logger="refract.server"):
-            res1 = await client.call_tool(
-                "job_report_error",
-                {
-                    "job_id": "job-log-1",
-                    "category": "protocol",
-                    "expected": "Expected behavior",
-                    "observed": "Observed behavior",
-                    "report_key": "log-key-1",
-                },
-            )
-            assert not res1.is_error
-
-            records = [
-                r
-                for r in caplog.records
-                if getattr(r, "event", "") == "job.error_reported"
-            ]
-            assert len(records) == 1
-            rec = records[0]
-            assert rec.report_id
-            assert rec.job_id == "job-log-1"
-            assert rec.project_id == project.id
-            assert rec.category == "protocol"
-            assert "Expected behavior" not in rec.getMessage()
-            assert "Expected behavior" not in str(rec.__dict__)
-            assert "Observed behavior" not in rec.getMessage()
-            assert "Observed behavior" not in str(rec.__dict__)
-            assert "log-key-1" not in rec.getMessage()
-            assert "log-key-1" not in str(rec.__dict__)
-
-            # Second call (duplicate delivery): no second job.error_reported log!
-            res2 = await client.call_tool(
-                "job_report_error",
-                {
-                    "job_id": "job-log-1",
-                    "category": "protocol",
-                    "expected": "Expected behavior",
-                    "observed": "Observed behavior",
-                    "report_key": "log-key-1",
-                },
-            )
-            assert not res2.is_error
-            records2 = [
-                r
-                for r in caplog.records
-                if getattr(r, "event", "") == "job.error_reported"
-            ]
-            assert len(records2) == 1
-
-
-@pytest.mark.asyncio
-async def test_server_task_guide_recovery_string_names_config_toml(tmp_path, monkeypatch) -> None:
+async def test_list_recovery_string_names_config_toml(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "proj"
         root.mkdir()
-        resolve = await client.call_tool("project_resolve", {"path": str(root), "alias": "p"})
-        assert not resolve.is_error
-        project_id = json.loads(resolve.content[0].text)["project"]["id"]
+        git(root, "init", "-q")
         (runtime.config.home / "task_guide.json").write_text("{invalid", encoding="utf-8")
-        response = await client.call_tool("task_guide", {"project_id": project_id})
+        response = await client.call_tool("list", {"path": str(root)})
         assert response.is_error
         payload = json.loads(response.content[0].text)
         assert payload["code"] == "config_invalid"

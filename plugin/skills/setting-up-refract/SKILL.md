@@ -21,14 +21,14 @@ answers.
 - Write only targets for backends the scan found.
 - Back up an existing config to `config.toml.bak-<YYYYMMDD>` before any write,
   and show the full new file for approval first.
-- Keep credentials in each CLI's own login or in `[envs.<name>]`.
+- Keep credentials in each CLI's own login or in the target `env` table.
 
 ## Workflow
 
 Each step ends on its stated completion criterion.
 
 1. **State.** Check for an existing config, a Refract checkout, and a
-   reachable daemon: the `project_resolve` tool responds. Done when each is
+   reachable daemon: `list(path)` on the current Git root responds. Done when each is
    recorded as present or absent. With an existing config, ask: extend it,
    replace it, or stop.
 2. **Scan.** Run every detect command in `backends.md`, then `--version` on
@@ -62,18 +62,18 @@ Each step ends on its stated completion criterion.
    named target or path and rerun.
 9. **Serve.** Ask before starting `uv run refract serve` as a background
    process. For a non-default host or port, the user exports `REFRACT_URL`
-   before restarting the client. Done when `project_resolve` on the current
-   Git root succeeds and `task_guide` lists the configured profiles.
+   before restarting the client. Done when `list(path)` on the current Git
+   root succeeds and lists the configured profiles.
 
 ## Edge Cases
 
-- **Per-project override.** The user wants a different default profile for
-  one repository: write `.refract/config.toml` there with `default_profile`
-  and optional `[profiles.*]`. Project `[[targets]]` entries may only overlay
-  `id`, `envs_vars`, and `envs` of existing global targets.
+- **Per-project override.** The user wants different routing for one
+  repository: write `.refract/config.toml` there with `[profiles.*]` and pass
+  that `profile` on `submit`. Project `[[targets]]` entries may only merge
+  `env` into existing global targets, named by `id`.
 - **Doctor config error.** `refract doctor` prints `Configuration error:`:
   fix the named key and rerun step 8.
 - **Daemon already running.** It reloads targets and profiles on the next
   tool call after the file changes; skip step 9 and confirm with
-  `task_guide`. A `[daemon]` host or port change needs a restart: ask first,
+  `list(path)`. A `[daemon]` host or port change needs a restart: ask first,
   since active jobs would be interrupted.

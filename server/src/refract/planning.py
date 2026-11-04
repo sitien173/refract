@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import Any, Literal, Mapping
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from refract.config import (
     DaemonConfig,
@@ -36,8 +35,12 @@ def _target_identity_data(target: TargetConfig) -> dict[str, Any]:
 
 def _target_data(target: TargetConfig) -> dict[str, Any]:
     value = _target_identity_data(target)
-    if target.retry_policy:
-        value["retry_policy"] = target.retry_policy
+    if target.retry != RetryPolicy():
+        value["retry"] = {
+            "attempts": target.retry.attempts,
+            "codes": list(target.retry.codes),
+            "patterns": list(target.retry.patterns),
+        }
     if target.context_window is not None:
         value["context_window"] = target.context_window
     return value
@@ -71,6 +74,26 @@ def _parse_selection(value: Any) -> TargetSelection:
     return TargetSelection(target_ids, timeout_s)
 
 
+def _parse_retry(raw: Any) -> RetryPolicy:
+    if raw is None:
+        return RetryPolicy()
+    attempts = raw.get("attempts", 0) if isinstance(raw, dict) else None
+    codes = raw.get("codes", []) if isinstance(raw, dict) else None
+    patterns = raw.get("patterns", []) if isinstance(raw, dict) else None
+    if (
+        not isinstance(raw, dict)
+        or set(raw) - {"attempts", "codes", "patterns"}
+        or isinstance(attempts, bool)
+        or not isinstance(attempts, int)
+        or attempts < 0
+        or not isinstance(codes, list)
+        or not isinstance(patterns, list)
+        or not all(isinstance(item, str) and item for item in [*codes, *patterns])
+    ):
+        raise ValueError("Execution plan target has invalid retry settings")
+    return RetryPolicy(attempts, tuple(codes), tuple(patterns))
+
+
 def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
     if not isinstance(raw, list):
         raise ValueError("Execution plan targets must be a list")
@@ -87,19 +110,11 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
             read_only = value.get("read_only", False)
             text_values = (
                 value.get("model", ""),
-                value.get("backend_profile", value.get("profile", "")),
+                value.get("backend_profile", ""),
                 value.get("reasoning", ""),
                 value.get("system_prompt", ""),
             )
-            if (
-                "retry" in value
-                or "retryAttempt" in value
-                or "retry_attempt" in value
-            ):
-                raise ValueError("Execution plan target cannot declare inline retry settings")
-            if "retryPolicy" in value:
-                raise ValueError("Execution plan target has unsupported settings")
-            raw_retry_policy = value.get("retry_policy", "")
+            retry = _parse_retry(value.get("retry"))
             context_window = value.get("context_window")
             if (
                 context_window is not None
@@ -118,7 +133,6 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
                 or not isinstance(isolated, bool)
                 or not isinstance(read_only, bool)
                 or not all(isinstance(item, str) for item in text_values)
-                or not isinstance(raw_retry_policy, str)
             ):
                 raise ValueError
             validate_target_args(
@@ -136,8 +150,8 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
                     read_only=read_only,
                     args=tuple(args),
                     max_concurrency=max_concurrency,
-                    retry_policy=raw_retry_policy,
                     context_window=context_window,
+                    retry=retry,
                 )
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -153,97 +167,10 @@ class ExecutionPlan:
     workflow: str
     selection: TargetSelection
     targets: tuple[TargetConfig, ...]
-    retry_policies: Mapping[str, RetryPolicy] = field(default_factory=dict)
     environment_targets: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "retry_policies",
-            MappingProxyType(dict(self.retry_policies)),
-        )
 
     def target(self, target_id: str) -> TargetConfig:
         return next(target for target in self.targets if target.id == target_id)
-
-    def retry_policy(self, target_id: str) -> RetryPolicy:
-        target = self.target(target_id)
-        if not target.retry_policy:
-            return RetryPolicy()
-        if target.retry_policy not in self.retry_policies:
-            raise ValueError(
-                f"Execution plan target {target.id!r} references unknown retry policy: {target.retry_policy!r}"
-            )
-        return self.retry_policies[target.retry_policy]
-
-
-def _retry_policy_data(policy: RetryPolicy) -> dict[str, Any]:
-    return {
-        "retry_attempt": policy.retry_attempt,
-        "error_codes": list(policy.error_codes),
-        "error_patterns": list(policy.error_patterns),
-    }
-
-
-def _parse_retry_policies(
-    raw: Any, targets: tuple[TargetConfig, ...]
-) -> dict[str, RetryPolicy]:
-    if not isinstance(raw, dict):
-        raise ValueError("Execution plan retry_policies must be a mapping")
-    policies: dict[str, RetryPolicy] = {}
-    allowed = {
-        "retry_attempt",
-        "error_codes",
-        "error_patterns",
-    }
-    for name, val in raw.items():
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError(
-                "Execution plan retry policy name must be a non-empty string"
-            )
-        if not isinstance(val, dict):
-            raise ValueError(
-                f"Execution plan retry policy {name!r} must be a mapping"
-            )
-        unknown = set(val) - allowed
-        if unknown:
-            raise ValueError(
-                f"Execution plan retry policy {name!r} has unsupported settings"
-            )
-        raw_attempt = val.get("retry_attempt", 0)
-        if (
-            isinstance(raw_attempt, bool)
-            or not isinstance(raw_attempt, int)
-            or raw_attempt < 0
-        ):
-            raise ValueError(
-                f"Execution plan retry policy {name!r} retryAttempt must be a non-negative integer"
-            )
-        raw_codes = val.get("error_codes", [])
-        if not isinstance(raw_codes, list) or not all(
-            isinstance(x, str) and x for x in raw_codes
-        ):
-            raise ValueError(
-                f"Execution plan retry policy {name!r} errorCodes must be a list of non-empty strings"
-            )
-        raw_patterns = val.get("error_patterns", [])
-        if not isinstance(raw_patterns, list) or not all(
-            isinstance(x, str) and x for x in raw_patterns
-        ):
-            raise ValueError(
-                f"Execution plan retry policy {name!r} errorPatterns must be a list of non-empty strings"
-            )
-        policies[name] = RetryPolicy(
-            retry_attempt=raw_attempt,
-            error_codes=tuple(raw_codes),
-            error_patterns=tuple(raw_patterns),
-        )
-    for target in targets:
-        if target.retry_policy and target.retry_policy not in policies:
-            raise ValueError(
-                f"Execution plan target {target.id!r} references unknown retry policy: {target.retry_policy!r}"
-            )
-    return policies
 
 
 def execution_plan_data(plan: ExecutionPlan) -> dict[str, Any]:
@@ -255,11 +182,6 @@ def execution_plan_data(plan: ExecutionPlan) -> dict[str, Any]:
     }
     if plan.environment_targets:
         data["environment_targets"] = list(plan.environment_targets)
-    if plan.retry_policies:
-        data["retry_policies"] = {
-            name: _retry_policy_data(policy)
-            for name, policy in sorted(plan.retry_policies.items())
-        }
     return data
 
 
@@ -273,13 +195,6 @@ def parse_execution_plan(data: Any) -> ExecutionPlan:
     targets = _parse_targets(data.get("targets"))
     if set(selection.targets) - {target.id for target in targets}:
         raise ValueError("Execution plan references unknown targets")
-    if "retry_policies" in data:
-        raw_policies = data["retry_policies"]
-        if not isinstance(raw_policies, dict):
-            raise ValueError("Execution plan retry_policies must be a mapping")
-    else:
-        raw_policies = {}
-    retry_policies = _parse_retry_policies(raw_policies, targets)
     raw_environment_targets = data.get("environment_targets", [])
     if (
         not isinstance(raw_environment_targets, list)
@@ -293,7 +208,6 @@ def parse_execution_plan(data: Any) -> ExecutionPlan:
         workflow,
         selection,
         targets,
-        retry_policies,
         tuple(raw_environment_targets),
     )
 
@@ -311,21 +225,12 @@ def resolve_execution_plan(
         raise ValueError(f"Profile {profile!r} does not map workflow {workflow!r}")
     target_by_id = {target.id: target for target in config.targets}
     targets = tuple(target_by_id[value] for value in selection.targets)
-    retry_policies: dict[str, RetryPolicy] = {}
-    for target in targets:
-        if target.retry_policy:
-            if target.retry_policy not in config.retry_policies:
-                raise ValueError(
-                    f"Profile target {target.id!r} references unknown retry policy: {target.retry_policy!r}"
-                )
-            retry_policies[target.retry_policy] = config.retry_policies[target.retry_policy]
     return ExecutionPlan(
         profile,
         workflow,
         selection,
         targets,
-        retry_policies,
-        tuple(target.id for target in targets if target.envs_vars or target.envs),
+        tuple(target.id for target in targets if target.env),
     )
 
 
@@ -334,31 +239,10 @@ def target_execution_key(target: TargetConfig) -> str:
     return f"{target.id}:{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 
-def next_target_token(
-    config_revision: str, project_id: str, profile: str, workflow: str, target: TargetConfig
-) -> str:
-    value = json.dumps(
-        [config_revision, project_id, profile, workflow, target_execution_key(target)],
-        separators=(",", ":"),
-    )
-    return "nt_" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
-
-
-def resolve_next_target(
-    token: str, config_revision: str, project_id: str, plan: ExecutionPlan
-) -> TargetConfig | None:
-    for target in plan.targets:
-        if token == next_target_token(config_revision, project_id, plan.profile, plan.workflow, target):
-            return target
-    return None
-
-
 __all__ = [
     "ExecutionPlan",
     "execution_plan_data",
     "parse_execution_plan",
     "resolve_execution_plan",
     "target_execution_key",
-    "next_target_token",
-    "resolve_next_target",
 ]

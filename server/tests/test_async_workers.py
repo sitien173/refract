@@ -9,8 +9,9 @@ from refract.config import load_config
 from refract.database import Database
 from refract.drivers import DriverResult
 from refract.runtime import Runtime
-from refract.server import job_list, job_wait, project_resolve, task_guide
+from refract.server import list_jobs, submit, wait
 from refract.workers import run_sync
+from tests.orchestration_helpers import git
 
 
 @pytest.mark.asyncio
@@ -28,6 +29,7 @@ consult = ["a"]
     (runtime.config.home / "task_guide.json").write_text('{"recommendations": []}')
     root = tmp_path / "project"
     root.mkdir()
+    git(root, "init", "-q")
     loop_thread = threading.get_ident()
     connection = Database._connection.fget
 
@@ -59,13 +61,12 @@ consult = ["a"]
     try:
         await runtime.start()
         assert probes == ["a"]
-        project = json.loads(await project_resolve(str(root), ctx))["project"]
-        assert json.loads(await task_guide(project["id"], ctx))["profiles"]["default"] == "test"
-        submitted = await runtime.submit(project["id"], "consult", "hello")
-        completed = await runtime.wait(submitted.job_id, 5)
+        assert json.loads(await list_jobs(str(root), ctx))["profiles"]["default"] == "test"
+        submitted = json.loads(await submit(str(root), "consult", "hello", ctx))["job"]
+        completed = await runtime.wait(submitted["id"], 5)
         assert completed.state == "succeeded"
-        assert json.loads(await job_wait(submitted.job_id, ctx))["result"]["text"] == "done"
-        assert json.loads(await job_list(project["id"], ctx))["recent"][0]["id"] == submitted.job_id
+        assert json.loads(await wait(submitted["id"], ctx))["result"]["text"] == "done"
+        assert json.loads(await list_jobs(str(root), ctx))["recent"][0]["id"] == submitted["id"]
     finally:
         await runtime.close()
 

@@ -1,88 +1,38 @@
-"""Safe, in-process dashboard HTTP endpoints."""
+"""Loopback-only dashboard pages and coordinator question endpoint."""
 
 from __future__ import annotations
 
-import asyncio
+import functools
 import ipaddress
 import inspect
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from datetime import datetime, timezone
+from html import escape
+from importlib import resources
 from typing import Any, Awaitable, Callable, cast
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from starlette.routing import Mount, Route
-from starlette.staticfiles import StaticFiles
+from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.routing import Route
 
 from refract.ask import AskAuthError, AskConflictError
-from refract.config import DaemonConfig, ProfileDeclaration, TargetSelection
-from refract.config_inspection import sanitize_config_error
-from refract.models import (
-    DashboardError,
-    DashboardJob,
-    DashboardOverview,
-    JobOutputResponse,
-    JobResult,
-    StreamStatus,
-    TERMINAL_STATES,
-)
-from refract.planning import parse_execution_plan
-from refract.workflows import BUILTIN_WORKFLOWS
+from refract.models import TERMINAL_STATES
 from refract.workers import run_sync
-
-
-_STATIC_DIR = Path(__file__).parent / "dashboard_static"
-_REFRACT_DIR = ".refract"
-_UNKNOWN_PROJECT = "Unknown project"
-SSE_KEEPALIVE_INTERVAL_S: float = 20.0
 
 
 @dataclass
 class DashboardState:
-    """Application-owned state shared by dashboard routes and MCP lifespan."""
-
     runtime: Any = None
 
 
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, DashboardJob):
-        data = value.model_dump(mode="json", exclude={"result"})
-        data["result"] = value.result.model_dump(mode="json")
-        return data
-    if isinstance(value, JobResult):
-        return value.model_dump(mode="json")
-    if hasattr(value, "model_dump"):
-        return _jsonable(value.model_dump(mode="json", exclude_none=True))
-    if isinstance(value, dict):
-        return {key: _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    return value
-
-
 def _json_response(value: Any, status_code: int = 200) -> Response:
-    return JSONResponse(_jsonable(value), status_code=status_code)
+    return JSONResponse(value, status_code=status_code)
 
 
-def _error(
-    message: str,
-    status_code: int,
-    *,
-    code: str = "",
-    unchanged: str = "",
-    recovery: str = "",
-) -> Response:
-    return _json_response(
-        DashboardError(
-            error=message,
-            code=code,
-            unchanged=unchanged,
-            recovery=recovery,
-        ),
-        status_code,
-    )
+def _error(message: str, status_code: int, *, code: str = "", unchanged: str = "", recovery: str = "") -> Response:
+    return _json_response({"error": message, "code": code, "unchanged": unchanged, "recovery": recovery}, status_code)
 
 
 def _runtime(state: DashboardState) -> Any:
@@ -98,225 +48,6 @@ def _runtime_error() -> Response:
         code="runtime_unavailable",
         unchanged="No dashboard data was changed.",
         recovery="Retry after the daemon has started.",
-    )
-
-
-def _selection_data(selection: TargetSelection) -> dict[str, Any]:
-    return {
-        "targets": list(selection.targets),
-        "timeout_s": selection.timeout_s,
-    }
-
-
-def _declaration_data(declaration: ProfileDeclaration | None) -> dict[str, Any] | None:
-    if declaration is None:
-        return None
-    return {
-        "extends": declaration.extends,
-        "workflows": {
-            workflow: _selection_data(selection)
-            for workflow, selection in sorted(declaration.workflows.items())
-        },
-    }
-
-
-def _profile_config_data(global_catalog: DaemonConfig, project_catalog: DaemonConfig) -> dict[str, Any]:
-    global_declarations = global_catalog.profile_declarations
-    merged_declarations = project_catalog.profile_declarations
-    project_declarations = project_catalog.project_profile_declarations
-    profile_ids = sorted(
-        set(global_catalog.profiles)
-        | set(project_catalog.profiles)
-        | set(global_declarations)
-        | set(merged_declarations)
-    )
-    profiles: list[dict[str, Any]] = []
-    for profile_id in profile_ids:
-        global_declaration = global_declarations.get(profile_id)
-        project_declaration = project_declarations.get(profile_id)
-        global_workflows = (
-            set(global_declaration.workflows) if global_declaration else set()
-        )
-        project_workflows = (
-            set(project_declaration.workflows) if project_declaration else set()
-        )
-        effective = project_catalog.profiles.get(profile_id, {})
-        declared = {
-            **(
-                {
-                    workflow: {
-                        "selection": _selection_data(selection),
-                        "source": "global",
-                    }
-                    for workflow, selection in global_declaration.workflows.items()
-                }
-                if global_declaration
-                else {}
-            ),
-            **(
-                {
-                    workflow: {
-                        "selection": _selection_data(selection),
-                        "source": "project",
-                    }
-                    for workflow, selection in project_declaration.workflows.items()
-                }
-                if project_declaration
-                else {}
-            ),
-        }
-        inherited = {
-            workflow: _selection_data(selection)
-            for workflow, selection in effective.items()
-            if workflow not in project_workflows
-            and (project_declaration is not None or workflow not in global_workflows)
-        }
-        def workflow_source(
-            current_profile: str,
-            workflow: str,
-            seen: set[str] | None = None,
-        ) -> str:
-            seen = set() if seen is None else seen
-            if current_profile in seen:
-                return "global"
-            seen.add(current_profile)
-            current_project = project_declarations.get(current_profile)
-            current_global = global_declarations.get(current_profile)
-            if current_project and workflow in current_project.workflows:
-                return "project"
-            if current_global and workflow in current_global.workflows:
-                return "global"
-            parent = (
-                current_project.extends
-                if current_project and current_project.extends
-                else current_global.extends
-                if current_global
-                else None
-            )
-            return (
-                workflow_source(parent, workflow, seen)
-                if parent
-                else "global"
-            )
-
-        sources = {
-            workflow: workflow_source(profile_id, workflow)
-            for workflow in effective
-        }
-        profiles.append(
-            {
-                "id": profile_id,
-                "parent": {
-                    "value": (
-                        project_declaration.extends
-                        if project_declaration is not None
-                        else global_declaration.extends
-                        if global_declaration
-                        else None
-                    ),
-                    "source": "project" if project_declaration else "global",
-                },
-                "declared": declared,
-                "inherited": inherited,
-                "effective": {
-                    workflow: _selection_data(selection)
-                    for workflow, selection in sorted(effective.items())
-                },
-                "sources": sources,
-            }
-        )
-    return {
-        "global_default_profile": global_catalog.default_profile,
-        "project_default_profile": project_catalog.default_profile,
-        "profiles": profiles,
-    }
-
-
-def _safe_execution_plan(raw: Any) -> dict[str, Any]:
-    """Allow-list the plan fields useful to operators; omit all other fields."""
-    try:
-        plan = parse_execution_plan(raw)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
-    return {
-        "profile": plan.profile,
-        "workflow": plan.workflow,
-        "selection": _selection_data(plan.selection),
-        "targets": [
-            {
-                "id": target.id,
-                "backend": target.backend,
-                "model": target.model,
-                "isolated": target.isolated,
-                "read_only": target.read_only,
-                "max_concurrency": target.max_concurrency,
-                "contextWindow": target.context_window,
-            }
-            for target in plan.targets
-        ],
-    }
-
-
-def _settings_payload(runtime: Any) -> dict[str, Any]:
-    cfg = runtime.catalog
-    logging = cfg.logging
-    return {
-        "source_path": cfg.config_path.as_posix() if cfg.config_path else "",
-        "revision": cfg.config_revision,
-        "daemon": {
-            "host": cfg.host,
-            "port": cfg.port,
-            "max_jobs": cfg.max_jobs,
-            "history_turns": cfg.history_turns,
-            "history_bytes": cfg.history_bytes,
-            "default_profile": cfg.default_profile,
-        },
-        "logging": {
-            "level": logging.level,
-            "format": logging.format,
-            "file": logging.file.as_posix() if logging.file else False,
-            "console": logging.console,
-            "max_bytes": logging.max_bytes,
-            "backup_count": logging.backup_count,
-            "capture_warnings": logging.capture_warnings,
-        },
-    }
-
-
-def _dashboard_job(runtime: Any, job_id: str) -> DashboardJob | None:
-    record = runtime.database.job_record(job_id)
-    return None if record is None else _dashboard_job_from_record(runtime, record)
-
-
-def _dashboard_job_from_record(runtime: Any, record: dict[str, Any], diagnostic_count: int | None = None) -> DashboardJob:
-    job = runtime.database.job_view(record)
-    try:
-        raw_plan = json.loads(record.get("execution_plan_json", ""))
-    except (TypeError, json.JSONDecodeError):
-        raw_plan = None
-    if diagnostic_count is None:
-        diagnostic_count = runtime.database.diagnostic_counts([job.id]).get(job.id, 0)
-    return DashboardJob(
-        id=job.id,
-        project_id=job.project_id,
-        workflow=job.workflow,
-        profile=job.profile,
-        prompt=str(record.get("prompt") or ""),
-        state=job.state,
-        context_key=job.context_key,
-        config_revision=job.config_revision,
-        target_id=job.target_id,
-        attempts=job.attempts,
-        created_at=job.created_at,
-        updated_at=job.updated_at,
-        result=JobResult(
-            text=job.result.text,
-            error=job.result.error,
-            metadata=runtime.live_result_metadata(job),
-        ),
-        execution_plan=_safe_execution_plan(raw_plan),
-        diagnostic_count=diagnostic_count,
-        suspect=diagnostic_count > 0,
     )
 
 
@@ -373,361 +104,242 @@ def _loopback_route(path: str, endpoint: Callable[[Request], Awaitable[Response]
     return Route(path, guarded, methods=methods)
 
 
-def _register_status_routes(state: DashboardState) -> list[Route]:
-    def overview(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            daemon = runtime.status()
-            configuration = runtime.config_health
-            targets = runtime.targets()
-            return _json_response(
-                DashboardOverview(
-                    daemon=daemon,
-                    configuration=configuration,
-                    projects=len(runtime.database.projects()),
-                    unhealthy_targets=sum(not target.healthy for target in targets),
-                )
-            )
-        except RuntimeError:
-            return _runtime_error()
-
-    def settings(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        if request.method != "GET":
-            return Response(status_code=405, headers={"allow": "GET"})
-        response = _json_response(_settings_payload(runtime))
-        response.headers["cache-control"] = "no-store"
-        response.headers["etag"] = f'"{runtime.catalog.config_revision}"'
-        return response
-
-    return [
-        _loopback_route("/dashboard/api/overview", overview, methods=["GET"]),
-        _loopback_route("/dashboard/api/settings", settings, methods=["GET"]),
-    ]
+_CSS_FILES = ("tokens.css", "fonts.css", "data-table.css", "tag.css", "announcement.css")
+_JOB_LIMIT = 200
+_OUTPUT_PAGE = 500
+_STATE_TAGS = {"queued": "default", "running": "intermediate", "succeeded": "positive", "failed": "negative", "cancelled": "default", "interrupted": "negative"}
+_BREAKER_TAGS = {"closed": "positive", "half_open": "intermediate", "open": "negative"}
+_POLL_SCRIPT = r"""<script>
+(() => {
+  const output = document.getElementById("output");
+  const state = document.getElementById("state");
+  let after = Number(output.dataset.after);
+  async function poll() {
+    try {
+      const response = await fetch(`${output.dataset.url}?after=${after}`);
+      if (!response.ok) return;
+      const payload = await response.json();
+      for (const event of payload.events) {
+        output.append(`#${event.seq} ${event.kind} ${JSON.stringify(event.data ?? {})}\n`);
+      }
+      after = payload.next;
+      state.textContent = payload.state;
+      if (payload.terminal) {
+        location.reload();
+        return;
+      }
+    } catch (error) {
+      // Keep polling through transient network errors.
+    }
+    setTimeout(poll, 1000);
+  }
+  poll();
+})();
+</script>"""
 
 
-def _register_catalog_routes(state: DashboardState) -> list[Route]:
-    def targets(request: Request) -> Response:
-        try:
-            return _json_response(_runtime(state).targets())
-        except RuntimeError:
-            return _runtime_error()
-
-    async def profiles(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            return _json_response(
-                {
-                    "default": runtime.catalog.default_profile,
-                    "available": sorted(runtime.catalog.profiles),
-                    "profiles": _profile_config_data(runtime.catalog, runtime.catalog)["profiles"],
-                }
-            )
-        except RuntimeError:
-            return _runtime_error()
-
-    return [
-        _loopback_route("/dashboard/api/targets", targets, methods=["GET"]),
-        _loopback_route("/dashboard/api/profiles", profiles, methods=["GET"]),
-    ]
+@functools.cache
+def _stylesheet() -> str:
+    folder = resources.files("refract") / "dashboard_static" / "tds"
+    return "\n".join((folder / name).read_text(encoding="utf-8") for name in _CSS_FILES)
 
 
-def _register_project_routes(state: DashboardState) -> list[Route]:
-    def projects(request: Request) -> Response:
-        try:
-            return _json_response(_runtime(state).database.projects())
-        except RuntimeError:
-            return _runtime_error()
-
-    def project(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            project_view = runtime.database.project(request.path_params["project_id"])
-            if project_view is None:
-                return _error(_UNKNOWN_PROJECT, 404, code="not_found")
-            catalog = runtime.catalog_for_project_cached(project_view.id)
-            return _json_response(
-                {
-                    "project": project_view,
-                    "configuration": _profile_config_data(runtime.catalog, catalog),
-                }
-            )
-        except RuntimeError:
-            return _runtime_error()
-        except (ValueError, KeyError) as exc:
-            return _error(
-                sanitize_config_error(exc),
-                422,
-                code="configuration_invalid",
-                unchanged="No configuration file was changed.",
-                recovery="Fix the project configuration file and retry.",
-            )
-
-    return [
-        _loopback_route("/dashboard/api/projects", projects, methods=["GET"]),
-        _loopback_route("/dashboard/api/projects/{project_id}", project, methods=["GET"]),
-    ]
-
-
-def _register_diagnostics_routes(state: DashboardState) -> list[Route]:
-    def diagnostics(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-        except RuntimeError:
-            return _runtime_error()
-        allowed = {"project_id", "job_id", "category", "before", "limit"}
-        if set(request.query_params.keys()) - allowed or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params.keys()):
-            return _error("Invalid diagnostics query parameters", 400, code="bad_request")
-        project_id = request.query_params.get("project_id", "")
-        job_id = request.query_params.get("job_id", "")
-        category = request.query_params.get("category", "")
-        if any(key in request.query_params and not request.query_params[key]
-               for key in ("project_id", "job_id", "category")):
-            return _error("Diagnostics filters must not be empty", 400, code="bad_request")
-        if category and category not in {"protocol", "output"}:
-            return _error("Invalid diagnostics category", 400, code="bad_request")
-        before_raw = request.query_params.get("before")
-        limit_raw = request.query_params.get("limit", "50")
-        if not limit_raw.isascii() or not limit_raw.isdecimal():
-            return _error("Invalid diagnostics limit", 400, code="bad_request")
-        normalized_limit = limit_raw.lstrip("0")
-        if not normalized_limit or len(normalized_limit) > 3:
-            return _error("Invalid diagnostics limit", 400, code="bad_request")
-        limit = int(normalized_limit)
-        if not 1 <= limit <= 100:
-            return _error("Invalid diagnostics limit", 400, code="bad_request")
-        before = None
-        if before_raw is not None:
-            if not before_raw.isascii() or not before_raw.isdecimal():
-                return _error("Invalid diagnostics cursor", 400, code="bad_request")
-            normalized_before = before_raw.lstrip("0")
-            max_cursor = "9223372036854775807"
-            if (not normalized_before or len(normalized_before) > len(max_cursor)
-                    or (len(normalized_before) == len(max_cursor) and normalized_before > max_cursor)):
-                return _error("Invalid diagnostics cursor", 400, code="bad_request")
-            before = int(normalized_before)
-        if project_id:
-            project = runtime.database.project(project_id)
-            if project is None:
-                return _error(_UNKNOWN_PROJECT, 404, code="not_found")
-            project_id = project.id
-        if job_id and runtime.database.job(job_id) is None:
-            return _error("Unknown job", 404, code="not_found")
-        rows = runtime.database.diagnostic_reports(
-            project_id=project_id, job_id=job_id, category=category,
-            before=before, limit=limit,
-        )
-        has_more = len(rows) > limit
-        reports = rows[:limit]
-        return _json_response({"reports": reports, "next_before": reports[-1]["id"] if has_more and reports else None})
-
-    return [_loopback_route("/dashboard/api/diagnostics", diagnostics, methods=["GET"])]
-
-
-def _register_job_routes(state: DashboardState) -> list[Route]:
-    def project_jobs(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            project_id = request.path_params["project_id"]
-            project_view = runtime.database.project(project_id)
-            if project_view is None:
-                return _error(_UNKNOWN_PROJECT, 404, code="not_found")
-            active, recent, more_recent = runtime.database.job_listing(project_view.id)
-            counts = runtime.database.diagnostic_counts([record["id"] for record in (*active, *recent)])
-            return _json_response({
-                "active": [_dashboard_job_from_record(runtime, record, counts.get(record["id"], 0)) for record in active],
-                "recent": [_dashboard_job_from_record(runtime, record, counts.get(record["id"], 0)) for record in recent],
-                "more_recent": more_recent,
-            })
-        except RuntimeError:
-            return _runtime_error()
-
-    def job(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            value = _dashboard_job(runtime, request.path_params["job_id"])
-            if value is None:
-                return _error("Unknown job", 404, code="not_found")
-            return _json_response(value)
-        except RuntimeError:
-            return _runtime_error()
-
-    return [
-        _loopback_route("/dashboard/api/projects/{project_id}/jobs", project_jobs, methods=["GET"]),
-        _loopback_route("/dashboard/api/jobs/{job_id}", job, methods=["GET"]),
-    ]
-
-
-def _job_stream_status(metadata: dict[str, Any], state: str) -> StreamStatus:
-    if metadata["failed"]:
-        return "failed"
-    if metadata["truncated"]:
-        return "truncated"
-    if state not in TERMINAL_STATES:
-        return "active"
-    if metadata["retained_from"] <= 0:
-        return "unavailable"
-    return "complete"
-
-
-def _output_update(cursor: int) -> bytes:
-    return (
-        f"event: output-updated\n"
-        f"id: {cursor}\n"
-        f"data: {json.dumps({'cursor': cursor})}\n\n"
-    ).encode("utf-8")
-
-
-async def _stream_output_updates(request: Request, runtime: Any, job_id: str, queue: Any, last_sent: int):
-    while True:
-        current = await run_sync(runtime.database.job, job_id)
-        if current is None or current.state in TERMINAL_STATES:
-            final_cursor = await run_sync(runtime.database.stream_high_water, job_id)
-            if final_cursor > last_sent:
-                yield _output_update(final_cursor)
-            break
-        if await request.is_disconnected():
-            break
-        try:
-            cursor = await asyncio.wait_for(
-                queue.get(), timeout=SSE_KEEPALIVE_INTERVAL_S
-            )
-            if cursor > last_sent:
-                last_sent = cursor
-                yield _output_update(cursor)
-        except asyncio.TimeoutError:
-            yield b": keepalive\n\n"
-
-
-async def _job_output_events(request: Request, runtime: Any, job_id: str):
-    queue = runtime.stream_hub.subscribe(job_id)
-    try:
-        initial_hw = await run_sync(runtime.database.stream_high_water, job_id)
-        yield _output_update(initial_hw)
-        async for event in _stream_output_updates(request, runtime, job_id, queue, initial_hw):
-            yield event
-    finally:
-        runtime.stream_hub.unsubscribe(job_id, queue)
-
-
-def _register_job_output_routes(state: DashboardState) -> list[Route]:
-    def job_output(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            job_id = request.path_params["job_id"]
-            job = runtime.database.job(job_id)
-            if job is None:
-                return _error("Unknown job", 404, code="not_found")
-            try:
-                after = max(0, int(request.query_params.get("after", 0)))
-            except (ValueError, TypeError):
-                after = 0
-            try:
-                limit = int(request.query_params.get("limit", 100))
-            except (ValueError, TypeError):
-                limit = 100
-            safe_limit = max(1, min(limit, 500))
-
-            metadata = runtime.database.stream_metadata(job_id)
-            high_water = metadata["high_water"]
-            retained_from = metadata["retained_from"]
-            events = runtime.database.stream_events(job_id, after=after, limit=safe_limit)
-
-            stream_status = _job_stream_status(metadata, job.state)
-
-            cursor = events[-1].id if events else after
-            has_more = bool(events and events[-1].id < high_water)
-
-            return _json_response(
-                JobOutputResponse(
-                    events=events,
-                    cursor=cursor,
-                    has_more=has_more,
-                    retained_from=retained_from,
-                    stream_status=stream_status,
-                )
-            )
-        except RuntimeError:
-            return _runtime_error()
-
-    async def job_output_updates(request: Request) -> Response:
-        try:
-            runtime = _runtime(state)
-            job_id = request.path_params["job_id"]
-            job = await run_sync(runtime.database.job, job_id)
-            if job is None:
-                return _error("Unknown job", 404, code="not_found")
-
-            response = StreamingResponse(
-                _job_output_events(request, runtime, job_id),
-                media_type="text/event-stream",
-            )
-            response.headers["Cache-Control"] = "no-cache"
-            response.headers["Connection"] = "keep-alive"
-            response.headers["X-Accel-Buffering"] = "no"
-            return response
-        except RuntimeError:
-            return _runtime_error()
-
-    return [
-        _loopback_route("/dashboard/api/jobs/{job_id}/output", job_output, methods=["GET"]),
-        _loopback_route("/dashboard/api/jobs/{job_id}/output/updates", job_output_updates, methods=["GET"]),
-    ]
-
-
-def _register_asset_routes() -> list[Route]:
-    async def api_not_found(request: Request) -> Response:
-        return _error(
-            "Dashboard API route not found",
-            404,
-            code="not_found",
-            unchanged="No dashboard data was changed.",
-            recovery="Check the dashboard API path and try again.",
-        )
-
-    async def dashboard_index(request: Request) -> Response:
-        index_file = _STATIC_DIR / "index.html"
-        if not index_file.is_file():
-            return _error(
-                "Dashboard assets are unavailable",
-                503,
-                code="dashboard_unavailable",
-                unchanged="The MCP transport and dashboard API remain available.",
-                recovery="Build the frontend assets and restart the daemon.",
-            )
-        response = FileResponse(index_file, media_type="text/html")
-        response.headers["cache-control"] = "no-store"
-        return response
-
-    async def dashboard_deep_link(request: Request) -> Response:
-        return await dashboard_index(request)
-
-    async def missing_asset(request: Request) -> Response:
-        return Response(status_code=404)
-
-    asset_directory = _STATIC_DIR / "assets"
-    asset_route = (
-        Mount(
-            "/dashboard/assets",
-            app=StaticFiles(directory=str(asset_directory)),
-            name="dashboard_assets",
-        )
-        if asset_directory.is_dir()
-        else Route("/dashboard/assets/{path:path}", missing_asset, methods=["GET"])
+def _page(title: str, body: str, *, script: str = "", status_code: int = 200) -> Response:
+    return HTMLResponse(
+        f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{escape(title)} - Refract</title>'
+        f"<style>{_stylesheet()}</style></head><body>"
+        '<nav><a href="/dashboard">Jobs</a><a href="/dashboard/targets">Targets</a></nav>'
+        f"<main>{body}</main>{script}</body></html>",
+        status_code=status_code,
     )
 
-    return [
-        _loopback_route("/dashboard/api", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
-        _loopback_route("/dashboard/api/{path:path}", api_not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
-        _loopback_route("/dashboard/assets", missing_asset, methods=["GET"]),
-        asset_route,
-        _loopback_route("/dashboard", dashboard_index, methods=["GET"]),
-        _loopback_route("/dashboard/", dashboard_index, methods=["GET"]),
-        _loopback_route("/dashboard/{path:path}", dashboard_deep_link, methods=["GET"]),
+
+def _tag(text: str, variant: str, *, element_id: str = "") -> str:
+    id_attribute = f' id="{element_id}"' if element_id else ""
+    return f'<span{id_attribute} class="tds-tag tds-tag--md tds-tag--{variant}">{escape(text)}</span>'
+
+
+def _table(title: str, headers: tuple[str, ...], rows: list[list[str]]) -> str:
+    """Render a TDS data table; ``rows`` holds cells that are already escaped HTML."""
+    head = "".join(f"<th>{escape(header)}</th>" for header in headers)
+    body = "".join("<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>" for row in rows)
+    return (
+        '<div class="tds-data-table-container"><div class="tds-data-table__header"><div class="tds-data-table__header-text">'
+        f'<div class="tds-data-table__header-title">{escape(title)}</div></div></div>'
+        f'<div class="tds-data-table__wrapper"><table class="tds-data-table"><thead><tr>{head}</tr></thead>'
+        f"<tbody>{body}</tbody></table></div></div>"
+    )
+
+
+def _age(timestamp: str) -> str:
+    try:
+        created = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return ""
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    seconds = max(0, int((datetime.now(timezone.utc) - created).total_seconds()))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+def _job_href(job_id: str) -> str:
+    return f"/dashboard/jobs/{quote(job_id, safe='')}"
+
+
+def _events(database: Any, job_id: str, after: int) -> list[dict[str, Any]]:
+    """Read stream events after ``after``; an event's seq is its line number in the stream file."""
+    try:
+        with database.stream_path(job_id).open(encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        return []
+    events: list[dict[str, Any]] = []
+    for seq, line in enumerate(lines, 1):
+        if not line.endswith("\n") or len(events) >= _OUTPUT_PAGE:
+            break
+        if seq <= after:
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = {"kind": "invalid", "data": {}}
+        events.append({**event, "seq": seq})
+    return events
+
+
+def _event_line(event: dict[str, Any]) -> str:
+    data = json.dumps(event.get("data") or {}, ensure_ascii=False, separators=(",", ":"))
+    return f"#{event['seq']} {event.get('kind', '')} {data}\n"
+
+
+def _job_list(runtime: Any) -> Response:
+    database = runtime.database
+    roots = {}
+    jobs = []
+    for project in database.projects():
+        roots[project.id] = project.root
+        jobs.extend(database.jobs(project.id))
+    jobs.sort(key=lambda job: job.created_at, reverse=True)
+    rows = [
+        [
+            f'<a href="{escape(_job_href(job.id))}">{escape(job.id)}</a>',
+            _tag(job.state, _STATE_TAGS.get(job.state, "default")),
+            escape(roots.get(job.project_id, job.project_id)),
+            escape(job.workflow),
+            escape(job.target_id),
+            escape(_age(job.created_at)),
+        ]
+        for job in jobs[:_JOB_LIMIT]
     ]
+    return _page("Jobs", _table("Jobs", ("Job", "State", "Project", "Workflow", "Target", "Age"), rows))
+
+
+def _job_detail(runtime: Any, job_id: str) -> Response:
+    database = runtime.database
+    job = database.job(job_id)
+    record = database.job_record(job_id)
+    if job is None or record is None:
+        return _page("Job not found", f"<h1>Job {escape(job_id)} was not found</h1>", status_code=404)
+    result = job.result
+    fields = [
+        ("Project", job.project_id), ("Workflow", job.workflow), ("Profile", job.profile), ("Target", job.target_id),
+        ("Session", job.session), ("Retry of", job.retry_of), ("Created", job.created_at), ("Updated", job.updated_at),
+        ("Model", result.model or ""), ("Duration ms", "" if result.duration_ms is None else str(result.duration_ms)),
+        ("Failure kind", result.failure_kind or ""),
+        *((name, "" if value is None else str(value)) for name, value in (result.tokens or {}).items()),
+    ]
+    metadata = _table("Metadata", ("Field", "Value"), [[escape(name), escape(value)] for name, value in fields if value])
+    events = _events(database, job_id, 0)
+    active = job.state not in TERMINAL_STATES
+    output_url = escape(f"{_job_href(job_id)}/output")
+    body = (
+        f"<h1>Job {escape(job_id)} {_tag(job.state, _STATE_TAGS.get(job.state, 'default'), element_id='state')}</h1>"
+        f"{metadata}"
+        f"<section><h2>Prompt</h2><pre>{escape(str(record.get('prompt', '')))}</pre></section>"
+        + (f"<section><h2>Result</h2><pre>{escape(result.text)}</pre></section>" if result.text else "")
+        + (f"<section><h2>Error</h2><pre>{escape(result.error)}</pre></section>" if result.error else "")
+        + f'<section><h2>Output</h2><pre id="output" data-url="{output_url}" data-after="{events[-1]["seq"] if events else 0}">'
+        f"{escape(''.join(_event_line(event) for event in events))}</pre></section>"
+    )
+    return _page(f"Job {job_id}", body, script=_POLL_SCRIPT if active else "")
+
+
+def _job_output(runtime: Any, job_id: str, after_value: str) -> Response:
+    job = runtime.database.job(job_id)
+    if job is None:
+        return _error("Job not found", 404, code="unknown_job")
+    try:
+        after = int(after_value)
+    except ValueError:
+        after = -1
+    if after < 0:
+        return _error("after must be a non-negative integer", 400, code="bad_request")
+    events = _events(runtime.database, job_id, after)
+    return _json_response({
+        "events": events,
+        "next": events[-1]["seq"] if events else after,
+        "state": job.state,
+        "terminal": job.state in TERMINAL_STATES,
+    })
+
+
+def _targets(runtime: Any) -> Response:
+    rows = [
+        [
+            escape(target.id), escape(target.backend), escape(target.model),
+            _tag(target.breaker_state.replace("_", " "), _BREAKER_TAGS.get(target.breaker_state, "default")),
+            escape(target.circuit_open_until), escape(str(target.cooldown_s)),
+            escape(f"{target.active}/{target.max_concurrency}"), "yes" if target.probing else "no",
+        ]
+        for target in runtime.targets()
+    ]
+    health = runtime.config_health()
+    if health.valid:
+        config = f"<p>Configuration is valid. Source: {escape(health.source_path)}. Revision: {escape(health.revision)}.</p>"
+    else:
+        config = (
+            '<div class="tds-announcement tds-announcement--error" role="alert"><div class="tds-announcement__content">'
+            '<p class="tds-announcement__title">Configuration error</p>'
+            f'<p class="tds-announcement__message">{escape(health.latest_error or "Configuration is not loaded.")}</p>'
+            f'<p class="tds-announcement__message">Source: {escape(health.source_path)}</p></div></div>'
+        )
+    table = _table(
+        "Targets", ("Target", "Backend", "Model", "Circuit", "Open until", "Cooldown s", "Active", "Probing"), rows,
+    )
+    return _page("Targets", f"<section><h2>Configuration</h2>{config}</section>{table}")
+
+
+def _register_page_routes(state: DashboardState) -> list[Route]:
+    def guarded_runtime(render: Callable[..., Response]) -> Callable[[Request], Response]:
+        def endpoint(request: Request) -> Response:
+            try:
+                runtime = _runtime(state)
+            except RuntimeError:
+                return _runtime_error()
+            return render(runtime, request)
+
+        return endpoint
+
+    return [
+        _loopback_route("/dashboard", guarded_runtime(lambda runtime, _: _job_list(runtime)), methods=["GET"]),
+        _loopback_route("/dashboard/targets", guarded_runtime(lambda runtime, _: _targets(runtime)), methods=["GET"]),
+        _loopback_route(
+            "/dashboard/jobs/{job_id}",
+            guarded_runtime(lambda runtime, request: _job_detail(runtime, request.path_params["job_id"])),
+            methods=["GET"],
+        ),
+        _loopback_route(
+            "/dashboard/jobs/{job_id}/output",
+            guarded_runtime(lambda runtime, request: _job_output(
+                runtime, request.path_params["job_id"], request.query_params.get("after", "0"),
+            )),
+            methods=["GET"],
+        ),
+    ]
+
 
 
 def _register_ask_routes(state: DashboardState) -> list[Route]:
@@ -789,17 +401,9 @@ def _register_ask_routes(state: DashboardState) -> list[Route]:
     ]
 
 
+
 def register_dashboard_routes(state: DashboardState) -> list[Route]:
-    return [
-        *_register_ask_routes(state),
-        *_register_status_routes(state),
-        *_register_catalog_routes(state),
-        *_register_project_routes(state),
-        *_register_diagnostics_routes(state),
-        *_register_job_routes(state),
-        *_register_job_output_routes(state),
-        *_register_asset_routes(),
-    ]
+    return [*_register_page_routes(state), *_register_ask_routes(state)]
 
 
 __all__ = ["DashboardState", "register_dashboard_routes"]

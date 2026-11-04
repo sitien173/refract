@@ -1,11 +1,11 @@
 # Refract 2.4.0
 
-Refract combines a Claude Code, Codex, Pi, and Antigravity CLI plugin with a local MCP orchestration server and read-only dashboard. The plugin coordinates planning, implementation, and review. The server runs durable jobs through installed coding-agent CLIs.
+Refract combines a Claude Code, Codex, Pi, and Antigravity CLI plugin with a local MCP orchestration server. The plugin coordinates planning, implementation, and review. The server runs durable jobs through installed coding-agent CLIs.
 
 ## Repository layout
 
 - `plugin/` contains manifests, commands, skills, hooks, shared contracts, and tests.
-- `server/` contains the Python MCP server and read-only dashboard.
+- `server/` contains the Python MCP server.
 - `docs/diagrams/` contains editable diagrams and exported images.
 
 ## Install
@@ -37,7 +37,7 @@ uv run refract serve
 
 These steps document a manual migration from the prior product state. They have not been run by this plan.
 
-Renaming files does not upgrade the database schema. This server accepts schema 16. Fresh databases initialize directly to schema 16. On startup, the server automatically upgrades schema 15 databases. Read-only preflight checks reject unsupported schemas (<15 or >16) before writes. Preflight also rejects malformed JSON and invalid recognized metadata before writes. Any later migration failure triggers an atomic transaction rollback. Stop the daemon and back up the full state directory including sidecars. Downgrade requires restoring this pre-upgrade backup; older binaries reject schema 16. Raw historical counters are deleted during migration, not normalized. Server, plugin, and read-only dashboard must deploy together as a unit. Select another state directory with `REFRACT_HOME` to start fresh without deleting history.
+Renaming files does not carry job history into v3. This server uses schema 18 and does not migrate older databases. On startup, a database with any other older schema is renamed to `refract.db.v2.bak`, together with its `-wal` and `-shm` sidecars, and a fresh schema 18 database is created. No data is deleted. If a `.v2.bak` file already exists, startup stops and the database is not modified; move the old backup away first. A database with a schema newer than 18 is refused and left unchanged. To return to the prior version, stop the daemon and restore the `.v2.bak` files under their original names. Select another state directory with `REFRACT_HOME` to start fresh without touching the old one.
 
 1. Stop the daemon. Back up the complete state directory, including SQLite sidecars.
 2. Move the state directory, then rename files matching `openmcp.db*` to `refract.db*` and `openmcp.log*` to `refract.log*` inside `~/.refract`. Preserve each file's suffix, including SQLite sidecars.
@@ -55,6 +55,37 @@ Renaming files does not upgrade the database schema. This server accepts schema 
 
 5. Rename `OPENMCP_*` environment variables to `REFRACT_*`.
 6. In Claude settings, replace the `superpowers-ccg` marketplace and plugin with `refract`. Update permission entries containing `mcp__plugin_superpowers-ccg_openmcp__*` or `.openmcp`.
+
+## Migrating config to v3
+
+The v3 server loads one flat snake_case config. A removed key fails the load with `<key> has been removed` and, where one exists, the replacement. Rewrite each removed key as listed:
+
+| Removed key | Replacement |
+|---|---|
+| `[langfuse]` | removed, no replacement |
+| `[daemon].history_turns` | removed, no replacement |
+| `[daemon].history_bytes` | removed, no replacement |
+| `[retryPolicies]` | use targets[].retry |
+| `targets[].retryPolicy` | use targets[].retry |
+| `[envs]` | use targets[].env |
+| `targets[].envs_vars` | use targets[].env |
+| `targets[].envs` | use targets[].env |
+| `targets[].contextWindow` | use targets[].context_window |
+| `targets[].profile` | use targets[].backend_profile |
+| `profiles workflow max_attempts` | use targets[].retry.attempts |
+| `${NAME} in targets[].env` | write the literal value |
+| `[project]` | pass profile on submit |
+| `[logging].format` | removed, no replacement |
+| `[logging].console` | removed, no replacement |
+| `[logging].capture_warnings` | removed, no replacement |
+
+- A named retry policy becomes an inline table on each target that used it: `retry = { attempts = 2, codes = ["rate_limit"], patterns = ["temporarily unavailable"] }`. The old `retryAttempt`, `errorCodes` and `errorPatterns` become `attempts`, `codes` and `patterns`.
+- Shared env sets are gone. Copy the values each target selected into its own `env` table. Write template values out literally; the daemon environment is already inherited.
+- A project `.refract/config.toml` may hold only `[profiles.<name>]` entries and `[[targets]]` entries with `id` and `env`. Pass the project profile on `submit` instead of setting a project default.
+- Logs are text only. The `REFRACT_LOG_FORMAT`, `REFRACT_LOG_CONSOLE` and `REFRACT_LOG_CAPTURE_WARNINGS` variables and the `--log-format` and `--log-console` flags are gone.
+- Unknown keys also fail the load, so a typo is reported instead of ignored.
+
+[`server/config.v3.toml`](server/config.v3.toml) is a complete v3 example.
 
 ## Lineage
 

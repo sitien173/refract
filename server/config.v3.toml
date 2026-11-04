@@ -1,0 +1,65 @@
+# Refract v3 example config. Copy to ~/.refract/config.toml and edit.
+# Every value below is a placeholder. Do not commit real credentials.
+
+[daemon]
+host = "127.0.0.1"
+port = 8765
+max_jobs = 4
+default_profile = "base"
+breaker_failure_threshold = 3
+breaker_base_cooldown_s = 60
+breaker_max_cooldown_s = 900
+ask_timeout_s = 300
+
+[logging]
+level = "INFO"
+file = "refract.log"
+max_bytes = 10485760
+backup_count = 5
+
+[notifications]
+enabled = false
+
+[[targets]]
+id = "codex-high-code"
+backend = "codex"
+model = "gpt-5.6-sol"
+backend_profile = "work"
+reasoning = "high"
+max_concurrency = 2
+context_window = 400000
+args = ["--color", "never"]
+retry = { attempts = 2, codes = ["rate_limit"], patterns = ["temporarily unavailable"] }
+env = { OPENAI_BASE_URL = "https://api.example.invalid/v1" }
+
+[[targets]]
+id = "pi-high-review"
+backend = "pi"
+model = "openai-codex/gpt-5.6-luna"
+reasoning = "high"
+isolated = true
+read_only = true
+system_prompt = "Review only. Never modify files."
+retry = { attempts = 1 }
+
+[[targets]]
+id = "claude-opus-code"
+backend = "claude"
+model = "opus"
+reasoning = "high"
+isolated = true
+env = { ANTHROPIC_API_KEY = "replace-me" }
+
+[[targets]]
+id = "agy-gemini-consult"
+backend = "agy"
+model = "Gemini 3.1 Pro (High)"
+
+[profiles.base]
+implement = "codex-high-code"
+review = ["pi-high-review", "claude-opus-code"]
+consult = { targets = ["agy-gemini-consult", "pi-high-review"], timeout_s = 1800 }
+
+[profiles.claude_impl]
+extends = "base"
+implement = "claude-opus-code"

@@ -1,11 +1,10 @@
-"""Claude Code-oriented MCP v2 tools for durable Refract jobs."""
+"""MCP tools for durable Refract jobs."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import inspect
 import secrets
 import time
 from importlib.metadata import version as package_version
@@ -24,12 +23,10 @@ from pydantic import Field, ValidationError
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from refract.config import DaemonConfig, load_config, load_task_guide
+from refract.config import DaemonConfig, load_config, load_guidance
 from refract.dashboard import DashboardState, register_dashboard_routes
 from refract.logging_setup import configure as configure_logging, get_logger, log_context
 from refract.models import JobSummary, JobView, TERMINAL_STATES
-from refract.observability import record_tool_observation
-from refract.result_metadata import JobResultMetadata
 from refract.workers import run_sync
 from refract.runtime import OrchestrationError, Runtime
 from refract.workflows import BUILTIN_WORKFLOWS
@@ -40,16 +37,11 @@ _MCP_WAIT_TIMEOUT_S = 3600
 _MCP_HEARTBEAT_INTERVAL_S: float = 30.0
 _MAX_RESPONSE_CHARS = 30_000
 _MAX_RESPONSE_BYTES = 9_000
-_MAX_RESULT_PAGE = 24_000
-_FORBIDDEN_OUTPUT_KEYS = frozenset(
-    {"target_id", "backend", "model", "resource_uri", "config_revision"}
-)
-_ERROR_FIELDS = frozenset({"code", "message", "next_action", "retryable"})
+_ERROR_FIELDS = frozenset({"code", "message", "next_action"})
 _ERROR_CODES = frozenset(
     {
         "unknown_project",
         "invalid_path",
-        "alias_taken",
         "unknown_job",
         "unknown_profile",
         "invalid_state",
@@ -79,13 +71,11 @@ class RefractError(ToolError):
         code: str,
         message: str,
         next_action: str,
-        retryable: bool = False,
         retry_after_s: int | None = None,
     ) -> None:
         self.code = code if code in _ERROR_CODES else "internal_error"
         self.message = message
         self.next_action = next_action
-        self.retryable = bool(retryable)
         self.retry_after_s = retry_after_s if self.code == "targets_unavailable" else None
         super().__init__(self.to_json())
 
@@ -94,37 +84,17 @@ class RefractError(ToolError):
             "code": self.code,
             "message": self.message,
             "next_action": self.next_action,
-            "retryable": self.retryable,
         }
         if self.code == "targets_unavailable" and self.retry_after_s is not None:
             payload["retry_after_s"] = self.retry_after_s
         return payload
 
     def to_json(self) -> str:
-        return json.dumps(self.to_payload(), ensure_ascii=False, separators=(",", ":"))
+        return _json(self.to_payload())
 
 
-def _public_data(value: Any) -> Any:
-    """Remove daemon/provider identity fields recursively from MCP payloads."""
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(mode="json")
-    if isinstance(value, Mapping):
-        public: dict[str, Any] = {}
-        for key, item in value.items():
-            name = str(key)
-            if name.casefold() in _FORBIDDEN_OUTPUT_KEYS:
-                continue
-            if name == "metadata":
-                try:
-                    public[name] = JobResultMetadata.model_validate(item).model_dump(mode="json")
-                except Exception:
-                    public[name] = _public_data(item)
-            else:
-                public[name] = _public_data(item)
-        return public
-    if isinstance(value, (list, tuple)):
-        return [_public_data(item) for item in value]
-    return value
+def _json(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _result_envelope_json(text: str, *, is_error: bool = False) -> str:
@@ -160,7 +130,7 @@ def _render_payload(
     *,
     applied: tuple[str, str, str] | None = None,
 ) -> str:
-    text = json.dumps(_public_data(payload), ensure_ascii=False, separators=(",", ":"))
+    text = _json(payload)
     if _fits_response(text):
         return text
     if applied is None:
@@ -177,67 +147,6 @@ def _render_payload(
     )
 
 
-def _public_terminal_error(job: JobView) -> str:
-    detail = job.result.error
-    if not detail:
-        return ""
-    if job.state in {"cancelled", "interrupted"}:
-        cancellation_causes = {
-            "cancelled": "cancelled",
-            "cancelled before execution": "cancelled before execution",
-            "execution task cancelled": "execution task cancelled",
-        }
-        if detail in cancellation_causes:
-            return cancellation_causes[detail]
-    return "Job execution failed. Detailed diagnostics are available in the dashboard."
-
-
-def _page_terminal_result(
-    job: JobView,
-    summary: dict[str, Any],
-    offset: int,
-    *,
-    public_error: str = "",
-    metadata: Mapping[str, Any] | None = None,
-) -> str:
-    result_text = job.result.text
-    start = min(offset, len(result_text))
-    end = min(len(result_text), start + _MAX_RESULT_PAGE)
-    raw_meta = metadata if metadata is not None else job.result.metadata
-    if hasattr(raw_meta, "model_dump"):
-        raw_meta = raw_meta.model_dump(mode="json")
-    meta_dict = JobResultMetadata.model_validate(raw_meta).model_dump(mode="json")
-    while True:
-        page_text = result_text[start:end]
-        payload = {
-            "job": summary,
-            "result": {
-                "text": page_text,
-                "error": public_error,
-                "next_offset": end if end < len(result_text) else None,
-                "metadata": meta_dict,
-            },
-        }
-        serialized = json.dumps(_public_data(payload), ensure_ascii=False, separators=(",", ":"))
-        if _fits_response(serialized):
-            return serialized
-        candidate_length = end - start
-        if candidate_length <= 1:
-            raise RefractError(
-                "response_too_large",
-                f"Result metadata for job {job.id} exceeds the supported size limit.",
-                f"Use the dashboard to inspect job {job.id}; do not resubmit it.",
-            )
-        reduced_end = start + candidate_length // 2
-        if reduced_end >= end:
-            raise RefractError(
-                "response_too_large",
-                f"Result metadata for job {job.id} exceeds the supported size limit.",
-                f"Use the dashboard to inspect job {job.id}; do not resubmit it.",
-            )
-        end = reduced_end
-
-
 def _valid_refract_error(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -251,7 +160,6 @@ def _valid_refract_error(value: Any) -> dict[str, Any] | None:
         or value["code"] not in _ERROR_CODES
         or not isinstance(value["message"], str)
         or not isinstance(value["next_action"], str)
-        or type(value["retryable"]) is not bool
     ):
         return None
     return value
@@ -289,7 +197,6 @@ def _internal_error(request_id: str) -> RefractError:
         "internal_error",
         f"An unexpected internal error occurred.{request_suffix}",
         "Retry once, then report the request ID.",
-        retryable=True,
     )
 
 
@@ -350,7 +257,7 @@ def _normalize_tool_error(wire_result: Mapping[str, Any], tool_name: str, reques
             RefractError(
                 "invalid_request",
                 "The requested tool is not available.",
-                "Use one of the nine tools returned by tools/list.",
+                "Use one of the six tools returned by tools/list.",
             )
         )
     log.warning(
@@ -426,29 +333,26 @@ def _error_boundary(ctx: Any, call_next: Callable[[Any], Awaitable[Any]], schema
     """Normalize SDK validation and ToolError results into compact JSON isError results."""
     return _dispatch_tool_request(ctx, call_next, schemas)
 
-_PROJECT_RESOLVE_DESCRIPTION = "Resolve an existing Git-root directory to a stable project ID. Use once per session. path must name an existing directory. Returns {project:{id,alias,path}}. Errors: invalid_path, alias_taken."
-_TASK_GUIDE_DESCRIPTION = "Load workflow and profile choices and project guidance before submission. Returns {workflows,profiles:{default,available},guidance}. Errors: unknown_project, config_invalid, response_too_large."
-_JOB_SUBMIT_DESCRIPTION = "Queue a durable coding job. prompt must be self-contained; optionally pass next_target from a failed job's result.metadata.retry.next_target to pin to that candidate. Returns {job:summary}. Errors include targets_unavailable (retry_after_s), invalid_request, unknown_project, unknown_profile, config_invalid, daemon_stopping, response_too_large."
-_JOB_WAIT_DESCRIPTION = "Wait for or page a job result. Nonterminal timeouts are normal; repeat with the same job_id. When a running worker asks a question, wait returns early with result.pending_question. Terminal text uses Unicode character offsets. Every terminal page returns result.metadata, including grouped metadata with a live opaque retry.next_target on eligible failed or cancelled jobs. Returns {job:summary,result:{text,error,next_offset,metadata}}. Errors: unknown_job, invalid_request, response_too_large."
-_JOB_LIST_DESCRIPTION = "List all active jobs and up to 10 most recently updated terminal jobs for a project. Returns {active,recent,more_recent}. Errors: unknown_project, response_too_large."
-_JOB_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job:summary}. Errors: unknown_job, response_too_large."
-_JOB_RETRY_DESCRIPTION = "Retry a failed, cancelled, or interrupted job; all-open candidates return targets_unavailable with retry_after_s. Returns {job:summary}. Errors: unknown_job, invalid_state, targets_unavailable, response_too_large."
-_JOB_ANSWER_DESCRIPTION = "Deliver a coordinator answer (up to 8192 characters) to a running job's pending question. Returns {job:summary}. Errors: unknown_job, invalid_state, invalid_request, response_too_large."
-_JOB_REPORT_ERROR_DESCRIPTION = "Report an unexpected job protocol or output anomaly for offline investigation. Persists/deduplicates a diagnostic event without altering execution state. Successful acknowledgements return {report:{id,job_id,category,created_at},duplicate,retry:{retryable,next_target}}. Only succeeded+output may expose a live fallback token; otherwise retry is {retryable:false,next_target:null}. Tokens are response-only routing hints, not replay authorization. Errors: unknown_job, invalid_request, response_too_large."
+_SUBMIT_DESCRIPTION = "Queue a durable coding job in the Git repository that contains path. prompt must be self-contained. Returns {job}. Errors: invalid_path, invalid_request, unknown_profile, config_invalid, targets_unavailable, daemon_stopping, response_too_large."
+_WAIT_DESCRIPTION = "Wait for a job to finish or to ask a question. Nonterminal timeouts are normal; repeat with the same job_id. When a running worker asks a question, wait returns early with result.pending_question. Terminal results carry text, truncated, result_path, failure_kind, next_target, model, duration_ms, and tokens. Returns {job,result}. Errors: unknown_job, invalid_request."
+_LIST_DESCRIPTION = "List active and recent jobs for the Git repository that contains path, with its workflows, profiles, and guidance. Returns {active,recent,workflows,profiles,guidance}. Errors: invalid_path, config_invalid, response_too_large."
+_CANCEL_DESCRIPTION = "Cancel a queued or running job; terminal jobs are returned unchanged. Returns {job}. Errors: unknown_job, response_too_large."
+_RETRY_DESCRIPTION = "Create a new job from a succeeded, failed, cancelled, or interrupted job. Without target, the new job uses the next target after the source job's target in profile order; with target, that target is pinned. The source job is not changed. Returns {job} with retry_of set. Errors: unknown_job, invalid_state, invalid_request, targets_unavailable, response_too_large."
+_ANSWER_DESCRIPTION = "Deliver a coordinator answer (up to 8192 characters) to a running job's pending question. Returns {job}. Errors: unknown_job, invalid_state, invalid_request, response_too_large."
 
 
 _INSTRUCTIONS = """
 
-Standard cycle: project_resolve(path=<Git root>) -> project.id; task_guide(project_id) -> workflow/profile; job_submit(project_id, workflow, prompt, ...) -> job.id; job_wait(job_id) -> result. Prompts are self-contained. Wait up to 3600 s; read result.text and page with timeout_s=0, result_offset=<next_offset> until next_offset is null.
+Standard cycle: list(path) -> active and recent jobs, workflows, profiles, guidance; submit(path, workflow, prompt) -> job.id; wait(job_id) -> result. Prompts are self-contained. wait blocks up to 3600 s. Read result.text; when result.truncated is true, read the full text at result.result_path.
 
 Rules:
-- Nonterminal job_wait and dropped connections are normal; wait again on the same job.
-- Reuse context_key to resume; fresh_session=true starts over. On session resume, job_list(project_id) and reconcile active jobs before submission.
-- job_cancel stops queued/running work; job_retry handles eligible terminal jobs; job_answer answers result.pending_question.
-- job_report_error(job_id, category, expected, observed, report_key) records client-observed anomalies. Read every terminal page first and preserve original job/project IDs. Reports do not change execution state.
-- For failed/cancelled jobs, use result.metadata.retry.next_target in job_submit(next_target=...). Tokens are opaque/stale after config changes; result.metadata.retry.retryable indicates live routing. Inspect result.metadata.failure.kind.
-- For unusable succeeded output, use top-level acknowledgement retry.retryable/next_target from category=output reports, not job_wait metadata. Only succeeded+output can expose fallback; false/null means stop and request routing guidance. Inspect partial local and external effects before replay. If reconciled and safe, explicitly submit a new job with next_target, matching project/workflow/profile/task intent and fresh_session=true. Token is a routing hint, not replay authorization. Refresh stale tokens with the identical report request while retained; never omit next_target to restart primary. Reporting failure is not recursively reported and does not block reconciliation. job_wait remains unchanged; job_retry cannot retry succeeded jobs.
-- Wait retry_after_s on targets_unavailable. Follow error next_action."""
+- A nonterminal wait and dropped connections are normal; wait again on the same job.
+- Use session to resume a worker session; fresh=true starts a new one. After failure_kind context_overflow, submit again with fresh=true.
+- On session resume, call list(path) and reconcile active jobs before submitting.
+- When wait returns result.pending_question, call answer(job_id, answer).
+- cancel(job_id) stops queued or running work.
+- retry(job_id) creates a new job on result.next_target of a succeeded, failed, cancelled, or interrupted job. retry(job_id, target=X) pins a target.
+- On targets_unavailable, wait retry_after_s seconds before retrying. Follow each error next_action."""
 
 
 _P = ParamSpec("_P")
@@ -459,18 +363,58 @@ def _runtime(ctx: Context) -> Runtime:
     return cast(Runtime, ctx.request_context.lifespan_context)
 
 
-def _summary(job: JobView) -> dict[str, Any]:
+def _summary(job: JobView, project_root: str) -> dict[str, Any]:
     return JobSummary(
         id=job.id,
-        project_id=job.project_id,
+        project=project_root,
         workflow=job.workflow,
         profile=job.profile,
+        target=job.target_id,
+        session=job.session,
         state=job.state,
-        context_key=job.context_key,
-        attempts=job.attempts,
+        retry_of=job.retry_of,
         created_at=job.created_at,
         updated_at=job.updated_at,
     ).model_dump(mode="json")
+
+
+async def _job_payload(runtime: Runtime, job: JobView) -> dict[str, Any]:
+    project = await run_sync(runtime.database.project, job.project_id)
+    return _summary(job, project.root if project is not None else "")
+
+
+def _tokens(job: JobView) -> dict[str, int | None]:
+    return job.result.tokens or dict.fromkeys(("context_used", "context_window", "input", "output", "cache_read", "cache_write"))
+
+
+async def _wait_response(runtime: Runtime, job: JobView) -> str:
+    terminal = job.state in TERMINAL_STATES
+    pending = runtime.ask_registry.get_pending(job.id)
+    result: dict[str, Any] = {
+        "text": job.result.text if terminal else "",
+        "truncated": False,
+        "result_path": str(runtime.database.result_path(job.id)) if terminal else None,
+        "pending_question": {"question_id": pending.question_id, "text": pending.text} if pending is not None else None,
+        "failure_kind": job.result.failure_kind,
+        "next_target": await run_sync(runtime._next_target, job) if job.state in {"failed", "cancelled"} else None,
+        "model": job.result.model,
+        "duration_ms": job.result.duration_ms,
+        "tokens": _tokens(job),
+    }
+    payload = {"job": await _job_payload(runtime, job), "result": result}
+    if _fits_response(_json(payload)):
+        return _json(payload)
+    full = job.result.text
+    low, high = 0, len(full)
+    while low < high:
+        middle = (low + high + 1) // 2
+        result["text"], result["truncated"] = full[:middle], True
+        if _fits_response(_json(payload)):
+            low = middle
+        else:
+            high = middle - 1
+    result["text"], result["truncated"] = full[:low], True
+    return _render_payload(payload)
 
 
 def _progress_token_present(context: Any) -> bool:
@@ -498,19 +442,8 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
             )
             request_id = _request_id(context)
             started_at = time.monotonic()
-            observation_started_ns = time.time_ns()
             extra: dict[str, Any] = {"operation": operation}
-            bound = inspect.signature(function).bind_partial(*args, **kwargs)
-            tool_input = {key: value for key, value in bound.arguments.items() if key != "ctx"}
-            runtime = None
-            if context is not None:
-                try:
-                    runtime = context.request_context.lifespan_context
-                except Exception:
-                    pass
-            tool_tracer = getattr(runtime, "tracer", None)
-            output: Any = None
-            if operation == "job_wait":
+            if operation == "wait":
                 extra["progress_token_present"] = _progress_token_present(context)
             outcome = "failed"
             error_type = ""
@@ -518,7 +451,6 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
                 log.info("MCP tool request started", extra={**extra, "event": "mcp.request_started"})
                 try:
                     result = await function(*args, **kwargs)
-                    output = result
                     outcome = "success"
                     return result
                 except asyncio.CancelledError:
@@ -530,7 +462,7 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
                 except OrchestrationError as exc:
                     error_type = type(exc).__name__
                     raise RefractError(
-                        exc.code, str(exc), exc.next_action, exc.retryable, exc.retry_after_s
+                        exc.code, str(exc), exc.next_action, exc.retry_after_s
                     ) from exc
                 except Exception as exc:
                     error_type = type(exc).__name__
@@ -542,26 +474,6 @@ def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], C
                         extra["error_type"] = error_type
                     log.log(logging.INFO if outcome == "success" else logging.WARNING,
                             "MCP tool request finished", extra=extra)
-                    job_id = tool_input.get("job_id")
-                    if operation == "job_submit" and isinstance(output, str):
-                        try:
-                            job_id = json.loads(output)["job"]["id"]
-                        except (KeyError, TypeError, json.JSONDecodeError):
-                            job_id = None
-                    project_id = tool_input.get("project_id")
-                    if operation == "project_resolve" and isinstance(output, str):
-                        try:
-                            project_id = json.loads(output)["project"]["id"]
-                        except (KeyError, TypeError, json.JSONDecodeError):
-                            project_id = None
-                    record_tool_observation(
-                        tool_tracer, name=operation, input=tool_input, output=output,
-                        metadata={"outcome": outcome, "error_type": error_type,
-                                  "duration_ms": extra["duration_ms"]},
-                        start_time_ns=observation_started_ns, end_time_ns=time.time_ns(),
-                        job_id=job_id if isinstance(job_id, str) else None,
-                        session_id=project_id if isinstance(project_id, str) else None,
-                    )
         return wrapped
     return decorate
 
@@ -584,90 +496,32 @@ def _annotations(
 
 
 @_tool(
-    title="Resolve Project",
-    description=_PROJECT_RESOLVE_DESCRIPTION,
-    annotations=_annotations("Resolve Project", read_only=False, destructive=False, idempotent=True, open_world=False),
-    structured_output=False,
-)
-@_logged_request("project_resolve")
-async def project_resolve(
-    path: Annotated[str, Field(description="Absolute or home-relative Git-root directory to register.", min_length=1)],
-    ctx: Context,
-    alias: Annotated[str, Field(description="Optional project alias; omit or pass an empty string for a unique default.")] = "",
-) -> str:
-    project = await run_sync(_runtime(ctx).resolve_project, path, alias)
-    return _render_payload(
-        {"project": {"id": project.id, "alias": project.alias, "path": project.root}},
-        applied=(
-            "Project resolution", project.id,
-            f"Use project ID {project.id} in task_guide or job_submit; do not resolve again to recover the result.",
-        ),
-    )
-
-
-@_tool(
-    title="Task Guide",
-    description=_TASK_GUIDE_DESCRIPTION,
-    annotations=_annotations("Task Guide", read_only=True, destructive=False, idempotent=True, open_world=False),
-    structured_output=False,
-)
-@_logged_request("task_guide")
-async def task_guide(
-    project_id: Annotated[str, Field(description="Registered project ID from project_resolve.", min_length=1)],
-    ctx: Context,
-) -> str:
-    runtime = _runtime(ctx)
-    project = await run_sync(runtime.database.project, project_id)
-    if project is None:
-        raise OrchestrationError(
-            "Project is not registered.", code="unknown_project",
-            next_action="Call project_resolve with the Git root.",
-        )
-    try:
-        catalog = await run_sync(runtime.catalog_for_project_cached, project.id)
-        guide = await run_sync(load_task_guide, runtime.config.home, Path(project.root))
-    except ValueError as exc:
-        raise OrchestrationError(
-            "Project task guidance or configuration is unavailable.", code="config_invalid",
-            next_action="Fix the project guidance or configuration in .refract/config.toml.",
-        ) from exc
-    return _render_payload({
-        "workflows": sorted(BUILTIN_WORKFLOWS),
-        "profiles": {"default": catalog.default_profile, "available": sorted(catalog.profiles)},
-        "guidance": guide,
-    })
-
-
-@_tool(
     title="Submit Job",
-    description=_JOB_SUBMIT_DESCRIPTION,
+    description=_SUBMIT_DESCRIPTION,
     annotations=_annotations("Submit Job", read_only=False, destructive=True, idempotent=False, open_world=True),
     structured_output=False,
 )
-@_logged_request("job_submit")
-async def job_submit(
-    project_id: Annotated[str, Field(description="Registered project ID from project_resolve.", min_length=1)],
-    workflow: Annotated[Literal[*BUILTIN_WORKFLOWS], Field(description="Workflow selected from task_guide.")],
+@_logged_request("submit")
+async def submit(
+    path: Annotated[str, Field(description="Absolute or home-relative directory inside the Git repository.", min_length=1)],
+    workflow: Annotated[Literal[*BUILTIN_WORKFLOWS], Field(description="Workflow name.")],
     prompt: Annotated[str, Field(description="Self-contained instructions visible to the worker.", min_length=1)],
     ctx: Context,
-    profile: Annotated[str, Field(description="Available profile from task_guide; empty uses the project's default.")] = "",
-    context_key: Annotated[str, Field(description="Session/history scope; empty uses the workflow name.")] = "",
-    fresh_session: Annotated[bool, Field(description="Start a new worker session instead of reusing the context.")] = False,
-    next_target: Annotated[str, Field(description="Opaque routing token from result.metadata.retry.next_target; omit to use the profile's first available target.")] = "",
+    profile: Annotated[str, Field(description="Profile name; empty uses the project's default.")] = "",
+    session: Annotated[str, Field(description="Session scope; empty uses the workflow name.")] = "",
+    fresh: Annotated[bool, Field(description="Start a new worker session instead of reusing the session.")] = False,
 ) -> str:
     runtime = _runtime(ctx)
-    submission = await runtime.submit(
-        project_id, workflow, prompt, profile=profile, context_key=context_key,
-        fresh_session=fresh_session, next_target=next_target,
-    )
+    project = await run_sync(runtime.resolve_project, path)
+    submission = await runtime.submit(project.id, workflow, prompt, profile=profile, session=session, fresh=fresh)
     job = await run_sync(runtime.database.job, submission.job_id)
     if job is None:
         raise _internal_error(_request_id(ctx))
     return _render_payload(
-        {"job": _summary(job)},
+        {"job": _summary(job, project.root)},
         applied=(
             "Job submission", job.id,
-            f"Use job ID {job.id} with job_wait or job_list; do not submit the same work again.",
+            f"Use job ID {job.id} with wait or list; do not submit the same work again.",
         ),
     )
 
@@ -691,7 +545,7 @@ async def _wait_with_progress(runtime: Runtime, ctx: Context, job_id: str, timeo
             except TimeoutError:
                 refreshed = await run_sync(runtime.database.job, job_id)
                 if refreshed is None:
-                    raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
+                    raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
                 if refreshed.state in TERMINAL_STATES:
                     break
                 progress += 1.0
@@ -707,204 +561,134 @@ async def _wait_with_progress(runtime: Runtime, ctx: Context, job_id: str, timeo
 
 @_tool(
     title="Wait for Job",
-    description=_JOB_WAIT_DESCRIPTION,
+    description=_WAIT_DESCRIPTION,
     annotations=_annotations("Wait for Job", read_only=True, destructive=False, idempotent=True, open_world=False),
     structured_output=False,
 )
-@_logged_request("job_wait")
-async def job_wait(
-    job_id: Annotated[str, Field(description="Job ID returned by job_submit.", min_length=1)],
+@_logged_request("wait")
+async def wait(
+    job_id: Annotated[str, Field(description="Job ID returned by submit.", min_length=1)],
     ctx: Context,
     timeout_s: Annotated[int, Field(description="Wait duration in seconds; zero reads immediately.", ge=0, le=3600)] = _MCP_WAIT_TIMEOUT_S,
-    result_offset: Annotated[int, Field(description="Unicode character offset into terminal result text.", ge=0)] = 0,
 ) -> str:
     runtime = _runtime(ctx)
     job = await run_sync(runtime.database.job, job_id)
     if job is None:
-        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
+        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
     await _report_progress(ctx, job, 0.0)
     if job.state not in TERMINAL_STATES and timeout_s > 0:
         await _wait_with_progress(runtime, ctx, job_id, timeout_s)
     current = await run_sync(runtime.database.job, job_id)
     if current is None:
-        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
-    summary = _summary(current)
-    if current.state not in TERMINAL_STATES:
-        pending = runtime.ask_registry.get_pending(job_id) if hasattr(runtime, "ask_registry") else None
-        live_meta = await run_sync(runtime.live_result_metadata, current)
-        result: dict[str, Any] = {"text": "", "error": "", "next_offset": None}
-        tel = live_meta.get("telemetry") if isinstance(live_meta, Mapping) else getattr(live_meta, "telemetry", None)
-        completeness = tel.get("completeness") if isinstance(tel, Mapping) else getattr(tel, "completeness", None)
-        if completeness in ("complete", "partial"):
-            result["metadata"] = live_meta
-        if pending is not None:
-            result["pending_question"] = {
-                "question_id": pending.question_id,
-                "text": pending.text,
-            }
-            next_action = "Call job_answer to answer the pending question."
-        else:
-            next_action = "Call job_wait again with the same job_id."
-        return _render_payload({
-            "job": summary,
-            "result": result,
-            "next_action": next_action,
-        })
-    return _page_terminal_result(
-        current,
-        summary,
-        result_offset,
-        public_error=_public_terminal_error(current),
-        metadata=await run_sync(runtime.live_result_metadata, current),
-    )
+        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
+    return await _wait_response(runtime, current)
 
 
 @_tool(
     title="List Jobs",
-    description=_JOB_LIST_DESCRIPTION,
+    description=_LIST_DESCRIPTION,
     annotations=_annotations("List Jobs", read_only=True, destructive=False, idempotent=True, open_world=False),
     structured_output=False,
+    name="list",
 )
-@_logged_request("job_list")
-async def job_list(
-    project_id: Annotated[str, Field(description="Registered project ID from project_resolve.", min_length=1)],
+@_logged_request("list")
+async def list_jobs(
+    path: Annotated[str, Field(description="Absolute or home-relative directory inside the Git repository.", min_length=1)],
     ctx: Context,
 ) -> str:
     runtime = _runtime(ctx)
-    project = await run_sync(runtime.database.project, project_id)
-    if project is None:
-        raise OrchestrationError("Project is not registered.", code="unknown_project", next_action="Call project_resolve with the Git root.")
-    active, recent, more_recent = await run_sync(runtime.database.job_listing, project.id)
+    project = await run_sync(runtime.resolve_project, path)
+    active, recent, _more_recent = await run_sync(runtime.database.job_overview, project.id)
+    try:
+        catalog = await run_sync(runtime.catalog_for_project_cached, project.id)
+        guide = await run_sync(load_guidance, runtime.config.home, Path(project.root))
+    except ValueError as exc:
+        raise OrchestrationError(
+            "Project task guidance or configuration is unavailable.", code="config_invalid",
+            next_action="Fix the project guidance or configuration in .refract/config.toml.",
+        ) from exc
     return _render_payload({
-        "active": [_summary(runtime.database.job_view(record)) for record in active],
-        "recent": [_summary(runtime.database.job_view(record)) for record in recent],
-        "more_recent": more_recent,
+        "active": [_summary(runtime.database.job_view(record), project.root) for record in active],
+        "recent": [_summary(runtime.database.job_view(record), project.root) for record in recent],
+        "workflows": sorted(BUILTIN_WORKFLOWS),
+        "profiles": {"default": catalog.default_profile, "available": sorted(catalog.profiles)},
+        "guidance": guide,
     })
 
 
 @_tool(
     title="Cancel Job",
-    description=_JOB_CANCEL_DESCRIPTION,
+    description=_CANCEL_DESCRIPTION,
     annotations=_annotations("Cancel Job", read_only=False, destructive=True, idempotent=True, open_world=False),
     structured_output=False,
 )
-@_logged_request("job_cancel")
-async def job_cancel(
-    job_id: Annotated[str, Field(description="Job ID returned by job_submit.", min_length=1)],
+@_logged_request("cancel")
+async def cancel(
+    job_id: Annotated[str, Field(description="Job ID returned by submit.", min_length=1)],
     ctx: Context,
 ) -> str:
     runtime = _runtime(ctx)
     job = await run_sync(runtime.database.job, job_id)
     if job is None:
-        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
+        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
     if job.state in TERMINAL_STATES:
-        return _render_payload({"job": _summary(job)})
+        return _render_payload({"job": await _job_payload(runtime, job)})
     await runtime.cancel(job_id)
     current = await run_sync(runtime.database.job, job_id)
     if current is None:
         raise _internal_error(_request_id(ctx))
     return _render_payload(
-        {"job": _summary(current)},
-        applied=("Job cancellation", job.id, f"Inspect job {job.id} with job_list; cancellation was applied and must not be repeated blindly."),
+        {"job": await _job_payload(runtime, current)},
+        applied=("Job cancellation", job.id, f"Inspect job {job.id} with wait; cancellation was applied and must not be repeated blindly."),
     )
 
 
 @_tool(
     title="Retry Job",
-    description=_JOB_RETRY_DESCRIPTION,
+    description=_RETRY_DESCRIPTION,
     annotations=_annotations("Retry Job", read_only=False, destructive=True, idempotent=False, open_world=True),
     structured_output=False,
 )
-@_logged_request("job_retry")
-async def job_retry(
-    job_id: Annotated[str, Field(description="Failed, cancelled, or interrupted job ID.", min_length=1)],
+@_logged_request("retry")
+async def retry(
+    job_id: Annotated[str, Field(description="Succeeded, failed, cancelled, or interrupted job ID.", min_length=1)],
     ctx: Context,
+    target: Annotated[str, Field(description="Target to pin; empty uses the next target in profile order.")] = "",
 ) -> str:
     runtime = _runtime(ctx)
-    submission = await runtime.retry(job_id)
+    submission = await runtime.retry(job_id, target)
     job = await run_sync(runtime.database.job, submission.job_id)
     if job is None:
         raise _internal_error(_request_id(ctx))
     return _render_payload(
-        {"job": _summary(job)},
-        applied=("Job retry", job.id, f"Use job ID {job.id} with job_wait or job_list; do not retry it again blindly."),
+        {"job": await _job_payload(runtime, job)},
+        applied=("Job retry", job.id, f"Use job ID {job.id} with wait; do not retry it again blindly."),
     )
 
 
 @_tool(
     title="Answer Job Question",
-    description=_JOB_ANSWER_DESCRIPTION,
+    description=_ANSWER_DESCRIPTION,
     annotations=_annotations("Answer Job Question", read_only=False, destructive=False, idempotent=False, open_world=False),
     structured_output=False,
 )
-@_logged_request("job_answer")
-async def job_answer(
-    job_id: Annotated[str, Field(description="Job ID returned by job_submit.", min_length=1)],
+@_logged_request("answer")
+async def answer(
+    job_id: Annotated[str, Field(description="Job ID returned by submit.", min_length=1)],
     answer: Annotated[str, Field(description="Answer to deliver to the running worker.", min_length=1, max_length=8192)],
     ctx: Context,
 ) -> str:
     runtime = _runtime(ctx)
     job = await run_sync(runtime.database.job, job_id)
     if job is None:
-        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call job_list for the project and use a listed job ID.")
+        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
     await runtime.job_answer(job_id, answer)
     current = await run_sync(runtime.database.job, job_id)
     if current is None:
         raise _internal_error(_request_id(ctx))
     return _render_payload(
-        {"job": _summary(current)},
-        applied=("Job answer", job.id, f"Use job ID {job.id} with job_wait or job_list; do not repeat the answer blindly."),
-    )
-
-
-@_tool(
-    title="Report Job Error",
-    description=_JOB_REPORT_ERROR_DESCRIPTION,
-    annotations=_annotations("Report Job Error", read_only=False, destructive=False, idempotent=True, open_world=False),
-    structured_output=False,
-)
-@_logged_request("job_report_error")
-async def job_report_error(
-    job_id: Annotated[str, Field(description="Job ID returned by job_submit.", min_length=1)],
-    category: Annotated[Literal["protocol", "output"], Field(description="Anomaly category: 'protocol' or 'output'.")],
-    expected: Annotated[str, Field(description="Expected behavior summary (1-2048 characters).", min_length=1, max_length=2048)],
-    observed: Annotated[str, Field(description="Observed behavior summary (1-2048 characters).", min_length=1, max_length=2048)],
-    report_key: Annotated[str, Field(description="Client-generated unique opaque key for delivery retries (1-128 ASCII letters, digits, underscores, or hyphens).", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")],
-    ctx: Context,
-) -> str:
-    runtime = _runtime(ctx)
-    result = await runtime.report_error(
-        job_id=job_id,
-        category=category,
-        expected=expected,
-        observed=observed,
-        report_key=report_key,
-    )
-    report = result["report"]
-    duplicate = bool(result["duplicate"])
-    project_id = result.get("project_id", "")
-    request_id = _request_id(ctx)
-
-    if not duplicate:
-        log.info(
-            "Diagnostic error reported",
-            extra={
-                "event": "job.error_reported",
-                "report_id": report["id"],
-                "job_id": job_id,
-                "project_id": project_id,
-                "request_id": request_id,
-                "category": category,
-            },
-        )
-
-    return _render_payload(
-        {"report": report, "duplicate": duplicate, "retry": result["retry"]},
-        applied=(
-            "Job error report",
-            report["id"],
-            f"Use report ID {report['id']} to inspect diagnostics; do not submit the same report again.",
-        ),
+        {"job": await _job_payload(runtime, current)},
+        applied=("Job answer", job.id, f"Use job ID {job.id} with wait; do not repeat the answer blindly."),
     )
 
 
@@ -993,6 +777,5 @@ mcp = create_mcp()
 
 
 __all__ = [
-    "RefractError", "create_application", "job_answer", "job_cancel", "job_list", "job_report_error", "job_retry",
-    "job_submit", "job_wait", "mcp", "project_resolve", "task_guide",
+    "RefractError", "answer", "cancel", "create_application", "list_jobs", "mcp", "retry", "submit", "wait",
 ]

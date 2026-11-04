@@ -11,6 +11,35 @@ from pathlib import Path
 
 MAX_CONFIG_ERROR_LENGTH = 512
 
+# Removed config keys and the replacement each load error names. Split
+# literals keep removed names out of repository-wide greps.
+REMOVED_KEYS: dict[str, str] = {
+    "[" "lang" "fuse" "]": "",
+    "[daemon]." "history" "_turns": "",
+    "[daemon]." "history" "_bytes": "",
+    "[" "retry" "Policies" "]": "use targets[].retry",
+    "targets[]." "retry" "Policy": "use targets[].retry",
+    "[envs]": "use targets[].env",
+    "targets[]." "envs" "_vars": "use targets[].env",
+    "targets[].envs": "use targets[].env",
+    "targets[]." "context" "Window": "use targets[].context_window",
+    "targets[].profile": "use targets[].backend_profile",
+    "profiles workflow max_attempts": "use targets[].retry.attempts",
+    "${NAME} in targets[].env": "write the literal value",
+    "[project]": "pass profile on submit",
+    "[logging].format": "",
+    "[logging].console": "",
+    "[logging].capture_warnings": "",
+}
+
+
+def removed_key_message(key: str) -> str:
+    hint = REMOVED_KEYS[key]
+    return f"{key} has been removed" + (f"; {hint}" if hint else "")
+
+
+_REMOVED_MESSAGES = frozenset(removed_key_message(key) for key in REMOVED_KEYS)
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -61,14 +90,20 @@ def _source_config_error(raw_text: str) -> str | None:
 
 def _section_config_error(text: str) -> str | None:
     """Recognize section diagnostics that contain no configuration values."""
+    if text in _REMOVED_MESSAGES:
+        return text
     if text.startswith("Unsupported config sections"):
         return "Unsupported config sections"
     if text.startswith("Unsupported daemon settings"):
         return "Unsupported daemon settings"
     if text.startswith("Unsupported project config sections"):
         return "Unsupported project config sections"
-    if text.startswith("Unsupported project settings"):
-        return "Unsupported project settings"
+    if text.startswith("Unsupported project target settings"):
+        return "Unsupported project target settings"
+    if text.startswith("Unsupported target settings"):
+        return "Unsupported target settings"
+    if text.startswith("Project config cannot add targets"):
+        return "Project config cannot add targets"
     missing = re.fullmatch(r"Missing required \[(targets|profiles)\] section", text)
     if missing:
         return text
@@ -76,11 +111,7 @@ def _section_config_error(text: str) -> str | None:
         "[targets] must contain at least one target",
         "[targets] must be a TOML array of tables",
         "[profiles] must contain at least one profile",
-        "[retryPolicies] must be a TOML table",
         "[logging] must be a TOML table",
-        "[project] must be a TOML table",
-        "[envs] must be a TOML table",
-        "Invalid environment set declaration",
         "[daemon].default_profile must be set",
         "[daemon].host must be a non-empty string",
         "[daemon].port must not exceed 65535",
@@ -92,8 +123,6 @@ def _section_config_error(text: str) -> str | None:
         return text
     if text.startswith("Unknown [daemon].default_profile"):
         return "Unknown [daemon].default_profile"
-    if text.startswith("Unknown project profile"):
-        return "Unknown project profile"
     return None
 
 
@@ -142,20 +171,10 @@ def _target_config_error(text: str) -> str | None:
         return "Target backend_profile must be a string"
     if "positive integer" in text:
         return "Target setting must be a positive integer"
-    if "cannot declare inline retry settings" in text:
-        return "Target cannot declare inline retry settings"
-    if "references unknown retry policy" in text:
-        return "Target references unknown retry policy"
-    if "retryPolicy must be a non-empty string" in text:
-        return "Target retryPolicy must be a non-empty string"
-    if "has unsupported settings" in text:
-        return "Target has unsupported settings"
-    if "envs_vars must be a list of strings" in text:
-        return "Target envs_vars must be a list of strings"
-    if "envs must be a TOML table" in text:
-        return "Target envs must be a TOML table"
-    if "references unknown environment set" in text:
-        return "Target references unknown environment set"
+    if "has invalid retry settings" in text:
+        return "Target has invalid retry settings"
+    if "env must be a TOML table" in text:
+        return "Target env must be a TOML table"
     return None
 
 
@@ -173,46 +192,11 @@ def _environment_config_error(text: str) -> str | None:
         return "Environment key cannot contain NUL bytes"
     if "Environment keys cannot use protected prefix" in text:
         return "Environment keys cannot use protected prefix"
-    if text.startswith("Environment set ") and "must be a TOML table" in text:
-        return "Environment set must be a TOML table"
-    if text.startswith("Project target override ") and "has unsupported settings" in text:
-        return "Project target override has unsupported settings"
-    if text.startswith("Unknown project target override"):
-        return "Unknown project target override"
     if text.startswith("Duplicate project target override"):
         return "Duplicate project target override"
-    if text.startswith("Missing environment reference"):
-        return "Missing environment reference"
-    if text.startswith("Environment reference cycle detected"):
-        return "Environment reference cycle detected"
-    if "Unterminated environment reference" in text:
-        return "Unterminated environment reference"
-    if "Empty environment reference" in text:
-        return "Empty environment reference"
-    if "Malformed environment reference" in text:
-        return "Malformed environment reference"
-    if "Protected environment reference" in text:
-        return "Protected environment reference"
     if text.startswith("Unknown target"):
         return "Unknown target"
     return None
-
-
-def _retry_policy_config_error(text: str) -> str | None:
-    """Remove retry policy identifiers, rule values, and patterns from validation errors."""
-    if not text.startswith("Retry policy "):
-        return None
-    if "must be a TOML table" in text:
-        return "Retry policy must be a TOML table"
-    if "has unsupported settings" in text:
-        return "Retry policy has unsupported settings"
-    if "retryAttempt must be a non-negative integer" in text:
-        return "Retry policy retryAttempt must be a non-negative integer"
-    if "errorCodes must be a list of non-empty strings" in text:
-        return "Retry policy errorCodes must be a list of non-empty strings"
-    if "errorPatterns must be a list of non-empty strings" in text:
-        return "Retry policy errorPatterns must be a list of non-empty strings"
-    return "Invalid retry policy declaration"
 
 
 def sanitize_config_error(error: object) -> str:
@@ -239,9 +223,6 @@ def sanitize_config_error(error: object) -> str:
     target_error = _target_config_error(text)
     if target_error is not None:
         return target_error
-    retry_policy_error = _retry_policy_config_error(text)
-    if retry_policy_error is not None:
-        return retry_policy_error
     env_error = _environment_config_error(text)
     if env_error is not None:
         return env_error

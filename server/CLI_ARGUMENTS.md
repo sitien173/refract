@@ -35,10 +35,10 @@ shell command and not a shell-quoted string.
 one configured profile. Refract does not fabricate configuration entries.
 
 `REFRACT_HOME` overrides the state directory; otherwise it defaults to
-`~/.refract`. `REFRACT_LOG_LEVEL`, `REFRACT_LOG_FORMAT`, `REFRACT_LOG_FILE`,
-`REFRACT_LOG_CONSOLE`, `REFRACT_LOG_MAX_BYTES`,
-`REFRACT_LOG_BACKUP_COUNT`, and `REFRACT_LOG_CAPTURE_WARNINGS` override logging
-settings. Relative log paths resolve under the state directory.
+`~/.refract`. `REFRACT_LOG_LEVEL`, `REFRACT_LOG_FILE`, `REFRACT_LOG_MAX_BYTES`,
+and `REFRACT_LOG_BACKUP_COUNT` override logging settings. Relative log paths
+resolve under the state directory. Logs are text in a private rotating file;
+when file logging is disabled or fails, they go to stderr.
 
 Profiles may declare one explicit parent with `extends`. A profile can map only
 some workflows. Missing workflow mappings fail during execution-plan
@@ -70,7 +70,7 @@ No answer from coordinator; use your best judgment or end with BLOCKED.
 Missing environment, connection failures, and HTTP rejection return nonzero.
 If the command fails or shell tools are unavailable, return `BLOCKED` with
 the unresolved question. The coordinator answers `result.pending_question`
-through `job_answer`, then resumes `job_wait` on the same job ID.
+through `answer`, then resumes `wait` on the same job ID.
 
 The worker tool-shell PATH must contain the installed `refract` executable.
 The live probes prepend this checkout's `server/.venv/bin` to PATH. They do
@@ -135,27 +135,24 @@ backend = "codex"
 model = "gpt-5.5"
 reasoning = "high"
 args = ["--color", "never", "-c", "web_search=live"]
-capabilities = ["review"]
 
 [[targets]]
 id = "agy-planner"
 backend = "agy"
 args = ["--mode", "plan", "--sandbox", "--print-timeout", "10m"]
-capabilities = ["reasoning"]
 
 [[targets]]
 id = "pi-offline"
 backend = "pi"
 model = "openai/gpt-5"
 args = ["--provider", "openai", "--offline"]
-capabilities = ["code"]
 ```
 
 Keep one option or value per TOML array item. Repeat both items for repeatable
 options, for example `args = ["--add-dir", "D:/one", "--add-dir", "D:/two"]`.
 Do not put API keys or other credentials in `args`: target configuration is
-snapshotted into job records. Use each CLI's credential store or environment
-variables instead.
+snapshotted into job records. Use each CLI's credential store or the target
+`env` table instead; `env` values are never stored in job records.
 
 Refract still owns the non-interactive transport, workspace, prompt, output
 capture, and durable session argument. The driver translates first-class target
@@ -354,17 +351,16 @@ Codex `--add-dir` is permitted.
 
 ## Worker telemetry and context measurement capabilities
 
-Telemetry exposes job consumption and live context snapshots. Unsupported values remain null.
+Each job stores six nullable token counters. Values a backend does not report remain null.
 
-| Measurement | Meaning | Codex | Claude Code | Pi | Agy |
+| Counter | Meaning | Codex | Claude Code | Pi | Agy |
 |---|---|---|---|---|---|
-| `context_remaining_percent` | Context remaining percentage | Derived when latest rollout snapshot includes capacity | Derived from capacity | Unavailable null | Unavailable null |
-| `context_window_size` | Context capacity limit | Reported in latest rollout `token_count` when present | Observed in `modelUsage` | Unavailable null | Unavailable null |
-| `context_used_tokens` | Current occupied context | Derived from latest `token_count.last_token_usage` response | Derived response usage | Derived response usage | Derived step usage |
-| `total_input_tokens` | Normalized input tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
-| `total_output_tokens` | Normalized output tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
-| `cache_read_tokens` | Cached input read tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
-| `cache_write_tokens` | Cache write tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
+| `context_window` | Context capacity limit | Reported in latest rollout `token_count` when present | Observed in `modelUsage` | Unavailable null | Unavailable null |
+| `context_used` | Current occupied context | Derived from latest `token_count.last_token_usage` response | Derived response usage | Derived response usage | Derived step usage |
+| `input` | Normalized input tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
+| `output` | Normalized output tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
+| `cache_read` | Cached input read tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
+| `cache_write` | Cache write tokens | `turn.completed.usage` | Response and result | Message and summary | Step and result |
 
 ### Measurement evidence and status
 
@@ -387,10 +383,10 @@ Capabilities are categorized by evidence level: package/CLI documentation eviden
 
 ### Semantics, cache accounting, and observation timing
 
-- **Canonical grouped metadata:** Public metadata strictly separates responsibilities into `execution`, `failure`, `retry`, and `telemetry` groups. Flat legacy counters and aliases (`input_tokens`, `output_tokens`, `cached_input_tokens`, `context_window_used`, `model_name`, `failure_kind`, `retryable`, `next_target`) have been removed from public responses. Active context occupancy remains strictly separated from cumulative job consumption under `result.metadata.telemetry`.
-- **Cache accounting:** Normalized `cache_read_tokens` and `cache_write_tokens` isolate cache contributions. For Codex, cumulative turn usage is normalized across attempts; for Claude Code, response and result usage maps cached read/write tokens.
-- **Observation and presentation timing:** Telemetry observations are reconciled on the server during job execution and persisted to `jobs.result_metadata_json`. Dashboards poll active jobs at standard intervals. Final values are persisted on job completion.
-- **Partial totals:** If any execution invocation has unobserved consumption, aggregate job consumption completeness is marked `partial`. Unreported measurements remain `null` with `quality: "unavailable"`.
+- **Flat counters:** `wait` returns the six counters under `result.tokens`. There is no measurement source, quality or timestamp. Active context occupancy stays separate from cumulative consumption.
+- **Cache accounting:** `cache_read` and `cache_write` isolate cache contributions. For Codex, cumulative turn usage is summed across attempts; for Claude Code, response and result usage maps cached read and write tokens.
+- **Observation and presentation timing:** Backends send `telemetry.updated` events with the known counters during a run. The final counters are stored in the job's `tok_*` columns when it finishes.
+- **Unknown values:** A counter no attempt reported stays null. Missing counts are never filled with zero.
 
 ### Opt-in live telemetry probes
 

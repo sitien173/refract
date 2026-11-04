@@ -36,10 +36,11 @@ review, Git, and handover.
    A requested phase other than `current_phase` needs user confirmation.
 3. **Read** `PLAN.md`, `.handover.md`, and the `read_first` paths that exist.
    Confirm the phase scope, its checks, and the plan-level commit message.
-4. **Reconcile.** When `project_id` exists, apply the Coordinator's resume
+4. **Reconcile.** When the handover names a job, apply the Coordinator's resume
    table before any edit. An active job is waited on, then resumed at its gate.
-5. **Guidance.** Do not re-run `task_guide` for an active phase; reuse its
-   saved guidance. For a new phase, run Coordinator setup and task guidance.
+5. **Guidance.** Do not call `list` for guidance during an active phase; reuse
+   its saved guidance. For a new phase, run Coordinator setup and call `list`
+   once.
 6. **Prepare.** Require the plan `base` anchor. When it is missing, set
    `STALE_ANCHOR` and stop; never infer it from history. Create missing
    `phase-<NN>/prompt.md`, `notes.md`, and `journal.md` from the bundled

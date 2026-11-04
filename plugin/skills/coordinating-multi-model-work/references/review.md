@@ -17,13 +17,13 @@ the review-fix loop as blocking findings.
 ## Independent quality review
 
 Review only what this phase changed. Submit the first `review` job for a plan
-with `fresh_session: true` and a full reviewer contract. Submit later review jobs
+with `fresh=true` and a full reviewer contract. Submit later review jobs
 prompt-only, scoped to the phase delta with:
 
 - the exact range `refs/plans/<slug>/phase-<NN>/base..HEAD`,
 - paths in FILES MODIFIED,
 - acceptance criteria and reviewer checklist,
-- the selected profile and plan `context_key`.
+- the selected profile and plan `session`.
 
 Instruct the reviewer to judge only whether those changes are correct, secure,
 and meet the plan. Pre-existing code outside the delta is out of scope.
@@ -36,7 +36,7 @@ and make no commit for review output.
 When specification or quality review returns blocking findings:
 
 1. Collect every blocking finding into one fix batch.
-2. Submit one `FIX:` `implement` job on the plan `context_key`, listing only the
+2. Submit one `FIX:` `implement` job on the plan `session`, listing only the
    findings, allowed paths, and checks to rerun.
 3. Validate the fix and create a temporary checkpoint commit.
 4. Re-review only the fix delta and rerun affected checks.
@@ -45,9 +45,13 @@ When specification or quality review returns blocking findings:
 Bound this to two automatic fix cycles. Return remaining findings after the
 second cycle.
 
-## Diagnostic anomalies
+## Unusable output
 
-Report protocol anomalies or confirmed output-contract anomalies with `job_report_error` before recovery, preserving original job and project IDs. Generic worker error text under `succeeded` is reportable only after complete terminal pagination. Follow the [authoritative recovery procedure](tool-contract.md#reported-successful-output-recovery) for acknowledgement-based output recovery, replay reconciliation, and reporting failures. It prevents recursive reporting and preserves safe reconciliation. Require ERP only where the workflow requires it.
+When a `succeeded` job returns output the review cannot use, inspect its
+partial local effects first. Then follow Recovery in
+[tool-contract.md](tool-contract.md#recovery): call `retry(job_id)` for the next
+target, or `retry(job_id, target=X)` to pin one. The new job keeps the source
+job's `session` and `fresh` values. Require ERP only where the workflow requires it.
 
 ## Finalize phase
 

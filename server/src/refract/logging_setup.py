@@ -7,12 +7,9 @@ handler configuration so importing Refract never changes the process root logger
 from __future__ import annotations
 
 import atexit
-import copy
-import json
 import logging
 import logging.handlers
 import os
-import queue
 import re
 import sys
 import threading
@@ -20,7 +17,6 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Protocol
@@ -30,31 +26,21 @@ class LoggingOptions(Protocol):
     """Structural type accepted by :func:`configure`."""
 
     level: str
-    format: str
     file: Path | None
-    console: bool
     max_bytes: int
     backup_count: int
-    capture_warnings: bool
 
 
 @dataclass(slots=True, frozen=True)
 class ResolvedLoggingConfig:
     level: str
-    format: str
     file: Path | None
-    console: bool
     max_bytes: int
     backup_count: int
-    capture_warnings: bool
 
 
 _CONTEXT_FIELDS = ("request_id", "project_id", "job_id", "stage_id", "target_id")
 _CONTEXT: ContextVar[Mapping[str, str]] = ContextVar("refract_log_context", default=MappingProxyType({}))
-_STANDARD_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__) | {
-    "message",
-    "asctime",
-}
 _SENSITIVE_KEY = re.compile(
     r"(?:authorization|cookie|password|passwd|secret|token|api[_-]?key|credential)",
     re.IGNORECASE,
@@ -68,15 +54,12 @@ _SECRET_PATTERNS = (
     re.compile(r"\b(sk-[A-Za-z0-9_-]{12,})\b"),
 )
 
-_LOG_QUEUE_CAPACITY = 10_000
 _LOCK = threading.RLock()
-_LISTENER: logging.handlers.QueueListener | None = None
-_QUEUE_HANDLER: logging.Handler | None = None
+_HANDLERS: list[logging.Handler] = []
 _CONFIGURED_PID: int | None = None
 _FINGERPRINT: ResolvedLoggingConfig | None = None
 _FILE_SINK_DEGRADED = False
 _ATEXIT_REGISTERED = False
-_WARNING_STATE: tuple[list[logging.Handler], int, bool, bool] | None = None
 
 
 def _environment_value(name: str) -> str | None:
@@ -87,15 +70,6 @@ def _environment_value(name: str) -> str | None:
 def _refract_home() -> Path:
     override = _environment_value("REFRACT_HOME")
     return Path(override).expanduser() if override else Path.home() / ".refract"
-
-
-def _boolean(value: str, name: str) -> bool:
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be true or false")
 
 
 def _integer(value: str, name: str, *, minimum: int) -> int:
@@ -126,60 +100,40 @@ def resolve_config(
             return overrides[name]
         return _environment_value(name)
     defaults = options if options is not None else ResolvedLoggingConfig(
-        level="INFO", format="text", file=_refract_home() / "refract.log",
-        console=False, max_bytes=10 * 1024 * 1024, backup_count=5,
-        capture_warnings=True,
+        level="INFO", file=_refract_home() / "refract.log",
+        max_bytes=10 * 1024 * 1024, backup_count=5,
     )
     level = defaults.level
-    log_format = defaults.format
     file = defaults.file
-    console = defaults.console
     max_bytes = defaults.max_bytes
     backup_count = defaults.backup_count
-    capture_warnings = defaults.capture_warnings
 
     if value := option("REFRACT_LOG_LEVEL"):
         level = value
-    if value := option("REFRACT_LOG_FORMAT"):
-        log_format = value
     if value := option("REFRACT_LOG_FILE"):
         file = _log_file_override(value)
-    if value := option("REFRACT_LOG_CONSOLE"):
-        console = _boolean(value, "REFRACT_LOG_CONSOLE")
     if value := option("REFRACT_LOG_MAX_BYTES"):
         max_bytes = _integer(value, "REFRACT_LOG_MAX_BYTES", minimum=1)
     if value := option("REFRACT_LOG_BACKUP_COUNT"):
         backup_count = _integer(value, "REFRACT_LOG_BACKUP_COUNT", minimum=0)
-    if value := option("REFRACT_LOG_CAPTURE_WARNINGS"):
-        capture_warnings = _boolean(value, "REFRACT_LOG_CAPTURE_WARNINGS")
 
-    return _resolved_logging_config(
-        level, log_format, file, console, max_bytes, backup_count, capture_warnings
-    )
+    return _resolved_logging_config(level, file, max_bytes, backup_count)
 
 
 def _resolved_logging_config(
-    level: str, log_format: str, file: Path | None, console: bool,
-    max_bytes: int, backup_count: int, capture_warnings: bool,
+    level: str, file: Path | None, max_bytes: int, backup_count: int,
 ) -> ResolvedLoggingConfig:
     resolved_level = str(level).strip().upper()
     if resolved_level not in logging.getLevelNamesMapping() or not isinstance(
         logging.getLevelNamesMapping()[resolved_level], int
     ):
         raise ValueError(f"Invalid logging level: {level!r}")
-    resolved_format = str(log_format).strip().lower()
-    if resolved_format not in {"text", "json"}:
-        raise ValueError("Logging format must be 'text' or 'json'")
     resolved_file = Path(file).expanduser() if file is not None else None
     return ResolvedLoggingConfig(
         level=resolved_level,
-        format=resolved_format,
         file=resolved_file,
-        # Never permit an accidental configuration with no observable sink.
-        console=bool(console or resolved_file is None),
         max_bytes=max(1, int(max_bytes)),
         backup_count=max(0, int(backup_count)),
-        capture_warnings=bool(capture_warnings),
     )
 
 
@@ -212,12 +166,6 @@ def _safe_value(value: Any, key: str = "") -> Any:
     return _redact_text(str(value))
 
 
-def _timestamp(record: logging.LogRecord) -> str:
-    return datetime.fromtimestamp(record.created, timezone.utc).isoformat(
-        timespec="milliseconds"
-    ).replace("+00:00", "Z")
-
-
 class _ContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         context = _CONTEXT.get()
@@ -225,38 +173,6 @@ class _ContextFilter(logging.Filter):
             if not hasattr(record, field):
                 setattr(record, field, context.get(field, ""))
         return True
-
-
-class _JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        payload: dict[str, Any] = {
-            "timestamp": _timestamp(record),
-            "service": "refract",
-            "level": record.levelname,
-            "logger": record.name,
-            "message": _redact_text(record.getMessage()),
-            "process_id": record.process,
-            "thread": record.threadName,
-            "source": {
-                "module": record.module,
-                "function": record.funcName,
-                "line": record.lineno,
-            },
-        }
-        for field in _CONTEXT_FIELDS:
-            if value := getattr(record, field, ""):
-                payload[field] = _safe_value(value, field)
-        for key, value in record.__dict__.items():
-            if key not in _STANDARD_RECORD_FIELDS and key not in _CONTEXT_FIELDS:
-                if key == "progress_token_present" and type(value) is bool:
-                    payload[key] = value
-                else:
-                    payload[key] = _safe_value(value, key)
-        if record.exc_info:
-            payload["exception"] = _redact_text(self.formatException(record.exc_info))
-        if record.stack_info:
-            payload["stack"] = _redact_text(self.formatStack(record.stack_info))
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 class _TextFormatter(logging.Formatter):
@@ -293,83 +209,7 @@ def _rotate_private_log(source: str, destination: str) -> None:
     Path(source).touch(mode=0o600)
 
 
-class _BoundedQueueHandler(logging.handlers.QueueHandler):
-    """Preserve exceptions and shed load safely when sinks fall behind."""
-
-    def __init__(self, records: queue.Queue[logging.LogRecord]) -> None:
-        super().__init__(records)
-        self._drop_lock = threading.Lock()
-        self._dropped = 0
-
-    def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
-        prepared = copy.copy(record)
-        prepared.msg = record.getMessage()
-        prepared.args = None
-        return prepared
-
-    def _drop_notice(self) -> logging.LogRecord:
-        record = logging.LogRecord(
-            name="refract.logging_setup",
-            level=logging.WARNING,
-            pathname=__file__,
-            lineno=0,
-            msg="Dropped %d application log records because sinks were unavailable",
-            args=(self._dropped,),
-            exc_info=None,
-        )
-        record.event = "logging.records_dropped"
-        record.dropped_records = self._dropped
-        return record
-
-    def enqueue(self, record: logging.LogRecord) -> None:
-        # QueueHandler's default implementation reports queue.Full through
-        # logging's internal stderr path. Count and summarize drops instead.
-        with self._drop_lock:
-            if self._dropped:
-                try:
-                    self.queue.put_nowait(self._drop_notice())
-                except queue.Full:
-                    self._dropped += 1
-                    return
-                self._dropped = 0
-            try:
-                self.queue.put_nowait(record)
-            except queue.Full:
-                self._dropped += 1
-
-    def emit_drop_notice(self, *, block: bool) -> None:
-        """Publish pending drop telemetry, including during graceful shutdown."""
-        with self._drop_lock:
-            if not self._dropped:
-                return
-            notice = self._drop_notice()
-            try:
-                if block:
-                    self.queue.put(notice, timeout=1.0)
-                else:
-                    self.queue.put_nowait(notice)
-            except queue.Full:
-                return
-            self._dropped = 0
-
-
-class _GracefulQueueListener(logging.handlers.QueueListener):
-    def enqueue_sentinel(self) -> None:
-        # QueueListener uses put_nowait(), which can fail exactly when a bounded
-        # queue is under pressure. Block while a healthy listener drains it,
-        # but never deadlock shutdown if a sink failure killed that thread.
-        if self._thread is not None and self._thread.is_alive():
-            self.queue.put(self._sentinel)
-            return
-        try:
-            self.queue.put_nowait(self._sentinel)
-        except queue.Full:
-            pass
-
-
-def _formatter(name: str) -> logging.Formatter:
-    if name == "json":
-        return _JsonFormatter()
+def _formatter() -> logging.Formatter:
     return _TextFormatter(
         "%(asctime)s.%(msecs)03dZ %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
@@ -389,39 +229,18 @@ def _secure_parent(path: Path) -> None:
 
 
 def _stop_locked() -> None:
-    global _LISTENER, _QUEUE_HANDLER, _CONFIGURED_PID, _FINGERPRINT
-    global _FILE_SINK_DEGRADED, _WARNING_STATE
+    global _CONFIGURED_PID, _FINGERPRINT, _FILE_SINK_DEGRADED
     logger = logging.getLogger("refract")
-    if _QUEUE_HANDLER is not None:
-        logger.removeHandler(_QUEUE_HANDLER)
-        warnings_logger = logging.getLogger("py.warnings")
-        warnings_logger.removeHandler(_QUEUE_HANDLER)
-    if isinstance(_QUEUE_HANDLER, _BoundedQueueHandler):
-        _QUEUE_HANDLER.emit_drop_notice(block=True)
-    if _LISTENER is not None:
+    for handler in _HANDLERS:
+        logger.removeHandler(handler)
         try:
-            _LISTENER.stop()
-        except (AttributeError, RuntimeError):
+            handler.flush()
+            handler.close()
+        except (OSError, ValueError):
             pass
-        for handler in _LISTENER.handlers:
-            try:
-                handler.flush()
-                handler.close()
-            except (OSError, ValueError):
-                pass
-    if _WARNING_STATE is not None:
-        handlers, level, propagate, was_captured = _WARNING_STATE
-        warnings_logger = logging.getLogger("py.warnings")
-        warnings_logger.handlers[:] = handlers
-        warnings_logger.setLevel(level)
-        warnings_logger.propagate = propagate
-        if not was_captured:
-            logging.captureWarnings(False)
+    _HANDLERS.clear()
     if not logger.handlers:
         logger.addHandler(logging.NullHandler())
-    _WARNING_STATE = None
-    _LISTENER = None
-    _QUEUE_HANDLER = None
     _CONFIGURED_PID = None
     _FINGERPRINT = None
     _FILE_SINK_DEGRADED = False
@@ -453,14 +272,13 @@ def configure(
     *,
     overrides: Mapping[str, str] | None = None,
 ) -> ResolvedLoggingConfig:
-    """Configure Refract's asynchronous rotating logs.
+    """Configure Refract's rotating log file.
 
     Calls are idempotent for identical settings and safely replace prior
     Refract-owned handlers when settings change. The process root logger is not
-    modified.
+    modified. Without a usable file, logs go to stderr.
     """
-    global _LISTENER, _QUEUE_HANDLER, _CONFIGURED_PID, _FINGERPRINT
-    global _ATEXIT_REGISTERED, _FILE_SINK_DEGRADED, _WARNING_STATE
+    global _CONFIGURED_PID, _FINGERPRINT, _ATEXIT_REGISTERED, _FILE_SINK_DEGRADED
 
     settings = resolve_config(options, overrides=overrides)
     with _LOCK:
@@ -472,57 +290,27 @@ def configure(
             return settings
         _stop_locked()
 
-        formatter = _formatter(settings.format)
-        context_filter = _ContextFilter()
-        targets: list[logging.Handler] = []
+        formatter = _formatter()
+        handler: logging.Handler | None = None
         file_error: OSError | None = None
         if settings.file is not None:
             try:
-                targets.append(_file_log_handler(settings, formatter))
+                handler = _file_log_handler(settings, formatter)
             except OSError as exc:
                 file_error = exc
-        if settings.console or not targets:
-            console_handler = logging.StreamHandler(sys.stderr)
-            console_handler.setFormatter(formatter)
-            targets.append(console_handler)
-
-        records: queue.Queue[logging.LogRecord] = queue.Queue(
-            maxsize=_LOG_QUEUE_CAPACITY
-        )
-        queue_handler = _BoundedQueueHandler(records)
-        # Bind context in the producer thread/task; ContextVars intentionally
-        # do not flow into the QueueListener's worker thread.
-        queue_handler.addFilter(context_filter)
+        if handler is None:
+            handler = logging.StreamHandler(sys.stderr)
+            handler.setFormatter(formatter)
+        handler.addFilter(_ContextFilter())
         logger = logging.getLogger("refract")
         logger.handlers.clear()
-        logger.addHandler(queue_handler)
+        logger.addHandler(handler)
         logger.setLevel(logging.getLevelNamesMapping()[settings.level])
         logger.propagate = False
-        listener = _GracefulQueueListener(
-            records,
-            *targets,
-            respect_handler_level=True,
-        )
-        listener.start()
-        _QUEUE_HANDLER = queue_handler
-        _LISTENER = listener
+        _HANDLERS.append(handler)
         _CONFIGURED_PID = os.getpid()
         _FINGERPRINT = settings
         _FILE_SINK_DEGRADED = file_error is not None
-
-        if settings.capture_warnings:
-            warnings_logger = logging.getLogger("py.warnings")
-            was_captured = getattr(logging, "_warnings_showwarning", None) is not None
-            _WARNING_STATE = (
-                list(warnings_logger.handlers),
-                warnings_logger.level,
-                warnings_logger.propagate,
-                was_captured,
-            )
-            logging.captureWarnings(True)
-            warnings_logger.handlers[:] = [queue_handler]
-            warnings_logger.setLevel(logging.getLevelNamesMapping()[settings.level])
-            warnings_logger.propagate = False
 
         if not _ATEXIT_REGISTERED:
             atexit.register(shutdown)
@@ -532,9 +320,7 @@ def configure(
             "Application logging configured",
             extra={
                 "event": "logging.configured",
-                "log_format": settings.format,
                 "log_file": os.fspath(settings.file) if settings.file else "",
-                "console": settings.console or file_error is not None,
             },
         )
         if file_error is not None:

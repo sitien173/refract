@@ -11,7 +11,7 @@ from refract.notifications import send_job_notification
 def _make_job(
     *,
     state: str = "succeeded",
-    context_key: str = "test-ctx",
+    session: str = "test-ctx",
     workflow: str = "implement",
     target_id: str = "primary",
     result_text: str = "",
@@ -23,7 +23,7 @@ def _make_job(
         workflow=workflow,
         profile="balanced",
         state=state,  # type: ignore[arg-type]
-        context_key=context_key,
+        session=session,
         target_id=target_id,
         attempts=1,
         created_at="2026-10-05T00:00:00Z",
@@ -38,7 +38,7 @@ def test_send_job_notification_success(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_notify_cls = MagicMock(return_value=mock_notify_instance)
     monkeypatch.setattr("refract.notifications.Notify", mock_notify_cls)
 
-    job = _make_job(state="succeeded", context_key="auth", workflow="implement", target_id="codex-1")
+    job = _make_job(state="succeeded", session="auth", workflow="implement", target_id="codex-1")
     result = send_job_notification(job, "web-app")
 
     assert result is True
@@ -54,7 +54,7 @@ def test_send_job_notification_empty_target_renders_dash(monkeypatch: pytest.Mon
     mock_notify_instance.send.return_value = True
     monkeypatch.setattr("refract.notifications.Notify", MagicMock(return_value=mock_notify_instance))
 
-    job = _make_job(state="cancelled", context_key="feature", workflow="review", target_id="")
+    job = _make_job(state="cancelled", session="feature", workflow="review", target_id="")
     result = send_job_notification(job, "cli-tool")
 
     assert result is True

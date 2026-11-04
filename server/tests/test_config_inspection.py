@@ -5,7 +5,7 @@ import hashlib
 import pytest
 
 from refract.config import load_config
-from refract.config_inspection import sanitize_config_error, sha256_bytes
+from refract.config_inspection import REMOVED_KEYS, removed_key_message, sanitize_config_error, sha256_bytes
 
 
 def _config() -> str:
@@ -61,6 +61,12 @@ def test_sanitizer_does_not_passthrough_configuration_identifiers(message, expec
     assert "SECRET_" not in sanitize_config_error(message)
 
 
+@pytest.mark.parametrize("key", sorted(REMOVED_KEYS))
+def test_sanitizer_preserves_removed_config_message(key) -> None:
+    message = removed_key_message(key)
+    assert sanitize_config_error(message) == message
+
+
 def test_sanitizer_preserves_only_parser_location_evidence() -> None:
     message = "Expected '=' after a key (at line 4, column 9) SECRET_VALUE"
 
@@ -81,40 +87,16 @@ def test_missing_source_has_empty_revision(tmp_path) -> None:
     ("message", "expected"),
     [
         (
-            "Retry policy 'SECRET_POLICY' has unsupported settings: ['SECRET_FIELD']",
-            "Retry policy has unsupported settings",
+            "Target 'SECRET_TARGET' has invalid retry settings",
+            "Target has invalid retry settings",
         ),
         (
-            "Retry policy 'SECRET_POLICY' retryAttempt must be a non-negative integer",
-            "Retry policy retryAttempt must be a non-negative integer",
-        ),
-        (
-            "Retry policy 'SECRET_POLICY' errorCodes must be a list of non-empty strings",
-            "Retry policy errorCodes must be a list of non-empty strings",
-        ),
-        (
-            "Retry policy 'SECRET_POLICY' errorPatterns must be a list of non-empty strings",
-            "Retry policy errorPatterns must be a list of non-empty strings",
-        ),
-        (
-            "Target 'SECRET_TARGET' references unknown retry policy: 'SECRET_POLICY'",
-            "Target references unknown retry policy",
-        ),
-        (
-            "Target 'SECRET_TARGET' cannot declare inline retry settings",
-            "Target cannot declare inline retry settings",
-        ),
-        (
-            "Target 'SECRET_TARGET' retryPolicy must be a non-empty string",
-            "Target retryPolicy must be a non-empty string",
-        ),
-        (
-            "Target 'SECRET_TARGET' has unsupported settings: ['retry_policy']",
-            "Target has unsupported settings",
+            "Unsupported target settings: ['SECRET_FIELD']",
+            "Unsupported target settings",
         ),
     ],
 )
-def test_sanitizer_does_not_expose_retry_policy_or_error_patterns(message, expected) -> None:
+def test_sanitizer_does_not_expose_retry_settings(message, expected) -> None:
     sanitized = sanitize_config_error(message)
     assert sanitized == expected
     assert "SECRET_" not in sanitized
@@ -125,80 +107,44 @@ def test_sanitizer_does_not_expose_retry_policy_or_error_patterns(message, expec
     ("message", "expected"),
     [
         (
-            "Target 'SECRET_TARGET' references unknown environment set: 'SECRET_GROUP'",
-            "Target references unknown environment set",
+            "Target 'SECRET_TARGET' env must be a TOML table",
+            "Target env must be a TOML table",
         ),
         (
-            "Target 'SECRET_TARGET' envs must be a TOML table",
-            "Target envs must be a TOML table",
-        ),
-        (
-            "Target 'SECRET_TARGET' envs_vars must be a list of strings",
-            "Target envs_vars must be a list of strings",
-        ),
-        (
-            "Environment set 'SECRET_GROUP' must be a TOML table",
-            "Environment set must be a TOML table",
-        ),
-        (
-            "Environment values must be strings in Environment set 'SECRET_GROUP'",
+            "Environment values must be strings in Target 'SECRET_TARGET' env",
             "Environment values must be strings",
         ),
         (
-            "Environment values cannot contain NUL bytes in Target 'SECRET_TARGET' envs",
+            "Environment values cannot contain NUL bytes in Target 'SECRET_TARGET' env",
             "Environment values cannot contain NUL bytes",
         ),
         (
-            "Environment key cannot be empty in Target 'SECRET_TARGET' envs",
+            "Environment key cannot be empty in Target 'SECRET_TARGET' env",
             "Environment key cannot be empty",
         ),
         (
-            "Environment key cannot contain '=' in Environment set 'SECRET_GROUP'",
+            "Environment key cannot contain '=' in Target 'SECRET_TARGET' env",
             "Environment key cannot contain '='",
         ),
         (
-            "Environment key cannot contain NUL bytes in Environment set 'SECRET_GROUP'",
+            "Environment key cannot contain NUL bytes in Target 'SECRET_TARGET' env",
             "Environment key cannot contain NUL bytes",
         ),
         (
-            "Environment keys cannot use protected prefix REFRACT_ASK_ in Environment set 'SECRET_GROUP'",
+            "Environment keys cannot use protected prefix REFRACT_ASK_ in Target 'SECRET_TARGET' env",
             "Environment keys cannot use protected prefix",
         ),
         (
-            "Project target override 'SECRET_TARGET' has unsupported settings: ['SECRET_FIELD']",
-            "Project target override has unsupported settings",
+            "Unsupported project target settings: ['SECRET_FIELD']",
+            "Unsupported project target settings",
         ),
         (
-            "Unknown project target override: 'SECRET_TARGET'",
-            "Unknown project target override",
+            "Project config cannot add targets: 'SECRET_TARGET'",
+            "Project config cannot add targets",
         ),
         (
             "Duplicate project target override: 'SECRET_TARGET'",
             "Duplicate project target override",
-        ),
-        (
-            "Missing environment reference: SECRET_VAR",
-            "Missing environment reference",
-        ),
-        (
-            "Environment reference cycle detected: SECRET_VAR",
-            "Environment reference cycle detected",
-        ),
-        (
-            "Protected environment reference: SECRET_REF",
-            "Protected environment reference",
-        ),
-        (
-            "Unterminated environment reference",
-            "Unterminated environment reference",
-        ),
-        (
-            "Empty environment reference",
-            "Empty environment reference",
-        ),
-        (
-            "Malformed environment reference: SECRET_NAME",
-            "Malformed environment reference",
         ),
         (
             "Unknown target: 'SECRET_TARGET'",
@@ -206,7 +152,7 @@ def test_sanitizer_does_not_expose_retry_policy_or_error_patterns(message, expec
         ),
     ],
 )
-def test_sanitizer_does_not_expose_environment_details_or_templates(message, expected) -> None:
+def test_sanitizer_does_not_expose_environment_details(message, expected) -> None:
     sanitized = sanitize_config_error(message)
     assert sanitized == expected
     assert "SECRET_" not in sanitized

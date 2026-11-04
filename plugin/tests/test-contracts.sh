@@ -46,44 +46,58 @@ assert agy_version == plugin_version == market_version == codex_version == pi_ve
 
 contract = (root / "skills/coordinating-multi-model-work/references/tool-contract.md").read_text()
 contract_flat = " ".join(contract.split())
-tool_table = contract.split("## Nine tools", 1)[1].split("## ", 1)[0]
-tools = re.findall(r"^\| `([a-z_]+)` \|", tool_table, re.M)
-assert tools == ["project_resolve", "task_guide", "job_submit", "job_wait", "job_list", "job_cancel", "job_retry", "job_answer", "job_report_error"]
+tool_table = contract.split("## Six tools", 1)[1].split("## ", 1)[0]
+tool_rows = re.findall(r"^\| `([a-z_]+)` \| (.*?) \| (.*?) \|$", tool_table, re.M)
+assert [row[0] for row in tool_rows] == ["submit", "wait", "answer", "cancel", "retry", "list"], tool_rows
+assert [row[1:] for row in tool_rows] == [
+    ("`path`, `workflow`, `prompt`, `profile=\"\"`, `session=\"\"`, `fresh=false`", "`{job}`"),
+    ("`job_id`, `timeout_s=3600`", "`{job, result}`"),
+    ("`job_id`, `answer`", "`{job}`"),
+    ("`job_id`", "`{job}`"),
+    ("`job_id`, `target=\"\"`", "`{job}` for a new job with `retry_of` set"),
+    ("`path`", "`{active, recent, workflows, profiles, guidance}`"),
+], tool_rows
 for detail in (
-    "`path`, `alias=\"\"`", "{project:{id, alias, path}}",
-    "{workflows, profiles:{default, available}, guidance}",
-    "{job:summary}", "{job:summary, result:{text, error, next_offset, metadata}}",
-    "{active, recent, more_recent}", "{job:summary}",
-    "`job_id`, `answer`",
-    "`job_id`, `category`, `expected`, `observed`, `report_key`",
-    "{report:{id, job_id, category, created_at}, duplicate, retry:{retryable, next_target}}",
-    "pending_question",
-    "Summary fields are exactly `id, project_id, workflow, profile, state, context_key, attempts, created_at, updated_at`.",
+    "Call only these tools with only these parameters",
+    "`job`: `id, project, workflow, profile, target, session, state, retry_of, created_at, updated_at`.",
+    "`result`: `text, truncated, result_path, pending_question, failure_kind, next_target, model, duration_ms, tokens`.",
+    "`tokens`: `context_used, context_window, input, output, cache_read, cache_write`, each an integer or null.",
     "Unknown tool arguments return `invalid_request`.",
+    "`path` is any directory inside the project; Refract resolves its Git root. A path outside Git returns `invalid_path`.",
     "At most one job per project runs at a time. Jobs within each project are admitted FIFO, bounded by the global `max_jobs` capacity; jobs in different projects may run concurrently up to that capacity.",
-    "`timeout_s=3600`", "`result_offset=0`", "0..3600",
-    "Capture `project.id` and `job.id` from returned envelopes.",
+    "`timeout_s` accepts 0..3600.",
+    "`result.pending_question` (`{question_id, text}`)",
+    "`answer` without a pending question, after the question expired, or on a terminal job returns `invalid_state`.",
+    "Every terminal job writes its full text to `result.result_path`. When `result.truncated` is true, read the full text from that file.",
+    "`failure_kind` is null on success, else one of `cancelled`, `circuit_open`, `replay_blocked`, `context_overflow`, `request_fatal`, `target_fatal`, `transient`.",
+    "The new job from `retry` keeps the source job's `session` and `fresh` values.",
+    "Responses stay below 30,000 characters and 9,000 UTF-8 bytes.",
+    "Capture `job.id` from returned envelopes.",
 ):
     assert detail in contract_flat, detail
+for removed in (
+    "project_" "resolve", "task_" "guide", "job_" "list", "job_" "report_error",
+    "result_" "offset", "next_" "offset", "fresh_" "session", "context_" "key",
+    "retry" "able", "project_" "id", "job_" "submit", "job_" "wait", "job_" "answer",
+    "job_" "cancel", "job_" "retry", "project_" "register",
+):
+    assert removed not in contract_flat, removed
 approved_errors = {
-    "unknown_project", "invalid_path", "alias_taken", "unknown_job",
-    "unknown_profile",
-    "invalid_state", "config_invalid", "daemon_stopping", "invalid_request",
-    "targets_unavailable", "response_too_large", "internal_error",
+    "invalid_path", "unknown_job", "unknown_profile", "invalid_state", "config_invalid",
+    "daemon_stopping", "invalid_request", "targets_unavailable", "response_too_large", "internal_error",
 }
 error_section = contract.split("## Errors", 1)[1].split("## ", 1)[0]
 error_codes = set(re.findall(r"^\| `([a-z_]+)` \|", error_section, re.M))
 assert error_codes == approved_errors, error_codes
-for detail in ("isError", "retryable", "next_action", "request ID"):
+for detail in ("isError", "next_action", "request ID", "retry_after_s"):
     assert detail in " ".join(error_section.split()), detail
-assert "root job or project ID" in contract_flat
-assert "project_register" not in contract
+assert "Honor the applied outcome and job ID" in contract_flat
+assert "Never blindly resubmit." in contract_flat
 assert plugin_version == market_version == codex_version == "2.4.0"
 repository = root.parent
 server_version = re.search(r'^version = "([^"]+)"', (repository / "server/pyproject.toml").read_text(), re.M).group(1)
-web_version = json.loads((repository / "server/web/package.json").read_text())["version"]
 sonar_version = re.search(r"^sonar\.projectVersion=(.+)$", (repository / "sonar-project.properties").read_text(), re.M).group(1)
-assert server_version == web_version == sonar_version == plugin_version, (server_version, web_version, sonar_version)
+assert server_version == sonar_version == plugin_version, (server_version, sonar_version)
 assert (repository / "README.md").read_text().startswith(f"# Refract {plugin_version}\n")
 assert f"Refract {plugin_version} ·" in (repository / "server/CLI_ARGUMENTS.md").read_text()
 for removed in ("depends_on", "cancelled_dependents", "invalid_dependency", "dependency_failed"):
@@ -91,7 +105,7 @@ for removed in ("depends_on", "cancelled_dependents", "invalid_dependency", "dep
 
 coordinator = (root / "skills/coordinating-multi-model-work/SKILL.md").read_text()
 setup = coordinator.split("## Setup and Resume", 1)[1].split("### Plan-Artifact Tracking", 1)[0]
-assert setup.index("using-git-worktrees") < setup.index("project_resolve")
+assert setup.index("using-git-worktrees") < setup.index("list(path)")
 assert "If unavailable, report it once" in setup
 assert "planning continues" in setup and "Execute and Review stop" in setup
 assert coordinator.index("After submission, do not edit the root") >= 0
@@ -138,50 +152,15 @@ assert "consolidation procedure" in (root / "skills/executing-plans/SKILL.md").r
 assert "consolidation procedure" in (root / "skills/coordinating-multi-model-work/references/review.md").read_text()
 
 review = (root / "skills/coordinating-multi-model-work/references/review.md").read_text()
-assert "job_report_error" in review
-assert "recursive reporting" in review
-assert "safe reconciliation" in review
-
-for diag_detail in (
-    "Database.prune_history",
-    "client observations",
-    "complete terminal pagination",
-    "Generic worker error text",
-):
-    assert diag_detail in contract, diag_detail
-
-assert "## Reported successful output recovery" in contract
-recovery_contract = contract.split("## Reported successful output recovery", 1)[1].split("## Errors", 1)[0]
-recovery_flat = " ".join(recovery_contract.split())
-for recovery_detail in (
-    "acknowledgement-level `retry: {retryable, next_target}`",
-    "Only `succeeded` plus category `output`",
-    "`retryable: false` and `next_target: null`",
-    "Read every terminal page",
-    "Inspect partial local files and external effects",
-    "original job and project IDs",
-    "fresh_session: true",
-    "matching project, workflow, and profile",
-    "routing hint, not authorization",
-    "identical original report request",
-    "retained report event",
-    "Never omit `next_target` to restart the primary target",
-    "Do not recursively report a reporting failure",
-    "`job_wait` remains unchanged",
-    "`job_retry` remains restricted",
-):
-    assert recovery_detail in recovery_flat, recovery_detail
-assert "top-level `retry:" in recovery_flat
-
-review = (root / "skills/coordinating-multi-model-work/references/review.md").read_text()
-assert "authoritative recovery procedure" in review
+assert "partial local effects" in review
+assert "retry(job_id, target=X)" in review
+assert "tool-contract.md#recovery" in review
 
 readme = (repository / "server/README.md").read_text()
-assert "Nine self-describing MCP tools" in readme
-assert "job_report_error" in readme
-assert "### Diagnostic Reporting" in readme
-assert "correlation metadata" in readme
-assert "2048 characters" in readme
+assert "Six self-describing MCP tools" in readme
+assert "### Recovery and Routing" in readme
+assert "### Diagnostic Reporting" not in readme
+assert "`result.result_path`" in readme
 assert "invalid_request" in readme
 
 for path in (root / "shared").glob("*.md"):
@@ -243,7 +222,8 @@ test "$(wc -l < skills/coordinating-multi-model-work/references/tool-contract.md
 test "$(wc -l < skills/coordinating-multi-model-work/references/review.md)" -le 100
 test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 100
 
-if grep -R -E 'project_resolve|task_guide|job_submit|job_wait|job_list|job_cancel|job_retry|job_answer|project_register|openmcp://' \
+v2_tools='project_''resolve|task_''guide|job_''submit|job_''wait|job_''list|job_''cancel|job_''retry|job_''answer|job_''report_error|project_''register|openmcp://'
+if grep -R -E "$v2_tools" \
     skills/brainstorming skills/systematic-debugging \
     skills/test-driven-development skills/verifying-before-completion; then
     printf 'Refract mechanics leaked into a policy skill\n' >&2
@@ -253,49 +233,49 @@ fi
 grep -q 'Every executable plan' skills/writing-plans/SKILL.md
 grep -q "Coordinator's plan \`base\` anchor" skills/writing-plans/SKILL.md
 grep -q 'Do not hard-code a default profile' skills/writing-plans/SKILL.md
-grep -q 'Do not call `task_guide`, register a project, or submit jobs' skills/writing-plans/SKILL.md
+grep -q 'Do not call `list` or `submit` while authoring.' skills/writing-plans/SKILL.md
 grep -q 'one Conventional Commit message for the completed plan' skills/writing-plans/SKILL.md
 grep -q 'sole branch commit replaces local phase checkpoints' skills/writing-plans/SKILL.md
-grep -q 'Do not re-run `task_guide` for an' skills/executing-plans/SKILL.md
+grep -q 'Do not call `list` for guidance during an active phase' skills/executing-plans/SKILL.md
 
 grep -q 'owns routing, admission' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Canonical gates use' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'sequential jobs one at a time' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Profiles may be' skills/coordinating-multi-model-work/references/tool-contract.md
-grep -q 'task_guide' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q '`list` takes no phase argument' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -R -E '^[[:space:]]*capabilities[[:space:]]*=' \
     commands hooks shared skills; then
     printf 'Removed Refract target capabilities remain documented\n' >&2
     exit 1
 fi
-grep -q 'project_resolve' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'job_list(project_id)' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'task_guide(project_id)' skills/coordinating-multi-model-work/SKILL.md
-grep -q '3600-second heartbeat' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -qF 'Pass the actual Git root, or any directory inside it, as `path` to' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'Reconcile with `list(path)`' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'Call `list(path)` once per phase.' skills/coordinating-multi-model-work/SKILL.md
+grep -q '3600-second default' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q 'You own the entire Git lifecycle' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'At most one job per project runs at a time' skills/coordinating-multi-model-work/references/tool-contract.md
 
-grep -q 'more_recent' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'the newest terminal jobs' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -q -E 'depends_on|cancelled_dependents|invalid_dependency|dependency_failed' skills/coordinating-multi-model-work/references/tool-contract.md; then
     printf 'removed job dependency surface remains in tool contract\n' >&2
     exit 1
 fi
-grep -q 'result_offset' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -qF 'When `result.truncated` is true, read the full text from that file.' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q '`other` requires an explicit mapping' skills/coordinating-multi-model-work/references/tool-contract.md
 # Preserve source-freeze and temporary-checkpoint policy guards.
 grep -q 'After submission, do not edit the root until that job is terminal.' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Create a temporary checkpoint commit only after it passes.' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'result.metadata.failure.kind' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'result.metadata.retry.retryable' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'result.metadata.retry.next_target' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'result.metadata.retry.next_target' skills/coordinating-multi-model-work/references/tool-contract.md
-if grep -qF '`result.metadata.telemetry.context_used_tokens` exceeds' skills/coordinating-multi-model-work/references/tool-contract.md; then
-    printf 'context_used_tokens object compared directly to threshold\n' >&2
+grep -qF 'result.failure_kind' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'retry(job_id)' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'result.next_target' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'result.next_target' skills/coordinating-multi-model-work/references/tool-contract.md
+if grep -qF 'result.metadata.' skills/coordinating-multi-model-work/SKILL.md skills/coordinating-multi-model-work/references/tool-contract.md; then
+    printf 'v2 result.metadata path found in coordinator guidance\n' >&2
     exit 1
 fi
-grep -qF 'result.metadata.telemetry.context_used_tokens.value' skills/coordinating-multi-model-work/references/tool-contract.md
-grep -q 'Always start every phase with `fresh_session=true`' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -qF '`result.tokens.context_used` exceeds 150,000' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'Always start every phase with `fresh=true`' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -qF 'For follow-up jobs within the same phase' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -q -E 'result\.metadata\.failure_kind|result\.metadata\.context_window_used' skills/coordinating-multi-model-work/SKILL.md skills/coordinating-multi-model-work/references/tool-contract.md; then
     printf 'removed legacy metadata field found in coordinator guidance\n' >&2

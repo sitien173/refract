@@ -6,100 +6,19 @@ import asyncio
 import shutil
 import subprocess
 import threading
-from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from refract.backends import BackendParams, BackendResult, agy, claude, codex, pi
+from refract.backends import AsyncEventHandler, BackendParams, BackendResult, agy, claude, codex, pi
 from refract.config import TargetConfig, validate_target_args
 from refract.logging_setup import get_logger
+from refract.telemetry import TOKEN_KEYS
 
 log = get_logger("drivers")
 _BACKENDS = {"agy": agy, "claude": claude, "codex": codex, "pi": pi}
-
-_PRODUCER_SENTINEL = object()
-
-
-class StreamBridge:
-    """Bounded queue bridging provider worker threads to daemon asyncio event loop."""
-
-    def __init__(self, loop: asyncio.AbstractEventLoop | None = None, queue_capacity: int = 256) -> None:
-        self.loop = loop or asyncio.get_running_loop()
-        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=queue_capacity)
-        self._closed = False
-        self._tool_activity = threading.Event()
-
-    @property
-    def has_tool_activity(self) -> bool:
-        """Report whether this bridge observed any tool.started event."""
-        return self._tool_activity.is_set()
-
-    def emit(self, event: dict[str, Any]) -> None:
-        """Synchronous emitter called on provider worker threads."""
-        if self._closed:
-            return
-        if isinstance(event, dict) and event.get("kind") == "tool.started":
-            self._tool_activity.set()
-        try:
-            running_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-
-        if running_loop is self.loop:
-            try:
-                self.queue.put_nowait(event)
-            except asyncio.QueueFull:
-                log.warning("Stream event dropped")
-            return
-
-        try:
-            future = asyncio.run_coroutine_threadsafe(self.queue.put(event), self.loop)
-            future.result()
-        except Exception:
-            log.warning("Stream event dropped", exc_info=True)
-
-    def close_producer(self) -> None:
-        """Signal end of production from a provider thread."""
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            running_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-
-        if running_loop is self.loop:
-            try:
-                self.queue.put_nowait(_PRODUCER_SENTINEL)
-            except asyncio.QueueFull:
-                pass
-            return
-
-        try:
-            future = asyncio.run_coroutine_threadsafe(self.queue.put(_PRODUCER_SENTINEL), self.loop)
-            future.result()
-        except Exception:
-            log.warning("Stream close signal dropped", exc_info=True)
-
-    async def close(self) -> None:
-        """Signal end of production from the event loop."""
-        if self._closed:
-            return
-        self._closed = True
-        await self.queue.put(_PRODUCER_SENTINEL)
-
-    async def consumer(self) -> AsyncIterator[dict[str, Any]]:
-        """Asynchronously iterate events until producer finishes."""
-        while True:
-            item = await self.queue.get()
-            try:
-                if item is _PRODUCER_SENTINEL:
-                    break
-                yield item
-            finally:
-                self.queue.task_done()
-
+_CANCEL_POLL_S = 0.05
 
 DriverOutcome = Literal[
     "SUCCESS",
@@ -118,7 +37,7 @@ class DriverResult:
     error: str
     error_code: str
     model: str | None = None
-    telemetry: dict[str, Any] | None = None
+    tokens: dict[str, int | None] = field(default_factory=lambda: dict.fromkeys(TOKEN_KEYS))
 
 
 def _target_args(target: TargetConfig) -> tuple[str, ...]:
@@ -195,7 +114,7 @@ def _normalize(result: BackendResult) -> DriverResult:
         outcome: DriverOutcome = "SUCCESS"
     elif result.error_class == "cancelled":
         outcome = "CANCELLED"
-    elif result.error_class == "bad_cd":
+    elif result.error_class in {"bad_cd", "request_fatal"}:
         outcome = "REQUEST_FATAL"
     elif result.error_class in {"missing_cli", "fatal_backend", "invalid_args"}:
         outcome = "TARGET_FATAL"
@@ -208,8 +127,24 @@ def _normalize(result: BackendResult) -> DriverResult:
         error=result.error,
         error_code=result.error_class,
         model=result.model,
-        telemetry=result.telemetry,
+        tokens=result.tokens,
     )
+
+
+async def _mirror_cancel(source: threading.Event, target: asyncio.Event) -> None:
+    """Set ``target`` once the thread-safe ``source`` is set."""
+    while not source.is_set():
+        await asyncio.sleep(_CANCEL_POLL_S)
+    target.set()
+
+
+async def _run_async_backend(backend: Any, params: BackendParams, on_event: AsyncEventHandler | None) -> BackendResult:
+    cancel = asyncio.Event()
+    mirror = asyncio.create_task(_mirror_cancel(params.cancel_event, cancel))
+    try:
+        return await backend.execute(params, cancel=cancel, on_event=on_event)
+    finally:
+        mirror.cancel()
 
 
 class DriverRegistry:
@@ -276,7 +211,7 @@ class DriverRegistry:
         session_id: str,
         timeout_s: int,
         cancel_event: threading.Event,
-        emitter: Callable[[dict[str, Any]], None] | None = None,
+        on_event: AsyncEventHandler | None = None,
         env: dict[str, str] | None = None,
     ) -> DriverResult:
         try:
@@ -305,11 +240,9 @@ class DriverRegistry:
             args=args,
             timeout_s=timeout_s,
             cancel_event=cancel_event,
-            emitter=emitter,
             env=env,
         )
-        result = await asyncio.to_thread(backend.execute, params)
-        return _normalize(result)
+        return _normalize(await _run_async_backend(backend, params, on_event))
 
 
-__all__ = ["DriverOutcome", "DriverRegistry", "DriverResult", "StreamBridge"]
+__all__ = ["DriverOutcome", "DriverRegistry", "DriverResult"]

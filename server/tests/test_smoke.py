@@ -1,9 +1,9 @@
+import asyncio
 import inspect
 import json
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import fields
 from pathlib import Path
 
@@ -11,81 +11,10 @@ import pytest
 
 from refract.backends import BackendResult
 from refract.backends import BackendParams
+from tests.claude_cli import stub_claude
+from tests.cli_stub import execute_sync, fake_run_process, shell_fake_as_process
 from refract.backends.agy import execute as agy_execute
 from refract.backends.codex import execute as codex_execute
-
-
-def test_shell_stream_reports_nonzero_exit_after_output() -> None:
-    from refract.backends._shell import ShellCommandFailed, stream_shell_command_lines
-
-    executable_name = Path(sys.executable).name
-    command = [sys.executable, "-c", "print('unknown option'); raise SystemExit(2)"]
-    stream = stream_shell_command_lines(
-        command,
-        executable_name=executable_name,
-        line_transform=str.strip,
-        terminate_wait_s=1,
-        check_returncode=True,
-    )
-
-    assert next(stream) == "unknown option"
-    with pytest.raises(ShellCommandFailed, match="status 2"):
-        next(stream)
-
-
-_CHATTY_CHILD = "import time\nwhile True:\n    print('tick', flush=True)\n    time.sleep(0.05)"
-
-
-def test_shell_stream_cancels_while_child_keeps_printing() -> None:
-    from refract.backends._shell import ShellCommandCancelled, stream_shell_command_lines
-
-    cancel = threading.Event()
-    stream = stream_shell_command_lines(
-        [sys.executable, "-c", _CHATTY_CHILD],
-        executable_name=Path(sys.executable).name,
-        line_transform=str.strip,
-        terminate_wait_s=1,
-        cancel_event=cancel,
-    )
-
-    assert next(stream) == "tick"
-    cancel.set()
-    started = time.monotonic()
-    with pytest.raises(ShellCommandCancelled):
-        for _ in stream:
-            pass
-    assert time.monotonic() - started < 3
-
-
-def test_shell_stream_times_out_while_child_keeps_printing() -> None:
-    from refract.backends._shell import stream_shell_command_lines
-
-    started = time.monotonic()
-    with pytest.raises(subprocess.TimeoutExpired):
-        for _ in stream_shell_command_lines(
-            [sys.executable, "-c", _CHATTY_CHILD],
-            executable_name=Path(sys.executable).name,
-            timeout_s=1,
-            line_transform=str.strip,
-            terminate_wait_s=1,
-        ):
-            pass
-    assert time.monotonic() - started < 4
-
-
-def test_shell_stream_writes_stdin_text_to_child() -> None:
-    from refract.backends._shell import stream_shell_command_lines
-
-    lines = list(stream_shell_command_lines(
-        [sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"],
-        executable_name=Path(sys.executable).name,
-        line_transform=str.strip,
-        terminate_wait_s=1,
-        check_returncode=True,
-        stdin_text="prompt via stdin",
-    ))
-
-    assert lines == ["PROMPT VIA STDIN"]
 
 
 def test_v1_server_facades_and_resource_uri_model_are_removed() -> None:
@@ -201,69 +130,6 @@ def test_serve_reports_invalid_configuration(monkeypatch, tmp_path, capsys) -> N
     assert raised.value.code == 1
     assert "Configuration error" in error
     assert "[targets]" in error
-
-
-def test_codex_session_file_fallback(monkeypatch, tmp_path) -> None:
-    from refract.backends.codex import _extract_session_id_from_latest_session
-
-    session_id = "019e532a-2d92-7281-8bd1-0110af0a34aa"
-    sessions_dir = tmp_path / "codex-home" / "sessions" / "2026" / "05" / "23"
-    sessions_dir.mkdir(parents=True)
-    session_file = sessions_dir / f"rollout-2026-05-23T11-48-53-{session_id}.jsonl"
-    prompt = "Reply with exactly the word PONG and nothing else."
-    session_file.write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "type": "session_meta",
-                        "payload": {
-                            "id": session_id,
-                            "cwd": str(tmp_path),
-                            "originator": "codex_exec",
-                        },
-                    }
-                ),
-                json.dumps({"type": "event_msg", "payload": {"message": prompt}}),
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
-
-    assert _extract_session_id_from_latest_session(tmp_path, prompt, time.time() - 1) == session_id
-
-
-def test_codex_session_file_fallback_without_prompt_match(monkeypatch, tmp_path) -> None:
-    from refract.backends.codex import _extract_session_id_from_latest_session
-
-    session_id = "019e532a-2d92-7281-8bd1-0110af0a34aa"
-    sessions_dir = tmp_path / "codex-home" / "sessions" / "2026" / "05" / "23"
-    sessions_dir.mkdir(parents=True)
-    session_file = sessions_dir / f"rollout-2026-05-23T11-48-53-{session_id}.jsonl"
-    session_file.write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "type": "session_meta",
-                        "payload": {
-                            "id": session_id,
-                            "cwd": str(tmp_path),
-                            "originator": "codex_exec",
-                        },
-                    }
-                ),
-                json.dumps({"type": "event_msg", "payload": {"message": "different prompt"}}),
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
-
-    assert _extract_session_id_from_latest_session(tmp_path, "prompt that is not in file", time.time() - 1) == session_id
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["Created", "Streaming"])
 async def test_agy_extracts_session_id_from_conversation_log(monkeypatch, tmp_path, prefix) -> None:
@@ -277,9 +143,9 @@ async def test_agy_extracts_session_id_from_conversation_log(monkeypatch, tmp_pa
         yield "PONG"
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(agy_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = agy_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await agy_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "OK"
     assert out.SESSION_ID == session_id
@@ -320,9 +186,9 @@ async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
 
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(agy_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = agy_backend.execute(
+    out = await agy_backend.execute(
         BackendParams(PROMPT="x", cd=tmp_path, SESSION_ID="resume-session-id")
     )
 
@@ -351,9 +217,9 @@ async def test_agy_prefers_stdout_reply_over_noisy_log_file(monkeypatch, tmp_pat
         yield "pong from agy"
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(agy_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = agy_backend.execute(
+    out = await agy_backend.execute(
         BackendParams(PROMPT="x", cd=tmp_path, args=("--mode", "plan", "--sandbox"))
     )
 
@@ -378,9 +244,9 @@ async def test_agy_timeout_with_partial_output_is_fatal(monkeypatch, tmp_path) -
         raise subprocess.TimeoutExpired(cmd=["agy"], timeout=1)
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(agy_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(agy_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = agy_backend.execute(BackendParams(PROMPT="x", cd=tmp_path, timeout_s=1))
+    out = await agy_backend.execute(BackendParams(PROMPT="x", cd=tmp_path, timeout_s=1))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "timeout"
@@ -389,7 +255,7 @@ async def test_agy_timeout_with_partial_output_is_fatal(monkeypatch, tmp_path) -
 @pytest.mark.asyncio
 async def test_bad_cd_agy_fatal() -> None:
     bad = Path("C:/definitely/not/real/path")
-    out = agy_execute(BackendParams(PROMPT="x", cd=bad))
+    out = await agy_execute(BackendParams(PROMPT="x", cd=bad))
     assert out.outcome == "FATAL"
     assert out.error_class == "bad_cd"
 
@@ -397,52 +263,36 @@ async def test_bad_cd_agy_fatal() -> None:
 @pytest.mark.asyncio
 async def test_bad_cd_codex_fatal() -> None:
     bad = Path("C:/definitely/not/real/path")
-    out = codex_execute(BackendParams(PROMPT="x", cd=bad))
+    out = await codex_execute(BackendParams(PROMPT="x", cd=bad))
     assert out.outcome == "FATAL"
     assert out.error_class == "bad_cd"
 
 
 @pytest.mark.asyncio
-async def test_codex_uses_input_session_id_when_no_extraction_sources_match(monkeypatch, tmp_path) -> None:
+async def test_codex_resume_without_exact_session_source_stores_no_session_id(monkeypatch, tmp_path) -> None:
     from refract.backends import codex as codex_backend
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        yield "PONG"
+        Path(cmd[cmd.index("-o") + 1]).write_text("PONG", encoding="utf-8")
+        return iter(())
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
+    monkeypatch.setattr(codex_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = codex_backend.execute(BackendParams(PROMPT="x", cd=tmp_path, SESSION_ID="resume-session-id"))
+    out = await codex_backend.execute(BackendParams(PROMPT="x", cd=tmp_path, SESSION_ID="resume-session-id"))
 
     assert out.outcome == "OK"
-    assert out.SESSION_ID == "resume-session-id"
+    assert out.SESSION_ID == ""
     assert out.agent_messages == "PONG"
-    assert out.error_class == ""
+    assert out.error_class == "warning"
 
 
-def test_codex_session_resolution_skips_filesystem_when_stdout_has_id(
-    monkeypatch,
-    tmp_path,
-) -> None:
+def test_codex_thread_started_id_is_first_exact_source() -> None:
     from refract.backends import codex as codex_backend
 
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
 
-    def fail_scan(*args):
-        raise AssertionError("session filesystem should not be scanned")
-
-    monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", fail_scan)
-
-    assert codex_backend._resolve_session_id(
-        parsed_session_id=session_id,
-        last_message="",
-        stdout_text="",
-        cwd=tmp_path,
-        prompt="x",
-        started_at=time.time(),
-        fallback_session_id="",
-    ) == (session_id, "stdout-jsonl:thread.started")
+    assert codex_backend._resolve_session_id(session_id, "", "") == (session_id, "stdout-jsonl:thread.started")
 
 
 @pytest.mark.asyncio
@@ -451,21 +301,16 @@ async def test_codex_nonzero_exit_is_fatal_despite_diagnostic_output(
     tmp_path,
 ) -> None:
     from refract.backends import codex as codex_backend
-    from refract.backends._shell import ShellCommandFailed
+    from tests.cli_stub import ShellCommandFailed
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield "error: unknown option"
         raise ShellCommandFailed(2)
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(
-        codex_backend,
-        "_extract_session_id_from_latest_session",
-        lambda *args: "",
-    )
+    monkeypatch.setattr(codex_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = codex_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await codex_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "execution_error"
@@ -475,24 +320,21 @@ async def test_codex_nonzero_exit_is_fatal_despite_diagnostic_output(
 async def test_claude_json_result_uses_last_result_and_transport_argv(monkeypatch, tmp_path) -> None:
     from refract.backends import claude as claude_backend
 
-    captured = {}
-    first_session = "first-session"
-    final_session = "final-session"
+    record = tmp_path / "record.json"
+    stub_claude(
+        monkeypatch,
+        tmp_path,
+        [
+            "Claude diagnostic: startup hook",
+            json.dumps({"type": "assistant", "message": "ignore me"}),
+            json.dumps({"type": "result", "subtype": "success", "session_id": "first-session", "result": "first"}),
+            "not JSON diagnostic",
+            json.dumps({"type": "result", "subtype": "success", "session_id": "final-session", "result": "PONG"}),
+        ],
+        record=record,
+    )
 
-    def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        captured["cmd"] = cmd
-        captured["cwd"] = cwd
-        captured["stdin"] = kwargs.get("stdin_text")
-        yield "Claude diagnostic: startup hook"
-        yield json.dumps({"type": "assistant", "message": "ignore me"})
-        yield json.dumps({"type": "result", "subtype": "success", "session_id": first_session, "result": "first"})
-        yield "not JSON diagnostic"
-        yield json.dumps({"type": "result", "subtype": "success", "session_id": final_session, "result": "PONG"})
-
-    monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
-
-    out = claude_backend.execute(
+    out = await claude_backend.execute(
         BackendParams(
             PROMPT="--prompt",
             cd=tmp_path,
@@ -501,15 +343,16 @@ async def test_claude_json_result_uses_last_result_and_transport_argv(monkeypatc
         )
     )
 
-    assert captured["cmd"] == [
+    captured = json.loads(record.read_text(encoding="utf-8"))
+    assert captured["argv"] == [
         "claude", "--tools", "Read", "-p", "--permission-mode",
         "bypassPermissions", "--output-format", "json", "--resume",
         "resume-session",
     ]
     assert captured["stdin"] == "--prompt"
-    assert Path(captured["cwd"]) == tmp_path.absolute()
+    assert Path(captured["cwd"]).resolve() == tmp_path.resolve()
     assert out.outcome == "OK"
-    assert out.SESSION_ID == final_session
+    assert out.SESSION_ID == "final-session"
     assert out.agent_messages == "PONG"
 
 
@@ -517,26 +360,25 @@ async def test_claude_json_result_uses_last_result_and_transport_argv(monkeypatc
 async def test_claude_new_session_argv_omits_resume(monkeypatch, tmp_path) -> None:
     from refract.backends import claude as claude_backend
 
-    captured = {}
+    record = tmp_path / "record.json"
+    stub_claude(
+        monkeypatch,
+        tmp_path,
+        [json.dumps({"type": "result", "subtype": "success", "session_id": "new-session", "result": "PONG"})],
+        record=record,
+    )
 
-    def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        captured["cmd"] = cmd
-        captured["stdin"] = kwargs.get("stdin_text")
-        yield json.dumps({"type": "result", "subtype": "success", "session_id": "new-session", "result": "PONG"})
-
-    monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
-
-    out = claude_backend.execute(
+    out = await claude_backend.execute(
         BackendParams(PROMPT="--prompt", cd=tmp_path, args=("--tools", "Read"))
     )
 
-    assert captured["cmd"] == [
+    captured = json.loads(record.read_text(encoding="utf-8"))
+    assert captured["argv"] == [
         "claude", "--tools", "Read", "-p", "--permission-mode",
         "bypassPermissions", "--output-format", "json",
     ]
     assert captured["stdin"] == "--prompt"
-    assert "--resume" not in captured["cmd"]
+    assert "--resume" not in captured["argv"]
     assert out.SESSION_ID == "new-session"
 
 
@@ -544,19 +386,19 @@ async def test_claude_new_session_argv_omits_resume(monkeypatch, tmp_path) -> No
 async def test_claude_error_result_is_fatal(monkeypatch, tmp_path) -> None:
     from refract.backends import claude as claude_backend
 
-    def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        yield json.dumps({
+    stub_claude(
+        monkeypatch,
+        tmp_path,
+        [json.dumps({
             "type": "result",
             "subtype": "error_during_login",
             "is_error": True,
             "result": "login failed",
             "api_error_status": 401,
-        })
+        })],
+    )
 
-    monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
-
-    out = claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "fatal_backend"
@@ -568,13 +410,9 @@ async def test_claude_error_result_is_fatal(monkeypatch, tmp_path) -> None:
 async def test_claude_result_falls_back_to_input_session_id(monkeypatch, tmp_path) -> None:
     from refract.backends import claude as claude_backend
 
-    def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        yield json.dumps({"type": "result", "subtype": "success", "result": "PONG"})
+    stub_claude(monkeypatch, tmp_path, [json.dumps({"type": "result", "subtype": "success", "result": "PONG"})])
 
-    monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
-
-    out = claude_backend.execute(
+    out = await claude_backend.execute(
         BackendParams(PROMPT="x", cd=tmp_path, SESSION_ID="resume-session")
     )
 
@@ -585,16 +423,15 @@ async def test_claude_result_falls_back_to_input_session_id(monkeypatch, tmp_pat
 @pytest.mark.asyncio
 async def test_claude_nonzero_exit_is_fatal_despite_agent_output(monkeypatch, tmp_path) -> None:
     from refract.backends import claude as claude_backend
-    from refract.backends._shell import ShellCommandFailed
 
-    def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        yield json.dumps({"type": "result", "subtype": "success", "session_id": "session", "result": "partial"})
-        raise ShellCommandFailed(2)
+    stub_claude(
+        monkeypatch,
+        tmp_path,
+        [json.dumps({"type": "result", "subtype": "success", "session_id": "session", "result": "partial"})],
+        exit_code=2,
+    )
 
-    monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(claude_backend, "run_shell_command", fake_run_shell_command)
-
-    out = claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "execution_error"
@@ -604,24 +441,16 @@ async def test_claude_nonzero_exit_is_fatal_despite_agent_output(monkeypatch, tm
 @pytest.mark.asyncio
 async def test_claude_timeout_and_cancel_are_mapped(monkeypatch, tmp_path) -> None:
     from refract.backends import claude as claude_backend
-    from refract.backends._shell import ShellCommandCancelled
 
-    def timeout_run(cmd, cwd=None, **kwargs):
-        yield "partial"
-        raise subprocess.TimeoutExpired(cmd=cmd, timeout=1)
-
-    monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(claude_backend, "run_shell_command", timeout_run)
-    timed_out = claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path, timeout_s=1))
+    stub_claude(monkeypatch, tmp_path, ["partial"], sleep_s=30)
+    timed_out = await claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path, timeout_s=1))
     assert timed_out.outcome == "FATAL"
     assert timed_out.error_class == "timeout"
+    assert timed_out.error == "claude subprocess timed out after 1s"
 
-    def cancel_run(cmd, cwd=None, **kwargs):
-        raise ShellCommandCancelled("cancelled")
-        yield "unreachable"
-
-    monkeypatch.setattr(claude_backend, "run_shell_command", cancel_run)
-    cancelled = claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    cancel = asyncio.Event()
+    asyncio.get_running_loop().call_later(0.2, cancel.set)
+    cancelled = await claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path), cancel=cancel)
     assert cancelled.outcome == "FATAL"
     assert cancelled.error_class == "cancelled"
 
@@ -632,7 +461,7 @@ async def test_missing_claude_cli_is_fatal(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: None)
 
-    out = claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await claude_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "missing_cli"
@@ -642,7 +471,7 @@ async def test_missing_claude_cli_is_fatal(monkeypatch, tmp_path) -> None:
 async def test_bad_cd_claude_fatal() -> None:
     from refract.backends import claude as claude_backend
 
-    out = claude_backend.execute(
+    out = await claude_backend.execute(
         BackendParams(PROMPT="x", cd=Path("C:/definitely/not/real/path"))
     )
 
@@ -656,7 +485,7 @@ async def test_pi_nonzero_exit_is_fatal_despite_agent_output(
     tmp_path,
 ) -> None:
     from refract.backends import pi as pi_backend
-    from refract.backends._shell import ShellCommandFailed
+    from tests.cli_stub import ShellCommandFailed
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps(
@@ -668,9 +497,9 @@ async def test_pi_nonzero_exit_is_fatal_despite_agent_output(
         raise ShellCommandFailed(2)
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(pi_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "execution_error"
@@ -690,9 +519,9 @@ async def test_pi_server_error_auth_unavailable_is_fatal(monkeypatch, tmp_path) 
         )
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(pi_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "fatal_backend"
@@ -723,11 +552,11 @@ async def test_pi_context_overflow_real_trace(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(
         pi_backend,
-        "run_shell_command",
-        lambda *args, **kwargs: (line for line in PI_CONTEXT_OVERFLOW_TRACE_FIXTURE),
+        "run_process",
+        fake_run_process(PI_CONTEXT_OVERFLOW_TRACE_FIXTURE),
     )
 
-    out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "context_overflow"
@@ -761,11 +590,11 @@ async def test_pi_structured_assistant_error_with_partial_content_is_fatal(
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(
         pi_backend,
-        "run_shell_command",
-        lambda *args, **kwargs: (line for line in fixture),
+        "run_process",
+        fake_run_process(fixture),
     )
 
-    out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "execution_error"
@@ -803,11 +632,11 @@ async def test_pi_close_negative_overflow_cases_not_classified_as_overflow(
         monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
         monkeypatch.setattr(
             pi_backend,
-            "run_shell_command",
-            lambda *args, **kwargs: (line for line in fixture),
+            "run_process",
+            fake_run_process(fixture),
         )
 
-        out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+        out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
         assert out.outcome == "FATAL"
         assert out.error_class != "context_overflow"
@@ -857,11 +686,11 @@ async def test_pi_boundary_and_case_negative_overflow_cases(
         monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
         monkeypatch.setattr(
             pi_backend,
-            "run_shell_command",
-            lambda *args, **kwargs: (line for line in fixture),
+            "run_process",
+            fake_run_process(fixture),
         )
 
-        out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+        out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
         assert out.outcome == "FATAL"
         assert out.error_class != "context_overflow", f"False positive overflow for {msg}"
@@ -890,11 +719,11 @@ async def test_pi_assistant_prose_containing_overflow_token_is_not_overflow(
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(
         pi_backend,
-        "run_shell_command",
-        lambda *args, **kwargs: (line for line in fixture),
+        "run_process",
+        fake_run_process(fixture),
     )
 
-    out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "OK"
     assert out.error_class == ""
@@ -905,17 +734,17 @@ async def test_pi_assistant_prose_containing_overflow_token_is_not_overflow(
 async def test_pi_cancellation_precedence_over_overflow(monkeypatch, tmp_path) -> None:
     from refract.backends import pi as pi_backend
 
-    cancel_evt = threading.Event()
-    cancel_evt.set()
+    cancel = asyncio.Event()
+    cancel.set()
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(
         pi_backend,
-        "run_shell_command",
-        lambda *args, **kwargs: (line for line in PI_CONTEXT_OVERFLOW_TRACE_FIXTURE),
+        "run_process",
+        fake_run_process(PI_CONTEXT_OVERFLOW_TRACE_FIXTURE),
     )
 
-    out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path, cancel_event=cancel_evt))
+    out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path), cancel=cancel)
 
     assert out.outcome == "FATAL"
     assert out.error_class == "cancelled"
@@ -927,7 +756,7 @@ async def test_pi_overflow_overrides_nonzero_exit_and_partial_output(
     tmp_path,
 ) -> None:
     from refract.backends import pi as pi_backend
-    from refract.backends._shell import ShellCommandFailed
+    from tests.cli_stub import ShellCommandFailed
 
     def fake_run_shell_command(cmd, cwd=None, **kwargs):
         yield json.dumps({"type": "session", "id": "pi-sess-1"})
@@ -945,9 +774,9 @@ async def test_pi_overflow_overrides_nonzero_exit_and_partial_output(
         raise ShellCommandFailed(2)
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(pi_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "context_overflow"
@@ -962,9 +791,9 @@ async def test_pi_stderr_overflow_detected(monkeypatch, tmp_path) -> None:
         yield "Error from provider: context_length_exceeded in session buffer"
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(pi_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
+    out = await pi_backend.execute(BackendParams(PROMPT="x", cd=tmp_path))
 
     assert out.outcome == "FATAL"
     assert out.error_class == "context_overflow"
@@ -989,29 +818,30 @@ def test_pi_driver_normalizes_context_overflow_to_retryable() -> None:
 @pytest.mark.asyncio
 async def test_codex_does_not_inject_session_metadata_line(monkeypatch, tmp_path) -> None:
     from refract.backends import codex as codex_backend
+    from refract.backends._process import ProcessOutcome
 
     captured = {}
     session_id = "b658ef34-d18c-4294-b329-0ae5dee0157b"
 
-    def fake_run_shell_command(cmd, cwd=None, **kwargs):
-        captured["cmd"] = cmd
+    async def fake_run_process(argv, stdin, env, cwd, deadline, cancel, on_line):
+        captured["cmd"] = argv
         captured["cwd"] = cwd
-        captured["stdin"] = kwargs.get("stdin_text")
-        yield "Reading additional input from stdin..."
-        yield json.dumps({"type": "thread.started", "thread_id": session_id})
-        yield json.dumps(
+        captured["stdin"] = stdin
+        await on_line("Reading additional input from stdin...")
+        await on_line(json.dumps({"type": "thread.started", "thread_id": session_id}))
+        await on_line(json.dumps(
             {
                 "type": "item.completed",
                 "item": {"id": "item_0", "type": "agent_message", "text": "PONG"},
             }
-        )
-        yield json.dumps({"type": "turn.completed"})
+        ))
+        await on_line(json.dumps({"type": "turn.completed"}))
+        return ProcessOutcome()
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr(codex_backend, "run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(codex_backend, "_extract_session_id_from_latest_session", lambda cwd, prompt, started_at: "")
+    monkeypatch.setattr(codex_backend, "run_process", fake_run_process)
 
-    out = codex_backend.execute(
+    out = await codex_backend.execute(
         BackendParams(
             PROMPT="x",
             cd=tmp_path,
@@ -1053,9 +883,9 @@ async def test_pi_json_mode_extracts_reply_session_and_cli_options(monkeypatch, 
         yield json.dumps({"type": "agent_end", "messages": []})
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(pi_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = pi_backend.execute(
+    out = await pi_backend.execute(
         BackendParams(
             PROMPT="x",
             cd=tmp_path,
@@ -1070,7 +900,7 @@ async def test_pi_json_mode_extracts_reply_session_and_cli_options(monkeypatch, 
     assert captured["cmd"] == [
         "pi", "--provider", "openai", "--offline", "--model", "openai/gpt-5",
         "--thinking", "high", "--approve", "--mode", "json", "--session",
-        "existing-session", "x",
+        "existing-session",
     ]
     assert Path(captured["cwd"]) == tmp_path.absolute()
     assert out.outcome == "OK"
@@ -1094,9 +924,9 @@ async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkey
         )
 
     monkeypatch.setattr("refract.backends.shutil.which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(pi_backend, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(pi_backend, "run_process", shell_fake_as_process(fake_run_shell_command))
 
-    out = pi_backend.execute(
+    out = await pi_backend.execute(
         BackendParams(
             PROMPT="review",
             cd=tmp_path,
@@ -1127,7 +957,6 @@ async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkey
         "read,grep,find,ls",
         "--mode",
         "json",
-        "review",
     ]
     assert out.outcome == "OK"
 
@@ -1139,7 +968,7 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
 
     captured = {}
 
-    def fake_execute(params):
+    async def fake_execute(params, *, cancel=None, on_event=None):
         captured["params"] = params
         return BackendResult(
             outcome="OK",
@@ -1195,7 +1024,7 @@ async def test_driver_compiles_claude_isolated_target_args(monkeypatch, tmp_path
 
     captured = {}
 
-    def fake_execute(params):
+    async def fake_execute(params, *, cancel=None, on_event=None):
         captured["params"] = params
         return BackendResult(outcome="OK", SESSION_ID="session", agent_messages="reviewed", error="", error_class="")
 
@@ -1240,7 +1069,7 @@ async def test_driver_compiles_claude_read_only_args(monkeypatch, tmp_path) -> N
 
     captured = {}
 
-    def fake_execute(params):
+    async def fake_execute(params, *, cancel=None, on_event=None):
         captured["args"] = params.args
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="reviewed", error="", error_class="")
 
@@ -1264,7 +1093,7 @@ async def test_driver_compiles_claude_model_and_reasoning_args(monkeypatch, tmp_
 
     captured = {}
 
-    def fake_execute(params):
+    async def fake_execute(params, *, cancel=None, on_event=None):
         captured["args"] = params.args
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="reviewed", error="", error_class="")
 
@@ -1293,7 +1122,7 @@ async def test_driver_dispatches_claude_instead_of_pi(monkeypatch, tmp_path) -> 
 
     calls = []
 
-    def fake_claude(params):
+    async def fake_claude(params, *, cancel=None, on_event=None):
         calls.append("claude")
         return BackendResult(outcome="OK", SESSION_ID="session", agent_messages="reviewed", error="", error_class="")
 
@@ -1342,7 +1171,7 @@ async def test_driver_enforces_approval_after_normal_pi_target_args(monkeypatch,
 
     captured = {}
 
-    def fake_execute(params):
+    async def fake_execute(params, *, cancel=None, on_event=None):
         captured["args"] = params.args
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
@@ -1424,11 +1253,11 @@ async def test_driver_compiles_agy_and_codex_target_configuration(monkeypatch, t
 
     captured = {}
 
-    def fake_agy(params):
+    async def fake_agy(params, *, cancel=None, on_event=None):
         captured["agy"] = params
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 
-    def fake_codex(params):
+    async def fake_codex(params, *, cancel=None, on_event=None):
         captured["codex"] = params
         return BackendResult(outcome="OK", SESSION_ID="", agent_messages="", error="", error_class="")
 

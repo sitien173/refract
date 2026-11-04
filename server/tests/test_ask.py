@@ -161,25 +161,95 @@ async def test_ask_atomic_validation_and_registration_rejects_revoked_token(monk
 
 
 
-def test_stream_shell_command_lines_injects_env() -> None:
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+@pytest.mark.asyncio
+async def test_answer_after_question_deadline_is_rejected(monkeypatch) -> None:
+    import types
+
+    clock = _Clock()
+    monkeypatch.setattr("refract.ask.time", types.SimpleNamespace(monotonic=clock.monotonic))
+    registry = AskRegistry()
+    token = registry.issue_token("job-late")
+    task = asyncio.create_task(registry.ask(token, "Still there?", timeout_s=0.2))
+    while not registry.has_pending("job-late"):
+        await asyncio.sleep(0)
+
+    clock.now += 1.0
+
+    assert registry.deliver_answer("job-late", "too late") is False
+    assert await task == NO_ANSWER_TEXT
+    assert not registry.has_pending("job-late")
+
+
+@pytest.mark.asyncio
+async def test_revoked_tokens_are_not_retained() -> None:
+    registry = AskRegistry()
+    tokens = [registry.issue_token(f"job-{index}", workflow_timeout_s=60) for index in range(20)]
+    tokens.append(registry.issue_token("job-0"))
+    for index in range(20):
+        registry.revoke_token(f"job-{index}")
+
+    assert registry._tokens == {}
+    assert not hasattr(registry, "_revoked_tokens")
+    assert not hasattr(registry, "_deadlines")
+    for token in tokens:
+        with pytest.raises(AskAuthError, match="unknown"):
+            registry.validate_token(token)
+
+
+def test_ask_client_timeout_is_ask_timeout_plus_ten(monkeypatch, capsys) -> None:
+    import socket
+
+    from refract import cli
+
+    seen: dict[str, float] = {}
+
+    def unresponsive(request, timeout=None):
+        seen["timeout"] = timeout
+        raise socket.timeout("timed out")
+
+    monkeypatch.setattr(cli, "urlopen", unresponsive)
+    monkeypatch.setenv("REFRACT_ASK_URL", "http://127.0.0.1:1/ask")
+    monkeypatch.setenv("REFRACT_ASK_TOKEN", "token")
+    monkeypatch.setenv("REFRACT_ASK_TIMEOUT_S", "45")
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["ask", "Anyone there?"])
+
+    assert exc_info.value.code == 1
+    assert seen["timeout"] == 55
+    assert "connection failed" in capsys.readouterr().err.lower()
+
+    monkeypatch.delenv("REFRACT_ASK_TIMEOUT_S")
+    with pytest.raises(SystemExit):
+        cli.main(["ask", "Anyone there?"])
+    assert seen["timeout"] == 310
+
+
+def test_run_process_injects_env() -> None:
+    import asyncio
     import sys
-    from refract.backends import BackendParams
-    from refract.backends._shell import stream_shell_command_lines
+    from refract.backends._process import run_process
 
     cmd = [
         sys.executable,
         "-c",
         "import os; print('URL=' + os.environ.get('REFRACT_ASK_URL', '')); print('TOK=' + os.environ.get('REFRACT_ASK_TOKEN', ''))",
     ]
-    lines = list(
-        stream_shell_command_lines(
-            cmd,
-            executable_name=sys.executable,
-            terminate_wait_s=5,
-            line_transform=lambda line: line.strip(),
-            env={"REFRACT_ASK_URL": "http://127.0.0.1:8765/ask", "REFRACT_ASK_TOKEN": "secret-12345"},
-        )
-    )
+    lines: list[str] = []
+
+    async def collect(line: str) -> None:
+        lines.append(line.strip())
+
+    env = {"REFRACT_ASK_URL": "http://127.0.0.1:8765/ask", "REFRACT_ASK_TOKEN": "secret-12345"}
+    asyncio.run(run_process(cmd, None, env, None, None, None, collect))
     assert "URL=http://127.0.0.1:8765/ask" in lines
     assert "TOK=secret-12345" in lines
 
@@ -210,7 +280,7 @@ async def test_execution_attempt_injects_and_revokes_token_and_keeps_secret(tmp_
         def supports_structured_streaming(self, target):
             return False
 
-        async def execute(self, *, target, prompt, cwd, session_id, timeout_s, cancel_event, emitter=None, env=None):
+        async def execute(self, *, target, prompt, cwd, session_id, timeout_s, cancel_event, on_event=None, env=None):
             nonlocal captured_env
             if env:
                 captured_env.update(env)
@@ -219,16 +289,16 @@ async def test_execution_attempt_injects_and_revokes_token_and_keeps_secret(tmp_
 
     executor = TargetExecutor(cfg, db, MockDrivers(), ask_registry=registry)
     job_id = "job-exec-1"
-    project = db.upsert_project(project_id="proj-1", alias="alias", root=str(tmp_path))
+    project = db.upsert_project(project_id="proj-1", root=str(tmp_path))
     db.create_job(
         job_id=job_id,
         project_id="proj-1",
-        context_key="main",
+        session="main",
         workflow="implement",
         profile="balanced",
         prompt="do work",
         execution_plan_json="{}",
-        fresh_session=True,
+        fresh=True,
     )
     db.start_job(job_id)
 
@@ -248,7 +318,7 @@ async def test_execution_attempt_injects_and_revokes_token_and_keeps_secret(tmp_
         job_id=job_id,
         project=project,
         workflow="implement",
-        context_key="main",
+        session="main",
         plan=plan,
         prompt="do work",
         cwd=tmp_path,
@@ -258,6 +328,7 @@ async def test_execution_attempt_injects_and_revokes_token_and_keeps_secret(tmp_
     assert result.result.outcome == "SUCCESS"
     assert "REFRACT_ASK_URL" in captured_env
     assert "REFRACT_ASK_TOKEN" in captured_env
+    assert captured_env["REFRACT_ASK_TIMEOUT_S"] == str(cfg.ask_timeout_s)
     issued_token = captured_env["REFRACT_ASK_TOKEN"]
 
     # Token is revoked after the attempt ends
@@ -271,12 +342,8 @@ async def test_execution_attempt_injects_and_revokes_token_and_keeps_secret(tmp_
             for v in record.extra.values():
                 assert issued_token not in str(v)
 
-    # Token is absent from database events
-    events = db.events(job_id)
-    for ev in events:
-        import json
-        ev_str = json.dumps(ev)
-        assert issued_token not in ev_str
+    # Token is absent from the stored job row
+    assert all(issued_token not in str(value) for value in db.job_record(job_id).values())
 
 
 @pytest.mark.asyncio
@@ -297,7 +364,7 @@ async def test_runtime_cancel_releases_pending_ask(tmp_path) -> None:
         await asyncio.sleep(0.01)
         assert runtime.ask_registry.has_pending("job-cancel-test")
 
-        runtime.database.upsert_project(project_id="proj-c", alias="alias-c", root=str(tmp_path))
+        runtime.database.upsert_project(project_id="proj-c", root=str(tmp_path))
         runtime.database.create_job(
             job_id="job-cancel-test",
             project_id="proj-c",
@@ -305,7 +372,7 @@ async def test_runtime_cancel_releases_pending_ask(tmp_path) -> None:
             profile="balanced",
             prompt="work",
             execution_plan_json="{}",
-            context_key="main",
+            session="main",
         )
         runtime.database.start_job("job-cancel-test")
 

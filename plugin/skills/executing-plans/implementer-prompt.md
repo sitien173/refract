@@ -1,6 +1,6 @@
 # Implementer Prompt Template
 
-This file owns the goal-oriented meta-prompt (`phase-<NN>/prompt.md`) and the Gate 2 `job_submit.prompt` envelope. The Coordinator synthesizes `PLAN.md`, `DESIGN.md`, `.handover.md`, and current code into a self-contained specification so the external worker has zero ambiguity about the desired end-state, architectural invariants, and scope boundaries.
+This file owns the goal-oriented meta-prompt (`phase-<NN>/prompt.md`) and the Gate 2 `submit.prompt` envelope. The Coordinator synthesizes `PLAN.md`, `DESIGN.md`, `.handover.md`, and current code into a self-contained specification so the external worker has zero ambiguity about the desired end-state, architectural invariants, and scope boundaries.
 
 Write `<plugin-root>` and `<repo-root>` as absolute paths. Workers run without the plugin loaded and can mis-resolve relative paths.
 
@@ -62,9 +62,9 @@ Role boundary: You are the phase implementer, not Coordinator. Work directly in 
 Append the complete `# EXTERNAL RESPONSE` block to `docs/plans/<slug>/phase-<NN>/journal.md`, then return that block and the matching status line from `erp.md`.
 ```
 
-## Gate 2 Dispatch Envelope (`job_submit.prompt`)
+## Gate 2 Dispatch Envelope (`submit.prompt`)
 
-Pass a self-contained prompt to `job_submit(workflow="implement", fresh_session=true, ...)`:
+Pass a self-contained prompt to `submit(path="<repo-root>", workflow="implement", fresh=true, ...)`:
 
 ```text
 You are the Phase <N> Implementer for plan `<slug>` in `<repo-root>`.

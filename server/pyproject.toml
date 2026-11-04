@@ -26,9 +26,6 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=7.1.0",
 ]
-langfuse = [
-    "langfuse>=4.15,<5",
-]
 
 [dependency-groups]
 dev = [
@@ -39,12 +36,8 @@ dev = [
 [project.scripts]
 refract = "refract.cli:main"
 
-[tool.hatch.build.targets.sdist]
-artifacts = ["src/refract/dashboard_static/**"]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/refract"]
-artifacts = ["src/refract/dashboard_static/**"]
 
 [tool.uv]
 package = true

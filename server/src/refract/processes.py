@@ -188,4 +188,55 @@ def terminate_process_tree(
     )
 
 
-__all__ = ["prepare_command", "process_group_kwargs", "terminate_process_tree"]
+def kill_process_tree(process_id: int) -> None:
+    """Kill a POSIX process group or Windows process tree without waiting."""
+    if os.name == "nt":
+        _taskkill(process_id, force=True, timeout_s=5)
+        return
+    try:
+        os.killpg(process_id, signal.SIGKILL)
+    except OSError:
+        return
+
+
+def _group_members(group_id: int) -> list[Path]:
+    members = []
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return members
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if fields[2:3] == [str(group_id)]:
+            members.append(entry)
+    return members
+
+
+def kill_stale_group(group_id: int, job_id: str) -> bool:
+    """Kill a worker process group left by a crashed daemon. Return whether it was killed.
+
+    A PGID can be reused by an unrelated process once the old group is gone. Workers run
+    with ``REFRACT_JOB_ID`` in their environment, so the group is killed only when a member
+    read from ``/proc`` carries this job's ID. Without ``/proc`` nothing is killed.
+    """
+    marker = f"REFRACT_JOB_ID={job_id}".encode()
+    for member in _group_members(group_id):
+        try:
+            environ = (member / "environ").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if marker in environ:
+            try:
+                os.killpg(group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                return False
+            return True
+    return False
+
+
+__all__ = ["kill_process_tree", "kill_stale_group", "prepare_command", "process_group_kwargs", "terminate_process_tree"]
