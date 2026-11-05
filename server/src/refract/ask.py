@@ -196,7 +196,9 @@ class AskRegistry:
                     self._pending.pop(resolved_job_id, None)
             raise
 
-    def deliver_answer(self, job_id: str, answer: str) -> bool:
+    def deliver_answer(
+        self, job_id: str, answer: str, expected_question_id: str | None = None
+    ) -> bool:
         """Deliver an answer to the pending question for job_id.
 
         Returns False when no question is pending or the question expired.
@@ -206,6 +208,8 @@ class AskRegistry:
             if pending is None:
                 return False
             if pending.future.done() or time.monotonic() >= pending.deadline:
+                return False
+            if expected_question_id is not None and pending.question_id != expected_question_id:
                 return False
             del self._pending[job_id]
             _resolve_future(pending.future, answer, pending.future.get_loop())

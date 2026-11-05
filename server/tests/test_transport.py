@@ -36,7 +36,23 @@ def _wait_gone(pid: int, timeout_s: float = 3.0) -> bool:
     return not _is_running(pid)
 
 
-def _run(argv, *, stdin=None, timeout_s=None, cancel=None, on_line=None):
+class ArmedDeadline:
+    def __init__(self, delay_s: float = 0.2, fallback_s: float = 30.0) -> None:
+        self.delay_s = delay_s
+        self.fallback = time.monotonic() + fallback_s
+        self.deadline: float | None = None
+
+    def arm(self) -> None:
+        self.deadline = time.monotonic() + self.delay_s
+
+    # run_process evaluates now >= deadline, which reflects to deadline <= now (__le__).
+    def __le__(self, now: float) -> bool:
+        if self.deadline is not None:
+            return self.deadline <= now
+        return self.fallback <= now
+
+
+def _run(argv, *, stdin=None, timeout_s=None, deadline=None, cancel=None, on_line=None):
     lines: list[str] = []
 
     async def collect(line: str) -> None:
@@ -44,7 +60,8 @@ def _run(argv, *, stdin=None, timeout_s=None, cancel=None, on_line=None):
         if on_line is not None:
             await on_line(line)
 
-    deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+    if deadline is None and timeout_s is not None:
+        deadline = time.monotonic() + timeout_s
     outcome = asyncio.run(run_process(argv, stdin, None, None, deadline, cancel, collect))
     return outcome, lines
 
@@ -88,11 +105,21 @@ def test_grandchild_holding_stdout_does_not_stall_after_parent_exit(tmp_path: Pa
 
 def test_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
     pid_file = tmp_path / "grandchild.pid"
+    armed = ArmedDeadline(delay_s=0.2)
+    grandchild: int | None = None
+
+    async def arm_on_ready(line: str) -> None:
+        nonlocal grandchild
+        if line == "ready":
+            grandchild = int(pid_file.read_text(encoding="utf-8"))
+            armed.arm()
+
     started = time.monotonic()
-    outcome, _ = _run(fake("spawn_and_sleep.py", pid_file), timeout_s=0.5)
+    outcome, _ = _run(fake("spawn_and_sleep.py", pid_file), deadline=armed, on_line=arm_on_ready)
     elapsed = time.monotonic() - started
 
-    grandchild = int(pid_file.read_text(encoding="utf-8"))
+    assert armed.deadline is not None
+    assert grandchild is not None
     assert outcome.error_class == "timeout"
     assert elapsed < 5
     assert _wait_gone(grandchild)

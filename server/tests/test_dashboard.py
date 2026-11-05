@@ -7,7 +7,6 @@ import pytest
 from starlette.applications import Starlette
 
 from refract.dashboard import DashboardState, register_dashboard_routes
-from refract.models import ConfigHealth, JobResult, JobView, ProjectView, TargetView
 
 
 async def request(app, path, *, method="GET", headers=(), body=b"", client_host="127.0.0.1"):
@@ -186,154 +185,58 @@ async def test_ask_non_loopback_rejected() -> None:
     assert registry.calls == []
 
 
-def _job(job_id, state, *, created_at="2026-11-04T10:00:00+00:00", result=None):
-    return JobView(
-        id=job_id, project_id="project-1", workflow="implement", profile="default", state=state, session="",
-        target_id="codex-main", retry_of="", created_at=created_at, updated_at=created_at, result=result or JobResult(),
-    )
-
-
-class FakeDatabase:
-    def __init__(self, tmp_path, jobs, prompts):
-        self.tmp_path = tmp_path
-        self._jobs = jobs
-        self._prompts = prompts
-
-    def projects(self):
-        return [ProjectView(id="project-1", root="/work/alpha", created_at="2026-11-04T09:00:00+00:00")]
-
-    def jobs(self, project_id):
-        return list(self._jobs.values()) if project_id == "project-1" else []
-
-    def job(self, job_id):
-        return self._jobs.get(job_id)
-
-    def job_record(self, job_id):
-        return {"id": job_id, "prompt": self._prompts[job_id]} if job_id in self._jobs else None
-
-    def stream_path(self, job_id):
-        return self.tmp_path / f"{job_id}.jsonl"
-
-
-def _dashboard(tmp_path, *, targets=(), health=None):
-    finished = JobResult(text="All done", model="gpt-5", duration_ms=1200, tokens={"tok_input": 10, "tok_output": 4})
-    jobs = {
-        "job-run": _job("job-run", "running"),
-        "job-done": _job("job-done", "succeeded", created_at="2026-11-04T09:30:00+00:00", result=finished),
-    }
-    prompts = {"job-run": "<script>alert(1)</script> fix it", "job-done": "write docs"}
-    runtime = SimpleNamespace(
-        database=FakeDatabase(tmp_path, jobs, prompts),
-        targets=lambda: list(targets),
-        config_health=health or ConfigHealth(valid=True, source_path="/cfg/config.toml"),
-    )
-    return Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
-
-
-def test_routes_are_the_four_dashboard_routes_and_ask():
+def test_routes_are_dashboard_routes_ask_and_actions():
     routes = register_dashboard_routes(DashboardState())
     assert {route.path for route in routes} == {
-        "/dashboard", "/dashboard/jobs/{job_id}", "/dashboard/jobs/{job_id}/output", "/dashboard/targets", "/ask",
+        "/dashboard",
+        "/dashboard/",
+        "/dashboard/{path:path}",
+        "/dashboard/assets",
+        "/dashboard/assets/{path:path}",
+        "/ask",
+        "/dashboard/api/jobs/{job_id}/cancel",
+        "/dashboard/api/jobs/{job_id}/retry",
+        "/dashboard/api/jobs/{job_id}/answer",
+        "/dashboard/api/jobs",
+        "/dashboard/api/jobs/{job_id}",
+        "/dashboard/api/jobs/{job_id}/output",
+        "/dashboard/api/targets",
+        "/dashboard/api",
+        "/dashboard/api/{rest:path}",
     }
 
 
 @pytest.mark.asyncio
-async def test_job_list_shows_state_project_workflow_target_and_age(tmp_path):
-    status, body = await request(_dashboard(tmp_path), "/dashboard")
-    page = body.decode()
-    assert status == 200
-    for text in ("job-run", "job-done", "running", "succeeded", "/work/alpha", "implement", "codex-main", "Age"):
-        assert text in page
-    assert page.index("job-run") < page.index("job-done")
-    assert 'href="/dashboard/jobs/job-run"' in page
-    assert "tds-data-table" in page and "--surface-neutral-01" in page
+async def test_dashboard_routes_serve_spa_shell_for_deep_links(tmp_path, monkeypatch):
+    static = tmp_path / "app"
+    static.mkdir()
+    (static / "index.html").write_text("<main>SPA shell</main>", encoding="utf-8")
+    monkeypatch.setattr("refract.dashboard._APP_STATIC_DIR", static, raising=False)
+    app = Starlette(routes=register_dashboard_routes(DashboardState()))
+    for path in ("/dashboard", "/dashboard/", "/dashboard/jobs/job-1", "/dashboard/targets"):
+        status, body = await request(app, path)
+        assert status == 200
+        assert body == b"<main>SPA shell</main>"
 
 
 @pytest.mark.asyncio
-async def test_running_job_detail_shows_prompt_and_polls_output(tmp_path):
-    status, body = await request(_dashboard(tmp_path), "/dashboard/jobs/job-run")
-    page = body.decode()
-    assert status == 200
-    assert "fix it" in page
-    assert "/dashboard/jobs/job-run/output" in page
-    assert "<script>" in page
-
-
-@pytest.mark.asyncio
-async def test_finished_job_detail_shows_result_metadata_and_does_not_poll(tmp_path):
-    status, body = await request(_dashboard(tmp_path), "/dashboard/jobs/job-done")
-    page = body.decode()
-    assert status == 200
-    for text in ("write docs", "All done", "gpt-5", "1200", "tok_input", "succeeded"):
-        assert text in page
-    assert "<script" not in page
-
-
-@pytest.mark.asyncio
-async def test_prompt_script_is_escaped(tmp_path):
-    _, body = await request(_dashboard(tmp_path), "/dashboard/jobs/job-run")
-    page = body.decode()
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
-    assert "<script>alert(1)" not in page
-
-
-@pytest.mark.asyncio
-async def test_unknown_job_is_404(tmp_path):
-    status, _ = await request(_dashboard(tmp_path), "/dashboard/jobs/missing")
+async def test_dashboard_assets_are_not_shell_fallback(tmp_path, monkeypatch):
+    static = tmp_path / "app"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("<main>SPA shell</main>", encoding="utf-8")
+    monkeypatch.setattr("refract.dashboard._APP_STATIC_DIR", static, raising=False)
+    app = Starlette(routes=register_dashboard_routes(DashboardState()))
+    status, _ = await request(app, "/dashboard/assets/missing.js")
     assert status == 404
-    status, _ = await request(_dashboard(tmp_path), "/dashboard/jobs/missing/output")
+    status, _ = await request(app, "/dashboard/assets")
     assert status == 404
 
 
 @pytest.mark.asyncio
-async def test_targets_page_shows_open_circuit_and_config_error(tmp_path):
-    target = TargetView(
-        id="codex-main", model="gpt-5", backend="codex", max_concurrency=2, active=1, healthy=False,
-        circuit_open_until="2026-11-04T11:00:00+00:00", breaker_state="open", cooldown_s=60, probing=False,
-    )
-    health = ConfigHealth(valid=False, source_path="/cfg/config.toml", latest_error="targets[0].model <bad> is required")
-    status, body = await request(_dashboard(tmp_path, targets=[target], health=health), "/dashboard/targets")
-    page = body.decode()
-    assert status == 200
-    for text in ("codex-main", "gpt-5", "codex", "open", "2026-11-04T11:00:00+00:00", "/cfg/config.toml"):
-        assert text in page
-    assert "targets[0].model &lt;bad&gt; is required" in page
-    assert "tds-announcement--error" in page
-
-
-@pytest.mark.asyncio
-async def test_output_returns_events_after_n(tmp_path):
-    events = [{"kind": f"event-{index}", "data": {"index": index}} for index in (1, 2, 3)]
-    (tmp_path / "job-run.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
-    status, body = await request(_dashboard(tmp_path), "/dashboard/jobs/job-run/output?after=1")
-    assert status == 200
-    payload = json.loads(body)
-    assert [event["seq"] for event in payload["events"]] == [2, 3]
-    assert [event["kind"] for event in payload["events"]] == ["event-2", "event-3"]
-    assert payload["next"] == 3
-    assert payload["state"] == "running"
-    assert payload["terminal"] is False
-
-
-@pytest.mark.asyncio
-async def test_output_without_stream_file_is_empty_and_terminal_for_finished_job(tmp_path):
-    status, body = await request(_dashboard(tmp_path), "/dashboard/jobs/job-done/output?after=0")
-    assert status == 200
-    assert json.loads(body) == {"events": [], "next": 0, "state": "succeeded", "terminal": True}
-
-
-@pytest.mark.asyncio
-async def test_output_rejects_bad_after(tmp_path):
-    status, _ = await request(_dashboard(tmp_path), "/dashboard/jobs/job-run/output?after=x")
-    assert status == 400
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "path", ["/dashboard", "/dashboard/jobs/job-run", "/dashboard/jobs/job-run/output", "/dashboard/targets"],
-)
-async def test_dashboard_routes_reject_non_loopback(tmp_path, path):
-    status, _ = await request(_dashboard(tmp_path), path, client_host="192.0.2.10")
+@pytest.mark.parametrize("path", ["/dashboard", "/dashboard/jobs/job-run", "/dashboard/assets/a.js"])
+async def test_dashboard_routes_reject_non_loopback(path):
+    app = Starlette(routes=register_dashboard_routes(DashboardState()))
+    status, _ = await request(app, path, client_host="192.0.2.10")
     assert status == 403
-    status, _ = await request(_dashboard(tmp_path), path, headers=(("Host", "evil.example"),))
+    status, _ = await request(app, path, headers=(("Host", "evil.example"),))
     assert status == 403

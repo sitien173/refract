@@ -2,7 +2,19 @@
 
 ## Unreleased - 2026-11-03
 
-- Breaking: replaced the dashboard with a strictly read-only live job console built on React 19 and Vite.
+- Breaking: replaced the server-rendered dashboard with a TDS-styled React live console. The dashboard supports live polling, filters, job actions, and target health.
+- Added `GET /dashboard/api/jobs`.
+- Added `GET /dashboard/api/jobs/{job_id}`.
+- Added `GET /dashboard/api/jobs/{job_id}/output`.
+- Added `GET /dashboard/api/targets`.
+- Added `POST /dashboard/api/jobs/{job_id}/cancel`.
+- Added `POST /dashboard/api/jobs/{job_id}/retry`.
+- Added `POST /dashboard/api/jobs/{job_id}/answer`.
+- Added `GET /dashboard/assets` and `GET /dashboard/assets/{path}`. The bare path returns 404 instead of the SPA shell.
+- Added `GET /dashboard/` and `GET /dashboard/{path}`. Any unmatched path under `/dashboard/` serves the SPA shell, including former preview URLs under `/dashboard/app`.
+- Removed the unreleased preview routes `GET /dashboard/app`, `GET /dashboard/app/`, `GET /dashboard/app/{path}`, and `GET /dashboard/app/assets/{path}`.
+- Removed `GET /dashboard/jobs/{job_id}/output`.
+- Removed the server-rendered HTML pages; `/dashboard`, `/dashboard/jobs/{job_id}`, and `/dashboard/targets` now serve the SPA.
 - Removed `GET /dashboard/api/bootstrap`.
 - Removed `GET /dashboard/api/status`.
 - Removed `GET /dashboard/api/configuration`.

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-hook="${repo_root}/hooks/refract-session-start.sh"
+hook="${repo_root}/hooks/refract-session-start.py"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -43,18 +43,18 @@ PY
 }
 
 mkdir -p "$tmp/repo"
-output="$(cd "$tmp/repo" && "$hook")"
+output="$(cd "$tmp/repo" && python3 "$hook")"
 validate_output "$output" "$repo_root"
-agy_output="$(cd "$tmp/repo" && "$hook" --antigravity)"
+agy_output="$(cd "$tmp/repo" && python3 "$hook" --antigravity)"
 validate_antigravity_output "$agy_output" "$repo_root"
 test -z "$(ls -A "$tmp/repo")"
 
 plugin_with_spaces="$tmp/plugin root"
 mkdir -p "$plugin_with_spaces/hooks" "$plugin_with_spaces/shared"
 cp "$hook" "$plugin_with_spaces/hooks/"
-output="$("$plugin_with_spaces/hooks/refract-session-start.sh")"
+output="$(python3 "$plugin_with_spaces/hooks/refract-session-start.py")"
 validate_output "$output" "$plugin_with_spaces"
-agy_output="$("$plugin_with_spaces/hooks/refract-session-start.sh" --antigravity)"
+agy_output="$(python3 "$plugin_with_spaces/hooks/refract-session-start.py" --antigravity)"
 validate_antigravity_output "$agy_output" "$plugin_with_spaces"
 
 printf 'session-start tests passed\n'

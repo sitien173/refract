@@ -1,0 +1,1 @@
+[{"kind":"assistant.text.delta","entity_id":"msg-1","data":{"text":"agy response"}},{"kind":"tool.started","entity_id":"tool-1","data":{"tool":"agent tool","input":{"parameters":{}}}},{"kind":"tool.completed","entity_id":"tool-1","data":{"status":"completed","output":"done"}}]

@@ -386,3 +386,70 @@ async def test_runtime_cancel_releases_pending_ask(tmp_path) -> None:
         runtime.database.close()
 
 
+@pytest.mark.asyncio
+async def test_deliver_answer_with_matching_and_mismatched_expected_question_id() -> None:
+    registry = AskRegistry()
+    token = registry.issue_token("job-qid-test")
+
+    task = asyncio.create_task(registry.ask(token, "Question with ID", timeout_s=2.0))
+    await asyncio.sleep(0.01)
+    pending = await registry.wait_question("job-qid-test", timeout_s=1.0)
+    assert pending is not None
+    real_qid = pending.question_id
+
+    # Mismatch returns False and leaves the pending question in place
+    assert not registry.deliver_answer("job-qid-test", "Wrong answer", expected_question_id="wrong-qid")
+    assert registry.has_pending("job-qid-test")
+
+    # Match returns True and resolves the question
+    assert registry.deliver_answer("job-qid-test", "Right answer", expected_question_id=real_qid)
+    assert not registry.has_pending("job-qid-test")
+    assert await task == "Right answer"
+
+
+@pytest.mark.asyncio
+async def test_runtime_job_answer_with_expected_question_id(tmp_path) -> None:
+    from refract.runtime import OrchestrationError, Runtime
+    from tests.orchestration_helpers import config
+
+    home = tmp_path / "home"
+    home.mkdir()
+    cfg = config(home)
+    runtime = Runtime(cfg)
+    try:
+        job_id = "job-qid-runtime"
+        runtime.database.upsert_project(project_id="proj-qid", root=str(tmp_path))
+        runtime.database.create_job(
+            job_id=job_id,
+            project_id="proj-qid",
+            workflow="implement",
+            profile="balanced",
+            prompt="work",
+            execution_plan_json="{}",
+            session="main",
+        )
+        runtime.database.start_job(job_id)
+
+        token = runtime.ask_registry.issue_token(job_id)
+        task = asyncio.create_task(
+            runtime.ask_registry.ask(token, "Runtime question", timeout_s=5.0)
+        )
+        await asyncio.sleep(0.01)
+        pending = await runtime.ask_registry.wait_question(job_id, timeout_s=1.0)
+        assert pending is not None
+
+        # Mismatch raises OrchestrationError with code "invalid_state" and keeps question pending
+        with pytest.raises(OrchestrationError) as exc_info:
+            await runtime.job_answer(job_id, "Bad answer", expected_question_id="wrong-id")
+        assert exc_info.value.code == "invalid_state"
+        assert runtime.ask_registry.has_pending(job_id)
+
+        # Match succeeds
+        res = await runtime.job_answer(job_id, "Good answer", expected_question_id=pending.question_id)
+        assert res.success is True
+        assert await task == "Good answer"
+        assert not runtime.ask_registry.has_pending(job_id)
+    finally:
+        runtime.database.close()
+
+

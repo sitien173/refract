@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const hook = JSON.parse(execFileSync(resolve(root, "hooks/refract-session-start.sh"), { encoding: "utf8" }));
+const hook = JSON.parse(execFileSync("python3", [resolve(root, "hooks/refract-session-start.py")], { encoding: "utf8" }));
 const context: string = hook.hookSpecificOutput.additionalContext;
 
 export default function refract(pi: ExtensionAPI) {

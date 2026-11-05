@@ -219,3 +219,124 @@ def test_failure_threshold_and_immediate_open(tmp_path) -> None:
     db.close()
 
 
+def test_cursor_roundtrip_and_validation() -> None:
+    from refract.database import decode_cursor, encode_cursor
+
+    cursor = encode_cursor("2026-11-05T10:00:00+00:00", "job-123")
+    assert isinstance(cursor, str)
+    created_at, job_id = decode_cursor(cursor)
+    assert created_at == "2026-11-05T10:00:00+00:00"
+    assert job_id == "job-123"
+
+    with pytest.raises(ValueError, match="Invalid cursor"):
+        decode_cursor("not-base64-json")
+
+    with pytest.raises(ValueError, match="Invalid cursor"):
+        decode_cursor("")
+
+
+def test_job_summaries_reads_no_result_files(tmp_path, monkeypatch) -> None:
+    from pathlib import Path
+
+    db = Database(tmp_path / "refract.db")
+    project = db.upsert_project(project_id="proj", root="/proj")
+    db.create_job(
+        job_id="job-1",
+        project_id=project.id,
+        workflow="consult",
+        profile="balanced",
+        prompt="hello",
+        execution_plan_json="{}",
+        session="sess",
+    )
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("result_path read! List query must not read result files.")
+
+    monkeypatch.setattr(Database, "result_path", explode)
+    monkeypatch.setattr(Path, "read_text", explode)
+
+    summaries, next_cursor = db.job_summaries()
+    assert len(summaries) == 1
+    assert summaries[0]["id"] == "job-1"
+    assert summaries[0]["project_root"] == "/proj"
+    assert next_cursor is None
+    db.close()
+
+
+def test_job_summaries_filters_and_pagination(tmp_path) -> None:
+    db = Database(tmp_path / "refract.db")
+    p1 = db.upsert_project(project_id="p1", root="/root1")
+    p2 = db.upsert_project(project_id="p2", root="/root2")
+
+    # Insert 5 jobs with distinct timestamps and attributes
+    now = "2026-11-05T12:00:0"
+    for i in range(5):
+        job_id = f"job_test_{i}"
+        db.create_job(
+            job_id=job_id,
+            project_id=p1.id if i < 3 else p2.id,
+            workflow="workflow-a" if i % 2 == 0 else "workflow-b",
+            profile="balanced",
+            prompt=f"prompt {i}",
+            execution_plan_json="{}",
+            session="sess",
+        )
+        # Update created_at so ordering is deterministic
+        with db._connection:
+            db._connection.execute(
+                "UPDATE jobs SET created_at=?, target=?, state=? WHERE id=?",
+                (f"{now}{i}+00:00", f"target-{i % 2}", "running" if i == 0 else "succeeded", job_id),
+            )
+
+    # Test filtering by state
+    jobs, _ = db.job_summaries(state="running")
+    assert len(jobs) == 1
+    assert jobs[0]["id"] == "job_test_0"
+
+    # Test filtering by project_id
+    jobs, _ = db.job_summaries(project_id=p2.id)
+    assert len(jobs) == 2
+    assert {j["id"] for j in jobs} == {"job_test_3", "job_test_4"}
+
+    # Test filtering by workflow
+    jobs, _ = db.job_summaries(workflow="workflow-a")
+    assert len(jobs) == 3
+    assert {j["id"] for j in jobs} == {"job_test_0", "job_test_2", "job_test_4"}
+
+    # Test filtering by target
+    jobs, _ = db.job_summaries(target="target-1")
+    assert len(jobs) == 2
+    assert {j["id"] for j in jobs} == {"job_test_1", "job_test_3"}
+
+    # Test q filter with wildcard escaping (e.g. searching for "_test_")
+    jobs, _ = db.job_summaries(q="_test_")
+    assert len(jobs) == 5
+
+    # Keyset pagination with limit=2
+    # Order: created_at DESC, id DESC: jobs 4, 3, 2, 1, 0
+    page1, cursor1 = db.job_summaries(limit=2)
+    assert len(page1) == 2
+    assert [j["id"] for j in page1] == ["job_test_4", "job_test_3"]
+    assert cursor1 is not None
+
+    page2, cursor2 = db.job_summaries(cursor=cursor1, limit=2)
+    assert len(page2) == 2
+    assert [j["id"] for j in page2] == ["job_test_2", "job_test_1"]
+    assert cursor2 is not None
+
+    page3, cursor3 = db.job_summaries(cursor=cursor2, limit=2)
+    assert len(page3) == 1
+    assert [j["id"] for j in page3] == ["job_test_0"]
+    assert cursor3 is None
+
+    # Test options: unfiltered distinct values across all jobs
+    opts = db.job_filter_options()
+    assert opts["states"] == ["running", "succeeded"]
+    assert opts["workflows"] == ["workflow-a", "workflow-b"]
+    assert opts["targets"] == ["target-0", "target-1"]
+    assert opts["projects"] == [{"id": "p1", "root": "/root1"}, {"id": "p2", "root": "/root2"}]
+
+    db.close()
+
+

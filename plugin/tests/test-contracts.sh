@@ -12,7 +12,7 @@ if grep -R -n -i -E 'openmcp|superpowers|ccg' \
     exit 1
 fi
 
-bash -n hooks/refract-session-start.sh
+python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" hooks/refract-session-start.py
 
 python3 - <<'PY'
 import json
@@ -139,7 +139,7 @@ assert documents[root / "hooks.json"] == {
         "SessionStart": [
             {
                 "type": "command",
-                "command": "./hooks/refract-session-start.sh --antigravity",
+                "command": "python3 ./hooks/refract-session-start.py --antigravity",
                 "timeout": 10,
             }
         ]

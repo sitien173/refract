@@ -2,24 +2,26 @@
 
 from __future__ import annotations
 
-import functools
 import ipaddress
 import inspect
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from html import escape
-from importlib import resources
+from pathlib import Path
 from typing import Any, Awaitable, Callable, cast
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from refract.ask import AskAuthError, AskConflictError
 from refract.models import TERMINAL_STATES
+from refract.runtime import OrchestrationError
 from refract.workers import run_sync
+
+
+DASHBOARD_HEADER = "X-Refract-Dashboard"
+DASHBOARD_HEADER_VALUE = "1"
 
 
 @dataclass
@@ -33,6 +35,52 @@ def _json_response(value: Any, status_code: int = 200) -> Response:
 
 def _error(message: str, status_code: int, *, code: str = "", unchanged: str = "", recovery: str = "") -> Response:
     return _json_response({"error": message, "code": code, "unchanged": unchanged, "recovery": recovery}, status_code)
+
+
+def _api_json_response(data: Any, status_code: int = 200, *, headers: dict[str, str] | None = None) -> Response:
+    resp_headers = {"Cache-Control": "no-store"}
+    if headers:
+        resp_headers.update(headers)
+    return JSONResponse(data, status_code=status_code, headers=resp_headers)
+
+
+def _api_error(
+    message: str,
+    status_code: int,
+    *,
+    code: str = "",
+    unchanged: str = "No job was changed.",
+    recovery: str = "",
+    headers: dict[str, str] | None = None,
+) -> Response:
+    return _api_json_response(
+        {"error": message, "code": code, "unchanged": unchanged, "recovery": recovery},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+def _map_orchestration_error(exc: OrchestrationError) -> Response:
+    status_code = 400
+    if exc.code == "unknown_job":
+        status_code = 404
+    elif exc.code == "invalid_state":
+        status_code = 409
+    elif exc.code == "targets_unavailable":
+        status_code = 503
+
+    headers = {}
+    if exc.retry_after_s is not None:
+        headers["Retry-After"] = str(exc.retry_after_s)
+
+    return _api_error(
+        str(exc),
+        status_code,
+        code=exc.code,
+        unchanged="No job was changed.",
+        recovery=exc.next_action,
+        headers=headers,
+    )
 
 
 def _runtime(state: DashboardState) -> Any:
@@ -104,244 +152,8 @@ def _loopback_route(path: str, endpoint: Callable[[Request], Awaitable[Response]
     return Route(path, guarded, methods=methods)
 
 
-_CSS_FILES = ("tokens.css", "fonts.css", "data-table.css", "tag.css", "announcement.css")
-_JOB_LIMIT = 200
+_APP_STATIC_DIR = Path(__file__).parent / "dashboard_static" / "app"
 _OUTPUT_PAGE = 500
-_STATE_TAGS = {"queued": "default", "running": "intermediate", "succeeded": "positive", "failed": "negative", "cancelled": "default", "interrupted": "negative"}
-_BREAKER_TAGS = {"closed": "positive", "half_open": "intermediate", "open": "negative"}
-_POLL_SCRIPT = r"""<script>
-(() => {
-  const output = document.getElementById("output");
-  const state = document.getElementById("state");
-  let after = Number(output.dataset.after);
-  async function poll() {
-    try {
-      const response = await fetch(`${output.dataset.url}?after=${after}`);
-      if (!response.ok) return;
-      const payload = await response.json();
-      for (const event of payload.events) {
-        output.append(`#${event.seq} ${event.kind} ${JSON.stringify(event.data ?? {})}\n`);
-      }
-      after = payload.next;
-      state.textContent = payload.state;
-      if (payload.terminal) {
-        location.reload();
-        return;
-      }
-    } catch (error) {
-      // Keep polling through transient network errors.
-    }
-    setTimeout(poll, 1000);
-  }
-  poll();
-})();
-</script>"""
-
-
-@functools.cache
-def _stylesheet() -> str:
-    folder = resources.files("refract") / "dashboard_static" / "tds"
-    return "\n".join((folder / name).read_text(encoding="utf-8") for name in _CSS_FILES)
-
-
-def _page(title: str, body: str, *, script: str = "", status_code: int = 200) -> Response:
-    return HTMLResponse(
-        f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{escape(title)} - Refract</title>'
-        f"<style>{_stylesheet()}</style></head><body>"
-        '<nav><a href="/dashboard">Jobs</a><a href="/dashboard/targets">Targets</a></nav>'
-        f"<main>{body}</main>{script}</body></html>",
-        status_code=status_code,
-    )
-
-
-def _tag(text: str, variant: str, *, element_id: str = "") -> str:
-    id_attribute = f' id="{element_id}"' if element_id else ""
-    return f'<span{id_attribute} class="tds-tag tds-tag--md tds-tag--{variant}">{escape(text)}</span>'
-
-
-def _table(title: str, headers: tuple[str, ...], rows: list[list[str]]) -> str:
-    """Render a TDS data table; ``rows`` holds cells that are already escaped HTML."""
-    head = "".join(f"<th>{escape(header)}</th>" for header in headers)
-    body = "".join("<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>" for row in rows)
-    return (
-        '<div class="tds-data-table-container"><div class="tds-data-table__header"><div class="tds-data-table__header-text">'
-        f'<div class="tds-data-table__header-title">{escape(title)}</div></div></div>'
-        f'<div class="tds-data-table__wrapper"><table class="tds-data-table"><thead><tr>{head}</tr></thead>'
-        f"<tbody>{body}</tbody></table></div></div>"
-    )
-
-
-def _age(timestamp: str) -> str:
-    try:
-        created = datetime.fromisoformat(timestamp)
-    except ValueError:
-        return ""
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    seconds = max(0, int((datetime.now(timezone.utc) - created).total_seconds()))
-    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
-        if seconds >= size:
-            return f"{seconds // size}{unit}"
-    return f"{seconds}s"
-
-
-def _job_href(job_id: str) -> str:
-    return f"/dashboard/jobs/{quote(job_id, safe='')}"
-
-
-def _events(database: Any, job_id: str, after: int) -> list[dict[str, Any]]:
-    """Read stream events after ``after``; an event's seq is its line number in the stream file."""
-    try:
-        with database.stream_path(job_id).open(encoding="utf-8") as handle:
-            lines = handle.readlines()
-    except FileNotFoundError:
-        return []
-    events: list[dict[str, Any]] = []
-    for seq, line in enumerate(lines, 1):
-        if not line.endswith("\n") or len(events) >= _OUTPUT_PAGE:
-            break
-        if seq <= after:
-            continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            event = {"kind": "invalid", "data": {}}
-        events.append({**event, "seq": seq})
-    return events
-
-
-def _event_line(event: dict[str, Any]) -> str:
-    data = json.dumps(event.get("data") or {}, ensure_ascii=False, separators=(",", ":"))
-    return f"#{event['seq']} {event.get('kind', '')} {data}\n"
-
-
-def _job_list(runtime: Any) -> Response:
-    database = runtime.database
-    roots = {}
-    jobs = []
-    for project in database.projects():
-        roots[project.id] = project.root
-        jobs.extend(database.jobs(project.id))
-    jobs.sort(key=lambda job: job.created_at, reverse=True)
-    rows = [
-        [
-            f'<a href="{escape(_job_href(job.id))}">{escape(job.id)}</a>',
-            _tag(job.state, _STATE_TAGS.get(job.state, "default")),
-            escape(roots.get(job.project_id, job.project_id)),
-            escape(job.workflow),
-            escape(job.target_id),
-            escape(_age(job.created_at)),
-        ]
-        for job in jobs[:_JOB_LIMIT]
-    ]
-    return _page("Jobs", _table("Jobs", ("Job", "State", "Project", "Workflow", "Target", "Age"), rows))
-
-
-def _job_detail(runtime: Any, job_id: str) -> Response:
-    database = runtime.database
-    job = database.job(job_id)
-    record = database.job_record(job_id)
-    if job is None or record is None:
-        return _page("Job not found", f"<h1>Job {escape(job_id)} was not found</h1>", status_code=404)
-    result = job.result
-    fields = [
-        ("Project", job.project_id), ("Workflow", job.workflow), ("Profile", job.profile), ("Target", job.target_id),
-        ("Session", job.session), ("Retry of", job.retry_of), ("Created", job.created_at), ("Updated", job.updated_at),
-        ("Model", result.model or ""), ("Duration ms", "" if result.duration_ms is None else str(result.duration_ms)),
-        ("Failure kind", result.failure_kind or ""),
-        *((name, "" if value is None else str(value)) for name, value in (result.tokens or {}).items()),
-    ]
-    metadata = _table("Metadata", ("Field", "Value"), [[escape(name), escape(value)] for name, value in fields if value])
-    events = _events(database, job_id, 0)
-    active = job.state not in TERMINAL_STATES
-    output_url = escape(f"{_job_href(job_id)}/output")
-    body = (
-        f"<h1>Job {escape(job_id)} {_tag(job.state, _STATE_TAGS.get(job.state, 'default'), element_id='state')}</h1>"
-        f"{metadata}"
-        f"<section><h2>Prompt</h2><pre>{escape(str(record.get('prompt', '')))}</pre></section>"
-        + (f"<section><h2>Result</h2><pre>{escape(result.text)}</pre></section>" if result.text else "")
-        + (f"<section><h2>Error</h2><pre>{escape(result.error)}</pre></section>" if result.error else "")
-        + f'<section><h2>Output</h2><pre id="output" data-url="{output_url}" data-after="{events[-1]["seq"] if events else 0}">'
-        f"{escape(''.join(_event_line(event) for event in events))}</pre></section>"
-    )
-    return _page(f"Job {job_id}", body, script=_POLL_SCRIPT if active else "")
-
-
-def _job_output(runtime: Any, job_id: str, after_value: str) -> Response:
-    job = runtime.database.job(job_id)
-    if job is None:
-        return _error("Job not found", 404, code="unknown_job")
-    try:
-        after = int(after_value)
-    except ValueError:
-        after = -1
-    if after < 0:
-        return _error("after must be a non-negative integer", 400, code="bad_request")
-    events = _events(runtime.database, job_id, after)
-    return _json_response({
-        "events": events,
-        "next": events[-1]["seq"] if events else after,
-        "state": job.state,
-        "terminal": job.state in TERMINAL_STATES,
-    })
-
-
-def _targets(runtime: Any) -> Response:
-    rows = [
-        [
-            escape(target.id), escape(target.backend), escape(target.model),
-            _tag(target.breaker_state.replace("_", " "), _BREAKER_TAGS.get(target.breaker_state, "default")),
-            escape(target.circuit_open_until), escape(str(target.cooldown_s)),
-            escape(f"{target.active}/{target.max_concurrency}"), "yes" if target.probing else "no",
-        ]
-        for target in runtime.targets()
-    ]
-    health = runtime.config_health
-    if health.valid:
-        config = f"<p>Configuration is valid. Source: {escape(health.source_path)}. Revision: {escape(health.revision)}.</p>"
-    else:
-        config = (
-            '<div class="tds-announcement tds-announcement--error" role="alert"><div class="tds-announcement__content">'
-            '<p class="tds-announcement__title">Configuration error</p>'
-            f'<p class="tds-announcement__message">{escape(health.latest_error or "Configuration is not loaded.")}</p>'
-            f'<p class="tds-announcement__message">Source: {escape(health.source_path)}</p></div></div>'
-        )
-    table = _table(
-        "Targets", ("Target", "Backend", "Model", "Circuit", "Open until", "Cooldown s", "Active", "Probing"), rows,
-    )
-    return _page("Targets", f"<section><h2>Configuration</h2>{config}</section>{table}")
-
-
-def _register_page_routes(state: DashboardState) -> list[Route]:
-    def guarded_runtime(render: Callable[..., Response]) -> Callable[[Request], Response]:
-        def endpoint(request: Request) -> Response:
-            try:
-                runtime = _runtime(state)
-            except RuntimeError:
-                return _runtime_error()
-            return render(runtime, request)
-
-        return endpoint
-
-    return [
-        _loopback_route("/dashboard", guarded_runtime(lambda runtime, _: _job_list(runtime)), methods=["GET"]),
-        _loopback_route("/dashboard/targets", guarded_runtime(lambda runtime, _: _targets(runtime)), methods=["GET"]),
-        _loopback_route(
-            "/dashboard/jobs/{job_id}",
-            guarded_runtime(lambda runtime, request: _job_detail(runtime, request.path_params["job_id"])),
-            methods=["GET"],
-        ),
-        _loopback_route(
-            "/dashboard/jobs/{job_id}/output",
-            guarded_runtime(lambda runtime, request: _job_output(
-                runtime, request.path_params["job_id"], request.query_params.get("after", "0"),
-            )),
-            methods=["GET"],
-        ),
-    ]
-
-
-
 def _register_ask_routes(state: DashboardState) -> list[Route]:
     async def ask(request: Request) -> Response:
         try:
@@ -402,8 +214,426 @@ def _register_ask_routes(state: DashboardState) -> list[Route]:
 
 
 
+def _check_csrf(request: Request) -> Response | None:
+    origin = request.headers.get("origin")
+    if not origin or origin.lower() == "null":
+        return _api_error("CSRF check failed: Origin header required", 403, code="csrf_rejected")
+
+    origin_split = urlsplit(origin)
+    if not origin_split.hostname or not _is_loopback_host(origin_split.hostname):
+        return _api_error("CSRF check failed: non-loopback Origin", 403, code="csrf_rejected")
+
+    origin_scheme = origin_split.scheme.lower()
+    req_scheme = request.url.scheme.lower()
+    if origin_scheme != req_scheme:
+        return _api_error("CSRF check failed: scheme mismatch", 403, code="csrf_rejected")
+
+    origin_host = origin_split.hostname.lower()
+    req_host = (request.url.hostname or "").lower()
+    if origin_host != req_host:
+        return _api_error("CSRF check failed: host mismatch", 403, code="csrf_rejected")
+
+    default_port = 443 if origin_scheme == "https" else 80
+    try:
+        origin_port = origin_split.port or default_port
+    except ValueError:
+        return _api_error("CSRF check failed: invalid Origin port", 403, code="csrf_rejected")
+    req_port = request.url.port or default_port
+    if origin_port != req_port:
+        return _api_error("CSRF check failed: port mismatch", 403, code="csrf_rejected")
+
+    sec_fetch_site = request.headers.get("sec-fetch-site")
+    if sec_fetch_site is not None and sec_fetch_site.strip().lower() != "same-origin":
+        return _api_error("CSRF check failed: Sec-Fetch-Site must be same-origin", 403, code="csrf_rejected")
+
+    dashboard_header = request.headers.get("x-refract-dashboard")
+    if dashboard_header != DASHBOARD_HEADER_VALUE:
+        return _api_error("CSRF check failed: missing or invalid dashboard header", 403, code="csrf_rejected")
+
+    content_type = request.headers.get("content-type", "")
+    media_type = content_type.split(";")[0].strip().lower()
+    if media_type != "application/json":
+        return _api_error("Content-Type must be application/json", 415, code="unsupported_media_type")
+
+    return None
+
+
+async def _parse_json_body(request: Request) -> tuple[dict[str, Any] | None, Response | None]:
+    try:
+        raw_body = await request.body()
+    except Exception:
+        return None, _api_error("Malformed request body", 400, code="invalid_request")
+
+    if not raw_body:
+        return {}, None
+
+    try:
+        body = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        return None, _api_error("Malformed JSON body", 400, code="invalid_request")
+
+    if not isinstance(body, dict):
+        return None, _api_error("JSON body must be an object", 400, code="invalid_request")
+
+    return body, None
+
+
+async def _api_post_preamble(
+    state: DashboardState, request: Request
+) -> tuple[Any, str, dict[str, Any]] | Response:
+    csrf_err = _check_csrf(request)
+    if csrf_err is not None:
+        return csrf_err
+
+    body, body_err = await _parse_json_body(request)
+    if body_err is not None:
+        return body_err
+    assert body is not None
+
+    try:
+        runtime = _runtime(state)
+    except RuntimeError:
+        return _api_error("Refract runtime is not active", 503, code="runtime_unavailable")
+
+    job_id = request.path_params["job_id"]
+    return runtime, job_id, body
+
+
+async def _api_cancel(state: DashboardState, request: Request) -> Response:
+    preamble = await _api_post_preamble(state, request)
+    if isinstance(preamble, Response):
+        return preamble
+    runtime, job_id, _ = preamble
+
+    try:
+        result = await runtime.cancel(job_id)
+        return _api_json_response({
+            "job_id": result.job_id,
+            "state": result.state,
+            "success": result.success,
+        })
+    except OrchestrationError as exc:
+        return _map_orchestration_error(exc)
+
+
+async def _api_retry(state: DashboardState, request: Request) -> Response:
+    preamble = await _api_post_preamble(state, request)
+    if isinstance(preamble, Response):
+        return preamble
+    runtime, job_id, _ = preamble
+
+    try:
+        result = await runtime.retry(job_id)
+        return _api_json_response({
+            "job_id": result.job_id,
+            "state": result.state,
+            "retry_of": job_id,
+        })
+    except OrchestrationError as exc:
+        return _map_orchestration_error(exc)
+
+
+async def _api_answer(state: DashboardState, request: Request) -> Response:
+    preamble = await _api_post_preamble(state, request)
+    if isinstance(preamble, Response):
+        return preamble
+    runtime, job_id, body = preamble
+
+    question_id = body.get("question_id")
+    if not isinstance(question_id, str) or not question_id:
+        return _api_error("question_id must be a non-empty string", 400, code="invalid_request")
+
+    answer = body.get("answer")
+    if not isinstance(answer, str) or not answer:
+        return _api_error("answer must be a non-empty string", 400, code="invalid_request")
+
+    try:
+        result = await runtime.job_answer(job_id, answer, expected_question_id=question_id)
+        return _api_json_response({
+            "job_id": result.job_id,
+            "state": result.state,
+            "success": result.success,
+        })
+    except OrchestrationError as exc:
+        return _map_orchestration_error(exc)
+
+
+def _register_action_routes(state: DashboardState) -> list[Route]:
+    async def cancel(request: Request) -> Response:
+        return await _api_cancel(state, request)
+
+    async def retry(request: Request) -> Response:
+        return await _api_retry(state, request)
+
+    async def answer(request: Request) -> Response:
+        return await _api_answer(state, request)
+
+    return [
+        _loopback_route("/dashboard/api/jobs/{job_id}/cancel", cancel, methods=["POST"]),
+        _loopback_route("/dashboard/api/jobs/{job_id}/retry", retry, methods=["POST"]),
+        _loopback_route("/dashboard/api/jobs/{job_id}/answer", answer, methods=["POST"]),
+    ]
+
+
+def _api_runtime(state: DashboardState) -> Any | Response:
+    try:
+        return _runtime(state)
+    except RuntimeError:
+        return _api_error(
+            "Refract runtime is not active",
+            503,
+            code="runtime_unavailable",
+            unchanged="Nothing was modified.",
+            recovery="Retry after the daemon has started.",
+        )
+
+
+def _api_get_jobs(state: DashboardState, request: Request) -> Response:
+    runtime = _api_runtime(state)
+    if isinstance(runtime, Response):
+        return runtime
+
+    limit_val = 100
+    limit_param = request.query_params.get("limit")
+    if limit_param is not None and limit_param != "":
+        try:
+            limit_val = int(limit_param)
+            if limit_val <= 0 or limit_val > 200:
+                return _api_error(
+                    "limit must be between 1 and 200", 400, code="invalid_request", unchanged="Nothing was modified."
+                )
+        except ValueError:
+            return _api_error(
+                "limit must be an integer", 400, code="invalid_request", unchanged="Nothing was modified."
+            )
+
+    cursor_param = request.query_params.get("cursor") or None
+    state_param = request.query_params.get("state") or None
+    project_param = request.query_params.get("project") or None
+    workflow_param = request.query_params.get("workflow") or None
+    target_param = request.query_params.get("target") or None
+    q_param = request.query_params.get("q") or None
+
+    try:
+        jobs, next_cursor = runtime.database.job_summaries(
+            state=state_param,
+            project_id=project_param,
+            workflow=workflow_param,
+            target=target_param,
+            q=q_param,
+            cursor=cursor_param,
+            limit=limit_val,
+        )
+    except ValueError as exc:
+        return _api_error(str(exc), 400, code="invalid_request", unchanged="Nothing was modified.")
+
+    options = runtime.database.job_filter_options()
+    return _api_json_response({
+        "jobs": jobs,
+        "next_cursor": next_cursor,
+        "options": options,
+    })
+
+
+def _api_get_job_detail(state: DashboardState, request: Request) -> Response:
+    runtime = _api_runtime(state)
+    if isinstance(runtime, Response):
+        return runtime
+
+    job_id = request.path_params["job_id"]
+    detail = runtime.database.job_detail(job_id)
+    if detail is None:
+        return _api_error("Job not found", 404, code="unknown_job", unchanged="Nothing was modified.")
+
+    ask_registry = getattr(runtime, "ask_registry", None)
+    pending = ask_registry.get_pending(job_id) if ask_registry else None
+    pending_question = (
+        {"question_id": pending.question_id, "text": pending.text}
+        if pending is not None
+        else None
+    )
+
+    detail["pending_question"] = pending_question
+    return _api_json_response(detail)
+
+
+def _stream_events_bounded(
+    stream_path: Path, after: int, limit: int = _OUTPUT_PAGE
+) -> tuple[list[dict[str, Any]], int, bool, bool]:
+    """Stream events from `stream_path` without reading the entire file into memory.
+
+    Returns (events, last_seq, has_more, available).
+    """
+    try:
+        handle = stream_path.open("r", encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return [], after, False, False
+
+    events: list[dict[str, Any]] = []
+    last_seq = after
+    has_more = False
+    with handle:
+        seq = 0
+        for line in handle:
+            seq += 1
+            if seq <= after:
+                continue
+            if not line.endswith("\n"):
+                # Partial final line: withheld, does not count toward has_more
+                break
+            if len(events) < limit:
+                try:
+                    payload = json.loads(line)
+                    if not isinstance(payload, dict):
+                        payload = {"kind": "invalid", "data": {}}
+                except Exception:
+                    payload = {"kind": "invalid", "data": {}}
+                events.append({**payload, "seq": seq})
+                last_seq = seq
+            else:
+                has_more = True
+                break
+
+    return events, last_seq, has_more, True
+
+
+def _api_get_job_output(state: DashboardState, request: Request) -> Response:
+    runtime = _api_runtime(state)
+    if isinstance(runtime, Response):
+        return runtime
+
+    job_id = request.path_params["job_id"]
+    job = runtime.database.job_record(job_id)
+    if job is None:
+        return _api_error("Job not found", 404, code="unknown_job", unchanged="Nothing was modified.")
+
+    after_str = request.query_params.get("after")
+    if after_str is None or after_str == "":
+        after = 0
+    else:
+        try:
+            after = int(after_str)
+            if after < 0:
+                return _api_error(
+                    "after must be a non-negative integer", 400, code="invalid_request", unchanged="Nothing was modified."
+                )
+        except ValueError:
+            return _api_error(
+                "after must be an integer", 400, code="invalid_request", unchanged="Nothing was modified."
+            )
+
+    stream_path = runtime.database.stream_path(job_id)
+    events, last_seq, has_more, available = _stream_events_bounded(stream_path, after, _OUTPUT_PAGE)
+
+    job_state = job["state"]
+    is_terminal = job_state in TERMINAL_STATES
+
+    return _api_json_response({
+        "events": events,
+        "next": last_seq,
+        "has_more": has_more,
+        "available": available,
+        "state": job_state,
+        "terminal": is_terminal,
+    })
+
+
+def _api_get_targets(state: DashboardState, request: Request) -> Response:
+    runtime = _api_runtime(state)
+    if isinstance(runtime, Response):
+        return runtime
+
+    targets = [target.model_dump() for target in runtime.targets()]
+    config = runtime.config_health.model_dump()
+    return _api_json_response({
+        "targets": targets,
+        "config": config,
+    })
+
+
+def _api_fallback(request: Request) -> Response:
+    return _api_error(
+        "Not found",
+        404,
+        code="not_found",
+        unchanged="Nothing was modified.",
+        recovery="Check the API URL.",
+    )
+
+
+def _app_shell(request: Request) -> Response:
+    try:
+        root = _APP_STATIC_DIR.resolve(strict=True)
+        index = (root / "index.html").resolve(strict=True)
+    except (OSError, RuntimeError):
+        return Response(status_code=404)
+    if not index.is_relative_to(root) or not index.is_file():
+        return Response(status_code=404)
+    return FileResponse(index, media_type="text/html", headers={
+        "Cache-Control": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+def _app_asset(request: Request) -> Response:
+    relative = request.path_params.get("path", "")
+    try:
+        root = (_APP_STATIC_DIR / "assets").resolve(strict=True)
+        asset = (root / relative).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return Response(status_code=404)
+    if not asset.is_relative_to(root) or not asset.is_file():
+        return Response(status_code=404)
+    return FileResponse(asset, headers={
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+def _register_app_routes() -> list[Route]:
+    return [
+        _loopback_route("/dashboard/assets", _app_asset, methods=["GET"]),
+        _loopback_route("/dashboard/assets/{path:path}", _app_asset, methods=["GET"]),
+        _loopback_route("/dashboard", _app_shell, methods=["GET"]),
+        _loopback_route("/dashboard/", _app_shell, methods=["GET"]),
+        _loopback_route("/dashboard/{path:path}", _app_shell, methods=["GET"]),
+    ]
+
+
+def _register_api_routes(state: DashboardState) -> list[Route]:
+    def jobs(request: Request) -> Response:
+        return _api_get_jobs(state, request)
+
+    def output(request: Request) -> Response:
+        return _api_get_job_output(state, request)
+
+    def job_detail(request: Request) -> Response:
+        return _api_get_job_detail(state, request)
+
+    def targets(request: Request) -> Response:
+        return _api_get_targets(state, request)
+
+    all_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+
+    # Fallback for unknown /dashboard/api/* routes and unsupported HTTP methods on
+    # registered API routes (which Starlette falls through to match here as JSON 404).
+    return [
+        _loopback_route("/dashboard/api/jobs", jobs, methods=["GET"]),
+        _loopback_route("/dashboard/api/jobs/{job_id}/output", output, methods=["GET"]),
+        _loopback_route("/dashboard/api/jobs/{job_id}", job_detail, methods=["GET"]),
+        _loopback_route("/dashboard/api/targets", targets, methods=["GET"]),
+        _loopback_route("/dashboard/api", _api_fallback, methods=all_methods),
+        _loopback_route("/dashboard/api/{rest:path}", _api_fallback, methods=all_methods),
+    ]
+
+
 def register_dashboard_routes(state: DashboardState) -> list[Route]:
-    return [*_register_page_routes(state), *_register_ask_routes(state)]
+    return [
+        *_register_action_routes(state),
+        *_register_api_routes(state),
+        *_register_app_routes(),
+        *_register_ask_routes(state),
+    ]
 
 
-__all__ = ["DashboardState", "register_dashboard_routes"]
+__all__ = ["DASHBOARD_HEADER", "DASHBOARD_HEADER_VALUE", "DashboardState", "register_dashboard_routes"]

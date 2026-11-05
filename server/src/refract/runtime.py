@@ -420,7 +420,9 @@ class Runtime:
             raise OrchestrationError(f"Unknown job: {job_id}")
         return refreshed
 
-    async def job_answer(self, job_id: str, answer: str) -> ActionResult:
+    async def job_answer(
+        self, job_id: str, answer: str, expected_question_id: str | None = None
+    ) -> ActionResult:
         job = await run_sync(self.database.job, job_id)
         if job is None:
             raise OrchestrationError(
@@ -447,7 +449,9 @@ class Runtime:
                 code="invalid_request",
                 next_action=f"Provide an answer up to {MAX_ANSWER_LENGTH} characters.",
             )
-        delivered = self.ask_registry.deliver_answer(job_id, cleaned_answer)
+        delivered = self.ask_registry.deliver_answer(
+            job_id, cleaned_answer, expected_question_id=expected_question_id
+        )
         if not delivered:
             raise OrchestrationError(
                 f"No question is pending for job {job_id}, or it expired.",

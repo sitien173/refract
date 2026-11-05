@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -95,6 +96,27 @@ def _token_values(tokens: dict[str, int | None] | None) -> tuple[int | None, ...
     """Return token counters in column order; a missing key stays NULL."""
     tokens = tokens or {}
     return tuple(tokens.get(key) for key, _column in _TOKEN_COLUMNS)
+
+
+def encode_cursor(created_at: str, job_id: str) -> str:
+    raw = json.dumps([created_at, job_id]).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def decode_cursor(cursor: str) -> tuple[str, str]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+        if (
+            isinstance(data, list)
+            and len(data) == 2
+            and isinstance(data[0], str)
+            and isinstance(data[1], str)
+        ):
+            return data[0], data[1]
+    except Exception:
+        pass
+    raise ValueError("Invalid cursor")
 
 
 class Database:
@@ -559,4 +581,161 @@ class Database:
         for job_id in job_ids:
             self.stream_path(job_id).unlink(missing_ok=True)
             self.result_path(job_id).unlink(missing_ok=True)
+
+    def job_summaries(
+        self,
+        *,
+        state: str | None = None,
+        project_id: str | None = None,
+        workflow: str | None = None,
+        target: str | None = None,
+        q: str | None = None,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        if limit <= 0 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+
+        query = """
+            SELECT
+                j.id,
+                j.state,
+                j.project_id,
+                COALESCE(p.root, '') AS project_root,
+                j.workflow,
+                j.profile,
+                j.target,
+                j.session,
+                j.retry_of,
+                j.failure_kind,
+                j.created_at,
+                j.updated_at
+            FROM jobs j
+            LEFT JOIN projects p ON j.project_id = p.id
+        """
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if state is not None:
+            where_clauses.append("j.state = ?")
+            params.append(state)
+
+        if project_id is not None:
+            where_clauses.append("j.project_id = ?")
+            params.append(project_id)
+
+        if workflow is not None:
+            where_clauses.append("j.workflow = ?")
+            params.append(workflow)
+
+        if target is not None:
+            where_clauses.append("j.target = ?")
+            params.append(target)
+
+        if q is not None and q != "":
+            escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            where_clauses.append("j.id LIKE ? ESCAPE '\\' COLLATE NOCASE")
+            params.append(f"%{escaped_q}%")
+
+        if cursor is not None and cursor != "":
+            cursor_created_at, cursor_id = decode_cursor(cursor)
+            where_clauses.append("(j.created_at < ? OR (j.created_at = ? AND j.id < ?))")
+            params.extend([cursor_created_at, cursor_created_at, cursor_id])
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        query += " ORDER BY j.created_at DESC, j.id DESC LIMIT ?"
+        params.append(limit + 1)
+
+        rows = self._connection.execute(query, tuple(params)).fetchall()
+        has_more = len(rows) > limit
+        result_rows = rows[:limit] if has_more else rows
+        next_cursor = (
+            encode_cursor(result_rows[-1]["created_at"], result_rows[-1]["id"])
+            if has_more and result_rows
+            else None
+        )
+        return [dict(row) for row in result_rows], next_cursor
+
+    def job_filter_options(self) -> dict[str, Any]:
+        states = [
+            row[0]
+            for row in self._connection.execute(
+                "SELECT DISTINCT state FROM jobs WHERE state != '' ORDER BY state"
+            ).fetchall()
+        ]
+        projects = [
+            {"id": row["id"], "root": row["root"]}
+            for row in self._connection.execute(
+                """
+                SELECT DISTINCT p.id, p.root
+                FROM jobs j
+                JOIN projects p ON j.project_id = p.id
+                ORDER BY p.root, p.id
+                """
+            ).fetchall()
+        ]
+        workflows = [
+            row[0]
+            for row in self._connection.execute(
+                "SELECT DISTINCT workflow FROM jobs WHERE workflow != '' ORDER BY workflow"
+            ).fetchall()
+        ]
+        targets = [
+            row[0]
+            for row in self._connection.execute(
+                "SELECT DISTINCT target FROM jobs WHERE target != '' ORDER BY target"
+            ).fetchall()
+        ]
+        return {
+            "states": states,
+            "projects": projects,
+            "workflows": workflows,
+            "targets": targets,
+        }
+
+    def job_detail(self, job_id: str) -> dict[str, Any] | None:
+        query = """
+            SELECT
+                j.*,
+                COALESCE(p.root, '') AS project_root
+            FROM jobs j
+            LEFT JOIN projects p ON j.project_id = p.id
+            WHERE j.id = ?
+        """
+        row = self._connection.execute(query, (job_id,)).fetchone()
+        if row is None:
+            return None
+        try:
+            result_text = self.result_path(job_id).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            result_text = ""
+        tokens = {key: row[column] for key, column in _TOKEN_COLUMNS}
+        result = {
+            "text": result_text,
+            "error": row["error"],
+            "failure_kind": row["failure_kind"],
+            "model": row["model"],
+            "duration_ms": row["duration_ms"],
+            "tokens": tokens,
+        }
+        return {
+            "id": row["id"],
+            "state": row["state"],
+            "project_id": row["project_id"],
+            "project_root": row["project_root"],
+            "workflow": row["workflow"],
+            "profile": row["profile"],
+            "target": row["target"],
+            "session": row["session"],
+            "retry_of": row["retry_of"],
+            "failure_kind": row["failure_kind"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "prompt": row["prompt"],
+            "result": result,
+        }
 

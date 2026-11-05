@@ -1,0 +1,80 @@
+@import "./tds/tokens.css";
+@import "tailwindcss";
+@import "./tds/fonts.css" layer(components);
+@import "./tds/button.css" layer(components);
+@import "./tds/icon-button.css" layer(components);
+@import "./tds/select.css" layer(components);
+@import "./tds/text-input.css" layer(components);
+@import "./tds/tabs.css" layer(components);
+@import "./tds/tab-item.css" layer(components);
+@import "./tds/dialog.css" layer(components);
+@import "./tds/announcement.css" layer(components);
+@import "./tds/spinner.css" layer(components);
+@import "./tds/field-label.css" layer(components);
+@import "./tds/field-caption.css" layer(components);
+@import "./tds/field-validation.css" layer(components);
+@import "./tds/dropdown-panel.css" layer(components);
+@import "./tds/caret.css" layer(components);
+
+@theme {
+  --color-*: initial;
+  --radius-*: initial;
+}
+
+@theme inline {
+  --font-sans: var(--font-family);
+}
+
+:root {
+  --background: var(--surface-neutral-01);
+  --card: var(--surface-neutral-01);
+  --popover: var(--surface-neutral-01);
+  --foreground: var(--text-default);
+  --card-foreground: var(--text-default);
+  --popover-foreground: var(--text-default);
+  --secondary-foreground: var(--text-default);
+  --accent-foreground: var(--text-default);
+  --primary: var(--interactive-default);
+  --primary-foreground: var(--text-inverse);
+  --secondary: var(--surface-neutral-02);
+  --muted: var(--surface-neutral-02);
+  --muted-foreground: var(--text-description);
+  --accent: var(--surface-hover);
+  --destructive: var(--border-negative);
+  --border: var(--border-subtle);
+  --input: var(--border-strong);
+  --ring: var(--border-focus);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--surface-neutral-02);
+  color: var(--text-default);
+  font-family: var(--font-family);
+}
+.text-body-xs { font-size: var(--font-size-xs); line-height: var(--line-height-xs); }
+.text-body-sm { font-size: var(--font-size-sm); line-height: var(--line-height-sm); }
+.text-body-md { font-size: var(--font-size-md); line-height: var(--line-height-md); }
+.text-body-lg { font-size: var(--font-size-lg); line-height: var(--line-height-lg); }
+.text-label-sm { font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); }
+.text-label-md { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); }
+.text-label-lg { font-size: var(--font-size-md); font-weight: var(--font-weight-medium); }
+.text-label-sm-uppercase { font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); text-transform: uppercase; }
+.text-heading-xs { font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
+.text-heading-sm { font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); }
+.text-heading-md { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); }
+.text-heading-lg { font-size: var(--font-size-xl); font-weight: var(--font-weight-semibold); }
+.text-heading-xl { font-size: var(--font-size-2xl); font-weight: var(--font-weight-semibold); }
+.text-heading-2xl { font-size: var(--font-size-3xl); font-weight: var(--font-weight-semibold); }
+.text-heading-3xl { font-size: var(--font-size-4xl); font-weight: var(--font-weight-semibold); }
+.text-display-sm, .text-display-md, .text-display-lg, .text-display-xl, .text-display-2xl, .text-display-3xl {
+  font-family: var(--font-family-display);
+}
+.text-display-sm { font-size: var(--font-size-display-sm); }
+.text-display-md { font-size: var(--font-size-display-md); }
+.text-display-lg { font-size: var(--font-size-display-lg); }
+.text-display-xl { font-size: var(--font-size-display-xl); }
+.text-display-2xl { font-size: var(--font-size-display-2xl); }
+.text-display-3xl { font-size: var(--font-size-display-3xl); }

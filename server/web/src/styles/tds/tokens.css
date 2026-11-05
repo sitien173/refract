@@ -1,0 +1,174 @@
+/* Trulioo Design System tokens, vendored from tds CLI @trulioodesign/tds-mcp v1.1.2. */
+/* Core tokens: only those the semantic tokens and vendored component CSS reference. */
+:root {
+  --color-teal-10: rgb(230, 248, 244);
+  --color-teal-60: rgb(14, 138, 120);
+  --color-teal-70: rgb(0, 107, 92);
+  --color-teal-80: rgb(0, 76, 69);
+  --color-teal-90: rgb(0, 53, 48);
+  --color-teal-100: rgb(0, 32, 30);
+  --color-violet-10: rgb(245, 238, 251);
+  --color-violet-20: rgb(232, 216, 245);
+  --color-violet-30: rgb(220, 192, 245);
+  --color-violet-80: rgb(89, 45, 128);
+  --color-neutral-10: rgb(244, 246, 244);
+  --color-neutral-15: rgb(232, 237, 232);
+  --color-neutral-20: rgb(221, 226, 222);
+  --color-neutral-30: rgb(197, 206, 200);
+  --color-neutral-40: rgb(168, 180, 172);
+  --color-neutral-50: rgb(138, 154, 144);
+  --color-neutral-60: rgb(97, 114, 105);
+  --color-neutral-70: rgb(82, 102, 96);
+  --color-neutral-100: rgb(23, 45, 45);
+  --color-white: rgb(255, 255, 255);
+  --color-red-border: rgb(219, 43, 43);
+  --color-red-bg: rgb(255, 241, 241);
+  --color-red-text: rgb(186, 21, 29);
+  --color-amber-border: rgb(216, 161, 59);
+  --color-amber-bg: rgb(255, 244, 219);
+  --color-amber-text: rgb(119, 85, 22);
+  --color-amber-icon: rgb(176, 122, 26);
+  --color-green-border: rgb(111, 179, 138);
+  --color-green-bg: rgb(234, 247, 240);
+  --color-green-text: rgb(22, 101, 52);
+  --color-green-icon: rgb(61, 139, 94);
+  --spacing-2: 0.125rem;
+  --spacing-4: 0.25rem;
+  --spacing-8: 0.5rem;
+  --spacing-12: 0.75rem;
+  --spacing-16: 1rem;
+  --spacing-24: 1.5rem;
+  --spacing-32: 2rem;
+  --spacing-40: 2.5rem;
+  --spacing-48: 3rem;
+  --spacing-64: 4rem;
+  --spacing-96: 6rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-full: 9999px;
+}
+
+/* Semantic tokens, from tds rules RULE 2. */
+:root {
+  --text-default: var(--color-neutral-100); /* rgb(23, 45, 45) */
+  --text-description: var(--color-neutral-70); /* rgb(82, 102, 96) */
+  --text-caption: var(--color-neutral-60); /* rgb(97, 114, 105) */
+  --text-placeholder: var(--color-neutral-50); /* rgb(138, 154, 144) */
+  --text-inverse: var(--color-white); /* rgb(255, 255, 255) */
+  --text-disabled: var(--color-neutral-50); /* rgb(138, 154, 144) */
+  --text-link: var(--color-teal-70); /* rgb(0, 107, 92) */
+  --text-negative: var(--color-red-text); /* rgb(186, 21, 29) */
+  --text-intermediate: var(--color-amber-text); /* rgb(119, 85, 22) */
+  --text-positive: var(--color-green-text); /* rgb(22, 101, 52) */
+  --surface-neutral-01: var(--color-white); /* rgb(255, 255, 255) */
+  --surface-neutral-02: var(--color-neutral-10); /* rgb(244, 246, 244) */
+  --surface-neutral-03: var(--color-neutral-15); /* rgb(232, 237, 232) */
+  --surface-neutral-04: var(--color-neutral-20); /* rgb(221, 226, 222) */
+  --surface-disabled: var(--color-neutral-20); /* rgb(221, 226, 222) */
+  --surface-hover: var(--color-neutral-10); /* rgb(244, 246, 244) */
+  --surface-selected: var(--color-teal-10); /* rgb(230, 248, 244) */
+  --surface-overlay: rgba(23, 28, 26, 0.5); /* rgb(23, 28, 26) @ 50% */
+  --surface-inverse: var(--color-neutral-100); /* rgb(23, 45, 45) */
+  --surface-negative: var(--color-red-bg); /* rgb(255, 241, 241) */
+  --surface-intermediate: var(--color-amber-bg); /* rgb(255, 244, 219) */
+  --surface-positive: var(--color-green-bg); /* rgb(234, 247, 240) */
+  --border-subtle: var(--color-neutral-20); /* rgb(221, 226, 222) */
+  --border-strong: var(--color-neutral-30); /* rgb(197, 206, 200) */
+  --border-interactive: var(--color-teal-80); /* rgb(0, 76, 69) */
+  --border-divider: var(--color-neutral-15); /* rgb(232, 237, 232) */
+  --border-disabled: var(--color-neutral-30); /* rgb(197, 206, 200) */
+  --border-focus: var(--color-teal-60); /* rgb(14, 138, 120) */
+  --border-selected: var(--color-teal-80); /* rgb(0, 76, 69) */
+  --border-negative: var(--color-red-border); /* rgb(219, 43, 43) */
+  --border-intermediate: var(--color-amber-border); /* rgb(216, 161, 59) */
+  --border-positive: var(--color-green-border); /* rgb(111, 179, 138) */
+  --interactive-default: var(--color-teal-80); /* rgb(0, 76, 69) */
+  --interactive-hover: var(--color-teal-90); /* rgb(0, 53, 48) */
+  --interactive-active: var(--color-teal-100); /* rgb(0, 32, 30) */
+  --interactive-subtle: var(--color-teal-10); /* rgb(230, 248, 244) */
+  --interactive-disabled: var(--color-neutral-40); /* rgb(168, 180, 172) */
+  --icon-default: var(--color-neutral-100); /* rgb(23, 45, 45) */
+  --icon-muted: var(--color-neutral-70); /* rgb(82, 102, 96) */
+  --icon-faint: var(--color-neutral-60); /* rgb(97, 114, 105) */
+  --icon-disabled: var(--color-neutral-50); /* rgb(138, 154, 144) */
+  --icon-inverse: var(--color-white); /* rgb(255, 255, 255) */
+  --icon-interactive: var(--color-teal-80); /* rgb(0, 76, 69) */
+  --icon-negative: var(--color-red-border); /* rgb(219, 43, 43) */
+  --icon-intermediate: var(--color-amber-icon); /* rgb(176, 122, 26) */
+  --icon-positive: var(--color-green-icon); /* rgb(61, 139, 94) */
+  --icon-ai: var(--color-violet-80); /* rgb(89, 45, 128) */
+  --ai-accent: var(--color-violet-80); /* rgb(89, 45, 128) */
+  --ai-surface: var(--color-violet-10); /* rgb(245, 238, 251) */
+  --ai-badge: var(--color-violet-30); /* rgb(220, 192, 245) */
+  --ai-hover: var(--color-violet-20); /* rgb(232, 216, 245) */
+  --padding-xs: var(--spacing-4); /* 4px */
+  --padding-sm: var(--spacing-8); /* 8px */
+  --padding-md: var(--spacing-12); /* 12px */
+  --padding-lg: var(--spacing-16); /* 16px */
+  --padding-xl: var(--spacing-24); /* 24px */
+  --padding-2xl: var(--spacing-32); /* 32px */
+  --padding-3xl: var(--spacing-40); /* 40px */
+  --gap-xs: var(--spacing-4); /* 4px */
+  --gap-sm: var(--spacing-8); /* 8px */
+  --gap-md: var(--spacing-12); /* 12px */
+  --gap-lg: var(--spacing-16); /* 16px */
+  --gap-xl: var(--spacing-24); /* 24px */
+  --gap-2xl: var(--spacing-32); /* 32px */
+  --margin-sm: var(--spacing-16); /* 16px */
+  --margin-md: var(--spacing-24); /* 24px */
+  --margin-lg: var(--spacing-32); /* 32px */
+  --margin-xl: var(--spacing-48); /* 48px */
+  --margin-2xl: var(--spacing-64); /* 64px */
+  --margin-3xl: var(--spacing-96); /* 96px */
+  --radius-button: var(--radius-md); /* 6px */
+  --radius-card: var(--radius-lg); /* 8px */
+  --radius-modal: var(--radius-xl); /* 12px */
+  --radius-section: var(--radius-2xl); /* 16px */
+  --radius-badge: var(--radius-full); /* 9999px */
+  --surface-flow-glow: url("data:image/svg+xml;utf8,<svg viewBox='0 0 1344 1008' xmlns='http://www.w3.org/2000/svg' preserveAspectRatio='none'><defs><radialGradient id='glow-tr' gradientUnits='userSpaceOnUse' cx='0' cy='0' r='10' gradientTransform='matrix(117.1 -6.04 5.436 105.39 1293 -242)'><stop stop-color='rgba(93,221,198,0.5)' offset='0'/><stop stop-color='rgba(140,166,229,0.2)' offset='0.5'/><stop stop-color='rgba(178,191,229,0)' offset='1'/></radialGradient><radialGradient id='glow-bl' gradientUnits='userSpaceOnUse' cx='0' cy='0' r='10' gradientTransform='matrix(112 0 0 100.8 1344 -302.4)'><stop stop-color='rgba(93,221,198,0.5)' offset='0'/><stop stop-color='rgba(126,165,231,0.2)' offset='0.5'/><stop stop-color='rgba(178,191,229,0)' offset='1'/></radialGradient></defs><rect x='0' y='0' width='100%25' height='100%25' fill='url(%23glow-tr)'/><g transform='rotate(180 672 504)'><rect x='0' y='0' width='100%25' height='100%25' fill='url(%23glow-bl)'/></g></svg>");
+  --shadow-button-resting: 0 1px 0 rgba(31, 35, 40, 0.04);
+  --shadow-button-elevated: 0 1px 1px rgba(0, 0, 0, 0.04), 0 1px 1.5px rgba(0, 0, 0, 0.06);
+  --shadow-inset: inset 0 1px 0 rgba(31, 35, 40, 0.04);
+  --shadow-switch-handle: 0 2px 4px rgba(140, 149, 159, 0.15);
+  --overlay-on-interactive: rgba(255, 255, 255, 0.2);
+  --overlay-on-neutral: rgba(0, 0, 0, 0.1);
+  --font-family: "Inter", sans-serif;
+  --font-family-display: "Tobias", Georgia, "Times New Roman", serif;
+  --font-family-mono: "SF Mono", "JetBrains Mono", "DM Mono", "Fira Code", monospace;
+  --text-tab-default: rgb(102, 102, 102);
+  --text-tab-disabled: rgb(179, 179, 179);
+  --font-size-xs: 0.75rem; /* 12px */
+  --font-size-sm: 0.875rem; /* 14px */
+  --font-size-md: 1rem; /* 16px */
+  --font-size-lg: 1.125rem; /* 18px */
+  --font-size-xl: 1.25rem; /* 20px */
+  --font-size-2xl: 1.5rem; /* 24px */
+  --font-size-3xl: 1.75rem; /* 28px */
+  --font-size-4xl: 2rem; /* 32px */
+  --font-size-display-sm: 2.25rem; /* 36px */
+  --font-size-display-md: 2.625rem; /* 42px */
+  --font-size-display-lg: 3rem; /* 48px */
+  --font-size-display-xl: 3.375rem; /* 54px */
+  --font-size-display-2xl: 3.75rem; /* 60px */
+  --font-size-display-3xl: 4.75rem; /* 76px */
+  --line-height-xs: 1rem; /* 16px */
+  --line-height-sm: 1.125rem; /* 18px */
+  --line-height-md: 1.25rem; /* 20px */
+  --line-height-lg: 1.375rem; /* 22px */
+  --line-height-xl: 1.5rem; /* 24px */
+  --line-height-2xl: 1.625rem; /* 26px */
+  --line-height-3xl: 1.875rem; /* 30px */
+  --line-height-4xl: 2.25rem; /* 36px */
+  --line-height-5xl: 2.5rem; /* 40px */
+  --font-weight-light: 300;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-weight-figma: 500;
+  --font-variation-figma-medium: "wght" 500;
+  --font-variation-figma-semibold: "wght" 600;
+}

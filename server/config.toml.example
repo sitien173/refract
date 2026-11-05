@@ -1,0 +1,222 @@
+# Refract v3 config, migrated from the v2 config.toml.v2.bak.
+
+[daemon]
+host = "127.0.0.1"
+port = 8765
+max_jobs = 4
+default_profile = "base"
+breaker_failure_threshold = 3
+breaker_base_cooldown_s = 60
+breaker_max_cooldown_s = 90
+
+[logging]
+level = "INFO"
+file = "openmcp.log"
+max_bytes = 10485760
+backup_count = 5
+
+[notifications]
+enabled = true
+
+[[targets]]
+id = "cc/claude-opus-high-isolated"
+backend = "claude"
+model = "opus"
+reasoning = "high"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+args = ["--verbose"]
+
+[[targets]]
+id = "cc/claude-opus-medium-isolated"
+backend = "claude"
+model = "opus"
+reasoning = "medium"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+args = ["--verbose"]
+
+[[targets]]
+id = "cc/claude-sonnet-high-isolated"
+backend = "claude"
+model = "sonnet"
+reasoning = "high"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+args = ["--verbose"]
+
+[[targets]]
+id = "cc/claude-sonnet-medium-isolated"
+backend = "claude"
+model = "sonnet"
+reasoning = "medium"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+args = ["--verbose"]
+
+[[targets]]
+id = "cc/claude-haiku-high-isolated"
+backend = "claude"
+model = "haiku"
+reasoning = "medium"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+args = ["--verbose"]
+
+[[targets]]
+id = "pi-cliproxy/chatgpt-web/gpt-6-luna-think"
+backend = "pi"
+model = "chatgpt-web/gpt-6-luna-think"
+isolated = true
+max_concurrency = 3
+context_window = 90000
+
+[[targets]]
+id = "pi-openai-codex/astra-high-isolated"
+backend = "pi"
+model = "openai-codex/gpt-6-astra"
+reasoning = "high"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "pi-openai-codex/astra-medium-isolated"
+backend = "pi"
+model = "openai-codex/gpt-6-astra"
+reasoning = "medium"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "pi-openai-codex/luna-high-isolated"
+backend = "pi"
+model = "openai-codex/gpt-6-luna"
+reasoning = "high"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "pi-openai-codex/sol-high-isolated"
+backend = "pi"
+model = "openai-codex/gpt-6.1-sol"
+reasoning = "high"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "pi-openai-codex/sol-medium-isolated"
+backend = "pi"
+model = "openai-codex/gpt-6.1-sol"
+reasoning = "medium"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "pi-deepseek/deepseek-flash-high"
+backend = "pi"
+model = "deepseek/deepseek-v4.1-flash"
+reasoning = "high"
+isolated = true
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "agy-opus"
+backend = "agy"
+model = "Claude Opus 5.5"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+context_window = 272000
+
+[[targets]]
+id = "agy-gemini-pro-high"
+backend = "agy"
+model = "Gemini 4 Argon (High)"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+context_window = 272000
+
+[[targets]]
+id = "agy-gemini-pro-medium"
+backend = "agy"
+model = "Gemini 4 Argon (Medium)"
+args = ["--print-timeout", "60m"]
+context_window = 272000
+
+[[targets]]
+id = "agy-gemini-flash-high"
+backend = "agy"
+model = "Gemini 3.8 Flash (High)"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+
+[[targets]]
+id = "codex/astra-high"
+backend = "codex"
+model = "gpt-6-astra"
+reasoning = "high"
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "codex/luna-high"
+backend = "codex"
+model = "gpt-6-luna"
+reasoning = "high"
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "codex/sol-high"
+backend = "codex"
+model = "gpt-6.1-sol"
+reasoning = "high"
+max_concurrency = 3
+context_window = 272000
+
+[[targets]]
+id = "codex/sol-medium"
+backend = "codex"
+model = "gpt-6.1-sol"
+reasoning = "medium"
+max_concurrency = 3
+context_window = 272000
+
+[profiles."base"]
+implement = ["pi-openai-codex/luna-high-isolated", "cc/claude-haiku-high-isolated", "agy-gemini-flash-high"]
+consult = ["agy-gemini-pro-high", "pi-openai-codex/astra-high-isolated", "cc/claude-opus-high-isolated"]
+review = ["cc/claude-sonnet-medium-isolated", "pi-openai-codex/sol-high-isolated"]
+other = ["agy-gemini-flash-high", "pi-openai-codex/luna-high-isolated"]
+
+[profiles."balanced"]
+extends = "base"
+consult = ["agy-opus", "agy-gemini-pro-high", "pi-openai-codex/astra-medium-isolated", "cc/claude-opus-medium-isolated"]
+implement = ["agy-gemini-flash-high", "pi-openai-codex/luna-high-isolated"]
+review = ["cc/claude-sonnet-medium-isolated", "pi-openai-codex/sol-medium-isolated"]
+
+[profiles."cost"]
+extends = "balanced"
+implement = ["agy-gemini-flash-high", "pi-openai-codex/luna-high-isolated", "cc/claude-haiku-high-isolated"]
+review = ["cc/claude-haiku-high-isolated", "pi-openai-codex/sol-medium-isolated"]
+
+[profiles."consult1"]
+extends = "base"
+consult = ["agy-gemini-pro-high"]
+
+[profiles."consult2"]
+extends = "base"
+consult = ["pi-openai-codex/astra-high-isolated"]
+
+[profiles."consult3"]
+extends = "base"
+consult = ["cc/claude-opus-high-isolated"]

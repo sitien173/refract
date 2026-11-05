@@ -33,6 +33,19 @@ cd server
 uv run refract serve
 ```
 
+## Dashboard
+
+The loopback-only dashboard is a React single-page console backed by the `/dashboard/api` JSON API. Open `http://127.0.0.1:8765/dashboard` for the live job console, `/dashboard/jobs/{job_id}` for a deep-linked job, or `/dashboard/targets` for target and configuration health. The selected job and list filters are kept in the URL. Job and transcript data poll while relevant, and the console supports cancelling, retrying, and answering pending questions with CSRF-guarded actions.
+
+To rebuild the committed frontend bundle:
+
+```bash
+cd server/web
+npm ci
+npm run build
+npm run check:bundle
+```
+
 ## Manual state migration
 
 These steps document a manual migration from the prior product state. They have not been run by this plan.

@@ -1,0 +1,1 @@
+[{"kind":"assistant.text.delta","entity_id":"msg-0","data":{"text":"Claude response"}},{"kind":"tool.started","entity_id":"tool-1","data":{"tool":"Read","activity":"tool_call"}},{"kind":"tool.completed","entity_id":"tool-1","data":{"status":"completed"}}]
