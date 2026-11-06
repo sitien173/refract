@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 2.4.0 -->
+<!-- refract-shared-version: 2.5.0 -->
 # Worker Contract
 
 Execution contract for the phase implementer. This bundled file is read
@@ -16,7 +16,7 @@ For each task in order:
    scaffolding first so the test fails on the intended assertion. For
    behavior-preserving refactors, establish passing characterization coverage
    and keep it green.
-2. Make changes directly in the working repository and stay strictly within the
+2. Make changes directly in the `<code-root>` named by the prompt and stay strictly within the
    phase's declared file set. After each task, run the fresh verification
    command from the `Done When` section of the phase prompt. Record exact
    RED→GREEN commands and assertion outputs (or root-cause reproduction for a
@@ -60,6 +60,9 @@ their values. If the command fails, return `BLOCKED` with the question.
 
 ## Prompt and scope discipline
 
+- Write phase records only under `<records-root>`. Outside a wave it equals
+  `<code-root>`; in a wave it is the main checkout. If a sandbox means you
+  cannot write under `<records-root>`, return `BLOCKED` with that error.
 - Stay within the declared file set (`Files` in `prompt.md` plus `notes.md` and
   `journal.md`). Report every worker-touched path.
 - Pre-existing or coordinator-updated changes to `.handover.md`, `PLAN.md`,

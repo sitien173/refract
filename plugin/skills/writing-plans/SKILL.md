@@ -29,19 +29,19 @@ first; it owns routing, execution, anchors, and Git.
 2. **Inputs.** Require a confirmed `DESIGN.md`; without one, offer
    `brainstorming` and stop. Require the Coordinator's plan `base` anchor at
    clean HEAD before creating plan artifacts.
-3. **Scope & Baseline.** Read `DESIGN.md` and only enough code to name exact
-   files and reuse targets. Run the verification commands at `base` and record
-   their baseline results.
+3. **Scope & Baseline.** Read `DESIGN.md` and only enough code to name exact files and
+   reuse targets. Run the verification commands at `base` and record their baseline results.
 4. **Phase.** Divide work into outcome-based phases of two to four related
-   tasks. One phase is what one implementation job can safely own. Work too
-   small for two tasks is a single phase.
-5. **Detail.** Fill the plan header and phase template below. Done when each
-   phase has exact files, preserved invariants, observable criteria, reviewer
-   checks, and commands.
-6. **Commit.** Specify one Conventional Commit message for the completed plan.
-7. **Write.** Create `PLAN.md` and `.handover.md`. Under `tracked`, checkpoint
-   the plan artifacts.
-8. **Confirm.** Ask the user to approve the plan before execution, then offer
+   tasks that one implementation job can safely own; smaller work is one phase.
+5. **Depend.** A missing `Depends on:` line means the phase depends on the previous phase.
+   Mark phases independent only when their `Files:` lists are disjoint and
+   neither needs an API, schema, or fixture the other creates. Shared files such as
+   lockfiles or `CHANGELOG.md` force a dependency. Reject cycles and unknown phase numbers.
+6. **Detail.** Fill the plan header and phase template below. Done when each phase
+   has exact files, preserved invariants, observable criteria, reviewer checks, and commands.
+7. **Commit.** Specify one Conventional Commit message for the completed plan.
+8. **Write.** Create `PLAN.md` and `.handover.md`; checkpoint them under `tracked`.
+9. **Confirm.** Ask the user to approve the plan before execution, then offer
    `executing-plans` (phase-by-phase) or `executing-plans-autonomously` (full run).
 
 ## Storage
@@ -49,9 +49,8 @@ first; it owns routing, execution, anchors, and Git.
 Every executable plan uses `docs/plans/<slug>/` holding `PLAN.md`, `DESIGN.md`,
 and `.handover.md`. Initialize handover with the canonical schema: `ACTIVE`,
 phase zero, null project and job fields, and empty lists. Create phase
-directories, never empty, only during execution.
-A documentation-only plan may use `docs/plans/<slug>-plan.md`. Convert a flat
-implementation plan to folder layout before execution.
+directories, never empty, only during execution. A documentation-only plan may
+use `docs/plans/<slug>-plan.md`; convert it to folder layout before execution.
 
 ## Plan and Phase Template
 
@@ -75,6 +74,7 @@ This sole branch commit replaces local phase checkpoints after every phase passe
 
 **Task Guide Input:** <complete phase request and distinct use cases>
 **Goal:** <one outcome>
+**Depends on:** <Phase N, Phase M | none>
 **Invariants & Boundaries:** <what to preserve; what is out of scope>
 **Files:**
 - Modify: `path/to/file`

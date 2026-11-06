@@ -8,7 +8,7 @@ history rewriting. This file owns anchor formats, writes, and resolution.
 ```text
 refs/plans/<slug>/base              commit before plan work
 refs/plans/<slug>/impl              sole final plan commit
-refs/plans/<slug>/phase-<NN>/base   checkpoint before phase implementation
+refs/plans/<slug>/phase-<NN>/base   checkpoint before the phase lands
 refs/plans/<slug>/phase-<NN>/impl   final validated phase checkpoint
 ```
 
@@ -21,7 +21,7 @@ refspecs omit these refs.
 | Moment | Action |
 |---|---|
 | Before preparing Phase 1 | Set plan `base` to clean HEAD. |
-| Gate 2, before implementation | Set phase `base` to clean checkpoint HEAD. |
+| Before the phase lands on the plan branch: Gate 2 sequentially, integration in a [wave](waves.md) | Set phase `base` to clean checkpoint HEAD. |
 | Gate 3, after the final phase fix | Set phase `impl` to validated checkpoint HEAD. |
 | Final plan consolidation | Replace branch checkpoints with one commit, then set plan `impl` to HEAD. |
 

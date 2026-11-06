@@ -29,7 +29,8 @@ Instruct the reviewer to judge only whether those changes are correct, secure,
 and meet the plan. Pre-existing code outside the delta is out of scope.
 
 Correctness and security findings force `FAIL`. Review through a read-only target
-and make no commit for review output.
+and make no commit for review output. During a wave, the root-unchanged check
+excludes main-checkout `.handover.md`; see [waves.md](waves.md).
 
 ## Review-fix loop
 

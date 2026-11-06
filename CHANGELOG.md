@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.5.0 - 2026-11-06
+
+- Added an optional `**Depends on:**` line to plan phases. A phase without it depends on the previous phase, so existing plans run unchanged.
+- Added phase waves. A wave is every phase whose dependencies have landed. `/refract:execute-plan` runs one wave; `/refract:execute-plan-all` runs all waves.
+- Multi-phase waves implement each phase in its own Git worktree, then integrate serially in plan order with rebase, phase checks, baseline checks, and `git merge --ff-only`. Review runs on the main checkout after each phase lands.
+- A single-phase wave uses the existing sequential path. Worktree creation failure runs the whole wave sequentially; there is no shared-checkout fallback.
+- `refract-stats` shows each active wave phase and its state.
+
 ## Unreleased - 2026-11-03
 
 - Breaking: replaced the server-rendered dashboard with a TDS-styled React live console. The dashboard supports live polling, filters, job actions, and target health.

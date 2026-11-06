@@ -16,7 +16,7 @@ tool, then fall back to `git worktree`. Never fight the harness.
 
 ## Constraints
 
-- Create at most one worktree per request.
+- Create at most one worktree per request, except in wave mode.
 - Use absolute paths for every command after creation.
 - Write ignore rules only to `$(git rev-parse --git-common-dir)/info/exclude`.
   A committed `.gitignore` imposes one contributor's layout on everyone.
@@ -86,8 +86,8 @@ When it is not ignored, append it to the exclude file named in Constraints.
 git worktree add "$LOCATION/$BRANCH_NAME" -b "$BRANCH_NAME"
 ```
 
-On a permission or sandbox error, tell the user the sandbox blocked worktree
-creation, then run Steps 2 and 3 in the current directory.
+Outside wave mode, on a permission or sandbox error, tell the user the sandbox
+blocked worktree creation, then run Steps 2 and 3 in the current directory.
 
 ## Step 2: Project Setup
 
@@ -137,6 +137,28 @@ When it is, the Write/Edit tool refuses to create plan files under `docs/plans/<
 Do not retry Write/Edit. Create/Update `PLAN.md`, `.handover.md`, and the phase prompt through
 the shell into `docs/plans/<slug>/` of the shared checkout, using the resolved
 path above.
+
+## Wave Mode
+
+[waves.md](../coordinating-multi-model-work/references/waves.md) invokes this
+mode for a multi-phase wave. The Coordinator already chose isolation, so skip
+the Step 0 question and Step 1a: a native tool moves the session into one
+worktree, while a wave needs several side by side. For each wave phase:
+
+1. Select the directory and pass the ignore check from Step 1b.
+2. Create the worktree from `wave_base`:
+
+   ```bash
+   git worktree add "$LOCATION/<slug>-phase-<NN>" -b "refract/<slug>/phase-<NN>" "$WAVE_BASE"
+   ```
+
+3. Run Step 2 in the new worktree. Skip Step 3; `wave_base` is the validated
+   main checkpoint.
+
+On any creation or setup failure, remove the worktrees and branches this wave
+created, report the error once, and return failure so the Coordinator runs the
+wave sequentially. Never fall back to the current directory in wave mode.
+Emit one `# WORKSPACE` block per phase.
 
 ## Output Format
 

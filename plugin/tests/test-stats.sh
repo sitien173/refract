@@ -50,4 +50,37 @@ test -z "$(printf '{"hook_event_name":"PostToolUse","cwd":"%s","tool_input":{"fi
 test -z "$(printf '{"hook_event_name":"Stop","stop_hook_active":true,"cwd":"%s"}' "$tmp" | "$stats" --hook)"
 test -z "$(cd / && printf '{"cwd":"/"}' | "$stats" --statusline)"
 
+# An empty wave list adds nothing to any output.
+mkdir -p "$tmp/empty/docs/plans/demo"
+cp "$tmp/docs/plans/demo/PLAN.md" "$tmp/empty/docs/plans/demo/PLAN.md"
+sed 's/^debt:/wave_base: null\nwave: []\ndebt:/' "$tmp/docs/plans/demo/.handover.md" > "$tmp/empty/docs/plans/demo/.handover.md"
+test "$(printf '{"cwd":"%s"}' "$tmp/empty" | "$stats" --statusline)" = "$line"
+test "$("$stats" "$tmp/empty")" = "$("$stats" "$tmp")"
+
+mkdir -p "$tmp/wave/docs/plans/waves"
+cp "$tmp/docs/plans/demo/PLAN.md" "$tmp/wave/docs/plans/waves/PLAN.md"
+cat > "$tmp/wave/docs/plans/waves/.handover.md" <<'MD'
+---
+status: ACTIVE
+current_phase: 3
+next_action: "Integrate Phase 2"
+checklist: []
+wave_base: abc1234
+wave:
+  - { phase: 2, state: implementing, worktree: /w/phase-02, branch: refract/waves/phase-02, implementation_job: j2 }
+  - { phase: 3, state: integrated, worktree: null, branch: refract/waves/phase-03, implementation_job: j3 }
+debt: []
+---
+MD
+wave_line="$(printf '{"cwd":"%s"}' "$tmp/wave" | "$stats" --statusline)"
+test "$wave_line" = "waves ACTIVE P3/3 debt 0 wave 2:implementing,3:integrated > Integrate Phase 2"
+HOOK_OUTPUT="$(printf '{"hook_event_name":"Stop","cwd":"%s"}' "$tmp/wave" | "$stats" --hook)" python3 - <<'PY'
+import json
+import os
+
+message = json.loads(os.environ["HOOK_OUTPUT"])["systemMessage"]
+assert "  wave: phase 2 implementing, phase 3 integrated" in message, message
+PY
+"$stats" "$tmp/wave" | grep -qF '  wave: phase 2 implementing, phase 3 integrated'
+
 printf 'stats tests passed\n'

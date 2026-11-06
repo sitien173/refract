@@ -58,9 +58,12 @@ resets, or restores. Assume it did none of these.
   local checkpoints. Consolidation leaves one plan commit.
 - Edit coordination files only while no project job is active.
   After submission, do not edit the root until that job is terminal.
+  During a wave, you may still edit main-checkout `.handover.md`.
 - Workers see every file. Keep secrets out of prompts and name secret-bearing
   files as out of scope in the phase prompt.
 - Submit sequential jobs one at a time. Verify each result before the next.
+  Wave implementation jobs in separate worktrees are the sole exception; see
+  [references/waves.md](references/waves.md).
 
 ## Setup and Resume
 

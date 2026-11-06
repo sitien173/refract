@@ -40,8 +40,16 @@ agy plugin install https://github.com/sitien173/refract
 | --- | --- |
 | `/refract:brainstorm <idea>` | Clarify intent and trade-offs; write `DESIGN.md`. |
 | `/refract:write-plan <design>` | Turn a confirmed design into a phase plan. |
-| `/refract:execute-plan [target]` | Run or resume one phase through all three gates. |
-| `/refract:execute-plan-all [target]` | Autonomously execute all phases through final audit and consolidation. |
+| `/refract:execute-plan [target]` | Run or resume one wave of phases through all three gates. |
+| `/refract:execute-plan-all [target]` | Autonomously execute all waves through final audit and consolidation. |
+
+## Parallel phases
+
+- A phase may declare `**Depends on:** Phase 1, Phase 3` or `**Depends on:** none`. Without the line, it depends on the previous phase.
+- A wave is every phase whose dependencies have landed. A single-phase wave runs exactly as a sequential phase.
+- A multi-phase wave implements each phase in its own worktree, then integrates and reviews each phase on the main checkout in plan order.
+- The Coordinator waits round-robin while several jobs are active. With more than four active jobs, a worker question can expire before it is answered.
+- Wave mechanics live in `skills/coordinating-multi-model-work/references/waves.md`.
 
 ## Skills
 

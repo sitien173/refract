@@ -1,6 +1,6 @@
 ---
 name: executing-plans-autonomously
-description: "Use when the user asks to autonomously execute an entire plan across all phases through final audit and consolidation without pausing for permission. Runs Phase 1 through the final phase continuously, makes autonomous engineering and deferral decisions, logs them to .handover.md, and completes final consolidation."
+description: "Use when the user asks to autonomously execute an entire plan across all phases through final audit and consolidation without pausing for permission. Runs every wave from Phase 1 through the final phase continuously, makes autonomous engineering and deferral decisions, logs them to .handover.md, and completes final consolidation."
 compatibility: Requires git and a running Refract server.
 ---
 
@@ -52,8 +52,11 @@ procedure.
    `.handover.md` is `BLOCKED`, resolve the pending question or blocker
    autonomously, set `status: ACTIVE`, record the rationale in `.handover.md`,
    and continue from the current unfinished phase.
-3. **Loop across all remaining phases.** For each phase from the current active
-   phase through the final phase in `PLAN.md`:
+3. **Loop across all remaining waves.** Loop waves until every phase has its `impl` ref,
+   selecting each per [waves.md](../coordinating-multi-model-work/references/waves.md). A single-phase wave runs
+   the steps below unchanged; a multi-phase wave runs through `waves.md`. When a
+   wave phase fails, set it `requeued` and log the decision to `.handover.md` instead of blocking.
+   For each phase from the current active phase through the final phase in `PLAN.md`:
    - Run the `executing-plans` phase preparation, `phase-<NN>/base` anchor,
      Gate 1 route, Gate 2 implementation with
      [implementer-prompt.md](../executing-plans/implementer-prompt.md), and

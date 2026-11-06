@@ -93,7 +93,7 @@ for detail in ("isError", "next_action", "request ID", "retry_after_s"):
     assert detail in " ".join(error_section.split()), detail
 assert "Honor the applied outcome and job ID" in contract_flat
 assert "Never blindly resubmit." in contract_flat
-assert plugin_version == market_version == codex_version == "2.4.0"
+assert plugin_version == market_version == codex_version == "2.5.0"
 repository = root.parent
 server_version = re.search(r'^version = "([^"]+)"', (repository / "server/pyproject.toml").read_text(), re.M).group(1)
 sonar_version = re.search(r"^sonar\.projectVersion=(.+)$", (repository / "sonar-project.properties").read_text(), re.M).group(1)
@@ -171,10 +171,42 @@ PY
 workflow_files=(commands hooks shared skills)
 public_workflow_files=(commands hooks shared skills)
 
-if grep -R -E --exclude-dir=using-git-worktrees 'git reset --soft|git worktree|isolated worktree|execution worktree|job_integrate|parent_job_id|include_stage_outputs|from_stage|integration_base|integration_conflict|\.openmcp\.local\.toml|profile="code-review"|\.agents/shared|SESSION_ID|mcp__plugin_superpowers-ccg_openmcp__run|\bConductor\b|\bconductor\b' "${workflow_files[@]}"; then
+if grep -R -E --exclude-dir=using-git-worktrees 'git reset --soft|isolated worktree|execution worktree|job_integrate|parent_job_id|include_stage_outputs|from_stage|integration_base|integration_conflict|\.openmcp\.local\.toml|profile="code-review"|\.agents/shared|SESSION_ID|mcp__plugin_superpowers-ccg_openmcp__run|\bConductor\b|\bconductor\b' "${workflow_files[@]}"; then
     printf 'forbidden workflow pattern found\n' >&2
     exit 1
 fi
+# Only the wave procedure may name `git worktree` outside using-git-worktrees.
+waves=skills/coordinating-multi-model-work/references/waves.md
+if grep -R -E --exclude-dir=using-git-worktrees 'git worktree' "${workflow_files[@]}" | grep -v -F "${waves}:"; then
+    printf 'forbidden workflow pattern found\n' >&2
+    exit 1
+fi
+
+python3 - "$waves" <<'PY'
+import pathlib
+import sys
+
+waves = " ".join(pathlib.Path(sys.argv[1]).read_text().split())
+for rule in (
+    "A single-phase wave runs exactly as today in the main checkout without a worktree.",
+    "run the whole wave sequentially in the main checkout. Never share one checkout between wave jobs.",
+    "call `wait` round-robin in plan order with `timeout_s=60`.",
+    "`git merge --ff-only refract/<slug>/phase-<NN>`",
+    "run phase validation plus the plan's baseline commands there.",
+    "On a rebase conflict or a step 6.1 check failure, abort the rebase, remove the worktree and branch, and set the state `requeued`.",
+    "Never review inside a phase worktree.",
+    "Write `phase-<NN>/impl` once.",
+):
+    assert rule in waves, rule
+PY
+coordinator_skill=skills/coordinating-multi-model-work/SKILL.md
+test "$(grep -c 'Submit sequential jobs one at a time.' "$coordinator_skill")" -eq 1
+grep -qF 'Wave implementation jobs in separate worktrees are the sole exception' "$coordinator_skill"
+grep -qF '(references/waves.md)' "$coordinator_skill"
+grep -qF 'During a wave, you may still edit main-checkout `.handover.md`' "$coordinator_skill"
+grep -qF 'waves.md#waiting' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -qF 'excludes main-checkout `.handover.md`' skills/coordinating-multi-model-work/references/review.md
+grep -qF 'Before the phase lands on the plan branch' skills/coordinating-multi-model-work/references/git-anchors.md
 
 if grep -R -E '\bcodex\b|\bagy\b|backend-write|frontend-write|review-read|backend-read|frontend-read|Cross-Validation' "${public_workflow_files[@]}"; then
     printf 'provider identity leaked into public workflow\n' >&2
@@ -236,7 +268,51 @@ grep -q 'Do not hard-code a default profile' skills/writing-plans/SKILL.md
 grep -q 'Do not call `list` or `submit` while authoring.' skills/writing-plans/SKILL.md
 grep -q 'one Conventional Commit message for the completed plan' skills/writing-plans/SKILL.md
 grep -q 'sole branch commit replaces local phase checkpoints' skills/writing-plans/SKILL.md
+grep -A1 -F '**Goal:** <one outcome>' skills/writing-plans/SKILL.md | grep -qF '**Depends on:** <Phase N, Phase M | none>'
+grep -qF 'A missing `Depends on:` line means the phase depends on the previous phase.' skills/writing-plans/SKILL.md
+grep -qF 'only when their `Files:` lists are disjoint' skills/writing-plans/SKILL.md
+grep -qF 'neither needs an API, schema, or fixture the other creates' skills/writing-plans/SKILL.md
+grep -qF 'lockfiles or `CHANGELOG.md` force a dependency' skills/writing-plans/SKILL.md
+grep -qF 'Reject cycles and unknown phase numbers.' skills/writing-plans/SKILL.md
+
+handover=skills/coordinating-multi-model-work/references/handover.md
+grep -qF 'wave_base: <commit|null>' "$handover"
+grep -qF 'wave: [{ phase, state: implementing|implemented|integrating|integrated|requeued, worktree, branch, implementation_job }, ...]' "$handover"
+grep -qF '`wave_base: null`, `wave: []`' "$handover"
+grep -qF 'A missing `wave_base` or `wave` key reads as `null` or `[]`.' "$handover"
+grep -qF 'Set `implementation_job` immediately after `submit` returns' "$handover"
+grep -qF '`current_phase` and `job_refs` describe the phase running gates on the main' "$handover"
+grep -qF 'Keep at most one step `doing` per phase.' "$handover"
 grep -q 'Do not call `list` for guidance during an active phase' skills/executing-plans/SKILL.md
+for skill in skills/executing-plans/SKILL.md skills/executing-plans-autonomously/SKILL.md; do
+    grep -qF '(../coordinating-multi-model-work/references/waves.md)' "$skill"
+    grep -qF 'single-phase wave runs' "$skill"
+done
+grep -qF 'Execute folder-layout plans only, one wave per invocation.' skills/executing-plans/SKILL.md
+if grep -qF 'one phase per invocation' skills/executing-plans/SKILL.md; then
+    printf 'executing-plans still runs one phase per invocation\n' >&2
+    exit 1
+fi
+grep -qF 'emits one phase report per phase' skills/executing-plans/SKILL.md
+grep -qF 'sets `BLOCKED` for a failed wave phase after the other phases integrate' skills/executing-plans/SKILL.md
+grep -qF 'Loop waves until every phase has its `impl` ref' skills/executing-plans-autonomously/SKILL.md
+grep -qF 'set it `requeued` and log the decision to `.handover.md` instead of blocking' skills/executing-plans-autonomously/SKILL.md
+implementer=skills/executing-plans/implementer-prompt.md
+grep -qF 'Outside a wave, `<code-root>` and `<records-root>` are both `<repo-root>`.' "$implementer"
+grep -qF 'submit(path="<code-root>"' "$implementer"
+grep -qF 'Read and execute `<records-root>/docs/plans/<slug>/phase-<NN>/prompt.md`' "$implementer"
+grep -qF '`<records-root>/docs/plans/<slug>/phase-<NN>/journal.md`' "$implementer"
+grep -qF 'Edit code only in `<code-root>`' "$implementer"
+grep -qF 'Write phase records only under `<records-root>`.' shared/worker-contract.md
+grep -qF 'cannot write under `<records-root>`, return `BLOCKED`' shared/worker-contract.md
+grep -qF 'repository-relative paths from both `<code-root>` and `<records-root>`' shared/erp.md
+worktrees_skill=skills/using-git-worktrees/SKILL.md
+grep -qF '## Wave Mode' "$worktrees_skill"
+grep -qF 'refract/<slug>/phase-<NN>' "$worktrees_skill"
+grep -qF 'Never fall back to the current directory in wave mode.' "$worktrees_skill"
+grep -qF 'Create at most one worktree per request, except in wave mode.' "$worktrees_skill"
+grep -qF 'one wave' commands/execute-plan.md
+grep -qF 'all waves' commands/execute-plan-all.md
 
 grep -q 'owns routing, admission' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Canonical gates use' skills/coordinating-multi-model-work/SKILL.md

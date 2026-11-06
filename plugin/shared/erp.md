@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 2.4.0 -->
+<!-- refract-shared-version: 2.5.0 -->
 # External Response Protocol (ERP)
 
 Worker-facing contract for the implementation response. This bundled file is
@@ -30,7 +30,8 @@ TASK_COMPLETE | BLOCKED | CONTINUE_CONTEXT
 - **SUMMARY** — one-line statement of what the phase or fix batch delivered.
 - **FILES MODIFIED** — every path the worker created or modified (allowed
   production/test files plus `phase-<NN>/notes.md` and `phase-<NN>/journal.md`),
-  using repository-relative paths. Never list untouched coordinator files such
+  using repository-relative paths from both `<code-root>` and `<records-root>`.
+  Never list untouched coordinator files such
   as `.handover.md`.
 - **NOTES** — pointer to the per-task `notes.md` blocks and fresh check counts.
 - **SPEC COMPLIANCE** — self-assessment against the phase `Done When`:

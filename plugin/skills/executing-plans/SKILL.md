@@ -1,6 +1,6 @@
 ---
 name: executing-plans
-description: "Use when the user asks to run, continue, or resume a plan or its next phase, even without naming the plan. Runs one phase of a folder-layout plan under docs/plans/ through implement and review, emits a phase report, then stops. Without a plan, use `writing-plans` first."
+description: "Use when the user asks to run, continue, or resume a plan or its next phase, even without naming the plan. Runs one wave of a folder-layout plan under docs/plans/ through implement and review, emits a phase report per phase, then stops. Without a plan, use `writing-plans` first."
 compatibility: Requires git and a running Refract server.
 ---
 
@@ -14,7 +14,7 @@ review, Git, and handover.
 
 ## Constraints
 
-- Execute folder-layout plans only, one phase per invocation. Send a flat plan
+- Execute folder-layout plans only, one wave per invocation. Send a flat plan
   back through `writing-plans` for conversion.
 - Never infer missing scope or reconcile conflicting state by resetting files.
 - Keep existing phase files. Create only the missing ones.
@@ -23,7 +23,11 @@ review, Git, and handover.
 
 1. **Resolve target.** A path or slug argument names the plan. A number names
    the phase. With no argument, use the single plan whose status is `ACTIVE`.
-   With zero or several candidates, list them and ask.
+   With zero or several candidates, list them and ask. Then select the next
+   wave from `Depends on:` lines and phase `impl` refs per [waves.md](../coordinating-multi-model-work/references/waves.md).
+   A single-phase wave runs steps 2 to 10 unchanged. A multi-phase wave runs
+   through `waves.md`, emits one phase report per phase, and
+   sets `BLOCKED` for a failed wave phase after the other phases integrate.
 2. **Check status.**
 
    | Status | Action |
@@ -56,7 +60,7 @@ review, Git, and handover.
    `implementer-prompt.md`, then Gate 3 with its bounded review-fix loop.
 9. **Finalize phase** per the Coordinator review procedure. Set handover
     `current_phase` and `next_action` to the next phase, emit the phase report,
-    and stop.
+    and stop after the last phase of the wave.
 10. **Finalize plan** after the final phase using the sole
     [consolidation procedure](../coordinating-multi-model-work/references/git-anchors.md#consolidation).
 

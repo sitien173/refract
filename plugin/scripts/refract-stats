@@ -79,6 +79,7 @@ def plan_stats(handover):
         "blocked": states.count("blocked"),
         "doing": doing,
         "debt": len(lists.get("debt", [])),
+        "wave": [(item_field(i, "phase"), item_field(i, "state")) for i in lists.get("wave", [])],
         "next": scalars.get("next_action", ""),
     }
 
@@ -108,6 +109,8 @@ def statusline(stats):
             if s["doing"]:
                 part += f" [{shorten(s['doing'], 24)}]"
         part += f" debt {s['debt']}"
+        if s["wave"]:
+            part += " wave " + ",".join(f"{phase}:{state}" for phase, state in s["wave"])
         if s["next"]:
             part += f" > {shorten(s['next'], NEXT_WIDTH)}"
         parts.append(part)
@@ -126,6 +129,8 @@ def summary(stats):
         lines.append(line)
         if s["doing"]:
             lines.append(f"  doing: {s['doing']}")
+        if s["wave"]:
+            lines.append("  wave: " + ", ".join(f"phase {phase} {state}" for phase, state in s["wave"]))
         if s["next"]:
             lines.append(f"  next: {s['next']}")
     return "\n".join(lines)

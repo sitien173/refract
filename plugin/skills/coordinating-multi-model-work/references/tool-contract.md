@@ -48,6 +48,7 @@ At most one job per project runs at a time. Jobs within each project are admitte
 
 - Call `wait` with its 3600-second default. `timeout_s` accepts 0..3600.
 - Treat timeouts as normal; repeat only while nonterminal. Wait sequentially, one call per job, without polling or overlapping calls. Re-wait on the same job ID after dropped connections.
+- Exception: while more than one wave job is active, wait round-robin with `timeout_s=60` per [waves.md](waves.md#waiting).
 - When `wait` returns early with `result.pending_question` (`{question_id, text}`), call `answer(job_id, answer)` (max 8192 characters). For large context, write it to a file and tell the worker to read the path. `answer` without a pending question, after the question expired, or on a terminal job returns `invalid_state`.
 - Every terminal job writes its full text to `result.result_path`. When `result.truncated` is true, read the full text from that file.
 - `failure_kind` is null on success, else one of `cancelled`, `circuit_open`, `replay_blocked`, `context_overflow`, `request_fatal`, `target_fatal`, `transient`.
