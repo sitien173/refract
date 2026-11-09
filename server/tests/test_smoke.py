@@ -208,11 +208,11 @@ async def test_agy_extracts_session_id_from_conversation_log(monkeypatch, tmp_pa
 async def test_agy_uses_input_session_id_when_log_has_no_conversation_id(
     monkeypatch,
     tmp_path,
-    tmp_path_factory,
 ) -> None:
     from refract.backends import agy as agy_backend
 
-    home = tmp_path_factory.mktemp("agy-home")
+    home = tmp_path / "agy-home"
+    home.mkdir()
     stale_id = "d597e994-7312-49ec-9317-ce9ae59b38bc"
     history_dir = home / ".gemini" / "antigravity-cli"
     history_dir.mkdir(parents=True)

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import sys
 import time
 from pathlib import Path
 
+import pytest
+
+from refract.backends import _process
 from refract.backends._process import run_process
 
 FAKE_CLI = Path(__file__).parent / "fixtures" / "fake_cli"
@@ -219,3 +223,124 @@ def test_unencodable_prompt_fails_before_the_child_starts(tmp_path: Path) -> Non
     assert "UTF-8" in outcome.error
     assert lines == []
     assert not marker.exists()
+
+
+def test_spawn_hook_receives_the_child_pid_before_any_output() -> None:
+    seen: list[int] = []
+    order: list[str] = []
+
+    async def hook(pid: int) -> None:
+        seen.append(pid)
+        order.append("hook")
+
+    async def on_line(line: str) -> None:
+        order.append(line)
+
+    token = _process.spawn_hook.set(hook)
+    try:
+        outcome = asyncio.run(run_process(fake("emit_both.py"), None, None, None, None, None, on_line))
+    finally:
+        _process.spawn_hook.reset(token)
+
+    assert len(seen) == 1
+    assert seen[0] > 0
+    assert order[0] == "hook"
+    assert sorted(order[1:]) == ["err-line", "out-line"]
+    assert outcome.error == ""
+
+
+def test_failing_spawn_hook_still_kills_the_group_and_propagates() -> None:
+    pids: list[int] = []
+
+    async def hook(pid: int) -> None:
+        pids.append(pid)
+        raise RuntimeError("hook failed")
+
+    async def on_line(line: str) -> None:
+        return None
+
+    command = fake("sleeper.py")
+    token = _process.spawn_hook.set(hook)
+    try:
+        with pytest.raises(RuntimeError, match="hook failed"):
+            asyncio.run(run_process(command, None, None, None, None, None, on_line))
+    finally:
+        _process.spawn_hook.reset(token)
+
+    assert len(pids) == 1
+    assert _wait_gone(pids[0])
+
+
+def test_env_is_merged_over_the_parent_environment_and_cwd_is_applied(tmp_path: Path) -> None:
+    code = "import os, sys; print(os.environ['REFRACT_T'], os.environ.get('PATH') is not None, os.getcwd())"
+    lines: list[str] = []
+
+    async def collect(line: str) -> None:
+        lines.append(line)
+
+    outcome = asyncio.run(
+        run_process([sys.executable, "-c", code], None, {"REFRACT_T": "yes"}, str(tmp_path), None, None, collect)
+    )
+
+    assert lines == [f"yes True {tmp_path.resolve()}"]
+    assert outcome.error == ""
+    assert outcome.returncode == 0
+
+
+def test_stdin_is_written_and_closed_for_a_reading_child() -> None:
+    outcome, lines = _run(fake("echo_stdin.py"), stdin="hello")
+
+    assert lines[0] == "5"
+    assert outcome.error == ""
+    assert outcome.returncode == 0
+
+
+def test_cancel_already_set_kills_the_child_before_any_output() -> None:
+    cancel = asyncio.Event()
+    cancel.set()
+
+    outcome, lines = _run(fake("sleeper.py"), cancel=cancel)
+
+    assert outcome.error == "backend command cancelled"
+    assert outcome.error_class == "cancelled"
+    assert lines == []
+    assert outcome.returncode is not None
+    assert outcome.returncode != 0
+
+
+def test_deadline_already_passed_reports_timeout_with_the_program_name() -> None:
+    outcome, lines = _run(fake("sleeper.py"), deadline=time.monotonic() - 1)
+
+    assert outcome.error == f"{os.path.basename(sys.executable)} subprocess timed out"
+    assert outcome.error_class == "timeout"
+    assert lines == []
+
+
+def test_cancel_wins_over_an_expired_deadline() -> None:
+    cancel = asyncio.Event()
+    cancel.set()
+
+    outcome, _ = _run(fake("sleeper.py"), cancel=cancel, deadline=time.monotonic() - 1)
+
+    assert outcome.error_class == "cancelled"
+
+
+def test_clean_exit_with_a_deadline_set_reports_no_error() -> None:
+    outcome, lines = _run(fake("emit_both.py"), timeout_s=30)
+
+    assert sorted(lines) == ["err-line", "out-line"]
+    assert outcome.error == ""
+    assert outcome.error_class == ""
+    assert outcome.returncode == 0
+    assert sorted(outcome.tail.splitlines()) == ["err-line", "out-line"]
+
+
+def test_parser_failure_message_names_the_exception_type_and_keeps_the_tail() -> None:
+    async def explode(line: str) -> None:
+        raise KeyError("k")
+
+    outcome, _ = _run(fake("exit_status.py"), on_line=explode, timeout_s=30)
+
+    assert outcome.error == "KeyError: 'k'"
+    assert outcome.error_class == "execution_error"
+    assert outcome.tail == "failing"

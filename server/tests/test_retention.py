@@ -25,8 +25,10 @@ def test_lifecycle_retention_preserves_active_and_recent_jobs(tmp_path):
         runtime.prune_retained_transcripts()
         assert db.job("old") is None
         assert not db.stream_path("old").exists()
-        assert db.job("recent") is not None and db.stream_path("recent").exists()
-        assert db.job("active") is not None and db.stream_path("active").exists()
+        assert db.job("recent") is not None
+        assert db.stream_path("recent").exists()
+        assert db.job("active") is not None
+        assert db.stream_path("active").exists()
     finally:
         db.close()
 

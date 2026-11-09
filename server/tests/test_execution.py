@@ -196,7 +196,8 @@ async def test_explicit_retry_rebinds_rotated_project_environment(tmp_path: Path
         assert (await runtime.wait(retried.job_id, 10)).state == "succeeded"
         assert runtime.database.job(submitted.job_id).state == "failed"
         assert received == ["first", "second"]
-        assert len(session_keys) == 2 and session_keys[0] != session_keys[1]
+        assert len(session_keys) == 2
+        assert session_keys[0] != session_keys[1]
     finally:
         await runtime.close()
 
@@ -225,12 +226,13 @@ async def test_cancellation_during_environment_resolution_releases_probe(tmp_pat
     def cancel_resolution(*_args):
         raise asyncio.CancelledError
     runtime.target_executor.environment_resolver = cancel_resolution
+    cancel_event = CancelEvent()
     try:
         with pytest.raises(asyncio.CancelledError):
             await runtime.target_executor.execute(
                 job_id="cancel-env-resolution", project=project, workflow="implement",
                 session="cancel", plan=plan, prompt="cancel", cwd=root,
-                cancel_event=CancelEvent(),
+                cancel_event=cancel_event,
             )
         assert runtime.database.target_health(key)["probe_job_id"] == ""
     finally:
@@ -1418,7 +1420,8 @@ async def test_shutdown_interrupts_active_job(tmp_path) -> None:
     database = Database(catalog.database_path)
     try:
         job = database.job(submitted.job_id)
-        assert job and job.state == "interrupted"
+        assert job
+        assert job.state == "interrupted"
     finally:
         database.close()
 
@@ -1503,7 +1506,8 @@ async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) 
     await runtime.start()
     try:
         interrupted = runtime.database.job("running")
-        assert interrupted and interrupted.state == "interrupted"
+        assert interrupted
+        assert interrupted.state == "interrupted"
         assert notifications == ["running"]
         assert (root / "partial.txt").read_text(encoding="utf-8") == "partial\n"
     finally:
@@ -1859,7 +1863,9 @@ async def test_fresh_job_retry_survives_and_runs_fresh(tmp_path) -> None:
         # Retry the job
         retried = await runtime.retry(submitted.job_id, target="primary")
         record = runtime.database.job_record(retried.job_id)
-        assert record and record["fresh"] == 1 and record["retry_of"] == submitted.job_id
+        assert record
+        assert record["fresh"] == 1
+        assert record["retry_of"] == submitted.job_id
 
         succeeded_job = await runtime.wait(retried.job_id, 10)
         assert succeeded_job.state == "succeeded"
@@ -3083,7 +3089,8 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
     await runtime_rec.start()
     try:
         interrupted_job = runtime_rec.database.job("interrupted-job")
-        assert interrupted_job and interrupted_job.state == "interrupted"
+        assert interrupted_job
+        assert interrupted_job.state == "interrupted"
         assert mock_send.call_count == 1
         called_job3, called_alias3 = mock_send.call_args[0]
         assert called_job3.id == "interrupted-job"
@@ -4242,10 +4249,11 @@ async def test_retry_injected_cleanup_failures_releases_resources(tmp_path: Path
         async def failing_prepare(*_args, **_kwargs):
             raise RuntimeError("prepare session injected error")
         monkeypatch.setattr(runtime.target_executor, "_prepare_session", failing_prepare)
+        cancel_event = CancelEvent()
         with pytest.raises(RuntimeError, match="prepare session injected error"):
             await runtime.target_executor.execute(
                 job_id="fail-prep-job", project=project, workflow="implement", session="prep",
-                plan=plan, prompt="p", cwd=root, cancel_event=CancelEvent(),
+                plan=plan, prompt="p", cwd=root, cancel_event=cancel_event,
             )
         assert runtime.database.target_health(target_key)["probe_job_id"] == ""
         assert not runtime.target_executor._target_active
@@ -4271,10 +4279,11 @@ async def test_retry_ask_token_issue_failure_propagates_without_driver_call(tmp_
         project = register_project(runtime, str(root))
         plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
         runtime.database.create_job(job_id="ask-issue-fault", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="ctx")
+        cancel_event = CancelEvent()
         with pytest.raises(RuntimeError, match="issue token fault"):
             await runtime.target_executor.execute(
                 job_id="ask-issue-fault", project=project, workflow="implement", session="ctx",
-                plan=plan, prompt="p", cwd=root, cancel_event=CancelEvent(),
+                plan=plan, prompt="p", cwd=root, cancel_event=cancel_event,
             )
         assert not drivers.sessions
         assert not runtime.target_executor._target_active
@@ -4340,10 +4349,11 @@ async def test_retry_finalization_faults_release_target_resources(tmp_path: Path
         else:
             def fail_storage(*_args, **_kwargs): raise RuntimeError("storage fault")
             monkeypatch.setattr(runtime.database, "store_session", fail_storage)
+        cancel_event = CancelEvent()
         with pytest.raises(RuntimeError, match=f"{fault} fault"):
             await runtime.target_executor.execute(
                 job_id=job_id, project=project, workflow="implement", session="ctx", plan=plan,
-                prompt="p", cwd=root, cancel_event=CancelEvent(),
+                prompt="p", cwd=root, cancel_event=cancel_event,
             )
         assert not runtime.target_executor._target_active
         assert runtime.target_executor._target_users.get("primary", 0) == 0
@@ -4678,3 +4688,365 @@ async def test_retry_unknown_observation_blocks_replay(tmp_path: Path) -> None:
         assert len(drivers.invocations) == 1
     finally:
         await runtime.close()
+
+
+def _attempt_runtime(tmp_path, drivers) -> tuple[Runtime, Path]:
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers
+    runtime.target_executor.drivers = drivers
+    return runtime, root
+
+
+async def _execute_primary(runtime: Runtime, root: Path, cancel_event: CancelEvent | None = None):
+    project = register_project(runtime, str(root))
+    plan = resolve_execution_plan(get_workflow("implement"), runtime.config, "balanced")
+    runtime.database.create_job(job_id="attempt-job", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="s")
+    return await runtime.target_executor.execute(
+        job_id="attempt-job", project=project, workflow="implement", session="s", plan=plan,
+        prompt="p", cwd=root, cancel_event=cancel_event or CancelEvent(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_attempt_without_ask_registry_runs_driver_without_ask_env(tmp_path) -> None:
+    seen: list[dict[str, str]] = []
+
+    class EnvDrivers(FakeDrivers):
+        async def execute(self, *, env=None, **kwargs):
+            seen.append(dict(env or {}))
+            return DriverResult("SUCCESS", "sid", "ok", "", "")
+
+    runtime, root = _attempt_runtime(tmp_path, EnvDrivers())
+    try:
+        runtime.target_executor.ask_registry = None
+        result = await _execute_primary(runtime, root)
+        assert result.result.outcome == "SUCCESS"
+        assert seen == [{"REFRACT_JOB_ID": "attempt-job"}]
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_with_ask_registry_passes_ask_env_and_revokes_token(tmp_path) -> None:
+    seen: list[dict[str, str]] = []
+
+    class EnvDrivers(FakeDrivers):
+        async def execute(self, *, env=None, **kwargs):
+            seen.append(dict(env or {}))
+            return DriverResult("SUCCESS", "sid", "ok", "", "")
+
+    runtime, root = _attempt_runtime(tmp_path, EnvDrivers())
+    try:
+        revoked: list[str] = []
+        real_revoke = runtime.ask_registry.revoke_token
+        runtime.ask_registry.revoke_token = lambda job_id: (revoked.append(job_id), real_revoke(job_id))[1]
+        await _execute_primary(runtime, root)
+        assert sorted(seen[0]) == ["REFRACT_ASK_TIMEOUT_S", "REFRACT_ASK_TOKEN", "REFRACT_ASK_URL", "REFRACT_JOB_ID"]
+        assert seen[0]["REFRACT_ASK_URL"] == f"http://{runtime.config.host}:{runtime.config.port}/ask"
+        assert revoked == ["attempt-job"]
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_revoke_failure_propagates_with_outcome(tmp_path) -> None:
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+
+        def broken_revoke(job_id: str) -> None:
+            raise RuntimeError("revoke broke")
+
+        runtime.ask_registry.revoke_token = broken_revoke
+        with pytest.raises(RuntimeError, match="revoke broke") as caught:
+            await _execute_primary(runtime, root)
+        assert caught.value._refract_outcome["failure_kind"] == "request_fatal"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_record_finished_failure_propagates_with_outcome(tmp_path) -> None:
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+
+        async def broken_record(*args, **kwargs) -> None:
+            raise RuntimeError("record broke")
+
+        runtime.target_executor._record_attempt_finished = broken_record
+        with pytest.raises(RuntimeError, match="record broke") as caught:
+            await _execute_primary(runtime, root)
+        assert caught.value._refract_outcome["failure_kind"] == "request_fatal"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_driver_exception_wins_over_revoke_and_record_failures(tmp_path) -> None:
+    class Exploding(FakeDrivers):
+        async def execute(self, **kwargs):
+            raise RuntimeError("driver broke")
+
+    runtime, root = _attempt_runtime(tmp_path, Exploding())
+    try:
+
+        def broken_revoke(job_id: str) -> None:
+            raise RuntimeError("revoke broke")
+
+        async def broken_record(*args, **kwargs) -> None:
+            raise RuntimeError("record broke")
+
+        runtime.ask_registry.revoke_token = broken_revoke
+        runtime.target_executor._record_attempt_finished = broken_record
+        with pytest.raises(RuntimeError, match="driver broke"):
+            await _execute_primary(runtime, root)
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_start_failure_propagates_with_outcome(tmp_path) -> None:
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+
+        async def broken_start(*args, **kwargs):
+            raise RuntimeError("start broke")
+
+        runtime.target_executor._start_attempt = broken_start
+        with pytest.raises(RuntimeError, match="start broke") as caught:
+            await _execute_primary(runtime, root)
+        assert caught.value._refract_outcome["failure_kind"] == "request_fatal"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_cancelled_before_first_attempt_returns_cancelled(tmp_path) -> None:
+    class Unreached(FakeDrivers):
+        async def execute(self, **kwargs):
+            raise AssertionError("driver must not run")
+
+    runtime, root = _attempt_runtime(tmp_path, Unreached())
+    try:
+        cancel_event = CancelEvent()
+        real_session = runtime.database.session
+
+        def cancelling_session(*args, **kwargs):
+            cancel_event.set()
+            return real_session(*args, **kwargs)
+
+        runtime.database.session = cancelling_session
+        result = await _execute_primary(runtime, root, cancel_event)
+        assert result.result.outcome == "CANCELLED"
+        assert result.outcome["failure_kind"] == "cancelled"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_cancel_set_during_driver_overrides_success(tmp_path) -> None:
+    cancel_event = CancelEvent()
+
+    class CancellingDrivers(FakeDrivers):
+        async def execute(self, **kwargs):
+            cancel_event.set()
+            return DriverResult("SUCCESS", "sid", "ok", "", "")
+
+    runtime, root = _attempt_runtime(tmp_path, CancellingDrivers())
+    try:
+        result = await _execute_primary(runtime, root, cancel_event)
+        assert result.result.outcome == "CANCELLED"
+        assert result.outcome["failure_kind"] == "cancelled"
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_driver_cancelled_error_propagates_with_cancelled_outcome(tmp_path) -> None:
+    class Cancelled(FakeDrivers):
+        async def execute(self, **kwargs):
+            raise asyncio.CancelledError()
+
+    runtime, root = _attempt_runtime(tmp_path, Cancelled())
+    try:
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await _execute_primary(runtime, root)
+        assert caught.value._refract_outcome["failure_kind"] == "cancelled"
+    finally:
+        runtime.database.close()
+
+
+_OUTCOME_CASES = [
+    pytest.param(DriverResult("SUCCESS", "", "", "", ""), {}, None, id="success"),
+    pytest.param(DriverResult("CANCELLED", "", "", "", ""), {}, "cancelled", id="cancelled"),
+    pytest.param(DriverResult("RETRYABLE", "", "", "", ""), {"circuit_open": True}, "circuit_open", id="circuit-open-flag"),
+    pytest.param(DriverResult("REQUEST_FATAL", "", "", "", "circuit_open"), {}, "circuit_open", id="circuit-open-code"),
+    pytest.param(DriverResult("RETRYABLE", "", "", "", ""), {"replay_blocked": True}, "replay_blocked", id="replay-blocked"),
+    pytest.param(DriverResult("REQUEST_FATAL", "", "", "", "context_overflow"), {}, "context_overflow", id="context-overflow"),
+    pytest.param(DriverResult("TARGET_FATAL", "", "", "", "configuration_error"), {}, "request_fatal", id="configuration-error"),
+    pytest.param(DriverResult("REQUEST_FATAL", "", "", "", "x"), {}, "request_fatal", id="request-fatal"),
+    pytest.param(DriverResult("TARGET_FATAL", "", "", "", "x"), {}, "target_fatal", id="target-fatal"),
+    pytest.param(DriverResult("RETRYABLE", "", "", "", "x"), {}, "transient", id="retryable"),
+    pytest.param(DriverResult("SURPRISE", "", "", "", "x"), {}, "request_fatal", id="unknown-outcome"),
+]
+
+
+@pytest.mark.parametrize(("result", "options", "expected"), _OUTCOME_CASES)
+def test_outcome_failure_kind(result, options, expected) -> None:
+    assert TargetExecutor._outcome(result, None, 7, **options)["failure_kind"] == expected
+
+
+def test_outcome_model_prefers_result_then_target_then_empty() -> None:
+    target = TargetConfig(id="primary", backend="codex", model="configured")
+    with_model = DriverResult("SUCCESS", "", "", "", "", model="reported")
+    without_model = DriverResult("SUCCESS", "", "", "", "")
+    assert TargetExecutor._outcome(with_model, target, 1)["model"] == "reported"
+    assert TargetExecutor._outcome(without_model, target, 1)["model"] == "configured"
+    assert TargetExecutor._outcome(without_model, None, 1)["model"] == ""
+    assert TargetExecutor._outcome(without_model, None, None)["duration_ms"] is None
+
+
+async def _invoke(runtime: Runtime, root: Path, drivers, tokens, **overrides):
+    runtime.target_executor.drivers = drivers
+    options = dict(
+        job_id="inv-job", attempt=1, attempt_tokens=tokens,
+        target=runtime.config.targets[0], prompt="p", session_id="", cwd=root,
+        timeout_s=5.0, cancel_event=CancelEvent(), supports_streaming=True,
+    )
+    options.update(overrides)
+    return await runtime.target_executor._run_target_invocation(**options)
+
+
+@pytest.mark.asyncio
+async def test_invocation_reports_tool_activity_and_stream_events(tmp_path) -> None:
+    class Streaming(FakeDrivers):
+        async def execute(self, *, on_event, **kwargs):
+            await on_event({"kind": "tool.started", "entity_id": "t1"})
+            await on_event({"kind": "telemetry.updated", "data": {"input": 3, "output": 4}})
+            await on_event({"kind": "telemetry.updated", "data": "not a dict"})
+            return DriverResult("SUCCESS", "sid", "ok", "", "")
+
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+        runtime.database.create_job(job_id="inv-job", project_id=register_project(runtime, str(root)).id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="s")
+        tokens: list = []
+        result, tool_activity = await _invoke(runtime, root, Streaming(), tokens)
+        assert (result.outcome, tool_activity) == ("SUCCESS", True)
+        assert len(tokens) == 1
+        assert (tokens[0].as_dict()["input"], tokens[0].as_dict()["output"]) == (3, 4)
+        assert [e["kind"] for e in _stream_events(runtime.database, "inv-job")] == ["tool.started", "telemetry.updated"]
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_invocation_without_streaming_skips_events_and_merges_returned_tokens(tmp_path) -> None:
+    class Plain(FakeDrivers):
+        async def execute(self, *, on_event, **kwargs):
+            assert on_event is None
+            return DriverResult("SUCCESS", "sid", "ok", "", "", tokens={"input": 9, "output": 2})
+
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+        tokens: list = []
+        result, tool_activity = await _invoke(runtime, root, Plain(), tokens, supports_streaming=False)
+        assert (result.outcome, tool_activity) == ("SUCCESS", False)
+        assert (tokens[0].as_dict()["input"], tokens[0].as_dict()["output"]) == (9, 2)
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_invocation_malformed_backend_tokens_are_ignored(tmp_path, caplog) -> None:
+    class Malformed(FakeDrivers):
+        async def execute(self, *, on_event, **kwargs):
+            return DriverResult("SUCCESS", "sid", "ok", "", "", tokens=object())
+
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+        with caplog.at_level("WARNING"):
+            result, _ = await _invoke(runtime, root, Malformed(), [], supports_streaming=False)
+        assert result.outcome == "SUCCESS"
+        assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == ["Ignoring malformed backend telemetry"]
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_invocation_telemetry_failure_is_logged_and_run_continues(tmp_path, caplog, monkeypatch) -> None:
+    import refract.execution as execution_module
+
+    class Streaming(FakeDrivers):
+        async def execute(self, *, on_event, **kwargs):
+            await on_event({"kind": "telemetry.updated", "data": {"input": 1}})
+            return DriverResult("SUCCESS", "sid", "ok", "", "")
+
+    def broken(values):
+        raise ValueError("bad counters")
+
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+        runtime.database.create_job(job_id="inv-job", project_id=register_project(runtime, str(root)).id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="s")
+        monkeypatch.setattr(execution_module, "_counters_from", broken)
+        with caplog.at_level("WARNING"):
+            result, _ = await _invoke(runtime, root, Streaming(), [])
+        assert result.outcome == "SUCCESS"
+        assert "Telemetry update failed" in [r.getMessage() for r in caplog.records]
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_invocation_process_group_record_failure_is_logged(tmp_path, caplog) -> None:
+    from refract.backends._process import spawn_hook
+
+    class Spawning(FakeDrivers):
+        async def execute(self, **kwargs):
+            await spawn_hook.get()(1234)
+            return DriverResult("SUCCESS", "sid", "ok", "", "")
+
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+
+        def broken_pgid(job_id, pgid):
+            raise RuntimeError("no job row")
+
+        runtime.database.set_pgid = broken_pgid
+        with caplog.at_level("WARNING"):
+            result, _ = await _invoke(runtime, root, Spawning(), [], supports_streaming=False)
+        assert result.outcome == "SUCCESS"
+        assert "Worker process group not recorded" in [r.getMessage() for r in caplog.records]
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_invocation_driver_exception_propagates(tmp_path) -> None:
+    class Exploding(FakeDrivers):
+        async def execute(self, **kwargs):
+            raise RuntimeError("driver broke")
+
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    exploding = Exploding()
+    try:
+        with pytest.raises(RuntimeError, match="driver broke"):
+            await _invoke(runtime, root, exploding, [], supports_streaming=False)
+    finally:
+        runtime.database.close()
+
+
+@pytest.mark.asyncio
+async def test_invocation_cancel_event_overrides_driver_result(tmp_path) -> None:
+    cancel_event = CancelEvent()
+
+    class Cancelling(FakeDrivers):
+        async def execute(self, **kwargs):
+            cancel_event.set()
+            return DriverResult("SUCCESS", "sid", "ok", "", "")
+
+    runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
+    try:
+        result, _ = await _invoke(runtime, root, Cancelling(), [], supports_streaming=False, cancel_event=cancel_event)
+        assert result.outcome == "CANCELLED"
+    finally:
+        runtime.database.close()

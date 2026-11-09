@@ -119,7 +119,8 @@ async def test_concurrent_submit_retry_and_shutdown_never_interrupt_a_job(tmp_pa
             admitted = []
             for outcome in outcomes[:3]:
                 if isinstance(outcome, BaseException):
-                    assert isinstance(outcome, OrchestrationError) and outcome.code == "daemon_stopping"
+                    assert isinstance(outcome, OrchestrationError)
+                    assert outcome.code == "daemon_stopping"
                 else:
                     admitted.append(outcome.job_id)
             _assert_latch_consistent(runtime, admitted, latch)
@@ -135,10 +136,13 @@ async def test_shutdown_if_idle_counts_queued_and_running_and_latches_when_idle(
     try:
         queued = await runtime.submit(project_id, "consult", "queued")
         busy = runtime.shutdown_if_idle()
-        assert busy["stopping"] is False and busy["queued"] >= 1 and busy["running"] == 0
+        assert busy["stopping"] is False
+        assert busy["queued"] >= 1
+        assert busy["running"] == 0
         runtime.database.start_job(queued.job_id)
         busy = runtime.shutdown_if_idle()
-        assert busy["stopping"] is False and busy["running"] >= 1
+        assert busy["stopping"] is False
+        assert busy["running"] >= 1
         # A refused latch leaves admission open.
         again = await runtime.submit(project_id, "consult", "still open")
         runtime.database.finish_job(queued.job_id, "failed", target="primary")
@@ -179,12 +183,14 @@ async def test_daemon_json_is_private_complete_and_removed_on_exit(tmp_path, mon
         assert os.name == "nt" or stat.S_IMODE(path.stat().st_mode) == 0o600  # file modes are POSIX-only
         data = json.loads(path.read_text(encoding="utf-8"))
         assert set(data) == {"token", "host", "port", "version"}
-        assert len(data["token"]) == 64 and int(data["token"], 16) >= 0
+        assert len(data["token"]) == 64
+        assert int(data["token"], 16) >= 0
         assert (data["host"], data["port"]) == ("127.0.0.1", 9321)
         assert data["version"] == server_module.package_version("refract")
         assert application.state.refract_dashboard.shutdown_token == data["token"]
         token = data["token"]
-    assert len(replaced) == 1 and replaced[0][1] > 0
+    assert len(replaced) == 1
+    assert replaced[0][1] > 0
     assert os.name == "nt" or replaced[0][0] == 0o600  # file modes are POSIX-only
     assert not path.exists()
     assert not list(home.glob(".daemon*"))
@@ -245,7 +251,8 @@ def test_shutdown_rejects_every_request_when_no_token_is_configured() -> None:
     client, runtime, exits = _shutdown_client(_IDLE, token="")
     for headers in ({}, {"Authorization": "Bearer "}):
         response = client.post(_SHUTDOWN, headers=headers)
-        assert response.status_code == 401 and response.json()["code"] == "unauthorized"
+        assert response.status_code == 401
+        assert response.json()["code"] == "unauthorized"
     assert (runtime.calls, exits) == (0, [])
 
 

@@ -269,21 +269,9 @@ class TargetExecutor:
 
     async def _execute_attempt(self, context: _ExecutionContext) -> TargetExecutionResult:
         job_id = context.job_id
-        project = context.project
-        workflow = context.workflow
-        session = context.session
-        plan = context.plan
-        prompt = context.prompt
-        cwd = context.cwd
         cancel_event = context.cancel_event
-        fresh = context.fresh
         target = context.target
-        target_key = context.target_key
-        session_target_key = context.session_target_key
         attempt_tokens = context.attempt_tokens
-        bound_env = context.bound_env
-
-        policy = target.retry
 
         policy_retries_done = 0
         attempt_number = 0
@@ -296,61 +284,21 @@ class TargetExecutor:
                 attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
                 break
 
-            try:
-                started_at, supports_streaming = await self._start_attempt(
-                    job_id, target, plan, workflow, context.session_id, attempt_number
-                )
-            except BaseException as exc:
-                duration_ms = int((time.monotonic() - overall_started_at) * 1000)
-                self._attach_outcome(exc, target, duration_ms, attempt_tokens=attempt_tokens)
-                raise
+            started_at, supports_streaming = await self._begin_attempt(context, attempt_number, overall_started_at)
 
-            ask_env: dict[str, str] | None = None
             driver_exc: BaseException | None = None
             try:
-                if self.ask_registry is not None:
-                    token = self.ask_registry.issue_token(
-                        job_id,
-                        workflow_timeout_s=plan.selection.timeout_s,
-                        started_at=started_at,
-                    )
-                    ask_url = f"http://{self.config.host}:{self.config.port}/ask"
-                    ask_env = {
-                        "REFRACT_ASK_URL": ask_url,
-                        "REFRACT_ASK_TOKEN": token,
-                        "REFRACT_ASK_TIMEOUT_S": str(self.config.ask_timeout_s),
-                    }
-                if cancel_event.is_set():
-                    attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
-                else:
-                    inv_result, has_tool_activity = await self._run_target_invocation(
-                        job_id=job_id,
-                        attempt=attempt_number,
-                        invocation=1,
-                        attempt_tokens=attempt_tokens,
-                        target=target,
-                        prompt=prompt,
-                        session_id=context.session_id,
-                        cwd=cwd,
-                        timeout_s=plan.selection.timeout_s,
-                        cancel_event=cancel_event,
-                        supports_streaming=supports_streaming,
-                        env={**bound_env, **(ask_env or {}), "REFRACT_JOB_ID": job_id},
-                    )
-                    attempt.result = inv_result
-                    attempt.replay_blocked = has_tool_activity and inv_result.outcome != "SUCCESS"
+                await self._run_attempt(context, attempt, attempt_number, started_at, supports_streaming)
             except BaseException as exc:
                 driver_exc = exc
             finally:
                 revoke_exc: BaseException | None = None
-                if self.ask_registry is not None:
-                    try:
-                        self.ask_registry.revoke_token(job_id)
-                    except BaseException as exc:
-                        revoke_exc = exc
+                try:
+                    self._revoke_ask_token(job_id)
+                except BaseException as exc:
+                    revoke_exc = exc
 
-                if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
-                    attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+                self._apply_cancellation(attempt, cancel_event, driver_exc)
 
                 rec_exc: BaseException | None = None
                 try:
@@ -360,80 +308,160 @@ class TargetExecutor:
                 except BaseException as exc:
                     rec_exc = exc
 
-                event_result = attempt.result
-                if driver_exc is not None and event_result is None:
-                    event_result = DriverResult("REQUEST_FATAL", "", "", str(driver_exc), "execution_error")
-                if event_result is not None:
-                    duration_ms = int((time.monotonic() - started_at) * 1000)
-                    log.info(
-                        "Target attempt finished",
-                        extra={
-                            "event": "target.attempt_finished",
-                            "job_id": job_id,
-                            "target_id": target.id,
-                            "workflow": workflow,
-                            "attempt": attempt_number,
-                            "outcome": event_result.outcome,
-                            "error_code": event_result.error_code,
-                            "duration_ms": duration_ms,
-                        },
-                    )
+                self._log_attempt_finished(context, attempt, attempt_number, started_at, driver_exc)
 
                 primary_exc = driver_exc or rec_exc or revoke_exc
                 if primary_exc is not None:
                     duration_ms = int((time.monotonic() - overall_started_at) * 1000)
                     self._attach_outcome(primary_exc, target, duration_ms, attempt_tokens=attempt_tokens)
                     raise primary_exc
-            if attempt.result is None:
-                attempt.result = DriverResult("REQUEST_FATAL", "", "", "execution_failed", "execution_error")
-            if attempt.result.outcome == "SUCCESS":
+            if not self._should_retry(context, attempt, policy_retries_done, supports_streaming):
                 break
-
-            if self._can_retry_attempt(
-                policy=policy,
-                policy_retries_done=policy_retries_done,
-                result=attempt.result,
-                replay_blocked=attempt.replay_blocked,
-                supports_streaming=supports_streaming,
-                cancel_event=cancel_event,
-            ):
-                policy_retries_done += 1
-                continue
-            else:
-                break
+            policy_retries_done += 1
 
         total_duration_ms = int((time.monotonic() - overall_started_at) * 1000)
+        return await self._finish_execution(context, attempt, total_duration_ms)
+
+    async def _begin_attempt(
+        self, context: _ExecutionContext, attempt_number: int, overall_started_at: float,
+    ) -> tuple[float, bool]:
+        try:
+            return await self._start_attempt(
+                context.job_id, context.target, context.plan, context.workflow, context.session_id, attempt_number
+            )
+        except BaseException as exc:
+            duration_ms = int((time.monotonic() - overall_started_at) * 1000)
+            self._attach_outcome(exc, context.target, duration_ms, attempt_tokens=context.attempt_tokens)
+            raise
+
+    def _issue_ask_env(self, job_id: str, plan: ExecutionPlan, started_at: float) -> dict[str, str] | None:
+        if self.ask_registry is None:
+            return None
+        token = self.ask_registry.issue_token(
+            job_id,
+            workflow_timeout_s=plan.selection.timeout_s,
+            started_at=started_at,
+        )
+        ask_url = f"http://{self.config.host}:{self.config.port}/ask"
+        return {
+            "REFRACT_ASK_URL": ask_url,
+            "REFRACT_ASK_TOKEN": token,
+            "REFRACT_ASK_TIMEOUT_S": str(self.config.ask_timeout_s),
+        }
+
+    async def _run_attempt(
+        self, context: _ExecutionContext, attempt: _TargetAttempt, attempt_number: int,
+        started_at: float, supports_streaming: bool,
+    ) -> None:
+        job_id = context.job_id
+        ask_env = self._issue_ask_env(job_id, context.plan, started_at)
+        if context.cancel_event.is_set():
+            attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+            return
+        inv_result, has_tool_activity = await self._run_target_invocation(
+            job_id=job_id,
+            attempt=attempt_number,
+            attempt_tokens=context.attempt_tokens,
+            target=context.target,
+            prompt=context.prompt,
+            session_id=context.session_id,
+            cwd=context.cwd,
+            timeout_s=context.plan.selection.timeout_s,
+            cancel_event=context.cancel_event,
+            supports_streaming=supports_streaming,
+            env={**context.bound_env, **(ask_env or {}), "REFRACT_JOB_ID": job_id},
+        )
+        attempt.result = inv_result
+        attempt.replay_blocked = has_tool_activity and inv_result.outcome != "SUCCESS"
+
+    def _revoke_ask_token(self, job_id: str) -> None:
+        if self.ask_registry is not None:
+            self.ask_registry.revoke_token(job_id)
+
+    @staticmethod
+    def _apply_cancellation(
+        attempt: _TargetAttempt, cancel_event: CancelEvent, driver_exc: BaseException | None
+    ) -> None:
+        if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
+            attempt.result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+
+    @staticmethod
+    def _log_attempt_finished(
+        context: _ExecutionContext, attempt: _TargetAttempt, attempt_number: int,
+        started_at: float, driver_exc: BaseException | None,
+    ) -> None:
+        event_result = attempt.result
+        if driver_exc is not None and event_result is None:
+            event_result = DriverResult("REQUEST_FATAL", "", "", str(driver_exc), "execution_error")
+        if event_result is not None:
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            log.info(
+                "Target attempt finished",
+                extra={
+                    "event": "target.attempt_finished",
+                    "job_id": context.job_id,
+                    "target_id": context.target.id,
+                    "workflow": context.workflow,
+                    "attempt": attempt_number,
+                    "outcome": event_result.outcome,
+                    "error_code": event_result.error_code,
+                    "duration_ms": duration_ms,
+                },
+            )
+
+    def _should_retry(
+        self, context: _ExecutionContext, attempt: _TargetAttempt, policy_retries_done: int, supports_streaming: bool,
+    ) -> bool:
+        if attempt.result is None:
+            attempt.result = DriverResult("REQUEST_FATAL", "", "", "execution_failed", "execution_error")
+        if attempt.result.outcome == "SUCCESS":
+            return False
+        return self._can_retry_attempt(
+            policy=context.target.retry,
+            policy_retries_done=policy_retries_done,
+            result=attempt.result,
+            replay_blocked=attempt.replay_blocked,
+            supports_streaming=supports_streaming,
+            cancel_event=context.cancel_event,
+        )
+
+    async def _finish_execution(
+        self, context: _ExecutionContext, attempt: _TargetAttempt, total_duration_ms: int,
+    ) -> TargetExecutionResult:
+        target = context.target
         last = attempt.result or DriverResult("REQUEST_FATAL", "", "", "execution_failed", "execution_error")
         try:
             if last.outcome == "SUCCESS":
-                await run_sync(self.database.record_target_success, target_key, self.config.breaker_base_cooldown_s)
-                if not fresh:
+                await run_sync(
+                    self.database.record_target_success, context.target_key, self.config.breaker_base_cooldown_s
+                )
+                if not context.fresh:
                     await run_sync(self.database.store_session,
-                        project_id=project.id,
-                        session=session,
-                        workflow=workflow,
-                        target_key=session_target_key,
+                        project_id=context.project.id,
+                        session=context.session,
+                        workflow=context.workflow,
+                        target_key=context.session_target_key,
                         backend_session_id=last.session_id,
                     )
             else:
-                await self._update_target_health(last, target_key, job_id, attempt.replay_blocked)
+                await self._update_target_health(last, context.target_key, context.job_id, attempt.replay_blocked)
         except BaseException as exc:
-            self._attach_outcome(exc, target, total_duration_ms, attempt_tokens=attempt_tokens)
+            self._attach_outcome(exc, target, total_duration_ms, attempt_tokens=context.attempt_tokens)
             raise
 
         return TargetExecutionResult(
             last,
             target.id,
-            target_key,
+            context.target_key,
             self._outcome(
                 last,
                 target,
                 total_duration_ms,
                 replay_blocked=attempt.replay_blocked,
-                attempt_tokens=attempt_tokens,
+                attempt_tokens=context.attempt_tokens,
             ),
-            session_target_key,
-            session,
+            context.session_target_key,
+            context.session,
         )
 
     async def _record_attempt_finished(
@@ -472,9 +500,8 @@ class TargetExecutor:
                 "data": dict(event.get("data", {})),
             }])
         except Exception as exc:
-            log.error(
+            log.exception(
                 "Stream persistence failed",
-                exc_info=True,
                 extra={"event": "stream.persistence_failed", "job_id": job_id, "error": str(exc)},
             )
 
@@ -517,6 +544,26 @@ class TargetExecutor:
             pass
 
     @staticmethod
+    def _failure_kind(result: DriverResult, replay_blocked: bool, circuit_open: bool) -> str | None:
+        if result.outcome == "SUCCESS":
+            return None
+        if result.outcome == "CANCELLED":
+            return "cancelled"
+        if circuit_open or result.error_code == "circuit_open":
+            return "circuit_open"
+        if replay_blocked:
+            return "replay_blocked"
+        if result.error_code == "context_overflow":
+            return "context_overflow"
+        if result.error_code == "configuration_error":
+            return "request_fatal"
+        if result.outcome == "TARGET_FATAL":
+            return "target_fatal"
+        if result.outcome == "RETRYABLE":
+            return "transient"
+        return "request_fatal"
+
+    @staticmethod
     def _outcome(
         result: DriverResult,
         target: TargetConfig | None,
@@ -526,26 +573,7 @@ class TargetExecutor:
         circuit_open: bool = False,
         attempt_tokens: list[TokenCounters] | None = None,
     ) -> dict[str, Any]:
-        if result.outcome == "SUCCESS":
-            failure_kind = None
-        elif result.outcome == "CANCELLED":
-            failure_kind = "cancelled"
-        elif circuit_open or result.error_code == "circuit_open":
-            failure_kind = "circuit_open"
-        elif replay_blocked:
-            failure_kind = "replay_blocked"
-        elif result.error_code == "context_overflow":
-            failure_kind = "context_overflow"
-        elif result.error_code == "configuration_error":
-            failure_kind = "request_fatal"
-        elif result.outcome == "REQUEST_FATAL":
-            failure_kind = "request_fatal"
-        elif result.outcome == "TARGET_FATAL":
-            failure_kind = "target_fatal"
-        elif result.outcome == "RETRYABLE":
-            failure_kind = "transient"
-        else:
-            failure_kind = "request_fatal"
+        failure_kind = TargetExecutor._failure_kind(result, replay_blocked, circuit_open)
         model_name = result.model
         if model_name is None and target is not None:
             model_name = target.model or None
@@ -561,7 +589,6 @@ class TargetExecutor:
         *,
         job_id: str,
         attempt: int,
-        invocation: int,
         attempt_tokens: list[TokenCounters],
         target: TargetConfig,
         prompt: str,
@@ -576,36 +603,18 @@ class TargetExecutor:
         consumed_tool_activity = False
         streamed_consumption = False
 
-        async def _handle_telemetry(event: dict[str, Any]) -> None:
-            nonlocal streamed_consumption
-            data = event.get("data")
-            if not isinstance(data, dict):
-                return
-            attempt_tokens[-1] = _counters_from(data)
-            streamed_consumption = streamed_consumption or any(key in data for key in CONSUMPTION_KEYS)
-
         async def consume(event: dict[str, Any]) -> None:
             """Apply one stream event to telemetry and the stream log."""
-            nonlocal consumed_tool_activity
-            if isinstance(event, dict) and event.get("kind") == "tool.started":
-                consumed_tool_activity = True
-            if isinstance(event, dict) and event.get("kind") == "telemetry.updated":
-                try:
-                    await _handle_telemetry(event)
-                except Exception:
-                    log.warning("Telemetry update failed", exc_info=True)
+            nonlocal consumed_tool_activity, streamed_consumption
+            consumed_tool_activity = consumed_tool_activity or self._is_event_kind(event, "tool.started")
+            if self._is_event_kind(event, "telemetry.updated"):
+                streamed_consumption = self._apply_telemetry(attempt_tokens, event) or streamed_consumption
             if supports_streaming:
                 await self._record_stream_event(job_id, attempt, target, event)
 
-        async def record_group(pgid: int) -> None:
-            try:
-                await run_sync(self.database.set_pgid, job_id, pgid)
-            except Exception:
-                log.warning("Worker process group not recorded", exc_info=True)
-
         attempt_result: DriverResult | None = None
         driver_exc: BaseException | None = None
-        hook_token = spawn_hook.set(record_group)
+        hook_token = spawn_hook.set(lambda pgid: self._record_process_group(job_id, pgid))
         try:
             with log_context(target_id=target.id):
                 attempt_result = await self.drivers.execute(
@@ -627,18 +636,49 @@ class TargetExecutor:
                 attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
             # Returned counts apply only when stream events did not already report consumption.
             if attempt_result is not None and not streamed_consumption:
-                try:
-                    current = attempt_tokens[-1].as_dict()
-                    reported = _counters_from(attempt_result.tokens or {}).as_dict()
-                    attempt_tokens[-1] = _counters_from({**current, **{k: v for k, v in reported.items() if v is not None}})
-                except Exception:
-                    log.warning("Ignoring malformed backend telemetry", exc_info=True)
+                self._merge_returned_tokens(attempt_tokens, attempt_result)
 
         if attempt_result is None:
-            err_msg = str(driver_exc) if driver_exc else "execution_failed"
-            attempt_result = DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
+            attempt_result = self._no_result(driver_exc)
 
         return attempt_result, consumed_tool_activity
+
+    @staticmethod
+    def _is_event_kind(event: Any, kind: str) -> bool:
+        return isinstance(event, dict) and event.get("kind") == kind
+
+    @staticmethod
+    def _apply_telemetry(attempt_tokens: list[TokenCounters], event: dict[str, Any]) -> bool:
+        """Record one telemetry event; return whether it reported consumption."""
+        try:
+            data = event.get("data")
+            if not isinstance(data, dict):
+                return False
+            attempt_tokens[-1] = _counters_from(data)
+            return any(key in data for key in CONSUMPTION_KEYS)
+        except Exception:
+            log.warning("Telemetry update failed", exc_info=True)
+            return False
+
+    async def _record_process_group(self, job_id: str, pgid: int) -> None:
+        try:
+            await run_sync(self.database.set_pgid, job_id, pgid)
+        except Exception:
+            log.warning("Worker process group not recorded", exc_info=True)
+
+    @staticmethod
+    def _merge_returned_tokens(attempt_tokens: list[TokenCounters], attempt_result: DriverResult) -> None:
+        try:
+            current = attempt_tokens[-1].as_dict()
+            reported = _counters_from(attempt_result.tokens or {}).as_dict()
+            attempt_tokens[-1] = _counters_from({**current, **{k: v for k, v in reported.items() if v is not None}})
+        except Exception:
+            log.warning("Ignoring malformed backend telemetry", exc_info=True)
+
+    @staticmethod
+    def _no_result(driver_exc: BaseException | None) -> DriverResult:
+        err_msg = str(driver_exc) if driver_exc else "execution_failed"
+        return DriverResult("REQUEST_FATAL", "", "", err_msg, "execution_error")
 
     def _release_capacity(self, target_id: str) -> None:
         self._target_users[target_id] -= 1

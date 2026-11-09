@@ -137,7 +137,8 @@ async def test_success_records_sticky_target_and_next_submit_prefers_it(tmp_path
     try:
         _set_sticky(runtime, project, "b")
         job = await _run(runtime, project)
-        assert job.state == "succeeded" and job.target_id == "b"
+        assert job.state == "succeeded"
+        assert job.target_id == "b"
         assert drivers.executed == ["b"]
         assert runtime.database.sticky_target(project.id, "s", "consult") == "b"
     finally:
@@ -164,7 +165,8 @@ async def test_sticky_target_with_open_circuit_falls_back_and_success_updates_it
         _set_sticky(runtime, project, "b")
         _open_circuit(runtime, "b")
         job = await _run(runtime, project)
-        assert job.state == "succeeded" and drivers.executed == ["a"]
+        assert job.state == "succeeded"
+        assert drivers.executed == ["a"]
         assert runtime.database.sticky_target(project.id, "s", "consult") == "a"
     finally:
         await runtime.close()
@@ -196,8 +198,10 @@ async def test_retry_creates_new_job_and_never_mutates_source(tmp_path, state) -
         job = await runtime.wait(retried.job_id, 5)
 
         assert retried.job_id != source.id
-        assert job.retry_of == source.id and job.state == "succeeded"
-        assert job.target_id == "b" and drivers.executed[-1] == "b"
+        assert job.retry_of == source.id
+        assert job.state == "succeeded"
+        assert job.target_id == "b"
+        assert drivers.executed[-1] == "b"
         assert runtime.database.job_record(job.id)["prompt"] == "original"
         assert runtime.database.job_record(job.id)["session"] == "s"
         assert runtime.database.job_record(source.id) == before
@@ -214,7 +218,8 @@ async def test_retry_with_target_pins_that_target_including_the_same_one(tmp_pat
         assert source.target_id == "a"
         retried = await runtime.retry(source.id, target="a")
         job = await runtime.wait(retried.job_id, 5)
-        assert job.target_id == "a" and drivers.executed == ["a", "a"]
+        assert job.target_id == "a"
+        assert drivers.executed == ["a", "a"]
     finally:
         await runtime.close()
 
@@ -267,7 +272,8 @@ async def test_next_target_is_plain_name_of_following_healthy_target(tmp_path) -
     runtime, project, _drivers = await _runtime(tmp_path, _Drivers({"a": "fail"}))
     try:
         job = await _run(runtime, project)
-        assert job.state == "failed" and job.target_id == "a"
+        assert job.state == "failed"
+        assert job.target_id == "a"
         assert runtime.live_routing(job)["retry"]["next_target"] == "b"
         _open_circuit(runtime, "b")
         assert runtime.live_routing(job)["retry"]["next_target"] is None

@@ -111,7 +111,8 @@ async def test_dashboard_spa_shell_fallback_assets_and_traversal(tmp_path, monke
         assert headers.get("x-content-type-options") == "nosniff"
 
     status, body, headers = await api_request(app, "/dashboard/assets/index-AbCd.js", method="GET")
-    assert status == 200 and body["raw"] == "export {}"
+    assert status == 200
+    assert body["raw"] == "export {}"
     assert headers.get("cache-control") == "public, max-age=31536000, immutable"
     assert headers.get("x-content-type-options") == "nosniff"
     status, _, _ = await api_request(app, "/dashboard/assets/missing.js", method="GET")
@@ -996,7 +997,8 @@ async def test_get_targets_contract() -> None:
     status, body, headers = await api_request(app, "/dashboard/api/targets", method="GET")
     assert status == 200
     assert headers.get("cache-control") == "no-store"
-    assert "targets" in body and "config" in body
+    assert "targets" in body
+    assert "config" in body
     assert len(body["targets"]) == 2
     assert body["targets"][0]["id"] == "tgt-1"
     assert body["targets"][0]["model"] == "gpt-4o"
@@ -1179,3 +1181,172 @@ async def test_card_routes_reject_post_with_fallback_404(path: str) -> None:
     assert "unchanged" in body
     assert "recovery" in body
     assert headers.get("cache-control") == "no-store"
+
+
+def _csrf_request(headers: tuple[tuple[str, str], ...], *, scheme: str = "http", host: str = "127.0.0.1:8765"):
+    from starlette.requests import Request
+
+    return Request({
+        "type": "http", "http_version": "1.1", "method": "POST", "path": "/", "raw_path": b"/", "query_string": b"",
+        "headers": [(b"host", host.encode()), *[(k.lower().encode(), v.encode()) for k, v in headers]],
+        "client": ("127.0.0.1", 1234), "server": ("127.0.0.1", 8765), "scheme": scheme, "root_path": "",
+    })
+
+
+_CSRF_REJECTIONS = [
+    pytest.param(dict(origin=""), {}, 403, "csrf_rejected", "CSRF check failed: Origin header required", id="empty-origin"),
+    pytest.param(dict(origin="NULL"), {}, 403, "csrf_rejected", "CSRF check failed: Origin header required", id="null-origin"),
+    pytest.param(dict(origin="not-a-url"), {}, 403, "csrf_rejected", "CSRF check failed: non-loopback Origin", id="origin-without-host"),
+    pytest.param(dict(origin="http://evil.example:8765"), {}, 403, "csrf_rejected", "CSRF check failed: non-loopback Origin", id="foreign-origin"),
+    pytest.param(dict(origin="https://127.0.0.1:8765"), {}, 403, "csrf_rejected", "CSRF check failed: scheme mismatch", id="scheme-mismatch"),
+    pytest.param(dict(origin="http://localhost:8765"), {}, 403, "csrf_rejected", "CSRF check failed: host mismatch", id="host-mismatch"),
+    pytest.param(dict(origin="http://127.0.0.1:abc"), {}, 403, "csrf_rejected", "CSRF check failed: invalid Origin port", id="invalid-port"),
+    pytest.param(dict(origin="http://127.0.0.1:9999"), {}, 403, "csrf_rejected", "CSRF check failed: port mismatch", id="port-mismatch"),
+    pytest.param(dict(origin="http://127.0.0.1"), {}, 403, "csrf_rejected", "CSRF check failed: port mismatch", id="default-port-mismatch"),
+    # Pins current behavior, not intended behavior: a loopback IPv6 origin is rejected today.
+    pytest.param(dict(origin="http://[::1]:8765"), {"host": "[::1]:8765"}, 403, "csrf_rejected", "CSRF check failed: non-loopback Origin", id="ipv6-origin-currently-rejected"),
+    pytest.param(dict(sec_fetch_site="cross-site"), {}, 403, "csrf_rejected", "CSRF check failed: Sec-Fetch-Site must be same-origin", id="cross-site"),
+    pytest.param(dict(token_header="0"), {}, 403, "csrf_rejected", "CSRF check failed: missing or invalid dashboard header", id="wrong-dashboard-header"),
+    pytest.param(dict(content_type="text/plain"), {}, 415, "unsupported_media_type", "Content-Type must be application/json", id="wrong-media-type"),
+]
+
+
+@pytest.mark.parametrize(("header_options", "request_options", "status", "code", "message"), _CSRF_REJECTIONS)
+def test_check_csrf_rejects_with_status_and_message(header_options, request_options, status, code, message) -> None:
+    from refract.dashboard import _check_csrf
+
+    response = _check_csrf(_csrf_request(valid_headers(**header_options), **request_options))
+    assert response is not None
+    body = json.loads(response.body)
+    assert (response.status_code, body["code"], body["error"]) == (status, code, message)
+
+
+@pytest.mark.parametrize(
+    ("headers", "status", "message"),
+    [
+        pytest.param(
+            (("Origin", "http://127.0.0.1:8765"), ("Content-Type", "application/json")),
+            403,
+            "CSRF check failed: missing or invalid dashboard header",
+            id="missing-dashboard-header",
+        ),
+        pytest.param(
+            (("Origin", "http://127.0.0.1:8765"), (DASHBOARD_HEADER, DASHBOARD_HEADER_VALUE)),
+            415,
+            "Content-Type must be application/json",
+            id="missing-content-type",
+        ),
+    ],
+)
+def test_check_csrf_rejects_absent_headers(headers, status, message) -> None:
+    from refract.dashboard import _check_csrf
+
+    response = _check_csrf(_csrf_request(headers))
+    assert response is not None
+    assert (response.status_code, json.loads(response.body)["error"]) == (status, message)
+
+
+@pytest.mark.parametrize(
+    ("headers", "scheme", "host"),
+    [
+        pytest.param(valid_headers(), "http", "127.0.0.1:8765", id="same-origin"),
+        pytest.param(valid_headers(sec_fetch_site=None), "http", "127.0.0.1:8765", id="no-sec-fetch-site"),
+        pytest.param(valid_headers(sec_fetch_site=" Same-Origin "), "http", "127.0.0.1:8765", id="sec-fetch-site-case-and-space"),
+        pytest.param(valid_headers(content_type="Application/JSON; charset=utf-8"), "http", "127.0.0.1:8765", id="media-type-parameters"),
+        pytest.param(valid_headers(origin="HTTP://127.0.0.1:8765"), "http", "127.0.0.1:8765", id="origin-scheme-case"),
+        pytest.param(valid_headers(origin="http://127.0.0.1"), "http", "127.0.0.1", id="default-http-port"),
+        pytest.param(valid_headers(origin="https://127.0.0.1"), "https", "127.0.0.1", id="default-https-port"),
+    ],
+)
+def test_check_csrf_accepts_same_origin_requests(headers, scheme, host) -> None:
+    from refract.dashboard import _check_csrf
+
+    assert _check_csrf(_csrf_request(headers, scheme=scheme, host=host)) is None
+
+
+def _ask_app(runtime):
+    return Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
+
+
+class _AskRegistry:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.error = error
+
+    async def ask(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return "the answer"
+
+
+_ASK_BAD_REQUEST = [
+    pytest.param(b"", "Malformed request body", id="empty-body"),
+    pytest.param(b"not-json", "Malformed request body", id="invalid-json"),
+    pytest.param(b"[1]", "Malformed request body", id="non-object"),
+    pytest.param(b'{"question":"q"}', "token must be a non-empty string", id="missing-token"),
+    pytest.param(b'{"token":"","question":"q"}', "token must be a non-empty string", id="empty-token"),
+    pytest.param(b'{"token":"t"}', "question must be a non-empty string", id="missing-question"),
+    pytest.param(b'{"token":"t","question":"  "}', "question must be a non-empty string", id="blank-question"),
+    pytest.param(b'{"token":"t","question":"q","job_id":5}', "job_id must be a string", id="non-string-job-id"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body", "message"), _ASK_BAD_REQUEST)
+async def test_ask_route_rejects_bad_requests(body, message) -> None:
+    registry = _AskRegistry()
+    status, parsed, _ = await api_request(_ask_app(SimpleNamespace(ask_registry=registry, config=SimpleNamespace())), "/ask", body=body)
+    assert (status, parsed["error"], parsed["code"]) == (400, message, "bad_request")
+    assert registry.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        pytest.param(None, id="no-runtime"),
+        pytest.param(SimpleNamespace(config=SimpleNamespace()), id="runtime-without-ask-registry"),
+    ],
+)
+async def test_ask_route_reports_inactive_runtime_and_missing_registry(runtime) -> None:
+    body = b'{"token":"t","question":"q"}'
+    status, parsed, _ = await api_request(_ask_app(runtime), "/ask", body=body)
+    assert (status, parsed["error"], parsed["code"]) == (503, "Refract runtime is not active", "runtime_unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "headers", "path", "expected_job_id"),
+    [
+        pytest.param(b'{"token":"t","question":" q ","job_id":"from-body"}', (("X-Refract-Job-Id", "from-header"),), "/ask?job_id=from-query", "from-body", id="body-job-id"),
+        pytest.param(b'{"token":"t","question":" q "}', (("X-Refract-Job-Id", "from-header"),), "/ask?job_id=from-query", "from-header", id="header-job-id"),
+        pytest.param(b'{"token":"t","question":" q "}', (), "/ask?job_id=from-query", "from-query", id="query-job-id"),
+        pytest.param(b'{"token":"t","question":" q "}', (), "/ask", None, id="no-job-id"),
+    ],
+)
+async def test_ask_route_job_id_sources_and_default_timeout(body, headers, path, expected_job_id) -> None:
+    registry = _AskRegistry()
+    status, parsed, _ = await api_request(_ask_app(SimpleNamespace(ask_registry=registry, config=SimpleNamespace())), path, body=body, headers=headers)
+    assert (status, parsed) == (200, {"answer": "the answer"})
+    assert registry.calls == [{"token": "t", "question": " q ", "timeout_s": 300, "job_id": expected_job_id}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status", "message", "code"),
+    [
+        pytest.param("auth", 403, "Forbidden", "forbidden", id="auth-error"),
+        pytest.param("conflict", 409, "A question is already pending for this job", "conflict", id="conflict-error"),
+    ],
+)
+async def test_ask_route_maps_registry_errors(error, status, message, code) -> None:
+    from refract.ask import AskAuthError, AskConflictError
+
+    registry = _AskRegistry({"auth": AskAuthError("no"), "conflict": AskConflictError("busy")}[error])
+    got_status, parsed, _ = await api_request(
+        _ask_app(SimpleNamespace(ask_registry=registry, config=SimpleNamespace(ask_timeout_s=9))), "/ask",
+        body=b'{"token":"t","question":"q"}',
+    )
+    assert (got_status, parsed["error"], parsed["code"]) == (status, message, code)
+    assert registry.calls[0]["timeout_s"] == 9

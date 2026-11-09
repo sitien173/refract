@@ -247,9 +247,10 @@ def test_project_catalog_snapshot_fails_safely_after_continuous_file_churn(tmp_p
 
     monkeypatch.setattr(runtime_module, "_file_identity", file_identity)
     monkeypatch.setattr(runtime_module, "load_project_config", load_project)
+    updated_base = replace(base)
     try:
         with pytest.raises(ValueError, match="Project configuration changed during loading") as error:
-            runtime._project_catalog_snapshot(root, replace(base))
+            runtime._project_catalog_snapshot(root, updated_base)
         assert loads == 3
         assert "SYNTHETIC_SECRET" not in str(error.value)
         assert root not in runtime._project_catalogs
@@ -845,7 +846,8 @@ def test_resolve_project_returns_concurrent_canonical_winner(tmp_path, monkeypat
         resolved = runtime.resolve_project(str(root))
         stored = other.project("race-winner")
         assert resolved.id == "race-winner"
-        assert stored is not None and stored.root == root.resolve().as_posix()
+        assert stored is not None
+        assert stored.root == root.resolve().as_posix()
     finally:
         other.close()
         runtime.database.close()
@@ -1057,3 +1059,75 @@ async def test_job_submission_succeeds_without_runtime_mutations(tmp_path) -> No
     finally:
         await runtime.close()
 
+
+
+def _admission_runtime(tmp_path):
+    runtime = Runtime(make_config(tmp_path / "home"))
+    root = tmp_path / "project"
+    root.mkdir()
+    return runtime, register_project(runtime, str(root))
+
+
+@pytest.mark.parametrize(
+    ("closing", "known_project", "workflow", "message", "code", "next_action"),
+    [
+        pytest.param(True, False, "implement", "The daemon is stopping.", "daemon_stopping", "Wait, then call submit again.", id="closing-wins-over-unknown-project"),
+        pytest.param(False, False, "implement", "Project is not registered.", "unknown_project", "Call submit with a path inside a Git repository.", id="unknown-project"),
+        pytest.param(False, False, "no-such-workflow", "Project is not registered.", "unknown_project", "Call submit with a path inside a Git repository.", id="unknown-project-wins-over-invalid-workflow"),
+        pytest.param(False, True, "no-such-workflow", "Unknown workflow .no-such-workflow.", "invalid_request", "Correct the workflow or prompt and call submit again.", id="invalid-workflow"),
+    ],
+)
+def test_admit_submission_rejects_before_planning(tmp_path, closing, known_project, workflow, message, code, next_action) -> None:
+    runtime, project = _admission_runtime(tmp_path)
+    runtime._closing = closing
+    try:
+        with pytest.raises(OrchestrationError, match=message) as raised:
+            runtime._admit_submission("job-1", project.id if known_project else "missing", workflow, "do it")
+        assert (raised.value.code, raised.value.next_action) == (code, next_action)
+        assert runtime.database.job("job-1") is None
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
+def test_admit_submission_creates_job_with_defaults(tmp_path) -> None:
+    runtime, project = _admission_runtime(tmp_path)
+    try:
+        admitted = runtime._admit_submission("job-1", project.id, "implement", "do it", profile="  ")
+        assert admitted == (project, "implement", "balanced")
+        job = runtime.database.job("job-1")
+        assert (job.workflow, job.profile, job.session) == ("implement", "balanced", "implement")
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
+@pytest.mark.parametrize(
+    ("profile", "code", "next_action"),
+    [
+        pytest.param("missing-profile", "unknown_profile", "Call list and choose an available profile.", id="unknown-profile"),
+    ],
+)
+def test_admit_submission_maps_plan_errors(tmp_path, profile, code, next_action) -> None:
+    runtime, project = _admission_runtime(tmp_path)
+    try:
+        with pytest.raises(OrchestrationError) as raised:
+            runtime._admit_submission("job-1", project.id, "implement", "do it", profile=profile)
+        assert (raised.value.code, raised.value.next_action) == (code, next_action)
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())
+
+
+def test_admit_submission_retry_rejects_unlisted_target_and_exhausted_order(tmp_path) -> None:
+    runtime, project = _admission_runtime(tmp_path)
+    try:
+        with pytest.raises(OrchestrationError, match="Target 'other' is not in profile balanced; profile targets: primary.") as pinned:
+            runtime._admit_submission("job-1", project.id, "implement", "do it", retry_of="old", target="other")
+        assert (pinned.value.code, pinned.value.next_action) == ("invalid_request", "Call retry with target set to one of: primary.")
+        with pytest.raises(OrchestrationError, match="No target follows the job's target in profile order.") as exhausted:
+            runtime._admit_submission("job-2", project.id, "implement", "do it", retry_of="old", after="primary")
+        assert (exhausted.value.code, exhausted.value.next_action) == ("targets_unavailable", "Call retry with target set to one of: primary.")
+    finally:
+        import asyncio
+        asyncio.run(runtime.close())

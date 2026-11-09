@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 MAX_CONFIG_ERROR_LENGTH = 512
+_USE_TARGETS_ENV = "use targets[].env"
 
 # Removed config keys and the replacement each load error names. Split
 # literals keep removed names out of repository-wide greps.
@@ -19,9 +20,9 @@ REMOVED_KEYS: dict[str, str] = {
     "[daemon]." "history" "_bytes": "",
     "[" "retry" "Policies" "]": "use targets[].retry",
     "targets[]." "retry" "Policy": "use targets[].retry",
-    "[envs]": "use targets[].env",
-    "targets[]." "envs" "_vars": "use targets[].env",
-    "targets[].envs": "use targets[].env",
+    "[envs]": _USE_TARGETS_ENV,
+    "targets[]." "envs" "_vars": _USE_TARGETS_ENV,
+    "targets[].envs": _USE_TARGETS_ENV,
     "targets[]." "context" "Window": "use targets[].context_window",
     "targets[].profile": "use targets[].backend_profile",
     "profiles workflow max_attempts": "use targets[].retry.attempts",

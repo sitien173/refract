@@ -143,10 +143,12 @@ consult = "primary"
     catalog = load_config(path)
 
     assert resolve_execution_plan(get_workflow("consult"), catalog, "consult-only")
+    implement = get_workflow("implement")
+    other = get_workflow("other")
     with pytest.raises(ValueError, match="does not map workflow 'implement'"):
-        resolve_execution_plan(get_workflow("implement"), catalog, "consult-only")
+        resolve_execution_plan(implement, catalog, "consult-only")
     with pytest.raises(ValueError, match="does not map workflow 'other'"):
-        resolve_execution_plan(get_workflow("other"), catalog, "consult-only")
+        resolve_execution_plan(other, catalog, "consult-only")
 
 
 def test_custom_target_args_round_trip_in_plan() -> None:

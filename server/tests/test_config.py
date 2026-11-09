@@ -6,9 +6,15 @@ import pytest
 
 from refract.config import (
     NotificationsConfig,
+    ProfileDeclaration,
     RetryPolicy,
     TargetConfig,
+    TargetSelection,
     _notifications_config,
+    _profile_declarations,
+    _resolve_profile_maps,
+    _target_selection,
+    _validate_env_mapping,
     load_config,
     load_project_config,
     load_guidance,
@@ -16,7 +22,7 @@ from refract.config import (
 )
 from refract.planning import resolve_execution_plan
 from refract.workflows import get_workflow
-from tests.orchestration_helpers import config
+from tests.orchestration_helpers import Raised, config, outcome, plain
 
 
 def _explicit_config() -> str:
@@ -152,8 +158,9 @@ def test_removed_project_profile_aliases_are_rejected(tmp_path) -> None:
         encoding="utf-8",
     )
 
+    catalog = config(tmp_path / "home")
     with pytest.raises(ValueError, match="Unsupported"):
-        load_project_config(root, config(tmp_path / "home"))
+        load_project_config(root, catalog)
 
 
 def test_project_config_overlays_profiles(tmp_path) -> None:
@@ -701,8 +708,9 @@ def test_project_config_rejects_notifications(tmp_path) -> None:
         encoding="utf-8",
     )
 
+    catalog = config(tmp_path / "home")
     with pytest.raises(ValueError, match="Unsupported project config sections"):
-        load_project_config(root, config(tmp_path / "home"))
+        load_project_config(root, catalog)
 
 
 def test_notifications_config_dataclass_defaults_and_immutability() -> None:
@@ -820,3 +828,540 @@ def test_removed_tracing_config_section_names_removal(tmp_path) -> None:
     path.write_text(_explicit_config() + "\n" + removed_section, encoding="utf-8")
     with pytest.raises(ValueError, match=r"(?=.*lang" "fuse)(?=.*removed)"):
         load_config(path)
+
+
+# Characterization of private config helpers. Expected values were recorded from
+# the implementation before the complexity refactor; every case pins the result
+# or the exact error text, and the "*_before_*" cases pin which error wins.
+
+_SELECTION_TARGETS = {"a": TargetConfig("a", "codex"), "b": TargetConfig("b", "pi")}
+_PROFILE_TARGETS = (TargetConfig("a", "codex"), TargetConfig("b", "pi"))
+
+
+def _sel(targets: tuple[str, ...], timeout_s: int = 0) -> TargetSelection:
+    return TargetSelection(targets, timeout_s)
+
+
+def _decl(extends: str | None = None, **workflows: str) -> ProfileDeclaration:
+    return ProfileDeclaration(extends, {k: _sel((v,)) for k, v in workflows.items()})
+
+
+_TARGET_SELECTION_CASES = {
+    "str_ok": ("a", _sel(("a",))),
+    "str_padded": (" a ", _sel(("a",))),
+    "str_empty": ("", Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
+    "str_blank": ("   ", Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
+    "str_unknown": ("z", Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['z']")),
+    "list_ok": (["a", "b"], _sel(("a", "b"))),
+    "list_padded": ([" a "], _sel(("a",))),
+    "list_nonstring": (
+        ["a", 1],
+        Raised(ValueError, "Profile 'p' workflow 'implement' targets must contain only strings"),
+    ),
+    "list_dup": (["a", "a"], Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
+    "list_empty": ([], Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
+    "list_unknown": (
+        ["a", "z", "y"],
+        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['y', 'z']"),
+    ),
+    "list_blank_item": (
+        ["a", " "],
+        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['']"),
+    ),
+    "dict_ok": ({"targets": ["a"], "timeout_s": 5}, _sel(("a",), 5)),
+    "dict_str_targets": ({"targets": " a "}, _sel(("a",))),
+    "dict_default_timeout": ({"targets": "a"}, _sel(("a",))),
+    "dict_timeout_zero": ({"targets": ["b"], "timeout_s": 0}, _sel(("b",))),
+    "dict_empty": ({}, Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
+    "dict_only_timeout": (
+        {"timeout_s": 3},
+        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []"),
+    ),
+    "dict_max_attempts": (
+        {"max_attempts": 1, "targets": ["a"]},
+        Raised(ValueError, "profiles workflow max_attempts has been removed; use targets[].retry.attempts"),
+    ),
+    "dict_unknown_settings": (
+        {"targets": ["a"], "y": 1, "x": 2},
+        Raised(ValueError, "Profile 'p' workflow 'implement' has unsupported settings: ['x', 'y']"),
+    ),
+    "dict_max_attempts_and_unknown": (
+        {"max_attempts": 1, "x": 1, "targets": ["a"]},
+        Raised(ValueError, "profiles workflow max_attempts has been removed; use targets[].retry.attempts"),
+    ),
+    "dict_nonstring_targets": (
+        {"targets": ["a", 2]},
+        Raised(ValueError, "Profile 'p' workflow 'implement' targets must contain only strings"),
+    ),
+    "dict_targets_int": (
+        {"targets": 3},
+        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []"),
+    ),
+    "dict_targets_dup": (
+        {"targets": ["a", "b", "a"]},
+        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []"),
+    ),
+    "dict_targets_empty_str": (
+        {"targets": ""},
+        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['']"),
+    ),
+    "dict_timeout_bool": (
+        {"targets": ["a"], "timeout_s": True},
+        Raised(ValueError, "timeout_s must be a non-negative integer"),
+    ),
+    "dict_timeout_negative": (
+        {"targets": ["a"], "timeout_s": -1},
+        Raised(ValueError, "timeout_s must be a non-negative integer"),
+    ),
+    "dict_timeout_str": (
+        {"targets": ["a"], "timeout_s": "5"},
+        Raised(ValueError, "timeout_s must be a non-negative integer"),
+    ),
+    "dict_timeout_float": (
+        {"targets": ["a"], "timeout_s": 1.5},
+        Raised(ValueError, "timeout_s must be a non-negative integer"),
+    ),
+    "dict_bad_timeout_and_unknown_target": (
+        {"targets": ["z"], "timeout_s": -1},
+        Raised(ValueError, "timeout_s must be a non-negative integer"),
+    ),
+    "dict_nonstring_and_bad_timeout": (
+        {"targets": [1], "timeout_s": -1},
+        Raised(ValueError, "Profile 'p' workflow 'implement' targets must contain only strings"),
+    ),
+    "dict_unknown_and_nonstring": (
+        {"targets": [1], "x": 1},
+        Raised(ValueError, "Profile 'p' workflow 'implement' has unsupported settings: ['x']"),
+    ),
+    "none": (None, Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
+    "int": (7, Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
+    "tuple": (("a",), Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
+}
+
+
+@pytest.mark.parametrize("case", list(_TARGET_SELECTION_CASES))
+def test_target_selection_characterization(case) -> None:
+    raw, expected = _TARGET_SELECTION_CASES[case]
+    assert outcome(
+        lambda: _target_selection(raw, profile_id="p", workflow="implement", target_by_id=_SELECTION_TARGETS)
+    ) == plain(expected)
+
+
+_PROFILE_DECLARATION_CASES = {
+    "not_dict": ([], Raised(ValueError, "[profiles] must contain at least one profile")),
+    "empty": ({}, Raised(ValueError, "[profiles] must contain at least one profile")),
+    "none": (None, Raised(ValueError, "[profiles] must contain at least one profile")),
+    "mapping_not_dict": ({"p": "a"}, Raised(ValueError, "Profile 'p' must declare extends or a workflow")),
+    "mapping_empty": ({"p": {}}, Raised(ValueError, "Profile 'p' must declare extends or a workflow")),
+    "extends_none": (
+        {"p": {"extends": None, "implement": "a"}},
+        {"p": ProfileDeclaration(None, {"implement": _sel(("a",))})},
+    ),
+    "extends_padded": (
+        {"p": {"extends": " base ", "implement": "a"}},
+        {"p": ProfileDeclaration("base", {"implement": _sel(("a",))})},
+    ),
+    "extends_only": ({"p": {"extends": "base"}}, {"p": ProfileDeclaration("base", {})}),
+    "extends_empty": (
+        {"p": {"extends": "", "implement": "a"}},
+        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
+    ),
+    "extends_blank": (
+        {"p": {"extends": "  "}},
+        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
+    ),
+    "extends_int": (
+        {"p": {"extends": 3}},
+        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
+    ),
+    "unknown_workflow": (
+        {"p": {"bogus": "a"}},
+        Raised(
+            ValueError,
+            "Unknown workflow 'bogus'; expected one of ('consult', 'implement', 'other', 'review')",
+        ),
+    ),
+    "workflows_ok": (
+        {"p": {"implement": "a", "review": ["a", "b"], "consult": {"targets": "b", "timeout_s": 9}}},
+        {
+            "p": ProfileDeclaration(
+                None, {"implement": _sel(("a",)), "review": _sel(("a", "b")), "consult": _sel(("b",), 9)}
+            )
+        },
+    ),
+    "bad_selection": (
+        {"p": {"implement": "zzz"}},
+        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['zzz']"),
+    ),
+    "int_profile_id": ({1: {"implement": "a"}}, {"1": ProfileDeclaration(None, {"implement": _sel(("a",))})}),
+    "two_profiles_ok": (
+        {"p": {"implement": "a"}, "q": {"extends": "p", "review": "b"}},
+        {
+            "p": ProfileDeclaration(None, {"implement": _sel(("a",))}),
+            "q": ProfileDeclaration("p", {"review": _sel(("b",))}),
+        },
+    ),
+    "first_bad_extends_second_bad_workflow": (
+        {"p": {"extends": 1}, "q": {"bogus": "a"}},
+        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
+    ),
+    "extends_bad_before_workflow": (
+        {"p": {"extends": 1, "bogus": "a"}},
+        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
+    ),
+    "workflow_bad_before_selection": (
+        {"p": {"bogus": "zzz"}},
+        Raised(
+            ValueError,
+            "Unknown workflow 'bogus'; expected one of ('consult', 'implement', 'other', 'review')",
+        ),
+    ),
+    "first_workflow_error_wins": (
+        {"p": {"implement": "zzz", "bogus": "a"}},
+        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['zzz']"),
+    ),
+    "second_profile_error": (
+        {"p": {"implement": "a"}, "q": {}},
+        Raised(ValueError, "Profile 'q' must declare extends or a workflow"),
+    ),
+    "extends_position_last": (
+        {"p": {"implement": "a", "extends": "x"}},
+        {"p": ProfileDeclaration("x", {"implement": _sel(("a",))})},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_PROFILE_DECLARATION_CASES))
+def test_profile_declarations_characterization(case) -> None:
+    raw, expected = _PROFILE_DECLARATION_CASES[case]
+    assert outcome(lambda: _profile_declarations(raw, _PROFILE_TARGETS)) == plain(expected)
+
+
+_RESOLVE_PROFILE_MAP_CASES = {
+    "chain": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends=None, workflows={"implement": TargetSelection(targets=("t1",), timeout_s=0)}
+                ),
+                "b": ProfileDeclaration(
+                    extends="a", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                ),
+                "c": ProfileDeclaration(
+                    extends="b", workflows={"consult": TargetSelection(targets=("t3",), timeout_s=0)}
+                ),
+            },
+            None,
+        ),
+        {
+            "a": {"implement": _sel(("t1",))},
+            "b": {"implement": _sel(("t1",)), "review": _sel(("t2",))},
+            "c": {"implement": _sel(("t1",)), "review": _sel(("t2",)), "consult": _sel(("t3",))},
+        },
+    ),
+    "chain_child_first": (
+        (
+            {
+                "c": ProfileDeclaration(
+                    extends="b", workflows={"consult": TargetSelection(targets=("t3",), timeout_s=0)}
+                ),
+                "b": ProfileDeclaration(
+                    extends="a", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                ),
+                "a": ProfileDeclaration(
+                    extends=None, workflows={"implement": TargetSelection(targets=("t1",), timeout_s=0)}
+                ),
+            },
+            None,
+        ),
+        {
+            "a": {"implement": _sel(("t1",))},
+            "b": {"implement": _sel(("t1",)), "review": _sel(("t2",))},
+            "c": {"implement": _sel(("t1",)), "review": _sel(("t2",)), "consult": _sel(("t3",))},
+        },
+    ),
+    "no_extends": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends=None, workflows={"implement": TargetSelection(targets=("t1",), timeout_s=0)}
+                )
+            },
+            None,
+        ),
+        {"a": {"implement": _sel(("t1",))}},
+    ),
+    "override": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends=None,
+                    workflows={
+                        "implement": TargetSelection(targets=("t1",), timeout_s=0),
+                        "review": TargetSelection(targets=("t1",), timeout_s=0),
+                    },
+                ),
+                "b": ProfileDeclaration(
+                    extends="a", workflows={"implement": TargetSelection(targets=("t2",), timeout_s=0)}
+                ),
+            },
+            None,
+        ),
+        {
+            "a": {"implement": _sel(("t1",)), "review": _sel(("t1",))},
+            "b": {"implement": _sel(("t2",)), "review": _sel(("t1",))},
+        },
+    ),
+    "shared_parent": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends=None, workflows={"implement": TargetSelection(targets=("t1",), timeout_s=0)}
+                ),
+                "b": ProfileDeclaration(
+                    extends="a", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                ),
+                "c": ProfileDeclaration(
+                    extends="a", workflows={"review": TargetSelection(targets=("t3",), timeout_s=0)}
+                ),
+            },
+            None,
+        ),
+        {
+            "a": {"implement": _sel(("t1",))},
+            "b": {"implement": _sel(("t1",)), "review": _sel(("t2",))},
+            "c": {"implement": _sel(("t1",)), "review": _sel(("t3",))},
+        },
+    ),
+    "self_extends_no_snapshots": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends="a", workflows={"implement": TargetSelection(targets=("t1",), timeout_s=0)}
+                )
+            },
+            None,
+        ),
+        Raised(ValueError, "Profile inheritance cycle: a -> a"),
+    ),
+    "self_extends_snapshot": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends="a", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                )
+            },
+            {"a": {"implement": TargetSelection(targets=("t1",), timeout_s=0)}},
+        ),
+        {"a": {"implement": _sel(("t1",)), "review": _sel(("t2",))}},
+    ),
+    "self_extends_snapshot_missing": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends="a", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                )
+            },
+            {"b": {}},
+        ),
+        Raised(ValueError, "Profile 'a' extends unknown parent 'a'"),
+    ),
+    "self_extends_empty_snapshots": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends="a", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                )
+            },
+            {},
+        ),
+        Raised(ValueError, "Profile 'a' extends unknown parent 'a'"),
+    ),
+    "parent_in_snapshots": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends="base", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                )
+            },
+            {"base": {"implement": TargetSelection(targets=("t1",), timeout_s=0)}},
+        ),
+        {"a": {"implement": _sel(("t1",)), "review": _sel(("t2",))}},
+    ),
+    "parent_unknown_no_snapshots": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends="nope", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                )
+            },
+            None,
+        ),
+        Raised(ValueError, "Profile 'a' extends unknown parent 'nope'"),
+    ),
+    "parent_unknown_with_snapshots": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends="nope", workflows={"review": TargetSelection(targets=("t2",), timeout_s=0)}
+                )
+            },
+            {"base": {}},
+        ),
+        Raised(ValueError, "Profile 'a' extends unknown parent 'nope'"),
+    ),
+    "parent_in_declarations_and_snapshots": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends=None, workflows={"implement": TargetSelection(targets=("t1",), timeout_s=0)}
+                ),
+                "b": ProfileDeclaration(extends="a", workflows={}),
+            },
+            {"a": {"implement": TargetSelection(targets=("old",), timeout_s=0)}},
+        ),
+        {"a": {"implement": _sel(("t1",))}, "b": {"implement": _sel(("t1",))}},
+    ),
+    "two_cycle": (
+        (
+            {
+                "a": ProfileDeclaration(extends="b", workflows={}),
+                "b": ProfileDeclaration(extends="a", workflows={}),
+            },
+            None,
+        ),
+        Raised(ValueError, "Profile inheritance cycle: a -> b -> a"),
+    ),
+    "three_cycle": (
+        (
+            {
+                "a": ProfileDeclaration(extends="b", workflows={}),
+                "b": ProfileDeclaration(extends="c", workflows={}),
+                "c": ProfileDeclaration(extends="a", workflows={}),
+            },
+            None,
+        ),
+        Raised(ValueError, "Profile inheritance cycle: a -> b -> c -> a"),
+    ),
+    "tail_into_cycle": (
+        (
+            {
+                "x": ProfileDeclaration(extends="a", workflows={}),
+                "a": ProfileDeclaration(extends="b", workflows={}),
+                "b": ProfileDeclaration(extends="a", workflows={}),
+            },
+            None,
+        ),
+        Raised(ValueError, "Profile inheritance cycle: a -> b -> a"),
+    ),
+    "chain_ends_unknown": (
+        (
+            {
+                "a": ProfileDeclaration(extends="b", workflows={}),
+                "b": ProfileDeclaration(extends="nope", workflows={}),
+            },
+            None,
+        ),
+        Raised(ValueError, "Profile 'b' extends unknown parent 'nope'"),
+    ),
+    "chain_ends_in_snapshot": (
+        (
+            {
+                "a": ProfileDeclaration(extends="b", workflows={}),
+                "b": ProfileDeclaration(extends="snap", workflows={}),
+            },
+            {"snap": {"review": TargetSelection(targets=("t9",), timeout_s=0)}},
+        ),
+        {"b": {"review": _sel(("t9",))}, "a": {"review": _sel(("t9",))}},
+    ),
+    "empty": (({}, None), {}),
+    "memo_after_error_order": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends=None, workflows={"implement": TargetSelection(targets=("t1",), timeout_s=0)}
+                ),
+                "b": ProfileDeclaration(extends="nope", workflows={}),
+                "c": ProfileDeclaration(extends="a", workflows={}),
+            },
+            None,
+        ),
+        Raised(ValueError, "Profile 'b' extends unknown parent 'nope'"),
+    ),
+    "snapshot_not_mutated_value": (
+        (
+            {
+                "a": ProfileDeclaration(
+                    extends="snap", workflows={"implement": TargetSelection(targets=("t2",), timeout_s=0)}
+                )
+            },
+            {
+                "snap": {
+                    "implement": TargetSelection(targets=("t1",), timeout_s=0),
+                    "review": TargetSelection(targets=("t1",), timeout_s=0),
+                }
+            },
+        ),
+        {"a": {"implement": _sel(("t2",)), "review": _sel(("t1",))}},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_RESOLVE_PROFILE_MAP_CASES))
+def test_resolve_profile_maps_characterization(case) -> None:
+    (declarations, snapshots), expected = _RESOLVE_PROFILE_MAP_CASES[case]
+    assert outcome(lambda: _resolve_profile_maps(declarations, snapshots=snapshots)) == plain(expected)
+
+
+_ENV_MAPPING_CASES = {
+    "not_dict": ([], Raised(ValueError, "ctx must be a TOML table")),
+    "none": (None, Raised(ValueError, "ctx must be a TOML table")),
+    "empty": ({}, {}),
+    "ok": ({"A": "1", "B": "two"}, {"A": "1", "B": "two"}),
+    "empty_key": ({"": "x"}, Raised(ValueError, "Environment key cannot be empty in ctx")),
+    "int_key": ({1: "x"}, Raised(ValueError, "Environment key cannot be empty in ctx")),
+    "eq_key": ({"A=B": "x"}, Raised(ValueError, "Environment key cannot contain '=' in ctx")),
+    "nul_key": ({"A\x00": "x"}, Raised(ValueError, "Environment key cannot contain NUL bytes in ctx")),
+    "protected_prefix": (
+        {"REFRACT_ASK_URL": "x"},
+        Raised(ValueError, "Environment keys cannot use protected prefix REFRACT_ASK_ in ctx"),
+    ),
+    "prefix_like_ok": (
+        {"REFRACT_ASK": "x", "XREFRACT_ASK_": "y"},
+        {"REFRACT_ASK": "x", "XREFRACT_ASK_": "y"},
+    ),
+    "bool_value": ({"A": True}, Raised(ValueError, "Environment values must be strings in ctx")),
+    "int_value": ({"A": 1}, Raised(ValueError, "Environment values must be strings in ctx")),
+    "none_value": ({"A": None}, Raised(ValueError, "Environment values must be strings in ctx")),
+    "nul_value": ({"A": "a\x00"}, Raised(ValueError, "Environment values cannot contain NUL bytes in ctx")),
+    "template_value": (
+        {"A": "${HOME}"},
+        Raised(ValueError, "${NAME} in targets[].env has been removed; write the literal value"),
+    ),
+    "dollar_ok": ({"A": "$HOME {x}"}, {"A": "$HOME {x}"}),
+    "empty_value_ok": ({"A": ""}, {"A": ""}),
+    "eq_and_nul_key": ({"=\x00": "x"}, Raised(ValueError, "Environment key cannot contain '=' in ctx")),
+    "nul_and_template_value": (
+        {"A": "\x00${x}"},
+        Raised(ValueError, "Environment values cannot contain NUL bytes in ctx"),
+    ),
+    "prefix_before_value": (
+        {"REFRACT_ASK_X": 1},
+        Raised(ValueError, "Environment keys cannot use protected prefix REFRACT_ASK_ in ctx"),
+    ),
+    "bad_value_before_later_bad_key": (
+        {"A": 1, "": "x"},
+        Raised(ValueError, "Environment values must be strings in ctx"),
+    ),
+    "later_bad": ({"A": "1", "B": 2}, Raised(ValueError, "Environment values must be strings in ctx")),
+    "eq_before_prefix": (
+        {"REFRACT_ASK_=": "x"},
+        Raised(ValueError, "Environment key cannot contain '=' in ctx"),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_ENV_MAPPING_CASES))
+def test_validate_env_mapping_characterization(case) -> None:
+    mapping, expected = _ENV_MAPPING_CASES[case]
+    assert outcome(lambda: _validate_env_mapping(mapping, context="ctx")) == plain(expected)

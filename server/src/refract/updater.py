@@ -60,6 +60,8 @@ _GITHUB_RE = re.compile(
     r"(?:\.git)?/?\Z"
 )
 _UNTRUSTED = "untrusted source"
+_NOT_A_GIT_CLONE = "not a git clone"
+_CANNOT_CHECK = "cannot check"
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _SERVER_SPEC = "refract @ git+https://github.com/sitien173/refract{tag}#subdirectory=server"
@@ -263,7 +265,7 @@ def discover_server() -> Install:
         path = Path(_file_url_path(url))
         root = _git_root(path)
         if root is None:
-            return Install("server", "clone", "skipped", "not a git clone", uv_tool=uv_tool, version=version)
+            return Install("server", "clone", "skipped", _NOT_A_GIT_CLONE, uv_tool=uv_tool, version=version)
         return Install("server", "clone", None, "editable clone", path=root, uv_tool=uv_tool, version=version)
     if _GITHUB_RE.match(url) or url.startswith("https://github.com/sitien173/refract/"):
         return Install("server", "github", None, "github install", uv_tool=uv_tool, version=version)
@@ -311,6 +313,35 @@ def _marketplace_source(entry: dict[str, Any]) -> tuple[str, Path | None] | None
     return None
 
 
+def _claude_clone_install(parsed_path: Path | None, common: dict[str, Any]) -> Install:
+    root = _git_root(parsed_path) if parsed_path is not None else None
+    if root is None:
+        return Install("claude", "clone", "skipped", _NOT_A_GIT_CLONE, **common)
+    return Install("claude", "clone", None, "clone marketplace", path=root, **common)
+
+
+def _claude_install(
+    item: dict[str, Any], market_sources: dict[str, tuple[str, Path | None] | None], records: Any
+) -> Install:
+    plugin_id = str(item.get("id") or item.get("name"))
+    market = str(item.get("marketplace") or (plugin_id.split("@", 1) + [""])[1])
+    scope = item.get("scope") if isinstance(item.get("scope"), str) else None
+    version = item.get("version") if _VERSION_RE.match(str(item.get("version"))) else None
+    common = {
+        "scope": scope,
+        "installed_sha": _record_sha(records, plugin_id, scope),
+        "version": version,
+        "ref": plugin_id,
+        "marketplace": market if _NAME_RE.match(market) else None,
+    }
+    parsed = market_sources.get(market)
+    if parsed is None:
+        return Install("claude", "unknown", "skipped", _UNTRUSTED, **common)
+    if parsed[0] == "github":
+        return Install("claude", "github", None, "github marketplace", **common)
+    return _claude_clone_install(parsed[1], common)
+
+
 def discover_claude() -> list[Install]:
     status, plugins = _host_json("claude", "plugin", "list", "--json")
     if status == "missing":
@@ -325,32 +356,7 @@ def discover_claude() -> list[Install]:
         return [Install("claude", "unknown", "failed", "cannot list marketplaces")]
     market_sources = {str(m.get("name")): _marketplace_source(m) for m in _plugin_items(markets)}
     records = _installed_records()
-    installs = []
-    for item in mine:
-        plugin_id = str(item.get("id") or item.get("name"))
-        market = str(item.get("marketplace") or (plugin_id.split("@", 1) + [""])[1])
-        scope = item.get("scope") if isinstance(item.get("scope"), str) else None
-        version = item.get("version") if _VERSION_RE.match(str(item.get("version"))) else None
-        sha = _record_sha(records, plugin_id, scope)
-        common = {
-            "scope": scope,
-            "installed_sha": sha,
-            "version": version,
-            "ref": plugin_id,
-            "marketplace": market if _NAME_RE.match(market) else None,
-        }
-        parsed = market_sources.get(market)
-        if parsed is None:
-            installs.append(Install("claude", "unknown", "skipped", _UNTRUSTED, **common))
-        elif parsed[0] == "github":
-            installs.append(Install("claude", "github", None, "github marketplace", **common))
-        else:
-            root = _git_root(parsed[1]) if parsed[1] is not None else None
-            if root is None:
-                installs.append(Install("claude", "clone", "skipped", "not a git clone", **common))
-            else:
-                installs.append(Install("claude", "clone", None, "clone marketplace", path=root, **common))
-    return installs
+    return [_claude_install(item, market_sources, records) for item in mine]
 
 
 def _is_refract_package(path: Path) -> bool:
@@ -363,6 +369,25 @@ def _is_refract_package(path: Path) -> bool:
     return False
 
 
+def _pi_install(entry: Any, base: Path) -> Install | None:
+    source = entry.get("source") if isinstance(entry, dict) else entry
+    if not isinstance(source, str):
+        return None
+    parsed = _parse_source(source, base)
+    if parsed is None:
+        if source.strip().startswith("-") or "refract" in source.lower():
+            return Install("pi", "unknown", "skipped", _UNTRUSTED, ref=source)
+        return None
+    if parsed[0] == "github":
+        return Install("pi", "github", None, "github package", ref=source)
+    if not _is_refract_package(parsed[1]):
+        return None
+    root = _git_root(parsed[1])
+    if root is None:
+        return Install("pi", "clone", "skipped", _NOT_A_GIT_CLONE, ref=source)
+    return Install("pi", "clone", None, "local package", path=root, ref=source)
+
+
 def discover_pi() -> list[Install]:
     override = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
     base = Path(override).expanduser() if override else Path.home() / ".pi" / "agent"
@@ -373,27 +398,8 @@ def discover_pi() -> list[Install]:
     except (OSError, ValueError):
         return [Install("pi", "unknown", "failed", "cannot read settings")]
     packages = data.get("packages") if isinstance(data, dict) else None
-    installs = []
-    for entry in packages if isinstance(packages, list) else []:
-        source = entry.get("source") if isinstance(entry, dict) else entry
-        if not isinstance(source, str):
-            continue
-        parsed = _parse_source(source, base)
-        if parsed is None:
-            if source.strip().startswith("-") or "refract" in source.lower():
-                installs.append(Install("pi", "unknown", "skipped", _UNTRUSTED, ref=source))
-            continue
-        if parsed[0] == "github":
-            installs.append(Install("pi", "github", None, "github package", ref=source))
-            continue
-        if not _is_refract_package(parsed[1]):
-            continue
-        root = _git_root(parsed[1])
-        if root is None:
-            installs.append(Install("pi", "clone", "skipped", "not a git clone", ref=source))
-        else:
-            installs.append(Install("pi", "clone", None, "local package", path=root, ref=source))
-    return installs
+    entries = packages if isinstance(packages, list) else []
+    return [install for install in (_pi_install(entry, base) for entry in entries) if install is not None]
 
 
 def discover_detect_only(host: str) -> list[Install]:
@@ -434,13 +440,13 @@ def _clone_blocker(root: Path) -> _CloneResult | None:
     """The reason ``root`` must not be pulled, or None when it is clean, on a branch, and has an upstream."""
     proc = _git(root, "rev-parse", "--absolute-git-dir")
     if proc is None or proc.returncode != 0:
-        return _CloneResult("failed", "cannot check")
+        return _CloneResult("failed", _CANNOT_CHECK)
     git_dir = Path(proc.stdout.strip())
     if any((git_dir / marker).exists() for marker in ("MERGE_HEAD", "rebase-merge", "rebase-apply")):
         return _CloneResult("skipped", "unfinished operation")
     proc = _git(root, "status", "--porcelain")
     if proc is None or proc.returncode != 0:
-        return _CloneResult("failed", "cannot check")
+        return _CloneResult("failed", _CANNOT_CHECK)
     if proc.stdout.strip():
         return _CloneResult("skipped", "dirty")
     proc = _git(root, "symbolic-ref", "-q", "HEAD")
@@ -458,14 +464,14 @@ def classify_clone(root: Path) -> _CloneResult:
         return blocker
     proc = _git(root, "fetch", timeout=FETCH_TIMEOUT_S)
     if proc is None or proc.returncode != 0:
-        return _CloneResult("failed", "cannot check")
+        return _CloneResult("failed", _CANNOT_CHECK)
     proc = _git(root, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
     try:
         ahead, behind = (int(n) for n in proc.stdout.split()) if proc and proc.returncode == 0 else (None, None)
     except ValueError:
         ahead = behind = None
     if ahead is None or behind is None:
-        return _CloneResult("failed", "cannot check")
+        return _CloneResult("failed", _CANNOT_CHECK)
     proc = _git(root, "rev-parse", "--short=12", "@{upstream}")
     sha = proc.stdout.strip() if proc is not None and proc.returncode == 0 else ""
     commit = sha if _SHA_RE.match(sha) else None
@@ -501,7 +507,7 @@ def _version_tuple(text: str) -> tuple[int, ...]:
 
 def check_release(installed: str | None) -> _ReleaseResult:
     """Compare the latest stable release with ``installed``. Remote text never leaves this function."""
-    failed = _ReleaseResult("failed", "cannot check")
+    failed = _ReleaseResult("failed", _CANNOT_CHECK)
     if installed is None or not _VERSION_RE.match(installed):
         return failed
     request = Request(
@@ -547,6 +553,48 @@ def _claude_reinstall_command(plugin_id: str, scope: str | None) -> str:
     return f"from the project directory run: {manual}"
 
 
+def _stale_claude_cache(install: Install, path: Path, heads: dict[Path, str | None]) -> tuple[str, str, bool] | None:
+    """(state, detail, cache_only) when the Claude plugin cache differs from the clone HEAD, else None."""
+    if path not in heads:
+        proc = _git(path, "rev-parse", "HEAD")
+        head = proc.stdout.strip() if proc is not None and proc.returncode == 0 else ""
+        heads[path] = head if _SHA_RE.match(head) else None
+    head = heads[path]
+    sha = install.installed_sha or ""
+    if not (_SHA_RE.match(sha) and head and not _same_commit(sha, head)):
+        return None
+    if install.scope == "user":
+        return "update", f"plugin cache {sha[:12]} differs from clone {head[:12]}", True
+    return "manual", _claude_reinstall_command(install.ref or "<id>", install.scope), False
+
+
+def _clone_component(
+    install: Install, path: Path, clones: dict[Path, _CloneResult], heads: dict[Path, str | None]
+) -> tuple[str, str, bool]:
+    if path not in clones:
+        clones[path] = classify_clone(path)
+    result = clones[path]
+    if install.name == "claude" and result.state == "current" and install.installed_sha is not None:
+        stale = _stale_claude_cache(install, path, heads)
+        if stale is not None:
+            return stale
+    return result.state, result.detail, False
+
+
+def _release_for(install: Install, server_version: str | None, releases: dict[str, _ReleaseResult]) -> _ReleaseResult:
+    installed = install.version or server_version
+    key = installed or ""
+    if key not in releases:
+        releases[key] = check_release(installed)
+    return releases[key]
+
+
+def _newer_version(latest: str | None, candidate: str | None) -> str | None:
+    if candidate and (latest is None or _version_tuple(candidate) > _version_tuple(latest)):
+        return candidate
+    return latest
+
+
 def classify(installs: list[Install]) -> CheckResult:
     clones: dict[Path, _CloneResult] = {}
     heads: dict[Path, str | None] = {}
@@ -558,32 +606,11 @@ def classify(installs: list[Install]) -> CheckResult:
         state, detail = install.state, install.detail
         cache_only = False
         if state is None and install.source == "clone" and install.path is not None:
-            if install.path not in clones:
-                clones[install.path] = classify_clone(install.path)
-            result = clones[install.path]
-            state, detail = result.state, result.detail
-            if install.name == "claude" and state == "current" and install.installed_sha is not None:
-                if install.path not in heads:
-                    proc = _git(install.path, "rev-parse", "HEAD")
-                    head = proc.stdout.strip() if proc is not None and proc.returncode == 0 else ""
-                    heads[install.path] = head if _SHA_RE.match(head) else None
-                head = heads[install.path]
-                if _SHA_RE.match(install.installed_sha) and head and not _same_commit(install.installed_sha, head):
-                    if install.scope == "user":
-                        state = "update"
-                        detail = f"plugin cache {install.installed_sha[:12]} differs from clone {head[:12]}"
-                        cache_only = True
-                    else:
-                        state, detail = "manual", _claude_reinstall_command(install.ref or "<id>", install.scope)
+            state, detail, cache_only = _clone_component(install, install.path, clones, heads)
         elif state is None:
-            installed = install.version or server_version
-            key = installed or ""
-            if key not in releases:
-                releases[key] = check_release(installed)
-            rel = releases[key]
+            rel = _release_for(install, server_version, releases)
             state, detail = rel.state, rel.detail
-            if rel.version and (latest_version is None or _version_tuple(rel.version) > _version_tuple(latest_version)):
-                latest_version = rel.version
+            latest_version = _newer_version(latest_version, rel.version)
         components.append(Component(install.name, install.source, state or "failed", detail, cache_only))
     server_clone = next((i.path for i in installs if i.name == "server" and i.path in clones), None)
     ordered = ([server_clone] if server_clone is not None else []) + sorted(clones, key=str)
@@ -728,6 +755,7 @@ _MANUAL_STOP = (
     "Stop the running Refract daemon once by hand, then run refract update again. Nothing was changed."
 )
 _MAY_BE_STOPPING = "The daemon may be stopping; run: refract serve"
+_UNCHANGED = "Nothing was changed."
 _Endpoint = tuple[str, int]
 
 
@@ -790,17 +818,18 @@ def _configured_endpoint() -> _Endpoint:
     return (host if isinstance(host, str) and host else "127.0.0.1"), (port if ok_port else DEFAULT_PORT)
 
 
-def _latch(out: Callable[[str], None]) -> tuple[bool, _Endpoint | None]:
-    """Latch the daemon shut when idle. Returns (proceed, endpoint of a daemon this run stopped)."""
-    unchanged = "Nothing was changed."
-    info = _read_daemon_file()
-    if info is None:
-        host, port = _configured_endpoint()
-        if _port_open(host, port):
-            out(_MANUAL_STOP)
-            return False, None
-        return True, None
-    token, host, port = info
+def _shutdown_http_failure(code: int) -> str:
+    if code == 404:
+        return _MANUAL_STOP
+    if code == 401:
+        return f"Failed: the daemon rejected the runtime token. {_UNCHANGED}"
+    if code == 503:
+        return f"Failed: the daemon cannot stop on request. {_UNCHANGED}"
+    return f"Failed: the daemon answered HTTP {code}. {_UNCHANGED}"
+
+
+def _post_shutdown(token: str, host: str, port: int, out: Callable[[str], None]) -> bytes | bool:
+    """POST the shutdown request. Returns the raw reply, True to proceed (nothing is listening), or False after reporting a failure."""
     request = urllib.request.Request(
         f"http://{_netloc(host, port)}/dashboard/api/shutdown",
         data=b"",
@@ -809,45 +838,67 @@ def _latch(out: Callable[[str], None]) -> tuple[bool, _Endpoint | None]:
     )
     try:
         with _open_direct(request, LATCH_POST_TIMEOUT_S) as response:
-            raw = response.read(MAX_REPLY_BYTES)
+            return response.read(MAX_REPLY_BYTES)
     except HTTPError as exc:
-        if exc.code == 404:
-            out(_MANUAL_STOP)
-        elif exc.code == 401:
-            out(f"Failed: the daemon rejected the runtime token. {unchanged}")
-        elif exc.code == 503:
-            out(f"Failed: the daemon cannot stop on request. {unchanged}")
-        else:
-            out(f"Failed: the daemon answered HTTP {exc.code}. {unchanged}")
-        return False, None
+        out(_shutdown_http_failure(exc.code))
     except (URLError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, ConnectionRefusedError):
-            return True, None
+            return True
         if isinstance(reason, TimeoutError):
             out(f"Failed: the daemon did not answer in time. {_MAY_BE_STOPPING} No update was applied.")
-            return False, None
-        out(f"Failed: cannot reach the daemon. {unchanged}")
-        return False, None
+        else:
+            out(f"Failed: cannot reach the daemon. {_UNCHANGED}")
+    return False
+
+
+def _shutdown_reply(raw: bytes) -> tuple[bool, int, int] | None:
+    """(stopping, running, queued) from the shutdown reply, or None when it is unreadable."""
     try:
         reply = json.loads(raw)
     except ValueError:
         reply = None
-    stopping = reply.get("stopping") if isinstance(reply, dict) else None
-    running = _count(reply.get("running")) if isinstance(reply, dict) else None
-    queued = _count(reply.get("queued")) if isinstance(reply, dict) else None
+    if not isinstance(reply, dict):
+        return None
+    stopping, running, queued = reply.get("stopping"), _count(reply.get("running")), _count(reply.get("queued"))
     if not isinstance(stopping, bool) or running is None or queued is None:
-        out(f"Failed: the daemon sent an unreadable reply. {unchanged}")
-        return False, None
-    if not stopping:
-        out(f"Refused: {running} running, {queued} queued job(s). {unchanged}")
-        return False, None
+        return None
+    return stopping, running, queued
+
+
+def _wait_for_stop(host: str, port: int, out: Callable[[str], None]) -> bool:
     deadline = time.monotonic() + LATCH_WAIT_S
     while (refract_home() / DAEMON_FILE).exists() or _port_open(host, port):
         if time.monotonic() >= deadline:
             out(f"Failed: the daemon did not stop in time. {_MAY_BE_STOPPING} No update was applied.")
-            return False, None
+            return False
         time.sleep(POLL_S)
+    return True
+
+
+def _latch(out: Callable[[str], None]) -> tuple[bool, _Endpoint | None]:
+    """Latch the daemon shut when idle. Returns (proceed, endpoint of a daemon this run stopped)."""
+    info = _read_daemon_file()
+    if info is None:
+        host, port = _configured_endpoint()
+        if _port_open(host, port):
+            out(_MANUAL_STOP)
+            return False, None
+        return True, None
+    token, host, port = info
+    raw = _post_shutdown(token, host, port, out)
+    if isinstance(raw, bool):
+        return raw, None
+    reply = _shutdown_reply(raw)
+    if reply is None:
+        out(f"Failed: the daemon sent an unreadable reply. {_UNCHANGED}")
+        return False, None
+    stopping, running, queued = reply
+    if not stopping:
+        out(f"Refused: {running} running, {queued} queued job(s). {_UNCHANGED}")
+        return False, None
+    if not _wait_for_stop(host, port, out):
+        return False, None
     return True, (host, port)
 
 
@@ -886,7 +937,7 @@ def _pull(root: Path, pulls: dict[Path, _CloneResult]) -> _CloneResult:
     return pulls[root]
 
 
-def _manual_command(install: Install, result: CheckResult) -> str:
+def _manual_command(install: Install) -> str:
     if install.name == "server":
         return shlex.join(["uv", "pip", "install", "-p", sys.executable, _SERVER_SPEC.format(tag="")])
     if install.name == "codex":
@@ -911,7 +962,7 @@ def _apply_server(install: Install, result: CheckResult) -> tuple[str, str]:
             return "manual", shlex.join(["uv", "pip", "install", "-p", sys.executable, spec])
         args = ["uv", "tool", "install", "--force", spec]
     else:
-        return "manual", _manual_command(install, result)
+        return "manual", _manual_command(install)
     reason = _step(args)
     return ("failed", f"install failed ({reason})") if reason else ("updated", "")
 
@@ -931,6 +982,50 @@ def _same_commit(sha: str | None, head: str) -> bool:
     return sha is not None and (head.startswith(sha) or sha.startswith(head))
 
 
+def _claude_reinstall(plugin_id: str, scope: str, head: str) -> tuple[str, str] | None:
+    """Uninstall and reinstall the plugin; a failure result, or None once the cache matches ``head``."""
+    restore = shlex.join(["claude", "plugin", "install", plugin_id, "-s", scope])
+    reason = _step(["claude", "plugin", "uninstall", plugin_id, "-s", scope, "--keep-data"])
+    if reason:
+        return "failed", f"uninstall failed ({reason})"
+    reason = _step(["claude", "plugin", "install", plugin_id, "-s", scope])
+    if reason:
+        return "failed", f"reinstall failed ({reason}); restore with: {restore}"
+    if not _same_commit(_record_sha(_installed_records(), plugin_id, scope), head):
+        return "failed", "plugin cache still differs from the clone"
+    return None
+
+
+def _claude_sync_cache(path: Path, plugin_id: str, scope: str | None) -> tuple[str, str] | None:
+    """A failure result, or None once the plugin cache matches the clone HEAD."""
+    proc = _git(path, "rev-parse", "HEAD")
+    head = proc.stdout.strip() if proc is not None and proc.returncode == 0 else ""
+    if not head:
+        return "failed", "cannot read the clone HEAD"
+    if _same_commit(_record_sha(_installed_records(), plugin_id, scope), head):
+        return None
+    if scope != "user":
+        # Non-user scopes act on the current directory's project; never run them from here.
+        manual = _claude_reinstall_command(plugin_id, scope)
+        return "failed", f"plugin cache differs from the clone; {manual}"
+    return _claude_reinstall(plugin_id, scope, head)
+
+
+def _claude_enabled_drift(plugin_id: str, scope: str | None, before: bool) -> tuple[str, str] | None:
+    """A failure result when the enabled state changed during the update, else None."""
+    after = _claude_enabled(plugin_id, scope)
+    if after is before:
+        return None
+    if after is None:
+        verb = "install"
+    elif before:
+        verb = "enable"
+    else:
+        verb = "disable"
+    restore = shlex.join(["claude", "plugin", verb, plugin_id, *(["-s", scope] if scope else [])])
+    return "failed", f"enabled state was not preserved; restore with: {restore}"
+
+
 def _apply_claude(install: Install) -> tuple[str, str]:
     plugin_id, scope = install.ref, install.scope
     if plugin_id is None or not _ID_RE.match(plugin_id):
@@ -938,7 +1033,6 @@ def _apply_claude(install: Install) -> tuple[str, str]:
     market = install.marketplace
     if market is None or not _NAME_RE.match(market):
         return "failed", "invalid marketplace name"
-    scope_args = ["-s", scope] if scope else []
     before = _claude_enabled(plugin_id, scope)
     for label, args in (
         ("marketplace update", ["claude", "plugin", "marketplace", "update", market]),
@@ -947,32 +1041,10 @@ def _apply_claude(install: Install) -> tuple[str, str]:
         reason = _step(args)
         if reason:
             return "failed", f"{label} failed ({reason})"
-    if install.source == "clone" and install.path is not None:
-        proc = _git(install.path, "rev-parse", "HEAD")
-        head = proc.stdout.strip() if proc is not None and proc.returncode == 0 else ""
-        if not head:
-            return "failed", "cannot read the clone HEAD"
-        if not _same_commit(_record_sha(_installed_records(), plugin_id, scope), head):
-            if scope != "user":
-                # Non-user scopes act on the current directory's project; never run them from here.
-                manual = _claude_reinstall_command(plugin_id, scope)
-                return "failed", f"plugin cache differs from the clone; {manual}"
-            restore = shlex.join(["claude", "plugin", "install", plugin_id, "-s", scope])
-            reason = _step(["claude", "plugin", "uninstall", plugin_id, "-s", scope, "--keep-data"])
-            if reason:
-                return "failed", f"uninstall failed ({reason})"
-            reason = _step(["claude", "plugin", "install", plugin_id, "-s", scope])
-            if reason:
-                return "failed", f"reinstall failed ({reason}); restore with: {restore}"
-            if not _same_commit(_record_sha(_installed_records(), plugin_id, scope), head):
-                return "failed", "plugin cache still differs from the clone"
-    if before is not None:
-        after = _claude_enabled(plugin_id, scope)
-        if after is not before:
-            verb = "install" if after is None else "enable" if before else "disable"
-            restore = shlex.join(["claude", "plugin", verb, plugin_id, *scope_args])
-            return "failed", f"enabled state was not preserved; restore with: {restore}"
-    return "updated", ""
+    failure = _claude_sync_cache(install.path, plugin_id, scope) if install.source == "clone" and install.path is not None else None
+    if failure is None and before is not None:
+        failure = _claude_enabled_drift(plugin_id, scope, before)
+    return failure or ("updated", "")
 
 
 def _apply_pi(install: Install) -> tuple[str, str]:
@@ -989,7 +1061,7 @@ def _apply_install(install: Install, component: Component, result: CheckResult, 
         return Outcome(install.name, install.source, status, detail)
 
     if component.state == "manual":
-        return outcome("manual", component.detail if install.name == "claude" else _manual_command(install, result))
+        return outcome("manual", component.detail if install.name == "claude" else _manual_command(install))
     if component.state != "update":
         return outcome(component.state, component.detail)
     if install.source == "clone" and install.path is not None and not component.cache_only:

@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Annotated, Any, AsyncIterator, Literal, ParamSpec, TypeVar, cast
+from typing import Annotated, Any, AsyncIterator, Literal, cast
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
@@ -31,12 +31,15 @@ from refract.dashboard import DashboardState, register_dashboard_routes
 from refract.logging_setup import configure as configure_logging, get_logger, log_context
 from refract.models import JobSummary, JobView, TERMINAL_STATES
 from refract.workers import run_sync
-from refract.runtime import OrchestrationError, Runtime
+from refract.runtime import UNKNOWN_JOB_MESSAGE, OrchestrationError, Runtime
 from refract.workflows import BUILTIN_WORKFLOWS
 
 
 log = get_logger("server")
 _MCP_WAIT_TIMEOUT_S = 3600
+_LIST_JOB_ID_ACTION = "Call list with the project path and use a listed job ID."
+_INVALID_TOOL_ARGUMENTS = "Tool arguments are invalid."
+_INVALID_TOOL_ARGUMENTS_ACTION = "Correct the arguments using the tool schema and call the tool again."
 _MCP_HEARTBEAT_INTERVAL_S: float = 30.0
 _MAX_RESPONSE_CHARS = 30_000
 _MAX_RESPONSE_BYTES = 9_000
@@ -188,7 +191,7 @@ def _recognized_sdk_error(tool_name: str, text: str) -> dict[str, Any] | None:
 
 def _validation_error_text(text: str) -> bool:
     first_line = text.splitlines()[0] if text else ""
-    if first_line.startswith("1 validation error for ") or first_line.startswith("ValidationError:"):
+    if first_line.startswith(("1 validation error for ", "ValidationError:")):
         return True
     count = first_line.split(" ", 1)[0]
     return count.isdigit() and " validation errors for " in first_line
@@ -273,8 +276,8 @@ def _normalize_tool_error(wire_result: Mapping[str, Any], tool_name: str, reques
         return _refract_error_result(
             RefractError(
                 "invalid_request",
-                "Tool arguments are invalid.",
-                "Correct the arguments using the tool schema and call the tool again.",
+                _INVALID_TOOL_ARGUMENTS,
+                _INVALID_TOOL_ARGUMENTS_ACTION,
             )
         )
     if prefix and error_text.startswith(prefix) and error_text[len(prefix) :].startswith("Unknown tool"):
@@ -326,8 +329,8 @@ async def _dispatch_tool_request(
         return _refract_error_result(
             RefractError(
                 "invalid_request",
-                "Tool arguments are invalid.",
-                "Correct the arguments using the tool schema and call the tool again.",
+                _INVALID_TOOL_ARGUMENTS,
+                _INVALID_TOOL_ARGUMENTS_ACTION,
             )
         )
     try:
@@ -338,8 +341,8 @@ async def _dispatch_tool_request(
         return _refract_error_result(
             RefractError(
                 "invalid_request",
-                "Tool arguments are invalid.",
-                "Correct the arguments using the tool schema and call the tool again.",
+                _INVALID_TOOL_ARGUMENTS,
+                _INVALID_TOOL_ARGUMENTS_ACTION,
             )
         )
     except MCPError:
@@ -381,10 +384,6 @@ Rules:
 - Record orchestrated work as cards: card_create(path, title) -> card; card_move(card_id, state, job_ids) moves it through todo, in_progress, in_review, done, cancelled and links jobs; card_list(path) -> cards.
 - retry(job_id) creates a new job on result.next_target of a succeeded, failed, cancelled, or interrupted job. retry(job_id, target=X) pins a target.
 - On targets_unavailable, wait retry_after_s seconds before retrying. Follow each error next_action."""
-
-
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
 
 
 def _runtime(ctx: Context) -> Runtime:
@@ -460,10 +459,10 @@ def _progress_token_present(context: Any) -> bool:
         return False
 
 
-def _logged_request(operation: str) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
-    def decorate(function: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+def _logged_request[**P, R](operation: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
+    def decorate(function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         @wraps(function)
-        async def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        async def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
             context = next(
                 (value for value in (*args, *kwargs.values()) if isinstance(value, Context) or hasattr(value, "request_context")),
                 None,
@@ -576,23 +575,36 @@ async def _wait_with_progress(runtime: Runtime, ctx: Context, job_id: str, timeo
             try:
                 await asyncio.wait_for(asyncio.shield(wait_task), timeout=interval)
             except TimeoutError:
-                if wait_task.done():
-                    # A coarse clock (Windows) can fire the heartbeat timer in the same tick the wait finishes.
+                next_progress = await _heartbeat(runtime, ctx, job_id, wait_task, progress)
+                if next_progress is None:
                     break
-                refreshed = await run_sync(runtime.database.job, job_id)
-                if refreshed is None:
-                    raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
-                if refreshed.state in TERMINAL_STATES:
-                    break
-                progress += 1.0
-                await _report_progress(ctx, refreshed, progress)
+                progress = next_progress
     finally:
-        if not wait_task.done():
-            wait_task.cancel()
-            result, = await asyncio.gather(wait_task, return_exceptions=True)
-            if isinstance(result, Exception):
-                log.warning("Job wait cleanup failed", exc_info=result,
-                            extra={"event": "job.wait_cleanup_failed", "job_id": job_id})
+        await _cancel_wait(wait_task, job_id)
+
+
+async def _heartbeat(runtime: Runtime, ctx: Context, job_id: str, wait_task: asyncio.Task[Any], progress: float) -> float | None:
+    """Report one progress heartbeat; return the new progress, or None when the wait is over."""
+    if wait_task.done():
+        # A coarse clock (Windows) can fire the heartbeat timer in the same tick the wait finishes.
+        return None
+    refreshed = await run_sync(runtime.database.job, job_id)
+    if refreshed is None:
+        raise OrchestrationError(UNKNOWN_JOB_MESSAGE, code="unknown_job", next_action=_LIST_JOB_ID_ACTION)
+    if refreshed.state in TERMINAL_STATES:
+        return None
+    progress += 1.0
+    await _report_progress(ctx, refreshed, progress)
+    return progress
+
+
+async def _cancel_wait(wait_task: asyncio.Task[Any], job_id: str) -> None:
+    if not wait_task.done():
+        wait_task.cancel()
+        result, = await asyncio.gather(wait_task, return_exceptions=True)
+        if isinstance(result, Exception):
+            log.warning("Job wait cleanup failed", exc_info=result,
+                        extra={"event": "job.wait_cleanup_failed", "job_id": job_id})
 
 
 def _card_payload(card: Mapping[str, Any]) -> dict[str, Any]:
@@ -695,13 +707,13 @@ async def wait(
     runtime = _runtime(ctx)
     job = await run_sync(runtime.database.job, job_id)
     if job is None:
-        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
+        raise OrchestrationError(UNKNOWN_JOB_MESSAGE, code="unknown_job", next_action=_LIST_JOB_ID_ACTION)
     await _report_progress(ctx, job, 0.0)
     if job.state not in TERMINAL_STATES and timeout_s > 0:
         await _wait_with_progress(runtime, ctx, job_id, timeout_s)
     current = await run_sync(runtime.database.job, job_id)
     if current is None:
-        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
+        raise OrchestrationError(UNKNOWN_JOB_MESSAGE, code="unknown_job", next_action=_LIST_JOB_ID_ACTION)
     return await _wait_response(runtime, current)
 
 
@@ -751,7 +763,7 @@ async def cancel(
     runtime = _runtime(ctx)
     job = await run_sync(runtime.database.job, job_id)
     if job is None:
-        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
+        raise OrchestrationError(UNKNOWN_JOB_MESSAGE, code="unknown_job", next_action=_LIST_JOB_ID_ACTION)
     if job.state in TERMINAL_STATES:
         return _render_payload({"job": await _job_payload(runtime, job)})
     await runtime.cancel(job_id)
@@ -802,7 +814,7 @@ async def answer(
     runtime = _runtime(ctx)
     job = await run_sync(runtime.database.job, job_id)
     if job is None:
-        raise OrchestrationError("Job does not exist.", code="unknown_job", next_action="Call list with the project path and use a listed job ID.")
+        raise OrchestrationError(UNKNOWN_JOB_MESSAGE, code="unknown_job", next_action=_LIST_JOB_ID_ACTION)
     await runtime.job_answer(job_id, answer)
     current = await run_sync(runtime.database.job, job_id)
     if current is None:

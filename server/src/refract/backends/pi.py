@@ -49,20 +49,25 @@ def _is_context_overflow(diagnostic: str) -> bool:
     return bool(_CONTEXT_OVERFLOW_PATTERN.search(diagnostic))
 
 
-def _event_model(event: dict[str, Any]) -> str | None:
-    """Return the model named by one event: its assistant message, else its last assistant message."""
-    msg = event.get("message")
-    if isinstance(msg, dict) and msg.get("role") == "assistant":
-        model = msg.get("model")
+def _assistant_model(message: Any) -> str | None:
+    if isinstance(message, dict) and message.get("role") == "assistant":
+        model = message.get("model")
         if isinstance(model, str) and model:
             return model
+    return None
+
+
+def _event_model(event: dict[str, Any]) -> str | None:
+    """Return the model named by one event: its assistant message, else its last assistant message."""
+    model = _assistant_model(event.get("message"))
+    if model:
+        return model
     messages = event.get("messages")
     if isinstance(messages, list):
         for m in reversed(messages):
-            if isinstance(m, dict) and m.get("role") == "assistant":
-                model = m.get("model")
-                if isinstance(model, str) and model:
-                    return model
+            model = _assistant_model(m)
+            if model:
+                return model
     return None
 
 
@@ -223,23 +228,25 @@ class PiRun:
             "data": tool_data,
         })
 
+    def _response_id(self, msg: dict[str, Any]) -> str | None:
+        """Return the ID to record this assistant message under, or None when it was already counted."""
+        resp_id = str(msg.get("responseId") or msg.get("id") or "")
+        if resp_id:
+            return None if resp_id in self.recorded_responses else resp_id
+        if self.turn_counter == 0:
+            self.turn_counter = 1
+            self.turn_completed_in_current_turn = False
+        elif self.turn_completed_in_current_turn:
+            return None
+        assigned_id = f"turn_{self.turn_counter}"
+        return None if assigned_id in self.recorded_responses else assigned_id
+
     def _message_usage(self, msg: Any) -> None:
         if not isinstance(msg, dict) or msg.get("role") != "assistant":
             return
-        resp_id = str(msg.get("responseId") or msg.get("id") or "")
-        if resp_id:
-            if resp_id in self.recorded_responses:
-                return
-            assigned_id = resp_id
-        else:
-            if self.turn_counter == 0:
-                self.turn_counter = 1
-                self.turn_completed_in_current_turn = False
-            elif self.turn_completed_in_current_turn:
-                return
-            assigned_id = f"turn_{self.turn_counter}"
-            if assigned_id in self.recorded_responses:
-                return
+        assigned_id = self._response_id(msg)
+        if assigned_id is None:
+            return
 
         self.recorded_responses.add(assigned_id)
         self.turn_completed_in_current_turn = True

@@ -70,8 +70,10 @@ def test_create_job_persists_fresh_flag(tmp_path) -> None:
     )
     standard_record = database.job_record("standard-job")
     fresh_record = database.job_record("fresh-job")
-    assert standard_record and standard_record["fresh"] == 0
-    assert fresh_record and fresh_record["fresh"] == 1
+    assert standard_record
+    assert standard_record["fresh"] == 0
+    assert fresh_record
+    assert fresh_record["fresh"] == 1
     database.close()
 
 
@@ -365,7 +367,8 @@ def test_probe_version_restarts_when_wal_vanishes_after_the_existence_check(tmp_
     database = Database(tmp_path / "refract.db")
     wal = Path(f"{database._path}-wal")
     expected = database._probe_version()
-    assert expected and wal.exists()
+    assert expected
+    assert wal.exists()
 
     def vanish(source) -> None:
         # A closing daemon checkpoints the WAL into the main file, then deletes it.

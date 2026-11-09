@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import subprocess
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from refract.config import DaemonConfig, ProfileDeclaration, TargetConfig, TargetSelection
@@ -52,6 +54,33 @@ def config(home: Path, targets: tuple[TargetConfig, ...] | None = None) -> Daemo
             )
         },
     )
+
+
+@dataclasses.dataclass(frozen=True)
+class Raised:
+    """Expected failure of a characterization case: exception type and exact message."""
+
+    exc_type: type[Exception]
+    message: str
+
+
+def plain(value: object) -> object:
+    """Order-preserving structural form: dicts keep key order, dataclasses keep field names."""
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return (type(value).__name__, [(f.name, plain(getattr(value, f.name))) for f in dataclasses.fields(value)])
+    if isinstance(value, dict):
+        return ("dict", [(plain(key), plain(item)) for key, item in value.items()])
+    if isinstance(value, (list, tuple)):
+        return type(value)(plain(item) for item in value)
+    return (type(value).__name__, value)
+
+
+def outcome(call: Callable[[], object]) -> object:
+    """Return the structural form of the result of `call`, or of the `Raised` it produced."""
+    try:
+        return plain(call())
+    except Exception as exc:  # noqa: BLE001
+        return plain(Raised(type(exc), str(exc)))
 
 
 class FakeDrivers:

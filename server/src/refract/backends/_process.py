@@ -81,6 +81,127 @@ def _stdin_outcome(failure: BaseException) -> tuple[str, str]:
     return f"stdin write failed: {type(failure).__name__}: {failure}", "stdin_failed"
 
 
+def _stop_reason(
+    now: float,
+    deadline: float | None,
+    cancel: asyncio.Event | None,
+    writer: asyncio.Future[None] | None,
+    outcome: ProcessOutcome,
+) -> str:
+    """Return the first stop reason in check order: cancel, deadline, stdin failure. Empty means keep going."""
+    if cancel is not None and cancel.is_set():
+        return "cancelled"
+    if deadline is not None and now >= deadline:
+        return "timeout"
+    failure = _stdin_failure(writer)
+    if failure is None:
+        return ""
+    outcome.error, outcome.error_class = _stdin_outcome(failure)
+    return "failed"
+
+
+def _note_exit(process: asyncio.subprocess.Process, exited_at: float | None, now: float) -> float | None:
+    """Return when the leader was first seen exited, or ``exited_at`` unchanged while it still runs."""
+    if process.returncode is not None and exited_at is None:
+        return now
+    return exited_at
+
+
+async def _read_one(
+    stdout: asyncio.StreamReader,
+    tail: OutputTail,
+    on_line: LineHandler,
+    outcome: ProcessOutcome,
+) -> str:
+    """Read and handle one line. Return "" to keep looping, "eof" at end of output, or "failed"."""
+    try:
+        raw = await asyncio.wait_for(stdout.readline(), POLL_INTERVAL_S)
+    except asyncio.TimeoutError:
+        return ""
+    except ValueError:
+        outcome.error, outcome.error_class = "output line exceeds 1 MiB", "execution_error"
+        return "failed"
+    if not raw:
+        return "eof"
+    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+    tail.append(line)
+    try:
+        await on_line(line)
+    except Exception as exc:  # noqa: BLE001 - a parser or emitter failure fails the attempt
+        outcome.error, outcome.error_class = f"{type(exc).__name__}: {exc}", "execution_error"
+        return "failed"
+    return ""
+
+
+async def _pump(
+    process: asyncio.subprocess.Process,
+    writer: asyncio.Future[None] | None,
+    deadline: float | None,
+    cancel: asyncio.Event | None,
+    on_line: LineHandler,
+    tail: OutputTail,
+    outcome: ProcessOutcome,
+) -> str:
+    """Poll the child until a stop reason, leader exit plus grace, or EOF. Return the stop reason or ""."""
+    assert process.stdout is not None
+    exited_at: float | None = None
+    eof = False
+    while True:
+        now = time.monotonic()
+        stop = _stop_reason(now, deadline, cancel, writer, outcome)
+        if stop:
+            return stop
+        exited_at = _note_exit(process, exited_at, now)
+        if exited_at is not None and (eof or now - exited_at >= EXIT_GRACE_S):
+            return ""
+        if eof:
+            await asyncio.sleep(POLL_INTERVAL_S)
+            continue
+        step = await _read_one(process.stdout, tail, on_line, outcome)
+        if step == "failed":
+            return step
+        eof = step == "eof"
+
+
+async def _finish_stdin(writer: asyncio.Future[None], outcome: ProcessOutcome) -> str:
+    """Give the stdin writer ``EXIT_GRACE_S`` to finish. Return "failed" when it failed, else ""."""
+    await asyncio.wait({writer}, timeout=EXIT_GRACE_S)
+    failure = _stdin_failure(writer)
+    if failure is None:
+        return ""
+    outcome.error, outcome.error_class = _stdin_outcome(failure)
+    return "failed"
+
+
+def _map_stop(outcome: ProcessOutcome, stop: str, name: str) -> None:
+    """Set the final error from the stop reason, or from a nonzero exit when nothing stopped the run."""
+    if stop == "cancelled":
+        outcome.error, outcome.error_class = "backend command cancelled", "cancelled"
+    elif stop == "timeout":
+        outcome.error, outcome.error_class = f"{name} subprocess timed out", "timeout"
+    elif not stop and outcome.returncode:
+        outcome.error = f"backend command exited with status {outcome.returncode}"
+        outcome.error_class = "execution_error"
+
+
+async def _spawn(
+    command: list[str],
+    payload: bytes | None,
+    env: dict[str, str] | None,
+    cwd: str | None,
+) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.DEVNULL if payload is None else asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=cwd,
+        env=None if env is None else {**os.environ, **env},
+        limit=LINE_LIMIT_BYTES,
+        **process_group_kwargs(),
+    )
+
+
 async def run_process(
     argv: list[str],
     stdin: str | None,
@@ -105,73 +226,18 @@ async def run_process(
     name = os.path.basename(argv[0])
     started_at = time.monotonic()
     command = prepare_command([shutil.which(argv[0]) or argv[0], *argv[1:]])
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdin=asyncio.subprocess.DEVNULL if payload is None else asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        cwd=cwd,
-        env=None if env is None else {**os.environ, **env},
-        limit=LINE_LIMIT_BYTES,
-        **process_group_kwargs(),
-    )
+    process = await _spawn(command, payload, env, cwd)
     assert process.stdout is not None
     writer = asyncio.ensure_future(_write_stdin(process.stdin, payload)) if payload is not None else None
     tail = OutputTail()
     outcome = ProcessOutcome()
-    stop = ""
-    exited_at: float | None = None
-    eof = False
     try:
         hook = spawn_hook.get()
         if hook is not None:
             await hook(process.pid)
-        while True:
-            now = time.monotonic()
-            if cancel is not None and cancel.is_set():
-                stop = "cancelled"
-                break
-            if deadline is not None and now >= deadline:
-                stop = "timeout"
-                break
-            failure = _stdin_failure(writer)
-            if failure is not None:
-                stop = "failed"
-                outcome.error, outcome.error_class = _stdin_outcome(failure)
-                break
-            if process.returncode is not None:
-                exited_at = exited_at if exited_at is not None else now
-                if eof or now - exited_at >= EXIT_GRACE_S:
-                    break
-            if eof:
-                await asyncio.sleep(POLL_INTERVAL_S)
-                continue
-            try:
-                raw = await asyncio.wait_for(process.stdout.readline(), POLL_INTERVAL_S)
-            except asyncio.TimeoutError:
-                continue
-            except ValueError:
-                stop = "failed"
-                outcome.error, outcome.error_class = "output line exceeds 1 MiB", "execution_error"
-                break
-            if not raw:
-                eof = True
-                continue
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            tail.append(line)
-            try:
-                await on_line(line)
-            except Exception as exc:  # noqa: BLE001 - a parser or emitter failure fails the attempt
-                stop = "failed"
-                outcome.error, outcome.error_class = f"{type(exc).__name__}: {exc}", "execution_error"
-                break
-
+        stop = await _pump(process, writer, deadline, cancel, on_line, tail, outcome)
         if not stop and writer is not None:
-            await asyncio.wait({writer}, timeout=EXIT_GRACE_S)
-            failure = _stdin_failure(writer)
-            if failure is not None:
-                stop = "failed"
-                outcome.error, outcome.error_class = _stdin_outcome(failure)
+            stop = await _finish_stdin(writer, outcome)
     finally:
         if writer is not None and not writer.done():
             writer.cancel()
@@ -183,13 +249,7 @@ async def run_process(
         outcome.returncode = process.returncode
         outcome.tail = tail.text()
 
-    if stop == "cancelled":
-        outcome.error, outcome.error_class = "backend command cancelled", "cancelled"
-    elif stop == "timeout":
-        outcome.error, outcome.error_class = f"{name} subprocess timed out", "timeout"
-    elif not stop and outcome.returncode:
-        outcome.error = f"backend command exited with status {outcome.returncode}"
-        outcome.error_class = "execution_error"
+    _map_stop(outcome, stop, name)
     if outcome.error_class:
         log.warning("%s subprocess ended class=%s after %.2fs", name, outcome.error_class, time.monotonic() - started_at)
     return outcome

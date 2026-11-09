@@ -12,4 +12,3 @@ def _isolate_refract_home(tmp_path_factory, monkeypatch):
     """Keep daemon state and logs out of the developer's home directory."""
     isolated_home = tmp_path_factory.mktemp("refract-home")
     monkeypatch.setattr(Path, "home", lambda: isolated_home)
-    yield

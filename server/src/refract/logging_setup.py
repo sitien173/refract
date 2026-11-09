@@ -46,7 +46,7 @@ _SENSITIVE_KEY = re.compile(
     re.IGNORECASE,
 )
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)(bearer\s+)[a-z0-9._~+/=-]+"),
     re.compile(
         r"(?i)((?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*)"
         r"([^\s,;]+)"

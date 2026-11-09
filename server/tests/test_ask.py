@@ -8,6 +8,7 @@ from refract.ask import (
     AskAuthError,
     AskConflictError,
     AskRegistry,
+    PendingQuestion,
 )
 
 
@@ -15,7 +16,8 @@ from refract.ask import (
 async def test_issue_token_and_validate() -> None:
     registry = AskRegistry()
     token = registry.issue_token("job-123")
-    assert isinstance(token, str) and len(token) > 16
+    assert isinstance(token, str)
+    assert len(token) > 16
 
     # Valid token resolves to the job id
     assert registry.validate_token(token) == "job-123"
@@ -453,3 +455,81 @@ async def test_runtime_job_answer_with_expected_question_id(tmp_path) -> None:
         runtime.database.close()
 
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", ["", "   "])
+async def test_ask_rejects_blank_question_before_validating_token(question) -> None:
+    registry = AskRegistry()
+    with pytest.raises(ValueError, match="question must be a non-empty string"):
+        await registry.ask("unknown-token", question, timeout_s=1.0)
+
+
+@pytest.mark.asyncio
+async def test_ask_with_no_time_left_returns_no_answer_without_registering() -> None:
+    registry = AskRegistry()
+    token = registry.issue_token("job-1")
+    assert await registry.ask(token, "Question", timeout_s=0) == NO_ANSWER_TEXT
+    assert registry.has_pending("job-1") is False
+
+
+@pytest.mark.asyncio
+async def test_ask_wakes_question_waiters_and_skips_finished_ones() -> None:
+    registry = AskRegistry()
+    token = registry.issue_token("job-1")
+    waiter = asyncio.create_task(registry.wait_question("job-1", 1.0))
+    await asyncio.sleep(0)
+    finished = asyncio.get_running_loop().create_future()
+    finished.cancel()
+    registry._question_waiters["job-1"].append(finished)
+
+    task = asyncio.create_task(registry.ask(token, "Question", timeout_s=1.0))
+    pending = await waiter
+    assert (pending.text, pending.question_id.startswith("q_")) == ("Question", True)
+    assert registry.deliver_answer("job-1", "Done")
+    assert await task == "Done"
+
+
+@pytest.mark.asyncio
+async def test_ask_wakes_waiter_owned_by_stopped_loop_directly() -> None:
+    registry = AskRegistry()
+    token = registry.issue_token("job-1")
+    other_loop = asyncio.new_event_loop()
+    try:
+        stopped_waiter = other_loop.create_future()
+        registry._question_waiters["job-1"] = [stopped_waiter]
+        task = asyncio.create_task(registry.ask(token, "Question", timeout_s=1.0))
+        await asyncio.sleep(0)
+        assert stopped_waiter.result().text == "Question"
+        registry.deliver_answer("job-1", "Done")
+        assert await task == "Done"
+    finally:
+        other_loop.close()
+
+
+@pytest.mark.asyncio
+async def test_ask_timeout_leaves_a_replacement_pending_question_in_place() -> None:
+    registry = AskRegistry()
+    token = registry.issue_token("job-1")
+    task = asyncio.create_task(registry.ask(token, "Question", timeout_s=0.05))
+    await asyncio.sleep(0)
+    replacement = registry.get_pending("job-1")
+    with registry._lock:
+        registry._pending["job-1"] = PendingQuestion(question_id="q_other", text="other", future=replacement.future)
+    assert await task == NO_ANSWER_TEXT
+    assert registry.get_pending("job-1").question_id == "q_other"
+
+
+@pytest.mark.asyncio
+async def test_ask_cancel_leaves_a_replacement_pending_question_in_place() -> None:
+    registry = AskRegistry()
+    token = registry.issue_token("job-1")
+    task = asyncio.create_task(registry.ask(token, "Question", timeout_s=5))
+    await asyncio.sleep(0)
+    original = registry.get_pending("job-1")
+    with registry._lock:
+        registry._pending["job-1"] = PendingQuestion(question_id="q_other", text="other", future=original.future)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert registry.get_pending("job-1").question_id == "q_other"

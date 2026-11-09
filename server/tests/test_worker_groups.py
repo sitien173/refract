@@ -66,7 +66,8 @@ async def test_worker_runs_with_job_id_and_records_process_group(tmp_path: Path)
         assert job.state == "succeeded"
         assert job.result.text == submitted.job_id
         pgid = runtime.database.job_record(submitted.job_id)["pgid"]
-        assert isinstance(pgid, int) and pgid > 0
+        assert isinstance(pgid, int)
+        assert pgid > 0
     finally:
         await runtime.close()
 

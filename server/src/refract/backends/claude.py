@@ -27,6 +27,7 @@ log = get_logger("claude")
 MAX_DIAGNOSTICS = 50
 _RESULT_FIELDS = ("result", "session_id", "is_error", "subtype", "api_error_status", "modelUsage")
 _NO_USAGE = TokenUsage(input=None, output=None, cache_read=None, cache_write=None, observed=False)
+_TELEMETRY_UPDATED = "telemetry.updated"
 
 
 def _value_text(value: Any) -> str:
@@ -158,25 +159,29 @@ class ClaudeRun:
             cache_write=tok.cache_write,
         )
         if self.on_event is not None:
-            await self._emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+            await self._emit({"kind": _TELEMETRY_UPDATED, "data": self.counters.as_dict()})
         if tok.input is not None:
             self.counters.record_context(used=tok.input + (tok.output or 0))
             if self.on_event is not None:
-                await self._emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+                await self._emit({"kind": _TELEMETRY_UPDATED, "data": self.counters.as_dict()})
+
+    def _context_capacity(self, event: dict[str, Any]) -> int | None:
+        model_usage = event.get("modelUsage")
+        if not isinstance(model_usage, dict):
+            return None
+        target_model = self.active_model
+        if not target_model and len(model_usage) == 1:
+            target_model = next(iter(model_usage))
+        if not target_model or target_model not in model_usage:
+            return None
+        stats = model_usage[target_model]
+        if not isinstance(stats, dict):
+            return None
+        cap = as_int(stats.get("contextWindow"))
+        return cap if cap and cap > 0 else None
 
     async def _result(self, event: dict[str, Any]) -> None:
-        model_usage = event.get("modelUsage")
-        capacity: int | None = None
-        if isinstance(model_usage, dict):
-            target_model = self.active_model
-            if not target_model and len(model_usage) == 1:
-                target_model = next(iter(model_usage))
-            if target_model and target_model in model_usage:
-                stats = model_usage[target_model]
-                if isinstance(stats, dict):
-                    cap = as_int(stats.get("contextWindow"))
-                    if cap and cap > 0:
-                        capacity = cap
+        capacity = self._context_capacity(event)
 
         usage = event.get("usage")
         tok = read_usage(usage) if isinstance(usage, dict) else _NO_USAGE
@@ -188,11 +193,11 @@ class ClaudeRun:
                 cache_write=tok.cache_write,
             )
             if self.on_event is not None:
-                await self._emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+                await self._emit({"kind": _TELEMETRY_UPDATED, "data": self.counters.as_dict()})
         if capacity is not None:
             self.counters.record_context(window=capacity)
             if self.on_event is not None:
-                await self._emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+                await self._emit({"kind": _TELEMETRY_UPDATED, "data": self.counters.as_dict()})
 
     def _extract(self) -> tuple[str, str, str, str]:
         """Return the final reply, session ID, diagnostics, and result error."""

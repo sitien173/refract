@@ -8,6 +8,7 @@ import shutil
 from functools import partial
 from pathlib import Path
 import threading
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -20,7 +21,10 @@ from refract.backends.agy import execute as agy_execute
 from tests.claude_cli import drive_claude, stub_claude
 from tests.cli_stub import execute_sync, fake_run_process, shell_fake_as_process, stub_cli
 from refract.backends.codex import execute as codex_execute
+from refract.backends.codex_rollout import _CodexRolloutCollector
 from refract.backends.pi import execute as pi_execute
+from refract.telemetry import TokenCounters
+from tests.telemetry_helpers import telemetry as _telemetry
 
 pi_sync = partial(execute_sync, pi_execute)
 agy_sync = partial(execute_sync, agy_execute)
@@ -3007,6 +3011,467 @@ def test_codex_rollout_missing_file_degrades_gracefully(tmp_path: Path, monkeypa
     assert res.tokens["context_window"] is None
     # Context used tokens still derived from turn usage
     assert res.tokens["context_used"] == 1050
+
+
+ROLLOUT_SESSION = "00000000-0000-0000-0000-aaaaaaaaaaaa"
+ROLLOUT_OTHER_SESSION = "00000000-0000-0000-0000-bbbbbbbbbbbb"
+
+
+def _rollout_collector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[_CodexRolloutCollector, Path, list[dict[str, Any]]]:
+    """Return a collector over an empty isolated CODEX_HOME, its sessions dir, and the emitted events."""
+    codex_home = tmp_path / "codex_home"
+    (codex_home / "sessions").mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    emitted: list[dict[str, Any]] = []
+    collector = _CodexRolloutCollector(cwd=workspace, session_id=ROLLOUT_SESSION, counters=TokenCounters(), emitter=emitted.append)
+    return collector, codex_home / "sessions", emitted
+
+
+def _rollout_header(cwd: Path, session_id: str = ROLLOUT_SESSION) -> str:
+    return json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(cwd)}}) + "\n"
+
+
+def _rollout_usage(input_tokens: Any, output_tokens: Any, reasoning_tokens: Any) -> dict[str, Any]:
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens, "reasoning_output_tokens": reasoning_tokens}
+
+
+def _rollout_token_count(info: Any) -> dict[str, Any]:
+    return {"type": "event_msg", "payload": {"type": "token_count", "info": info}}
+
+
+def _rollout_token_line(window: int = 1000) -> str:
+    return json.dumps(_rollout_token_count({"last_token_usage": _rollout_usage(100, 20, 5), "model_context_window": window})) + "\n"
+
+
+def test_codex_rollout_discovery_finds_nested_exact_file_and_records_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    nested = sessions / "2026" / "11" / "09"
+    nested.mkdir(parents=True)
+    target = nested / f"rollout_{ROLLOUT_SESSION}.jsonl"
+    target.write_text(_rollout_header(collector.cwd))
+
+    assert collector._find_exact_file() == target
+    assert (collector.file_dev, collector.file_ino) == (target.stat().st_dev, target.stat().st_ino)
+    assert collector.missing_discovery_retries == 0
+
+
+def test_codex_rollout_discovery_skips_mismatched_file_in_sibling_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    (sessions / "a").mkdir()
+    (sessions / "b").mkdir()
+    (sessions / "a" / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(_rollout_header(tmp_path / "elsewhere"))
+    target = sessions / "b" / f"rollout_{ROLLOUT_SESSION}.jsonl"
+    target.write_text(_rollout_header(collector.cwd))
+
+    assert collector._find_exact_file() == target
+
+
+@pytest.mark.parametrize(
+    ("depth", "expected_found"),
+    [(3, True), (4, False)],
+    ids=["at-max-depth", "past-max-depth"],
+)
+def test_codex_rollout_discovery_honors_depth_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int, expected_found: bool):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    directory = sessions.joinpath(*("d",) * depth)
+    directory.mkdir(parents=True)
+    target = directory / f"rollout_{ROLLOUT_SESSION}.jsonl"
+    target.write_text(_rollout_header(collector.cwd))
+
+    assert collector._find_exact_file() == (target if expected_found else None)
+    assert collector.missing_discovery_retries == (0 if expected_found else 1)
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["", "   ", "not-a-uuid"],
+    ids=["empty", "blank", "malformed"],
+)
+def test_codex_rollout_discovery_rejects_invalid_session_id_without_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session_id: str):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(_rollout_header(collector.cwd))
+    collector.session_id = session_id
+
+    assert collector._find_exact_file() is None
+    assert collector.missing_discovery_retries == 0
+
+
+def test_codex_rollout_discovery_stops_after_retry_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(_rollout_header(collector.cwd))
+    collector.missing_discovery_retries = collector.MAX_DISCOVERY_RETRIES
+
+    assert collector._find_exact_file() is None
+    assert collector.missing_discovery_retries == collector.MAX_DISCOVERY_RETRIES
+
+
+def test_codex_rollout_discovery_counts_missing_sessions_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    sessions.rmdir()
+
+    assert collector._find_exact_file() is None
+    assert collector.missing_discovery_retries == 1
+
+
+def test_codex_rollout_discovery_refuses_symlinked_sessions_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    real = tmp_path / "real_sessions"
+    real.mkdir()
+    (real / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(_rollout_header(collector.cwd))
+    sessions.rmdir()
+    try:
+        sessions.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    assert collector._find_exact_file() is None
+    assert collector.missing_discovery_retries == 1
+
+
+def test_codex_rollout_discovery_ignores_symlinked_rollout_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    real = tmp_path / "outside.jsonl"
+    real.write_text(_rollout_header(collector.cwd))
+    try:
+        (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").symlink_to(real)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    assert collector._find_exact_file() is None
+    assert collector.missing_discovery_retries == 1
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content"),
+    [
+        pytest.param(f"rollout_{ROLLOUT_SESSION}.txt", None, id="not-jsonl"),
+        pytest.param(f"rollout_{ROLLOUT_OTHER_SESSION}.jsonl", None, id="other-session-name"),
+        pytest.param(f"rollout_{ROLLOUT_SESSION}.jsonl", "tiny", id="under-minimum-size"),
+        pytest.param(f"rollout_{ROLLOUT_SESSION}.jsonl", "not json at all\n", id="header-not-json"),
+        pytest.param(f"rollout_{ROLLOUT_SESSION}.jsonl", '["session_meta", 1, 2]\n', id="header-not-object"),
+        pytest.param(f"rollout_{ROLLOUT_SESSION}.jsonl", '{"type": "other", "payload": {}}\n', id="header-wrong-type"),
+        pytest.param(f"rollout_{ROLLOUT_SESSION}.jsonl", '{"type": "session_meta", "payload": "x"}\n', id="payload-not-object"),
+        pytest.param(f"rollout_{ROLLOUT_SESSION}.jsonl", lambda cwd: _rollout_header(cwd, ROLLOUT_OTHER_SESSION), id="payload-other-session"),
+        pytest.param(f"rollout_{ROLLOUT_SESSION}.jsonl", lambda cwd: _rollout_header(cwd.parent / "elsewhere"), id="payload-other-cwd"),
+    ],
+)
+def test_codex_rollout_discovery_rejects_unverifiable_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file_name: str, content: str | Callable[[Path], str] | None):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    if callable(content):
+        content = content(collector.cwd)
+    (sessions / file_name).write_text(content if content is not None else _rollout_header(collector.cwd))
+
+    assert collector._find_exact_file() is None
+    assert collector.missing_discovery_retries == 1
+
+
+def test_codex_rollout_discovery_stops_at_entry_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, _ = _rollout_collector(tmp_path, monkeypatch)
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(_rollout_header(collector.cwd))
+    collector.MAX_DISCOVERY_ENTRIES = 1
+
+    assert collector._find_exact_file() is None
+    assert collector.missing_discovery_retries == 1
+
+
+def test_codex_rollout_poll_without_session_id_does_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(_rollout_header(collector.cwd) + _rollout_token_line())
+    collector.session_id = ""
+
+    collector.poll()
+
+    assert collector.session_file is None
+    assert collector.missing_discovery_retries == 0
+    assert emitted == []
+
+
+def test_codex_rollout_poll_counts_retry_while_file_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, _, emitted = _rollout_collector(tmp_path, monkeypatch)
+
+    collector.poll()
+
+    assert collector.session_file is None
+    assert collector.missing_discovery_retries == 1
+    assert emitted == []
+
+
+def test_codex_rollout_poll_first_read_verifies_file_and_records_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    target = sessions / f"rollout_{ROLLOUT_SESSION}.jsonl"
+    target.write_text(_rollout_header(collector.cwd) + _rollout_token_line())
+
+    collector.poll()
+
+    assert collector.session_file == target
+    assert collector.file_verified
+    assert collector.header_verified
+    assert collector.has_verified_context
+    assert collector.pending_context is None
+    assert collector.offset == target.stat().st_size
+    assert emitted == [_telemetry(context_used=115, context_window=1000)]
+
+
+def test_codex_rollout_poll_discards_stat_failure_after_discovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, _, emitted = _rollout_collector(tmp_path, monkeypatch)
+    collector._find_exact_file = lambda: tmp_path / "vanished.jsonl"
+
+    collector.poll()
+
+    assert collector.session_file is None
+    assert not collector.file_verified
+    assert emitted == []
+
+
+def test_codex_rollout_poll_invalidates_when_file_disappears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    target = sessions / f"rollout_{ROLLOUT_SESSION}.jsonl"
+    target.write_text(_rollout_header(collector.cwd) + _rollout_token_line())
+    collector.poll()
+    target.unlink()
+
+    collector.poll()
+
+    assert collector.session_file is None
+    assert not collector.file_verified
+    assert collector.offset == 0
+    assert collector.counters.as_dict()["context_used"] is None
+    assert emitted == [_telemetry(context_used=115, context_window=1000), _telemetry(context_window=1000)]
+
+
+def test_codex_rollout_poll_growth_invalidates_verified_context_until_next_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    target = sessions / f"rollout_{ROLLOUT_SESSION}.jsonl"
+    target.write_text(_rollout_header(collector.cwd) + _rollout_token_line())
+    collector.poll()
+    with target.open("a") as handle:
+        handle.write(json.dumps({"type": "event_msg", "payload": {"type": "noise"}}) + "\n")
+
+    collector.poll()
+
+    assert not collector.has_verified_context
+    assert emitted == [_telemetry(context_used=115, context_window=1000), _telemetry(context_window=1000)]
+
+
+def test_codex_rollout_poll_without_new_bytes_does_not_emit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(_rollout_header(collector.cwd) + _rollout_token_line())
+    collector.poll()
+
+    collector.poll()
+
+    assert emitted == [_telemetry(context_used=115, context_window=1000)]
+
+
+def test_codex_rollout_poll_keeps_partial_line_until_it_completes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    target = sessions / f"rollout_{ROLLOUT_SESSION}.jsonl"
+    line = _rollout_token_line()
+    target.write_text(_rollout_header(collector.cwd) + line[:20])
+
+    collector.poll()
+
+    assert collector.partial_buffer == line[:20]
+    assert collector.pending_context is None
+    assert emitted == []
+
+    with target.open("a") as handle:
+        handle.write(line[20:])
+    collector.poll()
+
+    assert collector.partial_buffer == ""
+    assert emitted == [_telemetry(context_used=115, context_window=1000)]
+
+
+def test_codex_rollout_poll_skips_blank_and_non_object_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(_rollout_header(collector.cwd) + "\n  \n[1, 2]\nnot json\n" + _rollout_token_line())
+
+    collector.poll()
+
+    assert emitted == [_telemetry(context_used=115, context_window=1000)]
+
+
+def test_codex_rollout_poll_defers_context_until_file_is_fully_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    header, token_line = _rollout_header(collector.cwd), _rollout_token_line()
+    noise = json.dumps({"type": "event_msg", "payload": {"type": "noise"}}) + "\n"
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(header + token_line + noise)
+    collector.max_bytes_per_poll = len((header + token_line).encode())
+
+    collector.poll()
+
+    assert collector.pending_context == (115, 1000)
+    assert emitted == []
+
+    collector.poll()
+
+    assert collector.pending_context is None
+    assert emitted == [_telemetry(context_used=115, context_window=1000)]
+
+
+def test_codex_rollout_poll_exhausted_budget_invalidates_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    header, token_line = _rollout_header(collector.cwd), _rollout_token_line()
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(header + token_line + token_line)
+    collector.max_total_bytes = len((header + token_line).encode())
+
+    collector.poll()
+    collector.poll()
+
+    assert collector.budget_exhausted
+    assert collector.pending_context is None
+    assert emitted == [_telemetry()]
+
+
+def test_codex_rollout_poll_truncation_with_foreign_header_resets_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
+    target = sessions / f"rollout_{ROLLOUT_SESSION}.jsonl"
+    target.write_text(_rollout_header(collector.cwd) + _rollout_token_line())
+    collector.poll()
+    target.write_text(_rollout_header(collector.cwd, ROLLOUT_OTHER_SESSION))
+
+    collector.poll()
+
+    assert collector.session_file is None
+    assert not collector.file_verified
+    assert not collector.header_verified
+    assert collector.offset == 0
+    assert collector.counters.as_dict()["context_used"] is None
+    assert emitted == [
+        _telemetry(context_used=115, context_window=1000),
+        _telemetry(context_window=1000),
+        _telemetry(context_window=1000),
+    ]
+
+
+def _verified_collector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[_CodexRolloutCollector, list[dict[str, Any]]]:
+    collector, _, emitted = _rollout_collector(tmp_path, monkeypatch)
+    collector.file_verified = True
+    return collector, emitted
+
+
+@pytest.mark.parametrize(
+    ("info", "expected"),
+    [
+        pytest.param({"last_token_usage": _rollout_usage(100, 20, 5), "model_context_window": 1000}, (115, 1000), id="valid"),
+        pytest.param({"last_token_usage": _rollout_usage(100, 20, 0)}, (120, None), id="no-window"),
+        pytest.param({"last_token_usage": _rollout_usage(100, 20, 0), "model_context_window": True}, (120, None), id="bool-window"),
+        pytest.param({"last_token_usage": _rollout_usage(1, 0, 1), "model_context_window": 10}, (0, 10), id="zero-used"),
+        pytest.param("not a dict", None, id="info-not-object"),
+        pytest.param({"last_token_usage": "not a dict"}, None, id="usage-not-object"),
+        pytest.param({"last_token_usage": {"input_tokens": 1, "output_tokens": 2}}, None, id="missing-reasoning"),
+        pytest.param({"last_token_usage": _rollout_usage(True, 2, 0)}, None, id="bool-input"),
+        pytest.param({"last_token_usage": _rollout_usage(1, 0, 5)}, None, id="negative-used"),
+    ],
+)
+def test_codex_rollout_token_count_sets_pending_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, info: Any, expected: tuple[int, int | None] | None):
+    collector, emitted = _verified_collector(tmp_path, monkeypatch)
+
+    collector._process_record(_rollout_token_count(info))
+
+    assert collector.pending_context == expected
+    assert emitted == []
+
+
+@pytest.mark.parametrize(
+    ("record", "expected_verified"),
+    [
+        pytest.param({"type": "session_meta", "payload": {"id": ROLLOUT_SESSION, "cwd": "CWD"}}, True, id="matching"),
+        pytest.param({"type": "session_meta", "payload": {"id": ROLLOUT_OTHER_SESSION, "cwd": "CWD"}}, False, id="other-id"),
+        pytest.param({"type": "session_meta", "payload": {"id": ROLLOUT_SESSION, "cwd": "ELSEWHERE"}}, False, id="other-cwd"),
+        pytest.param({"type": "session_meta", "payload": "not an object"}, True, id="payload-not-object"),
+    ],
+)
+def test_codex_rollout_session_meta_record_controls_verification(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: dict[str, Any], expected_verified: bool):
+    collector, _ = _verified_collector(tmp_path, monkeypatch)
+    if isinstance(record["payload"], dict):
+        record["payload"]["cwd"] = str(collector.cwd if record["payload"]["cwd"] == "CWD" else tmp_path / "elsewhere")
+
+    collector._process_record(record)
+
+    assert collector.file_verified is expected_verified
+
+
+def test_codex_rollout_records_are_ignored_while_file_is_unverified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    collector, emitted = _verified_collector(tmp_path, monkeypatch)
+    collector.file_verified = False
+
+    collector._process_record(_rollout_token_count({"last_token_usage": _rollout_usage(1, 1, 0)}))
+    collector._process_record({"type": "event_msg", "payload": {"type": "session_configured", "model": "m"}})
+    collector._process_record({"type": "context_compacted"})
+    collector._process_record({"type": "session_meta", "payload": {"id": ROLLOUT_SESSION, "cwd": str(collector.cwd)}})
+
+    assert collector.pending_context is None
+    assert collector.model_name is None
+    assert not collector.is_compacted
+    assert not collector.file_verified
+    assert emitted == []
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param({"type": "event_msg", "payload": {"type": "context_compacted"}}, id="event-msg"),
+        pytest.param({"type": "context_compacted"}, id="top-level"),
+    ],
+)
+def test_codex_rollout_compaction_record_clears_context_and_marks_compacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: dict[str, Any]):
+    collector, emitted = _verified_collector(tmp_path, monkeypatch)
+    collector.pending_context = (5, 10)
+    collector.has_verified_context = True
+    collector.counters.record_context(used=5, window=10)
+
+    collector._process_record(record)
+
+    assert collector.is_compacted
+    assert collector.pending_context is None
+    assert not collector.has_verified_context
+    assert emitted == [_telemetry(context_window=10)]
+
+
+@pytest.mark.parametrize(
+    ("payload", "previous", "expected_model", "expected_emitted"),
+    [
+        pytest.param({"type": "session_configured", "model": "m1"}, None, "m1", 0, id="first-model"),
+        pytest.param({"type": "model_reroute", "to_model": "m2"}, "m1", "m2", 1, id="reroute-changes-model"),
+        pytest.param({"type": "session_configured", "model": "m1"}, "m1", "m1", 0, id="same-model"),
+        pytest.param({"type": "session_configured", "model": "m2", "to_model": "m3"}, "m1", "m2", 1, id="model-wins-over-to-model"),
+        pytest.param({"type": "session_configured", "model": ""}, "m1", "m1", 0, id="empty-model"),
+    ],
+)
+def test_codex_rollout_model_records_update_model_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any], previous: str | None, expected_model: str, expected_emitted: int):
+    collector, emitted = _verified_collector(tmp_path, monkeypatch)
+    collector.model_name = previous
+
+    collector._process_record({"type": "event_msg", "payload": payload})
+
+    assert collector.model_name == expected_model
+    assert not collector.is_compacted
+    assert len(emitted) == expected_emitted
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param({"type": "event_msg", "payload": "text"}, id="payload-not-object"),
+        pytest.param({"type": "event_msg", "payload": {"type": "noise"}}, id="unknown-payload-type"),
+        pytest.param({"type": "response_item", "payload": {"type": "token_count"}}, id="unknown-record-type"),
+        pytest.param({}, id="empty-record"),
+    ],
+)
+def test_codex_rollout_unrecognized_records_change_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: dict[str, Any]):
+    collector, emitted = _verified_collector(tmp_path, monkeypatch)
+
+    collector._process_record(record)
+
+    assert collector.pending_context is None
+    assert collector.model_name is None
+    assert not collector.is_compacted
+    assert collector.file_verified
+    assert emitted == []
 
 
 def test_codex_rollout_lifecycle_cancellation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

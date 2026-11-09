@@ -111,7 +111,8 @@ def test_every_target_changes_and_nothing_else(bump, tree, current):
         assert old_len == new_len, rel
         assert len(changed) == 1, (rel, changed)
         _, old_line, new_line = changed[0]
-        assert current in old_line and new in new_line, rel
+        assert current in old_line
+        assert new in new_line, rel
         assert old_line.replace(current, new, 1) == new_line, rel
 
 
@@ -127,7 +128,8 @@ def test_history_lines_unchanged(bump, tree):
     assert headings
     assert bump.main(["minor"], root=tree, today=TODAY) == 0
     readme = (tree / "README.md").read_text(encoding="utf-8").splitlines()
-    assert readme[0].startswith("# Refract ") and readme[0] != readme_before[0]
+    assert readme[0].startswith("# Refract ")
+    assert readme[0] != readme_before[0]
     assert readme[1:] == readme_before[1:]
     changelog = (tree / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
     for heading in headings:

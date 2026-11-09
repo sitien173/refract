@@ -86,11 +86,13 @@ async def test_tool_surface_lists_exact_v3_contract() -> None:
     assert await mcp.list_resources() == []
     assert await mcp.list_resource_templates() == []
     assert mcp.title == "Refract job queue"
-    assert mcp.instructions and len(mcp.instructions) <= 2048
+    assert mcp.instructions
+    assert len(mcp.instructions) <= 2048
     assert all(name in mcp.instructions for name in expected)
     for tool in tools.values():
         assert tool.title
-        assert tool.description and len(tool.description) <= 2048
+        assert tool.description
+        assert len(tool.description) <= 2048
         assert "refract://" not in tool.description
         assert tool.output_schema is None
 
@@ -403,9 +405,11 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
             assert payload["code"] == code
             assert payload["next_action"]
             assert_private(payload)
-            assert len(response.content) == 1 and response.content[0].type == "text"
+            assert len(response.content) == 1
+            assert response.content[0].type == "text"
             wire = json.dumps(response.model_dump(by_alias=True, mode="json", exclude_none=True), separators=(",", ":"))
-            assert len(wire) < 30000 and len(wire.encode("utf-8")) < 9000
+            assert len(wire) < 30000
+            assert len(wire.encode("utf-8")) < 9000
             return payload
 
         await check("list", {"path": str(root / "missing")}, "invalid_path")
@@ -499,7 +503,8 @@ async def test_all_tool_success_payloads_are_private_and_single_text_content(tmp
                     visit(item)
         for response in responses:
             assert not response.is_error
-            assert len(response.content) == 1 and response.content[0].type == "text"
+            assert len(response.content) == 1
+            assert response.content[0].type == "text"
             wire = response.model_dump(by_alias=True, mode="json", exclude_none=True)
             assert "structuredContent" not in wire
             visit(json.loads(response.content[0].text))
@@ -520,7 +525,8 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
         assert submitted.is_error
         submit_error = json.loads(submitted.content[0].text)
         submitted_id = submit_error["message"].split("ID: ", 1)[1].rstrip(".")
-        assert submit_error["code"] == "response_too_large" and "applied" in submit_error["message"]
+        assert submit_error["code"] == "response_too_large"
+        assert "applied" in submit_error["message"]
         assert runtime.database.job(submitted_id) is not None
 
         runtime.database.create_job(
@@ -532,7 +538,8 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
         assert retried.is_error
         retry_error = json.loads(retried.content[0].text)
         retried_id = retry_error["message"].split("ID: ", 1)[1].rstrip(".")
-        assert retry_error["code"] == "response_too_large" and "applied" in retry_error["message"]
+        assert retry_error["code"] == "response_too_large"
+        assert "applied" in retry_error["message"]
         assert runtime.database.job(retried_id).retry_of == "retry-overflow"
         assert runtime.database.job("retry-overflow").state == "failed"
 
@@ -543,7 +550,8 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
         cancelled = await client.call_tool("cancel", {"job_id": "cancel-overflow"})
         assert cancelled.is_error
         cancel_error = json.loads(cancelled.content[0].text)
-        assert cancel_error["code"] == "response_too_large" and "cancel-overflow" in cancel_error["message"]
+        assert cancel_error["code"] == "response_too_large"
+        assert "cancel-overflow" in cancel_error["message"]
         assert "applied" in cancel_error["message"]
         assert runtime.database.job("cancel-overflow").state == "cancelled"
 
@@ -584,9 +592,11 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
         assert marker not in response.content[0].text
         assert "provider-secret-model-backend-detail" not in response.content[0].text
         envelope = json.dumps(response.model_dump(by_alias=True, mode="json", exclude_none=True), separators=(",", ":"))
-        assert len(envelope) < 30000 and len(envelope.encode("utf-8")) < 9000
+        assert len(envelope) < 30000
+        assert len(envelope.encode("utf-8")) < 9000
         stored = runtime.database.job(job_id)
-        assert stored is not None and stored.result.error == marker
+        assert stored is not None
+        assert stored.result.error == marker
 
 
 
@@ -663,7 +673,8 @@ async def test_wait_uses_timeout_and_returns_result_shape(timeout_s: int) -> Non
 
     assert waits == ([] if timeout_s == 0 else [(initial.id, timeout_s)])
     assert result["job"]["state"] == ("running" if timeout_s == 0 else "succeeded")
-    assert result["result"]["text"] == "" and result["result"]["truncated"] is False
+    assert result["result"]["text"] == ""
+    assert result["result"]["truncated"] is False
     assert result["result"]["pending_question"] is None
     assert json.loads(progress_messages[0]) == {"state": "running"}
 
@@ -1231,7 +1242,8 @@ async def test_wait_nonterminal_without_question(tmp_path) -> None:
         res_str = await wait("job-running-no-q", ctx, timeout_s=0)
         res = json.loads(res_str)
         assert res["job"]["state"] == "running"
-        assert res["result"]["text"] == "" and res["result"]["truncated"] is False
+        assert res["result"]["text"] == ""
+        assert res["result"]["truncated"] is False
         assert res["result"]["pending_question"] is None
     finally:
         runtime.database.close()
@@ -1614,24 +1626,32 @@ async def test_card_create_move_list_round_trip(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         _linkable_job(runtime, root, "job-1")
         error, created = await _card_call(client, "card_create", {"path": str(root), "title": "Ship", "body": "secret body", "job_ids": ["job-1"]})
-        assert not error and set(created) == {"card"}
+        assert not error
+        assert set(created) == {"card"}
         card = created["card"]
         assert set(card) == CARD_KEYS
-        assert card["state"] == "todo" and card["job_ids"] == ["job-1"]
+        assert card["state"] == "todo"
+        assert card["job_ids"] == ["job-1"]
         assert card["project"] == root.resolve().as_posix()
         assert uuid.UUID(card["id"]).version == 4
         assert "secret body" not in json.dumps(created)
 
         error, moved = await _card_call(client, "card_move", {"card_id": card["id"], "state": "in_progress", "note": "go"})
-        assert not error and set(moved) == {"card", "moved"} and moved["moved"] is True
-        assert set(moved["card"]) == CARD_KEYS and moved["card"]["state"] == "in_progress"
+        assert not error
+        assert set(moved) == {"card", "moved"}
+        assert moved["moved"] is True
+        assert set(moved["card"]) == CARD_KEYS
+        assert moved["card"]["state"] == "in_progress"
 
         error, same = await _card_call(client, "card_move", {"card_id": card["id"], "state": "in_progress"})
-        assert not error and same["moved"] is False
+        assert not error
+        assert same["moved"] is False
 
         error, listed = await _card_call(client, "card_list", {"path": str(root)})
-        assert not error and set(listed) == {"cards", "truncated", "omitted"}
-        assert listed["truncated"] is False and listed["omitted"] == 0
+        assert not error
+        assert set(listed) == {"cards", "truncated", "omitted"}
+        assert listed["truncated"] is False
+        assert listed["omitted"] == 0
         assert listed["cards"] == [{
             "id": card["id"], "title": "Ship", "state": "in_progress", "job_ids": ["job-1"],
             "updated_at": same["card"]["updated_at"],
@@ -1696,7 +1716,9 @@ async def test_card_list_returns_largest_fitting_prefix(tmp_path, monkeypatch) -
         for number in range(8):
             await _card_call(client, "card_create", {"path": str(root), "title": f"card {number} " + "x" * 100})
         _, full = await _card_call(client, "card_list", {"path": str(root)})
-        assert len(full["cards"]) == 8 and full["truncated"] is False and full["omitted"] == 0
+        assert len(full["cards"]) == 8
+        assert full["truncated"] is False
+        assert full["omitted"] == 0
 
         monkeypatch.setattr(server, "_MAX_RESPONSE_BYTES", 1500)
         error, partial = await _card_call(client, "card_list", {"path": str(root)})
@@ -1704,7 +1726,8 @@ async def test_card_list_returns_largest_fitting_prefix(tmp_path, monkeypatch) -
         kept = partial["cards"]
         assert 0 < len(kept) < 8
         assert kept == full["cards"][: len(kept)]
-        assert partial["truncated"] is True and partial["omitted"] == 8 - len(kept)
+        assert partial["truncated"] is True
+        assert partial["omitted"] == 8 - len(kept)
         assert server._fits_response(server._json(partial))
         assert not server._fits_response(
             server._json({"cards": full["cards"][: len(kept) + 1], "truncated": True, "omitted": 8 - len(kept) - 1})
@@ -1719,14 +1742,18 @@ async def test_oversized_card_create_and_move_report_the_applied_card(tmp_path, 
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         monkeypatch.setattr(server, "_fits_response", lambda text, *, is_error=False: is_error or not text.startswith('{"card"'))
         error, created = await _card_call(client, "card_create", {"path": str(root), "title": "big"})
-        assert error and created["code"] == "response_too_large"
+        assert error
+        assert created["code"] == "response_too_large"
         card_id = runtime.database.list_cards(project_id=None, limit=None)["cards"][0]["id"]
-        assert card_id in created["message"] and "Card creation was applied" in created["message"]
+        assert card_id in created["message"]
+        assert "Card creation was applied" in created["message"]
         assert "card_list" in created["next_action"]
 
         error, moved = await _card_call(client, "card_move", {"card_id": card_id, "state": "in_progress"})
-        assert error and moved["code"] == "response_too_large"
-        assert card_id in moved["message"] and "Card move was applied" in moved["message"]
+        assert error
+        assert moved["code"] == "response_too_large"
+        assert card_id in moved["message"]
+        assert "Card move was applied" in moved["message"]
         assert runtime.database.card_detail(card_id)["card"]["state"] == "in_progress"
 
 
@@ -1744,3 +1771,101 @@ def test_unknown_tool_hint_does_not_state_a_count() -> None:
     payload = json.loads(_normalize_tool_error(wire, "nope", "").content[0].text)
     assert payload["code"] == "invalid_request"
     assert payload["next_action"] == "Use one of the tools returned by tools/list."
+
+
+class _ProgressRuntime:
+    """Runtime double whose wait() blocks until released; database.job() replays scripted views."""
+
+    def __init__(self, views: list[JobView | None], wait_error: Exception | None = None) -> None:
+        self.views = views
+        self.wait_error = wait_error
+        self.release = asyncio.Event()
+        self.database = SimpleNamespace(job=self._job)
+
+    def _job(self, job_id: str) -> JobView | None:
+        assert job_id == "job-1"
+        return self.views.pop(0)
+
+    async def wait(self, job_id: str, timeout_s: int) -> JobView:
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            if self.wait_error is not None:
+                raise self.wait_error
+            raise
+        return _job_view("succeeded")
+
+
+def _progress_context(reports: list[tuple[float, float | None, str]], runtime: _ProgressRuntime | None = None):
+    async def report_progress(*, progress: float, total: float | None, message: str) -> None:
+        reports.append((progress, total, message))
+        if runtime is not None and len(reports) == 2:
+            runtime.release.set()
+
+    return SimpleNamespace(report_progress=report_progress)
+
+
+@pytest.mark.asyncio
+async def test_wait_with_progress_reports_each_heartbeat_with_incrementing_progress(monkeypatch) -> None:
+    from refract import server
+
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    runtime = _ProgressRuntime([_job_view("running")] * 2)
+    reports: list[tuple[float, float | None, str]] = []
+    await server._wait_with_progress(runtime, _progress_context(reports, runtime), "job-1", 5)
+    assert reports == [(1.0, None, '{"state":"running"}'), (2.0, None, '{"state":"running"}')]
+
+
+@pytest.mark.asyncio
+async def test_wait_with_progress_stops_without_report_when_job_is_terminal(monkeypatch) -> None:
+    from refract import server
+
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    runtime = _ProgressRuntime([_job_view("succeeded")])
+    reports: list[tuple[float, float | None, str]] = []
+    await server._wait_with_progress(runtime, _progress_context(reports), "job-1", 5)
+    assert reports == []
+
+
+@pytest.mark.asyncio
+async def test_wait_with_progress_unknown_job_raises_and_cancels_wait(monkeypatch) -> None:
+    from refract import server
+
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    runtime = _ProgressRuntime([None])
+    context = _progress_context([])
+    with pytest.raises(OrchestrationError, match="Job does not exist.") as raised:
+        await server._wait_with_progress(runtime, context, "job-1", 5)
+    assert (raised.value.code, raised.value.next_action) == ("unknown_job", "Call list with the project path and use a listed job ID.")
+
+
+@pytest.mark.asyncio
+async def test_wait_with_progress_logs_wait_cleanup_failure(monkeypatch, caplog) -> None:
+    from refract import server
+
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    runtime = _ProgressRuntime([None], wait_error=RuntimeError("cleanup broke"))
+    context = _progress_context([])
+    with caplog.at_level("WARNING"), pytest.raises(OrchestrationError, match="Job does not exist.") as raised:
+        await server._wait_with_progress(runtime, context, "job-1", 5)
+    assert raised.value.code == "unknown_job"
+    record = next(r for r in caplog.records if r.getMessage() == "Job wait cleanup failed")
+    assert (record.event, record.job_id) == ("job.wait_cleanup_failed", "job-1")
+
+
+@pytest.mark.asyncio
+async def test_wait_with_progress_nonpositive_heartbeat_uses_thirty_seconds(monkeypatch) -> None:
+    from refract import server
+
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0)
+    timeouts: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def recording_wait_for(awaitable, timeout):
+        timeouts.append(timeout)
+        return await real_wait_for(awaitable, timeout=0.001)
+
+    monkeypatch.setattr(server.asyncio, "wait_for", recording_wait_for)
+    runtime = _ProgressRuntime([_job_view("succeeded")])
+    await server._wait_with_progress(runtime, _progress_context([]), "job-1", 5)
+    assert timeouts == [30.0]

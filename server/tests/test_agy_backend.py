@@ -10,9 +10,15 @@ import asyncio
 import json
 import os
 import threading
+import types
 from pathlib import Path
 
+import pytest
+
+from refract.backends import BackendParams, agy
 from tests.cli_stub import run_target, stub_cli
+from tests.telemetry_helpers import telemetry as _telemetry
+from tests.telemetry_helpers import tokens as _tokens
 
 USAGE_FIXTURE = Path(__file__).parent / "fixtures" / "usage" / "agy.jsonl"
 CONVERSATION = "b658ef34-d18c-4294-b329-0ae5dee0157b"
@@ -215,3 +221,197 @@ def test_non_utf8_output_does_not_truncate_later_lines(tmp_path, monkeypatch):
 
     assert result.outcome == "SUCCESS"
     assert "after" in result.text
+
+
+# --- Characterization: step usage, execute preflight ---
+
+
+def _feed_updates(*updates: object, stream: bool = True) -> tuple[agy.AgyRun, list[dict]]:
+    events: list[dict] = []
+
+    async def sink(event: dict) -> None:
+        events.append(event)
+
+    run = agy.AgyRun(BackendParams(PROMPT="p", cd=Path(".")), sink if stream else None)
+
+    async def go() -> None:
+        for update in updates:
+            await run.feed(json.dumps({"event": "step_update", "step_update": update}))
+
+    asyncio.run(go())
+    return run, events
+
+
+def _done(usage: dict, **fields: object) -> dict:
+    return {"step_type": "agent_response", "state": "DONE", "usage": usage, **fields}
+
+
+@pytest.mark.parametrize(
+    ("update", "tokens"),
+    [
+        pytest.param(
+            _done({"input_tokens": 10, "output_tokens": 5, "thinking_tokens": 2, "context_window_size": 100}),
+            _tokens(input=10, output=5, context_used=13, context_window=100),
+            id="input-output-thinking-and-window",
+        ),
+        pytest.param(
+            _done({"input_tokens": 10, "output_tokens": 5}),
+            _tokens(input=10, output=5, context_used=15),
+            id="no-thinking-no-window",
+        ),
+        pytest.param(
+            _done({"input_tokens": 1, "output_tokens": 1, "thinking_tokens": 9}),
+            _tokens(input=1, output=1),
+            id="negative-context-is-skipped",
+        ),
+        pytest.param(
+            _done({"cache_read_tokens": 4, "cache_write_tokens": 3}),
+            _tokens(cache_read=4, cache_write=3),
+            id="cache-only-has-no-context-used",
+        ),
+        pytest.param(
+            _done({"input_tokens": 2}, model_context_window=50),
+            _tokens(input=2, context_window=50),
+            id="input-without-output-skips-context-used",
+        ),
+        pytest.param(
+            _done({"input_tokens": 2, "output_tokens": 3}, context_window_size=64),
+            _tokens(input=2, output=3, context_used=5, context_window=64),
+            id="window-falls-back-to-the-update",
+        ),
+        pytest.param(
+            _done({"input_tokens": 2, "output_tokens": 3, "model_context_window": 10, "context_window_size": 20}, context_window_size=30),
+            _tokens(input=2, output=3, context_used=5, context_window=10),
+            id="usage-model-window-wins",
+        ),
+    ],
+)
+def test_done_step_usage_updates_counters_and_emits_one_telemetry_event(update, tokens):
+    run, events = _feed_updates(update)
+
+    assert run.counters.as_dict() == tokens
+    assert events == [{"kind": "telemetry.updated", "data": tokens}]
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        pytest.param({"step_type": "agent_response", "state": "ACTIVE", "usage": {"input_tokens": 1}}, id="not-done"),
+        pytest.param({"step_type": "agent_response", "state": "DONE", "usage": "x"}, id="usage-not-a-dict"),
+        pytest.param({"step_type": "agent_response", "state": "DONE"}, id="no-usage"),
+        pytest.param(_done({"input_tokens": -1, "output_tokens": True, "cache_read_tokens": "7"}), id="no-valid-counts"),
+    ],
+)
+def test_step_without_usable_usage_leaves_counters_and_events_alone(update):
+    run, events = _feed_updates(update)
+
+    assert run.counters.as_dict() == _tokens()
+    assert events == []
+
+
+def test_non_dict_step_update_is_ignored():
+    run, events = _feed_updates("not a dict", ["x"], None)
+
+    assert run.counters.as_dict() == _tokens()
+    assert run.session_id == ""
+    assert events == []
+
+
+def test_step_usage_without_a_sink_still_updates_counters():
+    run, events = _feed_updates(_done({"input_tokens": 4, "output_tokens": 6}), stream=False)
+
+    assert run.counters.as_dict() == _tokens(input=4, output=6, context_used=10)
+    assert events == []
+
+
+def test_step_ids_use_step_index_when_present_else_a_running_counter():
+    run, _ = _feed_updates(
+        _done({"input_tokens": 1}, step_index=7),
+        _done({"input_tokens": 2}, step_index=7),
+        _done({"input_tokens": 4}),
+        _done({"input_tokens": 8}),
+    )
+
+    # Same index overwrites (2), then counter ids step_3 (4) and step_4 (8).
+    assert run.counters.as_dict()["input"] == 14
+    assert run.step_counter == 4
+
+
+def test_agent_response_and_tool_steps_still_dispatch_before_usage():
+    tool = {"step_type": "tool", "state": "ACTIVE", "tool_name": "ls", "tool_info": {"parameters": {"a": 1}}}
+    done_tool = {"step_type": "tool", "state": "DONE", "tool_info": {"output": "out"}, "usage": {"input_tokens": 3}}
+    run, events = _feed_updates(
+        {"step_type": "agent_response", "text_delta": "hi", "conversation_id": "c-1"},
+        tool,
+        done_tool,
+    )
+
+    assert run.session_id == "c-1"
+    assert run.assistant_deltas == ["hi"]
+    assert [event["kind"] for event in events] == [
+        "assistant.text.delta",
+        "tool.started",
+        "tool.completed",
+        "telemetry.updated",
+    ]
+    assert events[2] == {"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed", "output": "out"}}
+    assert events[3] == _telemetry(input=3)
+
+
+def test_missing_workspace_fails_before_spawn(tmp_path):
+    params = BackendParams(PROMPT="p", cd=tmp_path / "absent")
+
+    result = asyncio.run(agy.execute(params))
+
+    assert result.outcome == "FATAL"
+    assert result.error_class == "bad_cd"
+    assert str(tmp_path / "absent") in result.error
+
+
+def test_unencodable_prompt_is_request_fatal_with_the_session(tmp_path):
+    params = BackendParams(PROMPT="bad \ud800 prompt", cd=tmp_path, SESSION_ID="keep-me")
+
+    result = asyncio.run(agy.execute(params))
+
+    assert result.outcome == "FATAL"
+    assert result.error_class == "request_fatal"
+    assert result.SESSION_ID == "keep-me"
+    assert result.error.startswith("prompt is not valid UTF-8:")
+
+
+def test_new_session_argv_uses_new_project_and_log_file_order(tmp_path, monkeypatch):
+    record = tmp_path / "record.json"
+    stub_cli(monkeypatch, tmp_path, "agy", ["ok"], record=record)
+
+    asyncio.run(agy.execute(BackendParams(PROMPT="hi", cd=tmp_path, args=["--flag"])))
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "--conversation" not in argv
+    assert argv[:3] == ["agy", "--dangerously-skip-permissions", "--flag"]
+    assert argv[3:5] == ["--output-format", "stream-json"]
+    assert argv[5] == "--log-file"
+    assert argv[7:] == ["--new-project", "--print", "hi"]
+
+
+def test_windows_command_line_over_the_limit_is_request_fatal_and_removes_the_log(tmp_path, monkeypatch):
+    record = tmp_path / "record.json"
+    stub_cli(monkeypatch, tmp_path, "agy", ["never"], record=record)
+    monkeypatch.setattr(agy, "os", types.SimpleNamespace(name="nt", fspath=os.fspath))
+    created: list[str] = []
+    real_named = agy.tempfile.NamedTemporaryFile
+
+    def tracking(*args, **kwargs):
+        handle = real_named(*args, **kwargs)
+        created.append(handle.name)
+        return handle
+
+    monkeypatch.setattr(agy.tempfile, "NamedTemporaryFile", tracking)
+
+    result = asyncio.run(agy.execute(BackendParams(PROMPT="a" * 40_000, cd=tmp_path)))
+
+    assert result.outcome == "FATAL"
+    assert result.error_class == "request_fatal"
+    assert "above the Windows limit of 32767 characters for a command line" in result.error
+    assert not record.exists()
+    assert len(created) == 1
+    assert not Path(created[0]).exists()

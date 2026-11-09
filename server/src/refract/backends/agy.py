@@ -25,6 +25,7 @@ log = get_logger("agy")
 PROMPT_LIMIT_BYTES = 100 * 1024
 WINDOWS_COMMAND_LINE_LIMIT_CHARS = 32767
 _ASSISTANT_TEXT_DELTA = "assistant.text.delta"
+_TELEMETRY_UPDATED = "telemetry.updated"
 _UUID_PATTERN = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
 _CONVERSATION_ID_RE = re.compile(rf"(?:Created|Streaming) conversation {_UUID_PATTERN}")
 
@@ -166,41 +167,46 @@ class AgyRun:
         state = update.get("state", "")
         u = update.get("usage")
         if state == "DONE" and isinstance(u, dict):
-            raw_in = as_int(u.get("input_tokens"))
-            raw_out = as_int(u.get("output_tokens"))
-            cr = as_int(u.get("cache_read_tokens"))
-            cw = as_int(u.get("cache_write_tokens"))
-            if any(v is not None for v in (raw_in, raw_out, cr, cw)):
-                norm_in = raw_in
-                norm_out = raw_out
-                self.step_counter += 1
-                step_idx = update.get("step_index")
-                step_id = f"step_{step_idx}" if step_idx is not None else f"step_{self.step_counter}"
-                self.counters.record_response(
-                    step_id,
-                    input=norm_in,
-                    output=norm_out,
-                    cache_read=cr,
-                    cache_write=cw,
-                )
-                win_size = as_int(
-                    u.get("model_context_window")
-                    or u.get("context_window_size")
-                    or update.get("model_context_window")
-                    or update.get("context_window_size")
-                )
-                if norm_in is not None and norm_out is not None:
-                    try:
-                        thinking = as_int(u.get("thinking_tokens"))
-                        val = norm_in + norm_out - (thinking or 0)
-                        if val >= 0:
-                            self.counters.record_context(used=val)
-                    except Exception:
-                        pass
-                if win_size is not None:
-                    self.counters.record_context(window=win_size)
-                if self.events.enabled:
-                    self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+            self._step_usage(update, u)
+
+    def _step_usage(self, update: dict[str, Any], u: dict[str, Any]) -> None:
+        raw_in = as_int(u.get("input_tokens"))
+        raw_out = as_int(u.get("output_tokens"))
+        cr = as_int(u.get("cache_read_tokens"))
+        cw = as_int(u.get("cache_write_tokens"))
+        if not any(v is not None for v in (raw_in, raw_out, cr, cw)):
+            return
+        self.step_counter += 1
+        step_idx = update.get("step_index")
+        step_id = f"step_{step_idx}" if step_idx is not None else f"step_{self.step_counter}"
+        self.counters.record_response(
+            step_id,
+            input=raw_in,
+            output=raw_out,
+            cache_read=cr,
+            cache_write=cw,
+        )
+        win_size = as_int(
+            u.get("model_context_window")
+            or u.get("context_window_size")
+            or update.get("model_context_window")
+            or update.get("context_window_size")
+        )
+        self._step_context(u, raw_in, raw_out, win_size)
+        if self.events.enabled:
+            self.events.emit({"kind": _TELEMETRY_UPDATED, "data": self.counters.as_dict()})
+
+    def _step_context(self, u: dict[str, Any], raw_in: int | None, raw_out: int | None, win_size: int | None) -> None:
+        if raw_in is not None and raw_out is not None:
+            try:
+                thinking = as_int(u.get("thinking_tokens"))
+                val = raw_in + raw_out - (thinking or 0)
+                if val >= 0:
+                    self.counters.record_context(used=val)
+            except Exception:
+                pass
+        if win_size is not None:
+            self.counters.record_context(window=win_size)
 
     def _result(self, result: Any) -> None:
         if not isinstance(result, dict):
@@ -225,12 +231,12 @@ class AgyRun:
                     cache_write=cw,
                 )
                 if self.events.enabled:
-                    self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+                    self.events.emit({"kind": _TELEMETRY_UPDATED, "data": self.counters.as_dict()})
             win_size = as_int(u.get("model_context_window") or u.get("context_window_size"))
             if win_size is not None:
                 self.counters.record_context(window=win_size)
                 if self.events.enabled:
-                    self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+                    self.events.emit({"kind": _TELEMETRY_UPDATED, "data": self.counters.as_dict()})
 
     def _legacy_tool_completed(self, event: dict[str, Any]) -> None:
         tool_data = {"status": str(event.get("status", "completed"))}
@@ -305,6 +311,46 @@ class AgyRun:
         return result
 
 
+def _command(params: BackendParams, tmp_log_path: str) -> list[str]:
+    cmd = [
+        "agy",
+        "--dangerously-skip-permissions",
+        *params.args,
+        "--output-format",
+        "stream-json",
+    ]
+    cmd.extend([
+        "--log-file",
+        tmp_log_path,
+    ])
+    if params.SESSION_ID:
+        cmd.extend(["--conversation", params.SESSION_ID])
+    else:
+        cmd.append("--new-project")
+    # Keep Refract-owned transport arguments after target arguments:
+    # callers may tune the CLI, but cannot replace the prompt or log.
+    cmd.extend(["--print", params.PROMPT])
+    return cmd
+
+
+def _windows_line_failure(params: BackendParams, cmd: list[str], tmp_log_path: str) -> BackendResult | None:
+    if os.name != "nt":
+        return None
+    # Measure the line CreateProcess receives: the resolved launcher after prepare_command, quoted as subprocess quotes it.
+    try:
+        command = prepare_command([shutil.which(cmd[0]) or cmd[0], *cmd[1:]])
+    except OSError:
+        command = cmd  # run_process reports the launcher failure
+    line_chars = len(subprocess.list2cmdline(command))
+    if line_chars <= WINDOWS_COMMAND_LINE_LIMIT_CHARS:
+        return None
+    Path(tmp_log_path).unlink(missing_ok=True)
+    return _request_fatal(
+        params,
+        f"agy command line is {line_chars} characters, above the Windows limit of {WINDOWS_COMMAND_LINE_LIMIT_CHARS} characters for a command line",
+    )
+
+
 async def execute(
     params: BackendParams,
     *,
@@ -342,38 +388,10 @@ async def execute(
 
     with tempfile.NamedTemporaryFile(suffix=".log", delete=False) as tmp:
         tmp_log_path = tmp.name
-    cmd = [
-        "agy",
-        "--dangerously-skip-permissions",
-        *params.args,
-        "--output-format",
-        "stream-json",
-    ]
-    cmd.extend([
-        "--log-file",
-        tmp_log_path,
-    ])
-    if params.SESSION_ID:
-        cmd.extend(["--conversation", params.SESSION_ID])
-    else:
-        cmd.append("--new-project")
-    # Keep Refract-owned transport arguments after target arguments:
-    # callers may tune the CLI, but cannot replace the prompt or log.
-    cmd.extend(["--print", params.PROMPT])
-
-    if os.name == "nt":
-        # Measure the line CreateProcess receives: the resolved launcher after prepare_command, quoted as subprocess quotes it.
-        try:
-            command = prepare_command([shutil.which(cmd[0]) or cmd[0], *cmd[1:]])
-        except OSError:
-            command = cmd  # run_process reports the launcher failure
-        line_chars = len(subprocess.list2cmdline(command))
-        if line_chars > WINDOWS_COMMAND_LINE_LIMIT_CHARS:
-            Path(tmp_log_path).unlink(missing_ok=True)
-            return _request_fatal(
-                params,
-                f"agy command line is {line_chars} characters, above the Windows limit of {WINDOWS_COMMAND_LINE_LIMIT_CHARS} characters for a command line",
-            )
+    cmd = _command(params, tmp_log_path)
+    failure = _windows_line_failure(params, cmd, tmp_log_path)
+    if failure is not None:
+        return failure
 
     deadline = time.monotonic() + params.timeout_s if params.timeout_s and params.timeout_s > 0 else None
     run = AgyRun(params, on_event)

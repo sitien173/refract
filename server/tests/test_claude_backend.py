@@ -24,6 +24,7 @@ from refract.config import TargetConfig
 from refract.drivers import DriverRegistry
 from refract.telemetry import TokenCounters
 from tests.claude_cli import stub_claude
+from tests.telemetry_helpers import tokens as _tokens
 
 USAGE_FIXTURE = Path(__file__).parent / "fixtures" / "usage" / "claude.jsonl"
 SESSION_FIXTURE = "00000000-0000-0000-0000-000000000000"
@@ -318,3 +319,109 @@ async def test_parser_keeps_bounded_diagnostics_and_the_first_fatal_line():
     assert len(run.diagnostics) <= claude.MAX_DIAGNOSTICS + 1
     assert "Error: not logged in" in run.diagnostics
     assert run.outcome(ProcessOutcome()).error_class == "fatal_backend"
+
+
+# --- Characterization: result capacity and totals ---
+
+
+def _feed_lines(*lines: str, stream: bool = True) -> tuple[claude.ClaudeRun, list[dict]]:
+    events: list[dict] = []
+
+    async def sink(event: dict) -> None:
+        events.append(event)
+
+    run = claude.ClaudeRun(BackendParams(PROMPT="p", cd=Path(".")), sink if stream else None)
+
+    async def go() -> None:
+        for line in lines:
+            await run.feed(line)
+
+    asyncio.run(go())
+    return run, events
+
+
+def _assistant_line(model: str) -> str:
+    return json.dumps({"type": "assistant", "message": {"model": model}})
+
+
+@pytest.mark.parametrize(
+    ("lines", "window"),
+    [
+        pytest.param(
+            [_result_line(modelUsage={"only": {"contextWindow": 200}})],
+            200,
+            id="single-model-without-active-model",
+        ),
+        pytest.param(
+            [_assistant_line("b"), _result_line(modelUsage={"a": {"contextWindow": 100}, "b": {"contextWindow": 300}})],
+            300,
+            id="active-model-selects-its-entry",
+        ),
+        pytest.param(
+            [_result_line(modelUsage={"a": {"contextWindow": 100}, "b": {"contextWindow": 300}})],
+            None,
+            id="several-models-without-active-model",
+        ),
+        pytest.param(
+            [_assistant_line("zzz"), _result_line(modelUsage={"only": {"contextWindow": 200}})],
+            None,
+            id="active-model-missing-from-usage",
+        ),
+        pytest.param([_result_line(modelUsage={"only": "x"})], None, id="stats-not-a-dict"),
+        pytest.param([_result_line(modelUsage={"only": {"contextWindow": 0}})], None, id="zero-window"),
+        pytest.param([_result_line(modelUsage={"only": {"contextWindow": -5}})], None, id="negative-window"),
+        pytest.param([_result_line(modelUsage={"only": {}})], None, id="no-window-key"),
+        pytest.param([_result_line(modelUsage=["only"])], None, id="model-usage-not-a-dict"),
+        pytest.param([_result_line(modelUsage={})], None, id="empty-model-usage"),
+        pytest.param([_result_line()], None, id="no-model-usage"),
+    ],
+)
+def test_result_capacity_comes_from_the_selected_model_usage_entry(lines, window):
+    run, events = _feed_lines(*lines)
+
+    assert run.counters.as_dict() == _tokens(context_window=window)
+    expected = [{"kind": "telemetry.updated", "data": _tokens(context_window=window)}] if window else []
+    assert events == expected
+
+
+def test_result_usage_records_totals_then_capacity_with_one_event_each():
+    usage = {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 2, "cache_creation_input_tokens": 1}
+    run, events = _feed_lines(_result_line(usage=usage, modelUsage={"m": {"contextWindow": 500}}))
+
+    totals = _tokens(input=13, output=5, cache_read=2, cache_write=1)
+    assert events == [
+        {"kind": "telemetry.updated", "data": totals},
+        {"kind": "telemetry.updated", "data": {**totals, "context_window": 500}},
+    ]
+    assert run.counters.as_dict() == {**totals, "context_window": 500}
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param("x", id="usage-not-a-dict"),
+        pytest.param({}, id="empty-usage"),
+    ],
+)
+def test_result_without_observed_usage_records_no_totals(usage):
+    run, events = _feed_lines(_result_line(usage=usage))
+
+    assert run.counters.as_dict() == _tokens()
+    assert events == []
+
+
+def test_result_usage_without_a_sink_still_records_totals_and_capacity():
+    run, events = _feed_lines(
+        _result_line(usage={"input_tokens": 3, "output_tokens": 4}, modelUsage={"m": {"contextWindow": 9}}),
+        stream=False,
+    )
+
+    assert run.counters.as_dict() == _tokens(input=3, output=4, context_window=9)
+    assert events == []
+
+
+def test_result_with_a_malformed_count_is_observed_and_emits_empty_totals():
+    run, events = _feed_lines(_result_line(usage={"input_tokens": -1}))
+
+    assert run.counters.as_dict() == _tokens()
+    assert events == [{"kind": "telemetry.updated", "data": _tokens()}]

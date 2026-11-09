@@ -48,6 +48,10 @@ log = get_logger("runtime")
 RETENTION_INTERVAL_S = 3600
 DEFAULT_RETENTION_DAYS = 7
 MAX_ANSWER_LENGTH = 8192
+UNKNOWN_JOB_MESSAGE = "Job does not exist."
+_LIST_JOB_ID_ACTION = "Call list for the project and use a listed job ID."
+_DESKTOP_NOTIFICATION_FAILED = "Desktop notification failed"
+_DESKTOP_NOTIFICATION_FAILED_EVENT = "job.desktop_notification_failed"
 
 
 class OrchestrationError(ValueError):
@@ -125,8 +129,8 @@ class Runtime:
             return
         if lookup_error is not None:
             log.warning(
-                "Desktop notification failed",
-                extra={"event": "job.desktop_notification_failed", "job_id": job_id},
+                _DESKTOP_NOTIFICATION_FAILED,
+                extra={"event": _DESKTOP_NOTIFICATION_FAILED_EVENT, "job_id": job_id},
                 exc_info=(
                     type(lookup_error),
                     lookup_error,
@@ -143,13 +147,13 @@ class Runtime:
             ok = await run_sync(send_job_notification, job, Path(project.root).name)
             if not ok:
                 log.warning(
-                    "Desktop notification failed",
-                    extra={"event": "job.desktop_notification_failed", "job_id": job_id},
+                    _DESKTOP_NOTIFICATION_FAILED,
+                    extra={"event": _DESKTOP_NOTIFICATION_FAILED_EVENT, "job_id": job_id},
                 )
         except Exception:
             log.warning(
-                "Desktop notification failed",
-                extra={"event": "job.desktop_notification_failed", "job_id": job_id},
+                _DESKTOP_NOTIFICATION_FAILED,
+                extra={"event": _DESKTOP_NOTIFICATION_FAILED_EVENT, "job_id": job_id},
                 exc_info=True,
             )
 
@@ -303,61 +307,19 @@ class Runtime:
                 code="unknown_project",
                 next_action="Call submit with a path inside a Git repository.",
             )
-        try:
-            workflow = get_workflow(workflow_name)
-            resolved_prompt = validate_request(workflow, prompt)
-        except ValueError as exc:
-            raise OrchestrationError(
-                str(exc),
-                code="invalid_request",
-                next_action="Correct the workflow or prompt and call submit again.",
-            ) from exc
+        workflow, resolved_prompt = self._validate_request(workflow_name, prompt)
         try:
             with self._lock:
                 catalog = self._project_catalog(Path(project.root), self._reload_catalog_locked())
                 selected_profile = profile.strip() or catalog.default_profile
                 plan = resolve_execution_plan(workflow, catalog, selected_profile)
                 if retry_of:
-                    names = ", ".join(candidate.id for candidate in plan.targets)
-                    if not target:
-                        ids = [candidate.id for candidate in plan.targets]
-                        following = plan.targets[ids.index(after) + 1:] if after in ids else plan.targets
-                        if not following:
-                            raise OrchestrationError(
-                                "No target follows the job's target in profile order.",
-                                code="targets_unavailable",
-                                next_action=f"Call retry with target set to one of: {names}.",
-                            )
-                        self._ensure_candidates_available(replace(plan, targets=following))
-                        target = self._following_target(plan, after) or ""
-                    pinned = next((candidate for candidate in plan.targets if candidate.id == target), None)
-                    if pinned is None:
-                        raise OrchestrationError(
-                            f"Target {target!r} is not in profile {selected_profile}; profile targets: {names}.",
-                            code="invalid_request",
-                            next_action=f"Call retry with target set to one of: {names}.",
-                        )
-                    plan = replace(
-                        plan,
-                        selection=replace(plan.selection, targets=(pinned.id,)),
-                        targets=(pinned,),
-                        environment_targets=tuple(
-                            value for value in plan.environment_targets if value == pinned.id
-                        ),
-                    )
+                    plan = self._pin_retry_target(plan, selected_profile, target, after)
                 self._ensure_candidates_available(plan)
         except OrchestrationError:
             raise
         except ValueError as exc:
-            code = "unknown_profile" if "Unknown profile" in str(exc) else "config_invalid"
-            action = (
-                "Call list and choose an available profile."
-                if code == "unknown_profile"
-                else "Fix the project configuration in .refract/config.toml."
-            )
-            raise OrchestrationError(
-                sanitize_config_error(exc), code=code, next_action=action
-            ) from exc
+            raise self._plan_error(exc) from exc
         self.database.create_job(
             job_id=job_id,
             project_id=project.id,
@@ -370,6 +332,58 @@ class Runtime:
             retry_of=retry_of,
         )
         return project, workflow, selected_profile
+
+    @staticmethod
+    def _validate_request(workflow_name: str, prompt: str) -> tuple[str, str]:
+        try:
+            workflow = get_workflow(workflow_name)
+            return workflow, validate_request(workflow, prompt)
+        except ValueError as exc:
+            raise OrchestrationError(
+                str(exc),
+                code="invalid_request",
+                next_action="Correct the workflow or prompt and call submit again.",
+            ) from exc
+
+    def _pin_retry_target(self, plan: ExecutionPlan, selected_profile: str, target: str, after: str) -> ExecutionPlan:
+        names = ", ".join(candidate.id for candidate in plan.targets)
+        target_id = target
+        if not target_id:
+            ids = [candidate.id for candidate in plan.targets]
+            following = plan.targets[ids.index(after) + 1:] if after in ids else plan.targets
+            if not following:
+                raise OrchestrationError(
+                    "No target follows the job's target in profile order.",
+                    code="targets_unavailable",
+                    next_action=f"Call retry with target set to one of: {names}.",
+                )
+            self._ensure_candidates_available(replace(plan, targets=following))
+            target_id = self._following_target(plan, after) or ""
+        pinned = next((candidate for candidate in plan.targets if candidate.id == target_id), None)
+        if pinned is None:
+            raise OrchestrationError(
+                f"Target {target_id!r} is not in profile {selected_profile}; profile targets: {names}.",
+                code="invalid_request",
+                next_action=f"Call retry with target set to one of: {names}.",
+            )
+        return replace(
+            plan,
+            selection=replace(plan.selection, targets=(pinned.id,)),
+            targets=(pinned,),
+            environment_targets=tuple(
+                value for value in plan.environment_targets if value == pinned.id
+            ),
+        )
+
+    @staticmethod
+    def _plan_error(exc: ValueError) -> OrchestrationError:
+        code = "unknown_profile" if "Unknown profile" in str(exc) else "config_invalid"
+        action = (
+            "Call list and choose an available profile."
+            if code == "unknown_profile"
+            else "Fix the project configuration in .refract/config.toml."
+        )
+        return OrchestrationError(sanitize_config_error(exc), code=code, next_action=action)
 
     def live_routing(self, job: JobView) -> dict[str, object]:
         kind = job.result.failure_kind
@@ -403,9 +417,9 @@ class Runtime:
         job = await run_sync(self.database.job, job_id)
         if job is None:
             raise OrchestrationError(
-                "Job does not exist.",
+                UNKNOWN_JOB_MESSAGE,
                 code="unknown_job",
-                next_action="Call list for the project and use a listed job ID.",
+                next_action=_LIST_JOB_ID_ACTION,
             )
         if job.state in TERMINAL_STATES:
             await self.scheduler.wait(job_id, timeout_s)
@@ -450,9 +464,9 @@ class Runtime:
         job = await run_sync(self.database.job, job_id)
         if job is None:
             raise OrchestrationError(
-                "Job does not exist.",
+                UNKNOWN_JOB_MESSAGE,
                 code="unknown_job",
-                next_action="Call list for the project and use a listed job ID.",
+                next_action=_LIST_JOB_ID_ACTION,
             )
         if job.state in TERMINAL_STATES:
             raise OrchestrationError(
@@ -491,9 +505,9 @@ class Runtime:
         job = await run_sync(self.database.job, job_id)
         if job is None:
             raise OrchestrationError(
-                "Job does not exist.",
+                UNKNOWN_JOB_MESSAGE,
                 code="unknown_job",
-                next_action="Call list for the project and use a listed job ID.",
+                next_action=_LIST_JOB_ID_ACTION,
             )
         if job.state == "queued":
             if location in {"queued", "missing"}:
@@ -541,9 +555,9 @@ class Runtime:
         job = self.database.job(job_id)
         if job is None:
             raise OrchestrationError(
-                "Job does not exist.",
+                UNKNOWN_JOB_MESSAGE,
                 code="unknown_job",
-                next_action="Call list for the project and use a listed job ID.",
+                next_action=_LIST_JOB_ID_ACTION,
             )
         if job.state not in {"succeeded", "failed", "cancelled", "interrupted"}:
             raise OrchestrationError(

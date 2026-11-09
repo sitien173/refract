@@ -15,9 +15,10 @@ def test_fixed_workflows_are_validated_strings() -> None:
 
 def test_request_validation_normalizes_prompt_only() -> None:
     assert validate_request(get_workflow("implement"), "  change it  ") == "change it"
-    assert validate_request(get_workflow("review"), " review it ") == "review it"
+    review = get_workflow("review")
+    assert validate_request(review, " review it ") == "review it"
     with pytest.raises(ValueError, match="Prompt must contain text"):
-        validate_request(get_workflow("review"), "  ")
+        validate_request(review, "  ")
 
 
 def test_unknown_workflow_is_rejected() -> None:

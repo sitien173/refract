@@ -9,7 +9,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, cast
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
@@ -23,6 +23,10 @@ from refract.workers import run_sync
 
 DASHBOARD_HEADER = "X-Refract-Dashboard"
 DASHBOARD_HEADER_VALUE = "1"
+_RUNTIME_INACTIVE = "Refract runtime is not active"
+_MALFORMED_BODY = "Malformed request body"
+_DAEMON_NOT_STOPPED = "The daemon was not stopped."
+_NOTHING_MODIFIED = "Nothing was modified."
 
 
 @dataclass
@@ -88,13 +92,13 @@ def _map_orchestration_error(exc: OrchestrationError) -> Response:
 
 def _runtime(state: DashboardState) -> Any:
     if state.runtime is None:
-        raise RuntimeError("Refract runtime is not active")
+        raise RuntimeError(_RUNTIME_INACTIVE)
     return state.runtime
 
 
 def _runtime_error() -> Response:
     return _error(
-        "Refract runtime is not active",
+        _RUNTIME_INACTIVE,
         503,
         code="runtime_unavailable",
         unchanged="No dashboard data was changed.",
@@ -157,6 +161,58 @@ def _loopback_route(path: str, endpoint: Callable[[Request], Awaitable[Response]
 
 _APP_STATIC_DIR = Path(__file__).parent / "dashboard_static" / "app"
 _OUTPUT_PAGE = 500
+async def _read_ask_body(request: Request) -> dict[str, Any] | Response:
+    try:
+        raw_body = await request.body()
+    except Exception:
+        return _error(_MALFORMED_BODY, 400, code="bad_request")
+
+    if not raw_body:
+        return _error(_MALFORMED_BODY, 400, code="bad_request")
+
+    try:
+        body = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        return _error(_MALFORMED_BODY, 400, code="bad_request")
+
+    if not isinstance(body, dict):
+        return _error(_MALFORMED_BODY, 400, code="bad_request")
+
+    return body
+
+
+def _ask_fields(request: Request, body: dict[str, Any]) -> tuple[str, str, str | None] | Response:
+    token = body.get("token")
+    question = body.get("question")
+    job_id = body.get("job_id") or request.headers.get("x-refract-job-id") or request.query_params.get("job_id")
+
+    if not isinstance(token, str) or not token:
+        return _error("token must be a non-empty string", 400, code="bad_request")
+
+    if not isinstance(question, str) or not question.strip():
+        return _error("question must be a non-empty string", 400, code="bad_request")
+
+    if job_id is not None and not isinstance(job_id, str):
+        return _error("job_id must be a string", 400, code="bad_request")
+
+    return token, question, job_id
+
+
+async def _ask_registry_response(registry: Any, token: str, question: str, timeout_s: Any, job_id: str | None) -> Response:
+    try:
+        answer = await registry.ask(
+            token=token,
+            question=question,
+            timeout_s=timeout_s,
+            job_id=job_id,
+        )
+        return _json_response({"answer": answer}, 200)
+    except AskAuthError:
+        return _error("Forbidden", 403, code="forbidden")
+    except AskConflictError:
+        return _error("A question is already pending for this job", 409, code="conflict")
+
+
 def _register_ask_routes(state: DashboardState) -> list[Route]:
     async def ask(request: Request) -> Response:
         try:
@@ -164,52 +220,21 @@ def _register_ask_routes(state: DashboardState) -> list[Route]:
         except RuntimeError:
             return _runtime_error()
 
-        try:
-            raw_body = await request.body()
-        except Exception:
-            return _error("Malformed request body", 400, code="bad_request")
+        body = await _read_ask_body(request)
+        if isinstance(body, Response):
+            return body
 
-        if not raw_body:
-            return _error("Malformed request body", 400, code="bad_request")
-
-        try:
-            body = json.loads(raw_body.decode("utf-8"))
-        except Exception:
-            return _error("Malformed request body", 400, code="bad_request")
-
-        if not isinstance(body, dict):
-            return _error("Malformed request body", 400, code="bad_request")
-
-        token = body.get("token")
-        question = body.get("question")
-        job_id = body.get("job_id") or request.headers.get("x-refract-job-id") or request.query_params.get("job_id")
-
-        if not isinstance(token, str) or not token:
-            return _error("token must be a non-empty string", 400, code="bad_request")
-
-        if not isinstance(question, str) or not question.strip():
-            return _error("question must be a non-empty string", 400, code="bad_request")
-
-        if job_id is not None and not isinstance(job_id, str):
-            return _error("job_id must be a string", 400, code="bad_request")
+        fields = _ask_fields(request, body)
+        if isinstance(fields, Response):
+            return fields
+        token, question, job_id = fields
 
         registry = getattr(runtime, "ask_registry", None)
         if registry is None:
             return _runtime_error()
 
         timeout_s = getattr(runtime.config, "ask_timeout_s", 300)
-        try:
-            answer = await registry.ask(
-                token=token,
-                question=question,
-                timeout_s=timeout_s,
-                job_id=job_id,
-            )
-            return _json_response({"answer": answer}, 200)
-        except AskAuthError:
-            return _error("Forbidden", 403, code="forbidden")
-        except AskConflictError:
-            return _error("A question is already pending for this job", 409, code="conflict")
+        return await _ask_registry_response(registry, token, question, timeout_s, job_id)
 
     return [
         _loopback_route("/ask", ask, methods=["POST"]),
@@ -217,12 +242,7 @@ def _register_ask_routes(state: DashboardState) -> list[Route]:
 
 
 
-def _check_csrf(request: Request) -> Response | None:
-    origin = request.headers.get("origin")
-    if not origin or origin.lower() == "null":
-        return _api_error("CSRF check failed: Origin header required", 403, code="csrf_rejected")
-
-    origin_split = urlsplit(origin)
+def _check_origin(request: Request, origin_split: SplitResult) -> Response | None:
     if not origin_split.hostname or not _is_loopback_host(origin_split.hostname):
         return _api_error("CSRF check failed: non-loopback Origin", 403, code="csrf_rejected")
 
@@ -245,6 +265,18 @@ def _check_csrf(request: Request) -> Response | None:
     if origin_port != req_port:
         return _api_error("CSRF check failed: port mismatch", 403, code="csrf_rejected")
 
+    return None
+
+
+def _check_csrf(request: Request) -> Response | None:
+    origin = request.headers.get("origin")
+    if not origin or origin.lower() == "null":
+        return _api_error("CSRF check failed: Origin header required", 403, code="csrf_rejected")
+
+    origin_error = _check_origin(request, urlsplit(origin))
+    if origin_error is not None:
+        return origin_error
+
     sec_fetch_site = request.headers.get("sec-fetch-site")
     if sec_fetch_site is not None and sec_fetch_site.strip().lower() != "same-origin":
         return _api_error("CSRF check failed: Sec-Fetch-Site must be same-origin", 403, code="csrf_rejected")
@@ -265,7 +297,7 @@ async def _parse_json_body(request: Request) -> tuple[dict[str, Any] | None, Res
     try:
         raw_body = await request.body()
     except Exception:
-        return None, _api_error("Malformed request body", 400, code="invalid_request")
+        return None, _api_error(_MALFORMED_BODY, 400, code="invalid_request")
 
     if not raw_body:
         return {}, None
@@ -296,7 +328,7 @@ async def _api_post_preamble(
     try:
         runtime = _runtime(state)
     except RuntimeError:
-        return _api_error("Refract runtime is not active", 503, code="runtime_unavailable")
+        return _api_error(_RUNTIME_INACTIVE, 503, code="runtime_unavailable")
 
     job_id = request.path_params["job_id"]
     return runtime, job_id, body
@@ -370,15 +402,15 @@ def _api_shutdown(state: DashboardState, request: Request) -> Response:
             "Unauthorized",
             401,
             code="unauthorized",
-            unchanged="The daemon was not stopped.",
+            unchanged=_DAEMON_NOT_STOPPED,
             recovery="Read the token from daemon.json in the Refract home directory.",
         )
     try:
         runtime = _runtime(state)
     except RuntimeError:
-        return _api_error("Refract runtime is not active", 503, code="runtime_unavailable", unchanged="The daemon was not stopped.")
+        return _api_error(_RUNTIME_INACTIVE, 503, code="runtime_unavailable", unchanged=_DAEMON_NOT_STOPPED)
     if state.request_exit is None:
-        return _api_error("Daemon cannot exit on request", 503, code="shutdown_unavailable", unchanged="The daemon was not stopped.")
+        return _api_error("Daemon cannot exit on request", 503, code="shutdown_unavailable", unchanged=_DAEMON_NOT_STOPPED)
     result = runtime.shutdown_if_idle()
     if result["stopping"]:
         state.request_exit()
@@ -411,10 +443,10 @@ def _api_runtime(state: DashboardState) -> Any | Response:
         return _runtime(state)
     except RuntimeError:
         return _api_error(
-            "Refract runtime is not active",
+            _RUNTIME_INACTIVE,
             503,
             code="runtime_unavailable",
-            unchanged="Nothing was modified.",
+            unchanged=_NOTHING_MODIFIED,
             recovery="Retry after the daemon has started.",
         )
 
@@ -431,11 +463,11 @@ def _api_get_jobs(state: DashboardState, request: Request) -> Response:
             limit_val = int(limit_param)
             if limit_val <= 0 or limit_val > 200:
                 return _api_error(
-                    "limit must be between 1 and 200", 400, code="invalid_request", unchanged="Nothing was modified."
+                    "limit must be between 1 and 200", 400, code="invalid_request", unchanged=_NOTHING_MODIFIED
                 )
         except ValueError:
             return _api_error(
-                "limit must be an integer", 400, code="invalid_request", unchanged="Nothing was modified."
+                "limit must be an integer", 400, code="invalid_request", unchanged=_NOTHING_MODIFIED
             )
 
     cursor_param = request.query_params.get("cursor") or None
@@ -456,7 +488,7 @@ def _api_get_jobs(state: DashboardState, request: Request) -> Response:
             limit=limit_val,
         )
     except ValueError as exc:
-        return _api_error(str(exc), 400, code="invalid_request", unchanged="Nothing was modified.")
+        return _api_error(str(exc), 400, code="invalid_request", unchanged=_NOTHING_MODIFIED)
 
     options = runtime.database.job_filter_options()
     return _api_json_response({
@@ -488,7 +520,7 @@ def _api_get_card(state: DashboardState, request: Request) -> Response:
 
     detail = runtime.database.card_detail(request.path_params["card_id"])
     if detail is None:
-        return _api_error("Card not found", 404, code="unknown_card", unchanged="Nothing was modified.")
+        return _api_error("Card not found", 404, code="unknown_card", unchanged=_NOTHING_MODIFIED)
 
     jobs = [
         {key: job[key] for key in ("workflow", "state", "target", "available")} | {"id": job["job_id"]}
@@ -509,7 +541,7 @@ def _api_get_job_detail(state: DashboardState, request: Request) -> Response:
     job_id = request.path_params["job_id"]
     detail = runtime.database.job_detail(job_id)
     if detail is None:
-        return _api_error("Job not found", 404, code="unknown_job", unchanged="Nothing was modified.")
+        return _api_error("Job not found", 404, code="unknown_job", unchanged=_NOTHING_MODIFIED)
 
     ask_registry = getattr(runtime, "ask_registry", None)
     pending = ask_registry.get_pending(job_id) if ask_registry else None
@@ -571,7 +603,7 @@ def _api_get_job_output(state: DashboardState, request: Request) -> Response:
     job_id = request.path_params["job_id"]
     job = runtime.database.job_record(job_id)
     if job is None:
-        return _api_error("Job not found", 404, code="unknown_job", unchanged="Nothing was modified.")
+        return _api_error("Job not found", 404, code="unknown_job", unchanged=_NOTHING_MODIFIED)
 
     after_str = request.query_params.get("after")
     if after_str is None or after_str == "":
@@ -581,11 +613,11 @@ def _api_get_job_output(state: DashboardState, request: Request) -> Response:
             after = int(after_str)
             if after < 0:
                 return _api_error(
-                    "after must be a non-negative integer", 400, code="invalid_request", unchanged="Nothing was modified."
+                    "after must be a non-negative integer", 400, code="invalid_request", unchanged=_NOTHING_MODIFIED
                 )
         except ValueError:
             return _api_error(
-                "after must be an integer", 400, code="invalid_request", unchanged="Nothing was modified."
+                "after must be an integer", 400, code="invalid_request", unchanged=_NOTHING_MODIFIED
             )
 
     stream_path = runtime.database.stream_path(job_id)
@@ -604,7 +636,7 @@ def _api_get_job_output(state: DashboardState, request: Request) -> Response:
     })
 
 
-def _api_get_targets(state: DashboardState, request: Request) -> Response:
+def _api_get_targets(state: DashboardState) -> Response:
     runtime = _api_runtime(state)
     if isinstance(runtime, Response):
         return runtime
@@ -622,7 +654,7 @@ def _api_fallback(request: Request) -> Response:
         "Not found",
         404,
         code="not_found",
-        unchanged="Nothing was modified.",
+        unchanged=_NOTHING_MODIFIED,
         recovery="Check the API URL.",
     )
 
@@ -677,7 +709,7 @@ def _register_api_routes(state: DashboardState) -> list[Route]:
         return _api_get_job_detail(state, request)
 
     def targets(request: Request) -> Response:
-        return _api_get_targets(state, request)
+        return _api_get_targets(state)
 
     def cards(request: Request) -> Response:
         return _api_get_cards(state, request)

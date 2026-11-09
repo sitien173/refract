@@ -188,59 +188,65 @@ class CodexRun:
 
         if event_type == "turn.completed":
             self.collector.poll()
-            u = parsed.get("usage")
-            if isinstance(u, dict):
-                try:
-                    raw_in = as_int(u.get("input_tokens"))
-                    cached_in = as_int(u.get("cached_input_tokens"))
-                    cw = as_int(u.get("cache_write_input_tokens"))
-                    raw_out = as_int(u.get("output_tokens"))
-                    reasoning_out = as_int(u.get("reasoning_output_tokens"))
-                    if any(v is not None for v in (raw_in, cached_in, cw, raw_out, reasoning_out)):
-                        # Codex input_tokens already includes cached_input_tokens
-                        norm_in = raw_in
-                        norm_out = raw_out
-                        self.turn_counter += 1
-                        turn_id = f"turn_{self.turn_counter}"
-                        self.counters.record_response(
-                            turn_id,
-                            input=norm_in,
-                            output=norm_out,
-                            cache_read=cached_in,
-                            cache_write=cw,
-                        )
-                        if norm_in is not None and norm_out is not None:
-                            try:
-                                val = norm_in + norm_out - (reasoning_out or 0)
-                                if val >= 0 and not self.collector.is_compacted and not self.collector.has_verified_context and not self.collector.budget_exhausted:
-                                    self.counters.record_context(used=val)
-                            except Exception:
-                                log.warning("codex: could not derive context snapshot", exc_info=True)
-
-                        self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
-                except Exception:
-                    log.warning("codex: turn usage processing failed", exc_info=True)
+            self._record_turn_usage(parsed.get("usage"))
             self.collector.poll()
         elif event_type in ("thread.completed", "summary"):
             self.collector.poll()
-            u = parsed.get("usage")
-            if isinstance(u, dict):
-                raw_in = as_int(u.get("input_tokens"))
-                cached_in = as_int(u.get("cached_input_tokens"))
-                cw = as_int(u.get("cache_write_input_tokens"))
-                raw_out = as_int(u.get("output_tokens"))
-                if any(v is not None for v in (raw_in, cached_in, cw, raw_out)):
-                    norm_in = raw_in
-                    norm_out = raw_out
-                    if not self.params.SESSION_ID:
-                        self.counters.record_totals(
-                            input=norm_in,
-                            output=norm_out,
-                            cache_read=cached_in,
-                            cache_write=cw,
-                        )
-                        self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+            self._record_final_usage(parsed.get("usage"))
             self.collector.poll()
+
+    def _record_turn_usage(self, u: Any) -> None:
+        if not isinstance(u, dict):
+            return
+        try:
+            raw_in = as_int(u.get("input_tokens"))
+            cached_in = as_int(u.get("cached_input_tokens"))
+            cw = as_int(u.get("cache_write_input_tokens"))
+            raw_out = as_int(u.get("output_tokens"))
+            reasoning_out = as_int(u.get("reasoning_output_tokens"))
+            if not any(v is not None for v in (raw_in, cached_in, cw, raw_out, reasoning_out)):
+                return
+            # Codex input_tokens already includes cached_input_tokens
+            self.turn_counter += 1
+            turn_id = f"turn_{self.turn_counter}"
+            self.counters.record_response(
+                turn_id,
+                input=raw_in,
+                output=raw_out,
+                cache_read=cached_in,
+                cache_write=cw,
+            )
+            self._record_turn_context(raw_in, raw_out, reasoning_out)
+            self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
+        except Exception:
+            log.warning("codex: turn usage processing failed", exc_info=True)
+
+    def _record_turn_context(self, norm_in: int | None, norm_out: int | None, reasoning_out: int | None) -> None:
+        """Derive a context snapshot from turn usage unless the rollout already owns the context."""
+        if norm_in is None or norm_out is None:
+            return
+        try:
+            val = norm_in + norm_out - (reasoning_out or 0)
+            if val >= 0 and not self.collector.is_compacted and not self.collector.has_verified_context and not self.collector.budget_exhausted:
+                self.counters.record_context(used=val)
+        except Exception:
+            log.warning("codex: could not derive context snapshot", exc_info=True)
+
+    def _record_final_usage(self, u: Any) -> None:
+        if not isinstance(u, dict):
+            return
+        raw_in = as_int(u.get("input_tokens"))
+        cached_in = as_int(u.get("cached_input_tokens"))
+        cw = as_int(u.get("cache_write_input_tokens"))
+        raw_out = as_int(u.get("output_tokens"))
+        if any(v is not None for v in (raw_in, cached_in, cw, raw_out)) and not self.params.SESSION_ID:
+            self.counters.record_totals(
+                input=raw_in,
+                output=raw_out,
+                cache_read=cached_in,
+                cache_write=cw,
+            )
+            self.events.emit({"kind": "telemetry.updated", "data": self.counters.as_dict()})
 
     def outcome(self, process: ProcessOutcome) -> BackendResult:
         """Normalize the parsed stream and the transport outcome into a backend result."""

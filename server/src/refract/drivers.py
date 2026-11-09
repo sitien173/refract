@@ -41,6 +41,64 @@ class DriverResult:
     tokens: dict[str, int | None] = field(default_factory=lambda: dict.fromkeys(TOKEN_KEYS))
 
 
+def _agy_args(target: TargetConfig, args: list[str]) -> None:
+    if target.model:
+        args.extend(["--model", target.model])
+
+
+def _codex_args(target: TargetConfig, args: list[str]) -> None:
+    if target.backend_profile:
+        args.extend(["--profile", target.backend_profile])
+    if target.model:
+        args.extend(["--model", target.model])
+        if target.backend_profile:
+            escaped = target.model.replace("\\", "\\\\").replace('"', '\\"')
+            args.extend(["-c", f'model="{escaped}"'])
+    if target.reasoning:
+        args.extend(["-c", f"model_reasoning_effort={target.reasoning}"])
+
+
+def _pi_args(target: TargetConfig, args: list[str]) -> None:
+    if target.isolated:
+        args.extend(
+            [
+                "--no-approve",
+                "--no-context-files",
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+            ]
+        )
+    else:
+        # Append after user args so normal targets cannot disable the
+        # daemon's required non-interactive project approval.
+        args.append("--approve")
+    if target.system_prompt:
+        args.extend(["--system-prompt", target.system_prompt])
+    if target.read_only:
+        args.extend(["--tools", "read,grep,find,ls"])
+    if target.model:
+        args.extend(["--model", target.model])
+    if target.reasoning:
+        args.extend(["--thinking", target.reasoning])
+
+
+def _claude_args(target: TargetConfig, args: list[str]) -> None:
+    if target.isolated:
+        args.extend(["--safe-mode", "--strict-mcp-config"])
+    if target.system_prompt:
+        args.extend(["--system-prompt", target.system_prompt])
+    if target.read_only:
+        args.extend(["--tools", "Read,Grep,Glob"])
+    if target.model:
+        args.extend(["--model", target.model])
+    if target.reasoning:
+        args.extend(["--effort", target.reasoning])
+
+
+_ARGS_BUILDERS = {"agy": _agy_args, "codex": _codex_args, "pi": _pi_args, "claude": _claude_args}
+
+
 def _target_args(target: TargetConfig) -> tuple[str, ...]:
     """Translate target policy into backend argv.
 
@@ -54,59 +112,9 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
         isolated=target.isolated,
     )
     args = list(target.args)
-    if target.backend == "agy":
-        if target.model:
-            args.extend(["--model", target.model])
-        return tuple(args)
-
-    if target.backend == "codex":
-        if target.backend_profile:
-            args.extend(["--profile", target.backend_profile])
-        if target.model:
-            args.extend(["--model", target.model])
-            if target.backend_profile:
-                escaped = target.model.replace("\\", "\\\\").replace('"', '\\"')
-                args.extend(["-c", f'model="{escaped}"'])
-        if target.reasoning:
-            args.extend(["-c", f"model_reasoning_effort={target.reasoning}"])
-        return tuple(args)
-
-    if target.backend == "pi":
-        if target.isolated:
-            args.extend(
-                [
-                    "--no-approve",
-                    "--no-context-files",
-                    "--no-extensions",
-                    "--no-skills",
-                    "--no-prompt-templates",
-                ]
-            )
-        else:
-            # Append after user args so normal targets cannot disable the
-            # daemon's required non-interactive project approval.
-            args.append("--approve")
-        if target.system_prompt:
-            args.extend(["--system-prompt", target.system_prompt])
-        if target.read_only:
-            args.extend(["--tools", "read,grep,find,ls"])
-        if target.model:
-            args.extend(["--model", target.model])
-        if target.reasoning:
-            args.extend(["--thinking", target.reasoning])
-        return tuple(args)
-
-    if target.backend == "claude":
-        if target.isolated:
-            args.extend(["--safe-mode", "--strict-mcp-config"])
-        if target.system_prompt:
-            args.extend(["--system-prompt", target.system_prompt])
-        if target.read_only:
-            args.extend(["--tools", "Read,Grep,Glob"])
-        if target.model:
-            args.extend(["--model", target.model])
-        if target.reasoning:
-            args.extend(["--effort", target.reasoning])
+    build = _ARGS_BUILDERS.get(target.backend)
+    if build is not None:
+        build(target, args)
     return tuple(args)
 
 

@@ -34,7 +34,8 @@ def test_run_blocks_helper_covers_both_forms():
     blocks = run_blocks(text)
     assert len(blocks) == 2
     assert "${{ a }}" in blocks[0]
-    assert "${{ b }}" in blocks[1] and "${{ c }}" not in blocks[1]
+    assert "${{ b }}" in blocks[1]
+    assert "${{ c }}" not in blocks[1]
 
 
 def test_no_expression_inside_run_blocks():
@@ -79,7 +80,8 @@ def test_bump_atomic_push_and_dispatch():
     assert re.search(r'git push --atomic origin HEAD:main "refs/tags/v\$VERSION"', text)
     assert 'gh workflow run release.yml --ref "v$VERSION"' in text
     assert "GH_TOKEN: ${{ github.token }}" in text
-    assert "--force" not in text and "push -f" not in text
+    assert "--force" not in text
+    assert "push -f" not in text
 
 
 def test_bump_guards_precede_commit():

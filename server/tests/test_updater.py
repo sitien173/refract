@@ -344,8 +344,9 @@ def test_release_unknown_installed_version_fails(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.parametrize("target", ["https://evil.example/x", "http://api.github.com/x", "https://api.github.com.evil.example/x"])
 def test_redirect_handler_refuses_other_hosts(target: str) -> None:
     handler = updater._SameHostRedirect()
+    request = Request(updater.RELEASE_URL)
     with pytest.raises(URLError):
-        handler.redirect_request(Request(updater.RELEASE_URL), None, 302, "Found", {}, target)
+        handler.redirect_request(request, None, 302, "Found", {}, target)
 
 
 def test_redirect_handler_allows_same_host() -> None:
@@ -353,7 +354,8 @@ def test_redirect_handler_allows_same_host() -> None:
     new = handler.redirect_request(
         Request(updater.RELEASE_URL), None, 302, "Found", {}, "https://api.github.com/repos/other"
     )
-    assert new is not None and new.full_url == "https://api.github.com/repos/other"
+    assert new is not None
+    assert new.full_url == "https://api.github.com/repos/other"
 
 
 def test_release_cross_host_redirect_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -552,7 +554,8 @@ def test_claude_launcher_resolved_by_which_runs(env: Env) -> None:
     """The host tool is whatever `shutil.which` resolves: a `.cmd` shim on Windows, a script elsewhere."""
     env.stub("claude", json.dumps(PLUGIN))
     resolved = shutil.which("claude")
-    assert resolved is not None and Path(resolved).parent == env.stubs
+    assert resolved is not None
+    assert Path(resolved).parent == env.stubs
     status, plugins = updater._host_json("claude", "plugin", "list", "--json")
     assert (status, plugins) == ("ok", PLUGIN)
     assert env.call_log() == ["claude plugin list --json"]
@@ -737,7 +740,8 @@ def test_check_writes_schema_1_cache(env: Env, repos: Repos, monkeypatch: pytest
     assert exit_info.value.code == 0
     data = read(env)
     assert set(data) == {"schema", "checked_at", "update_available", "latest_version", "latest_commit", "components"}
-    assert data["schema"] == 1 and data["update_available"] is True
+    assert data["schema"] == 1
+    assert data["update_available"] is True
     assert data["latest_commit"] == sha[:12]
     assert data["components"] == [
         {"name": "server", "source": "clone", "state": "update", "detail": "behind upstream"}
@@ -807,7 +811,8 @@ def test_force_bypasses_throttle(env: Env, repos: Repos, monkeypatch: pytest.Mon
     repos.upstream_commit("b")
     updater.run_check(force=True, now=lambda: 1001.0, out=lambda _l: None)
     data = read(env)
-    assert data["checked_at"] == 1001.0 and data["update_available"] is True
+    assert data["checked_at"] == 1001.0
+    assert data["update_available"] is True
 
 
 @pytest.mark.parametrize("argv, force", [(["update", "--check"], False), (["update", "--check", "--force"], True)])
@@ -816,7 +821,8 @@ def test_cli_passes_force_flag(argv: list[str], force: bool, monkeypatch: pytest
     monkeypatch.setattr(updater, "run_check", lambda force: seen.append(force) or 0)
     with pytest.raises(SystemExit) as exit_info:
         cli.main(argv)
-    assert exit_info.value.code == 0 and seen == [force]
+    assert exit_info.value.code == 0
+    assert seen == [force]
 
 
 def test_future_checked_at_does_not_throttle(env: Env, repos: Repos, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -880,7 +886,8 @@ def test_valid_latest_values_are_written(env: Env, monkeypatch: pytest.MonkeyPat
     release(monkeypatch, {"tag_name": "v2.6.0"})
     updater.run_check(now=lambda: 1.0, out=lambda _l: None)
     data = read(env)
-    assert data["latest_version"] == "2.6.0" and data["update_available"] is True
+    assert data["latest_version"] == "2.6.0"
+    assert data["update_available"] is True
 
 
 @pytest.mark.parametrize(
@@ -894,7 +901,8 @@ def test_bad_cache_is_treated_as_absent_and_rewritten(env: Env, content: str, mo
     cache_file(env).write_text(content)
     monkeypatch.setattr(updater, "discover", lambda: [Install("codex", "unknown", "manual", "m")])
     updater.run_check(now=lambda: 1e12 + 5, out=lambda _l: None)
-    assert read(env)["schema"] == 1 and read(env)["components"][0]["name"] == "codex"
+    assert read(env)["schema"] == 1
+    assert read(env)["components"][0]["name"] == "codex"
 
 
 def test_symlinked_cache_is_replaced_not_followed(env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -924,7 +932,8 @@ def test_cache_write_is_atomic(env: Env, monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(updater.os, "replace", spy)
     updater.write_cache(path, {"schema": 1, "checked_at": 1.0})
-    assert Path(replaced[0][0]).parent == path.parent and Path(replaced[0][1]) == path
+    assert Path(replaced[0][0]).parent == path.parent
+    assert Path(replaced[0][1]) == path
     assert sorted(p.name for p in path.parent.iterdir()) == ["update-check.json"]
 
 
@@ -978,8 +987,10 @@ def spy_popen(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, dict[str, Any]
 
 def check_popens(popens: list[tuple[Any, dict[str, Any]]]) -> None:
     for args, kwargs in popens:
-        assert isinstance(args, list) and all(isinstance(a, str) for a in args)
-        assert not kwargs.get("shell") and kwargs.get("stdin") is subprocess.DEVNULL
+        assert isinstance(args, list)
+        assert all(isinstance(a, str) for a in args)
+        assert not kwargs.get("shell")
+        assert kwargs.get("stdin") is subprocess.DEVNULL
 
 
 def test_every_subprocess_uses_argument_list_and_timeout(env: Env, repos: Repos, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1000,8 +1011,10 @@ def test_every_subprocess_uses_argument_list_and_timeout(env: Env, repos: Repos,
     assert calls
     check_popens(popens)
     for args, kwargs in calls:
-        assert isinstance(args, list) and all(isinstance(a, str) for a in args)
-        assert kwargs.get("timeout") and not kwargs.get("shell")
+        assert isinstance(args, list)
+        assert all(isinstance(a, str) for a in args)
+        assert kwargs.get("timeout")
+        assert not kwargs.get("shell")
     assert any(a[:2] == ["git", "-C"] and "fetch" in a for a, _ in calls)
     assert not any("pull" in a for a, _ in calls)
 
@@ -1030,7 +1043,8 @@ def test_end_to_end_claude_and_pi_share_one_clone(env: Env, repos: Repos, monkey
     ]
     assert data["components"][3]["detail"] == "untrusted source"
     assert fetches == [repos.clone.resolve()]
-    assert data["latest_commit"] == sha[:12] and data["update_available"] is True
+    assert data["latest_commit"] == sha[:12]
+    assert data["update_available"] is True
 
 
 # --- phase 3 task 1: phase 2 debt ---------------------------------------
@@ -1060,7 +1074,8 @@ def test_open_release_uses_same_host_redirect_handler(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(updater, "build_opener", fake_build)
     assert REAL_OPEN_RELEASE(Request(updater.RELEASE_URL), 1.0) == "response"
-    assert len(handlers) == 1 and isinstance(handlers[0], updater._SameHostRedirect)
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], updater._SameHostRedirect)
 
 
 def test_check_exits_quietly_when_check_lock_is_held(env: Env, repos: Repos, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1070,7 +1085,8 @@ def test_check_exits_quietly_when_check_lock_is_held(env: Env, repos: Repos, mon
         assert held
         lines: list[str] = []
         assert updater.run_check(out=lines.append) == 0
-    assert lines == [] and not cache_file(env).exists()
+    assert lines == []
+    assert not cache_file(env).exists()
 
 
 def test_concurrent_checks_cannot_both_pass_the_throttle(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1092,7 +1108,8 @@ def test_concurrent_checks_cannot_both_pass_the_throttle(env: Env, monkeypatch: 
     assert updater.run_check(out=lines.append) == 0
     proceed.set()
     first.join(5)
-    assert lines == [] and classified == [1]
+    assert lines == []
+    assert classified == [1]
 
 
 def test_check_is_not_blocked_by_update_lock(env: Env, repos: Repos, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1299,7 +1316,8 @@ def test_busy_daemon_refuses_and_changes_nothing(env: Env, repos: Repos, pending
     lines: list[str] = []
     assert run_update(lines) == 1
     assert "Refused: 1 running, 2 queued job(s). Nothing was changed." in lines
-    assert applied == [] and env.call_log() == DISCOVERY_ONLY
+    assert applied == []
+    assert env.call_log() == DISCOVERY_ONLY
     assert git(repos.clone, "rev-parse", "HEAD") == head
     assert not cache_file(env).exists()
     assert daemon.requests == [("/dashboard/api/shutdown", f"Bearer {TOKEN}")]
@@ -1359,9 +1377,11 @@ def test_old_daemon_404_asks_for_manual_stop(env: Env, pending: str, make_daemon
     daemon.write_daemon_file()
     lines: list[str] = []
     assert run_update(lines) == 1
-    assert applied == [] and env.call_log() == DISCOVERY_ONLY
+    assert applied == []
+    assert env.call_log() == DISCOVERY_ONLY
     text = "\n".join(lines)
-    assert "Stop the running Refract daemon" in text and "run refract update again" in text
+    assert "Stop the running Refract daemon" in text
+    assert "run refract update again" in text
 
 
 def test_missing_daemon_file_with_live_port_asks_for_manual_stop(env: Env, pending: str, make_daemon: Any, applied: list[bool]) -> None:
@@ -1369,7 +1389,8 @@ def test_missing_daemon_file_with_live_port_asks_for_manual_stop(env: Env, pendi
     daemon.write_config()
     lines: list[str] = []
     assert run_update(lines) == 1
-    assert applied == [] and daemon.requests == []
+    assert applied == []
+    assert daemon.requests == []
     assert "Stop the running Refract daemon" in "\n".join(lines)
 
 
@@ -1384,10 +1405,29 @@ def test_other_http_errors_fail_before_apply(env: Env, pending: str, make_daemon
     assert TOKEN not in "\n".join(lines)
 
 
+@pytest.mark.parametrize(
+    ("status", "line"),
+    [
+        (401, "Failed: the daemon rejected the runtime token. Nothing was changed."),
+        (503, "Failed: the daemon cannot stop on request. Nothing was changed."),
+        (500, "Failed: the daemon answered HTTP 500. Nothing was changed."),
+    ],
+    ids=["401-rejected-token", "503-cannot-stop", "500-other-status"],
+)
+def test_shutdown_http_failure_prints_exact_line(env: Env, pending: str, make_daemon: Any, applied: list[bool], status: int, line: str) -> None:
+    daemon = make_daemon(status=status, body={"error": {"code": "x"}})
+    daemon.write_daemon_file()
+    lines: list[str] = []
+    assert run_update(lines) == 1
+    assert applied == []
+    assert lines == [line]
+
+
 def test_malformed_shutdown_reply_fails_before_apply(env: Env, pending: str, make_daemon: Any, applied: list[bool]) -> None:
     daemon = make_daemon(body={"stopping": "yes"})
     daemon.write_daemon_file()
-    assert run_update() == 1 and applied == []
+    assert run_update() == 1
+    assert applied == []
 
 
 def test_latch_timeout_fails_before_apply(env: Env, pending: str, make_daemon: Any, monkeypatch: pytest.MonkeyPatch, applied: list[bool]) -> None:
@@ -1400,6 +1440,16 @@ def test_latch_timeout_fails_before_apply(env: Env, pending: str, make_daemon: A
     assert any(line.startswith("Failed:") and "did not stop" in line for line in lines)
 
 
+def test_latch_timeout_prints_exact_did_not_stop_line(env: Env, pending: str, make_daemon: Any, monkeypatch: pytest.MonkeyPatch, applied: list[bool]) -> None:
+    monkeypatch.setattr(updater, "LATCH_WAIT_S", 0.3)
+    daemon = make_daemon(body={"stopping": True, "running": 0, "queued": 0})
+    daemon.write_daemon_file()
+    lines: list[str] = []
+    assert run_update(lines) == 1
+    assert applied == []
+    assert lines == ["Failed: the daemon did not stop in time. The daemon may be stopping; run: refract serve No update was applied."]
+
+
 def test_lock_contention_exits_one(env: Env, pending: str, applied: list[bool]) -> None:
     env.refract_home.mkdir()
     with updater._file_lock(env.refract_home / "update.lock") as held:
@@ -1407,7 +1457,8 @@ def test_lock_contention_exits_one(env: Env, pending: str, applied: list[bool]) 
         lines: list[str] = []
         assert run_update(lines) == 1
     assert lines == ["Another refract update is running."]
-    assert applied == [] and env.call_log() == []
+    assert applied == []
+    assert env.call_log() == []
 
 
 def test_nothing_to_update_never_touches_daemon(env: Env, repos: Repos, monkeypatch: pytest.MonkeyPatch, make_daemon: Any) -> None:
@@ -1416,8 +1467,10 @@ def test_nothing_to_update_never_touches_daemon(env: Env, repos: Repos, monkeypa
     daemon.write_daemon_file()
     lines: list[str] = []
     assert run_update(lines) == 0
-    assert daemon.requests == [] and env.call_log() == []
-    assert lines and "current" in lines[0]
+    assert daemon.requests == []
+    assert env.call_log() == []
+    assert lines
+    assert "current" in lines[0]
 
 
 def test_update_lock_is_released_after_run(env: Env, pending: str, make_daemon: Any, applied: list[bool]) -> None:
@@ -1553,7 +1606,8 @@ def test_clone_that_became_unsafe_at_recheck_is_skipped(env: Env, repos: Repos, 
     outcomes = updater._apply_updates(installs, result)
     expected = {"dirty": "dirty", "detached": "detached HEAD", "merge": "unfinished operation"}[mutation]
     assert [(o.name, o.status, o.detail) for o in outcomes] == [(n, "skipped", expected) for n in ("server", "claude", "pi")]
-    assert pulls == [] and host_calls(env) == []
+    assert pulls == []
+    assert host_calls(env) == []
     assert git(repos.clone, "rev-parse", "HEAD") == head
 
 
@@ -1618,7 +1672,8 @@ def test_claude_enabled_state_lost_is_failed_with_restore_command(env: Env, repo
 def test_claude_reinstall_failure_names_the_restore_command(env: Env, repos: Repos, shared: str) -> None:
     force_reinstall_setup(env, repos, shared, install_code=1)
     outcome = apply_now()[1]
-    assert outcome.status == "failed" and outcome.detail.startswith("reinstall failed (exit 1)")
+    assert outcome.status == "failed"
+    assert outcome.detail.startswith("reinstall failed (exit 1)")
     assert "claude plugin install refract@refract -s user" in outcome.detail
 
 
@@ -1666,7 +1721,8 @@ def test_server_uv_tool_github_reinstalls_at_the_validated_tag(env: Env, tmp_pat
 def test_server_github_outside_uv_tool_is_manual(env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     github_server(env, monkeypatch, tmp_path, uv_tool=False)
     [outcome] = apply_now()
-    assert outcome.status == "manual" and "@v2.6.0#subdirectory=server" in outcome.detail
+    assert outcome.status == "manual"
+    assert "@v2.6.0#subdirectory=server" in outcome.detail
     assert outcome.detail.startswith("uv pip install -p ")
     assert host_calls(env) == []
 
@@ -1676,13 +1732,15 @@ def test_unvalidated_version_never_reaches_a_command(env: Env) -> None:
     installs = [Install("server", "github", None, "", uv_tool=True, version="2.5.0")]
     result = updater.CheckResult((updater.Component("server", "github", "update", "x"),), "2.6.0; touch x", None)
     [outcome] = updater._apply_updates(installs, result)
-    assert outcome.status == "failed" and host_calls(env) == []
+    assert outcome.status == "failed"
+    assert host_calls(env) == []
 
 
 def test_unknown_server_install_is_manual_with_a_command(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
     use_dist(monkeypatch, None)
     [outcome] = apply_now()
-    assert outcome.status == "manual" and outcome.detail.startswith("uv pip install -p ")
+    assert outcome.status == "manual"
+    assert outcome.detail.startswith("uv pip install -p ")
 
 
 def test_pi_git_source_runs_pi_update(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1777,10 +1835,14 @@ def test_apply_subprocesses_use_argument_lists_timeouts_and_closed_stdin(env: En
     popens = spy_popen(monkeypatch)
     apply_now()
     check_popens(popens)
-    assert any(a[:2] == ["git", "-C"] and "pull" in a for a, _ in calls) and any(c.startswith("uv ") for c in env.call_log())
+    assert any(a[:2] == ["git", "-C"] and "pull" in a for a, _ in calls)
+    assert any(c.startswith("uv ") for c in env.call_log())
     for args, kwargs in calls:
-        assert isinstance(args, list) and all(isinstance(a, str) for a in args)
-        assert kwargs.get("timeout") and not kwargs.get("shell") and kwargs.get("stdin") is subprocess.DEVNULL
+        assert isinstance(args, list)
+        assert all(isinstance(a, str) for a in args)
+        assert kwargs.get("timeout")
+        assert not kwargs.get("shell")
+        assert kwargs.get("stdin") is subprocess.DEVNULL
 
 
 def test_updater_has_no_function_level_imports() -> None:
@@ -1883,9 +1945,12 @@ def test_spawn_serve_is_detached_with_an_argument_list(monkeypatch: pytest.Monke
     monkeypatch.setattr(updater.subprocess, "Popen", lambda args, **kwargs: seen.append((args, kwargs)))
     updater._spawn_serve()
     [(args, kwargs)] = seen
-    assert isinstance(args, list) and args[1:] == ["serve"] and Path(args[0]).stem.lower() == "refract"
+    assert isinstance(args, list)
+    assert args[1:] == ["serve"]
+    assert Path(args[0]).stem.lower() == "refract"
     assert kwargs["stdin"] is kwargs["stdout"] is kwargs["stderr"] is subprocess.DEVNULL
-    assert kwargs["start_new_session"] is True and not kwargs.get("shell")
+    assert kwargs["start_new_session"] is True
+    assert not kwargs.get("shell")
 
 
 def test_report_has_one_line_per_component_in_the_fixed_vocabulary(env: Env, pending: str, make_daemon: Any, restart: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1948,7 +2013,8 @@ def test_nothing_to_update_prints_components_and_refreshes_cache(env: Env, repos
     lines: list[str] = []
     assert run_update(lines) == 0
     assert lines == ["server (clone): current up to date"]
-    assert read(env)["update_available"] is False and restart["spawned"] == 0
+    assert read(env)["update_available"] is False
+    assert restart["spawned"] == 0
 
 
 def test_cache_write_failure_does_not_fail_the_run(env: Env, shared: str, make_daemon: Any, restart: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2008,8 +2074,11 @@ def test_symlinked_update_lock_is_not_followed(env: Env, pending: str, tmp_path:
     (env.refract_home / "update.lock").symlink_to(target)
     lines: list[str] = []
     assert run_update(lines) == 1
-    assert len(lines) == 1 and lines[0].startswith("Failed:") and "update.lock" in lines[0]
-    assert not target.exists() and applied == []
+    assert len(lines) == 1
+    assert lines[0].startswith("Failed:")
+    assert "update.lock" in lines[0]
+    assert not target.exists()
+    assert applied == []
 
 
 def test_symlinked_check_lock_exits_quietly(env: Env, repos: Repos, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2019,7 +2088,9 @@ def test_symlinked_check_lock_exits_quietly(env: Env, repos: Repos, tmp_path: Pa
     (env.refract_home / "update-check.lock").symlink_to(target)
     lines: list[str] = []
     assert updater.run_check(out=lines.append) == 0
-    assert lines == [] and not target.exists() and not cache_file(env).exists()
+    assert lines == []
+    assert not target.exists()
+    assert not cache_file(env).exists()
 
 
 def test_latch_wait_timeout_hints_the_daemon_may_be_stopping(env: Env, pending: str, make_daemon: Any, monkeypatch: pytest.MonkeyPatch, applied: list[bool]) -> None:
@@ -2272,7 +2343,8 @@ def test_classify_non_user_scope_cache_mismatch_is_manual(env: Env, repos: Repos
 @pytest.mark.parametrize(("plugin_id", "scope"), [("refract@x\x1b[2J\ndaemon: restarted", "project"), ("refract@refract", "pro\nject")])
 def test_reinstall_command_replaces_unsafe_id_and_scope(plugin_id: str, scope: str) -> None:
     command = updater._claude_reinstall_command(plugin_id, scope)
-    assert "\x1b" not in command and "\n" not in command
+    assert "\x1b" not in command
+    assert "\n" not in command
     assert "<id>" in command or "<scope>" in command
 
 
@@ -2297,3 +2369,152 @@ def test_update_with_a_project_scope_cache_mismatch_neither_latches_nor_runs_com
     assert restart["spawned"] == 0
     assert git_pulls(env) == []
     assert [c for c in env.call_log() if c.startswith("claude") and not c.endswith("list --json")] == []
+
+
+# --- complexity refactor characterization -------------------------------
+
+
+def test_claude_clone_marketplace_outside_git_is_skipped(env: Env, tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    claude_stub(env, PLUGIN, [{"name": "refract", "source": "directory", "path": str(plain)}])
+    [install] = updater.discover_claude()
+    assert (install.source, install.state, install.detail) == ("clone", "skipped", "not a git clone")
+    assert install.path is None
+
+
+def test_claude_item_without_id_or_valid_fields_drops_them(env: Env) -> None:
+    claude_stub(env, [{"name": "refract", "version": "not a version", "scope": 5}], [{"name": "refract", "source": "github", "repo": "sitien173/refract"}])
+    [install] = updater.discover_claude()
+    assert (install.ref, install.marketplace, install.version, install.scope) == ("refract", None, None, None)
+    assert (install.source, install.state, install.detail) == ("unknown", "skipped", "untrusted source")
+
+
+def latch_with(
+    monkeypatch: pytest.MonkeyPatch, *, raises: Exception | None = None, reply: bytes = b""
+) -> tuple[tuple[bool, Any], list[str]]:
+    monkeypatch.setattr(updater, "_read_daemon_file", lambda: (TOKEN, "127.0.0.1", 1))
+
+    def fake(request: Request, timeout: float):
+        if raises is not None:
+            raise raises
+        return FakeResponse(reply)
+
+    monkeypatch.setattr(updater, "_open_direct", fake)
+    lines: list[str] = []
+    return updater._latch(lines.append), lines
+
+
+def test_latch_connection_refused_proceeds_silently(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, lines = latch_with(monkeypatch, raises=URLError(ConnectionRefusedError()))
+    assert (result, lines) == ((True, None), [])
+
+
+@pytest.mark.parametrize(
+    ("raises", "line"),
+    [
+        (URLError("boom"), "Failed: cannot reach the daemon. Nothing was changed."),
+        (OSError("boom"), "Failed: cannot reach the daemon. Nothing was changed."),
+        (
+            URLError(TimeoutError()),
+            f"Failed: the daemon did not answer in time. {updater._MAY_BE_STOPPING} No update was applied.",
+        ),
+    ],
+    ids=["url-error", "os-error", "timeout"],
+)
+def test_latch_unreachable_daemon_fails_with_one_line(monkeypatch: pytest.MonkeyPatch, raises: Exception, line: str) -> None:
+    result, lines = latch_with(monkeypatch, raises=raises)
+    assert (result, lines) == ((False, None), [line])
+
+
+def test_latch_non_json_reply_is_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, lines = latch_with(monkeypatch, reply=b"not json")
+    assert (result, lines) == ((False, None), ["Failed: the daemon sent an unreadable reply. Nothing was changed."])
+
+
+def test_latch_refused_reply_reports_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, lines = latch_with(monkeypatch, reply=b'{"stopping": false, "running": 2, "queued": 3}')
+    assert (result, lines) == ((False, None), ["Refused: 2 running, 3 queued job(s). Nothing was changed."])
+
+
+def claude_unit(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    enabled: list[bool | None] | None = None,
+    failing: dict[str, str] | None = None,
+    head: str | None = "h" * 40,
+    records: list[str | None] | None = None,
+) -> list[list[str]]:
+    """Stub the helpers `_apply_claude` calls; the returned list records each `_step` argv."""
+    steps: list[list[str]] = []
+    states = iter(enabled if enabled is not None else [True, True])
+    shas = iter(records if records is not None else [])
+    monkeypatch.setattr(updater, "_claude_enabled", lambda *_a: next(states))
+    monkeypatch.setattr(updater, "_installed_records", dict)
+    monkeypatch.setattr(updater, "_record_sha", lambda *_a: next(shas))
+
+    def step(args: list[str], timeout: float = 0) -> str | None:
+        steps.append(args)
+        return (failing or {}).get(args[2])
+
+    monkeypatch.setattr(updater, "_step", step)
+    monkeypatch.setattr(
+        updater, "_git", lambda *_a, **_k: None if head is None else subprocess.CompletedProcess([], 0, stdout=f"{head}\n")
+    )
+    return steps
+
+
+def claude_install(**fields: Any) -> Install:
+    base: dict[str, Any] = {"source": "github", "ref": "refract@refract", "scope": "user", "marketplace": "refract"}
+    fields = {**base, **fields}
+    return Install("claude", fields.pop("source"), None, "", **fields)
+
+
+@pytest.mark.parametrize(
+    ("fields", "detail"),
+    [
+        ({"ref": None}, "invalid plugin id"),
+        ({"ref": "bad id"}, "invalid plugin id"),
+        ({"marketplace": None}, "invalid marketplace name"),
+        ({"marketplace": "bad name"}, "invalid marketplace name"),
+    ],
+    ids=["no-id", "bad-id", "no-marketplace", "bad-marketplace"],
+)
+def test_apply_claude_rejects_invalid_identifiers_without_commands(monkeypatch: pytest.MonkeyPatch, fields: dict[str, Any], detail: str) -> None:
+    steps = claude_unit(monkeypatch)
+    assert updater._apply_claude(claude_install(**fields)) == ("failed", detail)
+    assert steps == []
+
+
+def test_apply_claude_unreadable_clone_head_fails_after_updates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    steps = claude_unit(monkeypatch, head=None)
+    result = updater._apply_claude(claude_install(source="clone", path=tmp_path))
+    assert result == ("failed", "cannot read the clone HEAD")
+    assert steps == [
+        ["claude", "plugin", "marketplace", "update", "refract"],
+        ["claude", "plugin", "update", "refract@refract"],
+    ]
+
+
+def test_apply_claude_uninstall_failure_stops_before_reinstall(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    steps = claude_unit(monkeypatch, failing={"uninstall": "exit 1"}, records=["a" * 40])
+    result = updater._apply_claude(claude_install(source="clone", path=tmp_path))
+    assert result == ("failed", "uninstall failed (exit 1)")
+    assert steps[-1] == ["claude", "plugin", "uninstall", "refract@refract", "-s", "user", "--keep-data"]
+    assert len(steps) == 3
+
+
+def test_apply_claude_unknown_enabled_state_is_not_checked(monkeypatch: pytest.MonkeyPatch) -> None:
+    claude_unit(monkeypatch, enabled=[None])
+    assert updater._apply_claude(claude_install()) == ("updated", "")
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "verb"),
+    [(True, False, "enable"), (False, True, "disable"), (True, None, "install")],
+    ids=["was-enabled", "was-disabled", "was-removed"],
+)
+def test_apply_claude_lost_enabled_state_names_the_restore_verb(monkeypatch: pytest.MonkeyPatch, before: bool, after: bool | None, verb: str) -> None:
+    claude_unit(monkeypatch, enabled=[before, after])
+    result = updater._apply_claude(claude_install(scope=None))
+    assert result == ("failed", f"enabled state was not preserved; restore with: claude plugin {verb} refract@refract")

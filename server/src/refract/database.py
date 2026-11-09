@@ -19,6 +19,8 @@ from refract.logging_setup import get_logger
 from refract.models import TERMINAL_STATES, JobResult, JobView, ProjectView
 
 log = get_logger("database")
+_BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
+_JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
 _SCHEMA_VERSION = 19
 _TOKEN_COLUMNS = (
     ("context_used", "tok_context_used"),
@@ -226,7 +228,7 @@ class Database:
     @contextmanager
     def transaction(self):
         with self._connection:
-            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.execute(_BEGIN_IMMEDIATE)
             yield
 
     def close(self) -> None:
@@ -250,14 +252,14 @@ class Database:
             if version is not None:
                 self._retire(version)
             self._create_schema()
-        self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute(_JOURNAL_MODE_WAL)
         log.debug(
             "Database schema is current",
             extra={"event": "database.schema_ready", "schema_version": _SCHEMA_VERSION},
         )
 
     def _create_schema(self) -> None:
-        self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute(_JOURNAL_MODE_WAL)
         self._connection.executescript(_SCHEMA)
         self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
         self._connection.commit()
@@ -265,8 +267,8 @@ class Database:
     def _migrate_18_to_19(self) -> None:
         """Add the card tables in one transaction; any error rolls back and leaves schema 18."""
         connection = self._connection
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(_JOURNAL_MODE_WAL)
+        connection.execute(_BEGIN_IMMEDIATE)
         try:
             for statement in _CARD_DDL:
                 connection.execute(statement)
@@ -588,7 +590,7 @@ class Database:
         tokens: dict[str, int | None] | None,
     ) -> None:
         if not self._connection.in_transaction:
-            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.execute(_BEGIN_IMMEDIATE)
         row = self._connection.execute("SELECT project_id, session, workflow, target FROM jobs WHERE id=?", (job_id,)).fetchone()
         self._connection.execute(
             """UPDATE jobs SET state=?, target=CASE WHEN ?='' THEN target ELSE ? END,
@@ -641,7 +643,7 @@ class Database:
     ) -> None:
         with self._connection:
             if not self._connection.in_transaction:
-                self._connection.execute("BEGIN IMMEDIATE")
+                self._connection.execute(_BEGIN_IMMEDIATE)
             self._upsert_target_session(
                 project_id=project_id, session=session, workflow=workflow,
                 target_key=target_key, backend_session_id=backend_session_id, clear_sessions=True,

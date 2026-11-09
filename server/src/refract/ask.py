@@ -159,6 +159,25 @@ class AskRegistry:
             future=future,
         )
 
+        registered = self._register_question(token, job_id, pending, timeout_s)
+        if registered is None:
+            return NO_ANSWER_TEXT
+        resolved_job_id, remaining, waiters = registered
+        self._wake_waiters(waiters, pending)
+
+        try:
+            return await asyncio.wait_for(future, timeout=remaining)
+        except asyncio.TimeoutError:
+            self._discard_pending(resolved_job_id, pending)
+            return NO_ANSWER_TEXT
+        except asyncio.CancelledError:
+            self._discard_pending(resolved_job_id, pending)
+            raise
+
+    def _register_question(
+        self, token: str, job_id: str | None, pending: PendingQuestion, timeout_s: float,
+    ) -> tuple[str, float, list[asyncio.Future[PendingQuestion | None]]] | None:
+        """Validate the token and publish the question; None when no time is left to wait."""
         with self._lock:
             resolved_job_id = self._validate_token_locked(token, job_id)
             if resolved_job_id in self._pending:
@@ -170,11 +189,14 @@ class AskRegistry:
                 deadline = min(deadline, workflow_deadline)
             remaining = deadline - now
             if remaining <= 0:
-                return NO_ANSWER_TEXT
+                return None
             pending.deadline = deadline
             self._pending[resolved_job_id] = pending
             waiters = self._question_waiters.pop(resolved_job_id, [])
+        return resolved_job_id, remaining, waiters
 
+    @staticmethod
+    def _wake_waiters(waiters: list[asyncio.Future[PendingQuestion | None]], pending: PendingQuestion) -> None:
         for w in waiters:
             if not w.done():
                 loop = w.get_loop()
@@ -183,18 +205,10 @@ class AskRegistry:
                 else:
                     w.set_result(pending)
 
-        try:
-            return await asyncio.wait_for(future, timeout=remaining)
-        except asyncio.TimeoutError:
-            with self._lock:
-                if self._pending.get(resolved_job_id) is pending:
-                    self._pending.pop(resolved_job_id, None)
-            return NO_ANSWER_TEXT
-        except asyncio.CancelledError:
-            with self._lock:
-                if self._pending.get(resolved_job_id) is pending:
-                    self._pending.pop(resolved_job_id, None)
-            raise
+    def _discard_pending(self, job_id: str, pending: PendingQuestion) -> None:
+        with self._lock:
+            if self._pending.get(job_id) is pending:
+                self._pending.pop(job_id, None)
 
     def deliver_answer(
         self, job_id: str, answer: str, expected_question_id: str | None = None
