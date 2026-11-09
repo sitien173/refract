@@ -368,7 +368,8 @@ def test_missing_workspace_fails_before_spawn(tmp_path):
     assert str(tmp_path / "absent") in result.error
 
 
-def test_unencodable_prompt_is_request_fatal_with_the_session(tmp_path):
+def test_unencodable_prompt_is_request_fatal_with_the_session(tmp_path, monkeypatch):
+    stub_cli(monkeypatch, tmp_path, "agy")
     params = BackendParams(PROMPT="bad \ud800 prompt", cd=tmp_path, SESSION_ID="keep-me")
 
     result = asyncio.run(agy.execute(params))

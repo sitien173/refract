@@ -3298,7 +3298,7 @@ def test_codex_rollout_poll_defers_context_until_file_is_fully_read(tmp_path: Pa
     collector, sessions, emitted = _rollout_collector(tmp_path, monkeypatch)
     header, token_line = _rollout_header(collector.cwd), _rollout_token_line()
     noise = json.dumps({"type": "event_msg", "payload": {"type": "noise"}}) + "\n"
-    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(header + token_line + noise)
+    (sessions / f"rollout_{ROLLOUT_SESSION}.jsonl").write_text(header + token_line + noise, newline="\n")
     collector.max_bytes_per_poll = len((header + token_line).encode())
 
     collector.poll()
