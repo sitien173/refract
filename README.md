@@ -1,21 +1,31 @@
 # Refract 3.0.0
 
 [![tests](https://github.com/sitien173/refract/actions/workflows/server.yml/badge.svg)](https://github.com/sitien173/refract/actions/workflows/server.yml)
+
 [![Validate](https://github.com/sitien173/refract/actions/workflows/plugin.yml/badge.svg)](https://github.com/sitien173/refract/actions/workflows/plugin.yml)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Plan with one coding agent, implement and review with others.
 
 Refract runs coding work through three gates: **Plan, Execute, Review**. Your interactive agent acts as the Coordinator. It brainstorms and plans with you, hands implementation and independent review to worker CLIs, and keeps ownership of every Git commit and verification step.
 
+## Overview
+
 Refract has two parts:
 
 - **Plugin** in [`plugin/`](plugin): skills, slash commands, and a SessionStart hook for Claude Code, Antigravity, Codex, and Pi.
 - **Server** in [`server/`](server): a local daemon that queues jobs, routes them to worker CLIs, and exposes them over MCP and a web dashboard.
 
+### Architecture
+
 ![Refract system architecture](docs/diagrams/refract_system_architecture.svg)
 
-## Features
+### Data flow
+
+![Refract data flow](docs/diagrams/refract_data_flow_diagram.svg)
+
+### Features
 
 - **Three-gate workflow.** Brainstorm a design, write a phase plan, then execute and review each phase.
 - **Four worker backends.** Route jobs to Codex, Claude Code, Pi, or Antigravity CLIs.
@@ -26,7 +36,7 @@ Refract has two parts:
 - **Worker questions.** A worker can ask the Coordinator a question mid-job with `refract ask`.
 - **Live dashboard.** Watch transcripts, cancel, retry, and answer jobs at `http://127.0.0.1:8765/dashboard/`.
 
-## Requirements
+### Requirements
 
 - Python 3.12 or newer
 - [uv](https://docs.astral.sh/uv/)
