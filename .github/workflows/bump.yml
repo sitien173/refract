@@ -1,0 +1,85 @@
+name: Bump version
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: Version level to bump
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+concurrency:
+  group: bump-version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    permissions:
+      contents: write
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Run Bump version on main, not $GITHUB_REF" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.26"
+          python-version: "3.12"
+      - name: Bump version files
+        env:
+          LEVEL: ${{ inputs.level }}
+        run: |
+          python3 scripts/bump_version.py "$LEVEL" > bump.log
+          cat bump.log
+          version="$(tail -n 1 bump.log)"
+          rm bump.log
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Bump script did not print a version: $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Refuse an existing tag
+        run: |
+          if [ -n "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]; then
+            echo "Tag v$VERSION already exists on origin" >&2
+            exit 1
+          fi
+      - name: Check lock file
+        working-directory: server
+        run: uv lock --check
+      - name: Plugin tests
+        run: bash plugin/tests/run.sh
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): v$VERSION"
+          git tag -a "v$VERSION" -m "v$VERSION"
+      - name: Push commit and tag
+        run: git push --atomic origin HEAD:main "refs/tags/v$VERSION"
+      - name: Dispatch Release
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref "v$VERSION"
+      - name: Job summary
+        if: always()
+        env:
+          DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
+        run: |
+          if [ "$DISPATCH_OUTCOME" = "success" ]; then
+            echo "Pushed tag v$VERSION and dispatched Release." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$DISPATCH_OUTCOME" = "failure" ]; then
+            echo "Pushed tag v$VERSION but dispatching Release failed. Run Release on tag v$VERSION. Do not rerun Bump version: it would create the next version." >> "$GITHUB_STEP_SUMMARY"
+          fi

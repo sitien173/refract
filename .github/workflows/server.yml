@@ -1,0 +1,93 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["server/**", "plugin/**", "sonar-project.properties", ".github/workflows/server.yml", ".github/workflows/sonarqube.yml"]
+  pull_request:
+    paths: ["server/**", "plugin/**", "sonar-project.properties", ".github/workflows/server.yml", ".github/workflows/sonarqube.yml"]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web / Node
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: server/web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: server/web/.nvmrc
+          cache: pnpm
+          cache-dependency-path: server/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm exec biome ci .
+      - run: pnpm exec vitest run
+      - run: pnpm run check:bundle
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: server/uv.lock
+      - run: uv sync --all-extras --frozen
+        working-directory: server
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: server/web/playwright-report
+          if-no-files-found: ignore
+
+  cross-platform:
+    needs: [web]
+    defaults:
+      run:
+        working-directory: server
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: server/uv.lock
+      - run: uv sync --all-extras --frozen
+      - name: Python tests with coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: uv run pytest --cov --cov-report=xml
+      - name: Python compatibility tests
+        if: matrix.os != 'ubuntu-latest'
+        run: uv run pytest
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: python-coverage
+          path: server/coverage.xml
+          if-no-files-found: error
+      - run: uv build
+
+  sonar:
+    needs: [cross-platform]
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    uses: ./.github/workflows/sonarqube.yml
+    secrets: inherit

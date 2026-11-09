@@ -1,0 +1,293 @@
+from __future__ import annotations
+
+import faulthandler
+import logging
+import logging.handlers
+import os
+from contextvars import Context
+from pathlib import Path
+
+import pytest
+
+import refract.logging_setup as logging_setup
+from refract.config import LoggingConfig, load_config
+from refract.logging_setup import (
+    configure,
+    get_logger,
+    log_context,
+    resolve_config,
+    shutdown,
+)
+
+
+def _strict_config(logging: str) -> str:
+    return f"""[daemon]
+default_profile = "balanced"
+
+[[targets]]
+id = "primary"
+backend = "codex"
+
+[profiles.balanced]
+implement = "primary"
+review = "primary"
+consult = "primary"
+
+[logging]
+{logging}
+"""
+
+
+@pytest.fixture(autouse=True)
+def _close_test_logging():
+    shutdown()
+    yield
+    shutdown()
+
+
+def test_logging_config_loads_relative_to_refract_home(tmp_path, monkeypatch) -> None:
+    home = tmp_path / "state"
+    home.mkdir()
+    path = home / "config.toml"
+    path.write_text(
+        _strict_config(
+            """
+level = "debug"
+file = "logs/service.log"
+max_bytes = 4096
+backup_count = 7
+""",
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+
+    settings = load_config(path).logging
+
+    assert settings.level == "DEBUG"
+    assert settings.file == home / "logs" / "service.log"
+    assert settings.max_bytes == 4096
+    assert settings.backup_count == 7
+
+
+def test_logging_environment_overrides_configuration(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("REFRACT_LOG_LEVEL", "ERROR")
+    monkeypatch.setenv("REFRACT_LOG_FILE", "off")
+    monkeypatch.setenv("REFRACT_LOG_MAX_BYTES", "1234")
+    monkeypatch.setenv("REFRACT_LOG_BACKUP_COUNT", "2")
+    options = LoggingConfig(file=tmp_path / "ignored.log")
+
+    settings = resolve_config(options)
+
+    assert settings.level == "ERROR"
+    assert settings.file is None
+    assert settings.max_bytes == 1234
+    assert settings.backup_count == 2
+
+
+def test_relative_environment_log_file_uses_refract_home(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "state"
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+    monkeypatch.setenv("REFRACT_LOG_FILE", "logs/application.log")
+
+    settings = resolve_config(LoggingConfig(file=tmp_path / "configured.log"))
+
+    assert settings.file == home / "logs" / "application.log"
+
+
+def test_text_logging_has_context_and_redaction(tmp_path) -> None:
+    path = tmp_path / "application.log"
+    configure(LoggingConfig(level="INFO", file=path))
+    logger = get_logger("test")
+
+    with log_context(project_id="project-1", job_id="job-1", stage_id="review"):
+        logger.warning(
+            "request failed authorization=Bearer secret-token-value",
+            extra={"event": "test.failed", "target_id": "target-1"},
+        )
+    shutdown()
+
+    line = next(
+        item for item in path.read_text(encoding="utf-8").splitlines()
+        if "request failed" in item
+    )
+    assert "Z WARNING refract.test:" in line
+    assert "project_id=project-1" in line
+    assert "job_id=job-1" in line
+    assert "stage_id=review" in line
+    assert "target_id=target-1" in line
+    assert "secret-token-value" not in line
+
+
+def test_log_context_default_is_immutable_and_scopes_are_restored() -> None:
+    default = Context().run(logging_setup._CONTEXT.get)
+    with pytest.raises(TypeError):
+        default["job_id"] = "leaked"
+
+    with log_context(project_id="project-1"):
+        assert logging_setup._CONTEXT.get() == {"project_id": "project-1"}
+        with log_context(job_id="job-1"):
+            assert logging_setup._CONTEXT.get() == {
+                "project_id": "project-1", "job_id": "job-1",
+            }
+        assert logging_setup._CONTEXT.get() == {"project_id": "project-1"}
+        assert Context().run(logging_setup._CONTEXT.get) == {}
+    assert logging_setup._CONTEXT.get() == {}
+
+
+def test_configure_retries_a_degraded_file_sink(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "recovered.log"
+    options = LoggingConfig(file=path)
+    real_handler = logging.handlers.RotatingFileHandler
+    attempts = 0
+
+    def flaky_handler(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("transient sink failure")
+        return real_handler(*args, **kwargs)
+
+    monkeypatch.setattr(logging.handlers, "RotatingFileHandler", flaky_handler)
+
+    configure(options)
+    configure(options)
+    get_logger("recovery").info("file sink recovered")
+    shutdown()
+
+    assert attempts == 2
+    assert "file sink recovered" in path.read_text(encoding="utf-8")
+
+
+def test_configure_is_idempotent_and_rotates_files(tmp_path) -> None:
+    path = tmp_path / "application.log"
+    options = LoggingConfig(
+        level="INFO",
+        file=path,
+        max_bytes=300,
+        backup_count=2,
+    )
+    configure(options)
+    configure(options)
+    logger = get_logger("rotation")
+    for index in range(30):
+        logger.info("rotation record %s %s", index, "x" * 40)
+    shutdown()
+
+    assert path.exists()
+    assert list(tmp_path.glob("application.log.*"))
+    combined = "".join(
+        candidate.read_text(encoding="utf-8")
+        for candidate in tmp_path.glob("application.log*")
+    )
+    assert "rotation record" in combined
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_log_files_stay_private_across_rotation_without_changing_parent(tmp_path) -> None:
+    tmp_path.chmod(0o755)
+    path = tmp_path / "application.log"
+    configure(LoggingConfig(file=path, max_bytes=300, backup_count=2))
+    logger = get_logger("privacy")
+    for index in range(30):
+        logger.info("private record %s %s", index, "x" * 40)
+    shutdown()
+
+    files = list(tmp_path.glob("application.log*"))
+    assert len(files) == 3
+    assert all(candidate.stat().st_mode & 0o777 == 0o600 for candidate in files)
+    assert tmp_path.stat().st_mode & 0o777 == 0o755
+
+
+def test_exceptions_are_reported_and_redacted(tmp_path) -> None:
+    path = tmp_path / "exceptions.log"
+    configure(LoggingConfig(file=path))
+    try:
+        raise ValueError("token=exception-secret")
+    except ValueError:
+        get_logger("exceptions").exception("Failed password=message-secret")
+    shutdown()
+
+    output = path.read_text(encoding="utf-8")
+    assert "ValueError" in output
+    assert "Traceback" in output
+    assert "exception-secret" not in output
+    assert "message-secret" not in output
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_logging_does_not_manage_process_fault_handler(tmp_path, monkeypatch, enabled) -> None:
+    monkeypatch.setattr(faulthandler, "is_enabled", lambda: enabled)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Application logging must not manage the process fault handler")
+
+    monkeypatch.setattr(faulthandler, "enable", unexpected)
+    monkeypatch.setattr(faulthandler, "disable", unexpected)
+    configure(LoggingConfig(file=tmp_path / "application.log"))
+    shutdown()
+
+    assert not (tmp_path / "application.crash.log").exists()
+
+
+def test_invalid_logging_configuration_is_rejected(tmp_path, monkeypatch) -> None:
+    home = tmp_path / "state"
+    home.mkdir()
+    path = home / "config.toml"
+    path.write_text(_strict_config("level = 'loud'"), encoding="utf-8")
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+
+    with pytest.raises(ValueError, match="level"):
+        load_config(path)
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_progress_token_presence_boolean_is_visible_in_text_formatter(present: bool) -> None:
+    record = logging.makeLogRecord(
+        {
+            "msg": "MCP tool request started",
+            "operation": "wait",
+            "progress_token_present": present,
+        }
+    )
+
+    text_output = logging_setup._formatter().format(record)
+
+    assert f"progress_token_present={present}" in text_output
+
+
+def test_progress_token_presence_formatter_rejects_non_boolean_and_redacts_secrets() -> None:
+    record = logging.makeLogRecord(
+        {
+            "msg": "request token=message-secret-value",
+            "operation": "wait",
+            "progress_token_present": "raw-progress-token-value",
+            "progress_token": "another-secret-token-value",
+            "api_key": "api-secret-value",
+        }
+    )
+
+    text_output = logging_setup._formatter().format(record)
+
+    assert "progress_token_present" not in text_output
+    for secret in (
+        "message-secret-value",
+        "raw-progress-token-value",
+        "another-secret-token-value",
+        "api-secret-value",
+    ):
+        assert secret not in text_output
+
+
+def test_redact_text_sanitizes_bearer_tokens_and_api_keys() -> None:
+    from refract.logging_setup import redact_text
+
+    raw = "Expected Bearer my-secret-token and sk-1234567890abcdef and password: topsecret"
+    sanitized = redact_text(raw)
+    assert "my-secret-token" not in sanitized
+    assert "[REDACTED]" in sanitized
+    assert "1234567890abcdef" not in sanitized
+    assert "topsecret" not in sanitized

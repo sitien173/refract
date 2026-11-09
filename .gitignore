@@ -1,0 +1,54 @@
+# Local tooling and private data
+.worktrees/
+.private-journal/
+.claude/
+.pi/
+.agents/
+!plugin/.agents/
+!plugin/.agents/plugins.json
+.codex/
+.ace-tool/
+.antigravitycli/
+.tgrep/
+.ogrep/
+.vectors/
+
+# Node tooling
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.whl
+
+# Test and type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE and operating system files
+.vscode/
+.idea/
+.DS_Store
+*.DS_Store
+Thumbs.db
+
+# Coverage reports
+.coverage
+coverage.xml
+coverage/
+server/web/test-results/
+server/web/playwright-report/
+server/web/blob-report/
+.scannerwork/

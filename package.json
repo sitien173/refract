@@ -1,0 +1,16 @@
+{
+  "name": "refract",
+  "version": "3.0.0",
+  "description": "Refract: 3-gate (Plan → Execute → Review) workflow.",
+  "license": "MIT",
+  "private": true,
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./plugin/pi/extensions"],
+    "skills": ["./plugin/skills"],
+    "prompts": ["./plugin/commands"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

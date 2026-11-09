@@ -1,0 +1,6 @@
+[
+  { "kind": "assistant.message.started", "entity_id": "msg-1", "data": {} },
+  { "kind": "assistant.text.delta", "entity_id": "msg-1", "data": { "text": "Codex response" } },
+  { "kind": "tool.started", "entity_id": "tool-1", "data": { "tool": "shell", "activity": "command", "input": { "command": "pwd" } } },
+  { "kind": "tool.completed", "entity_id": "tool-1", "data": { "status": "completed", "output": "/workspace" } }
+]

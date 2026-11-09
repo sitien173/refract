@@ -1,0 +1,171 @@
+@import "tailwindcss";
+
+@theme {
+  --color-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+
+  --color-background: #f5f5f7;
+  --color-foreground: #1d1d1f;
+  --color-card: #ffffff;
+  --color-card-foreground: #1d1d1f;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #1d1d1f;
+  --color-muted: #ececf0;
+  --color-muted-foreground: #6e6e73;
+  --color-secondary: #e8e8ed;
+  --color-secondary-foreground: #1d1d1f;
+  --color-accent: #f0f0f3;
+  --color-accent-foreground: #1d1d1f;
+  --color-primary: #0071e3;
+  --color-primary-hover: #0077ed;
+  --color-primary-foreground: #ffffff;
+  --color-destructive: #d70015;
+  --color-destructive-foreground: #ffffff;
+  --color-warning-surface: #fff8e6;
+  --color-warning-foreground: #6b4a00;
+  --color-error-surface: #fff1f1;
+  --color-error-foreground: #a30010;
+  --color-border: #d2d2d7;
+  --color-input: #c7c7cc;
+  --color-ring: #0071e3;
+  --color-scrim: rgb(0 0 0 / 0.32);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 0 0 1px rgb(0 0 0 / 0.04);
+  --shadow-popover: 0 8px 24px rgb(0 0 0 / 0.12), 0 0 0 1px rgb(0 0 0 / 0.06);
+  --shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.2), 0 0 0 1px rgb(0 0 0 / 0.06);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --duration-fast: 140ms;
+  --duration-base: 200ms;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+/* Base UI portals mount here; the root stacking context keeps popups above the app. */
+#root {
+  isolation: isolate;
+  position: relative;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .callout {
+    border-radius: var(--radius-md);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    background: var(--color-muted);
+    color: var(--color-foreground);
+  }
+  .callout-error {
+    background: var(--color-error-surface);
+    color: var(--color-error-foreground);
+  }
+  .callout-warning {
+    background: var(--color-warning-surface);
+    color: var(--color-warning-foreground);
+  }
+}
+
+/* Dialog, alert dialog, and select popup transitions animate opacity and transform only. */
+[data-slot="dialog-overlay"],
+[data-slot="alert-dialog-overlay"] {
+  opacity: 1;
+  transition: opacity var(--duration-base) var(--ease-out);
+}
+[data-slot="dialog-overlay"][data-starting-style],
+[data-slot="dialog-overlay"][data-ending-style],
+[data-slot="alert-dialog-overlay"][data-starting-style],
+[data-slot="alert-dialog-overlay"][data-ending-style] {
+  opacity: 0;
+}
+[data-slot="dialog-content"],
+[data-slot="alert-dialog-content"] {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
+}
+[data-slot="dialog-content"][data-starting-style],
+[data-slot="dialog-content"][data-ending-style],
+[data-slot="alert-dialog-content"][data-starting-style],
+[data-slot="alert-dialog-content"][data-ending-style] {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.96);
+}
+[data-slot="select-content"] {
+  opacity: 1;
+  transform: scale(1);
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+[data-slot="select-content"][data-starting-style],
+[data-slot="select-content"][data-ending-style] {
+  opacity: 0;
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
+  }
+}
+
+/* View Transitions on job and tab change: the default root cross-fade animates opacity only. */
+::view-transition-group(root) {
+  animation-duration: var(--duration-base);
+  animation-timing-function: var(--ease-out);
+}
+
+:root:has(.board-view)::view-transition-old(root),
+:root:has(.board-view)::view-transition-new(root) {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}

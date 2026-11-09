@@ -1,0 +1,200 @@
+# Refract
+
+A Claude Code plugin that runs coding work through three gates:
+**Plan → Execute → Review**. Claude acts as Coordinator: it brainstorms and
+plans with you, delegates implementation and independent review to external
+workers through Refract, and owns every Git commit, anchor, and verification.
+
+## Prerequisite: Refract
+
+Execute and Review require a running Refract server. The `.mcp.json` entry
+uses the default endpoint documented in the
+[tool contract](skills/coordinating-multi-model-work/references/tool-contract.md).
+For another host or port, export `REFRACT_URL` before starting Claude Code:
+
+```bash
+export REFRACT_URL=http://127.0.0.1:9000/mcp
+```
+
+At session start the plugin runs `refract status` and starts a detached
+`refract serve` when the daemon is not running and `refract` is on PATH.
+
+Without Refract, brainstorming and plan authoring still work; consultation is
+skipped and recorded, and execution stops at the setup check.
+
+## Install
+
+After the marketplace is published, install the plugin with:
+
+```bash
+claude plugin marketplace add sitien173/refract
+claude plugin install refract@refract
+```
+
+For Antigravity CLI (`agy`):
+
+```bash
+agy plugin install https://github.com/sitien173/refract
+```
+
+For the Pi coding agent (`pi`), install from GitHub or from a local clone:
+
+```bash
+pi install https://github.com/sitien173/refract
+pi install /path/to/refract/plugin
+```
+
+Pi reads the `pi` manifest in `package.json`: the repository-root manifest
+for a GitHub install, `plugin/package.json` for a local `plugin/` path. The
+`pi/extensions/refract.ts` extension registers the Refract MCP server at
+`REFRACT_URL` and adds the coordinator context. Pi names skills and tools
+without the Claude plugin namespace: `/skill:using-refract`,
+`mcp__refract__list`.
+
+### Run without Refract
+
+Set `REFRACT_DISABLE=1` for any host; `true` and `yes` also work. The
+SessionStart hook then skips the daemon check and replaces the coordinator
+context with a notice to ignore Refract skills, commands, and MCP tools unless
+the user asks for them. The skills and MCP server stay installed, so this
+relies on the agent following the notice:
+
+```bash
+REFRACT_DISABLE=1 claude -p "Summarize this repository"
+REFRACT_DISABLE=1 codex exec "Summarize this repository"
+REFRACT_DISABLE=1 agy -p "Summarize this repository"
+```
+
+To unload the plugin itself for one Claude Code run, override
+`enabledPlugins` with the plugin ID from `/plugin`:
+
+```bash
+claude -p --settings '{"enabledPlugins":{"refract@refract":false}}' "Summarize this repository"
+```
+
+Codex reads `plugins."<plugin>@<marketplace>".enabled` from `config.toml`, and
+`-c` overrides it for one run. Take the ID from `codex plugin list`:
+
+```bash
+codex exec -c 'plugins."refract@<marketplace>".enabled=false' "Summarize this repository"
+```
+
+Antigravity disables plugins only persistently, with `agy plugin disable refract`.
+
+### Run Pi without Refract
+
+The extension adds a `--no-refract` flag. It skips the daemon check and the
+MCP server for one run and injects the same ignore notice. The Refract skills
+and commands still load:
+
+```bash
+pi -p --no-refract "Summarize this repository"
+```
+
+`REFRACT_DISABLE=1` does the same; it also accepts `true` and `yes`:
+
+```bash
+REFRACT_DISABLE=1 pi -p "Summarize this repository"
+```
+
+Pi has no flag that disables one package. To disable every extension, skill,
+and prompt template for one non-interactive run:
+
+```bash
+pi -p --no-extensions --no-skills --no-prompt-templates "Summarize this repository"
+```
+
+`--no-extensions` also disables built-in MCP support; add `-e builtin:mcp` to
+keep it. `--no-extensions` alone stops the coordinator context and the daemon
+check but keeps the Refract skills and commands, without the ignore notice.
+
+To disable only Refract, replace its entry in `packages` in
+`~/.pi/agent/settings.json` with an empty filter. Use the `source` string Pi
+recorded at install. This applies to every Pi session, interactive included:
+
+```json
+{
+  "source": "../../projects/refract/plugin",
+  "extensions": [],
+  "skills": [],
+  "prompts": []
+}
+```
+
+For one run only, point `PI_CODING_AGENT_DIR` at a copy of `~/.pi/agent` with
+this filter. The copy needs `auth.json` for provider credentials.
+
+Refract Pi workers with `isolated = true` already run with
+`--no-extensions --no-skills --no-prompt-templates`. A non-isolated Pi target
+loads installed packages, so its workers receive the coordinator context.
+
+## Updating
+
+`refract update --check` looks for newer versions of the server, the Claude Code plugin, and the Pi package, and writes the result to `${REFRACT_HOME:-~/.refract}/update-check.json`. It checks at most once per 24 hours; `refract update --check --force` ignores that limit.
+
+`refract update` applies every available update. It refuses while the daemon has work: `Refused: <r> running, <q> queued job(s). Nothing was changed.` Run it again once the jobs finish. Otherwise it stops and restarts the daemon itself.
+
+After applying updates it prints `Restart open Claude Code, Pi, Codex, and agy sessions to load the update.`
+
+Codex and agy are not updated automatically. `refract update` prints the commands to run:
+
+```bash
+codex plugin marketplace upgrade && codex plugin add refract@<marketplace>
+agy plugin install https://github.com/sitien173/refract
+```
+
+The SessionStart hook reads the cached check result and tells you and the model when an update is available. It makes no network call. When the cache is missing or older than 24 hours, it starts a detached `refract update --check` in the background. Set `REFRACT_NO_UPDATE_CHECK=1` to turn off the notice and the background check.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `/refract:brainstorm <idea>` | Clarify intent and trade-offs; write `DESIGN.md`. |
+| `/refract:write-plan <design>` | Turn a confirmed design into a phase plan. |
+| `/refract:execute-plan [target]` | Run or resume one wave of phases through all three gates. |
+| `/refract:execute-plan-all [target]` | Autonomously execute all waves through final audit and consolidation. |
+
+In Pi, drop the `refract:` prefix: `/brainstorm`, `/write-plan`,
+`/execute-plan`, `/execute-plan-all`.
+
+## Parallel phases
+
+- A phase may declare `**Depends on:** Phase 1, Phase 3` or `**Depends on:** none`. Without the line, it depends on the previous phase.
+- A wave is every phase whose dependencies have landed. A single-phase wave runs exactly as a sequential phase.
+- A multi-phase wave implements each phase in its own worktree, then integrates and reviews each phase on the main checkout in plan order.
+- The Coordinator waits round-robin while several jobs are active. With more than four active jobs, a worker question can expire before it is answered.
+- Wave mechanics live in `skills/coordinating-multi-model-work/references/waves.md`.
+
+## Skills
+
+- `using-refract`: entry point; decides when coordination applies.
+- `coordinating-multi-model-work`: Refract lifecycle, Git ownership, review, handover.
+- `brainstorming`, `writing-plans`, `executing-plans`, `executing-plans-autonomously`: the three gates and full-plan autonomous execution.
+- `systematic-debugging`, `test-driven-development`, `verifying-before-completion`: process discipline.
+- `using-git-worktrees`: optional isolated workspace before registration.
+
+## Layout
+
+```text
+commands/   slash commands
+skills/     SKILL.md files and references
+shared/     worker contract, response protocol, phase templates
+hooks/      SessionStart hook that loads the coordinator context
+pi/         Pi extension: MCP registration and coordinator context
+tests/      contract tests (`tests/run.sh`)
+```
+
+## Development
+
+```bash
+tests/run.sh
+```
+
+Runs the hook and contract tests, then `claude plugin validate` and
+`agy plugin validate` when the CLIs are available. Versions are bumped by
+`scripts/bump_version.py`, which updates every file that holds one; the tests
+assert they match.
+
+## License
+
+MIT

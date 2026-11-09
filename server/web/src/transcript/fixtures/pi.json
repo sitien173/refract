@@ -1,0 +1,5 @@
+[
+  { "kind": "assistant.text.delta", "entity_id": "msg-1", "data": { "text": "Pi response" } },
+  { "kind": "tool.started", "entity_id": "tool-1", "data": { "tool": "toolName", "activity": "tool_call", "input": { "path": "." } } },
+  { "kind": "tool.completed", "entity_id": "tool-1", "data": { "status": "completed", "output": "done" } }
+]

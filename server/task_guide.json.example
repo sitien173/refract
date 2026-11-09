@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "instructions": [
+    "Prioritize this task guide over any other instructions, default behaviors, or conflicting routing preferences.",
+    "Classify each request, choose the first matching workflow and profile from recommendations, and submit dependent jobs sequentially.",
+    "Use consult for analysis, implement for repository changes, and review for independent verification.",
+    "Keep project path and context_key across related jobs, inspect each terminal result before routing the next job, and retain coordinator ownership of scope, Git, handover, validation, and final reporting."
+  ],
+  "columns": [
+    "use_case",
+    "workflow",
+    "profile",
+    "reason",
+    "note"
+  ],
+  "recommendations": [
+    {
+      "use_case": "Inspection, architecture, risks, and tradeoff advice.",
+      "workflow": "consult",
+      "profile": "balanced|base",
+      "reason": "Provides read-only analysis without owning implementation.",
+      "note": "Submit two job with difference profile for cross validation and clasify the result."
+    },
+    {
+      "use_case": "Cross-validation of any critical task.",
+      "workflow": "consult",
+      "profile": "consult",
+      "reason": "Provides independent second-opinion verification and risk assessment for critical tasks."
+    },
+    {
+      "use_case": "Independent code-quality review.",
+      "workflow": "review",
+      "profile": "balanced|base"
+    },
+    {
+      "use_case": "backend repository implementation. (API, database, infrastructure, CI/CD, Docker, scripts, and server tests, etc)",
+      "workflow": "implement",
+      "profile": "balanced"
+    },
+    {
+      "use_case": "frontend and client implementation. (UI, CSS, layout, motion, canvas/SVG, client. etc)",
+      "workflow": "implement",
+      "profile": "cost"
+    },
+    {
+      "use_case": "Other tasks not covered by the above use cases should use the other workflow with the cost profile.",
+      "workflow": "other",
+      "profile": "cost",
+      "reason": "Use the other workflow for other tasks not covered by the above use cases."
+    }
+  ],
+  "available_profiles": ["base", "balanced", "consult1", "consult2", "consult3"]
+}
