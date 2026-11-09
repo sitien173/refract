@@ -4,6 +4,8 @@
 
 [![Validate](https://github.com/sitien173/refract/actions/workflows/plugin.yml/badge.svg)](https://github.com/sitien173/refract/actions/workflows/plugin.yml)
 
+[![Quality gate status](https://cf-api-gateway.sitienbmt.workers.dev/sonarqube-refract-badge)](https://cf-api-gateway.sitienbmt.workers.dev/sonarqube/summary/new_code?id=refract)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Plan with one coding agent, implement and review with others.
