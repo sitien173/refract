@@ -1,0 +1,19 @@
+title: Refract
+description: Plan with one coding agent, implement and review with others.
+theme: just-the-docs
+color_scheme: light
+search_enabled: true
+aux_links:
+  "GitHub":
+    - https://github.com/sitien173/refract
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub"
+gh_edit_repository: "https://github.com/sitien173/refract"
+gh_edit_branch: "main"
+gh_edit_source: site
+gh_edit_view_mode: "tree"
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+  - .bundle

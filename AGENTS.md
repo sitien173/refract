@@ -21,6 +21,10 @@ plugin/tests/run.sh
 pnpm install
 pnpm run typecheck && pnpm exec biome ci . && pnpm exec vitest run && pnpm run check:bundle
 pnpm run e2e
+
+# Docs site: run from site/
+bundle install
+bundle exec jekyll build
 ```
 
 CI runs the server tests on Linux, Windows, and macOS. Keep every change portable across all three.

@@ -31,6 +31,10 @@ env/
 build/
 dist/
 *.whl
+site/_site/
+site/.jekyll-cache/
+site/vendor/
+site/.bundle/
 
 # Test and type-check caches
 .pytest_cache/

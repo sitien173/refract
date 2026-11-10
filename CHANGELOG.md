@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Documentation site in `site/`, built with Jekyll and Just the Docs and deployed to GitHub Pages.
+
 ## 3.0.0 - 2026-11-09
 
 First public release.
