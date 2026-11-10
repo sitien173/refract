@@ -1,4 +1,5 @@
 ---
+layout: default
 title: Workflows
 nav_order: 3
 ---

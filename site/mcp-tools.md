@@ -1,4 +1,5 @@
 ---
+layout: default
 title: MCP tools
 nav_order: 5
 ---
