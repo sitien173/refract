@@ -97,6 +97,12 @@ def _section_config_error(text: str) -> str | None:
         return "Unsupported config sections"
     if text.startswith("Unsupported daemon settings"):
         return "Unsupported daemon settings"
+    if text.startswith("Invalid pricing") or text.startswith("Pricing values"):
+        return "Invalid pricing configuration"
+    if text.startswith("pricing."):
+        return text.split(" must be", 1)[0] + " must be valid"
+    if text.startswith("telemetry."):
+        return text.split(" must be", 1)[0] + " must be valid"
     if text.startswith("Unsupported project config sections"):
         return "Unsupported project config sections"
     if text.startswith("Unsupported project target settings"):

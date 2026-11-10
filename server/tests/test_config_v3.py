@@ -230,6 +230,18 @@ def test_project_overlay_rejects_other_sections(tmp_path) -> None:
         _load_project(tmp_path, base, "[daemon]\nmax_jobs = 9\n")
 
 
+def test_project_overlay_rejects_global_telemetry(tmp_path) -> None:
+    base = _load_global(tmp_path, _global())
+    with pytest.raises(ValueError, match=r"Unsupported project config sections"):
+        _load_project(tmp_path, base, "[telemetry]\nenabled = true\n")
+
+
+def test_project_overlay_rejects_global_pricing(tmp_path) -> None:
+    base = _load_global(tmp_path, _global())
+    with pytest.raises(ValueError, match=r"Unsupported project config sections"):
+        _load_project(tmp_path, base, "[pricing]\ncurrency = 'USD'\n")
+
+
 def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> None:
     import tomllib
     from pathlib import Path
@@ -249,6 +261,13 @@ def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> 
     }
     assert set(raw["logging"]) == {"level", "file", "max_bytes", "backup_count"}
     assert set(raw["notifications"]) == {"enabled"}
+    assert set(raw["telemetry"]) == {"enabled", "endpoint"}
+    assert config.telemetry.enabled is False
+    assert "example.invalid" in config.telemetry.endpoint
+    assert set(raw["pricing"]) == {"currency", "models"}
+    assert set(raw["pricing"]["models"]["example-model"]) == {
+        "input", "output", "cache_read", "cache_write"
+    }
     profiles = raw["profiles"].values()
     assert any("extends" in profile for profile in profiles)
     workflow_values = [

@@ -15,8 +15,10 @@ import pytest
 import refract.database as database_module
 from refract.database import Database
 
-V3_TABLES = {"projects", "jobs", "sessions", "target_sessions", "target_health", "cards", "card_jobs", "card_moves"}
+V3_TABLES = {"projects", "jobs", "sessions", "target_sessions", "target_health", "cards", "card_jobs", "card_moves", "job_metrics", "telemetry_outbox"}
 V3_COLUMNS = {
+    "job_metrics": {"job_id", "finished_at", "workflow", "target", "backend", "model", "state", "failure_kind", "duration_ms", "tok_input", "tok_output", "tok_cache_read", "tok_cache_write", "attempts", "skipped_targets", "retry_of"},
+    "telemetry_outbox": {"id", "event_key", "created_at", "payload", "send_attempts", "next_attempt_at"},
     "projects": {"id", "root", "created_at"},
     "jobs": {
         "id", "project_id", "workflow", "profile", "target", "session", "fresh", "prompt", "state",
@@ -133,7 +135,25 @@ def _schema_18(path: Path) -> str:
             "VALUES (?, 'p1', 'implement', 'default', 'hello', 'succeeded', 's', 't1', 't2', '{}')",
             (job_id,),
         )
+        connection.execute(
+            "UPDATE jobs SET target='target-a', execution_plan_json=? WHERE id=?",
+            ('{"targets":[{"id":"target-a","backend":"codex"}]}', job_id),
+        )
+        connection.execute(
+            "INSERT INTO jobs(id, project_id, workflow, profile, prompt, state, session, created_at, updated_at, execution_plan_json) "
+            "VALUES ('queued-job', 'p1', 'implement', 'default', 'hello', 'queued', 's2', 't1', 't2', '{}')"
+        )
         connection.execute("PRAGMA user_version=18")
+        connection.commit()
+    return job_id
+
+
+def _schema_19(path: Path) -> str:
+    job_id = _schema_18(path)
+    with closing(sqlite3.connect(path)) as connection:
+        for statement in database_module._CARD_DDL:
+            connection.execute(statement)
+        connection.execute("PRAGMA user_version=19")
         connection.commit()
     return job_id
 
@@ -275,17 +295,70 @@ def test_result_file_is_private_and_pruning_deletes_job_stream_and_result(tmp_pa
     assert not database.result_path(job_id).exists()
 
 
-def test_schema_18_database_upgrades_to_19_and_keeps_job_rows(tmp_path: Path) -> None:
+def test_schema_18_database_upgrades_to_20_and_keeps_job_rows(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     job_id = _schema_18(path)
     before = _job_rows(path)
 
     Database(path).close()
 
-    assert _user_version(path) == 19
+    assert _user_version(path) == 20
     assert _job_rows(path) == before
     assert before[0][0] == job_id
+    with closing(sqlite3.connect(path)) as connection:
+        metric = connection.execute(
+            "SELECT job_id, finished_at, attempts, skipped_targets FROM job_metrics"
+        ).fetchone()
+    assert metric == (job_id, "t2", None, None)
+    with closing(sqlite3.connect(path)) as connection:
+        all_metrics = connection.execute("SELECT job_id FROM job_metrics").fetchall()
+        resolved = connection.execute(
+            "SELECT target, backend FROM job_metrics WHERE job_id=?", (job_id,),
+        ).fetchone()
+    assert all_metrics == [(job_id,)]
+    assert resolved == ("target-a", "codex")
     assert _tables(path) == V3_TABLES
+
+
+def test_schema_19_database_backfills_terminal_jobs_and_skips_nonterminal(tmp_path: Path) -> None:
+    path = tmp_path / "refract.db"
+    job_id = _schema_19(path)
+
+    Database(path).close()
+
+    assert _user_version(path) == 20
+    with closing(sqlite3.connect(path)) as connection:
+        rows = connection.execute(
+            "SELECT job_id, finished_at, backend, attempts, skipped_targets FROM job_metrics"
+        ).fetchall()
+    assert rows == [(job_id, "t2", "codex", None, None)]
+
+
+def test_failed_schema_19_migration_rolls_back_without_new_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "refract.db"
+    _schema_19(path)
+    monkeypatch.setattr(database_module, "_METRICS_DDL", (*database_module._METRICS_DDL[:1], "CREATE TABLE broken ("))
+
+    with pytest.raises(sqlite3.Error):
+        Database(path)
+
+    assert _user_version(path) == 19
+    assert "job_metrics" not in _tables(path)
+    assert "telemetry_outbox" not in _tables(path)
+
+
+def test_failed_schema_20_step_from_schema_18_leaves_schema_18_without_new_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "refract.db"
+    _schema_18(path)
+    before = _job_rows(path)
+    monkeypatch.setattr(database_module, "_METRICS_DDL", (*database_module._METRICS_DDL[:1], "CREATE TABLE broken ("))
+
+    with pytest.raises(sqlite3.Error):
+        Database(path)
+
+    assert _user_version(path) == 18
+    assert _job_rows(path) == before
+    assert not {"cards", "job_metrics", "telemetry_outbox"} & set(_tables(path))
 
 
 def test_schema_18_upgrade_succeeds_with_existing_backup_and_creates_none(tmp_path: Path) -> None:
@@ -295,7 +368,7 @@ def test_schema_18_upgrade_succeeds_with_existing_backup_and_creates_none(tmp_pa
 
     Database(path).close()
 
-    assert _user_version(path) == 19
+    assert _user_version(path) == 20
     assert sorted(p.name for p in tmp_path.glob("*.v2.bak")) == ["refract.db.v2.bak"]
     assert (tmp_path / "refract.db.v2.bak").read_bytes() == b"old"
 
@@ -315,7 +388,7 @@ def test_failed_schema_18_migration_rolls_back(tmp_path: Path, monkeypatch: pyte
     assert "cards" not in _tables(path)
 
 
-def test_schema_19_database_reopens_unchanged(tmp_path: Path) -> None:
+def test_schema_20_database_reopens_unchanged(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     _schema_18(path)
     Database(path).close()
@@ -323,16 +396,16 @@ def test_schema_19_database_reopens_unchanged(tmp_path: Path) -> None:
 
     Database(path).close()
 
-    assert _user_version(path) == 19
+    assert _user_version(path) == 20
     assert _job_rows(path) == before
     assert not list(tmp_path.glob("*.v2.bak"))
 
 
-def test_fresh_database_reports_schema_19(tmp_path: Path) -> None:
+def test_fresh_database_reports_schema_20(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     Database(path).close()
 
-    assert _user_version(path) == 19
+    assert _user_version(path) == 20
 
 
 def test_cards_survive_close_and_reopen(tmp_path: Path) -> None:

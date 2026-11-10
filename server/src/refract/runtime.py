@@ -38,6 +38,11 @@ from refract.models import (
 )
 from refract.notifications import send_job_notification
 from refract.planning import (ExecutionPlan, execution_plan_data, resolve_execution_plan, target_execution_key)
+from refract.product_telemetry import (
+    FEATURE_FLUSH_INTERVAL_S, build_features_event, build_heartbeat_event, build_job_event,
+    SendStatus, install_id, purge, read_heartbeat_date, sender, telemetry_decision, telemetry_status,
+    write_heartbeat_date,
+)
 from refract.processes import kill_stale_group
 from refract.scheduler import ProjectScheduler
 from refract.workflows import get_workflow, validate_request
@@ -47,7 +52,9 @@ from refract.workers import run_sync
 log = get_logger("runtime")
 RETENTION_INTERVAL_S = 3600
 DEFAULT_RETENTION_DAYS = 7
+JOB_METRICS_RETENTION_DAYS = 365
 MAX_ANSWER_LENGTH = 8192
+MAX_FEATURE_NAMES = 200
 UNKNOWN_JOB_MESSAGE = "Job does not exist."
 _LIST_JOB_ID_ACTION = "Call list for the project and use a listed job ID."
 _DESKTOP_NOTIFICATION_FAILED = "Desktop notification failed"
@@ -80,6 +87,20 @@ class Runtime:
         self.database = Database(config.database_path)
         self.ask_registry = AskRegistry()
         self._retention_task: asyncio.Task[None] | None = None
+        self._telemetry_task: asyncio.Task[None] | None = None
+        self._telemetry_enqueues: set[asyncio.Task[None]] = set()
+        self._feature_counts: dict[str, int] = {}
+        self._feature_lock = threading.Lock()
+        self._feature_period_start = utc_now()
+        self._feature_task: asyncio.Task[None] | None = None
+        # The purge lock. Consent changes, the sender, feature flushes and job enqueues each hold it in one worker thread.
+        self._flush_lock = threading.RLock()
+        self._flush_inflight: asyncio.Task[None] | None = None
+        self._telemetry_send_status = SendStatus()
+        # The one consent state. Only _set_telemetry_enabled changes it after construction.
+        self._telemetry_enabled = telemetry_decision(config)[0]
+        # File identity at the last publish, to tell whether the config changed since.
+        self._consent_stat = _file_identity(config.config_path) if config.config_path else None
         self._catalog = config
         # A per-runtime secret makes revision contexts opaque and prevents
         # session keys from becoming fingerprints of secret-bearing config hashes.
@@ -168,6 +189,8 @@ class Runtime:
     def prune_retained_transcripts(self, days: int = DEFAULT_RETENTION_DAYS) -> None:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         self.database.prune_history(cutoff)
+        metrics_cutoff = (datetime.now(timezone.utc) - timedelta(days=JOB_METRICS_RETENTION_DAYS)).isoformat()
+        self.database.prune_job_metrics(metrics_cutoff)
 
     async def _retain_history(self) -> None:
         while True:
@@ -196,6 +219,15 @@ class Runtime:
             await run_sync(self.drivers.supports_structured_streaming, target)
         await self.scheduler.start()
         self._retention_task = asyncio.create_task(self._retain_history(), name="refract-retention")
+        self._telemetry_task = asyncio.create_task(
+            sender(self.database, self._telemetry_config_check, self.config.home,
+                   send_status=self._telemetry_send_status, purge_lock=self._flush_lock,
+                   consent=lambda _config: self._telemetry_enabled),
+            name="refract-telemetry-sender",
+        )
+        self._feature_task = asyncio.create_task(
+            self._flush_features_hourly(), name="refract-telemetry-features",
+        )
         for job_id, _project_id in await run_sync(self.database.queued_jobs):
             await self._enqueue_record(job_id)
         log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
@@ -210,8 +242,191 @@ class Runtime:
             str(record["project_id"]),
         )
 
-    async def _job_terminal(self, job_id: str, _state: str) -> None:
+    async def _job_terminal(self, job_id: str, _state: str, changed: bool = True) -> None:
         self.scheduler.complete(job_id, signal=False)
+        run_secrets = self.target_executor.run_secrets.pop(job_id, None)
+        # Only the call that moved the job to a terminal state reports it, so a repeat enqueues nothing.
+        if not changed:
+            return
+        # A job that ended while consent was off stays unreported, unless the config changed since the last publish.
+        if not self._telemetry_enabled and not self._consent_stale():
+            return
+        task = asyncio.create_task(self._enqueue_telemetry(job_id, run_secrets), name="refract-telemetry-enqueue")
+        self._telemetry_enqueues.add(task)
+        task.add_done_callback(self._telemetry_enqueues.discard)
+
+    def _consent_stale(self) -> bool:
+        """True when the config file or environment changed since consent was last published."""
+        path = self.config.config_path
+        if path is not None and _file_identity(path) != self._consent_stat:
+            return True
+        return telemetry_decision(self._catalog)[0] != self._telemetry_enabled
+
+    def _telemetry_config_check(self) -> DaemonConfig:
+        """Publish the current configuration and consent; an environment change needs no reload to count."""
+        with self._lock:
+            config = self._reload_catalog_locked()
+            # Decide and apply under the catalog lock so a later publish cannot be overwritten by this decision.
+            self._set_telemetry_enabled(telemetry_decision(config)[0])
+        return config
+
+    def _set_telemetry_enabled(self, enabled: bool) -> None:
+        """The only writer of consent. A switch to off clears counts and purges queued state in the same locked section."""
+        if enabled == self._telemetry_enabled:
+            return
+        with self._flush_lock:
+            previous = self._telemetry_enabled
+            with self._feature_lock:
+                if enabled and not previous:
+                    self._feature_period_start = utc_now()
+                if not enabled:
+                    self._feature_counts = {}
+                self._telemetry_enabled = enabled
+            if previous and not enabled:
+                try:
+                    purge(self.database, self.config.home)
+                except Exception:
+                    log.warning("Telemetry purge failed", extra={"event": "telemetry.purge_failed"}, exc_info=True)
+
+    @property
+    def telemetry_enabled(self) -> bool:
+        return self._telemetry_enabled
+
+    def telemetry_status(self) -> dict[str, Any]:
+        """Report the consent decision and next batch without creating state while off."""
+        try:
+            config = self._telemetry_config_check()
+        except ValueError:
+            # A config that fails to load counts as off.
+            return telemetry_status(self.database, self.config, False, "config", self._telemetry_send_status)
+        enabled, source = telemetry_decision(config)
+        return telemetry_status(self.database, config, enabled, source, self._telemetry_send_status)
+
+    def count_feature(self, name: str) -> None:
+        """Count one feature use in memory; a no-op while consent is off."""
+        if not self._telemetry_enabled:
+            return
+        with self._feature_lock:
+            if self._telemetry_enabled and (name in self._feature_counts
+                                            or len(self._feature_counts) < MAX_FEATURE_NAMES):
+                self._feature_counts[name] = self._feature_counts.get(name, 0) + 1
+
+    async def _flush_features_hourly(self) -> None:
+        while True:
+            await asyncio.sleep(FEATURE_FLUSH_INTERVAL_S)
+            # Shielded so a cancel from close() cannot drop counts the flush already detached.
+            self._flush_inflight = asyncio.create_task(self._flush_telemetry())
+            await asyncio.shield(self._flush_inflight)
+
+    async def _flush_telemetry(self) -> None:
+        counts: dict[str, int] = {}
+        period_start = ""
+        features_queued_flag: list[bool] = []
+        try:
+            try:
+                config = await run_sync(self._telemetry_config_check)
+            except ValueError:
+                return
+            if not self._telemetry_enabled:
+                return
+            now = utc_now()
+            with self._feature_lock:
+                counts, self._feature_counts = self._feature_counts, {}
+                period_start, self._feature_period_start = self._feature_period_start, now
+            events = [(f"features:{period_start}", build_features_event(period_start, now, counts))] if counts else []
+            try:
+                await run_sync(self._write_flush, config, events, now, features_queued_flag)
+            except BaseException:
+                if counts and not features_queued_flag:
+                    self._restore_feature_counts(counts, period_start)
+                raise
+        except Exception:
+            log.warning("Telemetry flush failed", extra={"event": "telemetry.flush_failed"}, exc_info=True)
+
+    def _write_flush(self, config: DaemonConfig, events: list[tuple[str, dict[str, Any]]], now: str,
+                     features_queued: list[bool]) -> None:
+        """Write the heartbeat date and queue the events under the purge lock; run_sync joins this thread on cancel."""
+        with self._flush_lock:
+            if not self._telemetry_enabled:
+                return
+            previous = read_heartbeat_date(config.home)
+            heartbeat_due = previous != now[:10]
+            if heartbeat_due:
+                events = [*events, (f"heartbeat:{now[:10]}", build_heartbeat_event(config))]
+            if not events:
+                return
+            install_id(config.home)
+            if not self._telemetry_enabled:
+                return
+            wrote_date = False
+            try:
+                if heartbeat_due:
+                    # Persist the date first so a delivered heartbeat can never be re-queued after a restart.
+                    wrote_date = True
+                    write_heartbeat_date(config.home, now[:10])
+                for key, event in events:
+                    self._enqueue_marking(key, json.dumps(event), now, features_queued)
+            except BaseException:
+                if wrote_date:
+                    self._restore_heartbeat_date(config.home, previous)
+                raise
+
+    def _enqueue_marking(self, key: str, payload: str, now: str, features_queued: list[bool]) -> None:
+        """Enqueue, then record a committed features row; a failed call leaves the flag unset."""
+        self.database.enqueue_telemetry(key, payload, now)
+        if key.startswith("features:"):
+            features_queued.append(True)
+
+    def _restore_feature_counts(self, counts: dict[str, int], period_start: str) -> None:
+        """Merge counts from a failed flush back in; consent off drops them."""
+        with self._feature_lock:
+            if not self._telemetry_enabled:
+                return
+            for name, value in counts.items():
+                if name in self._feature_counts or len(self._feature_counts) < MAX_FEATURE_NAMES:
+                    self._feature_counts[name] = self._feature_counts.get(name, 0) + value
+            self._feature_period_start = period_start
+
+    @staticmethod
+    def _restore_heartbeat_date(home: Path, previous: str) -> None:
+        if previous:
+            write_heartbeat_date(home, previous)
+        else:
+            (home / "telemetry_heartbeat").unlink(missing_ok=True)
+
+    async def _enqueue_telemetry(self, job_id: str, run_secrets: tuple[str, ...] | None = None) -> None:
+        try:
+            try:
+                config = await run_sync(self._telemetry_config_check)
+            except ValueError:
+                return
+            if not self._telemetry_enabled:
+                return
+            metrics = await run_sync(self.database.job_metrics_row, job_id)
+            if metrics is None:
+                return
+            job = await run_sync(self.database.job_record, job_id)
+            if not job:
+                return
+            project = await run_sync(self.database.project, job["project_id"])
+            catalog = config
+            if project is not None:
+                catalog = await run_sync(self._project_catalog, Path(project.root), config)
+            if run_secrets is None:
+                run_secrets = tuple(value for target in catalog.targets for value in (*target.args, *target.env.values()))
+            event = build_job_event(metrics, job, secrets=run_secrets,
+                                    project=project.root if project else "", home=config.home)
+            await run_sync(self._write_job_event, config.home, f"job:{job_id}", json.dumps(event, ensure_ascii=False))
+        except Exception:
+            log.warning("Telemetry enqueue failed", extra={"event": "telemetry.enqueue_failed", "job_id": job_id}, exc_info=True)
+
+    def _write_job_event(self, home: Path, key: str, payload: str) -> None:
+        """Queue the event exactly when consent is on, deciding under the purge lock."""
+        with self._flush_lock:
+            if not self._telemetry_enabled:
+                return
+            install_id(home)
+            self.database.enqueue_telemetry(key, payload, utc_now())
 
     async def close(self) -> None:
         self._closing = True
@@ -219,7 +434,22 @@ class Runtime:
             self._retention_task.cancel()
             await asyncio.gather(self._retention_task, return_exceptions=True)
             self._retention_task = None
+        if self._telemetry_task is not None:
+            self._telemetry_task.cancel()
+            await asyncio.gather(self._telemetry_task, return_exceptions=True)
+            self._telemetry_task = None
+        if self._feature_task is not None:
+            self._feature_task.cancel()
+            await asyncio.gather(self._feature_task, return_exceptions=True)
+            self._feature_task = None
+        if self._flush_inflight is not None:
+            await asyncio.gather(self._flush_inflight, return_exceptions=True)
+            self._flush_inflight = None
         await self.scheduler.close()
+        while self._telemetry_enqueues:
+            await asyncio.gather(*tuple(self._telemetry_enqueues), return_exceptions=True)
+        await self._flush_telemetry()
+        self.target_executor.run_secrets.clear()
         await run_sync(self.database.close)
         log.info("Scheduler stopped", extra={"event": "scheduler.stopped"})
 
@@ -511,8 +741,8 @@ class Runtime:
             )
         if job.state == "queued":
             if location in {"queued", "missing"}:
-                await run_sync(self.database.finish_job, job_id, "cancelled")
-                await self._job_terminal(job_id, "cancelled")
+                changed = await run_sync(self.database.finish_job, job_id, "cancelled")
+                await self._job_terminal(job_id, "cancelled", changed)
                 await self._notify_job(job_id)
                 return ActionResult(success=True, job_id=job_id, state="cancelled")
             if location == "running":
@@ -716,6 +946,9 @@ class Runtime:
             catalog = load_config(self.config.config_path)
         except ValueError as exc:
             self._catalog_stat = None
+            self._consent_stat = None
+            # Invalid configuration counts as off.
+            self._set_telemetry_enabled(False)
             attempted_at = getattr(exc, "attempted_at", utc_now())
             source_path = getattr(exc, "path", self.config.config_path)
             revision = getattr(exc, "revision", "")
@@ -734,6 +967,8 @@ class Runtime:
         previous = self._config_health
         self._catalog = catalog
         self._catalog_stat = stat
+        self._consent_stat = stat
+        self._set_telemetry_enabled(telemetry_decision(catalog)[0])
         # Planning and execution must read the same settings after any reload.
         try:
             running_loop = asyncio.get_running_loop()

@@ -459,6 +459,22 @@ def _progress_token_present(context: Any) -> bool:
         return False
 
 
+def _count_mcp_feature(context: Any, operation: str) -> None:
+    """Count the tool and the client name; a single flag check while telemetry is off."""
+    if context is None:
+        return
+    try:
+        runtime = context.request_context.lifespan_context
+        if not runtime.telemetry_enabled:
+            return
+        runtime.count_feature(f"mcp.{operation}")
+        client_params = context.request_context.session.client_params
+        if client_params is not None and client_params.client_info.name:
+            runtime.count_feature(f"mcp_client.{client_params.client_info.name[:64]}")
+    except Exception:
+        log.warning("Feature count failed", extra={"event": "telemetry.count_failed"}, exc_info=True)
+
+
 def _logged_request[**P, R](operation: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     def decorate(function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         @wraps(function)
@@ -468,6 +484,7 @@ def _logged_request[**P, R](operation: str) -> Callable[[Callable[P, Awaitable[R
                 None,
             )
             request_id = _request_id(context)
+            _count_mcp_feature(context, operation)
             started_at = time.monotonic()
             extra: dict[str, Any] = {"operation": operation}
             if operation == "wait":

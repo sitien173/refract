@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
 export type ViewNavProps = {
-  current: "console" | "board" | "targets";
+  current: "console" | "board" | "targets" | "insights";
   onNavigate: (path: string) => void;
 };
 
@@ -9,6 +9,7 @@ const LINKS = [
   { view: "console", label: "Console", href: "/dashboard/" },
   { view: "board", label: "Board", href: "/dashboard/board" },
   { view: "targets", label: "Targets", href: "/dashboard/targets" },
+  { view: "insights", label: "Insights", href: "/dashboard/insights" },
 ] as const;
 
 export function ViewNav({ current, onNavigate }: ViewNavProps) {

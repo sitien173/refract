@@ -2,7 +2,7 @@ export const TABS = ["transcript", "prompt", "result", "metadata"] as const;
 export type DashboardTab = (typeof TABS)[number];
 
 export type DashboardRoute = {
-  view: "targets" | "console" | "board";
+  view: "targets" | "console" | "board" | "insights";
   jobId: string | null;
   cardId: string | null;
   filters: Record<string, string>;
@@ -21,10 +21,11 @@ export function readRoute(url = new URL(window.location.href)): DashboardRoute {
   }
   const isTargets = url.pathname === "/dashboard/targets" || url.pathname === "/dashboard/targets/";
   const isBoard = url.pathname === "/dashboard/board" || url.pathname === "/dashboard/board/";
+  const isInsights = url.pathname === "/dashboard/insights" || url.pathname === "/dashboard/insights/";
   const cardParam = url.searchParams.get("card");
   const tab = url.searchParams.get("tab");
   return {
-    view: isBoard ? "board" : isTargets ? "targets" : "console",
+    view: isBoard ? "board" : isTargets ? "targets" : isInsights ? "insights" : "console",
     jobId: jobId ? decodeURIComponent(jobId) : null,
     cardId: isBoard && cardParam ? cardParam : null,
     filters,

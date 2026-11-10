@@ -57,10 +57,11 @@ def test_bump_dispatch_input():
 
 def test_bump_permissions_and_concurrency():
     text = read("bump.yml")
-    assert re.search(r"permissions:\n\s+contents: write\n\s+actions: write\n", text)
-    assert "concurrency:" in text
-    assert "group:" in text
-    assert "cancel-in-progress: false" in text
+    assert re.search(r"permissions:\n\s+contents: read\n", text)
+    assert not re.search(r"^\s+actions: write$", text, re.M)
+    assert re.search(r"concurrency:\n\s+group: bump-version\n\s+cancel-in-progress: false", text)
+    checkout = step_with(text, "actions/checkout@v4")
+    assert "token: ${{ secrets.BUMP_TOKEN }}" in checkout
 
 
 def test_bump_main_branch_guard_comes_first():
@@ -78,8 +79,8 @@ def test_bump_pins_uv():
 def test_bump_atomic_push_and_dispatch():
     text = read("bump.yml")
     assert re.search(r'git push --atomic origin HEAD:main "refs/tags/v\$VERSION"', text)
-    assert 'gh workflow run release.yml --ref "v$VERSION"' in text
-    assert "GH_TOKEN: ${{ github.token }}" in text
+    assert not re.search(r"gh workflow run .*release", text)
+    assert "GH_TOKEN: ${{ github.token }}" not in text
     assert "--force" not in text
     assert "push -f" not in text
 
@@ -160,13 +161,13 @@ def test_bump_commit_message_and_annotated_tag():
     assert step.index("git commit") < step.index("git tag -a")
 
 
-def test_bump_summary_always_runs_and_names_recovery():
+def test_bump_summary_describes_tag_triggered_release():
     step = step_with(read("bump.yml"), "GITHUB_STEP_SUMMARY")
-    assert "if: always()" in step
+    assert 'echo "Pushed tag v$VERSION. The tag push starts Release."' in step
     assert '>> "$GITHUB_STEP_SUMMARY"' in step
-    assert "Run Release on tag v$VERSION" in step
-    assert "Do not rerun Bump version" in step
-    assert "DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}" in step
+    assert "if: always()" not in step
+    assert "Run Release on tag" not in step
+    assert "DISPATCH_OUTCOME:" not in step
 
 
 def test_release_check_requires_tag_ref_type():

@@ -10,6 +10,11 @@ it("does not interpret the job ID targets as the targets screen", () => {
   expect(readRoute(new URL("http://localhost/dashboard/jobs/targets")).view).toBe("console");
   expect(readRoute(new URL("http://localhost/dashboard/targets")).view).toBe("targets");
 });
+it("reads the insights route with and without a trailing slash", () => {
+  expect(readRoute(new URL("http://localhost/dashboard/insights")).view).toBe("insights");
+  expect(readRoute(new URL("http://localhost/dashboard/insights/")).view).toBe("insights");
+  expect(readRoute(new URL("http://localhost/dashboard/jobs/insights")).view).toBe("console");
+});
 it("reads board route and card query parameter", () => {
   expect(readRoute(new URL("http://localhost/dashboard/board")).view).toBe("board");
   expect(readRoute(new URL("http://localhost/dashboard/board/")).view).toBe("board");

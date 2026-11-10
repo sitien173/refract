@@ -61,6 +61,7 @@ class _ExecutionContext:
     session_target_key: str
     session_id: str
     attempt_tokens: list[TokenCounters]
+    skipped_targets: int | None = None
     bound_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -105,6 +106,9 @@ class TargetExecutor:
         self.drivers = drivers
         self.ask_registry = ask_registry
         self.environment_resolver = environment_resolver
+        # Values each running job was launched with, held in memory only so the terminal
+        # callback can redact them from telemetry after the configuration has rotated.
+        self.run_secrets: dict[str, tuple[str, ...]] = {}
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
         self._target_users: dict[str, int] = {}
@@ -118,6 +122,8 @@ class TargetExecutor:
         }
     async def execute(self, *, job_id: str, project: ProjectView, workflow: str, session: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: CancelEvent, fresh: bool = False) -> TargetExecutionResult:
         attempt_tokens: list[TokenCounters] = []
+        run_secrets = tuple(value for target in plan.targets for value in (*target.args, *target.env.values()))
+        self.run_secrets[job_id] = run_secrets
 
         last = DriverResult("REQUEST_FATAL", "", "", "No admissible target", "circuit_open")
         if not plan.selection.targets:
@@ -129,7 +135,7 @@ class TargetExecutor:
         sticky = await run_sync(self.database.sticky_target, project.id, session, workflow)
         if sticky in order:
             order = (sticky, *(target_id for target_id in order if target_id != sticky))
-        target = await run_sync(self._select_target, order, plan, job_id)
+        target, skipped_targets = await run_sync(self._select_target, order, plan, job_id)
         if target is None:
             return TargetExecutionResult(last, "", outcome=self._outcome(last, None, None, circuit_open=True, attempt_tokens=attempt_tokens))
         target_key = target_execution_key(target)
@@ -142,6 +148,7 @@ class TargetExecutor:
                 return self._configuration_failure(target, target_key, "Target environment configuration is unavailable", attempt_tokens)
             try:
                 bound_env, revision_context = await run_sync(self.environment_resolver, project, target.id)
+                self.run_secrets[job_id] = (*run_secrets, *bound_env.values())
                 opaque_revision = hashlib.sha256((project.id + revision_context).encode()).hexdigest()[:20]
                 session_target_key = f"{target_key}:env:{opaque_revision}"
                 scoped_session = f"{session}:env:{opaque_revision}"
@@ -187,6 +194,7 @@ class TargetExecutor:
                 cancel_event=cancel_event, fresh=fresh,
                 target=target, target_key=target_key, session_target_key=session_target_key, session_id=session_id,
                 attempt_tokens=attempt_tokens,
+                skipped_targets=skipped_targets,
                 bound_env=bound_env,
             ))
         finally:
@@ -320,7 +328,7 @@ class TargetExecutor:
             policy_retries_done += 1
 
         total_duration_ms = int((time.monotonic() - overall_started_at) * 1000)
-        return await self._finish_execution(context, attempt, total_duration_ms)
+        return await self._finish_execution(context, attempt, total_duration_ms, attempt_number)
 
     async def _begin_attempt(
         self, context: _ExecutionContext, attempt_number: int, overall_started_at: float,
@@ -427,6 +435,7 @@ class TargetExecutor:
 
     async def _finish_execution(
         self, context: _ExecutionContext, attempt: _TargetAttempt, total_duration_ms: int,
+        attempt_number: int,
     ) -> TargetExecutionResult:
         target = context.target
         last = attempt.result or DriverResult("REQUEST_FATAL", "", "", "execution_failed", "execution_error")
@@ -459,6 +468,8 @@ class TargetExecutor:
                 total_duration_ms,
                 replay_blocked=attempt.replay_blocked,
                 attempt_tokens=context.attempt_tokens,
+                attempts=attempt_number,
+                skipped_targets=context.skipped_targets,
             ),
             context.session_target_key,
             context.session,
@@ -572,6 +583,8 @@ class TargetExecutor:
         replay_blocked: bool = False,
         circuit_open: bool = False,
         attempt_tokens: list[TokenCounters] | None = None,
+        attempts: int | None = None,
+        skipped_targets: int | None = None,
     ) -> dict[str, Any]:
         failure_kind = TargetExecutor._failure_kind(result, replay_blocked, circuit_open)
         model_name = result.model
@@ -582,6 +595,8 @@ class TargetExecutor:
             "model": model_name or "",
             "duration_ms": duration_ms,
             "tokens": _job_tokens(attempt_tokens or [], target),
+            "attempts": attempts,
+            "skipped_targets": skipped_targets,
         }
 
     async def _run_target_invocation(
@@ -705,24 +720,26 @@ class TargetExecutor:
             if not accepted and not acquire.cancelled() and acquire.exception() is None:
                 semaphore.release()
 
-    def _select_target(self, target_ids: tuple[str, ...], plan: ExecutionPlan, job_id: str = "") -> TargetConfig | None:
+    def _select_target(self, target_ids: tuple[str, ...], plan: ExecutionPlan, job_id: str = "") -> tuple[TargetConfig | None, int]:
         now = datetime.now(timezone.utc)
         healthy: list[TargetConfig] = []
         claimed_probes: list[str] = []
+        rejected = 0
         for target_id in target_ids:
             target = plan.target(target_id)
             target_key = target_execution_key(target)
             if not self._admit_target(target, target_key, now, job_id, claimed_probes):
+                rejected += 1
                 continue
             healthy.append(target)
             if self._target_active.get(target.id, 0) < target.max_concurrency:
                 self._release_unselected_probes(claimed_probes, target_key, job_id)
-                return target
+                return target, rejected
         if not healthy:
-            return None
+            return None, rejected
         selected = healthy[0]
         self._release_unselected_probes(claimed_probes, target_execution_key(selected), job_id)
-        return selected
+        return selected, rejected
 
     def _admit_target(
         self, target: TargetConfig, target_key: str, now: datetime,
@@ -791,7 +808,7 @@ class TargetExecutor:
 
 
 JobNotifier = Callable[[str], Awaitable[None]]
-JobTerminalCallback = Callable[[str, str], Any]
+JobTerminalCallback = Callable[..., Any]
 
 
 async def _noop_notifier(_: str) -> None:
@@ -812,7 +829,8 @@ class JobRunner:
         self.targets = targets
         self.is_closing = is_closing
         self.notifier = notifier or _noop_notifier
-        self.on_terminal = on_terminal or (lambda _job_id, _state: None)
+        self.on_terminal = on_terminal or (lambda _job_id, _state, **_kwargs: None)
+        self._commits: dict[str, bool] = {}
 
     async def _notify(self, job_id: str) -> None:
         try:
@@ -824,9 +842,30 @@ class JobRunner:
                 exc_info=True,
             )
 
-    async def _terminal(self, job_id: str, state: str) -> None:
+    async def _commit(self, job_id: str, call: Callable[..., bool], /, *args: Any, **kwargs: Any) -> bool:
+        """Run a terminal commit and record its transition result in the worker thread, so a cancel that joins the thread keeps it."""
+        def work() -> bool:
+            changed = call(*args, **kwargs)
+            self._commits[job_id] = changed
+            return changed
+        return await run_sync(work)
+
+    async def _finish_reporting(self, job_id: str, state: str, *, notify: bool = True, **fields: Any) -> None:
+        """Commit a terminal state and report it; a cancel during the commit still reports this runner's transition once."""
         try:
-            result = self.on_terminal(job_id, state)
+            changed = await self._commit(job_id, self.database.finish_job, job_id, state, **fields)
+        except asyncio.CancelledError:
+            await self._terminal(job_id, state, self._commits.pop(job_id, False))
+            raise
+        self._commits.pop(job_id, None)
+        await self._terminal(job_id, state, changed)
+        if notify:
+            await self._notify(job_id)
+
+    async def _terminal(self, job_id: str, state: str, changed: bool) -> None:
+        """Report a terminal state; ``changed`` is true only for the call that committed the transition."""
+        try:
+            result = self.on_terminal(job_id, state, changed=changed)
             if inspect.isawaitable(result):
                 await result
         except Exception:
@@ -867,14 +906,14 @@ class JobRunner:
             outcome = execution.outcome
             if execution.result.outcome != "SUCCESS" or cancel_event.is_set():
                 final_state = self._failure_state(cancel_event)
-                await run_sync(self.database.finish_job, job_id, final_state, error=execution.result.error or execution.result.outcome, **outcome)
+                changed = await self._commit(job_id, self.database.finish_job, job_id, final_state, error=execution.result.error or execution.result.outcome, **outcome)
                 committed_state = final_state
-                await self._terminal(job_id, final_state)
+                await self._terminal(job_id, final_state, changed)
                 await self._notify(job_id)
                 return
-            await self._finish_success(job_id, project, record, execution)
+            changed = await self._finish_success(job_id, project, record, execution)
             committed_state = "succeeded"
-            await self._terminal(job_id, committed_state)
+            await self._terminal(job_id, committed_state, changed)
             await self._notify(job_id)
         except asyncio.CancelledError as exc:
             await self._finish_cancelled_job(job_id, exc, committed_state)
@@ -882,6 +921,9 @@ class JobRunner:
         except Exception as exc:
             await self._finish_failed_job(job_id, exc, final_state, committed_state, outcome)
         finally:
+            # Release the launch values however the run exits; the terminal callback has already taken them on the normal path.
+            self.targets.run_secrets.pop(job_id, None)
+            self._commits.pop(job_id, None)
             completed = await run_sync(self.database.job, job_id)
             log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})
 
@@ -891,15 +933,11 @@ class JobRunner:
             return None
         if cancel_event.is_set():
             state = "interrupted" if self.is_closing() else "cancelled"
-            await run_sync(self.database.finish_job, job_id, state, error="cancelled before execution")
-            await self._terminal(job_id, state)
-            await self._notify(job_id)
+            await self._finish_reporting(job_id, state, error="cancelled before execution")
             return None
         project = await run_sync(self.database.project, project_id)
         if project is None:
-            await run_sync(self.database.finish_job, job_id, "failed", error="Project was removed")
-            await self._terminal(job_id, "failed")
-            await self._notify(job_id)
+            await self._finish_reporting(job_id, "failed", error="Project was removed")
         return project
 
     def _failure_state(self, cancel_event: CancelEvent) -> str:
@@ -912,9 +950,9 @@ class JobRunner:
     async def _finish_success(
         self, job_id: str, project: ProjectView, record: dict[str, Any],
         execution: TargetExecutionResult,
-    ) -> None:
+    ) -> bool:
         if bool(record.get("fresh", 0)):
-            await run_sync(self.database.finish_fresh_job_success,
+            return await self._commit(job_id, self.database.finish_fresh_job_success,
                 job_id=job_id,
                 project_id=project.id,
                 session=execution.scoped_session or record["session"],
@@ -925,16 +963,17 @@ class JobRunner:
                 text=execution.result.text,
                 **execution.outcome,
             )
-        else:
-            await run_sync(self.database.finish_job, job_id, "succeeded", text=execution.result.text, target=execution.target_id, **execution.outcome)
+        return await self._commit(job_id, self.database.finish_job, job_id, "succeeded", text=execution.result.text, target=execution.target_id, **execution.outcome)
 
     async def _finish_cancelled_job(
         self, job_id: str, exc: asyncio.CancelledError, committed_state: str | None,
     ) -> None:
         completed = await run_sync(self.database.job, job_id)
         if completed is not None and completed.state in TERMINAL_STATES:
+            # A normal-path commit has already reported; only a commit that the cancel interrupted is still unreported.
+            changed = committed_state is None and self._commits.pop(job_id, False)
             committed_state = completed.state
-            await self._terminal(job_id, committed_state)
+            await self._terminal(job_id, committed_state, changed)
         if committed_state is None:
             final_state = "interrupted" if self.is_closing() else "cancelled"
             outcome = (
@@ -943,8 +982,7 @@ class JobRunner:
                     DriverResult("CANCELLED", "", "", "cancelled", "cancelled"), None, None
                 )
             )
-            await run_sync(self.database.finish_job, job_id, final_state, error="execution task cancelled", **outcome)
-            await self._terminal(job_id, final_state)
+            await self._finish_reporting(job_id, final_state, notify=False, error="execution task cancelled", **outcome)
 
     async def _finish_failed_job(
         self, job_id: str, exc: Exception, final_state: str,
@@ -968,9 +1006,7 @@ class JobRunner:
             "Unexpected job failure",
             extra={"event": "job.exception", "job_id": job_id},
         )
-        await run_sync(self.database.finish_job, job_id, final_state, error=str(exc), **outcome)
-        await self._terminal(job_id, final_state)
-        await self._notify(job_id)
+        await self._finish_reporting(job_id, final_state, error=str(exc), **outcome)
 
 
 __all__ = ["JobNotifier", "JobRunner", "TargetExecutor", "TargetExecutionResult"]

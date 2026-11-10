@@ -6,6 +6,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from refract.database import Database
@@ -53,6 +54,21 @@ def seed(home: Path) -> None:
                     }
                 ],
             )
+        # The seed bypasses `_finish`, so write the metrics rows that a real run would have stored.
+        with database._connection:
+            database._connection.execute(
+                "INSERT INTO job_metrics(job_id, finished_at, workflow, target, backend, model, state, failure_kind, "
+                "duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write, attempts, skipped_targets, retry_of) "
+                "SELECT id, finished_at, workflow, 'e2e', 'claude', 'e2e', 'succeeded', NULL, 1000, 100, 50, 20, 10, 1, 0, '' "
+                "FROM jobs WHERE id LIKE 'e2e-seed-%'"
+            )
+            # Outside the 7 day window and inside the 30 day window, so the window switch changes the count.
+            database._connection.execute(
+                "INSERT INTO job_metrics(job_id, finished_at, workflow, target, backend, model, state, failure_kind, "
+                "duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write, attempts, skipped_targets, retry_of) "
+                "VALUES ('e2e-metric-old', ?, 'consult', 'e2e', 'claude', 'e2e', 'succeeded', NULL, 1000, 100, 50, 20, 10, 1, 0, '')",
+                ((datetime.now(timezone.utc) - timedelta(days=20)).isoformat(),),
+            )
     finally:
         database.close()
 
@@ -77,6 +93,7 @@ def main() -> None:
         for key in ("REFRACT_ASK_URL", "REFRACT_ASK_TOKEN", "REFRACT_ASK_TIMEOUT_S"):
             environment.pop(key, None)
         environment["REFRACT_HOME"] = str(home)
+        environment["DO_NOT_TRACK"] = "1"
         environment["PATH"] = f"{bin_dir}{os.pathsep}{environment.get('PATH', '')}"
         child = subprocess.Popen(
             [

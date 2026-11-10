@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { CardDetailResponseSchema, CardStateSchema, CardsResponseSchema, DashboardApiError, getJob, getJobOutput, getJobs, getTargets, postJobAction } from "./api";
+import {
+  CardDetailResponseSchema,
+  CardStateSchema,
+  CardsResponseSchema,
+  DashboardApiError,
+  getJob,
+  getJobOutput,
+  getJobs,
+  getStats,
+  getTargets,
+  postJobAction,
+  StatsResponseSchema,
+} from "./api";
 
 function response(status: number, body: unknown, json = vi.fn().mockResolvedValue(body)) {
   return { ok: status >= 200 && status < 300, status, json } as unknown as Response;
@@ -242,5 +254,173 @@ describe("dashboard API", () => {
     // Rejects a state outside the five values
     expect(CardStateSchema.safeParse("unknown_state").success).toBe(false);
     expect(CardsResponseSchema.safeParse({ ...validList, cards: [{ ...validCard, state: "unknown_state" }] }).success).toBe(false);
+  });
+});
+
+// Copied from a real `get_stats(days=7, tz_offset_minutes=0)` result over four seeded jobs.
+const sampleStats = {
+  days: 7,
+  currency: "USD",
+  work_delegated: {
+    by_workflow: {
+      consult: {
+        succeeded: 1,
+        failed: 1,
+      },
+      implement: {
+        failed: 1,
+        succeeded: 1,
+      },
+    },
+    by_state: {
+      succeeded: 2,
+      failed: 2,
+    },
+    worker_hours: 0.075,
+    success_rate: 0.5,
+    daily: {
+      "2026-11-09": {
+        succeeded: 1,
+        failed: 1,
+      },
+      "2026-11-10": {
+        succeeded: 1,
+        failed: 1,
+      },
+    },
+  },
+  failover_saves: {
+    skipped_targets: 1,
+    retries: 1,
+    retries_after_failure: 1,
+    unknown_skipped_targets: 1,
+    unknown_attempts: 1,
+  },
+  tokens: {
+    by_backend: {
+      codex: {
+        input: 1000,
+        uncached_input: 600,
+        output: 200,
+        cache_read: 400,
+        cache_write: 0,
+        jobs: 1,
+        cache_hit_ratio: 0.4,
+      },
+      claude: {
+        input: 1300,
+        uncached_input: 1030,
+        output: 400,
+        cache_read: 150,
+        cache_write: 120,
+        jobs: 2,
+        cache_hit_ratio: 0.1271186440677966,
+      },
+      unassigned: {
+        input: 0,
+        uncached_input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        jobs: 1,
+        cache_hit_ratio: 0.0,
+      },
+    },
+    by_model: {
+      "gpt-x": {
+        input: 1000,
+        uncached_input: 600,
+        output: 200,
+        cache_read: 400,
+        cache_write: 0,
+        jobs: 1,
+        cache_hit_ratio: 0.4,
+      },
+      "claude-y": {
+        input: 1300,
+        uncached_input: 1030,
+        output: 400,
+        cache_read: 150,
+        cache_write: 120,
+        jobs: 2,
+        cache_hit_ratio: 0.1271186440677966,
+      },
+      unassigned: {
+        input: 0,
+        uncached_input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        jobs: 1,
+        cache_hit_ratio: 0.0,
+      },
+    },
+    by_target: {
+      t1: {
+        input: 1000,
+        uncached_input: 600,
+        output: 200,
+        cache_read: 400,
+        cache_write: 0,
+        jobs: 1,
+        cache_hit_ratio: 0.4,
+      },
+      t2: {
+        input: 1300,
+        uncached_input: 1030,
+        output: 400,
+        cache_read: 150,
+        cache_write: 120,
+        jobs: 2,
+        cache_hit_ratio: 0.1271186440677966,
+      },
+      unassigned: {
+        input: 0,
+        uncached_input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        jobs: 1,
+        cache_hit_ratio: 0.0,
+      },
+    },
+  },
+  estimated_cost: {
+    total: 0.010624999999999999,
+    by_model: {
+      "claude-y": 0.009585,
+      "gpt-x": 0.00104,
+    },
+    unpriced_models: ["unassigned"],
+  },
+};
+
+describe("stats API", () => {
+  it("requests the window and UTC offset and parses a real response", async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(200, sampleStats));
+    const stats = await getStats(7, -300, fetcher);
+    expect(fetcher).toHaveBeenCalledWith("/dashboard/api/stats?days=7&tz_offset_minutes=-300", expect.objectContaining({ cache: "no-store" }));
+    expect(stats).toEqual(sampleStats);
+    expect(stats.tokens.by_model.unassigned.cache_hit_ratio).toBe(0);
+  });
+
+  it("accepts empty maps and rejects a missing or mistyped field", () => {
+    const empty = {
+      days: 1,
+      currency: "USD",
+      work_delegated: { by_workflow: {}, by_state: {}, worker_hours: 0, success_rate: 0, daily: {} },
+      failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
+      tokens: { by_backend: {}, by_model: {}, by_target: {} },
+      estimated_cost: { total: 0, by_model: {}, unpriced_models: [] },
+    };
+    expect(StatsResponseSchema.safeParse(empty).success).toBe(true);
+    const { currency: _, ...withoutCurrency } = empty;
+    expect(StatsResponseSchema.safeParse(withoutCurrency).success).toBe(false);
+    expect(StatsResponseSchema.safeParse({ ...empty, estimated_cost: { ...empty.estimated_cost, total: "0" } }).success).toBe(false);
+  });
+
+  it("maps an error response to DashboardApiError", async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(400, { error: "days must be one of 1, 7, 30, or 365", code: "invalid_request" }));
+    await expect(getStats(7, 0, fetcher)).rejects.toMatchObject({ status: 400, code: "invalid_request" });
   });
 });

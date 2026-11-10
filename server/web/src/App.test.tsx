@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   getTargets: vi.fn(),
   getCards: vi.fn(),
   getCard: vi.fn(),
+  getStats: vi.fn(),
   postJobAction: vi.fn(),
 }));
 vi.mock("./api", async (importOriginal) => ({ ...(await importOriginal<typeof import("./api")>()), ...api }));
@@ -26,6 +27,14 @@ const detailOf = (id: string, state = "failed", pending_question: unknown = null
   result: { text: "r" },
   pending_question,
 });
+const emptyStats = {
+  days: 7,
+  currency: "USD",
+  work_delegated: { by_workflow: {}, by_state: {}, worker_hours: 0, success_rate: 0, daily: {} },
+  failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
+  tokens: { by_backend: {}, by_model: {}, by_target: {} },
+  estimated_cost: { total: 0, by_model: {}, unpriced_models: [] },
+};
 const announcements = () => screen.getByRole("status", { name: "Announcements" });
 
 let queryClient = createTestQueryClient();
@@ -40,6 +49,7 @@ beforeEach(() => {
   api.getJobOutput.mockResolvedValue({ events: [], next: 0, has_more: false, available: true, state: "failed", terminal: true });
   api.getCards.mockResolvedValue({ cards: [], truncated: false, options: { projects: [] } });
   api.getCard.mockResolvedValue({ card: {}, moves: [], jobs: [] });
+  api.getStats.mockResolvedValue(emptyStats);
   api.postJobAction.mockResolvedValue({ job_id: "new-job", state: "queued" });
 });
 
@@ -131,6 +141,35 @@ it("shows navigation links in the header with aria-current on the active view", 
   expect(screen.getByRole("link", { name: "Console" })).not.toHaveAttribute("aria-current");
   expect(screen.getByRole("link", { name: "Board" })).toHaveAttribute("aria-current", "page");
   expect(screen.getByRole("link", { name: "Targets" })).not.toHaveAttribute("aria-current");
+  expect(screen.getByRole("link", { name: "Insights" })).not.toHaveAttribute("aria-current");
+
+  cleanup();
+  history.replaceState({}, "", "/dashboard/insights");
+  renderApp();
+  await settle();
+  expect(screen.getByRole("link", { name: "Console" })).not.toHaveAttribute("aria-current");
+  expect(screen.getByRole("link", { name: "Board" })).not.toHaveAttribute("aria-current");
+  expect(screen.getByRole("link", { name: "Targets" })).not.toHaveAttribute("aria-current");
+  expect(screen.getByRole("link", { name: "Insights" })).toHaveAttribute("aria-current", "page");
+});
+
+it("makes no job-list request and sends the UTC offset when visiting the insights view", async () => {
+  vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
+  history.replaceState({}, "", "/dashboard/insights");
+  renderApp();
+  await settle();
+  expect(api.getJobs).not.toHaveBeenCalled();
+  expect(api.getStats).toHaveBeenCalledWith(7, 330, expect.anything());
+});
+
+it("navigates to insights in-app from the console nav", async () => {
+  history.replaceState({}, "", "/dashboard/");
+  renderApp();
+  await settle();
+  fireEvent.click(screen.getByRole("link", { name: "Insights" }));
+  await settle();
+  expect(location.pathname).toBe("/dashboard/insights");
+  expect(screen.getByRole("heading", { name: "Insights" })).toBeInTheDocument();
 });
 
 it("makes no job-list request when visiting the board view", async () => {

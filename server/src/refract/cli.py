@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 from collections.abc import Sequence
+from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -48,6 +49,10 @@ def _parser() -> argparse.ArgumentParser:
     update = commands.add_parser("update", help="Check for or apply Refract updates")
     update.add_argument("--check", action="store_true", help="Check for updates without changing anything")
     update.add_argument("--force", action="store_true", help="Ignore the 24 hour check throttle")
+    stats = commands.add_parser("stats", help="Show local usage analytics")
+    stats.add_argument("--days", type=int, choices=(1, 7, 30, 365), default=7)
+    stats.add_argument("--json", action="store_true", help="Print the API response as JSON")
+    commands.add_parser("telemetry", help="Show the telemetry decision and the next batch")
     return parser
 
 
@@ -144,6 +149,93 @@ def _status() -> int:
     return 0 if running else 1
 
 
+def _stats(args: argparse.Namespace) -> int:
+    try:
+        config = load_config()
+    except ValueError as exc:
+        sys.stderr.write(f"Configuration error: {exc}\n")
+        return 1
+    offset = datetime.now().astimezone().utcoffset()
+    tz_offset_minutes = int(offset.total_seconds() // 60) if offset is not None else 0
+    url = (f"http://{config.host}:{config.port}/dashboard/api/stats?days={args.days}"
+           f"&tz_offset_minutes={tz_offset_minutes}")
+    try:
+        with urlopen(url, timeout=2) as response:
+            raw_body = response.read()
+    except HTTPError as exc:
+        try:
+            api_error = json.loads(exc.read()).get("error", exc.reason)
+        except (ValueError, AttributeError):
+            api_error = exc.reason
+        sys.stderr.write(f"Refract stats request failed: HTTP {exc.code}: {api_error}\n")
+        return 1
+    except (OSError, URLError):
+        sys.stderr.write("Refract daemon is not running.\n")
+        return 1
+    if args.json:
+        sys.stdout.buffer.write(raw_body)
+    else:
+        try:
+            payload = json.loads(raw_body)
+        except (ValueError, UnicodeDecodeError):
+            sys.stderr.write("Refract stats response contains invalid JSON.\n")
+            return 1
+        try:
+            work = payload["work_delegated"]
+            saves = payload["failover_saves"]
+            tokens = payload["tokens"]["by_model"]
+            cost = payload["estimated_cost"]
+            lines = (
+                f"Work delegated ({args.days} days): {sum(work['by_state'].values())} jobs; "
+                f"{work['worker_hours']:.2f} worker hours; "
+                f"{work['success_rate']:.1%} success rate\n",
+                f"Failover saves: {sum(saves[key] for key in ('skipped_targets', 'retries', 'retries_after_failure'))}\n",
+                f"Tokens by model: {len(tokens)} models\n",
+                f"Estimated cost: {cost['total']:.2f} {payload['currency']}\n",
+            )
+        except (KeyError, TypeError, AttributeError, ValueError):
+            sys.stderr.write("Refract stats response has an unexpected shape.\n")
+            return 1
+        sys.stdout.write("".join(lines))
+    return 0
+
+
+def _telemetry() -> int:
+    try:
+        config = load_config()
+    except ValueError as exc:
+        sys.stderr.write(f"Configuration error: {exc}\n")
+        return 1
+    try:
+        with urlopen(f"http://{config.host}:{config.port}/dashboard/api/telemetry", timeout=2) as response:
+            payload = json.loads(response.read())
+    except HTTPError as exc:
+        try:
+            api_error = json.loads(exc.read()).get("error", exc.reason)
+        except (ValueError, AttributeError):
+            api_error = exc.reason
+        sys.stderr.write(f"Refract telemetry request failed: HTTP {exc.code}: {api_error}\n")
+        return 1
+    except (OSError, URLError):
+        sys.stderr.write("Refract daemon is not running.\n")
+        return 1
+    except ValueError:
+        sys.stderr.write("Refract telemetry response contains invalid JSON.\n")
+        return 1
+    sys.stdout.write(f"enabled: {'on' if payload['enabled'] else 'off'}\n")
+    sys.stdout.write(f"source: {payload['source']}\n")
+    sys.stdout.write(f"endpoint: {payload['endpoint']}\n")
+    sys.stdout.write(f"install_id: {payload['install_id'] or 'none'}\n")
+    sys.stdout.write(f"queued: {payload['queued']}\n")
+    sys.stdout.write(f"last_send_at: {payload['last_send_at'] or 'never'}\n")
+    sys.stdout.write(f"last_error: {payload['last_error'] or 'none'}\n")
+    if payload["next_batch"] is None:
+        sys.stdout.write("next_batch: none\n")
+    else:
+        sys.stdout.write(f"next_batch:\n{json.dumps(payload['next_batch'], indent=2)}\n")
+    return 0
+
+
 def _update(args: argparse.Namespace) -> int:
     from refract.updater import run_check, run_update
 
@@ -178,6 +270,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(_status())
     if args.command == "update":
         raise SystemExit(_update(args))
+    if args.command == "stats":
+        raise SystemExit(_stats(args))
+    if args.command == "telemetry":
+        raise SystemExit(_telemetry())
     if args.command not in {None, "serve"}:
         raise SystemExit(2)
 
