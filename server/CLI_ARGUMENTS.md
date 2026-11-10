@@ -1,6 +1,6 @@
 # Non-interactive backend CLI arguments
 
-Refract 3.0.0 · [Repository](https://github.com/sitien173/refract)
+Refract 3.0.1 · [Repository](https://github.com/sitien173/refract)
 
 Flags were last checked on 2026-10-26 against:
 

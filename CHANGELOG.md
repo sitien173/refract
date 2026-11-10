@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.0.1 - 2026-11-10
+
 - Documentation site in `site/`, built with Jekyll and Just the Docs and deployed to GitHub Pages.
 - `refract update` no longer reports an update forever after an editable clone install moves to a new version: it reinstalls the server when its package metadata version differs from the clone.
 - `refract update --check` compares a Pi GitHub package against the version Pi checked out, not the server version.
