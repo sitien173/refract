@@ -19,8 +19,7 @@ concurrency:
 jobs:
   bump:
     permissions:
-      contents: write
-      actions: write
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - name: Require main
@@ -32,6 +31,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Admin PAT: bypasses the main and v* tag rulesets.
+          token: ${{ secrets.BUMP_TOKEN }}
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.26"
@@ -66,20 +67,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "chore(release): v$VERSION"
           git tag -a "v$VERSION" -m "v$VERSION"
+      # BUMP_TOKEN pushes trigger workflows, so the tag push starts Release.
       - name: Push commit and tag
         run: git push --atomic origin HEAD:main "refs/tags/v$VERSION"
-      - name: Dispatch Release
-        id: dispatch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run release.yml --ref "v$VERSION"
       - name: Job summary
-        if: always()
-        env:
-          DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
-        run: |
-          if [ "$DISPATCH_OUTCOME" = "success" ]; then
-            echo "Pushed tag v$VERSION and dispatched Release." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$DISPATCH_OUTCOME" = "failure" ]; then
-            echo "Pushed tag v$VERSION but dispatching Release failed. Run Release on tag v$VERSION. Do not rerun Bump version: it would create the next version." >> "$GITHUB_STEP_SUMMARY"
-          fi
+        run: echo "Pushed tag v$VERSION. The tag push starts Release." >> "$GITHUB_STEP_SUMMARY"
