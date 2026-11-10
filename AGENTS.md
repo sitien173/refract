@@ -5,7 +5,7 @@ Refract is a monorepo with two shipped parts:
 - `plugin/`: host plugin for Claude Code, Antigravity, Codex, and Pi. Skills, slash commands, a SessionStart hook, and a Pi extension.
 - `server/`: Python 3.12 daemon and `refract` CLI. MCP tools, job scheduling, backend drivers, and a React dashboard in `server/web/`.
 
-[`README.md`](README.md) covers usage. [`server/README.md`](server/README.md) covers configuration and the MCP tools.
+[`README.md`](README.md) covers usage. [`server/README.md`](server/README.md) covers configuration and the MCP tools. [`CONTRIBUTING.md`](CONTRIBUTING.md) covers code style; read it before writing code.
 
 ## Commands
 
