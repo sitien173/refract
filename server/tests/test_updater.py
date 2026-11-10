@@ -612,6 +612,14 @@ def test_pi_github_sources(env: Env) -> None:
     assert [(i.source, i.state) for i in updater.discover_pi()] == [("github", None)] * 2
 
 
+def test_pi_github_version_comes_from_pi_checkout(env: Env) -> None:
+    checkout = env.pi_dir / "git" / "github.com" / "sitien173" / "refract" / "plugin"
+    checkout.mkdir(parents=True)
+    (checkout / "package.json").write_text(json.dumps({"name": "refract", "version": "3.0.0"}))
+    pi_settings(env, ["https://github.com/sitien173/refract"])
+    assert updater.discover_pi()[0].version == "3.0.0"
+
+
 @pytest.mark.parametrize(
     "source",
     ["-evil", "--extension=x", "https://github.com/sitien173/refract@main", "git:evil.example/refract", "npm:refract-evil"],
@@ -1589,6 +1597,24 @@ def test_shared_clone_is_pulled_once_and_every_host_updated(env: Env, repos: Rep
         "claude plugin marketplace update refract",
         "claude plugin update refract@refract",
     ]
+
+
+def test_current_clone_with_stale_server_metadata_reinstalls_without_pull(env: Env, repos: Repos, monkeypatch: pytest.MonkeyPatch) -> None:
+    (repos.seed / "server").mkdir()
+    (repos.seed / "server" / "pyproject.toml").write_text('[project]\nname = "refract"\nversion = "3.0.0"\n')
+    git(repos.seed, "add", "server")
+    git(repos.seed, "commit", "-q", "-m", "server")
+    git(repos.seed, "push", "-q", "origin", "main")
+    git(repos.clone, "pull", "-q")
+    clone_server(monkeypatch, repos)
+    env.stub("uv", "")
+    installs = updater.discover()
+    result = updater.classify(installs)
+    assert [(c.state, c.detail) for c in result.components] == [("update", "installed 2.5.0 differs from clone 3.0.0")]
+    pulls = pull_spy(monkeypatch)
+    assert statuses(updater._apply_updates(installs, result)) == [("server", "updated")]
+    assert pulls == []
+    assert host_calls(env) == [f"uv pip install -p {sys.executable} -e {repos.clone.resolve() / 'server'}"]
 
 
 @pytest.mark.parametrize("mutation", ["dirty", "detached", "merge"])

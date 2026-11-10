@@ -369,6 +369,14 @@ def _is_refract_package(path: Path) -> bool:
     return False
 
 
+def _package_version(path: Path) -> str | None:
+    try:
+        version = json.loads((path / "package.json").read_text()).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) and _VERSION_RE.match(version) else None
+
+
 def _pi_install(entry: Any, base: Path) -> Install | None:
     source = entry.get("source") if isinstance(entry, dict) else entry
     if not isinstance(source, str):
@@ -379,7 +387,9 @@ def _pi_install(entry: Any, base: Path) -> Install | None:
             return Install("pi", "unknown", "skipped", _UNTRUSTED, ref=source)
         return None
     if parsed[0] == "github":
-        return Install("pi", "github", None, "github package", ref=source)
+        # Pi clones user-scope git packages to <agent dir>/git/<host>/<path>.
+        checkout = base / "git" / "github.com" / "sitien173" / "refract"
+        return Install("pi", "github", None, "github package", ref=source, version=_package_version(checkout / "plugin"))
     if not _is_refract_package(parsed[1]):
         return None
     root = _git_root(parsed[1])
@@ -568,6 +578,14 @@ def _stale_claude_cache(install: Install, path: Path, heads: dict[Path, str | No
     return "manual", _claude_reinstall_command(install.ref or "<id>", install.scope), False
 
 
+def _clone_server_version(root: Path) -> str | None:
+    try:
+        version = tomllib.loads((root / "server" / "pyproject.toml").read_text()).get("project", {}).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) and _VERSION_RE.match(version) else None
+
+
 def _clone_component(
     install: Install, path: Path, clones: dict[Path, _CloneResult], heads: dict[Path, str | None]
 ) -> tuple[str, str, bool]:
@@ -578,6 +596,11 @@ def _clone_component(
         stale = _stale_claude_cache(install, path, heads)
         if stale is not None:
             return stale
+    if install.name == "server" and result.state == "current" and install.version is not None:
+        # An editable install keeps its metadata version until it is reinstalled.
+        cloned = _clone_server_version(path)
+        if cloned is not None and cloned != install.version:
+            return "update", f"installed {install.version} differs from clone {cloned}", True
     return result.state, result.detail, False
 
 
