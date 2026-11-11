@@ -728,7 +728,7 @@ def _register_api_routes(state: DashboardState) -> list[Route]:
             return _api_error("tz_offset_minutes must be an integer", 400, code="invalid_request")
         from refract.insights import get_stats
         try:
-            return _api_json_response(get_stats(runtime.database, runtime.config, days, offset))
+            return _api_json_response(get_stats(runtime.database, runtime.pricing, days, offset))
         except ValueError as exc:
             return _api_error(str(exc), 400, code="invalid_request")
 

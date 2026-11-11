@@ -28,6 +28,16 @@ BATCH_SIZE = 100
 TIMEOUT_S = 10
 MAX_BACKOFF_S = 24 * 60 * 60
 FEATURE_FLUSH_INTERVAL_S = 60 * 60
+COLLECTOR_URL = "https://cf-api-gateway.sitienbmt.workers.dev/refract-collector"
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Returning None makes urllib raise HTTPError for every 3xx, so the body is never resent.
+        return None
+
+
+TELEMETRY_OPENER = urllib.request.build_opener(_RefuseRedirects())
 
 
 @dataclass(slots=True)
@@ -120,10 +130,10 @@ def build_batch_body(install: str, events: list[dict[str, Any]], sent_at: str | 
             "sent_at": sent_at, "events": events}
 
 
-def send_batch(endpoint: str, install: str, events: list[dict[str, Any]], *, opener: Callable[..., Any] | None = None) -> int:
+def send_batch(install: str, events: list[dict[str, Any]], *, opener: Callable[..., Any] | None = None) -> int:
     body = json.dumps(build_batch_body(install, events, datetime.now(timezone.utc).isoformat())).encode()
-    request = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
-    response = (opener or urllib.request.urlopen)(request, timeout=TIMEOUT_S)
+    request = urllib.request.Request(COLLECTOR_URL, data=body, headers={"Content-Type": "application/json"})
+    response = (opener or TELEMETRY_OPENER.open)(request, timeout=TIMEOUT_S)
     return int(response.status)
 
 
@@ -134,7 +144,7 @@ def telemetry_status(database: Any, config: DaemonConfig, enabled: bool, source:
     next_batch = (build_batch_body(str(install), [json.loads(row["payload"]) for row in rows], None)
                   if rows else None)
     queued = database.telemetry_queue_count()
-    return {"enabled": enabled, "source": source, "endpoint": config.telemetry.endpoint,
+    return {"enabled": enabled, "source": source, "endpoint": COLLECTOR_URL,
             "install_id": install, "queued": queued, "last_send_at": status.last_send_at,
             "last_error": status.last_error, "next_batch": next_batch}
 
@@ -218,7 +228,7 @@ def _send_outbox_locked(
         ids = [r["id"] for r in rows]
         try:
             install = install_id(home)
-            status = send_batch(config.telemetry.endpoint, install, events, opener=opener)
+            status = send_batch(install, events, opener=opener)
         except urllib.error.HTTPError as exc:
             status = exc.code
         except Exception:
@@ -236,7 +246,7 @@ def _send_outbox_locked(
             database.delete_telemetry(ids)
         elif status == 429 or status >= 500:
             database.defer_telemetry(ids, [next_backoff(r["send_attempts"]) for r in rows])
-        elif 400 <= status < 500:
+        elif 300 <= status < 500:
             database.delete_telemetry(ids)
             log.warning("Telemetry batch rejected", extra={"event": "telemetry.batch_rejected"})
         else:

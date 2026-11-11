@@ -63,27 +63,6 @@ Global config only. See [Telemetry](#telemetry).
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | unset, which means off | `true` or `false`; the third step in the consent order |
-| `endpoint` | `"https://telemetry.example.invalid/v1/events"` | URL that receives each batch. The default is a placeholder, so an opted-in install cannot deliver until you set a real URL. |
-
-### `[pricing]`
-
-Global config only. Prices feed the estimated cost in [Stats](#stats). Refract ships no price data.
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `currency` | `"USD"` | Label shown beside costs |
-| `models."<model>"` | none | A table with `input`, `output`, `cache_read`, and `cache_write`. All four are required and must be non-negative numbers per 1M tokens. `<model>` is the model string that stats display. |
-
-```toml
-[pricing]
-currency = "USD"
-
-[pricing.models."example-model"]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-```
 
 ### `[[targets]]`
 
@@ -171,9 +150,9 @@ The Insights view at `/dashboard/insights` shows the numbers that `refract stats
 
 ## Telemetry
 
-Telemetry is off by default. When it is on, the daemon sends usage data to the URL in `[telemetry] endpoint`. The data informs backend and model priorities, reliability fixes, feature adoption, and install base. Stats work with telemetry on or off.
+Telemetry is off by default. When it is on, the daemon sends usage data to `https://cf-api-gateway.sitienbmt.workers.dev/refract-collector`. A leftover `[telemetry] endpoint` key is ignored and produces a warning. The data informs backend and model priorities, reliability fixes, feature adoption, and install base. Stats work with telemetry on or off.
 
-While telemetry is off, Refract makes no telemetry network call, creates no install ID, and writes no outbox rows. A job that ends while telemetry is off is never queued later.
+While telemetry is off, Refract makes no telemetry network call, creates no install ID, and writes no outbox rows. The [price file fetch](#pricing) is not telemetry. It runs in either state and sends no install ID or usage data. A job that ends while telemetry is off is never queued later.
 
 ### Consent order
 
@@ -192,7 +171,7 @@ A config file that fails to load counts as off. Each enqueue and each send re-re
 | --- | --- |
 | `enabled` | `on` or `off` |
 | `source` | `DO_NOT_TRACK`, `REFRACT_TELEMETRY`, `config`, or `default` |
-| `endpoint` | Configured endpoint URL |
+| `endpoint` | `https://cf-api-gateway.sitienbmt.workers.dev/refract-collector` |
 | `install_id` | Install ID, or `none` while telemetry is off |
 | `queued` | Number of events in the outbox |
 | `last_send_at` | Time of the last successful send, or `never` |
@@ -292,6 +271,32 @@ Error text is redacted in this order, then cut to 500 characters:
 
 When telemetry turns off, the daemon deletes the outbox rows, the in-memory feature counts, `telemetry_id`, `telemetry_heartbeat`, and any leftover `telemetry_heartbeat.tmp`. Pending rows are deleted, not sent. The `job_metrics` table that backs [Stats](#stats) is not touched.
 
+## Pricing
+
+Estimated cost in [Stats](#stats) uses a price file that the daemon fetches from `https://raw.githubusercontent.com/sitien173/refract/refs/heads/main/server/config/pricing.toml`. Refract has no `[pricing]` config section. A leftover `[pricing]` section is ignored and produces a warning.
+
+The file is TOML with `schema = 1` and a `[pricing]` table. `currency` defaults to `"USD"`. Each `[pricing.models."<model>"]` table needs `input`, `output`, `cache_read`, and `cache_write`, as non-negative numbers per 1M tokens. `<model>` is the model string that stats display. The file is at most 64 KiB, and redirects are refused.
+
+```toml
+schema = 1
+
+[pricing]
+currency = "USD"
+
+[pricing.models."example-model"]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+```
+
+- The daemon fetches at start and then every 24 hours. After a failed fetch it retries after 1 hour and keeps the previous prices.
+- A valid file is cached at `$REFRACT_HOME/pricing.toml`. The daemon loads the cache at start, so stats work offline.
+- Stats requests read the prices held in memory. They never touch the disk or the network.
+- The fetch runs regardless of telemetry consent and `DO_NOT_TRACK`. It sends no install ID and no usage data, only a plain GET with a `User-Agent: refract` header.
+- Set `REFRACT_PRICING_FETCH=0` to turn the fetch off. The daemon then uses the cache alone, or no prices when there is no cache.
+- A price change re-prices retained history, because cost is computed from token counts at request time.
+
 ## Stats
 
 `refract stats` and the Insights view read the `job_metrics` table. Refract writes one row for each terminal job and keeps it for 365 days, so stats outlast the 7-day job history. The row holds no prompt, result, error text, project path, or session.
@@ -309,11 +314,11 @@ A window of N days covers the last N times 24 hours from the request time. It is
 | Work delegated | Jobs by workflow and state. Worker hours are `sum(duration_ms) / 3,600,000`. Success rate is `succeeded / (succeeded + failed)`. The daily series counts succeeded and failed jobs. |
 | Failover saves | `skipped_targets`: succeeded jobs that passed over at least one target. `retries`: succeeded jobs with more than one attempt. `retries_after_failure`: succeeded jobs in the window whose `retry_of` names a failed job anywhere in the retained metrics. Succeeded jobs with unknown values count under `unknown_skipped_targets` and `unknown_attempts`, not as zero. Jobs in other states are not counted in either. |
 | Tokens | For each backend, model, and target: uncached input, output, cache read, cache write, and job count. Cache hit ratio is `cache_read / (uncached_input + cache_read)`. |
-| Estimated cost | `(uncached_input * input + output * output + cache_read * cache_read + cache_write * cache_write) / 1e6`, using `[pricing.models]`. The result has a total, a per-model breakdown, and a list of unpriced models. A job with no model appears as `unassigned` in the per-model breakdown, and the price lookup still uses the empty model string. A model without a price never fails the request. |
+| Estimated cost | `(uncached_input * input + output * output + cache_read * cache_read + cache_write * cache_write) / 1e6`, using the fetched [Pricing](#pricing) file. The result has a total, a per-model breakdown, and a list of unpriced models. A job with no model appears as `unassigned` in the per-model breakdown, and the price lookup still uses the empty model string. A model without a price never fails the request. |
 
 Uncached input is `max(0, input - cache components)`, where the components are those that the backend already counts in `input`. These are `cache_read` for `codex`, and `cache_read` plus `cache_write` for `claude` and `pi`. For `agy` and an empty backend, Refract subtracts nothing. A job that ended before target selection appears as `unassigned`.
 
-Cost is an estimate from your own prices. Jobs that migrated from an older database have unknown `attempts` and `skipped_targets`.
+Cost is an estimate from the published prices. Jobs that migrated from an older database have unknown `attempts` and `skipped_targets`.
 
 `refract stats` prints the job count, worker hours, success rate, failover saves, model count, and total cost. Use `--json` for every field.
 
@@ -332,6 +337,7 @@ Schema 20 adds `job_metrics` and `telemetry_outbox`. The first start of this ver
 | `REFRACT_DISABLE` | Plugin ignores Refract for the session |
 | `REFRACT_NO_UPDATE_CHECK` | Plugin skips the update notice and background check |
 | `REFRACT_TELEMETRY` | `1` turns telemetry on and `0` turns it off, unless `DO_NOT_TRACK=1` is set. Other values are ignored. The daemon reads it. |
+| `REFRACT_PRICING_FETCH` | `0` turns off the [pricing](#pricing) fetch. Telemetry consent and `DO_NOT_TRACK` do not affect it. The daemon reads it. |
 | `DO_NOT_TRACK` | `1` forces telemetry off and overrides every other setting. Other values are ignored. |
 
 ## Development

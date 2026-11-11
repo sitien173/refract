@@ -22,3 +22,13 @@ def _isolate_refract_home(tmp_path_factory, monkeypatch):
         raise AssertionError("Telemetry network access is forbidden in tests")
 
     monkeypatch.setattr(urllib.request, "urlopen", reject_telemetry)
+    from refract import product_telemetry
+
+    monkeypatch.setattr(product_telemetry.TELEMETRY_OPENER, "open", reject_telemetry)
+
+    from refract import pricing
+
+    def reject_pricing_fetch(*_args, **_kwargs):
+        raise pricing.PricingError("http")
+
+    monkeypatch.setattr(pricing, "fetch_pricing", reject_pricing_fetch)

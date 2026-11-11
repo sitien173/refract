@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import hashlib
 import hmac
 import secrets
@@ -38,6 +39,7 @@ from refract.models import (
 )
 from refract.notifications import send_job_notification
 from refract.planning import (ExecutionPlan, execution_plan_data, resolve_execution_plan, target_execution_key)
+from refract import pricing
 from refract.product_telemetry import (
     FEATURE_FLUSH_INTERVAL_S, build_features_event, build_heartbeat_event, build_job_event,
     SendStatus, install_id, purge, read_heartbeat_date, sender, telemetry_decision, telemetry_status,
@@ -51,6 +53,8 @@ from refract.workers import run_sync
 
 log = get_logger("runtime")
 RETENTION_INTERVAL_S = 3600
+PRICING_REFRESH_INTERVAL_S = 24 * 3600
+PRICING_RETRY_INTERVAL_S = 3600
 DEFAULT_RETENTION_DAYS = 7
 JOB_METRICS_RETENTION_DAYS = 365
 MAX_ANSWER_LENGTH = 8192
@@ -93,6 +97,8 @@ class Runtime:
         self._feature_lock = threading.Lock()
         self._feature_period_start = utc_now()
         self._feature_task: asyncio.Task[None] | None = None
+        self._pricing_task: asyncio.Task[None] | None = None
+        self.pricing = pricing.read_cache(config.home)
         # The purge lock. Consent changes, the sender, feature flushes and job enqueues each hold it in one worker thread.
         self._flush_lock = threading.RLock()
         self._flush_inflight: asyncio.Task[None] | None = None
@@ -201,7 +207,37 @@ class Runtime:
                 log.warning("History retention failed", exc_info=True,
                             extra={"event": "history.retention_failed"})
 
+    async def _refresh_pricing(self) -> None:
+        # to_thread, not run_sync: run_sync shields cancellation, so close() would wait out the HTTP timeout.
+        # asyncio.run joins the default executor at shutdown, so a fetch blocked in the thread can delay process exit by up to the fetch timeout.
+        while True:
+            delay = PRICING_RETRY_INTERVAL_S
+            try:
+                data = await asyncio.to_thread(pricing.fetch_pricing)
+                parsed = pricing.parse_pricing_file(data)
+                try:
+                    await asyncio.to_thread(pricing.write_cache, self.config.home, data)
+                except OSError:
+                    log.warning("Pricing cache write failed", exc_info=True,
+                                extra={"event": "pricing.cache_write_failed"})
+                self.pricing = parsed
+                delay = PRICING_REFRESH_INTERVAL_S
+            except pricing.PricingError as err:
+                log.warning("Pricing fetch failed", extra={"event": "pricing.fetch_failed", "reason": err.reason})
+            except Exception:
+                log.warning("Pricing refresh failed", exc_info=True,
+                            extra={"event": "pricing.refresh_failed"})
+            await asyncio.sleep(delay)
+
+    def _warn_ignored_keys(self, config: DaemonConfig) -> None:
+        if config.ignored_keys:
+            log.warning(
+                "Ignored configuration keys",
+                extra={"event": "config.ignored_keys", "keys": config.ignored_keys},
+            )
+
     async def start(self) -> None:
+        self._warn_ignored_keys(self.config)
         self._loop = asyncio.get_running_loop()
         self._closing = False
         await run_sync(self.prune_retained_transcripts)
@@ -228,6 +264,8 @@ class Runtime:
         self._feature_task = asyncio.create_task(
             self._flush_features_hourly(), name="refract-telemetry-features",
         )
+        if os.environ.get("REFRACT_PRICING_FETCH") != "0":
+            self._pricing_task = asyncio.create_task(self._refresh_pricing(), name="refract-pricing")
         for job_id, _project_id in await run_sync(self.database.queued_jobs):
             await self._enqueue_record(job_id)
         log.info("Scheduler started", extra={"event": "scheduler.started", "workers": self.scheduler.workers, "interrupted_jobs": len(interrupted), "queued_jobs": self.scheduler.queued_jobs})
@@ -442,6 +480,10 @@ class Runtime:
             self._feature_task.cancel()
             await asyncio.gather(self._feature_task, return_exceptions=True)
             self._feature_task = None
+        if self._pricing_task is not None:
+            self._pricing_task.cancel()
+            await asyncio.gather(self._pricing_task, return_exceptions=True)
+            self._pricing_task = None
         if self._flush_inflight is not None:
             await asyncio.gather(self._flush_inflight, return_exceptions=True)
             self._flush_inflight = None
@@ -967,6 +1009,7 @@ class Runtime:
         previous = self._config_health
         self._catalog = catalog
         self._catalog_stat = stat
+        self._warn_ignored_keys(catalog)
         self._consent_stat = stat
         self._set_telemetry_enabled(telemetry_decision(catalog)[0])
         # Planning and execution must read the same settings after any reload.

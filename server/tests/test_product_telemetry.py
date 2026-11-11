@@ -9,16 +9,22 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.request
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
 from refract.config import DaemonConfig, TargetConfig, TargetSelection, TelemetryConfig, load_config
 from refract.drivers import DriverResult
+from refract import pricing, product_telemetry
 from refract.database import Database
+from refract.pricing import PricingError
 from refract.product_telemetry import (
     BATCH_SIZE,
+    COLLECTOR_URL,
+    SendStatus,
     install_id,
     _redact,
     next_backoff,
@@ -37,7 +43,7 @@ def config_factory(tmp_path):
         home.mkdir(exist_ok=True)
         return DaemonConfig(
             home=home, targets=targets,
-            telemetry=TelemetryConfig(enabled, "https://telemetry.example.invalid/v1/events"),
+            telemetry=TelemetryConfig(enabled),
             config_path=config_path,
         )
     return make
@@ -73,8 +79,20 @@ async def _drain_enqueue(runtime: Runtime) -> None:
             return
 
 
+@pytest.mark.asyncio
+async def test_runtime_start_warns_for_ignored_config_keys(config_factory, caplog) -> None:
+    runtime = Runtime(replace(config_factory(), ignored_keys=("telemetry.endpoint",)))
+    await runtime.start()
+    try:
+        records = [record for record in caplog.records if getattr(record, "event", None) == "config.ignored_keys"]
+        assert len(records) == 1
+        assert records[0].keys == ("telemetry.endpoint",)
+    finally:
+        await runtime.close()
+
+
 def test_consent_uses_precedence_and_invalid_environment_is_ignored(tmp_path) -> None:
-    config = DaemonConfig(home=tmp_path, telemetry=TelemetryConfig(True, "https://example.invalid"))
+    config = DaemonConfig(home=tmp_path, telemetry=TelemetryConfig(True))
     assert telemetry_decision(config, {"DO_NOT_TRACK": "1", "REFRACT_TELEMETRY": "1"}) == (False, "DO_NOT_TRACK")
     assert telemetry_decision(config, {"REFRACT_TELEMETRY": "0"}) == (False, "REFRACT_TELEMETRY")
     assert telemetry_decision(config, {"REFRACT_TELEMETRY": "1"}) == (True, "REFRACT_TELEMETRY")
@@ -124,6 +142,85 @@ def test_redaction_removes_user_home_paths_outside_refract_home(tmp_path, monkey
     assert outside not in _redact(outside, (), "/project", user_home / ".refract")
 
 
+def test_send_batch_uses_fixed_collector_url() -> None:
+    from refract.product_telemetry import send_batch
+
+    requests = []
+
+    class Response:
+        status = 204
+
+    assert send_batch("install", [], opener=lambda request, **_kwargs: requests.append(request) or Response()) == 204
+    assert requests[0].full_url == COLLECTOR_URL
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_telemetry_opener_refuses_http_redirects(status) -> None:
+    requested_paths = []
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            requested_paths.append(self.path)
+            if self.path == "/first":
+                self.send_response(status)
+                self.send_header("Location", "/second")
+                self.end_headers()
+            else:
+                self.send_response(204)
+                self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), RedirectHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/first"
+        request = urllib.request.Request(url, data=b"payload", method="POST")
+        handlers = [h for h in product_telemetry.TELEMETRY_OPENER.handlers if isinstance(h, product_telemetry._RefuseRedirects)]
+        assert handlers
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), *handlers)
+        with pytest.raises(urllib.error.HTTPError) as error:
+            opener.open(request, timeout=5)
+        assert error.value.code == status
+        assert requested_paths == ["/first"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_delivery_redirect_http_error_drops_batch_and_records_status(tmp_path, config_factory, caplog) -> None:
+    database = Database(tmp_path / "redirect.db")
+    config = config_factory(enabled=True)
+    status = SendStatus()
+    previous_dnt = os.environ.pop("DO_NOT_TRACK", None)
+    previous_consent = os.environ.get("REFRACT_TELEMETRY")
+    os.environ["REFRACT_TELEMETRY"] = "1"
+    now = datetime.now(timezone.utc).isoformat()
+    database.enqueue_telemetry("job:redirect", json.dumps({"event": "job"}), now)
+
+    def opener(_request, *, timeout):
+        raise urllib.error.HTTPError(COLLECTOR_URL, 302, "Found", {}, None)
+
+    try:
+        with caplog.at_level(logging.WARNING):
+            await send_outbox_once(database, lambda: config, config.home, opener, status)
+        assert database._connection.execute("SELECT COUNT(*) FROM telemetry_outbox").fetchone()[0] == 0
+        assert status.last_error == "HTTP 302"
+        assert sum(getattr(record, "event", None) == "telemetry.batch_rejected" for record in caplog.records) == 1
+    finally:
+        database.close()
+        if previous_dnt is not None:
+            os.environ["DO_NOT_TRACK"] = previous_dnt
+        if previous_consent is None:
+            os.environ.pop("REFRACT_TELEMETRY", None)
+        else:
+            os.environ["REFRACT_TELEMETRY"] = previous_consent
+
+
 def test_install_id_is_created_private_only_when_called(tmp_path) -> None:
     value = install_id(tmp_path)
     assert len(value) == 36
@@ -137,6 +234,14 @@ async def test_consent_off_full_runtime_job_makes_no_network_or_telemetry_state(
     monkeypatch.delenv("REFRACT_TELEMETRY", raising=False)
     calls = []
     monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: calls.append((a, kw)))
+    monkeypatch.setattr(product_telemetry.TELEMETRY_OPENER, "open", lambda *a, **kw: calls.append((a, kw)))
+    pricing_fetched = threading.Event()
+
+    def pricing_fetch():
+        pricing_fetched.set()
+        raise PricingError("http")
+
+    monkeypatch.setattr(pricing, "fetch_pricing", pricing_fetch)
     target = TargetConfig("worker", "pi")
     base = config_factory(enabled=False, targets=(target,))
     selection = {name: TargetSelection(("worker",)) for name in ("consult", "implement", "review", "other")}
@@ -151,6 +256,7 @@ async def test_consent_off_full_runtime_job_makes_no_network_or_telemetry_state(
         job = await runtime.wait(submitted.job_id, timeout_s=10)
         await _drain_enqueue(runtime)
         assert job.state == "succeeded"
+        assert await asyncio.to_thread(pricing_fetched.wait, 5)
         assert calls == []
         assert not (runtime.config.home / "telemetry_id").exists()
         assert runtime.database._connection.execute("SELECT COUNT(*) FROM telemetry_outbox").fetchone()[0] == 0
@@ -298,9 +404,16 @@ def test_delivery_network_error_backs_off_and_keeps_rows(tmp_path, config_factor
     assert any(getattr(record, "event", "") == "telemetry.send_failed" for record in caplog.records)
 
 
-@pytest.mark.parametrize("status", [301, 399])
+@pytest.mark.parametrize("status", [0, 600])
 def test_delivery_unknown_status_defers_with_backoff(tmp_path, config_factory, status) -> None:
     asyncio.run(_delivery_case(tmp_path, config_factory, status=status, expected_count=1, expected_attempts=1))
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_delivery_redirect_status_drops_batch_and_logs_warning(tmp_path, config_factory, caplog, status) -> None:
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(_delivery_case(tmp_path, config_factory, status=status, expected_count=0))
+    assert any(getattr(record, "event", "") == "telemetry.batch_rejected" for record in caplog.records)
 
 
 def test_delivery_other_4xx_drops_batch_and_logs_warning(tmp_path, config_factory, caplog) -> None:
@@ -455,8 +568,8 @@ async def test_config_switch_off_before_send_purges_without_post(config_factory,
 
 def test_telemetry_config_error_is_sanitized_without_values() -> None:
     from refract.config_inspection import sanitize_config_error
-    assert sanitize_config_error("telemetry.endpoint must be a non-empty string") == \
-        "telemetry.endpoint must be valid"
+    assert sanitize_config_error("telemetry.enabled must be true or false") == \
+        "telemetry.enabled must be valid"
 
 
 def test_project_overlay_with_telemetry_is_rejected(tmp_path) -> None:
@@ -1434,14 +1547,38 @@ async def test_pre_commit_enqueue_failure_under_repeated_cancel_restores_counts_
 
 
 def _write_telemetry_config(path, *, enabled: bool = True, args: str = "--old-args-secret",
-                            env: str = "old-env-secret") -> None:
+                            env: str = "old-env-secret",
+                            endpoint: str | None = "https://telemetry.example.invalid/v1/events") -> None:
+    endpoint_line = f'endpoint = "{endpoint}"\n' if endpoint is not None else ""
     path.write_text(
         f'[daemon]\ndefault_profile = "balanced"\n\n[telemetry]\nenabled = {str(enabled).lower()}\n'
-        'endpoint = "https://telemetry.example.invalid/v1/events"\n\n'
+        f'{endpoint_line}\n'
         f'[[targets]]\nid = "worker"\nbackend = "pi"\nargs = ["{args}"]\nenv = {{ TOKEN = "{env}" }}\n\n'
         '[profiles.balanced]\nimplement = "worker"\nreview = "worker"\nconsult = "worker"\nother = "worker"\n',
         encoding="utf-8",
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_warns_when_reload_loads_ignored_telemetry_endpoint(tmp_path, caplog) -> None:
+    config_path = tmp_path / "config.toml"
+    _write_telemetry_config(config_path, endpoint=None)
+    runtime = Runtime(load_config(config_path))
+    try:
+        await runtime.start()
+        caplog.clear()
+        _write_telemetry_config(config_path, endpoint="x")
+        with runtime._lock:
+            runtime._reload_catalog_locked()
+        records = [
+            record for record in caplog.records
+            if getattr(record, "event", None) == "config.ignored_keys"
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert records[0].keys == ("telemetry.endpoint",)
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio

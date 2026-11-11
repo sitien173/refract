@@ -236,6 +236,32 @@ def test_project_overlay_rejects_global_telemetry(tmp_path) -> None:
         _load_project(tmp_path, base, "[telemetry]\nenabled = true\n")
 
 
+def test_telemetry_endpoint_is_ignored_and_recorded(tmp_path) -> None:
+    config = _load_global(tmp_path, _global() + '\n[telemetry]\nendpoint = "x"\n')
+    assert config.ignored_keys == ("telemetry.endpoint",)
+
+
+def test_missing_telemetry_endpoint_has_no_ignored_keys(tmp_path) -> None:
+    config = _load_global(tmp_path, _global())
+    assert config.ignored_keys == ()
+
+
+def test_leftover_pricing_section_loads_and_is_reported_as_ignored(tmp_path) -> None:
+    config = _load_global(
+        tmp_path,
+        _global() + '\n[pricing]\ncurrency = "EUR"\n[pricing.models.m]\ninput = "bad"\n',
+    )
+    assert config.ignored_keys == ("pricing",)
+    assert not hasattr(config, "pricing")
+
+
+def test_leftover_pricing_and_telemetry_endpoint_are_both_ignored(tmp_path) -> None:
+    config = _load_global(
+        tmp_path, _global() + '\n[telemetry]\nendpoint = "x"\n[pricing]\ncurrency = "USD"\n',
+    )
+    assert config.ignored_keys == ("telemetry.endpoint", "pricing")
+
+
 def test_project_overlay_rejects_global_pricing(tmp_path) -> None:
     base = _load_global(tmp_path, _global())
     with pytest.raises(ValueError, match=r"Unsupported project config sections"):
@@ -261,13 +287,11 @@ def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> 
     }
     assert set(raw["logging"]) == {"level", "file", "max_bytes", "backup_count"}
     assert set(raw["notifications"]) == {"enabled"}
-    assert set(raw["telemetry"]) == {"enabled", "endpoint"}
+    assert set(raw["telemetry"]) == {"enabled"}
     assert config.telemetry.enabled is False
-    assert "example.invalid" in config.telemetry.endpoint
-    assert set(raw["pricing"]) == {"currency", "models"}
-    assert set(raw["pricing"]["models"]["example-model"]) == {
-        "input", "output", "cache_read", "cache_write"
-    }
+    assert config.ignored_keys == ()
+    assert "pricing" not in raw
+    assert not hasattr(config, "pricing")
     profiles = raw["profiles"].values()
     assert any("extends" in profile for profile in profiles)
     workflow_values = [

@@ -1840,7 +1840,7 @@ async def test_telemetry_cli_next_batch_equals_sender_post_body_apart_from_sent_
     _telemetry_cli_home(monkeypatch, tmp_path)
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     home = tmp_path / "daemon-home"
-    runtime = Runtime(DaemonConfig(home=home, telemetry=TelemetryConfig(True, "https://telemetry.example.invalid/v1")))
+    runtime = Runtime(DaemonConfig(home=home, telemetry=TelemetryConfig(True)))
     try:
         runtime.database.enqueue_telemetry("job:one", json.dumps({"event": "job", "job_id": "one"}),
                                            datetime.now(timezone.utc).isoformat())

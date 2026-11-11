@@ -16,7 +16,7 @@ from refract.dashboard import (
     register_dashboard_routes,
 )
 from refract.models import ActionResult, SubmissionResult
-from refract.config import PricingConfig
+from refract.pricing import PricingConfig
 from refract.runtime import OrchestrationError
 
 
@@ -436,7 +436,7 @@ def _stats_test_app() -> tuple[Starlette, sqlite3.Connection]:
         tok_input INTEGER, tok_output INTEGER, tok_cache_read INTEGER, tok_cache_write INTEGER,
         attempts INTEGER, skipped_targets INTEGER, retry_of TEXT)""")
     runtime = SimpleNamespace(database=SimpleNamespace(_connection=connection),
-                              config=SimpleNamespace(pricing=PricingConfig()))
+                              pricing=PricingConfig())
     return Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime))), connection
 
 

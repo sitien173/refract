@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import tomllib
 from dataclasses import dataclass, field, replace
@@ -93,23 +92,8 @@ class NotificationsConfig:
 
 
 @dataclass(slots=True, frozen=True)
-class ModelPricing:
-    input: float
-    output: float
-    cache_read: float
-    cache_write: float
-
-
-@dataclass(slots=True, frozen=True)
 class TelemetryConfig:
     enabled: bool | None = None
-    endpoint: str = "https://telemetry.example.invalid/v1/events"
-
-
-@dataclass(slots=True, frozen=True)
-class PricingConfig:
-    currency: str = "USD"
-    models: dict[str, ModelPricing] = field(default_factory=dict)
 
 
 @dataclass(slots=True, frozen=True)
@@ -129,11 +113,11 @@ class DaemonConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
-    pricing: PricingConfig = field(default_factory=PricingConfig)
     breaker_failure_threshold: int = 3
     breaker_base_cooldown_s: int = 60
     breaker_max_cooldown_s: int = 900
     ask_timeout_s: int = DEFAULT_ASK_TIMEOUT_S
+    ignored_keys: tuple[str, ...] = ()
 
     @property
     def database_path(self) -> Path:
@@ -643,38 +627,9 @@ def _telemetry_config(raw: Any) -> TelemetryConfig:
     if not isinstance(raw, dict) or set(raw) - {"enabled", "endpoint"}:
         raise ValueError("Invalid telemetry configuration")
     enabled = raw.get("enabled")
-    endpoint = raw.get("endpoint", "https://telemetry.example.invalid/v1/events")
     if enabled is not None and not isinstance(enabled, bool):
         raise ValueError("telemetry.enabled must be true or false")
-    if not isinstance(endpoint, str) or not endpoint.strip():
-        raise ValueError("telemetry.endpoint must be a non-empty string")
-    return TelemetryConfig(enabled, endpoint.strip())
-
-
-def _pricing_config(raw: Any) -> PricingConfig:
-    if raw is None:
-        return PricingConfig()
-    if not isinstance(raw, dict) or set(raw) - {"currency", "models"}:
-        raise ValueError("Invalid pricing configuration")
-    currency = raw.get("currency", "USD")
-    models = raw.get("models", {})
-    if not isinstance(currency, str) or not currency.strip():
-        raise ValueError("pricing.currency must be a non-empty string")
-    if not isinstance(models, dict):
-        raise ValueError("pricing.models must be a TOML table")
-    parsed: dict[str, ModelPricing] = {}
-    for model, values in models.items():
-        if not isinstance(values, dict) or set(values) != {"input", "output", "cache_read", "cache_write"}:
-            raise ValueError("Invalid pricing model settings")
-        prices = []
-        for key in ("input", "output", "cache_read", "cache_write"):
-            value = values[key]
-            if (isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(value) or value < 0):
-                raise ValueError("Pricing values must be non-negative numbers")
-            prices.append(float(value))
-        parsed[model] = ModelPricing(*prices)
-    return PricingConfig(currency=currency.strip(), models=parsed)
+    return TelemetryConfig(enabled)
 
 
 def load_config(path: Path | None = None) -> DaemonConfig:
@@ -814,11 +769,17 @@ def _load_config_values(
         logging=_logging_config(raw.get("logging"), home),
         notifications=_notifications_config(raw.get("notifications")),
         telemetry=_telemetry_config(raw.get("telemetry")),
-        pricing=_pricing_config(raw.get("pricing")),
         breaker_failure_threshold=_positive_int(daemon.get("breaker_failure_threshold"), 3, "[daemon].breaker_failure_threshold"),
         breaker_base_cooldown_s=breaker_base,
         breaker_max_cooldown_s=breaker_max,
         ask_timeout_s=_positive_int(daemon.get("ask_timeout_s"), DEFAULT_ASK_TIMEOUT_S, "[daemon].ask_timeout_s"),
+        ignored_keys=(
+            *(("telemetry.endpoint",)
+              if isinstance(raw.get("telemetry"), dict) and "endpoint" in raw["telemetry"]
+              else ()),
+            # Pricing is fetched from the published file; a leftover section has no effect.
+            *(("pricing",) if "pricing" in raw else ()),
+        ),
     )
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from refract.config import DaemonConfig
+from refract.pricing import PricingConfig
 
 INPUT_INCLUDES_CACHE_COMPONENTS = {
     "codex": frozenset({"cache_read"}),
@@ -19,7 +19,7 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def get_stats(database: Any, config: DaemonConfig, days: int = 7,
+def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
               tz_offset_minutes: int = 0, *, now: datetime | None = None) -> dict[str, Any]:
     """Aggregate retained job metrics for one rolling window."""
     if isinstance(days, bool) or days not in VALID_DAYS:
@@ -103,7 +103,7 @@ def get_stats(database: Any, config: DaemonConfig, days: int = 7,
             for name, value in values.items():
                 totals[name] += value
             totals["jobs"] += 1
-        price = config.pricing.models.get(row["model"])
+        price = pricing.models.get(row["model"])
         if price is None:
             unpriced.add(row["model"] or "unassigned")
             continue
@@ -121,7 +121,7 @@ def get_stats(database: Any, config: DaemonConfig, days: int = 7,
 
     return {
         "days": days,
-        "currency": config.pricing.currency,
+        "currency": pricing.currency,
         "work_delegated": {"by_workflow": by_workflow, "by_state": by_state,
             "worker_hours": total_duration / 3_600_000,
             "success_rate": succeeded / (succeeded + failures) if succeeded + failures else 0.0,

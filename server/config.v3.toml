@@ -22,16 +22,6 @@ enabled = false
 
 [telemetry]
 enabled = false
-endpoint = "https://telemetry.example.invalid/v1/events"
-
-[pricing]
-currency = "USD"
-
-[pricing.models."example-model"]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
 
 [[targets]]
 id = "codex-high-code"

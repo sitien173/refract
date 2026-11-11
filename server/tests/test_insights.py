@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from refract.config import ModelPricing, PricingConfig
+from refract.pricing import ModelPricing, PricingConfig
 from refract.insights import get_stats
 
 
@@ -28,9 +28,9 @@ def metrics_db():
 
 
 def test_stats_aggregates_work_failover_tokens_cost_and_normalizes_codex(metrics_db):
-    config = SimpleNamespace(pricing=PricingConfig("USD", {
+    config = PricingConfig("USD", {
         "priced": ModelPricing(1, 2, 3, 4),
-    }))
+    })
     result = get_stats(metrics_db, config, 7, 0, now=datetime(2026, 1, 3, tzinfo=timezone.utc))
     work = result["work_delegated"]
     assert work["by_workflow"] == {"implement": {"failed": 1, "succeeded": 1}, "review": {"succeeded": 1}}
@@ -61,7 +61,7 @@ def test_stats_normalizes_backend_input_with_cache_components(metrics_db):
         ],
     )
     result = get_stats(
-        metrics_db, SimpleNamespace(pricing=PricingConfig()), 7, 0,
+        metrics_db, PricingConfig(), 7, 0,
         now=datetime(2026, 1, 3, tzinfo=timezone.utc),
     )
     by_backend = result["tokens"]["by_backend"]
@@ -72,7 +72,7 @@ def test_stats_normalizes_backend_input_with_cache_components(metrics_db):
 
 
 def test_stats_timezone_offsets_produce_exact_daily_buckets(metrics_db):
-    config = SimpleNamespace(pricing=PricingConfig())
+    config = PricingConfig()
     now = datetime(2026, 1, 3, tzinfo=timezone.utc)
     utc = get_stats(metrics_db, config, 7, 0, now=now)["work_delegated"]["daily"]
     ahead = get_stats(metrics_db, config, 7, 120, now=now)["work_delegated"]["daily"]
@@ -96,7 +96,7 @@ def test_retry_after_failed_job_outside_window_counts_as_failover_save(metrics_d
          "priced", "succeeded", None, 0, 0, 0, 0, 0, 1, 0, "old-failure"),
     )
     result = get_stats(
-        metrics_db, SimpleNamespace(pricing=PricingConfig()), 1,
+        metrics_db, PricingConfig(), 1,
         now=datetime(2026, 1, 2, 12, tzinfo=timezone.utc),
     )
     assert result["failover_saves"]["retries_after_failure"] == 1
@@ -104,7 +104,7 @@ def test_retry_after_failed_job_outside_window_counts_as_failover_save(metrics_d
 
 def test_stats_rejects_timezone_offset_outside_supported_range(metrics_db):
     with pytest.raises(ValueError, match="tz_offset_minutes must be an integer between -1440 and 1440"):
-        get_stats(metrics_db, SimpleNamespace(pricing=PricingConfig()), 7, 999999999999)
+        get_stats(metrics_db, PricingConfig(), 7, 999999999999)
 
 
 def test_stats_window_includes_just_inside_and_excludes_just_outside(metrics_db):
@@ -118,7 +118,7 @@ def test_stats_window_includes_just_inside_and_excludes_just_outside(metrics_db)
              "workflow", "t", "codex", "model", "succeeded", None, 0, 0, 0, 0, 0, 1, 0, ""),
         ],
     )
-    result = get_stats(metrics_db, SimpleNamespace(pricing=PricingConfig()), 7, now=now)
+    result = get_stats(metrics_db, PricingConfig(), 7, now=now)
     assert result["work_delegated"]["by_state"]["succeeded"] == 1
 
 
@@ -131,7 +131,7 @@ def test_stats_zero_success_and_failure_count_has_zero_success_rate(metrics_db):
          for name, state in (("cancelled", "cancelled"), ("interrupted", "interrupted"))],
     )
     result = get_stats(
-        metrics_db, SimpleNamespace(pricing=PricingConfig()), 7,
+        metrics_db, PricingConfig(), 7,
         now=datetime(2026, 1, 3, tzinfo=timezone.utc),
     )
     assert result["work_delegated"]["success_rate"] == 0.0
@@ -144,7 +144,7 @@ def test_stats_labels_empty_backend_and_model_in_every_section_but_prices_raw_mo
         ("unassigned", "2026-01-02T00:30:00+00:00", "workflow", "", "", "",
          "succeeded", None, 0, 100, 0, 0, 0, 1, 0, ""),
     )
-    config = SimpleNamespace(pricing=PricingConfig("USD", {"": ModelPricing(1, 0, 0, 0)}))
+    config = PricingConfig("USD", {"": ModelPricing(1, 0, 0, 0)})
     result = get_stats(
         metrics_db, config, 7, now=datetime(2026, 1, 3, tzinfo=timezone.utc),
     )
@@ -157,9 +157,9 @@ def test_stats_labels_empty_backend_and_model_in_every_section_but_prices_raw_mo
 @pytest.mark.parametrize("days", [2, 0, 366])
 def test_stats_rejects_unsupported_days(metrics_db, days):
     with pytest.raises(ValueError, match="days must"):
-        get_stats(metrics_db, SimpleNamespace(pricing=PricingConfig()), days)
+        get_stats(metrics_db, PricingConfig(), days)
 
 
 def test_stats_rejects_non_integer_timezone_offset(metrics_db):
     with pytest.raises(ValueError, match="tz_offset_minutes"):
-        get_stats(metrics_db, SimpleNamespace(pricing=PricingConfig()), 7, "x")
+        get_stats(metrics_db, PricingConfig(), 7, "x")
