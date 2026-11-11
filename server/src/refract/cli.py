@@ -49,6 +49,25 @@ def _parser() -> argparse.ArgumentParser:
     update = commands.add_parser("update", help="Check for or apply Refract updates")
     update.add_argument("--check", action="store_true", help="Check for updates without changing anything")
     update.add_argument("--force", action="store_true", help="Ignore the 24 hour check throttle")
+    for name, verb in (("install", "Install"), ("uninstall", "Remove")):
+        sub = commands.add_parser(name, help=f"{verb} the Refract plugin for coding-agent hosts")
+        sub.add_argument(
+            "-p",
+            "--host",
+            dest="hosts",
+            action="append",
+            required=True,
+            metavar="HOST",
+            help="claude, codex, agy, pi, or all; comma-separated or repeated",
+        )
+        sub.add_argument("--scope", choices=("user", "project", "local"), default="user")
+        sub.add_argument(
+            "--dry-run", action="store_true", help="Print the host commands without running them"
+        )
+        if name == "install":
+            sub.add_argument(
+                "--source", default=None, help="Plugin path or URL; default is the GitHub repository"
+            )
     stats = commands.add_parser("stats", help="Show local usage analytics")
     stats.add_argument("--days", type=int, choices=(1, 7, 30, 365), default=7)
     stats.add_argument("--json", action="store_true", help="Print the API response as JSON")
@@ -242,6 +261,18 @@ def _update(args: argparse.Namespace) -> int:
     return run_check(force=args.force) if args.check else run_update()
 
 
+def _install(args: argparse.Namespace) -> int:
+    from refract.installer import run
+
+    return run(
+        args.command,
+        args.hosts,
+        scope=args.scope,
+        source=getattr(args, "source", None),
+        dry_run=args.dry_run,
+    )
+
+
 def _logging_overrides(args: argparse.Namespace) -> dict[str, str]:
     overrides = {
         "REFRACT_LOG_LEVEL": getattr(args, "log_level", None),
@@ -270,6 +301,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(_status())
     if args.command == "update":
         raise SystemExit(_update(args))
+    if args.command in {"install", "uninstall"}:
+        raise SystemExit(_install(args))
     if args.command == "stats":
         raise SystemExit(_stats(args))
     if args.command == "telemetry":

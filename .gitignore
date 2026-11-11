@@ -4,6 +4,9 @@
 .claude/
 .pi/
 .agents/
+!/.agents/
+/.agents/*
+!/.agents/plugins/
 !plugin/.agents/
 !plugin/.agents/plugins.json
 .codex/

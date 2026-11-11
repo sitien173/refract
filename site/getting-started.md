@@ -51,11 +51,30 @@ refract serve
 
 ## 4. Install the plugin
 
+Run `refract install` with the host you use:
+
+```bash
+refract install -p claude
+refract install -p claude,codex,pi
+refract install -p all
+```
+
+`-p` takes `claude`, `codex`, `agy`, `pi`, or `all`. Pass a comma list or repeat the flag. `all` means every host CLI found on PATH. Add `--dry-run` to print the host commands without running them. Use `refract uninstall -p <host>` to remove the plugin. See the Installing section of [`plugin/README.md`](https://github.com/sitien173/refract/blob/main/plugin/README.md) for scopes and sources.
+
+To install by hand, use the host's own commands.
+
 Claude Code:
 
 ```bash
 claude plugin marketplace add sitien173/refract
 claude plugin install refract@refract
+```
+
+Codex:
+
+```bash
+codex plugin marketplace add sitien173/refract
+codex plugin add refract@refract
 ```
 
 Antigravity:

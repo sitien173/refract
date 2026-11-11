@@ -10,6 +10,7 @@
 - Readable, project-grouped console rows in the dashboard: jobs show a `workflow · session` title with a `target · relative time · short id` meta line, organized into collapsible per-project sections.
 - Dashboard Board and Targets grouping: the Board project selector lists project roots, 'All projects' organizes cards into collapsible per-project swimlanes, card details open in a centered modal dialog, and targets are grouped by backend with target and healthy counts.
 - Dashboard Insights chart and breakdown improvements: continuous zero-filled daily ranges, labelled y axis with gridlines, window-thinned x-axis date labels, full-width legend, accessible hover and focus tooltips with roving tabindex for annual views, and an expanded breakdown table by profile, workflow, target, and state replacing the separate jobs by state table.
+- `refract install -p <host>` and `refract uninstall -p <host>` install and remove the plugin for `claude`, `codex`, `agy`, and `pi` by running each host's own CLI, with `--scope`, `--dry-run`, and `--source`. The repository now ships a Codex marketplace manifest at `.agents/plugins/marketplace.json`.
 
 ## 3.0.1 - 2026-11-10
 

@@ -128,6 +128,58 @@ Refract Pi workers with `isolated = true` already run with
 `--no-extensions --no-skills --no-prompt-templates`. A non-isolated Pi target
 loads installed packages, so its workers receive the coordinator context.
 
+## Installing
+
+`refract install -p <host>` installs the plugin by running each host's own CLI. `refract uninstall -p <host>` removes it. `-p` takes `claude`, `codex`, `agy`, `pi`, or `all`. Pass a comma list or repeat the flag. `all` means every host CLI found on PATH. The resolved host list always prints first as `hosts: ...`.
+
+```bash
+refract install -p claude
+refract install -p claude,codex -p pi
+refract install -p all --dry-run
+refract uninstall -p codex
+```
+
+Claude and Codex add the `refract` marketplace, then install `refract@refract`. Antigravity runs `agy plugin install <source>`. Pi runs `pi install <source>`.
+
+Each host prints one result line: `installed`, `already installed`, `removed`, `not installed`, `skipped (dry run)`, or `failed: <reason>`. A failure on one host does not stop the others. A failed step prints the commands already applied and an undo command where one exists. Nothing is rolled back automatically.
+
+### Scopes
+
+| Host | `--scope` values |
+| --- | --- |
+| `claude` | `user`, `project`, `local` |
+| `pi` | `user`, `project`; `project` runs `pi install -l` |
+| `codex` | `user` |
+| `agy` | `user` |
+
+The default is `user`. An unsupported scope exits 2 before any host command runs. A scope other than `user` acts on the current directory, which the command prints.
+
+### Dry run
+
+`--dry-run` prints each planned host command as `<host>: would run: <command>`. It runs no command that changes state. It still runs the read-only checks: `plugin list --json` and `plugin marketplace list --json` for Claude and Codex, `plugin list --json` for Antigravity, and a read of Pi's `settings.json`.
+
+### Marketplace removal
+
+`refract install` skips the marketplace step when a `refract` marketplace already points at the same source. A `refract` marketplace with a different source is a failure, and Refract does not overwrite it.
+
+`refract uninstall` removes the plugin first. It removes the `refract` marketplace only when its source is Refract and no other plugin from that marketplace is still installed. When it keeps an existing `refract` marketplace, it prints `<host>: note: marketplace refract kept: <reason>`. When the plugin is not installed, uninstall leaves the marketplace alone. Pi removal uses the source string Pi stored at install time.
+
+### Source
+
+`--source` defaults to `https://github.com/sitien173/refract`. Claude and Codex receive it as `sitien173/refract`. A value that contains `://` or starts with `git@` is used as given. Any other value is a local path, expanded and made absolute.
+
+`--source owner/repo` is therefore a local path, not a GitHub repository. To install a fork, pass the full URL.
+
+A fork URL installs, but `refract update` reports a Claude Code or Pi fork as untrusted and does not update it. Codex and Antigravity installs are always updated by hand.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Every host succeeded or was already in the requested state. |
+| `1` | A host failed, a named host is not on PATH, `-p all` found no host, another `refract update` or install holds the lock, or the lock file cannot be opened. |
+| `2` | Usage error or unsupported scope. |
+
 ## Updating
 
 `refract update --check` looks for newer versions of the server, the Claude Code plugin, and the Pi package, and writes the result to `${REFRACT_HOME:-~/.refract}/update-check.json`. It checks at most once per 24 hours; `refract update --check --force` ignores that limit.

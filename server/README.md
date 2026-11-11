@@ -27,6 +27,8 @@ uv run refract --help
 | `refract status` | Exit 0 when the configured daemon answers, 1 otherwise. |
 | `refract ask "<question>"` | Ask the Coordinator a question from inside a worker job. |
 | `refract update [--check] [--force]` | Check for or apply updates to the server and installed plugins. |
+| `refract install -p <host> [--scope S] [--dry-run] [--source SOURCE]` | Install the plugin through each host's own CLI. `-p` takes `claude`, `codex`, `agy`, `pi`, or `all`, as a comma list or repeated. `--scope` is `user`, `project`, or `local`: `claude` accepts all three, `pi` accepts `user` and `project`, `codex` and `agy` accept `user` only. `--dry-run` prints the host commands without running them. `--source` is a plugin path or URL; the default is the GitHub repository. Exits 0 when every host succeeded or was already installed, 1 when a host failed, a named host is not on PATH, `-p all` found no host, another update or install holds the lock, or the lock file cannot be opened, and 2 for a usage error or unsupported scope. |
+| `refract uninstall -p <host> [--scope S] [--dry-run]` | Remove the plugin through each host's own CLI. Takes the same `-p`, `--scope`, and `--dry-run` options and returns the same exit codes. |
 | `refract stats [--days N] [--json]` | Show local usage stats. `--days` is `1`, `7`, `30`, or `365`; the default is `7`. `--json` prints the API response unchanged. Needs a running daemon. |
 | `refract telemetry` | Show whether telemetry is on, the deciding setting, and the exact next batch. Needs a running daemon. |
 

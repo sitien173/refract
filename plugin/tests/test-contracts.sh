@@ -7,10 +7,17 @@ cd "$repo_root"
 
 if grep -R -n -i -E 'openmcp|superpowers|ccg' \
     commands hooks shared skills .antigravity-plugin .claude-plugin .codex-plugin .mcp.json mcp_config.json hooks.json \
-    ../.claude-plugin/marketplace.json; then
+    ../.claude-plugin/marketplace.json ../.agents/plugins/marketplace.json; then
     printf 'legacy product name found in plugin surfaces\n' >&2
     exit 1
 fi
+
+rc=0; git -c core.excludesFile=/dev/null check-ignore -q --no-index ../.agents/plugins/marketplace.json || rc=$?
+[ "$rc" -eq 1 ] || { printf 'codex marketplace manifest is git-ignored or not in a git tree\n' >&2; exit 1; }
+
+# Nested `.agents` directories stay ignored.
+rc=0; git -c core.excludesFile=/dev/null check-ignore -q ../server/.agents/x || rc=$?
+[ "$rc" -eq 0 ] || { printf 'nested .agents directory is not git-ignored\n' >&2; exit 1; }
 
 python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" hooks/refract-session-start.py
 
@@ -44,6 +51,15 @@ market_version = documents[root.parent / ".claude-plugin/marketplace.json"]["plu
 codex_version = documents[root / ".codex-plugin/plugin.json"]["version"]
 pi_version = documents[root / "package.json"]["version"]
 pi_root_version = documents[root.parent / "package.json"]["version"]
+codex_market_path = root.parent / ".agents/plugins/marketplace.json"
+assert codex_market_path.is_file(), codex_market_path
+codex_market = json.loads(codex_market_path.read_text())
+assert codex_market["name"] == "refract"
+assert codex_market["plugins"][0]["name"] == "refract"
+codex_source = codex_market["plugins"][0]["source"]
+assert isinstance(codex_source, dict) and codex_source["path"] == "./plugin"
+assert (root.parent / codex_source["path"] / ".codex-plugin/plugin.json").is_file()
+
 assert agy_version == plugin_version == market_version == codex_version == pi_version == pi_root_version
 
 # The repository-root manifest lets `pi install` load the plugin from a git clone.
