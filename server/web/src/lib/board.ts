@@ -29,7 +29,7 @@ export function shortCardId(id: string): string {
 }
 
 export function getProjectName(projectRoot: string): string {
-  const segments = projectRoot.split("/").filter(Boolean);
+  const segments = projectRoot.split(/[/\\]/).filter(Boolean);
   return segments.pop() ?? projectRoot;
 }
 

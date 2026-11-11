@@ -314,7 +314,7 @@ A window of N days covers the last N times 24 hours from the request time. It is
 
 | Group | Definition |
 | --- | --- |
-| Work delegated | Jobs by workflow and state. Worker hours are `sum(duration_ms) / 3,600,000`. Success rate is `succeeded / (succeeded + failed)`. The daily series counts succeeded and failed jobs. |
+| Work delegated | Jobs by workflow and state, plus a breakdown by profile, workflow, target, and state. Worker hours are `sum(duration_ms) / 3,600,000`. Success rate is `succeeded / (succeeded + failed)`. The daily series counts succeeded and failed jobs. |
 | Failover saves | `skipped_targets`: succeeded jobs that passed over at least one target. `retries`: succeeded jobs with more than one attempt. `retries_after_failure`: succeeded jobs in the window whose `retry_of` names a failed job anywhere in the retained metrics. Succeeded jobs with unknown values count under `unknown_skipped_targets` and `unknown_attempts`, not as zero. Jobs in other states are not counted in either. |
 | Tokens | For each backend, model, and target: uncached input, output, cache read, cache write, and job count. Cache hit ratio is `cache_read / (uncached_input + cache_read)`. |
 | Estimated cost | `(uncached_input * input + output * output + cache_read * cache_read + cache_write * cache_write) / 1e6`, using the fetched [Pricing](#pricing) file. Rows group by canonical model name, so a provider-prefixed or aliased name merges into one row. The result has a total, a per-model breakdown, and a list of unpriced models. A job with no model appears as `unassigned` in the per-model breakdown, and the price lookup still uses the empty model string. A model without a price never fails the request. |
@@ -325,9 +325,9 @@ Cost is an estimate from the published prices. Jobs that migrated from an older 
 
 `refract stats` prints the job count, worker hours, success rate, failover saves, model count, and total cost. Use `--json` for every field.
 
-### Database schema 20
+### Database schema 21
 
-Schema 20 adds `job_metrics` and `telemetry_outbox`. The first start of this version migrates a schema 19 or 18 database in place and backfills `job_metrics` from jobs still stored. It never backfills the outbox. A Refract version that supports only schema 19 refuses a schema 20 database with an error and leaves the file unchanged. To go back, install the older version and point `REFRACT_HOME` at another state directory, or restore a copy of `refract.db` made before the upgrade.
+Schema 20 added `job_metrics` and `telemetry_outbox`. Schema 21 adds `job_metrics.profile`. The first start of this version migrates a schema 20, 19, or 18 database in place and backfills `job_metrics` from jobs still stored. Metrics rows whose job was already pruned get an empty profile and show as `unknown`. It never backfills the outbox. A Refract version that supports only an older schema refuses a schema 21 database with an error and leaves the file unchanged. To go back, install the older version and point `REFRACT_HOME` at another state directory, or restore a copy of `refract.db` made before the upgrade.
 
 ## Environment variables
 

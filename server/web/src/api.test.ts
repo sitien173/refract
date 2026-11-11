@@ -276,6 +276,12 @@ const sampleStats = {
       succeeded: 2,
       failed: 2,
     },
+    breakdown: [
+      { profile: "default", workflow: "consult", target: "t1", state: "succeeded", jobs: 1 },
+      { profile: "default", workflow: "consult", target: "t1", state: "failed", jobs: 1 },
+      { profile: "default", workflow: "implement", target: "t2", state: "failed", jobs: 1 },
+      { profile: "default", workflow: "implement", target: "t2", state: "succeeded", jobs: 1 },
+    ],
     worker_hours: 0.075,
     success_rate: 0.5,
     daily: {
@@ -404,11 +410,29 @@ describe("stats API", () => {
     expect(stats.tokens.by_model.unassigned.cache_hit_ratio).toBe(0);
   });
 
+  it("validates work_delegated breakdown rows", () => {
+    const withBreakdown = {
+      ...sampleStats,
+      work_delegated: {
+        ...sampleStats.work_delegated,
+        breakdown: [
+          { profile: "default", workflow: "consult", target: "t1", state: "succeeded", jobs: 1 },
+          { profile: "default", workflow: "consult", target: "t1", state: "failed", jobs: 1 },
+        ],
+      },
+    };
+    const parsed = StatsResponseSchema.parse(withBreakdown);
+    expect(parsed.work_delegated.breakdown).toEqual([
+      { profile: "default", workflow: "consult", target: "t1", state: "succeeded", jobs: 1 },
+      { profile: "default", workflow: "consult", target: "t1", state: "failed", jobs: 1 },
+    ]);
+  });
+
   it("accepts empty maps and rejects a missing or mistyped field", () => {
     const empty = {
       days: 1,
       currency: "USD",
-      work_delegated: { by_workflow: {}, by_state: {}, worker_hours: 0, success_rate: 0, daily: {} },
+      work_delegated: { by_workflow: {}, by_state: {}, breakdown: [], worker_hours: 0, success_rate: 0, daily: {} },
       failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
       tokens: { by_backend: {}, by_model: {}, by_target: {} },
       estimated_cost: { total: 0, by_model: {}, unpriced_models: [] },

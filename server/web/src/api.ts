@@ -182,6 +182,15 @@ export const StatsResponseSchema = z.object({
   work_delegated: z.object({
     by_workflow: z.record(z.string(), z.record(z.string(), z.number())),
     by_state: z.record(z.string(), z.number()),
+    breakdown: z.array(
+      z.object({
+        profile: z.string(),
+        workflow: z.string(),
+        target: z.string(),
+        state: z.string(),
+        jobs: z.number(),
+      }),
+    ),
     worker_hours: z.number(),
     success_rate: z.number(),
     daily: z.record(z.string(), z.object({ succeeded: z.number(), failed: z.number() })),

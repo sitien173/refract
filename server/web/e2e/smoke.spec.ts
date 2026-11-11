@@ -3,7 +3,7 @@ import { jobState, submitJob } from "./helpers";
 
 test("daemon serves seeded jobs, deep links, and pending questions", async ({ page, request }) => {
   await page.goto("/dashboard/");
-  await expect(page.getByText("e2e-seed-100")).toBeVisible();
+  await expect(page.getByText("consult · e2e-seed-100")).toBeVisible();
 
   await page.goto("/dashboard/jobs/e2e-seed-100");
   await expect(page.getByRole("heading", { name: "Job e2e-seed-100" })).toBeVisible();

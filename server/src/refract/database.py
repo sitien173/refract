@@ -22,7 +22,7 @@ from refract.product_telemetry import MAX_OUTBOX_AGE_DAYS, MAX_OUTBOX_ROWS
 log = get_logger("database")
 _BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
 _JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
-_SCHEMA_VERSION = 20
+_SCHEMA_VERSION = 21
 _TOKEN_COLUMNS = (
     ("context_used", "tok_context_used"),
     ("context_window", "tok_context_window"),
@@ -35,6 +35,7 @@ _METRICS_DDL = (
     """CREATE TABLE job_metrics (
     job_id TEXT PRIMARY KEY,
     finished_at TEXT NOT NULL,
+    profile TEXT NOT NULL DEFAULT '',
     workflow TEXT NOT NULL,
     target TEXT NOT NULL,
     backend TEXT NOT NULL,
@@ -289,7 +290,9 @@ class Database:
                 f"supports ({_SCHEMA_VERSION}). The database was not modified."
             )
         if version in (18, 19):
-            self._migrate_to_20(version)
+            self._migrate_from_18_or_19(version)
+        elif version == 20:
+            self._migrate_to_21()
         elif version != _SCHEMA_VERSION:
             if version is not None:
                 self._retire(version)
@@ -306,7 +309,7 @@ class Database:
         self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
         self._connection.commit()
 
-    def _migrate_to_20(self, version: int) -> None:
+    def _migrate_from_18_or_19(self, version: int) -> None:
         """Add the card tables from schema 18, then the metrics tables and backfill, in one transaction.
 
         Any error rolls back and leaves the original schema version.
@@ -325,16 +328,38 @@ class Database:
             ).fetchall()
             for job in terminal_jobs:
                 connection.execute(
-                    """INSERT INTO job_metrics(job_id, finished_at, workflow, target, backend, model, state,
-                       failure_kind, duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write,
-                       attempts, skipped_targets, retry_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)""",
-                    (job["id"], job["finished_at"] or job["updated_at"], job["workflow"],
+                    """INSERT INTO job_metrics(job_id, finished_at, profile, workflow, target, backend, model,
+                       state, failure_kind, duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write,
+                       attempts, skipped_targets, retry_of)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)""",
+                    (job["id"], job["finished_at"] or job["updated_at"], job["profile"], job["workflow"],
                      job["target"] or "", _backend_for_target(job["execution_plan_json"], job["target"] or ""),
                      job["model"] or "", job["state"], job["failure_kind"], job["duration_ms"],
                      job["tok_input"], job["tok_output"], job["tok_cache_read"],
                      job["tok_cache_write"], job["retry_of"]),
                 )
-            connection.execute("PRAGMA user_version=20")
+            connection.execute("PRAGMA user_version=21")
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
+
+    def _migrate_to_21(self) -> None:
+        """Add job_metrics.profile and backfill it from jobs still stored, in one transaction.
+
+        Metrics rows whose job was already pruned keep an empty profile. Any error rolls back and
+        leaves schema 20.
+        """
+        connection = self._connection
+        connection.execute(_JOURNAL_MODE_WAL)
+        connection.execute(_BEGIN_IMMEDIATE)
+        try:
+            connection.execute("ALTER TABLE job_metrics ADD COLUMN profile TEXT NOT NULL DEFAULT ''")
+            connection.execute(
+                "UPDATE job_metrics SET profile = (SELECT profile FROM jobs WHERE jobs.id = job_metrics.job_id) "
+                "WHERE job_id IN (SELECT id FROM jobs)"
+            )
+            connection.execute("PRAGMA user_version=21")
             connection.execute("COMMIT")
         except BaseException:
             connection.execute("ROLLBACK")
@@ -697,10 +722,10 @@ class Database:
         target = row["target"] or ""
         backend = _backend_for_target(row["execution_plan_json"], target)
         self._connection.execute(
-            """INSERT OR REPLACE INTO job_metrics(job_id, finished_at, workflow, target, backend, model,
-               state, failure_kind, duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write,
-               attempts, skipped_targets, retry_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (job_id, finished_at, row["workflow"], target, backend, row["model"] or "", state,
+            """INSERT OR REPLACE INTO job_metrics(job_id, finished_at, profile, workflow, target, backend,
+               model, state, failure_kind, duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write,
+               attempts, skipped_targets, retry_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, finished_at, row["profile"], row["workflow"], target, backend, row["model"] or "", state,
              row["failure_kind"], row["duration_ms"], row["tok_input"], row["tok_output"],
              row["tok_cache_read"], row["tok_cache_write"], attempts, skipped_targets, row["retry_of"]),
         )

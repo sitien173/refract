@@ -6,6 +6,10 @@
 - Local usage stats from a `job_metrics` table kept for 365 days: work delegated, failover saves, tokens by backend, model, and target, and estimated cost from a price file that the daemon fetches every 24 hours and caches at `$REFRACT_HOME/pricing.toml`. The fetch ignores telemetry consent, sends no usage data, and `REFRACT_PRICING_FETCH=0` turns it off. A leftover `[pricing]` config section is ignored with a warning. `refract stats [--days N] [--json]` and `GET /dashboard/api/stats` serve them. Provider-prefixed and aliased model names merge into one row.
 - Dashboard Insights view at `/dashboard/insights` with a 1, 7, 30, and 365 day window.
 - Database schema 20 adds the `job_metrics` and `telemetry_outbox` tables and migrates schema 19 and 18 databases in place. Refract 3.0.1 and older refuse a schema 20 database and leave it unchanged, so keep a copy of `refract.db` before you upgrade if you may go back.
+- Database schema 21 adds `job_metrics.profile` and migrates schema 20, 19, and 18 databases in place, backfilling the profile from jobs still stored. The Insights stats payload gains `work_delegated.breakdown`, a list of job counts by profile, workflow, target, and state. Refract versions that support only an older schema refuse a schema 21 database and leave it unchanged.
+- Readable, project-grouped console rows in the dashboard: jobs show a `workflow · session` title with a `target · relative time · short id` meta line, organized into collapsible per-project sections.
+- Dashboard Board and Targets grouping: the Board project selector lists project roots, 'All projects' organizes cards into collapsible per-project swimlanes, card details open in a centered modal dialog, and targets are grouped by backend with target and healthy counts.
+- Dashboard Insights chart and breakdown improvements: continuous zero-filled daily ranges, labelled y axis with gridlines, window-thinned x-axis date labels, full-width legend, accessible hover and focus tooltips with roving tabindex for annual views, and an expanded breakdown table by profile, workflow, target, and state replacing the separate jobs by state table.
 
 ## 3.0.1 - 2026-11-10
 

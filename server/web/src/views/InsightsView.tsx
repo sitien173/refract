@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { STATS_DAYS, type StatsDays, type StatsResponse, type TokenTotals } from "../api";
 import { ViewNav } from "../components/ViewNav";
@@ -11,11 +12,16 @@ type InsightsViewProps = {
   onNavigate: (path: string) => void;
 };
 
-type Day = { day: string; succeeded: number; failed: number };
+export type Day = { day: string; succeeded: number; failed: number };
 
 const CHART_WIDTH = 600;
 const CHART_HEIGHT = 160;
-const CHART_LABEL_HEIGHT = 18;
+const CHART_LABEL_HEIGHT = 20;
+const Y_AXIS_WIDTH = 40;
+const PLOT_TOP = 10;
+const PLOT_BOTTOM = CHART_HEIGHT - CHART_LABEL_HEIGHT;
+const PLOT_HEIGHT = PLOT_BOTTOM - PLOT_TOP;
+const PLOT_WIDTH = CHART_WIDTH - Y_AXIS_WIDTH;
 const MAX_BAR_WIDTH = 40;
 
 /**
@@ -52,44 +58,242 @@ function KpiGrid({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function DailyChart({ days }: { days: Day[] }) {
-  const max = Math.max(...days.map((d) => d.succeeded + d.failed), 1);
-  const plotHeight = CHART_HEIGHT - CHART_LABEL_HEIGHT;
-  const slot = CHART_WIDTH / days.length;
-  const barWidth = Math.min(MAX_BAR_WIDTH, slot * 0.7);
+function localDateString(timeMs: number, tzOffsetMinutes: number): string {
+  const localMs = timeMs + tzOffsetMinutes * 60_000;
+  const d = new Date(localMs);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+export function fillDays(daily: Record<string, { succeeded: number; failed: number }>, windowDays: number, now: number, tzOffsetMinutes: number): Day[] {
+  const startMs = now - windowDays * 24 * 60 * 60 * 1000;
+  const daySet = new Set<string>();
+
+  for (let i = 0; i <= windowDays; i++) {
+    daySet.add(localDateString(startMs + i * 86_400_000, tzOffsetMinutes));
+  }
+
+  for (const k of Object.keys(daily)) {
+    daySet.add(k);
+  }
+
+  const sortedKeys = Array.from(daySet).sort();
+  return sortedKeys.map((key) => ({
+    day: key,
+    succeeded: daily[key]?.succeeded ?? 0,
+    failed: daily[key]?.failed ?? 0,
+  }));
+}
+
+export function niceTicks(max: number): number[] {
+  const effectiveMax = Math.max(max || 0, 1);
+  const exponent = Math.floor(Math.log10(effectiveMax));
+  const steps: number[] = [];
+  for (let exp = Math.max(0, exponent - 1); exp <= exponent + 2; exp++) {
+    for (const factor of [1, 2, 5]) {
+      steps.push(factor * 10 ** exp);
+    }
+  }
+  steps.sort((a, b) => a - b);
+
+  let chosenStep = steps[steps.length - 1];
+  for (const step of steps) {
+    if (Math.ceil(effectiveMax / step) <= 4) {
+      chosenStep = step;
+      break;
+    }
+  }
+
+  const k = Math.max(2, Math.ceil(effectiveMax / chosenStep));
+  const ticks: number[] = [];
+  for (let i = 0; i <= k; i++) {
+    ticks.push(i * chosenStep);
+  }
+  return ticks;
+}
+
+function formatTick(val: number): string {
+  if (val < 10_000) return val.toLocaleString();
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(val);
+}
+
+function formatShortDate(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+    return dateStr;
+  }
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(date);
+}
+
+export function getXLabels(days: Day[], windowDays: number): { index: number; text: string }[] {
+  if (days.length === 0) return [];
+  const labels: { index: number; text: string }[] = [];
+
+  if (windowDays === 1 || days.length <= 8) {
+    for (let i = 0; i < days.length; i++) {
+      labels.push({ index: i, text: formatShortDate(days[i].day) });
+    }
+  } else if (windowDays === 365 || days.length > 35) {
+    for (let i = 0; i < days.length; i++) {
+      if (days[i].day.endsWith("-01")) {
+        labels.push({ index: i, text: formatShortDate(days[i].day) });
+      }
+    }
+  } else {
+    for (let i = 0; i < days.length; i++) {
+      if (i % 7 === 0) {
+        labels.push({ index: i, text: formatShortDate(days[i].day) });
+      }
+    }
+  }
+  return labels;
+}
+
+export function DailyChart({ days, windowDays = 7 }: { days: Day[]; windowDays?: number }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const [rovingIndex, setRovingIndex] = useState<number>(0);
+  const groupRefs = useRef<(SVGGElement | null)[]>([]);
+
+  if (days.length === 0) return null;
+
+  const maxCount = Math.max(...days.map((d) => d.succeeded + d.failed), 0);
+  const ticks = niceTicks(maxCount);
+  const maxTick = ticks[ticks.length - 1];
+
+  const slot = PLOT_WIDTH / days.length;
+  const barWidth = Math.max(1, Math.min(MAX_BAR_WIDTH, slot * 0.7));
+
+  const xLabels = getXLabels(days, windowDays);
+  const isRoving = windowDays === 365 || days.length > 31;
+  const effectiveRovingIndex = Math.max(0, Math.min(rovingIndex, days.length - 1));
+
+  const activeIndex = hoveredIndex ?? focusedIndex;
+  const activeDay = activeIndex !== null ? days[activeIndex] : null;
+
   const label = `Daily jobs finished, ${days[0].day} to ${days[days.length - 1].day}: succeeded and failed`;
 
+  const handleKeyDown = (e: React.KeyboardEvent, index: number) => {
+    let targetIndex: number | null = null;
+    if (e.key === "ArrowRight") {
+      targetIndex = Math.min(days.length - 1, index + 1);
+    } else if (e.key === "ArrowLeft") {
+      targetIndex = Math.max(0, index - 1);
+    } else if (e.key === "Home") {
+      targetIndex = 0;
+    } else if (e.key === "End") {
+      targetIndex = days.length - 1;
+    }
+
+    if (targetIndex !== null) {
+      e.preventDefault();
+      if (isRoving) setRovingIndex(targetIndex);
+      setFocusedIndex(targetIndex);
+      groupRefs.current[targetIndex]?.focus();
+    }
+  };
+
+  const activeCenterX = activeIndex !== null ? Y_AXIS_WIDTH + activeIndex * slot + slot / 2 : 0;
+  const tooltipLeftPercent = Math.max(12, Math.min(88, (activeCenterX / CHART_WIDTH) * 100));
+
   return (
-    <>
-      <svg role="img" aria-label={label} viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} className="w-full max-w-2xl">
-        <title>{label}</title>
-        {days.map((d, index) => {
-          const x = index * slot + (slot - barWidth) / 2;
-          const succeededHeight = (d.succeeded / max) * plotHeight;
-          const failedHeight = (d.failed / max) * plotHeight;
-          return (
-            <g key={d.day}>
-              <rect x={x} y={plotHeight - succeededHeight} width={barWidth} height={succeededHeight} className="fill-primary" />
-              <rect x={x} y={plotHeight - succeededHeight - failedHeight} width={barWidth} height={failedHeight} className="fill-destructive" />
-            </g>
-          );
-        })}
-        <line x1={0} x2={CHART_WIDTH} y1={plotHeight} y2={plotHeight} className="stroke-border" />
-        <text x={0} y={CHART_HEIGHT - 4} className="fill-muted-foreground text-[11px]">
-          {days[0].day}
-        </text>
-        <text x={CHART_WIDTH} y={CHART_HEIGHT - 4} textAnchor="end" className="fill-muted-foreground text-[11px]">
-          {days[days.length - 1].day}
-        </text>
-      </svg>
-      <p className="flex gap-4 text-sm text-muted-foreground" aria-hidden="true">
+    <div className="relative flex flex-col gap-2 w-full">
+      <div className="flex items-center gap-4 text-sm text-muted-foreground w-full" aria-hidden="true">
         <span className="flex items-center gap-1.5">
           <span className="size-2.5 rounded-sm bg-primary" /> Succeeded
         </span>
         <span className="flex items-center gap-1.5">
           <span className="size-2.5 rounded-sm bg-destructive" /> Failed
         </span>
-      </p>
+      </div>
+
+      {activeDay && (
+        <div
+          role="tooltip"
+          className="pointer-events-none absolute top-0 z-10 rounded-md bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-md border border-border"
+          style={{
+            left: `${tooltipLeftPercent}%`,
+            transform: "translateX(-50%)",
+          }}
+        >
+          <span className="font-medium">{activeDay.day}: </span>
+          <span className="text-primary font-medium">{activeDay.succeeded} succeeded</span>
+          <span>, </span>
+          <span className="text-destructive font-medium">{activeDay.failed} failed</span>
+        </div>
+      )}
+
+      {/* biome-ignore lint/a11y/useSemanticElements: SVG chart container represents a named group */}
+      <svg role="group" aria-label={label} viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} className="w-full overflow-visible">
+        <title>{label}</title>
+
+        {/* Y-axis gridlines and labels */}
+        {ticks.map((val) => {
+          const y = PLOT_BOTTOM - (val / maxTick) * PLOT_HEIGHT;
+          return (
+            <g key={val} className="text-muted-foreground">
+              <line x1={Y_AXIS_WIDTH} x2={CHART_WIDTH} y1={y} y2={y} className="stroke-border/50" strokeDasharray={val === 0 ? undefined : "3 3"} />
+              <text x={Y_AXIS_WIDTH - 6} y={y + 3.5} textAnchor="end" className="fill-muted-foreground text-[10px]">
+                {formatTick(val)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* X-axis baseline */}
+        <line x1={Y_AXIS_WIDTH} x2={CHART_WIDTH} y1={PLOT_BOTTOM} y2={PLOT_BOTTOM} className="stroke-border" />
+
+        {/* Day bar groups */}
+        {days.map((d, index) => {
+          const x = Y_AXIS_WIDTH + index * slot + (slot - barWidth) / 2;
+          const succeededHeight = (d.succeeded / maxTick) * PLOT_HEIGHT;
+          const failedHeight = (d.failed / maxTick) * PLOT_HEIGHT;
+          const tabIndex = isRoving ? (index === effectiveRovingIndex ? 0 : -1) : 0;
+          const isSelected = index === activeIndex;
+
+          return (
+            // biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: bar group is focusable for chart tooltip inspection
+            <g
+              key={d.day}
+              ref={(el) => {
+                groupRefs.current[index] = el;
+              }}
+              role="img"
+              tabIndex={tabIndex}
+              aria-label={`${d.day}: ${d.succeeded} succeeded, ${d.failed} failed`}
+              className="outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+              onMouseEnter={() => setHoveredIndex(index)}
+              onMouseLeave={() => setHoveredIndex(null)}
+              onFocus={() => {
+                setFocusedIndex(index);
+                if (isRoving) setRovingIndex(index);
+              }}
+              onBlur={() => setFocusedIndex(null)}
+              onKeyDown={(e) => handleKeyDown(e, index)}
+            >
+              {/* Invisible full-height hit area */}
+              <rect x={Y_AXIS_WIDTH + index * slot} y={PLOT_TOP} width={slot} height={PLOT_HEIGHT} fill="transparent" />
+              {isSelected && <rect x={Y_AXIS_WIDTH + index * slot} y={PLOT_TOP} width={slot} height={PLOT_HEIGHT} className="fill-muted/20" />}
+              {succeededHeight > 0 && <rect x={x} y={PLOT_BOTTOM - succeededHeight} width={barWidth} height={succeededHeight} className="fill-primary" />}
+              {failedHeight > 0 && <rect x={x} y={PLOT_BOTTOM - succeededHeight - failedHeight} width={barWidth} height={failedHeight} className="fill-destructive" />}
+            </g>
+          );
+        })}
+
+        {/* X-axis labels */}
+        {xLabels.map(({ index, text }) => {
+          const centerX = Y_AXIS_WIDTH + index * slot + slot / 2;
+          return (
+            <text key={days[index].day} x={centerX} y={CHART_HEIGHT - 3} textAnchor="middle" className="fill-muted-foreground text-[10px]">
+              {text}
+            </text>
+          );
+        })}
+      </svg>
+
       <table aria-label="Daily jobs finished" className="sr-only">
         <thead>
           <tr>
@@ -108,7 +312,7 @@ function DailyChart({ days }: { days: Day[] }) {
           ))}
         </tbody>
       </table>
-    </>
+    </div>
   );
 }
 
@@ -143,17 +347,16 @@ function SimpleTable({ label, headings, rows }: { label: string; headings: strin
 }
 
 function JobBreakdown({ work }: { work: StatsResponse["work_delegated"] }) {
-  const byWorkflow = Object.entries(work.by_workflow).flatMap(([workflow, states]) => Object.entries(states).map(([state, jobs]) => [workflow, state, count(jobs)]));
+  const rows = work.breakdown.map((row) => [row.profile, row.workflow, row.target, row.state, count(row.jobs)]);
   return (
     <div className="flex flex-col gap-3">
-      <SimpleTable label="Jobs by state" headings={["State", "Jobs"]} rows={Object.entries(work.by_state).map(([state, jobs]) => [state, count(jobs)])} />
-      <SimpleTable label="Jobs by workflow and state" headings={["Workflow", "State", "Jobs"]} rows={byWorkflow} />
+      <SimpleTable label="Jobs by profile, workflow, target, and state" headings={["Profile", "Workflow", "Target", "State", "Jobs"]} rows={rows} />
     </div>
   );
 }
 
-function WorkDelegated({ work }: { work: StatsResponse["work_delegated"] }) {
-  const days = Object.entries(work.daily).map(([day, counts]) => ({ day, ...counts }));
+function WorkDelegated({ work, windowDays }: { work: StatsResponse["work_delegated"]; windowDays: number }) {
+  const days = fillDays(work.daily, windowDays, Date.now(), -new Date().getTimezoneOffset() || 0);
   const total = Object.values(work.by_state).reduce((sum, value) => sum + value, 0);
   return (
     <section aria-label="Work delegated" className="flex flex-col gap-3">
@@ -165,11 +368,7 @@ function WorkDelegated({ work }: { work: StatsResponse["work_delegated"] }) {
         <Kpi label="Success rate" value={percent(work.success_rate)} />
         <Kpi label="Worker hours" value={fixed(work.worker_hours, 2)} />
       </KpiGrid>
-      {days.length > 0 ? (
-        <DailyChart days={days} />
-      ) : (
-        <p className="text-sm text-muted-foreground">{total === 0 ? "No jobs finished in this window." : "No succeeded or failed jobs finished in this window."}</p>
-      )}
+      <DailyChart key={windowDays} days={days} windowDays={windowDays} />
       {total > 0 && <JobBreakdown work={work} />}
     </section>
   );
@@ -349,7 +548,7 @@ export function InsightsView({ stats, days, loading, error, onDaysChange, onNavi
       )}
       {stats && (
         <>
-          <WorkDelegated work={stats.work_delegated} />
+          <WorkDelegated work={stats.work_delegated} windowDays={stats.days} />
           <FailoverSaves saves={stats.failover_saves} />
           <Tokens tokens={stats.tokens} />
           <Cost cost={stats.estimated_cost} currency={stats.currency} />

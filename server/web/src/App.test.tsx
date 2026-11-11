@@ -19,7 +19,8 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", async (importOriginal) => ({ ...(await importOriginal<typeof import("./api")>()), ...api }));
 
 const options = { states: [], projects: [], workflows: [], targets: [] };
-const jobsPage = (ids: string[], next_cursor: string | null = null) => ({ jobs: ids.map((id) => ({ id, state: "queued" })), next_cursor, options }) as unknown as JobPage;
+const jobsPage = (ids: string[], next_cursor: string | null = null) =>
+  ({ jobs: ids.map((id) => ({ id, state: "queued", session: id })), next_cursor, options }) as unknown as JobPage;
 const detailOf = (id: string, state = "failed", pending_question: unknown = null) => ({
   id,
   state,
@@ -30,7 +31,7 @@ const detailOf = (id: string, state = "failed", pending_question: unknown = null
 const emptyStats = {
   days: 7,
   currency: "USD",
-  work_delegated: { by_workflow: {}, by_state: {}, worker_hours: 0, success_rate: 0, daily: {} },
+  work_delegated: { by_workflow: {}, by_state: {}, breakdown: [], worker_hours: 0, success_rate: 0, daily: {} },
   failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
   tokens: { by_backend: {}, by_model: {}, by_target: {} },
   estimated_cost: { total: 0, by_model: {}, unpriced_models: [] },
@@ -67,11 +68,11 @@ it("loads the next cursor page after a nonempty first page and keeps both", asyn
   history.replaceState({}, "", "/dashboard/");
   renderApp();
   await settle();
-  expect(screen.getByRole("button", { name: /first.*queued/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /first/ })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Load more jobs" }));
   await settle();
-  expect(screen.getByRole("button", { name: /first.*queued/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /later.*queued/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /first/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /later/ })).toBeInTheDocument();
   expect(api.getJobs).toHaveBeenCalledWith({ cursor: "cursor-1" }, expect.any(AbortSignal));
   expect(screen.queryByRole("button", { name: "Load more jobs" })).not.toBeInTheDocument();
 });
@@ -89,7 +90,7 @@ it("discards a late load-more response after the filter changes", async () => {
   fireEvent.change(screen.getByLabelText("Search jobs"), { target: { value: "fresh" } });
   fireEvent.click(screen.getByRole("button", { name: "Search" }));
   await settle();
-  expect(screen.getByRole("button", { name: /fresh-job.*queued/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /fresh-job/ })).toBeInTheDocument();
   await act(async () => late.resolve(jobsPage(["stale-job"], "stale-cursor")));
   await settle();
   expect(screen.queryByRole("button", { name: /stale-job/ })).not.toBeInTheDocument();
@@ -268,7 +269,7 @@ it("clears the previous announcement when the user selects another job", async (
   fireEvent.click(screen.getByRole("button", { name: "Confirm cancellation" }));
   await settle();
   expect(announcements()).toHaveTextContent("Cancellation requested");
-  fireEvent.click(screen.getByRole("button", { name: /other.*queued/ }));
+  fireEvent.click(screen.getByRole("button", { name: /other/ }));
   await settle();
   expect(announcements()).toBeEmptyDOMElement();
 });
@@ -394,7 +395,7 @@ it("starts a view transition on job and tab changes but not on polls", async () 
   expect(start).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("tab", { name: "Result" }));
   expect(start).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole("button", { name: /other.*queued/ }));
+  fireEvent.click(screen.getByRole("button", { name: /other/ }));
   expect(start).toHaveBeenCalledTimes(2);
   await settle(3000);
   expect(start).toHaveBeenCalledTimes(2);
@@ -453,7 +454,7 @@ it("renders card detail on /dashboard/board?card=<id>", async () => {
   history.replaceState({}, "", "/dashboard/board?card=card-1");
   renderApp();
   await settle();
-  expect(screen.getByRole("complementary", { name: "Card detail" })).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Card detail" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { level: 2, name: "Test Card 1" })).toBeInTheDocument();
 });
 
@@ -465,5 +466,5 @@ it("clears card selection and announces Card not found on 404", async () => {
   expect(location.pathname).toBe("/dashboard/board");
   expect(location.search).toBe("?project=p1");
   expect(announcements()).toHaveTextContent("Card not found");
-  expect(screen.queryByRole("complementary", { name: "Card detail" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "Card detail" })).not.toBeInTheDocument();
 });

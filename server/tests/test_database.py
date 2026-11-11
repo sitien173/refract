@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 
 import pytest
 
 from refract.database import Database
+from tests.test_storage_v3 import _schema_18, _schema_19, _user_version
 
 
 def table_columns(database: Database, table: str) -> set[str]:
@@ -14,6 +16,60 @@ def table_columns(database: Database, table: str) -> set[str]:
         row["name"]
         for row in database._connection.execute("SELECT name FROM pragma_table_info(?)", (table,))
     }
+
+
+# Schema 20 as shipped at 49bc8621: job_metrics without profile.
+SCHEMA_20_METRICS_DDL = (
+    """CREATE TABLE job_metrics (
+    job_id TEXT PRIMARY KEY,
+    finished_at TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    target TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    model TEXT NOT NULL,
+    state TEXT NOT NULL,
+    failure_kind TEXT,
+    duration_ms INTEGER,
+    tok_input INTEGER,
+    tok_output INTEGER,
+    tok_cache_read INTEGER,
+    tok_cache_write INTEGER,
+    attempts INTEGER,
+    skipped_targets INTEGER,
+    retry_of TEXT NOT NULL DEFAULT ''
+)""",
+    "CREATE INDEX job_metrics_finished_idx ON job_metrics(finished_at)",
+    """CREATE TABLE telemetry_outbox (
+    id INTEGER PRIMARY KEY,
+    event_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    send_attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL
+)""",
+)
+
+
+def _schema_20(path) -> str:
+    """Create a schema 20 database: a retained job, its metrics row, and a metrics row whose job was pruned."""
+    job_id = _schema_19(path)
+    with closing(sqlite3.connect(path)) as connection:
+        for statement in SCHEMA_20_METRICS_DDL:
+            connection.execute(statement)
+        for metric_id in (job_id, "pruned-job"):
+            connection.execute(
+                "INSERT INTO job_metrics(job_id, finished_at, workflow, target, backend, model, state) "
+                "VALUES (?, 't2', 'implement', 'target-a', 'codex', 'm', 'succeeded')",
+                (metric_id,),
+            )
+        connection.execute("PRAGMA user_version=20")
+        connection.commit()
+    return job_id
+
+
+def _profiles(path) -> dict[str, str]:
+    with closing(sqlite3.connect(path)) as connection:
+        return dict(connection.execute("SELECT job_id, profile FROM job_metrics").fetchall())
 
 
 @pytest.mark.parametrize("failure", ["connection", "schema"])
@@ -578,4 +634,80 @@ def test_interrupt_active_jobs_leaves_a_job_that_turned_terminal_after_the_selec
     assert (metrics["state"], metrics["tok_input"]) == ("succeeded", 5)
     assert database.job_record("still-running")["state"] == "interrupted"
     assert database.job_metrics_row("still-running")["state"] == "interrupted"
+    database.close()
+
+
+def test_fresh_database_has_metrics_profile_column_at_schema_21(tmp_path) -> None:
+    path = tmp_path / "refract.db"
+    database = Database(path)
+
+    assert "profile" in table_columns(database, "job_metrics")
+    database.close()
+    assert _user_version(path) == 21
+
+
+def test_schema_20_database_migrates_and_backfills_profile_from_retained_jobs(tmp_path) -> None:
+    path = tmp_path / "refract.db"
+    job_id = _schema_20(path)
+
+    Database(path).close()
+
+    assert _user_version(path) == 21
+    assert _profiles(path) == {job_id: "default", "pruned-job": ""}
+    migrated = Database(path)
+    project = migrated.upsert_project(project_id="p2", root="/p2")
+    migrated.create_job(
+        job_id="after-migration", project_id=project.id, workflow="implement", profile="fast",
+        prompt="p", execution_plan_json="{}", session="s",
+    )
+    migrated.finish_job("after-migration", "succeeded", target="target")
+    assert migrated.job_metrics_row("after-migration")["profile"] == "fast"
+    migrated.close()
+
+
+@pytest.mark.parametrize("make_old", [_schema_18, _schema_19], ids=["schema-18", "schema-19"])
+def test_schema_18_and_19_reach_schema_21_with_profile_backfilled(tmp_path, make_old) -> None:
+    path = tmp_path / "refract.db"
+    job_id = make_old(path)
+
+    Database(path).close()
+
+    assert _user_version(path) == 21
+    assert _profiles(path) == {job_id: "default"}
+
+
+def test_failed_schema_21_migration_keeps_schema_20_without_profile_column(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "refract.db"
+    _schema_20(path)
+    real_connect = sqlite3.connect
+
+    class FailingConnection(sqlite3.Connection):
+        def execute(self, statement, *args, **kwargs):
+            if statement.startswith("UPDATE job_metrics SET profile"):
+                raise sqlite3.OperationalError("backfill failed")
+            return super().execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: real_connect(*a, factory=FailingConnection, **k))
+
+    with pytest.raises(sqlite3.OperationalError, match="backfill failed"):
+        Database(path)
+
+    monkeypatch.undo()
+    assert _user_version(path) == 20
+    with closing(sqlite3.connect(path)) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(job_metrics)")}
+    assert "profile" not in columns
+
+
+def test_newly_terminal_job_stores_its_profile_in_metrics(tmp_path) -> None:
+    database = Database(tmp_path / "refract.db")
+    project = database.upsert_project(project_id="project", root="/project")
+    database.create_job(
+        job_id="profiled", project_id=project.id, workflow="implement", profile="fast",
+        prompt="p", execution_plan_json="{}", session="s",
+    )
+
+    database.finish_job("profiled", "succeeded", target="target")
+
+    assert database.job_metrics_row("profiled")["profile"] == "fast"
     database.close()

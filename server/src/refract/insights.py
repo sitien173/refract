@@ -44,6 +44,7 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
     }
     by_workflow: dict[str, dict[str, int]] = {}
     by_state: dict[str, int] = {}
+    breakdown: dict[tuple[str, str, str, str], int] = {}
     daily: dict[str, dict[str, int]] = {}
     skipped = retries = retry_jobs = 0
     unknown_attempts = unknown_skipped_targets = 0
@@ -64,6 +65,8 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
         workflow = row["workflow"]
         by_workflow.setdefault(workflow, {})[state] = by_workflow.setdefault(workflow, {}).get(state, 0) + 1
         by_state[state] = by_state.get(state, 0) + 1
+        key = (row["profile"] or "unknown", workflow, row["target"] or "unknown", state)
+        breakdown[key] = breakdown.get(key, 0) + 1
         total_duration += row["duration_ms"] or 0
         if state == "succeeded":
             succeeded += 1
@@ -124,6 +127,8 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
         "days": days,
         "currency": pricing.currency,
         "work_delegated": {"by_workflow": by_workflow, "by_state": by_state,
+            "breakdown": [{"profile": profile, "workflow": workflow, "target": target, "state": state, "jobs": jobs}
+                          for (profile, workflow, target, state), jobs in sorted(breakdown.items())],
             "worker_hours": total_duration / 3_600_000,
             "success_rate": succeeded / (succeeded + failures) if succeeded + failures else 0.0,
             "daily": dict(sorted(daily.items()))},

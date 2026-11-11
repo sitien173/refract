@@ -17,7 +17,7 @@ from refract.database import Database
 
 V3_TABLES = {"projects", "jobs", "sessions", "target_sessions", "target_health", "cards", "card_jobs", "card_moves", "job_metrics", "telemetry_outbox"}
 V3_COLUMNS = {
-    "job_metrics": {"job_id", "finished_at", "workflow", "target", "backend", "model", "state", "failure_kind", "duration_ms", "tok_input", "tok_output", "tok_cache_read", "tok_cache_write", "attempts", "skipped_targets", "retry_of"},
+    "job_metrics": {"job_id", "finished_at", "profile", "workflow", "target", "backend", "model", "state", "failure_kind", "duration_ms", "tok_input", "tok_output", "tok_cache_read", "tok_cache_write", "attempts", "skipped_targets", "retry_of"},
     "telemetry_outbox": {"id", "event_key", "created_at", "payload", "send_attempts", "next_attempt_at"},
     "projects": {"id", "root", "created_at"},
     "jobs": {
@@ -295,14 +295,14 @@ def test_result_file_is_private_and_pruning_deletes_job_stream_and_result(tmp_pa
     assert not database.result_path(job_id).exists()
 
 
-def test_schema_18_database_upgrades_to_20_and_keeps_job_rows(tmp_path: Path) -> None:
+def test_schema_18_database_upgrades_to_21_and_keeps_job_rows(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     job_id = _schema_18(path)
     before = _job_rows(path)
 
     Database(path).close()
 
-    assert _user_version(path) == 20
+    assert _user_version(path) == 21
     assert _job_rows(path) == before
     assert before[0][0] == job_id
     with closing(sqlite3.connect(path)) as connection:
@@ -326,7 +326,7 @@ def test_schema_19_database_backfills_terminal_jobs_and_skips_nonterminal(tmp_pa
 
     Database(path).close()
 
-    assert _user_version(path) == 20
+    assert _user_version(path) == 21
     with closing(sqlite3.connect(path)) as connection:
         rows = connection.execute(
             "SELECT job_id, finished_at, backend, attempts, skipped_targets FROM job_metrics"
@@ -368,7 +368,7 @@ def test_schema_18_upgrade_succeeds_with_existing_backup_and_creates_none(tmp_pa
 
     Database(path).close()
 
-    assert _user_version(path) == 20
+    assert _user_version(path) == 21
     assert sorted(p.name for p in tmp_path.glob("*.v2.bak")) == ["refract.db.v2.bak"]
     assert (tmp_path / "refract.db.v2.bak").read_bytes() == b"old"
 
@@ -388,7 +388,7 @@ def test_failed_schema_18_migration_rolls_back(tmp_path: Path, monkeypatch: pyte
     assert "cards" not in _tables(path)
 
 
-def test_schema_20_database_reopens_unchanged(tmp_path: Path) -> None:
+def test_schema_21_database_reopens_unchanged(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     _schema_18(path)
     Database(path).close()
@@ -396,16 +396,16 @@ def test_schema_20_database_reopens_unchanged(tmp_path: Path) -> None:
 
     Database(path).close()
 
-    assert _user_version(path) == 20
+    assert _user_version(path) == 21
     assert _job_rows(path) == before
     assert not list(tmp_path.glob("*.v2.bak"))
 
 
-def test_fresh_database_reports_schema_20(tmp_path: Path) -> None:
+def test_fresh_database_reports_schema_21(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     Database(path).close()
 
-    assert _user_version(path) == 20
+    assert _user_version(path) == 21
 
 
 def test_cards_survive_close_and_reopen(tmp_path: Path) -> None:
