@@ -19,7 +19,7 @@ from urllib.request import Request
 
 import pytest
 
-from refract import cli, updater
+from refract import cli, daemon_control, updater
 from refract.updater import Install
 from tests.host_stubs import GIT_ENV, Env
 
@@ -2359,14 +2359,14 @@ def test_claude_item_without_id_or_valid_fields_drops_them(env: Env) -> None:
 def latch_with(
     monkeypatch: pytest.MonkeyPatch, *, raises: Exception | None = None, reply: bytes = b""
 ) -> tuple[tuple[bool, Any], list[str]]:
-    monkeypatch.setattr(updater, "_read_daemon_file", lambda: (TOKEN, "127.0.0.1", 1))
+    monkeypatch.setattr(updater, "_read_daemon_file", lambda: (TOKEN, "127.0.0.1", 1, None))
 
     def fake(request: Request, timeout: float):
         if raises is not None:
             raise raises
         return FakeResponse(reply)
 
-    monkeypatch.setattr(updater, "_open_direct", fake)
+    monkeypatch.setattr(daemon_control, "open_direct", fake)
     lines: list[str] = []
     return updater._latch(lines.append), lines
 

@@ -891,7 +891,7 @@ def create_mcp(
 def _write_daemon_file(path: Path, host: str, port: int) -> str:
     """Atomically publish a fresh private runtime token; return it, or "" when the file cannot be written."""
     token = secrets.token_hex(32)
-    content = json.dumps({"token": token, "host": host, "port": port, "version": package_version("refract")})
+    content = json.dumps({"token": token, "host": host, "port": port, "version": package_version("refract"), "pid": os.getpid()})
     temp = ""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

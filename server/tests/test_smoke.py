@@ -153,7 +153,266 @@ implement = "primary"
     assert raised.value.code == exit_code
     assert seen["url"] == "http://127.0.0.1:9911/mcp"
     assert seen["timeout"] is not None
-    assert json.loads(capsys.readouterr().out) == {"running": running, "url": "http://127.0.0.1:9911"}
+    assert json.loads(capsys.readouterr().out) == {
+        "running": running, "url": "http://127.0.0.1:9911", "pid": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("daemon_payload", "expected_pid"),
+    [
+        ({"token": "t", "host": "127.0.0.1", "port": 9911, "pid": 1234}, 1234),
+        (None, None),
+        ({"token": "t", "host": "127.0.0.1", "port": 9912, "pid": 1234}, None),
+        ({"token": "t", "host": "127.0.0.1", "port": 9911, "pid": True}, None),
+        ({"token": "t", "host": "127.0.0.1", "port": 9911, "pid": "1234"}, None),
+    ],
+    ids=["matching", "missing-file", "different-endpoint", "bool-pid", "string-pid"],
+)
+def test_status_reports_pid_only_for_matching_running_daemon(
+    monkeypatch, tmp_path, capsys, daemon_payload, expected_pid
+) -> None:
+    from refract import cli
+
+    home = tmp_path / "refract"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[daemon]\ndefault_profile = "balanced"\nport = 9911\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n'
+        '[profiles.balanced]\nimplement = "primary"\n', encoding="utf-8",
+    )
+    if daemon_payload is not None:
+        (home / "daemon.json").write_text(json.dumps(daemon_payload), encoding="utf-8")
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: Response())
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["status"])
+
+    assert raised.value.code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "running": True, "url": "http://127.0.0.1:9911", "pid": expected_pid,
+    }
+
+
+def test_status_pid_lookup_failure_does_not_change_running_result(monkeypatch, tmp_path, capsys) -> None:
+    from refract import cli, daemon_control
+
+    home = tmp_path / "refract"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n'
+        '[profiles.balanced]\nimplement = "primary"\n', encoding="utf-8",
+    )
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(
+        daemon_control, "read_daemon_file",
+        lambda: (_ for _ in ()).throw(OSError("unavailable")),
+    )
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["status"])
+
+    captured = json.loads(capsys.readouterr().out)
+    assert raised.value.code == 0
+    assert captured["running"] is True
+    assert captured["pid"] is None
+
+
+@pytest.mark.parametrize(
+    ("case", "force", "exit_code", "message"),
+    [
+        ("idle", False, 0, "Stopped the Refract daemon."),
+        ("busy", False, 1, "Refused: 2 running, 3 queued job(s)."),
+        ("forced", True, 0, "Stopped the Refract daemon. Forced stop: 2 running, 3 queued job(s)."),
+        ("missing", False, 0, "Refract daemon is not running."),
+        ("stale", False, 0, "Refract daemon is not running."),
+        ("manual", False, 1, "Cannot stop the Refract daemon automatically. Stop it manually."),
+        ("http", False, 1, "Failed: the daemon rejected shutdown (HTTP 401)."),
+        ("http-404", False, 1, "Failed: the daemon rejected shutdown (HTTP 404)."),
+        ("http-503", False, 1, "Failed: the daemon rejected shutdown (HTTP 503)."),
+        ("post-timeout", False, 1, "Failed: the shutdown request timed out."),
+        ("unreachable", False, 1, "Failed: cannot reach the daemon."),
+        ("wait-timeout", False, 1, "Failed: the daemon may still be stopping."),
+        ("force-refused", True, 1, "Refused: 2 running, 3 queued job(s)."),
+    ],
+    ids=["idle", "busy-no-force", "busy-force", "not-running", "stale-daemon-file", "manual-stop", "http-failure", "http-404", "http-503", "request-timeout", "unreachable", "stop-timeout", "old-daemon-force-refusal"],
+)
+def test_stop_cli_cases(monkeypatch, tmp_path, capsys, case, force, exit_code, message) -> None:
+    from refract import daemon_control
+    from refract.cli import main
+    from refract.daemon_control import ShutdownFailure
+
+    home = tmp_path / "refract"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\n'
+        'backend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n', encoding="utf-8",
+    )
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+    daemon = None if case in {"missing", "manual"} else ("token", "127.0.0.1", 9911, 123)
+    monkeypatch.setattr(daemon_control, "read_daemon_file", lambda: daemon)
+    monkeypatch.setattr(daemon_control, "configured_endpoint", lambda: ("127.0.0.1", 9911))
+    monkeypatch.setattr(daemon_control, "port_open", lambda *_: case == "manual")
+    calls = []
+
+    def post(_token, _host, _port, timeout, *, force=False):
+        calls.append((force, timeout))
+        if case == "stale":
+            return True
+        if case in {"busy", "force-refused"}:
+            return b'{"stopping": false, "running": 2, "queued": 3}'
+        if case == "http":
+            return ShutdownFailure("http", 401)
+        if case == "http-404":
+            return ShutdownFailure("http", 404)
+        if case == "http-503":
+            return ShutdownFailure("http", 503)
+        if case == "post-timeout":
+            return ShutdownFailure("timeout")
+        if case == "unreachable":
+            return ShutdownFailure("unreachable")
+        return b'{"stopping": true, "running": 2, "queued": 3}'
+
+    monkeypatch.setattr(daemon_control, "post_shutdown", post)
+    wait_calls = []
+    monkeypatch.setattr(
+        daemon_control, "wait_for_stop",
+        lambda *args: wait_calls.append(args) or case != "wait-timeout",
+    )
+    argv = ["stop"] + (["--force"] if force else [])
+    with pytest.raises(SystemExit) as raised:
+        main(argv)
+
+    assert raised.value.code == exit_code
+    assert capsys.readouterr().out.strip() == message
+    assert calls == (
+        [] if case in {"missing", "manual"}
+        else [(force, daemon_control.SHUTDOWN_POST_TIMEOUT_S)]
+    )
+    assert bool(wait_calls) is (case in {"idle", "forced", "wait-timeout"})
+
+
+@pytest.mark.parametrize(("force", "expected_wait_s"), [(False, 10.0), (True, 30.0)])
+def test_stop_uses_force_specific_wait_timeout(monkeypatch, force, expected_wait_s) -> None:
+    from refract import daemon_control
+    from refract.cli import _stop_daemon
+
+    monkeypatch.setattr(
+        daemon_control, "read_daemon_file", lambda: ("token", "daemon-host", 8765, 123),
+    )
+    monkeypatch.setattr(
+        daemon_control, "post_shutdown",
+        lambda *_args, **_kwargs: b'{"stopping": true, "running": 1, "queued": 2}',
+    )
+    wait_args = []
+    monkeypatch.setattr(
+        daemon_control, "wait_for_stop", lambda *args: wait_args.append(args) or True,
+    )
+
+    assert _stop_daemon(force, lambda _message: None) is True
+    expected_timeout = (
+        daemon_control.FORCED_STOP_WAIT_S if force else daemon_control.STOP_WAIT_S
+    )
+    assert expected_timeout == expected_wait_s
+    assert wait_args[0][2] == expected_timeout
+    assert wait_args[0][3] == daemon_control.POLL_S
+
+
+@pytest.mark.parametrize(
+    ("case", "running_daemon", "force", "answers", "exit_code", "spawn_count", "message"),
+    [
+        ("start", False, False, True, 0, 1, "Started the Refract daemon."),
+        ("start-timeout", False, False, False, 1, 1, "Failed: the Refract daemon did not start in time."),
+        ("after-stop", True, False, True, 0, 1, "Started the Refract daemon."),
+        ("forced", True, True, True, 0, 1, "Started the Refract daemon."),
+        ("stale", True, False, True, 0, 1, "Started the Refract daemon."),
+        ("refused", True, False, True, 1, 0, "Refused: 2 running, 3 queued job(s)."),
+        ("stop-failed", True, False, True, 1, 0, "Failed: the daemon rejected shutdown (HTTP 503)."),
+    ],
+    ids=["no-daemon-running", "new-daemon-timeout", "stops-then-starts", "force", "stale-daemon-file", "stop-refused", "stop-failed"],
+)
+def test_restart_cli_cases(
+    monkeypatch, tmp_path, capsys, case, running_daemon, force, answers, exit_code, spawn_count, message
+) -> None:
+    from refract import daemon_control
+    from refract.cli import main
+
+    home = tmp_path / "refract"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\n'
+        'backend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n', encoding="utf-8",
+    )
+    monkeypatch.setenv("REFRACT_HOME", str(home))
+    monkeypatch.setattr(
+        daemon_control, "read_daemon_file",
+        lambda: ("token", "daemon-host", 8765, 123) if running_daemon else None,
+    )
+    monkeypatch.setattr(daemon_control, "configured_endpoint", lambda: ("127.0.0.1", 9911))
+    monkeypatch.setattr(daemon_control, "port_open", lambda *_: False)
+    post_calls = []
+    post_args = []
+
+    def post_shutdown(*args, **kwargs):
+        post_calls.append(kwargs.get("force", False))
+        post_args.append(args)
+        if case == "stale":
+            return True
+        return (
+            daemon_control.ShutdownFailure("http", 503) if case == "stop-failed"
+            else b'{"stopping": false, "running": 2, "queued": 3}' if case == "refused"
+            else b'{"stopping": true, "running": 0, "queued": 0}'
+        )
+
+    monkeypatch.setattr(daemon_control, "post_shutdown", post_shutdown)
+    stop_wait_args = []
+    monkeypatch.setattr(
+        daemon_control, "wait_for_stop", lambda *args: stop_wait_args.append(args) or True,
+    )
+    spawned = []
+    monkeypatch.setattr(daemon_control, "spawn_serve", lambda: spawned.append(True))
+    start_wait_args = []
+    monkeypatch.setattr(
+        daemon_control, "wait_until_answers",
+        lambda *args: start_wait_args.append(args) or answers,
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main(["restart"] + (["--force"] if force else []))
+
+    assert raised.value.code == exit_code
+    assert post_calls == ([force] if running_daemon else [])
+    assert post_args == (
+        [("token", "daemon-host", 8765, daemon_control.SHUTDOWN_POST_TIMEOUT_S)]
+        if running_daemon else []
+    )
+    assert stop_wait_args == (
+        [(
+            "daemon-host", 8765,
+            daemon_control.FORCED_STOP_WAIT_S if force else daemon_control.STOP_WAIT_S,
+            daemon_control.POLL_S,
+        )]
+        if running_daemon and case not in {"refused", "stop-failed", "stale"} else []
+    )
+    assert start_wait_args == (
+        [("127.0.0.1", 9911, daemon_control.START_WAIT_S, daemon_control.POLL_S)]
+        if spawn_count else []
+    )
+    assert len(spawned) == spawn_count
+    assert capsys.readouterr().out.strip().splitlines()[-1] == message
 
 
 @pytest.mark.parametrize("json_output", [True, False], ids=["json", "text"])

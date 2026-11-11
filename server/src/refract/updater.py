@@ -11,13 +11,11 @@ import os
 import re
 import shlex
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 import time
 import tomllib
-import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -33,7 +31,20 @@ if sys.platform == "win32":
 else:
     import fcntl
 
-from refract.config import DEFAULT_PORT, refract_home
+from refract.config import refract_home
+from refract.daemon_control import (
+    Endpoint,
+    ShutdownFailure,
+    wait_until_answers,
+)
+from refract.daemon_control import configured_endpoint as _configured_endpoint
+from refract.daemon_control import daemon_answers as _daemon_answers
+from refract.daemon_control import port_open as _port_open
+from refract.daemon_control import post_shutdown as _post_shutdown
+from refract.daemon_control import read_daemon_file as _read_daemon_file
+from refract.daemon_control import shutdown_reply as _shutdown_reply
+from refract.daemon_control import spawn_serve as _spawn_serve
+from refract.daemon_control import wait_for_stop as _wait_for_stop
 from refract.processes import kill_process_tree, prepare_command, process_group_kwargs
 
 RELEASE_URL = "https://api.github.com/repos/sitien173/refract/releases/latest"
@@ -49,8 +60,6 @@ LATCH_WAIT_S = 10.0
 RESTART_WAIT_S = 10.0
 LATCH_POST_TIMEOUT_S = 5.0
 POLL_S = 0.1
-DAEMON_FILE = "daemon.json"
-MAX_REPLY_BYTES = 64 * 1024
 
 _TAG_RE = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+\Z")
 _VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\Z")
@@ -795,66 +804,7 @@ _MANUAL_STOP = (
 )
 _MAY_BE_STOPPING = "The daemon may be stopping; run: refract serve"
 _UNCHANGED = "Nothing was changed."
-_Endpoint = tuple[str, int]
-
-
-def _read_daemon_file() -> tuple[str, str, int] | None:
-    try:
-        data = json.loads((refract_home() / DAEMON_FILE).read_text())
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    token, host, port = data.get("token"), data.get("host"), data.get("port")
-    if not (isinstance(token, str) and token and isinstance(host, str) and host):
-        return None
-    if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
-        return None
-    return token, host, port
-
-
-def _netloc(host: str, port: int) -> str:
-    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
-
-
-def _port_open(host: str, port: int) -> bool:
-    try:
-        socket.create_connection((host, port), timeout=1.0).close()
-    except OSError:
-        return False
-    return True
-
-
-def _open_direct(request: str | urllib.request.Request, timeout: float):  # type: ignore[no-untyped-def]
-    """Open a loopback URL without proxies, so the bearer token only ever goes to the daemon."""
-    return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout)
-
-
-def _daemon_answers(host: str, port: int) -> bool:
-    """The `refract status` probe: any HTTP reply means running."""
-    try:
-        with _open_direct(f"http://{_netloc(host, port)}/mcp", 2):
-            return True
-    except HTTPError:
-        return True
-    except (OSError, URLError):
-        return False
-
-
-def _count(value: object) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-
-
-def _configured_endpoint() -> _Endpoint:
-    """The daemon host and port from [daemon] in config.toml, without full validation."""
-    try:
-        daemon = tomllib.loads((refract_home() / "config.toml").read_text()).get("daemon")
-    except (OSError, ValueError):
-        daemon = None
-    daemon = daemon if isinstance(daemon, dict) else {}
-    host, port = daemon.get("host"), daemon.get("port")
-    ok_port = isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536
-    return (host if isinstance(host, str) and host else "127.0.0.1"), (port if ok_port else DEFAULT_PORT)
+_Endpoint = Endpoint
 
 
 def _shutdown_http_failure(code: int) -> str:
@@ -867,52 +817,12 @@ def _shutdown_http_failure(code: int) -> str:
     return f"Failed: the daemon answered HTTP {code}. {_UNCHANGED}"
 
 
-def _post_shutdown(token: str, host: str, port: int, out: Callable[[str], None]) -> bytes | bool:
-    """POST the shutdown request. Returns the raw reply, True to proceed (nothing is listening), or False after reporting a failure."""
-    request = urllib.request.Request(
-        f"http://{_netloc(host, port)}/dashboard/api/shutdown",
-        data=b"",
-        method="POST",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    try:
-        with _open_direct(request, LATCH_POST_TIMEOUT_S) as response:
-            return response.read(MAX_REPLY_BYTES)
-    except HTTPError as exc:
-        out(_shutdown_http_failure(exc.code))
-    except (URLError, OSError) as exc:
-        reason = getattr(exc, "reason", exc)
-        if isinstance(reason, ConnectionRefusedError):
-            return True
-        if isinstance(reason, TimeoutError):
-            out(f"Failed: the daemon did not answer in time. {_MAY_BE_STOPPING} No update was applied.")
-        else:
-            out(f"Failed: cannot reach the daemon. {_UNCHANGED}")
-    return False
-
-
-def _shutdown_reply(raw: bytes) -> tuple[bool, int, int] | None:
-    """(stopping, running, queued) from the shutdown reply, or None when it is unreadable."""
-    try:
-        reply = json.loads(raw)
-    except ValueError:
-        reply = None
-    if not isinstance(reply, dict):
-        return None
-    stopping, running, queued = reply.get("stopping"), _count(reply.get("running")), _count(reply.get("queued"))
-    if not isinstance(stopping, bool) or running is None or queued is None:
-        return None
-    return stopping, running, queued
-
-
-def _wait_for_stop(host: str, port: int, out: Callable[[str], None]) -> bool:
-    deadline = time.monotonic() + LATCH_WAIT_S
-    while (refract_home() / DAEMON_FILE).exists() or _port_open(host, port):
-        if time.monotonic() >= deadline:
-            out(f"Failed: the daemon did not stop in time. {_MAY_BE_STOPPING} No update was applied.")
-            return False
-        time.sleep(POLL_S)
-    return True
+def _shutdown_failure_text(failure: ShutdownFailure) -> str:
+    if failure.kind == "http":
+        return _shutdown_http_failure(failure.code or 0)
+    if failure.kind == "timeout":
+        return f"Failed: the daemon did not answer in time. {_MAY_BE_STOPPING} No update was applied."
+    return f"Failed: cannot reach the daemon. {_UNCHANGED}"
 
 
 def _latch(out: Callable[[str], None]) -> tuple[bool, _Endpoint | None]:
@@ -924,8 +834,11 @@ def _latch(out: Callable[[str], None]) -> tuple[bool, _Endpoint | None]:
             out(_MANUAL_STOP)
             return False, None
         return True, None
-    token, host, port = info
-    raw = _post_shutdown(token, host, port, out)
+    token, host, port, _pid = info
+    raw = _post_shutdown(token, host, port, LATCH_POST_TIMEOUT_S)
+    if isinstance(raw, ShutdownFailure):
+        out(_shutdown_failure_text(raw))
+        return False, None
     if isinstance(raw, bool):
         return raw, None
     reply = _shutdown_reply(raw)
@@ -936,7 +849,8 @@ def _latch(out: Callable[[str], None]) -> tuple[bool, _Endpoint | None]:
     if not stopping:
         out(f"Refused: {running} running, {queued} queued job(s). {_UNCHANGED}")
         return False, None
-    if not _wait_for_stop(host, port, out):
+    if not _wait_for_stop(host, port, LATCH_WAIT_S, POLL_S):
+        out(f"Failed: the daemon did not stop in time. {_MAY_BE_STOPPING} No update was applied.")
         return False, None
     return True, (host, port)
 
@@ -1128,29 +1042,14 @@ def _apply_updates(installs: list[Install], result: CheckResult) -> list[Outcome
     return outcomes
 
 
-def _spawn_serve() -> None:
-    subprocess.Popen(
-        [shutil.which("refract") or "refract", "serve"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-
-
 def _restart() -> bool:
     """Spawn a detached daemon and wait for the `refract status` probe to see it on the configured endpoint."""
     try:
         _spawn_serve()
     except OSError:
         return False
-    endpoint = _configured_endpoint()
-    deadline = time.monotonic() + RESTART_WAIT_S
-    while not _daemon_answers(*endpoint):
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(POLL_S)
-    return True
+    host, port = _configured_endpoint()
+    return wait_until_answers(host, port, RESTART_WAIT_S, POLL_S, _daemon_answers)
 
 
 def _line(outcome: Outcome) -> str:
