@@ -369,6 +369,10 @@ class Runtime:
                 return
             now = utc_now()
             with self._feature_lock:
+                # Coarse clocks such as Windows can repeat a timestamp; a repeated period start would reuse the outbox key and drop counts.
+                start = datetime.fromisoformat(self._feature_period_start)
+                if datetime.fromisoformat(now) <= start:
+                    now = (start + timedelta(microseconds=1)).isoformat()
                 counts, self._feature_counts = self._feature_counts, {}
                 period_start, self._feature_period_start = self._feature_period_start, now
             events = [(f"features:{period_start}", build_features_event(period_start, now, counts))] if counts else []

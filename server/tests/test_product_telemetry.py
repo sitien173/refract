@@ -1426,6 +1426,22 @@ async def test_cancel_after_features_commit_does_not_restore_counts_or_lose_late
 
 
 @pytest.mark.asyncio
+async def test_flushes_within_one_clock_tick_keep_separate_feature_events(config_factory, monkeypatch) -> None:
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
+    monkeypatch.setattr("refract.runtime.utc_now", lambda: "2026-11-11T00:00:00+00:00")
+    runtime = Runtime(config_factory(enabled=True))
+    try:
+        runtime.count_feature("mcp.submit")
+        await runtime._flush_telemetry()
+        runtime.count_feature("mcp.wait")
+        await runtime._flush_telemetry()
+        features = [value["counts"] for key, value in _outbox(runtime).items() if key.startswith("features:")]
+        assert sorted(features, key=lambda counts: sorted(counts)) == [{"mcp.submit": 1}, {"mcp.wait": 1}]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_close_waits_for_an_in_flight_sender_database_call_before_closing_sqlite(config_factory, monkeypatch) -> None:
     from refract.product_telemetry import send_outbox_once
 
