@@ -13,11 +13,11 @@ if grep -R -n -i -E 'openmcp|superpowers|ccg' \
 fi
 
 rc=0; git -c core.excludesFile=/dev/null check-ignore -q --no-index ../.agents/plugins/marketplace.json || rc=$?
-[ "$rc" -eq 1 ] || { printf 'codex marketplace manifest is git-ignored or not in a git tree\n' >&2; exit 1; }
+[[ "$rc" -eq 1 ]] || { printf 'codex marketplace manifest is git-ignored or not in a git tree\n' >&2; exit 1; }
 
 # Nested `.agents` directories stay ignored.
 rc=0; git -c core.excludesFile=/dev/null check-ignore -q ../server/.agents/x || rc=$?
-[ "$rc" -eq 0 ] || { printf 'nested .agents directory is not git-ignored\n' >&2; exit 1; }
+[[ "$rc" -eq 0 ]] || { printf 'nested .agents directory is not git-ignored\n' >&2; exit 1; }
 
 python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" hooks/refract-session-start.py
 

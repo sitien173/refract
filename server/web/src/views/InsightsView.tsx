@@ -79,7 +79,7 @@ export function fillDays(daily: Record<string, { succeeded: number; failed: numb
     daySet.add(k);
   }
 
-  const sortedKeys = Array.from(daySet).sort();
+  const sortedKeys = Array.from(daySet).sort((a, b) => a.localeCompare(b));
   return sortedKeys.map((key) => ({
     day: key,
     succeeded: daily[key]?.succeeded ?? 0,
