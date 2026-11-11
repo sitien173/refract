@@ -4,12 +4,18 @@ test("insights shows seeded job metrics and switches the window", async ({ page 
   await page.goto("/dashboard/insights");
   await expect(page.getByRole("heading", { name: "Insights" })).toBeVisible();
 
-  const jobsFinished = page.getByText("Jobs finished", { exact: true }).locator("xpath=following-sibling::dd");
-  await expect(jobsFinished).toHaveText("101");
+  // Other e2e tests finish jobs on the same daemon, so count only the seeded profile's row.
+  await expect(page.getByText("Jobs finished", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "7 days" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("group", { name: /^Daily jobs finished/ })).toBeVisible();
   const breakdownTable = page.getByRole("table", { name: "Jobs by profile, workflow, target, and state" });
   await expect(breakdownTable).toBeVisible();
+  const seededJobs = breakdownTable
+    .getByRole("row")
+    .filter({ has: page.getByRole("cell", { name: "seed", exact: true }) })
+    .getByRole("cell")
+    .last();
+  await expect(seededJobs).toHaveText("101");
   for (const heading of ["Profile", "Workflow", "Target", "State", "Jobs"]) {
     await expect(breakdownTable.getByRole("columnheader", { name: heading })).toBeVisible();
   }
@@ -18,8 +24,8 @@ test("insights shows seeded job metrics and switches the window", async ({ page 
 
   await page.getByRole("button", { name: "30 days" }).click();
   await expect(page.getByRole("button", { name: "30 days" })).toHaveAttribute("aria-pressed", "true");
-  await expect(jobsFinished).toHaveText("102");
+  await expect(seededJobs).toHaveText("102");
 
   await page.getByRole("button", { name: "1 day" }).click();
-  await expect(jobsFinished).toHaveText("101");
+  await expect(seededJobs).toHaveText("101");
 });
