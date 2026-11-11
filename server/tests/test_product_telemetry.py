@@ -249,6 +249,7 @@ async def test_consent_off_full_runtime_job_makes_no_network_or_telemetry_state(
     async def fake_execute(**kwargs):
         return DriverResult("SUCCESS", "", "result-sentinel", "", "", model="model")
     runtime.drivers.execute = fake_execute
+    runtime.drivers.available = lambda _target: True
     try:
         project = runtime.database.upsert_project(project_id="p", root=str(tmp_path))
         await runtime.start()
