@@ -138,6 +138,45 @@ def test_stats_zero_success_and_failure_count_has_zero_success_rate(metrics_db):
     assert result["work_delegated"]["daily"] == {}
 
 
+def _insert_models(metrics_db, *models):
+    metrics_db._connection.execute("DELETE FROM job_metrics")
+    metrics_db._connection.executemany(
+        "INSERT INTO job_metrics VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [(f"job-{index}", "2026-01-02T00:30:00+00:00", "workflow", "a", "codex", model,
+          "succeeded", None, 0, 100, 10, 0, 0, 1, 0, "")
+         for index, model in enumerate(models)],
+    )
+
+
+def test_stats_merges_prefixed_and_aliased_models_in_tokens_and_cost(metrics_db):
+    _insert_models(metrics_db, "gpt-6-luna", "openai-codex/gpt-6-luna", "Display L")
+    config = PricingConfig(
+        "USD", {"gpt-6-luna": ModelPricing(1, 0, 0, 0)}, {"Display L": "gpt-6-luna"})
+    result = get_stats(metrics_db, config, 7, now=datetime(2026, 1, 3, tzinfo=timezone.utc))
+    by_model = result["tokens"]["by_model"]
+    assert list(by_model) == ["gpt-6-luna"]
+    assert (by_model["gpt-6-luna"]["input"], by_model["gpt-6-luna"]["jobs"]) == (300, 3)
+    assert result["estimated_cost"]["by_model"] == {"gpt-6-luna": pytest.approx(0.0003)}
+    assert result["estimated_cost"]["unpriced_models"] == []
+
+
+def test_stats_lists_canonical_names_as_unpriced(metrics_db):
+    _insert_models(metrics_db, "p/x", "x")
+    result = get_stats(
+        metrics_db, PricingConfig(), 7, now=datetime(2026, 1, 3, tzinfo=timezone.utc))
+    assert list(result["tokens"]["by_model"]) == ["x"]
+    assert result["estimated_cost"]["unpriced_models"] == ["x"]
+    assert result["estimated_cost"]["by_model"] == {}
+
+
+def test_stats_cost_labels_are_token_labels(metrics_db):
+    _insert_models(metrics_db, "p/m", "", "other")
+    config = PricingConfig("USD", {"m": ModelPricing(1, 0, 0, 0), "": ModelPricing(1, 0, 0, 0)})
+    result = get_stats(metrics_db, config, 7, now=datetime(2026, 1, 3, tzinfo=timezone.utc))
+    assert set(result["estimated_cost"]["by_model"]) == {"m", "unassigned"}
+    assert set(result["estimated_cost"]["by_model"]) <= set(result["tokens"]["by_model"])
+
+
 def test_stats_labels_empty_backend_and_model_in_every_section_but_prices_raw_model(metrics_db):
     metrics_db._connection.execute(
         "INSERT INTO job_metrics VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

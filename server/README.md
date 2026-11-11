@@ -275,7 +275,7 @@ When telemetry turns off, the daemon deletes the outbox rows, the in-memory feat
 
 Estimated cost in [Stats](#stats) uses a price file that the daemon fetches from `https://raw.githubusercontent.com/sitien173/refract/refs/heads/main/server/config/pricing.toml`. Refract has no `[pricing]` config section. A leftover `[pricing]` section is ignored and produces a warning.
 
-The file is TOML with `schema = 1` and a `[pricing]` table. `currency` defaults to `"USD"`. Each `[pricing.models."<model>"]` table needs `input`, `output`, `cache_read`, and `cache_write`, as non-negative numbers per 1M tokens. `<model>` is the model string that stats display. The file is at most 64 KiB, and redirects are refused.
+The file is TOML with `schema = 1` and a `[pricing]` table. `currency` defaults to `"USD"`. Each `[pricing.models."<model>"]` table needs `input`, `output`, `cache_read`, and `cache_write`, as non-negative numbers per 1M tokens. `<model>` is the canonical model name that stats display: the reported string with any provider prefix removed (the text after the last `/`), then resolved through the optional `[pricing.aliases]` table. An alias maps an exact, case-sensitive display name to a priced model. The file is invalid when an alias target is not a priced model, an alias key is also a model key or is empty, or a model or alias key contains `/`. The file is at most 64 KiB, and redirects are refused.
 
 ```toml
 schema = 1
@@ -288,6 +288,9 @@ input = 0.0
 output = 0.0
 cache_read = 0.0
 cache_write = 0.0
+
+[pricing.aliases]
+"Example Model (High)" = "example-model"
 ```
 
 - The daemon fetches at start and then every 24 hours. After a failed fetch it retries after 1 hour and keeps the previous prices.
@@ -314,7 +317,7 @@ A window of N days covers the last N times 24 hours from the request time. It is
 | Work delegated | Jobs by workflow and state. Worker hours are `sum(duration_ms) / 3,600,000`. Success rate is `succeeded / (succeeded + failed)`. The daily series counts succeeded and failed jobs. |
 | Failover saves | `skipped_targets`: succeeded jobs that passed over at least one target. `retries`: succeeded jobs with more than one attempt. `retries_after_failure`: succeeded jobs in the window whose `retry_of` names a failed job anywhere in the retained metrics. Succeeded jobs with unknown values count under `unknown_skipped_targets` and `unknown_attempts`, not as zero. Jobs in other states are not counted in either. |
 | Tokens | For each backend, model, and target: uncached input, output, cache read, cache write, and job count. Cache hit ratio is `cache_read / (uncached_input + cache_read)`. |
-| Estimated cost | `(uncached_input * input + output * output + cache_read * cache_read + cache_write * cache_write) / 1e6`, using the fetched [Pricing](#pricing) file. The result has a total, a per-model breakdown, and a list of unpriced models. A job with no model appears as `unassigned` in the per-model breakdown, and the price lookup still uses the empty model string. A model without a price never fails the request. |
+| Estimated cost | `(uncached_input * input + output * output + cache_read * cache_read + cache_write * cache_write) / 1e6`, using the fetched [Pricing](#pricing) file. Rows group by canonical model name, so a provider-prefixed or aliased name merges into one row. The result has a total, a per-model breakdown, and a list of unpriced models. A job with no model appears as `unassigned` in the per-model breakdown, and the price lookup still uses the empty model string. A model without a price never fails the request. |
 
 Uncached input is `max(0, input - cache components)`, where the components are those that the backend already counts in `input`. These are `cache_read` for `codex`, and `cache_read` plus `cache_write` for `claude` and `pi`. For `agy` and an empty backend, Refract subtracts nothing. A job that ended before target selection appears as `unassigned`.
 

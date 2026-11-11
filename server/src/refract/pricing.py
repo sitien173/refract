@@ -48,19 +48,29 @@ class ModelPricing:
 class PricingConfig:
     currency: str = "USD"
     models: dict[str, ModelPricing] = field(default_factory=dict)
+    aliases: dict[str, str] = field(default_factory=dict)
+
+
+def canonical_model(raw: str, aliases: dict[str, str]) -> str:
+    """Drop a provider prefix, then apply one exact-match alias lookup."""
+    name = raw.rpartition("/")[2] or raw
+    return aliases.get(name, name)
 
 
 def parse_pricing(raw: Any) -> PricingConfig:
     if raw is None:
         return PricingConfig()
-    if not isinstance(raw, dict) or set(raw) - {"currency", "models"}:
+    if not isinstance(raw, dict) or set(raw) - {"currency", "models", "aliases"}:
         raise ValueError("Invalid pricing configuration")
     currency = raw.get("currency", "USD")
     models = raw.get("models", {})
+    aliases = raw.get("aliases", {})
     if not isinstance(currency, str) or not currency.strip():
         raise ValueError("pricing.currency must be a non-empty string")
     if not isinstance(models, dict):
         raise ValueError("pricing.models must be a TOML table")
+    if not isinstance(aliases, dict):
+        raise ValueError("pricing.aliases must be a TOML table")
     parsed: dict[str, ModelPricing] = {}
     for model, values in models.items():
         if not isinstance(values, dict) or set(values) != {"input", "output", "cache_read", "cache_write"}:
@@ -73,7 +83,14 @@ def parse_pricing(raw: Any) -> PricingConfig:
                 raise ValueError("Pricing values must be non-negative numbers")
             prices.append(float(value))
         parsed[model] = ModelPricing(*prices)
-    return PricingConfig(currency=currency.strip(), models=parsed)
+    if any("/" in model for model in parsed):
+        raise ValueError("Pricing model names must not contain '/'")
+    for alias, target in aliases.items():
+        if not alias or "/" in alias or alias in parsed:
+            raise ValueError("Invalid pricing alias name")
+        if not isinstance(target, str) or target not in parsed:
+            raise ValueError("Pricing alias targets must name a priced model")
+    return PricingConfig(currency=currency.strip(), models=parsed, aliases=dict(aliases))
 
 
 def parse_pricing_file(data: bytes) -> PricingConfig:

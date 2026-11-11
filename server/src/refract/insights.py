@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from refract.pricing import PricingConfig
+from refract.pricing import PricingConfig, canonical_model
 
 INPUT_INCLUDES_CACHE_COMPONENTS = {
     "codex": frozenset({"cache_read"}),
@@ -95,22 +95,23 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
         uncached = max(0, raw_input - included_cache)
         values = {"input": raw_input, "uncached_input": uncached, "output": row["tok_output"] or 0,
                   "cache_read": cache_read, "cache_write": cache_write}
+        canonical = canonical_model(row["model"] or "", pricing.aliases)
+        label = canonical or "unassigned"
         dimensions = ((by_backend, row["backend"] or "unassigned"),
-                      (by_model, row["model"] or "unassigned"),
+                      (by_model, label),
                       (by_target, row["target"] or "unassigned"))
         for mapping, key in dimensions:
             totals = token_accumulator(mapping, key)
             for name, value in values.items():
                 totals[name] += value
             totals["jobs"] += 1
-        price = pricing.models.get(row["model"])
+        price = pricing.models.get(canonical)
         if price is None:
-            unpriced.add(row["model"] or "unassigned")
+            unpriced.add(label)
             continue
         amount = (uncached * price.input + values["output"] * price.output
                   + cache_read * price.cache_read + values["cache_write"] * price.cache_write) / 1_000_000
         cost_total += amount
-        label = row["model"] or "unassigned"
         cost_models[label] = cost_models.get(label, 0.0) + amount
 
     def add_cache_ratio(values: dict[str, dict[str, int]]) -> dict[str, dict[str, int | float]]:

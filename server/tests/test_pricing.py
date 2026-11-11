@@ -22,6 +22,7 @@ from refract.pricing import (
     ModelPricing,
     PricingConfig,
     PricingError,
+    canonical_model,
     fetch_pricing,
     parse_pricing,
     parse_pricing_file,
@@ -37,6 +38,24 @@ def test_parse_pricing_none_returns_defaults() -> None:
 def test_parse_pricing_reads_currency_and_models() -> None:
     raw = {"currency": " EUR ", "models": {"m": {"input": 1, "output": 2.5, "cache_read": 0, "cache_write": 4}}}
     assert parse_pricing(raw) == PricingConfig("EUR", {"m": ModelPricing(1.0, 2.5, 0.0, 4.0)})
+
+
+@pytest.mark.parametrize(
+    ("raw", "aliases", "expected"),
+    [
+        ("openai-codex/gpt-6-luna", {}, "gpt-6-luna"),
+        ("a/b/m", {}, "m"),
+        ("foo/", {}, "foo/"),
+        ("Claude Opus 5.5", {"Claude Opus 5.5": "claude-opus-5-5"}, "claude-opus-5-5"),
+        ("x/Claude Opus 5.5", {"Claude Opus 5.5": "claude-opus-5-5"}, "claude-opus-5-5"),
+        ("", {}, ""),
+        ("claude opus 5.5", {"Claude Opus 5.5": "claude-opus-5-5"}, "claude opus 5.5"),
+    ],
+    ids=["prefix", "nested-prefix", "trailing-slash", "alias", "prefix-and-alias",
+         "empty", "case-sensitive"],
+)
+def test_canonical_model(raw, aliases, expected) -> None:
+    assert canonical_model(raw, aliases) == expected
 
 
 @pytest.mark.parametrize(
@@ -71,6 +90,48 @@ output = 2
 cache_read = 3
 cache_write = 4
 """
+
+
+_ONE_MODEL = {"m": {"input": 1, "output": 0, "cache_read": 0, "cache_write": 0}}
+
+
+def test_parse_pricing_reads_aliases() -> None:
+    raw = {"models": _ONE_MODEL, "aliases": {"Display M": "m"}}
+    assert parse_pricing(raw) == PricingConfig(
+        "USD", {"m": ModelPricing(1.0, 0.0, 0.0, 0.0)}, {"Display M": "m"})
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"models": _ONE_MODEL, "aliases": []}, "pricing.aliases must be a TOML table"),
+        ({"models": _ONE_MODEL, "aliases": {"A": 1}}, "alias targets must name a priced model"),
+        ({"models": _ONE_MODEL, "aliases": {"": "m"}}, "Invalid pricing alias name"),
+        ({"models": _ONE_MODEL, "aliases": {"A": "missing"}},
+         "alias targets must name a priced model"),
+        ({"models": {**_ONE_MODEL, "n": _ONE_MODEL["m"]}, "aliases": {"n": "m"}},
+         "Invalid pricing alias name"),
+        ({"models": {"p/m": _ONE_MODEL["m"]}}, "model names must not contain"),
+        ({"models": _ONE_MODEL, "aliases": {"p/A": "m"}}, "Invalid pricing alias name"),
+    ],
+    ids=["not-table", "non-string-value", "empty-key", "unpriced-target", "key-is-model",
+         "slash-in-model", "slash-in-alias"],
+)
+def test_parse_pricing_rejects_invalid_aliases(raw, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_pricing(raw)
+
+
+def test_parse_pricing_file_maps_invalid_alias_to_schema() -> None:
+    data = _VALID + b'\n[pricing.aliases]\n"A" = "missing"\n'
+    with pytest.raises(PricingError) as error:
+        parse_pricing_file(data)
+    assert error.value.reason == "schema"
+
+
+def test_parse_pricing_file_reads_aliases() -> None:
+    data = _VALID + b'\n[pricing.aliases]\n"A" = "m"\n'
+    assert parse_pricing_file(data).aliases == {"A": "m"}
 
 
 def test_parse_pricing_file_accepts_valid_file() -> None:
@@ -425,4 +486,7 @@ async def test_pricing_task_starts_and_close_does_not_wait_for_a_blocked_fetch(
 
 def test_repository_pricing_file_is_valid_and_prices_a_model() -> None:
     path = Path(__file__).resolve().parents[1] / "config" / "pricing.toml"
-    assert parse_pricing_file(path.read_bytes()).models
+    config = parse_pricing_file(path.read_bytes())
+    assert config.models
+    assert canonical_model("Claude Opus 5.5", config.aliases) == "claude-opus-5-5"
+    assert canonical_model("openai-codex/gpt-6-luna", config.aliases) in config.models
