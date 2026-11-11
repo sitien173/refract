@@ -7,9 +7,12 @@ import {
   getCard,
   getCards,
   getJob,
+  getStats,
   getTargets,
   isTerminalJobState,
   type JobDetail,
+  type StatsDays,
+  type StatsResponse,
   type TargetsResponse,
 } from "../api";
 
@@ -104,4 +107,19 @@ export function useCardDetail(
   }, [query.error, onNotFound]);
 
   return query;
+}
+
+/** `new Date().getTimezoneOffset()` is positive west of UTC; the stats API wants a UTC offset, east positive. */
+const browserUtcOffsetMinutes = () => -new Date().getTimezoneOffset() || 0;
+
+export function useStats(days: StatsDays, options?: { load?: (days: StatsDays, tzOffsetMinutes: number, signal?: AbortSignal) => Promise<StatsResponse>; enabled?: boolean }) {
+  const load = options?.load ?? getStats;
+  const enabled = options?.enabled ?? true;
+  const tzOffsetMinutes = browserUtcOffsetMinutes();
+
+  return useQuery({
+    queryKey: ["stats", days, tzOffsetMinutes],
+    queryFn: ({ signal }) => load(days, tzOffsetMinutes, signal),
+    enabled,
+  });
 }

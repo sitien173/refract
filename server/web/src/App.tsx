@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import type { DashboardApiError } from "./api";
+import type { DashboardApiError, StatsDays } from "./api";
 import { JobActions } from "./components/JobActions";
 import { ViewNav } from "./components/ViewNav";
-import { useBoardCards, useCardDetail, useJobDetail, useTargets } from "./hooks/queries";
+import { useBoardCards, useCardDetail, useJobDetail, useStats, useTargets } from "./hooks/queries";
 import { useJobActions } from "./hooks/useJobActions";
 import { useJobPages } from "./hooks/useJobPages";
 import { useJobTranscript } from "./hooks/useJobTranscript";
 import { type DashboardTab, jobPath, readRoute, tabUrl } from "./router";
 import { BoardView } from "./views/BoardView";
 import { ConsoleView } from "./views/ConsoleView";
+import { InsightsView } from "./views/InsightsView";
 import { TargetsView } from "./views/TargetsView";
 
 const CONSOLE_PATH = "/dashboard/";
@@ -26,6 +27,7 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 export function App() {
   const [route, setRoute] = useState(() => readRoute());
   const [announcement, setAnnouncement] = useState("");
+  const [statsDays, setStatsDays] = useState<StatsDays>(7);
 
   const navigate = useCallback((path: string, { keepAnnouncement = false, replace = false } = {}) => {
     if (replace) history.replaceState({}, "", path);
@@ -46,7 +48,7 @@ export function App() {
     setAnnouncement("Card not found");
   }, [navigate]);
 
-  const pages = useJobPages(route.filters, undefined, route.view !== "board");
+  const pages = useJobPages(route.filters, undefined, route.view !== "board" && route.view !== "insights");
 
   const detailQuery = useJobDetail(route.jobId, { onNotFound: clearSelection });
   const detail = detailQuery.data?.id === route.jobId ? detailQuery.data : null;
@@ -64,6 +66,9 @@ export function App() {
   const boardLoading = boardQuery.isLoading;
   const boardError = boardQuery.error ? (messageOf(boardQuery.error) ?? "Unable to load board.") : null;
   const boardTruncated = boardQuery.data?.truncated ?? false;
+
+  const statsQuery = useStats(statsDays, { enabled: route.view === "insights" });
+  const statsError = statsQuery.error ? (messageOf(statsQuery.error) ?? "Unable to load insights.") : null;
 
   const cardQuery = useCardDetail(route.cardId, { onNotFound: clearCardSelection });
   const cardDetail = cardQuery.data?.card.id === route.cardId ? cardQuery.data : null;
@@ -121,6 +126,10 @@ export function App() {
 
   if (route.view === "targets") {
     return <TargetsView targets={targets} config={config} loading={targetsLoading} error={targetsError} onNavigate={navigate} />;
+  }
+
+  if (route.view === "insights") {
+    return <InsightsView stats={statsQuery.data ?? null} days={statsDays} loading={statsQuery.isLoading} error={statsError} onDaysChange={setStatsDays} onNavigate={navigate} />;
   }
 
   if (route.view === "board") {

@@ -65,15 +65,16 @@ describe("BoardView", () => {
     expect(screen.getByRole("link", { name: "Board" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("renders five sections with aria-labelledby pointing to h2s holding labels and counts in column-major order", () => {
-    const { container } = render(<BoardView cards={sampleCards} options={defaultOptions} onNavigate={vi.fn()} onProjectChange={vi.fn()} />);
+  it("renders five sections with aria-labelledby pointing to h2s holding labels and counts in column-major order when a project is selected", () => {
+    const p1Cards = sampleCards.filter((c) => c.project_id === "p1");
+    const { container } = render(<BoardView cards={p1Cards} options={defaultOptions} project="p1" onNavigate={vi.fn()} onProjectChange={vi.fn()} />);
 
     const sections = container.querySelectorAll("section");
     expect(sections).toHaveLength(5);
 
     const expectedLabels = [
       { label: "TODO", count: 1 },
-      { label: "IN PROGRESS", count: 1 },
+      { label: "IN PROGRESS", count: 0 },
       { label: "IN REVIEW", count: 0 },
       { label: "DONE", count: 0 },
       { label: "CANCELLED", count: 0 },
@@ -91,6 +92,49 @@ describe("BoardView", () => {
       const ol = section.querySelector("ol");
       expect(ol).toBeTruthy();
     });
+  });
+
+  it("renders collapsible swimlanes ordered by newest updated_at with unique heading ids when no project is selected", () => {
+    const { container } = render(<BoardView cards={sampleCards} options={defaultOptions} onNavigate={vi.fn()} onProjectChange={vi.fn()} />);
+
+    const details = container.querySelectorAll("details");
+    expect(details).toHaveLength(2);
+
+    // project-beta has updated_at 02:30, project-alpha has 02:00
+    const summaries = container.querySelectorAll("summary");
+    expect(summaries[0]).toHaveTextContent("project-beta");
+    expect(summaries[0]).toHaveTextContent("1 card");
+    expect(summaries[1]).toHaveTextContent("project-alpha");
+    expect(summaries[1]).toHaveTextContent("1 card");
+
+    const rootSpan = summaries[0].querySelector("span[title='/home/user/project-beta']");
+    expect(rootSpan).toBeInTheDocument();
+    expect(rootSpan?.textContent).toBe("/home/user/project-beta");
+
+    // All swimlanes start open
+    for (const d of details) {
+      expect(d).toHaveAttribute("open");
+    }
+
+    // Check heading ids are unique across all sections
+    const sections = container.querySelectorAll("section");
+    expect(sections).toHaveLength(10);
+    const headingIds = new Set<string>();
+    for (const section of sections) {
+      const labelledBy = section.getAttribute("aria-labelledby");
+      expect(labelledBy).toBeTruthy();
+      if (labelledBy) {
+        expect(headingIds.has(labelledBy)).toBe(false);
+        headingIds.add(labelledBy);
+      }
+    }
+
+    // Per-card project-name line is dropped inside swimlanes
+    const cardLinks = container.querySelectorAll("li a");
+    expect(cardLinks).toHaveLength(2);
+    for (const link of cardLinks) {
+      expect(link.querySelector(".truncate")).toBeNull();
+    }
   });
 
   it("renders card content: clamped title, 8-char short ID, relative time, and linked job count", () => {
@@ -180,7 +224,7 @@ describe("BoardView", () => {
 
     fireEvent.click(trigger);
     await settle(300);
-    choose(screen.getByRole("option", { name: "p1" }));
+    choose(screen.getByRole("option", { name: "/home/user/project-alpha" }));
     expect(onProjectChange).toHaveBeenCalledWith("p1");
 
     fireEvent.click(trigger);
@@ -202,13 +246,69 @@ describe("BoardView", () => {
     expect(onNavigate).toHaveBeenCalledWith("/dashboard/board?project=p1&card=card-12345678-abcd");
   });
 
-  it("mounts CardPanel when cardId is set and closes it with onNavigate", () => {
+  it("mounts CardDialog when cardId is set and closes it when Close button is clicked", () => {
     const onNavigate = vi.fn();
     render(<BoardView cards={sampleCards} options={defaultOptions} cardId="card-12345678-abcd" project="p1" onNavigate={onNavigate} onProjectChange={vi.fn()} />);
 
-    expect(screen.getByRole("complementary", { name: "Card detail" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Card detail" });
+    expect(dialog).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    expect(onNavigate).toHaveBeenCalledTimes(1);
     expect(onNavigate).toHaveBeenCalledWith("/dashboard/board?project=p1");
+  });
+
+  it("closes CardDialog on Escape key", () => {
+    const onNavigate = vi.fn();
+    render(<BoardView cards={sampleCards} options={defaultOptions} cardId="card-12345678-abcd" project="p1" onNavigate={onNavigate} onProjectChange={vi.fn()} />);
+
+    const dialog = screen.getByRole("dialog", { name: "Card detail" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(onNavigate).toHaveBeenCalledWith("/dashboard/board?project=p1");
+  });
+
+  it("holds move announcement in the BoardView live region in closed state", async () => {
+    mockMotion();
+    const { container, rerender } = render(<BoardView cards={sampleCards} options={defaultOptions} onNavigate={vi.fn()} onProjectChange={vi.fn()} />);
+
+    const boardRegion = container.querySelector('[role="status"][aria-label="Announcements"]');
+    expect(boardRegion).toBeInTheDocument();
+    expect(boardRegion).toHaveTextContent("");
+
+    const updatedCards: CardSummary[] = [{ ...sampleCards[0], state: "in_review" }, sampleCards[1]];
+    rerender(<BoardView cards={updatedCards} options={defaultOptions} onNavigate={vi.fn()} onProjectChange={vi.fn()} />);
+    await settle(0);
+
+    expect(boardRegion).toHaveTextContent("'Implement coordinator kanban board' moved to IN REVIEW");
+  });
+
+  it("starts dialog region empty even with an earlier announcement, then shows a new move announcement in open state", async () => {
+    mockMotion();
+    const { rerender } = render(
+      <BoardView cards={sampleCards} options={defaultOptions} cardId="card-12345678-abcd" announcement="Earlier announcement" onNavigate={vi.fn()} onProjectChange={vi.fn()} />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Card detail" });
+    const dialogRegion = dialog.querySelector('[role="status"][aria-label="Announcements"]');
+    expect(dialogRegion).toBeInTheDocument();
+    expect(dialogRegion).toHaveTextContent("");
+
+    const updatedCards: CardSummary[] = [{ ...sampleCards[0], state: "in_review" }, sampleCards[1]];
+    rerender(<BoardView cards={updatedCards} options={defaultOptions} cardId="card-12345678-abcd" onNavigate={vi.fn()} onProjectChange={vi.fn()} />);
+    await settle(0);
+
+    expect(dialogRegion).toHaveTextContent("'Implement coordinator kanban board' moved to IN REVIEW");
+  });
+
+  it("holds the new announcement in the BoardView region on open-to-close rerender with cardId removed", async () => {
+    const { container, rerender } = render(<BoardView cards={sampleCards} options={defaultOptions} cardId="card-12345678-abcd" onNavigate={vi.fn()} onProjectChange={vi.fn()} />);
+
+    const boardRegion = container.querySelector('[role="status"][aria-label="Announcements"]');
+    expect(boardRegion).toBeInTheDocument();
+
+    rerender(<BoardView cards={sampleCards} options={defaultOptions} cardId={null} announcement="Card not found" onNavigate={vi.fn()} onProjectChange={vi.fn()} />);
+
+    expect(boardRegion).toHaveTextContent("Card not found");
   });
 
   describe("View transitions", () => {

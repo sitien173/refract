@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from types import SimpleNamespace
 from urllib.parse import unquote
 from typing import Any
@@ -15,6 +16,7 @@ from refract.dashboard import (
     register_dashboard_routes,
 )
 from refract.models import ActionResult, SubmissionResult
+from refract.pricing import PricingConfig
 from refract.runtime import OrchestrationError
 
 
@@ -424,6 +426,66 @@ async def test_post_answer_matching_stale_and_validation() -> None:
     assert status == 400
     assert body["code"] == "invalid_request"
     assert runtime.answer_calls == []
+
+
+def _stats_test_app() -> tuple[Starlette, sqlite3.Connection]:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    connection.execute("""CREATE TABLE job_metrics (job_id TEXT, finished_at TEXT, workflow TEXT,
+        target TEXT, backend TEXT, model TEXT, state TEXT, failure_kind TEXT, duration_ms INTEGER,
+        tok_input INTEGER, tok_output INTEGER, tok_cache_read INTEGER, tok_cache_write INTEGER,
+        attempts INTEGER, skipped_targets INTEGER, retry_of TEXT)""")
+    runtime = SimpleNamespace(database=SimpleNamespace(_connection=connection),
+                              pricing=PricingConfig())
+    return Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime))), connection
+
+
+@pytest.mark.asyncio
+async def test_stats_api_returns_valid_body() -> None:
+    app, connection = _stats_test_app()
+    try:
+        status, body, _ = await api_request(app, "/dashboard/api/stats?days=7", method="GET")
+        assert status == 200
+        assert body["days"] == 7
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_stats_api_rejects_days_two() -> None:
+    app, connection = _stats_test_app()
+    try:
+        status, body, _ = await api_request(app, "/dashboard/api/stats?days=2", method="GET")
+        assert status == 400
+        assert "days" in body["error"]
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_stats_api_rejects_non_integer_timezone_offset() -> None:
+    app, connection = _stats_test_app()
+    try:
+        status, body, _ = await api_request(
+            app, "/dashboard/api/stats?tz_offset_minutes=no", method="GET"
+        )
+        assert status == 400
+        assert "tz_offset_minutes" in body["error"]
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_stats_api_rejects_out_of_range_timezone_offset() -> None:
+    app, connection = _stats_test_app()
+    try:
+        status, body, _ = await api_request(
+            app, "/dashboard/api/stats?tz_offset_minutes=999999999999", method="GET"
+        )
+        assert status == 400
+        assert body["error"] == "tz_offset_minutes must be an integer between -1440 and 1440"
+    finally:
+        connection.close()
 
 
 @pytest.mark.asyncio
@@ -1350,3 +1412,34 @@ async def test_ask_route_maps_registry_errors(error, status, message, code) -> N
     )
     assert (got_status, parsed["error"], parsed["code"]) == (status, message, code)
     assert registry.calls[0]["timeout_s"] == 9
+
+
+@pytest.mark.asyncio
+async def test_telemetry_status_route_returns_runtime_status_before_api_fallback() -> None:
+    status = {"enabled": False, "source": "default", "endpoint": "https://example.invalid", "install_id": None,
+              "queued": 0, "last_send_at": None, "last_error": None, "next_batch": None}
+    runtime = SimpleNamespace(telemetry_status=lambda: status)
+    app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
+    code, body, headers = await api_request(app, "/dashboard/api/telemetry", method="GET")
+    assert (code, body) == (200, status)
+    assert headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_telemetry_status_route_is_loopback_only() -> None:
+    runtime = SimpleNamespace(telemetry_status=lambda: {"enabled": True})
+    app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
+    code, _body, _headers = await api_request(app, "/dashboard/api/telemetry", method="GET", client_host="203.0.113.9")
+    assert code == 403
+    code, _body, _headers = await api_request(
+        app, "/dashboard/api/telemetry", method="GET", headers=(("Host", "evil.example:8765"),),
+    )
+    assert code == 403
+
+
+@pytest.mark.asyncio
+async def test_telemetry_status_route_without_runtime_reports_unavailable() -> None:
+    app = Starlette(routes=register_dashboard_routes(DashboardState()))
+    code, body, _headers = await api_request(app, "/dashboard/api/telemetry", method="GET")
+    assert code == 503
+    assert body["code"] == "runtime_unavailable"

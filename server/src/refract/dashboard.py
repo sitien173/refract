@@ -16,11 +16,13 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from refract.ask import AskAuthError, AskConflictError
+from refract.logging_setup import get_logger
 from refract.models import TERMINAL_STATES
 from refract.runtime import OrchestrationError
 from refract.workers import run_sync
 
 
+log = get_logger("dashboard")
 DASHBOARD_HEADER = "X-Refract-Dashboard"
 DASHBOARD_HEADER_VALUE = "1"
 _RUNTIME_INACTIVE = "Refract runtime is not active"
@@ -94,6 +96,15 @@ def _runtime(state: DashboardState) -> Any:
     if state.runtime is None:
         raise RuntimeError(_RUNTIME_INACTIVE)
     return state.runtime
+
+
+def _count_feature(state: DashboardState, name: str) -> None:
+    try:
+        runtime = state.runtime
+        if runtime is not None and runtime.telemetry_enabled:
+            runtime.count_feature(name)
+    except Exception:
+        log.warning("Feature count failed", extra={"event": "telemetry.count_failed"}, exc_info=True)
 
 
 def _runtime_error() -> Response:
@@ -220,6 +231,7 @@ def _register_ask_routes(state: DashboardState) -> list[Route]:
         except RuntimeError:
             return _runtime_error()
 
+        _count_feature(state, "ask")
         body = await _read_ask_body(request)
         if isinstance(body, Response):
             return body
@@ -699,22 +711,55 @@ def _register_app_routes() -> list[Route]:
 
 
 def _register_api_routes(state: DashboardState) -> list[Route]:
+    def stats(request: Request) -> Response:
+        _count_feature(state, "dashboard.stats")
+        runtime = _api_runtime(state)
+        if isinstance(runtime, Response):
+            return runtime
+        days_raw = request.query_params.get("days", "7")
+        try:
+            days = int(days_raw)
+        except ValueError:
+            return _api_error("days must be one of 1, 7, 30, or 365", 400, code="invalid_request")
+        offset_raw = request.query_params.get("tz_offset_minutes", "0")
+        try:
+            offset = int(offset_raw)
+        except ValueError:
+            return _api_error("tz_offset_minutes must be an integer", 400, code="invalid_request")
+        from refract.insights import get_stats
+        try:
+            return _api_json_response(get_stats(runtime.database, runtime.pricing, days, offset))
+        except ValueError as exc:
+            return _api_error(str(exc), 400, code="invalid_request")
+
+    def telemetry(request: Request) -> Response:
+        runtime = _api_runtime(state)
+        if isinstance(runtime, Response):
+            return runtime
+        return _api_json_response(runtime.telemetry_status())
+
     def jobs(request: Request) -> Response:
+        _count_feature(state, "dashboard.jobs")
         return _api_get_jobs(state, request)
 
     def output(request: Request) -> Response:
+        _count_feature(state, "dashboard.output")
         return _api_get_job_output(state, request)
 
     def job_detail(request: Request) -> Response:
+        _count_feature(state, "dashboard.job_detail")
         return _api_get_job_detail(state, request)
 
     def targets(request: Request) -> Response:
+        _count_feature(state, "dashboard.targets")
         return _api_get_targets(state)
 
     def cards(request: Request) -> Response:
+        _count_feature(state, "dashboard.cards")
         return _api_get_cards(state, request)
 
     def card(request: Request) -> Response:
+        _count_feature(state, "dashboard.card")
         return _api_get_card(state, request)
 
     all_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
@@ -722,6 +767,8 @@ def _register_api_routes(state: DashboardState) -> list[Route]:
     # Fallback for unknown /dashboard/api/* routes and unsupported HTTP methods on
     # registered API routes (which Starlette falls through to match here as JSON 404).
     return [
+        _loopback_route("/dashboard/api/stats", stats, methods=["GET"]),
+        _loopback_route("/dashboard/api/telemetry", telemetry, methods=["GET"]),
         _loopback_route("/dashboard/api/jobs", jobs, methods=["GET"]),
         _loopback_route("/dashboard/api/jobs/{job_id}/output", output, methods=["GET"]),
         _loopback_route("/dashboard/api/jobs/{job_id}", job_detail, methods=["GET"]),

@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { submitJob } from "./helpers";
 
-const jobButton = (page: import("@playwright/test").Page, id: string) => page.getByRole("button", { name: new RegExp(`^${id} `) });
+const sessionOf = (id: string) => id.replace(/^e2e-seed-0*(\d+)$/, "e2e-seed-$1");
+// Relies on the row's title and meta spans producing a whitespace-separated accessible name.
+const jobButton = (page: import("@playwright/test").Page, id: string) => page.getByRole("button", { name: new RegExp(`^consult · ${sessionOf(id)}(\\s|$)`) });
 
 test("deep links open a job and the targets view", async ({ page }) => {
   await page.goto("/dashboard/jobs/e2e-seed-042");

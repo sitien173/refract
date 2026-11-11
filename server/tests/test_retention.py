@@ -7,6 +7,48 @@ from refract.config import DaemonConfig
 from refract.runtime import Runtime
 
 
+def test_retention_prunes_old_jobs_but_keeps_metrics_until_365_days(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    runtime = Runtime(DaemonConfig(home=tmp_path))
+    database = runtime.database
+    try:
+        database.upsert_project(project_id="p", root="/p")
+        for job_id in ("eight-days", "four-hundred-days"):
+            database.create_job(
+                job_id=job_id, project_id="p", workflow="consult", profile="p",
+                prompt="hello", execution_plan_json="{}", session=job_id,
+            )
+            database.finish_job(job_id, "succeeded")
+        now = datetime.now(timezone.utc)
+        eight_days = (now - timedelta(days=8)).isoformat()
+        four_hundred_days = (now - timedelta(days=400)).isoformat()
+        with database._connection:
+            database._connection.execute(
+                "UPDATE jobs SET updated_at=? WHERE id IN ('eight-days', 'four-hundred-days')",
+                (eight_days,),
+            )
+            database._connection.execute(
+                "UPDATE job_metrics SET finished_at=? WHERE job_id='eight-days'", (eight_days,),
+            )
+            database._connection.execute(
+                "UPDATE job_metrics SET finished_at=? WHERE job_id='four-hundred-days'",
+                (four_hundred_days,),
+            )
+
+        runtime.prune_retained_transcripts()
+
+        assert database.job_record("eight-days") is None
+        assert database._connection.execute(
+            "SELECT 1 FROM job_metrics WHERE job_id='eight-days'"
+        ).fetchone() is not None
+        assert database._connection.execute(
+            "SELECT 1 FROM job_metrics WHERE job_id='four-hundred-days'"
+        ).fetchone() is None
+    finally:
+        database.close()
+
+
 def test_lifecycle_retention_preserves_active_and_recent_jobs(tmp_path):
     runtime = Runtime(DaemonConfig(home=tmp_path))
     db = runtime.database

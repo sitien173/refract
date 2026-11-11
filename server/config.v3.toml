@@ -20,6 +20,9 @@ backup_count = 5
 [notifications]
 enabled = false
 
+[telemetry]
+enabled = false
+
 [[targets]]
 id = "codex-high-code"
 backend = "codex"

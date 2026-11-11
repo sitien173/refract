@@ -301,11 +301,19 @@ def _record_sha(records: dict[str, list[dict[str, Any]]], plugin_id: str, scope:
     return None
 
 
+_MARKETPLACE_KEYS = ("path", "url", "source")
+
+
+def _item_marketplace(item: dict[str, Any]) -> str:
+    plugin_id = str(item.get("id") or item.get("name"))
+    return str(item.get("marketplace") or (plugin_id.split("@", 1) + [""])[1])
+
+
 def _marketplace_source(entry: dict[str, Any]) -> tuple[str, Path | None] | None:
     repo = entry.get("repo")
     if isinstance(repo, str) and repo.strip() and not repo.strip().startswith("-"):
         return _parse_source(f"github.com/{repo.strip()}", None)
-    for key in ("path", "url", "source"):
+    for key in _MARKETPLACE_KEYS:
         if key in entry:
             parsed = _parse_source(entry[key], None)
             if parsed is not None or key != "source":
@@ -324,7 +332,7 @@ def _claude_install(
     item: dict[str, Any], market_sources: dict[str, tuple[str, Path | None] | None], records: Any
 ) -> Install:
     plugin_id = str(item.get("id") or item.get("name"))
-    market = str(item.get("marketplace") or (plugin_id.split("@", 1) + [""])[1])
+    market = _item_marketplace(item)
     scope = item.get("scope") if isinstance(item.get("scope"), str) else None
     version = item.get("version") if _VERSION_RE.match(str(item.get("version"))) else None
     common = {
@@ -398,9 +406,17 @@ def _pi_install(entry: Any, base: Path) -> Install | None:
     return Install("pi", "clone", None, "local package", path=root, ref=source)
 
 
-def discover_pi() -> list[Install]:
+def _pi_agent_dir() -> Path:
     override = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
-    base = Path(override).expanduser() if override else Path.home() / ".pi" / "agent"
+    return Path(override).expanduser() if override else Path.home() / ".pi" / "agent"
+
+
+def discover_pi() -> list[Install]:
+    return discover_pi_at(_pi_agent_dir())
+
+
+def discover_pi_at(base: Path) -> list[Install]:
+    """Pi installs recorded in ``base/settings.json``; the installer reads ``<cwd>/.pi`` for ``-l``."""
     try:
         data = json.loads((base / "settings.json").read_text())
     except FileNotFoundError:

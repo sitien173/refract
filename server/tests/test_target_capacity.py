@@ -45,6 +45,51 @@ async def test_capacity_task_cancellation_does_not_leak_permit():
 
 
 @pytest.mark.asyncio
+async def test_full_first_target_records_zero_skipped_targets(tmp_path):
+    from dataclasses import replace
+    from refract.config import TargetConfig, TargetSelection
+    from refract.drivers import DriverResult
+    from refract.planning import resolve_execution_plan
+    from refract.runtime import Runtime
+    from refract.workflows import get_workflow
+    from tests.orchestration_helpers import FakeDrivers, config, repository, register_project
+
+    root = repository(tmp_path)
+    first = TargetConfig(id="full", backend="codex", max_concurrency=1)
+    second = TargetConfig(id="available", backend="codex")
+    selection = TargetSelection((first.id, second.id))
+    catalog = replace(
+        config(tmp_path / "home"), targets=(first, second),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+    runtime = Runtime(catalog)
+
+    class SelectedTargetDrivers(FakeDrivers):
+        async def execute(self, *, target, **kwargs):
+            assert target.id == "available"
+            return DriverResult("SUCCESS", "sid", "done", "", "")
+
+    runtime.drivers = SelectedTargetDrivers()
+    runtime.target_executor._target_active[first.id] = 1
+    plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
+    selected, rejected = runtime.target_executor._select_target(selection.targets, plan)
+    assert selected is second
+    assert rejected == 0
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "capacity metrics")
+        job = await runtime.wait(submission.job_id, 10)
+        assert job.state == "succeeded"
+        row = runtime.database._connection.execute(
+            "SELECT skipped_targets FROM job_metrics WHERE job_id=?", (submission.job_id,),
+        ).fetchone()
+        assert row["skipped_targets"] == 0
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_probe_ownership_during_retries_blocks_other_probe(tmp_path):
     from dataclasses import replace
     from refract.config import RetryPolicy, TargetConfig, TargetSelection
@@ -105,6 +150,6 @@ async def test_concurrent_probe_ownership_during_retries_blocks_other_probe(tmp_
         sub = await runtime.submit(project.id, "implement", "probe concurrency test")
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "succeeded"
-        assert concurrent_admitted == [None]
+        assert concurrent_admitted == [(None, 1)]
     finally:
         await runtime.close()

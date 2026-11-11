@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CardSummary } from "../api";
-import { BOARD_COLUMNS, COLUMN_LABELS, diffCardMoves, formatMoveAnnouncement, formatRelativeTime, shortCardId, sortCards } from "./board";
+import { BOARD_COLUMNS, COLUMN_LABELS, diffCardMoves, formatMoveAnnouncement, formatRelativeTime, getProjectName, shortCardId, sortCards } from "./board";
 
 const card = (id: string, overrides: Partial<CardSummary> = {}): CardSummary => ({
   id,
@@ -45,6 +45,24 @@ describe("board logic", () => {
 
   it("returns 8-character short ID", () => {
     expect(shortCardId("abcdef1234567890")).toBe("abcdef12");
+  });
+
+  describe("getProjectName", () => {
+    it("extracts project name from POSIX paths", () => {
+      expect(getProjectName("/path/to/project")).toBe("project");
+      expect(getProjectName("/path/to/project/")).toBe("project");
+    });
+
+    it("extracts project name from Windows backslash paths", () => {
+      expect(getProjectName("C:\\work\\repo")).toBe("repo");
+      expect(getProjectName("C:\\work\\repo\\")).toBe("repo");
+    });
+
+    it("handles mixed separators and root-only paths", () => {
+      expect(getProjectName("C:/work\\repo")).toBe("repo");
+      expect(getProjectName("/")).toBe("/");
+      expect(getProjectName("C:\\")).toBe("C:");
+    });
   });
 
   it("formats relative update time using Intl.RelativeTimeFormat", () => {

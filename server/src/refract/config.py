@@ -92,6 +92,11 @@ class NotificationsConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class TelemetryConfig:
+    enabled: bool | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class DaemonConfig:
     home: Path
     host: str = "127.0.0.1"
@@ -107,10 +112,12 @@ class DaemonConfig:
     config_loaded_at: str = ""
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     breaker_failure_threshold: int = 3
     breaker_base_cooldown_s: int = 60
     breaker_max_cooldown_s: int = 900
     ask_timeout_s: int = DEFAULT_ASK_TIMEOUT_S
+    ignored_keys: tuple[str, ...] = ()
 
     @property
     def database_path(self) -> Path:
@@ -614,6 +621,17 @@ def _notifications_config(raw: Any) -> NotificationsConfig:
     return NotificationsConfig(enabled=raw.get("enabled", False))
 
 
+def _telemetry_config(raw: Any) -> TelemetryConfig:
+    if raw is None:
+        return TelemetryConfig()
+    if not isinstance(raw, dict) or set(raw) - {"enabled", "endpoint"}:
+        raise ValueError("Invalid telemetry configuration")
+    enabled = raw.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError("telemetry.enabled must be true or false")
+    return TelemetryConfig(enabled)
+
+
 def load_config(path: Path | None = None) -> DaemonConfig:
     home = refract_home()
     config_path = path or home / _CONFIG_FILE
@@ -689,6 +707,8 @@ def _load_config_values(
         "targets",
         "profiles",
         "notifications",
+        "telemetry",
+        "pricing",
     }
     if unsupported:
         raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
@@ -748,10 +768,18 @@ def _load_config_values(
         profile_declarations=profile_declarations,
         logging=_logging_config(raw.get("logging"), home),
         notifications=_notifications_config(raw.get("notifications")),
+        telemetry=_telemetry_config(raw.get("telemetry")),
         breaker_failure_threshold=_positive_int(daemon.get("breaker_failure_threshold"), 3, "[daemon].breaker_failure_threshold"),
         breaker_base_cooldown_s=breaker_base,
         breaker_max_cooldown_s=breaker_max,
         ask_timeout_s=_positive_int(daemon.get("ask_timeout_s"), DEFAULT_ASK_TIMEOUT_S, "[daemon].ask_timeout_s"),
+        ignored_keys=(
+            *(("telemetry.endpoint",)
+              if isinstance(raw.get("telemetry"), dict) and "endpoint" in raw["telemetry"]
+              else ()),
+            # Pricing is fetched from the published file; a leftover section has no effect.
+            *(("pricing",) if "pricing" in raw else ()),
+        ),
     )
 
 

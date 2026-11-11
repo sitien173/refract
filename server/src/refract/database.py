@@ -17,11 +17,12 @@ from typing import Any, Sequence
 from refract.config_inspection import utc_now
 from refract.logging_setup import get_logger
 from refract.models import TERMINAL_STATES, JobResult, JobView, ProjectView
+from refract.product_telemetry import MAX_OUTBOX_AGE_DAYS, MAX_OUTBOX_ROWS
 
 log = get_logger("database")
 _BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
 _JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
-_SCHEMA_VERSION = 19
+_SCHEMA_VERSION = 21
 _TOKEN_COLUMNS = (
     ("context_used", "tok_context_used"),
     ("context_window", "tok_context_window"),
@@ -29,6 +30,36 @@ _TOKEN_COLUMNS = (
     ("output", "tok_output"),
     ("cache_read", "tok_cache_read"),
     ("cache_write", "tok_cache_write"),
+)
+_METRICS_DDL = (
+    """CREATE TABLE job_metrics (
+    job_id TEXT PRIMARY KEY,
+    finished_at TEXT NOT NULL,
+    profile TEXT NOT NULL DEFAULT '',
+    workflow TEXT NOT NULL,
+    target TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    model TEXT NOT NULL,
+    state TEXT NOT NULL,
+    failure_kind TEXT,
+    duration_ms INTEGER,
+    tok_input INTEGER,
+    tok_output INTEGER,
+    tok_cache_read INTEGER,
+    tok_cache_write INTEGER,
+    attempts INTEGER,
+    skipped_targets INTEGER,
+    retry_of TEXT NOT NULL DEFAULT ''
+)""",
+    "CREATE INDEX job_metrics_finished_idx ON job_metrics(finished_at)",
+    """CREATE TABLE telemetry_outbox (
+    id INTEGER PRIMARY KEY,
+    event_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    send_attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL
+)""",
 )
 _CARD_DDL = (
     """CREATE TABLE cards (
@@ -134,7 +165,19 @@ CREATE TABLE target_health (
 );
 CREATE INDEX jobs_state_idx ON jobs(state, created_at);
 CREATE INDEX jobs_project_idx ON jobs(project_id, updated_at);
-""" + "".join(f"{statement};\n" for statement in _CARD_DDL)
+""" + "".join(f"{statement};\n" for statement in (*_CARD_DDL, *_METRICS_DDL))
+
+
+def _backend_for_target(plan_json: str, target: str) -> str:
+    try:
+        targets = json.loads(plan_json).get("targets", [])
+        if isinstance(targets, list):
+            backend = next((item.get("backend") for item in targets
+                            if isinstance(item, dict) and item.get("id") == target), "")
+            return backend if isinstance(backend, str) else ""
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return ""
 
 
 def _token_values(tokens: dict[str, int | None] | None) -> tuple[int | None, ...]:
@@ -246,8 +289,10 @@ class Database:
                 f"The database at {self._path} uses schema {version}, which is newer than this Refract "
                 f"supports ({_SCHEMA_VERSION}). The database was not modified."
             )
-        if version == 18:
-            self._migrate_18_to_19()
+        if version in (18, 19):
+            self._migrate_from_18_or_19(version)
+        elif version == 20:
+            self._migrate_to_21()
         elif version != _SCHEMA_VERSION:
             if version is not None:
                 self._retire(version)
@@ -264,23 +309,61 @@ class Database:
         self._connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
         self._connection.commit()
 
-    def _migrate_18_to_19(self) -> None:
-        """Add the card tables in one transaction; any error rolls back and leaves schema 18."""
+    def _migrate_from_18_or_19(self, version: int) -> None:
+        """Add the card tables from schema 18, then the metrics tables and backfill, in one transaction.
+
+        Any error rolls back and leaves the original schema version.
+        """
         connection = self._connection
         connection.execute(_JOURNAL_MODE_WAL)
         connection.execute(_BEGIN_IMMEDIATE)
         try:
-            for statement in _CARD_DDL:
+            if version == 18:
+                for statement in _CARD_DDL:
+                    connection.execute(statement)
+            for statement in _METRICS_DDL:
                 connection.execute(statement)
-            connection.execute("PRAGMA user_version=19")
+            terminal_jobs = connection.execute(
+                "SELECT * FROM jobs WHERE state IN ('succeeded', 'failed', 'interrupted', 'cancelled')"
+            ).fetchall()
+            for job in terminal_jobs:
+                connection.execute(
+                    """INSERT INTO job_metrics(job_id, finished_at, profile, workflow, target, backend, model,
+                       state, failure_kind, duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write,
+                       attempts, skipped_targets, retry_of)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)""",
+                    (job["id"], job["finished_at"] or job["updated_at"], job["profile"], job["workflow"],
+                     job["target"] or "", _backend_for_target(job["execution_plan_json"], job["target"] or ""),
+                     job["model"] or "", job["state"], job["failure_kind"], job["duration_ms"],
+                     job["tok_input"], job["tok_output"], job["tok_cache_read"],
+                     job["tok_cache_write"], job["retry_of"]),
+                )
+            connection.execute("PRAGMA user_version=21")
             connection.execute("COMMIT")
         except BaseException:
             connection.execute("ROLLBACK")
             raise
-        log.info(
-            "Migrated database to schema 19",
-            extra={"event": "database.migrated", "schema_version": 19},
-        )
+
+    def _migrate_to_21(self) -> None:
+        """Add job_metrics.profile and backfill it from jobs still stored, in one transaction.
+
+        Metrics rows whose job was already pruned keep an empty profile. Any error rolls back and
+        leaves schema 20.
+        """
+        connection = self._connection
+        connection.execute(_JOURNAL_MODE_WAL)
+        connection.execute(_BEGIN_IMMEDIATE)
+        try:
+            connection.execute("ALTER TABLE job_metrics ADD COLUMN profile TEXT NOT NULL DEFAULT ''")
+            connection.execute(
+                "UPDATE job_metrics SET profile = (SELECT profile FROM jobs WHERE jobs.id = job_metrics.job_id) "
+                "WHERE job_id IN (SELECT id FROM jobs)"
+            )
+            connection.execute("PRAGMA user_version=21")
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
 
     def create_card(self, *, card_id: str, project_id: str, title: str, body: str, job_ids: Sequence[str]) -> dict[str, Any]:
         if not 1 <= len(title) <= _CARD_TITLE_MAX or not title.strip():
@@ -460,17 +543,23 @@ class Database:
         return self.results_dir / f"{job_id}.md"
 
     def interrupt_active_jobs(self) -> list[dict[str, Any]]:
-        rows = [
-            dict(row)
-            for row in self._connection.execute(
-                "SELECT * FROM jobs WHERE state='running' ORDER BY created_at"
-            ).fetchall()
-        ]
         with self._connection:
-            self._connection.execute(
-                "UPDATE jobs SET state='interrupted', updated_at=? WHERE state='running'",
-                (utc_now(),),
-            )
+            if not self._connection.in_transaction:
+                self._connection.execute(_BEGIN_IMMEDIATE)
+            rows = [
+                dict(row)
+                for row in self._connection.execute(
+                    "SELECT * FROM jobs WHERE state='running' ORDER BY created_at"
+                ).fetchall()
+            ]
+            updated_at = utc_now()
+            for row in rows:
+                changed = self._connection.execute(
+                    "UPDATE jobs SET state='interrupted', updated_at=? WHERE id=? AND state='running'",
+                    (updated_at, row["id"]),
+                ).rowcount
+                if changed:
+                    self._write_job_metrics(row["id"], updated_at, "interrupted", None, None, None)
         return rows
 
     def upsert_project(self, *, project_id: str, root: str) -> ProjectView:
@@ -569,11 +658,15 @@ class Database:
         model: str = "",
         duration_ms: int | None = None,
         tokens: dict[str, int | None] | None = None,
-    ) -> None:
+        attempts: int | None = None,
+        skipped_targets: int | None = None,
+    ) -> bool:
+        """Finish the job; report whether this call moved it out of a non-terminal state."""
         with self._connection:
-            self._finish(
+            return self._finish(
                 job_id, state, text=text, target=target, error=error,
                 failure_kind=failure_kind, model=model, duration_ms=duration_ms, tokens=tokens,
+                attempts=attempts, skipped_targets=skipped_targets,
             )
 
     def _finish(
@@ -588,10 +681,13 @@ class Database:
         model: str,
         duration_ms: int | None,
         tokens: dict[str, int | None] | None,
-    ) -> None:
+        attempts: int | None = None,
+        skipped_targets: int | None = None,
+    ) -> bool:
         if not self._connection.in_transaction:
             self._connection.execute(_BEGIN_IMMEDIATE)
-        row = self._connection.execute("SELECT project_id, session, workflow, target FROM jobs WHERE id=?", (job_id,)).fetchone()
+        row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        transitioned = row is not None and row["state"] not in TERMINAL_STATES
         self._connection.execute(
             """UPDATE jobs SET state=?, target=CASE WHEN ?='' THEN target ELSE ? END,
                error=?, failure_kind=?, model=?, duration_ms=?,
@@ -610,7 +706,29 @@ class Database:
                 sticky_target=excluded.sticky_target, updated_at=excluded.updated_at""",
                 (row["project_id"], row["session"], row["workflow"], target or row["target"], utc_now()),
             )
+        metrics_row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if metrics_row:
+            self._write_job_metrics(job_id, metrics_row["finished_at"], state, attempts, skipped_targets, metrics_row)
         self._write_result(job_id, text)
+        return transitioned
+
+    def _write_job_metrics(
+        self, job_id: str, finished_at: str, state: str, attempts: int | None,
+        skipped_targets: int | None, row: sqlite3.Row | None = None,
+    ) -> None:
+        row = row or self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            return
+        target = row["target"] or ""
+        backend = _backend_for_target(row["execution_plan_json"], target)
+        self._connection.execute(
+            """INSERT OR REPLACE INTO job_metrics(job_id, finished_at, profile, workflow, target, backend,
+               model, state, failure_kind, duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write,
+               attempts, skipped_targets, retry_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, finished_at, row["profile"], row["workflow"], target, backend, row["model"] or "", state,
+             row["failure_kind"], row["duration_ms"], row["tok_input"], row["tok_output"],
+             row["tok_cache_read"], row["tok_cache_write"], attempts, skipped_targets, row["retry_of"]),
+        )
 
     def _write_result(self, job_id: str, text: str) -> None:
         self.results_dir.mkdir(mode=0o700, exist_ok=True)
@@ -640,7 +758,9 @@ class Database:
         model: str = "",
         duration_ms: int | None = None,
         tokens: dict[str, int | None] | None = None,
-    ) -> None:
+        attempts: int | None = None,
+        skipped_targets: int | None = None,
+    ) -> bool:
         with self._connection:
             if not self._connection.in_transaction:
                 self._connection.execute(_BEGIN_IMMEDIATE)
@@ -648,9 +768,10 @@ class Database:
                 project_id=project_id, session=session, workflow=workflow,
                 target_key=target_key, backend_session_id=backend_session_id, clear_sessions=True,
             )
-            self._finish(
+            return self._finish(
                 job_id, "succeeded", text=text, target=target, error="",
                 failure_kind=failure_kind, model=model, duration_ms=duration_ms, tokens=tokens,
+                attempts=attempts, skipped_targets=skipped_targets,
             )
 
     def job(self, job_id: str) -> JobView | None:
@@ -785,6 +906,54 @@ class Database:
         descriptor = os.open(self.stream_path(job_id), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
             handle.write(payload)
+
+    def job_metrics_row(self, job_id: str) -> dict[str, Any] | None:
+        row = self._connection.execute(
+            "SELECT * FROM job_metrics WHERE job_id=?", (job_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def enqueue_telemetry(self, event_key: str, payload: str, now: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                "INSERT OR IGNORE INTO telemetry_outbox(event_key, created_at, payload, next_attempt_at) VALUES (?, ?, ?, ?)",
+                (event_key, now, payload, now),
+            )
+            self._connection.execute(
+                "DELETE FROM telemetry_outbox WHERE id IN (SELECT id FROM telemetry_outbox ORDER BY id DESC LIMIT -1 OFFSET ?)",
+                (MAX_OUTBOX_ROWS,),
+            )
+            cutoff = (datetime.fromisoformat(now) - timedelta(days=MAX_OUTBOX_AGE_DAYS)).isoformat()
+            self._connection.execute("DELETE FROM telemetry_outbox WHERE created_at < ?", (cutoff,))
+
+    def telemetry_batch(self, limit: int) -> list[dict[str, Any]]:
+        return [dict(row) for row in self._connection.execute(
+            "SELECT * FROM telemetry_outbox WHERE next_attempt_at <= ? ORDER BY id LIMIT ?",
+            (utc_now(), limit),
+        ).fetchall()]
+
+    def telemetry_queue_count(self) -> int:
+        return int(self._connection.execute("SELECT COUNT(*) FROM telemetry_outbox").fetchone()[0])
+
+    def delete_telemetry(self, row_ids: list[int]) -> None:
+        with self._connection:
+            self._connection.executemany("DELETE FROM telemetry_outbox WHERE id=?", [(item,) for item in row_ids])
+
+    def defer_telemetry(self, row_ids: list[int], delays: list[int]) -> None:
+        with self._connection:
+            for row_id, delay in zip(row_ids, delays):
+                self._connection.execute(
+                    "UPDATE telemetry_outbox SET send_attempts=send_attempts+1, next_attempt_at=? WHERE id=?",
+                    ((datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(), row_id),
+                )
+
+    def clear_telemetry_outbox(self) -> None:
+        with self._connection:
+            self._connection.execute("DELETE FROM telemetry_outbox")
+
+    def prune_job_metrics(self, cutoff: str) -> None:
+        with self._connection:
+            self._connection.execute("DELETE FROM job_metrics WHERE finished_at < ?", (cutoff,))
 
     def prune_history(self, older_than: str) -> None:
         """Delete terminal jobs older than the cutoff with their stream and result files."""

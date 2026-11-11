@@ -165,6 +165,59 @@ export const CardDetailResponseSchema = z.object({
 });
 export type CardDetailResponse = z.infer<typeof CardDetailResponseSchema>;
 
+const TokenTotalsSchema = z.object({
+  input: z.number(),
+  uncached_input: z.number(),
+  output: z.number(),
+  cache_read: z.number(),
+  cache_write: z.number(),
+  jobs: z.number(),
+  cache_hit_ratio: z.number(),
+});
+export type TokenTotals = z.infer<typeof TokenTotalsSchema>;
+
+export const StatsResponseSchema = z.object({
+  days: z.number(),
+  currency: z.string(),
+  work_delegated: z.object({
+    by_workflow: z.record(z.string(), z.record(z.string(), z.number())),
+    by_state: z.record(z.string(), z.number()),
+    breakdown: z.array(
+      z.object({
+        profile: z.string(),
+        workflow: z.string(),
+        target: z.string(),
+        state: z.string(),
+        jobs: z.number(),
+      }),
+    ),
+    worker_hours: z.number(),
+    success_rate: z.number(),
+    daily: z.record(z.string(), z.object({ succeeded: z.number(), failed: z.number() })),
+  }),
+  failover_saves: z.object({
+    skipped_targets: z.number(),
+    retries: z.number(),
+    retries_after_failure: z.number(),
+    unknown_skipped_targets: z.number(),
+    unknown_attempts: z.number(),
+  }),
+  tokens: z.object({
+    by_backend: z.record(z.string(), TokenTotalsSchema),
+    by_model: z.record(z.string(), TokenTotalsSchema),
+    by_target: z.record(z.string(), TokenTotalsSchema),
+  }),
+  estimated_cost: z.object({
+    total: z.number(),
+    by_model: z.record(z.string(), z.number()),
+    unpriced_models: z.array(z.string()),
+  }),
+});
+export const STATS_DAYS = [1, 7, 30, 365] as const;
+export type StatsDays = (typeof STATS_DAYS)[number];
+
+export type StatsResponse = z.infer<typeof StatsResponseSchema>;
+
 /** Job states after which a job never changes again (mirrors TERMINAL_STATES on the server). */
 export const TERMINAL_JOB_STATES: ReadonlySet<string> = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
 
@@ -255,6 +308,17 @@ export function getJobOutput(
 export function getTargets(fetcherOrSignal?: typeof fetch | AbortSignal | { signal?: AbortSignal; fetcher?: typeof fetch }, maybeSignal?: AbortSignal): Promise<TargetsResponse> {
   const { fetcher, signal } = resolveRequestOptions(fetcherOrSignal, maybeSignal);
   return request(TargetsResponseSchema, `${base}/targets`, { signal }, fetcher);
+}
+
+/** `tzOffsetMinutes` is the UTC offset in minutes, east positive; `-new Date().getTimezoneOffset()` in a browser. */
+export function getStats(
+  days: StatsDays,
+  tzOffsetMinutes: number,
+  fetcherOrSignal?: typeof fetch | AbortSignal | { signal?: AbortSignal; fetcher?: typeof fetch },
+  maybeSignal?: AbortSignal,
+): Promise<StatsResponse> {
+  const { fetcher, signal } = resolveRequestOptions(fetcherOrSignal, maybeSignal);
+  return request(StatsResponseSchema, `${base}/stats?days=${days}&tz_offset_minutes=${tzOffsetMinutes}`, { signal }, fetcher);
 }
 
 export function postJobAction(

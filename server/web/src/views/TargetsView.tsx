@@ -63,6 +63,28 @@ function TargetCard({ target }: { target: TargetView }) {
   );
 }
 
+type BackendGroup = {
+  backend: string;
+  targets: TargetView[];
+  healthyCount: number;
+};
+
+function groupTargetsByBackend(targets: readonly TargetView[]): BackendGroup[] {
+  const map = new Map<string, BackendGroup>();
+  for (const t of targets) {
+    let group = map.get(t.backend);
+    if (!group) {
+      group = { backend: t.backend, targets: [], healthyCount: 0 };
+      map.set(t.backend, group);
+    }
+    group.targets.push(t);
+    if (t.healthy) {
+      group.healthyCount += 1;
+    }
+  }
+  return [...map.values()].sort((a, b) => a.backend.localeCompare(b.backend));
+}
+
 export function TargetsView({ targets, config, loading, error, onNavigate }: TargetsViewProps) {
   return (
     <main className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
@@ -88,12 +110,25 @@ export function TargetsView({ targets, config, loading, error, onNavigate }: Tar
       {!loading && config && <ConfigurationSection config={config} />}
       {!loading && !error && targets.length === 0 && <p className="text-sm text-muted-foreground">No targets configured.</p>}
       {!loading && targets.length > 0 && (
-        <section aria-label="Targets" className="flex flex-col gap-3">
+        <section aria-label="Targets" className="flex flex-col gap-6">
           <h2 className="text-xl font-semibold tracking-tight">Targets</h2>
-          <div className="flex flex-col gap-4">
-            {targets.map((target) => (
-              <TargetCard key={target.id} target={target} />
-            ))}
+          <div className="flex flex-col gap-6">
+            {groupTargetsByBackend(targets).map((group, index) => {
+              const headingId = `backend-${index}-heading`;
+              const countText = group.targets.length === 1 ? "1 target" : `${group.targets.length} targets`;
+              return (
+                <section key={group.backend} aria-labelledby={headingId} className="flex flex-col gap-3">
+                  <h3 id={headingId} className="text-lg font-semibold tracking-tight">
+                    {group.backend} · {countText} · {group.healthyCount} healthy
+                  </h3>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {group.targets.map((target) => (
+                      <TargetCard key={target.id} target={target} />
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
           </div>
         </section>
       )}

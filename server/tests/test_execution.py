@@ -526,9 +526,10 @@ def test_half_open_probe_claim_is_not_leaked_when_target_at_capacity(tmp_path) -
     executor._target_active[targets[0].id] = targets[0].max_concurrency
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
 
-    selected = executor._select_target(plan.selection.targets, plan, "probe-job")
+    selected, skipped = executor._select_target(plan.selection.targets, plan, "probe-job")
 
     assert selected is targets[1]
+    assert skipped == 0
     assert database.target_health(probe_key)["probe_job_id"] == ""
     database.close()
 
@@ -3798,6 +3799,64 @@ class StreamingSequenceDrivers(FakeDrivers):
         return DriverResult("SUCCESS", "ok", "", "", "")
 
 
+@pytest.mark.asyncio
+async def test_same_target_retry_records_two_attempts_in_job_metrics(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    policy = RetryPolicy(1, ("rate_limit",), ())
+    target = TargetConfig(id="primary", backend="codex", retry=policy)
+    selection = TargetSelection((target.id,))
+    catalog = replace(
+        config(tmp_path / "home"), targets=(target,),
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+    runtime = Runtime(catalog)
+    runtime.drivers = StreamingSequenceDrivers([
+        DriverResult("RETRYABLE", "", "", "temporary", "rate_limit"),
+        DriverResult("SUCCESS", "sid", "done", "", ""),
+    ])
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "retry metrics")
+        job = await runtime.wait(submission.job_id, 10)
+        assert job.state == "succeeded"
+        row = runtime.database._connection.execute(
+            "SELECT attempts FROM job_metrics WHERE job_id=?", (submission.job_id,),
+        ).fetchone()
+        assert row["attempts"] == 2
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_breaker_open_first_target_records_one_skipped_target(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    targets = (TargetConfig(id="blocked", backend="codex"), TargetConfig(id="available", backend="codex"))
+    selection = TargetSelection(("blocked", "available"))
+    catalog = replace(
+        config(tmp_path / "home"), targets=targets,
+        profiles={"balanced": {"implement": selection, "review": selection, "consult": selection}},
+    )
+    runtime = Runtime(catalog)
+    runtime.drivers = StreamingSequenceDrivers([DriverResult("SUCCESS", "sid", "done", "", "")])
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        first_key = target_execution_key(targets[0])
+        with runtime.database._connection:
+            runtime.database._connection.execute(
+                "INSERT INTO target_health(target_id, circuit_open_until, cooldown_s) VALUES (?, '2999-01-01T00:00:00+00:00', 60)",
+                (first_key,),
+            )
+        submission = await runtime.submit(project.id, "implement", "failover metrics")
+        job = await runtime.wait(submission.job_id, 10)
+        assert job.state == "succeeded"
+        row = runtime.database._connection.execute(
+            "SELECT target, skipped_targets FROM job_metrics WHERE job_id=?", (submission.job_id,),
+        ).fetchone()
+        assert tuple(row) == ("available", 1)
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio

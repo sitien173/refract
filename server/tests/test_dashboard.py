@@ -202,6 +202,8 @@ def test_routes_are_dashboard_routes_ask_and_actions():
         "/dashboard/api/jobs/{job_id}",
         "/dashboard/api/jobs/{job_id}/output",
         "/dashboard/api/targets",
+        "/dashboard/api/stats",
+        "/dashboard/api/telemetry",
         "/dashboard/api/cards",
         "/dashboard/api/cards/{card_id}",
         "/dashboard/api",
