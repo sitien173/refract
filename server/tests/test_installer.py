@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -520,3 +522,619 @@ def test_codex_other_marketplace_alone_is_not_installed(env: Env) -> None:
     assert code == 0
     assert "codex: not installed" in lines
     assert mutating(env) == []
+
+
+# --- agy-ide: destination, source, probe, and dry-run file plan -----------------
+
+
+def make_plugin_root(root: Path) -> Path:
+    manifest = root / ".antigravity-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"name": "refract"}))
+    return root
+
+
+IDE_MARKER = ".refract-agy-ide-install.json"
+
+
+def own_ide_copy(dst: Path) -> Path:
+    """Mark ``dst`` as a copy Refract made, the way an install does."""
+    (dst / IDE_MARKER).write_text(json.dumps({"owner": "refract", "path": str(dst.resolve())}))
+    return dst
+
+
+def mark_ide_present(env: Env) -> None:
+    (env.home / ".gemini" / "config").mkdir(parents=True)
+
+
+def snapshot(root: Path) -> list[Path]:
+    return sorted(root.rglob("*"))
+
+
+def test_agy_ide_is_a_host_with_user_and_project_scopes() -> None:
+    assert "agy-ide" in installer.HOSTS
+    assert installer._SCOPES_BY_HOST["agy-ide"] == ("user", "project")
+
+
+def test_agy_ide_scope_local_is_rejected_with_exit_2(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mark_ide_present(env)
+    code, lines = run("install", ["agy-ide"], scope="local")
+    assert code == 2
+    assert lines == []
+    assert "--scope local is not supported for agy-ide" in capsys.readouterr().err
+
+
+def test_agy_ide_destination_per_scope(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    cwd = env.home / "work"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    assert installer._agy_ide_destination("user") == (
+        env.home / ".gemini" / "config" / "plugins" / "refract"
+    )
+    assert installer._agy_ide_destination("project") == (
+        cwd.resolve() / ".agents" / "plugins" / "refract"
+    )
+
+
+def test_agy_ide_rejects_url_source(env: Env) -> None:
+    mark_ide_present(env)
+    code, lines = run("install", ["agy-ide"], dry_run=True)
+    assert code == 1
+    assert any("agy-ide: failed:" in line and "local path" in line for line in lines)
+    code, lines = run("install", ["agy-ide"], source="git@github.com:o/r.git", dry_run=True)
+    assert code == 1
+    assert any("local path" in line for line in lines)
+
+
+def test_agy_ide_plugin_root_from_repository_path(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    repo = tmp_path / "repo"
+    plugin = make_plugin_root(repo / "plugin")
+    assert installer._agy_ide_plugin_root(str(repo)) == plugin
+    code, lines = run("install", ["agy-ide"], source=str(repo), dry_run=True)
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    assert code == 0
+    assert lines[0] == "hosts: agy-ide"
+    assert f"agy-ide: would copy {plugin} -> {dst}" in lines
+    assert lines[-1] == "agy-ide: skipped (dry run)"
+
+
+def test_agy_ide_plugin_root_from_plugin_path(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    plugin = make_plugin_root(tmp_path / "plugin")
+    assert installer._agy_ide_plugin_root(str(plugin)) == plugin
+    code, lines = run("install", ["agy-ide"], source=str(plugin), dry_run=True)
+    assert code == 0
+    assert any(line.startswith(f"agy-ide: would copy {plugin} -> ") for line in lines)
+
+
+def test_agy_ide_fails_without_manifest(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    (tmp_path / "empty" / "plugin").mkdir(parents=True)
+    code, lines = run("install", ["agy-ide"], source=str(tmp_path / "empty"), dry_run=True)
+    assert code == 1
+    assert any("agy-ide: failed:" in line and "plugin.json" in line for line in lines)
+
+
+@pytest.mark.parametrize("marker", [".gemini/antigravity-ide", ".gemini/config"])
+def test_agy_ide_probe_present(env: Env, marker: str) -> None:
+    (env.home / marker).mkdir(parents=True)
+    assert installer._agy_ide_present() is True
+
+
+def test_agy_ide_probe_absent_reports_failure(env: Env, tmp_path: Path) -> None:
+    plugin = make_plugin_root(tmp_path / "plugin")
+    assert installer._agy_ide_present() is False
+    code, lines = run("install", ["agy-ide"], source=str(plugin), dry_run=True)
+    assert code == 1
+    assert "agy-ide: failed: Antigravity IDE not found" in lines
+
+
+def test_all_includes_agy_ide_only_when_probe_succeeds(env: Env) -> None:
+    assert installer._expand_hosts(["all"]) == []
+    mark_ide_present(env)
+    assert installer._expand_hosts(["all"]) == ["agy-ide"]
+
+
+def test_agy_ide_install_dry_run_lines_and_no_writes(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    plugin = make_plugin_root(tmp_path / "plugin")
+    before = snapshot(env.home)
+    code, lines = run("install", ["agy-ide"], source=str(plugin), dry_run=True)
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    assert code == 0
+    assert lines == [
+        "hosts: agy-ide",
+        f"agy-ide: would copy {plugin} -> {dst}",
+        "agy-ide: skipped (dry run)",
+    ]
+    assert snapshot(env.home) == before
+
+
+def test_agy_ide_installed_detection_and_uninstall_dry_run(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    plugin = make_plugin_root(tmp_path / "plugin")
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    code, lines = run("uninstall", ["agy-ide"], dry_run=True)
+    assert (code, lines) == (0, ["hosts: agy-ide", "agy-ide: not installed"])
+    own_ide_copy(make_plugin_root(dst))
+    before = snapshot(env.home)
+    assert run("install", ["agy-ide"], source=str(plugin), dry_run=True)[1][-1] == (
+        "agy-ide: already installed"
+    )
+    code, lines = run("uninstall", ["agy-ide"], dry_run=True)
+    assert code == 0
+    assert lines == [
+        "hosts: agy-ide",
+        f"agy-ide: would remove {dst}",
+        "agy-ide: skipped (dry run)",
+    ]
+    assert snapshot(env.home) == before
+
+
+def test_agy_ide_detects_root_plugin_json(env: Env) -> None:
+    mark_ide_present(env)
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    dst.mkdir(parents=True)
+    (dst / "plugin.json").write_text(json.dumps({"name": "refract"}))
+    own_ide_copy(dst)
+    assert run("uninstall", ["agy-ide"], dry_run=True)[1][1] == f"agy-ide: would remove {dst}"
+    (dst / "plugin.json").write_text(json.dumps({"name": "other"}))
+    failure = run("uninstall", ["agy-ide"], dry_run=True)[1][1]
+    assert failure.startswith("agy-ide: failed:")
+    assert "not a Refract plugin" in failure
+
+
+def test_agy_ide_project_scope_dry_run(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = make_plugin_root(tmp_path / "plugin")
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    code, lines = run("install", ["agy-ide"], scope="project", source=str(plugin), dry_run=True)
+    dst = cwd.resolve() / ".agents" / "plugins" / "refract"
+    assert code == 0
+    assert f"agy-ide: would copy {plugin} -> {dst}" in lines
+    assert not (cwd / ".agents").exists()
+
+
+def test_all_with_default_source_skips_agy_ide_and_exits_0(env: Env) -> None:
+    mark_ide_present(env)
+    for dry_run in (True, False):
+        code, lines = run("install", ["all"], dry_run=dry_run)
+        assert code == 0
+        assert lines == ["hosts: agy-ide", "agy-ide: skipped: needs --source <local path>"]
+
+
+def test_all_uninstall_with_agy_ide_not_installed_exits_0(env: Env) -> None:
+    mark_ide_present(env)
+    code, lines = run("uninstall", ["all"])
+    assert (code, lines) == (0, ["hosts: agy-ide", "agy-ide: not installed"])
+
+
+def test_named_agy_ide_with_default_source_still_fails(env: Env) -> None:
+    mark_ide_present(env)
+    code, lines = run("install", ["agy-ide"])
+    assert code == 1
+    assert "agy-ide: failed: agy-ide needs a local path source; pass --source <path>" in lines
+
+
+def tree(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def fake_plugin(root: Path) -> Path:
+    make_plugin_root(root)
+    (root / "skills" / "one").mkdir(parents=True)
+    (root / "skills" / "one" / "SKILL.md").write_bytes(b"# one\r\n\x00\xff")
+    (root / "hooks.json").write_text("{}")
+    return root
+
+
+def test_agy_ide_install_copies_the_tree_and_uninstall_removes_it(
+    env: Env, tmp_path: Path
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    code, lines = run("install", ["agy-ide"], source=str(plugin))
+    assert (code, lines) == (0, ["hosts: agy-ide", "agy-ide: installed"])
+    copied = tree(dst)
+    assert {k: v for k, v in copied.items() if k != IDE_MARKER} == tree(plugin)
+    assert IDE_MARKER in copied
+    assert not [p for p in dst.parent.iterdir() if p != dst]
+    code, lines = run("uninstall", ["agy-ide"])
+    assert (code, lines) == (0, ["hosts: agy-ide", "agy-ide: removed"])
+    assert not dst.exists()
+    assert (dst.parent).is_dir()
+    assert run("uninstall", ["agy-ide"]) == (0, ["hosts: agy-ide", "agy-ide: not installed"])
+
+
+def test_agy_ide_reinstall_is_a_noop(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    assert run("install", ["agy-ide"], source=str(plugin))[0] == 0
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    (dst / "skills" / "one" / "SKILL.md").write_text("edited")
+    before = tree(dst)
+    code, lines = run("install", ["agy-ide"], source=str(plugin))
+    assert (code, lines) == (0, ["hosts: agy-ide", "agy-ide: already installed"])
+    assert tree(dst) == before
+
+
+def test_agy_ide_project_scope_install_and_uninstall(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    assert run("install", ["agy-ide"], scope="project", source=str(plugin))[0] == 0
+    dst = cwd / ".agents" / "plugins" / "refract"
+    assert (dst / ".antigravity-plugin" / "plugin.json").is_file()
+    assert run("uninstall", ["agy-ide"], scope="project")[1][-1] == "agy-ide: removed"
+    assert not dst.exists()
+
+
+def test_agy_ide_uninstall_refuses_another_plugin(env: Env) -> None:
+    mark_ide_present(env)
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    make_plugin_root(dst)
+    (dst / ".antigravity-plugin" / "plugin.json").write_text(json.dumps({"name": "other"}))
+    own_ide_copy(dst)
+    before = tree(dst)
+    code, lines = run("uninstall", ["agy-ide"])
+    assert code == 1
+    assert lines[-1].startswith("agy-ide: failed:")
+    assert "not a Refract plugin" in lines[-1]
+    assert tree(dst) == before
+
+
+def test_agy_ide_uninstall_refuses_a_directory_without_a_manifest(env: Env) -> None:
+    mark_ide_present(env)
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    dst.mkdir(parents=True)
+    (dst / "notes.txt").write_text("keep")
+    code, lines = run("uninstall", ["agy-ide"])
+    assert code == 1
+    assert "not a Refract plugin" in lines[-1]
+    assert (dst / "notes.txt").read_text() == "keep"
+
+
+def test_agy_ide_uninstall_refuses_a_refract_manifest_without_the_marker(env: Env) -> None:
+    """The agy CLI stages its own refract manifest at this path; it must survive."""
+    mark_ide_present(env)
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    make_plugin_root(dst)
+    before = tree(dst)
+    for dry_run in (True, False):
+        code, lines = run("uninstall", ["agy-ide"], dry_run=dry_run)
+        assert code == 1
+        assert lines[-1].startswith("agy-ide: failed:")
+        assert "another tool" in lines[-1]
+        assert tree(dst) == before
+
+
+def test_agy_ide_uninstall_of_a_missing_destination_is_not_installed(env: Env) -> None:
+    mark_ide_present(env)
+    assert run("uninstall", ["agy-ide"]) == (0, ["hosts: agy-ide", "agy-ide: not installed"])
+
+
+def test_agy_ide_failed_copy_leaves_no_destination_or_temp_dir(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    parent = env.home / ".gemini" / "config" / "plugins"
+
+    def half_copy(src: Path, dst: Path, **kwargs: object) -> Path:
+        (dst / "hooks.json").write_text("{}")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(installer.shutil, "copytree", half_copy)
+    code, lines = run("install", ["agy-ide"], source=str(plugin))
+    assert code == 1
+    assert lines[1].startswith("agy-ide: failed:")
+    assert "disk full" in lines[1]
+    assert not (parent / "refract").exists()
+    assert list(parent.iterdir()) == []
+
+
+def test_agy_ide_install_into_an_existing_foreign_directory_fails_and_keeps_it(
+    env: Env, tmp_path: Path
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    dst.mkdir(parents=True)
+    (dst / "notes.txt").write_text("keep")
+    code, lines = run("install", ["agy-ide"], source=str(plugin))
+    assert code == 1
+    assert lines[-1].startswith("agy-ide: failed:")
+    assert tree(dst) == {"notes.txt": b"keep"}
+    assert [p.name for p in dst.parent.iterdir()] == ["refract"]
+
+
+def ide_dst(env: Env) -> Path:
+    return env.home / ".gemini" / "config" / "plugins" / "refract"
+
+
+def staging_leftovers(parent: Path) -> list[str]:
+    return sorted(p.name for p in parent.iterdir() if p.name.startswith(".refract-"))
+
+
+def test_apply_file_rechecks_the_marker_before_removing(env: Env) -> None:
+    dst = make_plugin_root(ide_dst(env))
+    before = tree(dst)
+    reason = installer._apply_file(installer._FileStep("remove", None, dst))
+    assert reason is not None
+    assert "no Refract install marker" in reason
+    assert tree(dst) == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_agy_ide_symlinked_destination_is_refused_at_plan_and_execute_time(
+    env: Env, tmp_path: Path
+) -> None:
+    mark_ide_present(env)
+    target = own_ide_copy(make_plugin_root(tmp_path / "elsewhere"))
+    dst = ide_dst(env)
+    dst.parent.mkdir(parents=True)
+    dst.symlink_to(target, target_is_directory=True)
+    before = tree(target)
+    for dry_run in (True, False):
+        code, lines = run("uninstall", ["agy-ide"], dry_run=dry_run)
+        assert code == 1
+        assert lines[-1] == f"agy-ide: failed: {dst} is a link; not removing it"
+    reason = installer._apply_file(installer._FileStep("remove", None, dst))
+    assert reason == f"{dst} is a link; not removing it"
+    assert dst.is_symlink()
+    assert tree(target) == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_agy_ide_symlinked_marker_is_not_ownership(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    dst = make_plugin_root(ide_dst(env))
+    real = own_ide_copy(make_plugin_root(tmp_path / "real"))
+    (dst / IDE_MARKER).symlink_to(real / IDE_MARKER)
+    # Even with a path that matches, a linked marker proves nothing.
+    (real / IDE_MARKER).write_text(json.dumps({"owner": "refract", "path": str(dst.resolve())}))
+    assert installer._agy_ide_owned(dst) is False
+    code, lines = run("uninstall", ["agy-ide"])
+    assert code == 1
+    assert "another tool" in lines[-1]
+    assert dst.is_dir()
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["not json", "[]", '{"owner": "other"}', '{"owner": "refract"}', '{"owner": "refract", "path": 3}'],
+    ids=["malformed", "not-object", "wrong-owner", "no-path-legacy", "bad-path"],
+)
+def test_agy_ide_unusable_marker_is_not_ownership(env: Env, content: str) -> None:
+    mark_ide_present(env)
+    dst = make_plugin_root(ide_dst(env))
+    (dst / IDE_MARKER).write_text(content)
+    before = tree(dst)
+    code, lines = run("uninstall", ["agy-ide"])
+    assert code == 1
+    assert "another tool" in lines[-1]
+    assert tree(dst) == before
+
+
+def test_agy_ide_marker_that_is_a_directory_is_not_ownership(env: Env) -> None:
+    mark_ide_present(env)
+    dst = make_plugin_root(ide_dst(env))
+    (dst / IDE_MARKER).mkdir()
+    assert run("uninstall", ["agy-ide"])[0] == 1
+    assert dst.is_dir()
+
+
+def test_agy_ide_marker_naming_another_location_is_not_ownership(
+    env: Env, tmp_path: Path
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    assert run("install", ["agy-ide"], source=str(plugin))[0] == 0
+    dst = ide_dst(env)
+    elsewhere = tmp_path / "copy" / "refract"
+    shutil.copytree(dst, elsewhere)
+    assert json.loads((elsewhere / IDE_MARKER).read_text())["path"] == str(dst.resolve())
+    assert installer._agy_ide_owned(elsewhere) is False
+    reason = installer._apply_file(installer._FileStep("remove", None, elsewhere))
+    assert reason is not None
+    assert elsewhere.is_dir()
+    assert installer._agy_ide_owned(dst) is True
+
+
+def test_agy_ide_failed_rename_leaves_no_staging_directory(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+
+    def refuse(self: Path, target: object) -> Path:
+        raise PermissionError("busy")
+
+    monkeypatch.setattr(Path, "rename", refuse)
+    code, lines = run("install", ["agy-ide"], source=str(plugin))
+    assert code == 1
+    assert "busy" in lines[-1]
+    assert not ide_dst(env).exists()
+    assert staging_leftovers(ide_dst(env).parent) == []
+
+
+def test_agy_ide_interrupt_during_copy_removes_staging(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+
+    def interrupt(src: Path, dst: Path, **kwargs: object) -> Path:
+        (dst / "hooks.json").write_text("{}")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(installer.shutil, "copytree", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        run("install", ["agy-ide"], source=str(plugin))
+    assert staging_leftovers(ide_dst(env).parent) == []
+    assert not ide_dst(env).exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX permission bits")
+def test_agy_ide_read_only_source_installs_or_fails_cleanly(env: Env, tmp_path: Path) -> None:
+    """No copytree patch: the real copystat path makes staging read-only."""
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    (plugin / "hooks.json").chmod(0o444)
+    plugin.chmod(0o555)
+    try:
+        code, lines = run("install", ["agy-ide"], source=str(plugin))
+        parent = ide_dst(env).parent
+        assert staging_leftovers(parent) == []
+        assert (code, lines[-1]) == (0, "agy-ide: installed")
+        assert run("uninstall", ["agy-ide"])[1][-1] == "agy-ide: removed"
+        assert list(parent.iterdir()) == []
+    finally:
+        plugin.chmod(0o755)
+        (plugin / "hooks.json").chmod(0o644)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX permission bits")
+def test_agy_ide_read_only_source_with_failing_marker_write_leaves_no_staging(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    (plugin / "skills" / "one" / "SKILL.md").chmod(0o444)
+    (plugin / "skills" / "one").chmod(0o555)
+    real_write = Path.write_text
+
+    def deny_marker(self: Path, *args: object, **kwargs: object) -> int:
+        if self.name == IDE_MARKER:
+            raise PermissionError(13, "denied")
+        return real_write(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "write_text", deny_marker)
+    try:
+        code, lines = run("install", ["agy-ide"], source=str(plugin))
+        assert code == 1
+        assert "denied" in lines[-1]
+        assert staging_leftovers(ide_dst(env).parent) == []
+    finally:
+        (plugin / "skills" / "one").chmod(0o755)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX permission bits")
+def test_agy_ide_uninstall_deletes_read_only_files(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    assert run("install", ["agy-ide"], source=str(plugin))[0] == 0
+    dst = ide_dst(env)
+    (dst / "skills" / "one" / "SKILL.md").chmod(0o444)
+    (dst / "skills" / "one").chmod(0o555)
+    assert run("uninstall", ["agy-ide"])[1][-1] == "agy-ide: removed"
+    assert list(dst.parent.iterdir()) == []
+
+
+def test_agy_ide_failed_delete_leaves_no_broken_destination(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    assert run("install", ["agy-ide"], source=str(plugin))[0] == 0
+    dst = ide_dst(env)
+
+    def fail(path: Path) -> None:
+        raise OSError("file in use")
+
+    monkeypatch.setattr(installer, "_rmtree", fail)
+    code, lines = run("uninstall", ["agy-ide"])
+    assert code == 1
+    assert "file in use" in lines[-1]
+    assert ".refract-removing-" in lines[-1]
+    assert not dst.exists()
+    # The leftover is named in the report; a later uninstall sees no destination.
+    assert run("uninstall", ["agy-ide"]) == (0, ["hosts: agy-ide", "agy-ide: not installed"])
+
+
+def test_agy_ide_failed_rename_aside_keeps_the_destination(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    assert run("install", ["agy-ide"], source=str(plugin))[0] == 0
+    dst = ide_dst(env)
+    before = tree(dst)
+
+    def refuse(self: Path, target: object) -> Path:
+        raise PermissionError("busy")
+
+    monkeypatch.setattr(Path, "rename", refuse)
+    code, lines = run("uninstall", ["agy-ide"])
+    assert code == 1
+    assert "busy" in lines[-1]
+    assert tree(dst) == before
+    assert run("uninstall", ["agy-ide"], dry_run=True)[1][1] == f"agy-ide: would remove {dst}"
+
+
+def test_agy_ide_destination_inside_the_source_is_refused(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    plugin = fake_plugin(tmp_path / "plugin")
+    (plugin / ".agents").mkdir()
+    monkeypatch.chdir(plugin)
+    for dry_run in (True, False):
+        code, lines = run(
+            "install", ["agy-ide"], scope="project", source=str(plugin), dry_run=dry_run
+        )
+        assert code == 1
+        assert "inside the source" in lines[-1]
+    assert list((plugin / ".agents").iterdir()) == []
+
+
+def test_all_with_local_source_runs_every_host_including_agy_ide(
+    env: Env, tmp_path: Path
+) -> None:
+    mark_ide_present(env)
+    for host in ("claude", "codex", "agy", "pi"):
+        stub_host(env, host)
+    plugin = fake_plugin(tmp_path / "plugin")
+    code, lines = run("install", ["all"], source=str(plugin))
+    assert code == 0
+    assert lines[0] == "hosts: claude, codex, agy, agy-ide, pi"
+    for host in ("claude", "codex", "agy", "agy-ide", "pi"):
+        assert f"{host}: installed" in lines
+    assert any(call.startswith("pi install") for call in mutating(env))
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    assert (dst / ".antigravity-plugin" / "plugin.json").is_file()
+
+
+def test_agy_ide_failure_does_not_stop_later_hosts(env: Env, tmp_path: Path) -> None:
+    mark_ide_present(env)
+    stub_host(env, "claude")
+    plugin = fake_plugin(tmp_path / "plugin")
+    dst = env.home / ".gemini" / "config" / "plugins" / "refract"
+    dst.mkdir(parents=True)
+    code, lines = run("install", ["agy-ide", "claude"], source=str(plugin))
+    assert code == 1
+    assert lines[1].startswith("agy-ide: failed:")
+    assert lines[-1] == "claude: installed"
+
+
+def test_report_failure_renders_file_steps() -> None:
+    lines: list[str] = []
+    step = installer._FileStep("copy", Path("src"), Path("dst"))
+    installer._report_failure("agy-ide", "boom", [step], lines.append)
+    assert lines == ["agy-ide: failed: boom", "agy-ide: applied: copy src -> dst"]

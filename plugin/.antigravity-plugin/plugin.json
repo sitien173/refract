@@ -1,7 +1,15 @@
 {
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "refract",
+  "displayName": "Refract",
   "description": "Refract: 3-gate (Plan → Execute → Review) workflow.",
   "version": "3.0.1",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Brainstorm a design for a new feature",
+    "Turn this design into a phased implementation plan",
+    "Run the next wave of the active plan"
+  ],
   "author": {
     "name": "sitien173"
   },

@@ -16,7 +16,7 @@ Follow these rules for every Refract MCP call. Default endpoint is `http://127.0
 | `card_move` | `card_id`, `state`, `job_ids=()`, `note=""` | `{card, moved}` |
 | `card_list` | `path` | `{cards, truncated, omitted}` |
 
-Call only these tools with only these parameters; your client may prefix the names. Unknown tool arguments return `invalid_request`. Capture `job.id` from returned envelopes.
+Call only these tools with only these parameters. They belong to the `refract` MCP server; never call a same-named tool from another server. Unknown tool arguments return `invalid_request`. Capture `job.id` from returned envelopes.
 
 - `job`: `id, project, workflow, profile, target, session, state, retry_of, created_at, updated_at`. `project` is the Git root path.
 - `result`: `text, truncated, result_path, pending_question, failure_kind, next_target, model, duration_ms, tokens`.

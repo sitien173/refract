@@ -35,7 +35,7 @@ CI runs the server tests on Linux, Windows, and macOS. Keep every change portabl
 - **Changelog.** Add each user-visible change as a bullet under `## Unreleased` in `CHANGELOG.md`.
 - **Dashboard bundle.** The built dashboard in `server/src/refract/dashboard_static/app` is committed. After editing `server/web/src`, run `pnpm run build` and commit the new bundle; `check:bundle` fails when it is stale.
 - **Pinned docs.** `plugin/tests/test-contracts.sh` asserts exact phrases in `server/README.md`, `server/CLI_ARGUMENTS.md`, the plugin skills, and `plugin/skills/coordinating-multi-model-work/references/tool-contract.md`. Read its assertions before editing those files.
-- **Manifests.** The plugin description must match across `package.json`, `plugin/package.json`, and the three `plugin/.*-plugin/plugin.json` files.
+- **Manifests.** The plugin description must match across `package.json`, `plugin/package.json`, the three `plugin/.*-plugin/plugin.json` files, and `plugin/plugin.json`, which must equal `plugin/.antigravity-plugin/plugin.json`.
 - **Example config.** `server/config.v3.toml` must load and use every supported key. Adding a config key means adding it there. Values stay placeholders such as `replace-me` or `example`.
 - **Credentials.** Target settings other than `env` are copied into job records. Credentials go in `env` or the CLI's own login, never in `args`.
 

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Refract">
+  <rect width="256" height="256" rx="48" fill="#111827"/>
+  <path d="M40 128h72" stroke="#f9fafb" stroke-width="12" stroke-linecap="round"/>
+  <path d="M112 76 168 128 112 180Z" fill="none" stroke="#f9fafb" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M168 128 216 84" stroke="#f87171" stroke-width="12" stroke-linecap="round"/>
+  <path d="M168 128h48" stroke="#fbbf24" stroke-width="12" stroke-linecap="round"/>
+  <path d="M168 128 216 172" stroke="#60a5fa" stroke-width="12" stroke-linecap="round"/>
+</svg>

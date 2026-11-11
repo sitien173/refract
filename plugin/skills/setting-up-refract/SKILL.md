@@ -28,7 +28,7 @@ answers.
 Each step ends on its stated completion criterion.
 
 1. **State.** Check for an existing config, a Refract checkout, and a
-   reachable daemon: `list(path)` on the current Git root responds. Done when each is
+   reachable daemon: the `refract` MCP server's `list(path)` on the current Git root responds. Done when each is
    recorded as present or absent. With an existing config, ask: extend it,
    replace it, or stop.
 2. **Scan.** Run every detect command in `backends.md`, then `--version` on

@@ -58,7 +58,7 @@ def _parser() -> argparse.ArgumentParser:
             action="append",
             required=True,
             metavar="HOST",
-            help="claude, codex, agy, pi, or all; comma-separated or repeated",
+            help="claude, codex, agy, agy-ide, pi, or all; comma-separated or repeated",
         )
         sub.add_argument("--scope", choices=("user", "project", "local"), default="user")
         sub.add_argument(
