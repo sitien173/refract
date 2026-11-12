@@ -8,7 +8,7 @@ import json
 import os
 import shutil
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -44,6 +44,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands.add_parser("doctor", help="Inspect daemon prerequisites")
     commands.add_parser("status", help="Report whether the daemon is running")
+    for name in ("stop", "restart"):
+        command = commands.add_parser(name, help=f"{name.capitalize()} the local daemon")
+        command.add_argument("--force", action="store_true", help="Stop even when jobs are running")
     ask = commands.add_parser("ask", help="Ask the coordinator during a worker job")
     ask.add_argument("question")
     update = commands.add_parser("update", help="Check for or apply Refract updates")
@@ -149,6 +152,80 @@ def _doctor(config: DaemonConfig | None = None) -> int:
     return 0 if home_writable and all(target["executable"] for target in targets.values()) else 1
 
 
+def _stop_daemon(
+    force: bool, out: Callable[[str], object], *, quiet_missing: bool = False
+) -> bool:
+    from refract import daemon_control
+
+    info = daemon_control.read_daemon_file()
+    if info is None:
+        host, port = daemon_control.configured_endpoint()
+        if daemon_control.port_open(host, port):
+            out("Cannot stop the Refract daemon automatically. Stop it manually.")
+            return False
+        if not quiet_missing:
+            out("Refract daemon is not running.")
+        return True
+
+    token, host, port, _pid = info
+    raw = daemon_control.post_shutdown(
+        token, host, port, daemon_control.SHUTDOWN_POST_TIMEOUT_S, force=force
+    )
+    if isinstance(raw, bool):
+        if not quiet_missing:
+            out("Refract daemon is not running.")
+        return True
+    if isinstance(raw, daemon_control.ShutdownFailure):
+        if raw.kind == "http":
+            out(f"Failed: the daemon rejected shutdown (HTTP {raw.code}).")
+        elif raw.kind == "timeout":
+            out("Failed: the shutdown request timed out.")
+        else:
+            out("Failed: cannot reach the daemon.")
+        return False
+    reply = daemon_control.shutdown_reply(raw)
+    if reply is None:
+        out("Failed: the daemon sent an unreadable shutdown reply.")
+        return False
+    stopping, running, queued = reply
+    if not stopping:
+        out(f"Refused: {running} running, {queued} queued job(s).")
+        return False
+    wait_s = daemon_control.FORCED_STOP_WAIT_S if force else daemon_control.STOP_WAIT_S
+    if not daemon_control.wait_for_stop(host, port, wait_s, daemon_control.POLL_S):
+        out("Failed: the daemon may still be stopping.")
+        return False
+    if force:
+        out(f"Stopped the Refract daemon. Forced stop: {running} running, {queued} queued job(s).")
+    else:
+        out("Stopped the Refract daemon.")
+    return True
+
+
+def _stop(args: argparse.Namespace) -> int:
+    return 0 if _stop_daemon(args.force, print) else 1
+
+
+def _restart(args: argparse.Namespace) -> int:
+    from refract import daemon_control
+
+    if not _stop_daemon(args.force, print, quiet_missing=True):
+        return 1
+    try:
+        daemon_control.spawn_serve()
+    except OSError:
+        print("Failed: could not start the Refract daemon.")
+        return 1
+    host, port = daemon_control.configured_endpoint()
+    if not daemon_control.wait_until_answers(
+        host, port, daemon_control.START_WAIT_S, daemon_control.POLL_S
+    ):
+        print("Failed: the Refract daemon did not start in time.")
+        return 1
+    print("Started the Refract daemon.")
+    return 0
+
+
 def _status() -> int:
     try:
         config = load_config()
@@ -164,7 +241,19 @@ def _status() -> int:
         running = True
     except (OSError, URLError):
         running = False
-    sys.stdout.write(json.dumps({"running": running, "url": url}) + "\n")
+    pid = None
+    if running:
+        from refract.daemon_control import read_daemon_file
+
+        try:
+            daemon_info = read_daemon_file()
+        except (OSError, ValueError):
+            daemon_info = None
+        if daemon_info is not None:
+            _token, host, port, file_pid = daemon_info
+            if host == config.host and port == config.port:
+                pid = file_pid
+    sys.stdout.write(json.dumps({"running": running, "url": url, "pid": pid}) + "\n")
     return 0 if running else 1
 
 
@@ -299,6 +388,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(_doctor())
     if args.command == "status":
         raise SystemExit(_status())
+    if args.command == "stop":
+        raise SystemExit(_stop(args))
+    if args.command == "restart":
+        raise SystemExit(_restart(args))
     if args.command == "update":
         raise SystemExit(_update(args))
     if args.command in {"install", "uninstall"}:
