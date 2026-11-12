@@ -92,6 +92,12 @@ def _parse_retry(raw: Any) -> RetryPolicy:
     return RetryPolicy(attempts, tuple(codes), tuple(patterns))
 
 
+def _parse_context_window(value: Any) -> int | None:
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+        raise ValueError
+    return value
+
+
 def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
     if not isinstance(raw, list):
         raise ValueError("Execution plan targets must be a list")
@@ -115,12 +121,7 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
                 value.get("system_prompt", ""),
             )
             retry = _parse_retry(value.get("retry"))
-            context_window = value.get("context_window")
-            if (
-                context_window is not None
-                and (isinstance(context_window, bool) or not isinstance(context_window, int) or context_window < 1)
-            ):
-                raise ValueError
+            context_window = _parse_context_window(value.get("context_window"))
             if (
                 not isinstance(target_id, str)
                 or not target_id

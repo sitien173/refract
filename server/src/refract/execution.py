@@ -145,21 +145,13 @@ class TargetExecutor:
         session_target_key = target_key
         scoped_session = session
         if target.id in plan.environment_targets:
-            if self.environment_resolver is None:
-                await self._release_probe(target_key, job_id)
-                return self._configuration_failure(target, target_key, "Target environment configuration is unavailable", attempt_tokens)
-            try:
-                bound_env, revision_context = await run_sync(self.environment_resolver, project, target.id)
-                self.run_secrets[job_id] = (*run_secrets, *bound_env.values())
-                opaque_revision = hashlib.sha256((project.id + revision_context).encode()).hexdigest()[:20]
-                session_target_key = f"{target_key}:env:{opaque_revision}"
-                scoped_session = f"{session}:env:{opaque_revision}"
-            except asyncio.CancelledError:
-                await self._release_probe(target_key, job_id)
-                raise
-            except Exception:
-                await self._release_probe(target_key, job_id)
-                return self._configuration_failure(target, target_key, "Target environment configuration is invalid", attempt_tokens)
+            resolved = await self._resolve_environment(project, target, target_key, job_id, attempt_tokens)
+            if isinstance(resolved, TargetExecutionResult):
+                return resolved
+            bound_env, opaque_revision = resolved
+            self.run_secrets[job_id] = (*run_secrets, *bound_env.values())
+            session_target_key = f"{target_key}:env:{opaque_revision}"
+            scoped_session = f"{session}:env:{opaque_revision}"
         session_key = (project.id, scoped_session, workflow, session_target_key)
         session_lock = self._session_locks.setdefault(session_key, asyncio.Semaphore(1))
         self._session_users[session_key] = self._session_users.get(session_key, 0) + 1
@@ -248,6 +240,23 @@ class TargetExecutor:
             await run_sync(self.database.release_target_probe, target_key, job_id)
         except Exception:
             log.warning("Failed to release target probe", exc_info=True)
+
+    async def _resolve_environment(
+        self, project: ProjectView, target: TargetConfig, target_key: str, job_id: str, attempt_tokens: list[TokenCounters],
+    ) -> tuple[dict[str, str], str] | TargetExecutionResult:
+        """Return the bound env and its opaque revision, or a configuration failure after releasing the probe."""
+        if self.environment_resolver is None:
+            await self._release_probe(target_key, job_id)
+            return self._configuration_failure(target, target_key, "Target environment configuration is unavailable", attempt_tokens)
+        try:
+            bound_env, revision_context = await run_sync(self.environment_resolver, project, target.id)
+            return bound_env, hashlib.sha256((project.id + revision_context).encode()).hexdigest()[:20]
+        except asyncio.CancelledError:
+            await self._release_probe(target_key, job_id)
+            raise
+        except Exception:
+            await self._release_probe(target_key, job_id)
+            return self._configuration_failure(target, target_key, "Target environment configuration is invalid", attempt_tokens)
 
     @staticmethod
     def _matches_retry_policy(policy: RetryPolicy, result: DriverResult) -> bool:
