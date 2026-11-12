@@ -15,7 +15,8 @@ For each task in order:
    Then write the minimal code that passes. For a bug, the test reproduces it
    and the fix addresses the root cause. For a behavior-preserving refactor,
    keep passing characterization coverage green.
-2. **Verify.** Run the fresh verification command from the phase `Done When`.
+2. **Verify.** Run the targeted tests for this task. Leave the full `Done When`
+   commands for the end of the phase.
 3. **Record.** Append a `## Task <M>` block to `<plan-dir>/phase-<NN>/notes.md`,
    creating the file from `notes-template.md` when it is missing. Fill every
    sub-section, using `- none` when empty, and record the exact RED and GREEN
@@ -23,15 +24,16 @@ For each task in order:
 
 ## After all tasks
 
-1. Create `<plan-dir>/phase-<NN>/journal.md` from `journal-template.md` when it
+1. Run each fresh verification command from the phase `Done When` once.
+2. Create `<plan-dir>/phase-<NN>/journal.md` from `journal-template.md` when it
    is missing, and fill its META.
-2. Append the `# EXTERNAL RESPONSE` block from `erp.md` under
+3. Append the `# EXTERNAL RESPONSE` block from `erp.md` under
    `## Implementation Response` in `journal.md`.
-3. Return that block and the matching status line from `erp.md`.
+4. Return that block and the matching status line from `erp.md`.
 
 On a resumed or `FIX:` batch, append a new batch section to `notes.md` and a
 new response block to `journal.md`. Keep earlier notes, responses, and reviews
-intact.
+intact. A `FIX:` batch runs only the checks its prompt lists.
 
 ## Scope
 

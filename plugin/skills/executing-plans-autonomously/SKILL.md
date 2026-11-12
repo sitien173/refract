@@ -22,8 +22,8 @@ each phase report and continuing. Stop for the user only at a hard stop.
 | Stop point | Decision |
 |---|---|
 | Worker `BLOCKED`, `result.pending_question`, or handover `BLOCKED` | Answer from the plan, design, and code. Set `status: ACTIVE` and continue. |
-| Test, lint, review, or audit failure | Fix the root cause in code or tests, then re-verify and re-review until checks pass. |
-| Findings remaining after the review-fix loop | Fix them and re-review. |
+| Test, lint, review, or audit failure | Fix the root cause in code or tests, re-verify, and re-review where the review-fix loop requires it. |
+| Findings remaining after the review-fix loop | Run one more fix cycle under the same re-review rule. |
 | Live or smoke check hits an environment limit, mock discrepancy, or nondeterminism | Investigate. When it cannot be resolved within the repository's constraints, such as read-only checkouts or secret handling, defer it with the exact finding. |
 | `PASS_WITH_DEBT` or deferred scope awaiting sign-off | Accept it with a named owner. |
 
@@ -40,6 +40,7 @@ instead of deciding:
 - User changes that block an anchor or review, per Git Ownership in
   `coordinating-multi-model-work`.
 - Handover `status: STALE_ANCHOR`.
+- Blocking findings still open after the second fix cycle.
 - Refract server unavailable.
 
 After the user resolves the stop, invoking this skill again resumes from the
