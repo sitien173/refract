@@ -59,7 +59,9 @@ refract install -p claude,codex,pi
 refract install -p all
 ```
 
-`-p` takes `claude`, `codex`, `agy`, `pi`, or `all`. Pass a comma list or repeat the flag. `all` means every host CLI found on PATH. Add `--dry-run` to print the host commands without running them. Use `refract uninstall -p <host>` to remove the plugin. See the Installing section of [`plugin/README.md`](https://github.com/sitien173/refract/blob/main/plugin/README.md) for scopes and sources.
+`-p` takes `claude`, `codex`, `agy`, `agy-ide`, `pi`, or `all`. Pass a comma list or repeat the flag. `all` means every host CLI found on PATH, plus `agy-ide` when the Antigravity IDE is present. Add `--dry-run` to print the planned commands without running them. Use `refract uninstall -p <host>` to remove the plugin. See the Installing section of [`plugin/README.md`](https://github.com/sitien173/refract/blob/main/plugin/README.md) for scopes and sources.
+
+The standalone Antigravity IDE has no plugin CLI, so `agy-ide` works differently: Refract copies the plugin files itself, to `~/.gemini/config/plugins/refract/` for `user` scope or `.agents/plugins/refract/` in the current directory for `project` scope. Pass a local clone with `--source`. Refract leaves a marker in what it copies and will not delete a directory it did not install.
 
 To install by hand, use the host's own commands.
 

@@ -20,6 +20,7 @@ TARGETS = [
     ("plugin/.claude-plugin/plugin.json", JSON),
     ("plugin/.codex-plugin/plugin.json", JSON),
     ("plugin/.antigravity-plugin/plugin.json", JSON),
+    ("plugin/plugin.json", JSON),
     ("sonar-project.properties", rf"^sonar\.projectVersion={V}{EOL}"),
     ("README.md", rf"^# Refract {V}{EOL}"),
     ("server/README.md", rf"^Version {V} ·"),

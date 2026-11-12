@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The SessionStart hook and skills name Refract MCP tools by the `refract` server instead of a host-specific prefix, so every host resolves them without colliding with same-named tools from other servers. Antigravity no longer receives the Claude Code tool name.
 - Add `refract stop` and `refract restart` with optional force, and report the daemon PID in `refract status`.
 - Opt-in product telemetry. It is off by default and follows `DO_NOT_TRACK=1`, then `REFRACT_TELEMETRY`, then `[telemetry] enabled`. Events queue in a local outbox and go to the fixed collector at `https://cf-api-gateway.sitienbmt.workers.dev/refract-collector`. Prompts, results, project paths, and target `args` and `env` values are never collected as payload fields, and error text is redacted for target values and paths, but it may still carry prompt or code fragments. `refract telemetry` shows the decision and the exact next batch. See the Telemetry section of `server/README.md`.
 - Local usage stats from a `job_metrics` table kept for 365 days: work delegated, failover saves, tokens by backend, model, and target, and estimated cost from a price file that the daemon fetches every 24 hours and caches at `$REFRACT_HOME/pricing.toml`. The fetch ignores telemetry consent, sends no usage data, and `REFRACT_PRICING_FETCH=0` turns it off. A leftover `[pricing]` config section is ignored with a warning. `refract stats [--days N] [--json]` and `GET /dashboard/api/stats` serve them. Provider-prefixed and aliased model names merge into one row.
@@ -12,6 +13,8 @@
 - Dashboard Board and Targets grouping: the Board project selector lists project roots, 'All projects' organizes cards into collapsible per-project swimlanes, card details open in a centered modal dialog, and targets are grouped by backend with target and healthy counts.
 - Dashboard Insights chart and breakdown improvements: continuous zero-filled daily ranges, labelled y axis with gridlines, window-thinned x-axis date labels, full-width legend, accessible hover and focus tooltips with roving tabindex for annual views, and an expanded breakdown table by profile, workflow, target, and state replacing the separate jobs by state table.
 - `refract install -p <host>` and `refract uninstall -p <host>` install and remove the plugin for `claude`, `codex`, `agy`, and `pi` by running each host's own CLI, with `--scope`, `--dry-run`, and `--source`. The repository now ships a Codex marketplace manifest at `.agents/plugins/marketplace.json`.
+- `refract install -p agy-ide` and `refract uninstall -p agy-ide` install and remove the plugin for the standalone Antigravity IDE by copying it to `~/.gemini/config/plugins/refract/` (`user`) or `<cwd>/.agents/plugins/refract/` (`project`), the one host Refract installs by writing files itself. `--source` must be a local path, `-p all` includes it only when the IDE is detected, and uninstall removes only a directory that carries Refract's ownership marker.
+- The plugin now ships `plugin/plugin.json`, a copy of `.antigravity-plugin/plugin.json`, because the standalone Antigravity IDE loads a plugin only when `plugin.json` sits at its root.
 
 ## 3.0.1 - 2026-11-10
 

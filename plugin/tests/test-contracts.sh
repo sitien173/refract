@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 if grep -R -n -i -E 'openmcp|superpowers|ccg' \
-    commands hooks shared skills .antigravity-plugin .claude-plugin .codex-plugin .mcp.json mcp_config.json hooks.json \
+    commands hooks shared skills .antigravity-plugin plugin.json .claude-plugin .codex-plugin .mcp.json mcp_config.json hooks.json \
     ../.claude-plugin/marketplace.json ../.agents/plugins/marketplace.json; then
     printf 'legacy product name found in plugin surfaces\n' >&2
     exit 1
@@ -30,6 +30,7 @@ root = pathlib.Path.cwd()
 paths = [
     root / ".agents/plugins.json",
     root / ".antigravity-plugin/plugin.json",
+    root / "plugin.json",
     root / ".claude-plugin/plugin.json",
     root.parent / ".claude-plugin/marketplace.json",
     root / ".codex-plugin/plugin.json",
@@ -152,6 +153,15 @@ codex_description = documents[root / ".codex-plugin/plugin.json"]["description"]
 pi_description = documents[root / "package.json"]["description"]
 pi_root_description = documents[root.parent / "package.json"]["description"]
 assert agy_description == plugin_description == codex_description == pi_description == pi_root_description
+
+agy_manifest = documents[root / ".antigravity-plugin/plugin.json"]
+# The standalone Antigravity IDE reads only the root plugin.json.
+assert documents[root / "plugin.json"] == agy_manifest, "plugin.json must match .antigravity-plugin/plugin.json"
+assert agy_manifest.get("displayName"), "antigravity manifest needs a non-empty displayName"
+assert (root / agy_manifest.get("logo", "missing-logo")).is_file(), "antigravity manifest logo must name an existing file"
+logo = agy_manifest["logo"]
+assert not pathlib.Path(logo).is_absolute(), "antigravity manifest logo must be a relative path"
+assert (root / logo).resolve().is_relative_to(root.resolve()), "antigravity manifest logo must stay inside the plugin root"
 
 mcp = documents[root / ".mcp.json"]["mcpServers"]["refract"]
 assert mcp == {

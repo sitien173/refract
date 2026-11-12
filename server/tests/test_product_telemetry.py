@@ -160,6 +160,7 @@ def test_telemetry_opener_refuses_http_redirects(status) -> None:
 
     class RedirectHandler(BaseHTTPRequestHandler):
         def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
             requested_paths.append(self.path)
             if self.path == "/first":
                 self.send_response(status)

@@ -48,8 +48,8 @@ Pi reads the `pi` manifest in `package.json`: the repository-root manifest
 for a GitHub install, `plugin/package.json` for a local `plugin/` path. The
 `pi/extensions/refract.ts` extension registers the Refract MCP server at
 `REFRACT_URL` and adds the coordinator context. Pi names skills and tools
-without the Claude plugin namespace: `/skill:using-refract`,
-`mcp__refract__list`.
+without the Claude plugin namespace: `/skill:using-refract`. The skills and
+hook name MCP tools by the `refract` server, not by a host-specific prefix.
 
 ### Run without Refract
 
@@ -130,7 +130,7 @@ loads installed packages, so its workers receive the coordinator context.
 
 ## Installing
 
-`refract install -p <host>` installs the plugin by running each host's own CLI. `refract uninstall -p <host>` removes it. `-p` takes `claude`, `codex`, `agy`, `pi`, or `all`. Pass a comma list or repeat the flag. `all` means every host CLI found on PATH. The resolved host list always prints first as `hosts: ...`.
+`refract install -p <host>` installs the plugin by running each host's own CLI. `refract uninstall -p <host>` removes it. `-p` takes `claude`, `codex`, `agy`, `agy-ide`, `pi`, or `all`. Pass a comma list or repeat the flag. `all` means every host CLI found on PATH, plus `agy-ide` when the Antigravity IDE is present (see Antigravity IDE below). The resolved host list always prints first as `hosts: ...`.
 
 ```bash
 refract install -p claude
@@ -139,7 +139,7 @@ refract install -p all --dry-run
 refract uninstall -p codex
 ```
 
-Claude and Codex add the `refract` marketplace, then install `refract@refract`. Antigravity runs `agy plugin install <source>`. Pi runs `pi install <source>`.
+Claude and Codex add the `refract` marketplace, then install `refract@refract`. Antigravity runs `agy plugin install <source>`. Pi runs `pi install <source>`. The Antigravity IDE (`agy-ide`) is the one exception: Refract copies files itself.
 
 Each host prints one result line: `installed`, `already installed`, `removed`, `not installed`, `skipped (dry run)`, or `failed: <reason>`. A failure on one host does not stop the others. A failed step prints the commands already applied and an undo command where one exists. Nothing is rolled back automatically.
 
@@ -151,12 +151,35 @@ Each host prints one result line: `installed`, `already installed`, `removed`, `
 | `pi` | `user`, `project`; `project` runs `pi install -l` |
 | `codex` | `user` |
 | `agy` | `user` |
+| `agy-ide` | `user`, `project`; `local` exits 2 |
 
 The default is `user`. An unsupported scope exits 2 before any host command runs. A scope other than `user` acts on the current directory, which the command prints.
 
 ### Dry run
 
-`--dry-run` prints each planned host command as `<host>: would run: <command>`. It runs no command that changes state. It still runs the read-only checks: `plugin list --json` and `plugin marketplace list --json` for Claude and Codex, `plugin list --json` for Antigravity, and a read of Pi's `settings.json`.
+`--dry-run` prints each planned host command as `<host>: would run: <command>`. It runs no command that changes state. For `agy-ide` it prints each planned file operation instead, as `agy-ide: would copy <src> -> <dst>` or `agy-ide: would remove <dst>`, then `agy-ide: skipped (dry run)`, and writes nothing. It still runs the read-only checks: `plugin list --json` and `plugin marketplace list --json` for Claude and Codex, `plugin list --json` for Antigravity, and a read of Pi's `settings.json`.
+
+### Antigravity IDE
+
+The standalone Antigravity IDE has no plugin CLI. For `agy-ide` alone, Refract writes into your home directory (or the current directory for `project`) by copying the plugin tree itself, instead of running a host CLI.
+
+```bash
+refract install -p agy-ide --source /path/to/refract
+refract install -p agy-ide --scope project --source /path/to/refract/plugin
+refract uninstall -p agy-ide
+```
+
+- `user` scope copies to `~/.gemini/config/plugins/refract/`. `project` scope copies to `<cwd>/.agents/plugins/refract/`. `--scope local` exits 2.
+- `--source` must be a local path to the repository root or to `plugin/`. The default GitHub source fails with `agy-ide needs a local path source; pass --source <path>`.
+- Refract detects the IDE by a filesystem check for `~/.gemini/antigravity-ide` or `~/.gemini/config`, not by PATH. A named `agy-ide` without either prints `agy-ide: failed: Antigravity IDE not found`.
+- `-p all` includes `agy-ide` only when that check passes. With a remote source, `refract install -p all` prints `agy-ide: skipped: needs --source <local path>` and still succeeds for it.
+- Install writes an ownership marker, `.refract-agy-ide-install.json`, into the copied directory. Uninstall removes the directory only when that marker is present and names the same path. Refract refuses to delete a directory that is not a Refract plugin, an unmarked directory, a marker for another path, or a link, and it prints the reason.
+- The `agy` CLI stages its own installs at the same `user` path. Refract does not delete that directory.
+- Installing over an existing Refract install prints `already installed`. Replacing is not supported; uninstall first.
+
+If you have the `agy` CLI, `agy plugin install https://github.com/sitien173/refract` is an alternative that needs no `--source`.
+
+Antigravity does not load plugin slash commands, so the four commands are unavailable here. See Commands below for the skill names to invoke instead.
 
 ### Marketplace removal
 
@@ -177,7 +200,7 @@ A fork URL installs, but `refract update` reports a Claude Code or Pi fork as un
 | Code | Meaning |
 | --- | --- |
 | `0` | Every host succeeded or was already in the requested state. |
-| `1` | A host failed, a named host is not on PATH, `-p all` found no host, another `refract update` or install holds the lock, or the lock file cannot be opened. |
+| `1` | A host failed, a named host is not on PATH or, for `agy-ide`, not found, `-p all` found no host, another `refract update` or install holds the lock, or the lock file cannot be opened. |
 | `2` | Usage error or unsupported scope. |
 
 ## Updating
@@ -205,6 +228,17 @@ The SessionStart hook reads the cached check result and tells you and the model 
 | `/refract:write-plan <design>` | Turn a confirmed design into a phase plan. |
 | `/refract:execute-plan [target]` | Run or resume one wave of phases through all three gates. |
 | `/refract:execute-plan-all [target]` | Autonomously execute all waves through final audit and consolidation. |
+
+Antigravity (`agy` and `agy-ide`) does not load plugin slash commands, so
+`/refract:brainstorm` and the other three are unavailable. Invoke the skill by
+name instead:
+
+| Command | Skill to invoke in Antigravity |
+| --- | --- |
+| `/refract:brainstorm` | `brainstorming` |
+| `/refract:write-plan` | `writing-plans` |
+| `/refract:execute-plan` | `executing-plans` |
+| `/refract:execute-plan-all` | `executing-plans-autonomously` |
 
 In Pi, drop the `refract:` prefix: `/brainstorm`, `/write-plan`,
 `/execute-plan`, `/execute-plan-all`.

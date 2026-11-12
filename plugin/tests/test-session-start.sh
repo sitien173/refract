@@ -18,7 +18,8 @@ assert specific["hookEventName"] == "SessionStart"
 context = specific["additionalContext"]
 assert os.environ["EXPECTED_ROOT"] in context
 assert "coordinating-multi-model-work" in context
-assert "mcp__plugin_refract_refract__list" in context
+assert "the `refract` `list` tool" in context
+assert "mcp__" not in context
 assert "Do not treat" not in context
 PY
 }
@@ -39,6 +40,8 @@ assert expected_root in context
 assert "coordinating-multi-model-work" in context
 assert f"reference {expected_root} only to invoke plugin skills" in context
 assert f"Do not treat {expected_repo_root} or {expected_root} as a project to work on." in context
+assert "the `refract` `list` tool" in context
+assert "mcp__" not in context
 PY
 }
 
@@ -88,9 +91,9 @@ context = json.loads(os.environ["HOOK_OUTPUT"])["hookSpecificOutput"]["additiona
 assert os.environ["EXPECTED_ROOT"] in context
 assert "Load using-refract skill" in context
 assert "Read coordinating-multi-model-work skill" in context
-assert "mcp__refract__list" in context
+assert "the `refract` `list` tool" in context
 assert "refract:" not in context
-assert "mcp__plugin_" not in context
+assert "mcp__" not in context
 PY
 }
 
@@ -145,7 +148,8 @@ else:
     context = payload["hookSpecificOutput"]["additionalContext"]
 assert "Refract is disabled for this session" in context
 assert "Coordinator" not in context
-assert ("mcp__refract__" if os.environ["PI_FLAG"] == "--pi" else "mcp__plugin_refract_refract__") in context
+assert "any tool of the `refract` MCP server" in context
+assert "mcp__" not in context
 PY
         test ! -s "$tmp/calls"
     done

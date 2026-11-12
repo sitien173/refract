@@ -12,18 +12,16 @@ import sys
 import time
 
 plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Pi names skills and MCP tools without the Claude plugin namespace.
+# Pi names skills without the Claude plugin namespace.
 pi = sys.argv[1:2] == ["--pi"]
 skill_prefix = "" if pi else "refract:"
-list_tool = "mcp__refract__list" if pi else "mcp__plugin_refract_refract__list"
-tool_prefix = list_tool.removesuffix("list")
 disabled = os.environ.get("REFRACT_DISABLE", "").lower() in ("1", "true", "yes")
 
 DISABLED_CONTEXT = f"""
 Refract is disabled for this session (REFRACT_DISABLE is set).
 Ignore the Refract plugin instructions: do not load Refract skills
 such as {skill_prefix}using-refract, do not run Refract commands, and do not call
-{tool_prefix}* tools. Work directly unless the user explicitly asks for Refract."""
+any tool of the `refract` MCP server. Work directly unless the user explicitly asks for Refract."""
 
 COMPACT_CONTEXT = f"""
 You are Coordinator. Follow the workflow described by the skills below.
@@ -31,7 +29,7 @@ You are Coordinator. Follow the workflow described by the skills below.
 Load {skill_prefix}using-refract skill, your introduction to using skills.
 Read {skill_prefix}coordinating-multi-model-work skill before any Plan, Execute,
 or Review action on coordinated work. Route external workers only when that
-skill requires them. Prefer guidance returned by {list_tool}.
+skill requires them. Prefer guidance returned by the `refract` `list` tool.
 User instructions override the workflow.
 
 Bundled worker contracts:
