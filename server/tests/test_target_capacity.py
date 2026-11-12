@@ -118,7 +118,7 @@ async def test_concurrent_probe_ownership_during_retries_blocks_other_probe(tmp_
             self.target_key = target_key
             self.attempt = 0
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return True
 
         async def execute(self, *, target, **kwargs):

@@ -13,10 +13,12 @@ from refract.logging_setup import get_logger
 
 from refract.config_inspection import (
     REMOVED_KEYS,
+    REMOVED_RETRY_CODES,
     ConfigSource,
     ConfigurationLoadError,
     read_config_source,
     removed_key_message,
+    removed_retry_code_message,
     sha256_bytes,
     utc_now,
 )
@@ -431,6 +433,9 @@ def _retry(raw: Any, target_id: str) -> RetryPolicy:
         if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
             raise error
         rules.append(tuple(value))
+    for code in rules[0]:
+        if code in REMOVED_RETRY_CODES:
+            raise ValueError(f"Target {target_id!r} {removed_retry_code_message(code)}")
     return RetryPolicy(attempts, *rules)
 
 

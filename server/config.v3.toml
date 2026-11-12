@@ -32,7 +32,7 @@ reasoning = "high"
 max_concurrency = 2
 context_window = 400000
 args = ["--color", "never"]
-retry = { attempts = 2, codes = ["rate_limit"], patterns = ["temporarily unavailable"] }
+retry = { attempts = 2, codes = ["service_error"], patterns = ["temporarily unavailable"] }
 env = { OPENAI_BASE_URL = "https://api.example.invalid/v1" }
 
 [[targets]]

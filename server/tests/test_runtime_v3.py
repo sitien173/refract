@@ -37,7 +37,7 @@ class _Drivers:
         self.executed: list[str] = []
 
     @staticmethod
-    def supports_structured_streaming(_target): return True
+    async def supports_structured_streaming(_target, cancel_event=None): return True
 
     @staticmethod
     def available(_target): return True

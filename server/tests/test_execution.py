@@ -15,18 +15,18 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from coding_agent_cli import Capabilities
 
 from refract.config import NotificationsConfig, RetryPolicy, TargetConfig, TargetSelection
 from refract.database import Database
-from refract.drivers import DriverResult
-from refract.backends import BackendParams
+from refract.drivers import DriverRegistry, DriverResult
 from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key
 from refract.runtime import OrchestrationError, Runtime
 from refract.execution import TargetExecutor
 from refract.scheduler import CancelEvent
 from refract.workflows import get_workflow
 from tests.claude_cli import stub_claude
-from tests.cli_stub import execute_sync, fake_run_process, shell_fake_as_process
+from tests.cli_stub import stub_cli
 from tests.launchers import install_launcher
 from tests.orchestration_helpers import BlockingDrivers, FakeDrivers, config, git, repository
 from tests.orchestration_helpers import register_project
@@ -1017,7 +1017,7 @@ async def test_target_semaphore_released_after_post_acquire_failures(tmp_path, m
     )
 
     class CapabilityFailureDrivers(FakeDrivers):
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             raise RuntimeError("capability setup failed")
 
     runtime.drivers = CapabilityFailureDrivers()
@@ -2328,22 +2328,23 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
     assert hasattr(registry, "supports_structured_streaming")
     checks = []
 
-    def fake_version_check(exe_path: str) -> bool:
-        checks.append(exe_path)
-        return "new" in exe_path
+    async def fake_check(req, **kwargs):
+        checks.append(req.driver)
+        return Capabilities(available=True, structured_streaming="new" in req.driver or None)
 
-    # Check for target_old -> False, cached per resolved executable /bin/claude-old
-    assert registry.supports_structured_streaming(target_old, version_check=fake_version_check) is False
-    assert len(checks) == 1
-    # Repeated call uses cache without calling check again
-    assert registry.supports_structured_streaming(target_old, version_check=fake_version_check) is False
-    assert len(checks) == 1
+    monkeypatch.setattr("refract.drivers.coding_agent_cli.check", fake_check)
 
-    # Check for target_new -> True, cached per resolved executable /bin/claude-new
-    assert registry.supports_structured_streaming(target_new, version_check=fake_version_check) is True
+    # A CLI the library cannot verify reads as unsupported and is not cached, so every call probes again
+    assert await registry.supports_structured_streaming(target_old) is False
+    assert len(checks) == 1
+    assert await registry.supports_structured_streaming(target_old) is False
     assert len(checks) == 2
-    assert registry.supports_structured_streaming(target_new, version_check=fake_version_check) is True
-    assert len(checks) == 2
+
+    # A verified CLI is cached per resolved executable /bin/claude-new
+    assert await registry.supports_structured_streaming(target_new) is True
+    assert len(checks) == 3
+    assert await registry.supports_structured_streaming(target_new) is True
+    assert len(checks) == 3
 
     # In execution, when capability is unsupported, TargetExecutor falls back to final-only invocation (on_event=None)
     root = repository(tmp_path)
@@ -2354,7 +2355,7 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
     received_emitters = []
 
     class MockExecutorDrivers(FakeDrivers):
-        def supports_structured_streaming(self, target, **kwargs):
+        async def supports_structured_streaming(self, target, cancel_event=None, **kwargs):
             return False
 
         async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
@@ -2378,7 +2379,7 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
         await runtime.close()
 
 
-def test_detect_structured_mode_invokes_help_probe_and_detects_support(tmp_path, monkeypatch) -> None:
+def test_structured_streaming_invokes_help_probe_and_detects_support(tmp_path, monkeypatch) -> None:
     """Default capability probe invokes configured --help command and detects supported structured mode."""
     from refract.drivers import DriverRegistry
     from tests.launchers import install_launcher
@@ -2390,7 +2391,7 @@ def test_detect_structured_mode_invokes_help_probe_and_detects_support(tmp_path,
         'if sys.argv[1:2] == ["--help"]:\n'
         f"    with open({str(marker)!r}, 'a', encoding='utf-8') as log:\n"
         "        log.write('called\\n')\n"
-        "    print('options: stream-json --include-partial-messages')\n",
+        "    print('options: --output-format stream-json --include-partial-messages')\n",
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
@@ -2405,21 +2406,20 @@ def test_detect_structured_mode_invokes_help_probe_and_detects_support(tmp_path,
         lambda name, *args, **kwargs: str(fake_cli) if name == "claude" else previous(name, *args, **kwargs),
     )
 
-    # Reach default capability probe without version_check override
-    assert registry.supports_structured_streaming(target) is True
+    assert asyncio.run(registry.supports_structured_streaming(target)) is True
     assert marker.read_text(encoding="utf-8").strip() == "called"
 
     # Cached per resolved executable: second call should not re-invoke probe
-    assert registry.supports_structured_streaming(target) is True
+    assert asyncio.run(registry.supports_structured_streaming(target)) is True
     assert marker.read_text(encoding="utf-8").splitlines() == ["called"]
 
 
-def test_detect_structured_mode_launches_windows_shim_through_prepare_command(tmp_path) -> None:
+def test_structured_streaming_probe_launches_windows_shim_through_prepare_command(tmp_path, monkeypatch) -> None:
     """The help probe must use the .ps1 shim, never run the .cmd through cmd.exe."""
     from refract.drivers import DriverRegistry
 
     script = tmp_path / "fake_claude.py"
-    script.write_text("print('options: stream-json --include-partial-messages')\n", encoding="utf-8")
+    script.write_text("print('options: --output-format stream-json --include-partial-messages')\n", encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_cli = install_launcher(bin_dir, "claude", script)
@@ -2427,7 +2427,13 @@ def test_detect_structured_mode_launches_windows_shim_through_prepare_command(tm
         # Only the PowerShell shim works, so a probe that executes the .cmd directly fails.
         fake_cli.write_text("@exit /b 9\r\n", encoding="utf-8")
 
-    assert DriverRegistry._detect_structured_mode("claude", str(fake_cli)) is True
+    previous = shutil.which
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name, *args, **kwargs: str(fake_cli) if name == "claude" else previous(name, *args, **kwargs),
+    )
+
+    assert asyncio.run(DriverRegistry().supports_structured_streaming(TargetConfig(id="t", backend="claude"))) is True
 
 
 def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
@@ -2447,6 +2453,7 @@ def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
         "    print('Usage: codex exec [OPTIONS] [PROMPT]')\n"
         "    print('Options:')\n"
         "    print('  --json  Output structured JSONL events')\n"
+        "    print('  --output-last-message FILE  Write the last message')\n"
         "elif sys.argv[1:2] == ['--help']:\n"
         "    record('toplevel-probe')\n"
         "    print('Usage: codex [OPTIONS] COMMAND [ARGS]...')\n"
@@ -2468,7 +2475,7 @@ def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
     fake_codex = install_launcher(bin_dir, "codex", script)
     old_bin_dir = tmp_path / "old-bin"
     old_bin_dir.mkdir()
-    fake_old_codex = install_launcher(old_bin_dir, "codex-old", old_script)
+    fake_old_codex = install_launcher(old_bin_dir, "codex", old_script)
 
     registry = DriverRegistry()
     target = TargetConfig(id="target-codex", backend="codex")
@@ -2479,19 +2486,17 @@ def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
     )
 
     # Must probe 'exec --help' and detect structured streaming support
-    assert registry.supports_structured_streaming(target) is True
+    assert asyncio.run(registry.supports_structured_streaming(target)) is True
     log_content = log.read_text(encoding="utf-8").strip()
     assert log_content == "exec-probe"
 
     # Also test representative older codex where exec --help lacks --json
-    target_old = TargetConfig(id="target-old-codex", backend="codex-old")
+    target_old = TargetConfig(id="target-old-codex", backend="codex")
     monkeypatch.setattr(
         "shutil.which",
-        lambda name, *args, **kwargs: str(fake_old_codex)
-        if name == "codex-old"
-        else (str(fake_codex) if name == "codex" else previous(name, *args, **kwargs)),
+        lambda name, *args, **kwargs: str(fake_old_codex) if name == "codex" else previous(name, *args, **kwargs),
     )
-    assert registry.supports_structured_streaming(target_old) is False
+    assert asyncio.run(registry.supports_structured_streaming(target_old)) is False
 
 
 @pytest.mark.asyncio
@@ -2626,62 +2631,8 @@ async def test_execution_security_regression_fixtures_strip_forbidden_content(tm
 
 
 @pytest.mark.asyncio
-async def test_agy_never_promotes_log_text_to_agent_messages_on_empty_stdout(tmp_path, monkeypatch) -> None:
-    """Empty stdout with diagnostic/secret log text extracts session ID but never promotes log text."""
-    from refract.backends import agy as agy_backend
-
-    secret_diagnostic = "DIAGNOSTIC_SECRET_TRACE_TOKEN_NEVER_PROMOTE_777"
-    session_id = "11111111-2222-3333-4444-555555555555"
-
-    def fake_run_shell(cmd, cwd=None, **kwargs):
-        log_idx = cmd.index("--log-file") + 1
-        log_path = Path(cmd[log_idx])
-        log_path.write_text(
-            f"Created conversation {session_id}\n[diag] {secret_diagnostic}\nserver internal dump",
-            encoding="utf-8",
-        )
-        yield ""
-
-    monkeypatch.setattr("refract.backends.shutil.which", lambda _: "/bin/agy")
-    monkeypatch.setattr(agy_backend, "run_process", shell_fake_as_process(fake_run_shell))
-
-    res = await agy_backend.execute(BackendParams(PROMPT="test", cd=tmp_path))
-    assert res.SESSION_ID == session_id
-    assert secret_diagnostic not in res.agent_messages
-    assert "server internal dump" not in res.agent_messages
-    assert res.agent_messages == ""
-    assert res.outcome == "FATAL"
-    assert res.error_class == "no_agent_messages"
-
-
-def test_agy_execute_sync_post_submission_type_error_single_invocation(tmp_path, monkeypatch) -> None:
-    """Post-submission TypeError in execute raises immediately with exactly one invocation."""
-    from refract.backends import agy as agy_backend
-
-    call_count = 0
-
-    def fail_with_type_error(params, *, cancel=None, on_event=None, entity_state=None):
-        nonlocal call_count
-        call_count += 1
-        raise TypeError("post-submission internal failure")
-
-    monkeypatch.setattr(agy_backend, "execute", fail_with_type_error)
-
-    params = BackendParams(PROMPT="test", cd=tmp_path)
-    with pytest.raises(TypeError, match="post-submission internal failure"):
-        execute_sync(agy_backend.execute, params)
-
-    assert call_count == 1
-
-
-@pytest.mark.asyncio
 async def test_execution_all_provider_fixtures_persistence_and_authoritative_results(tmp_path, monkeypatch) -> None:
     """Exercise sanitized Claude, Codex, Pi, and Agy fixtures through execution flow."""
-    from refract.backends.claude import execute as claude_execute
-    from refract.backends.codex import execute as codex_execute
-    from refract.backends.pi import execute as pi_execute_once
-    from refract.backends.agy import execute as agy_execute_once
-
     root = repository(tmp_path)
     cfg = config(tmp_path / "home")
 
@@ -2721,19 +2672,12 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
         "agy": [
             "Created conversation 12345678-1234-1234-1234-123456789abc",
             f"[diagnostic] {secrets[3]} and server trace",
-            json.dumps({"type": "assistant.text.delta", "text": "Agy verified clean."}),
-            json.dumps({"type": "tool.started", "tool_name": "exec", "arguments": {"token": secrets[1]}}),
-            json.dumps({"type": "tool.completed", "status": "completed", "result": secrets[5]}),
-            json.dumps({"type": "result", "result": "Agy verified clean."}),
+            json.dumps({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Agy verified clean."}}),
+            json.dumps({"event": "step_update", "step_update": {"step_type": "tool", "state": "ACTIVE", "tool_name": "exec", "tool_info": {"parameters": {"token": secrets[1]}}}}),
+            json.dumps({"event": "step_update", "step_update": {"step_type": "tool", "state": "DONE", "tool_name": "exec", "result": secrets[5]}}),
+            json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "Agy verified clean."}}),
         ],
     }
-    previous_which = shutil.which
-    monkeypatch.setattr(
-        "shutil.which",
-        lambda cmd, *args, **kwargs: "/usr/bin/mock"
-        if cmd in ("claude", "codex", "pi", "agy")
-        else previous_which(cmd, *args, **kwargs),
-    )
 
     class RealAdapterDrivers(FakeDrivers):
         def __init__(self, backend_name):
@@ -2741,33 +2685,15 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             self.backend_name = backend_name
 
         async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
-            lines = dirty_streams[self.backend_name]
-            if self.backend_name == "claude":
-                stub_claude(monkeypatch, tmp_path, lines)
-                res = await claude_execute(BackendParams(PROMPT="p", cd=tmp_path), on_event=on_event)
-                return DriverResult(
-                    outcome="SUCCESS" if res.outcome == "OK" else "FATAL",
-                    session_id=res.SESSION_ID,
-                    text=res.agent_messages,
-                    error=res.error,
-                    error_code=res.error_class,
-                )
-
-            if self.backend_name == "codex":
-                monkeypatch.setattr("refract.backends.codex.run_process", shell_fake_as_process(lambda *args, **kw: (l for l in lines)))
-                res = await codex_execute(BackendParams(PROMPT="p", cd=tmp_path), on_event=on_event)
-            elif self.backend_name == "pi":
-                monkeypatch.setattr("refract.backends.pi.run_process", fake_run_process(lines))
-                res = await pi_execute_once(BackendParams(PROMPT="p", cd=tmp_path), on_event=on_event)
-            else:
-                monkeypatch.setattr("refract.backends.agy.run_process", fake_run_process(lines))
-                res = await agy_execute_once(BackendParams(PROMPT="p", cd=tmp_path), on_event=on_event)
-            return DriverResult(
-                outcome="SUCCESS" if res.outcome == "OK" else "FATAL",
-                session_id=res.SESSION_ID,
-                text=res.agent_messages,
-                error=res.error,
-                error_code=res.error_class,
+            stub_cli(monkeypatch, tmp_path, self.backend_name, dirty_streams[self.backend_name])
+            return await DriverRegistry().execute(
+                target=TargetConfig(id=self.backend_name, backend=self.backend_name),
+                prompt="p",
+                cwd=tmp_path,
+                session_id="",
+                timeout_s=0,
+                cancel_event=threading.Event(),
+                on_event=on_event,
             )
 
     for backend_name in ("claude", "codex", "pi", "agy"):
@@ -2796,8 +2722,8 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
                 assert secrets[1] in rows_data_text, f"{backend_name} missing persisted tool input {secrets[1]}"
             if backend_name == "pi":
                 assert secrets[2] in rows_data_text, f"{backend_name} missing persisted tool input {secrets[2]}"
-            if backend_name in {"codex", "pi", "agy"}:
-                assert secrets[5] in rows_data_text, f"{backend_name} missing persisted tool output {secrets[5]}"
+            # The library emits tool completion as a status only, so tool output never reaches the stream
+            assert secrets[5] not in rows_data_text, f"{backend_name} persisted tool output {secrets[5]}"
 
             # Activity classification in persisted stream events
             tool_start_rows = [r for r in rows if r["kind"] == "tool.started"]
@@ -3389,6 +3315,33 @@ async def test_telemetry_updated_routes_through_execution_before_stream_recordin
 
 
 @pytest.mark.asyncio
+async def test_library_usage_event_converted_by_adapter_updates_job_tokens(tmp_path: Path, monkeypatch) -> None:
+    from coding_agent_cli import Outcome, Result, Usage, events
+
+    import refract.drivers as drivers_module
+
+    async def fake_run(request, *, on_event=None, **kwargs):
+        await on_event(events.UsageUpdated(usage=Usage(input=100, output=40)))
+        return Result(outcome=Outcome.SUCCESS)
+
+    monkeypatch.setattr(drivers_module.coding_agent_cli, "run", fake_run)
+    root = repository(tmp_path)
+    runtime = Runtime(config(tmp_path / "home"))
+    runtime.drivers = drivers_module.DriverRegistry()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        submission = await runtime.submit(project.id, "implement", "test")
+        job = await runtime.wait(submission.job_id, 5)
+        assert job.state == "succeeded"
+        assert job.result.tokens is not None
+        assert job.result.tokens["input"] == 100
+        assert job.result.tokens["output"] == 40
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_context_invalidation_persists_nulls_without_clearing_consumption(tmp_path: Path) -> None:
     root = repository(tmp_path)
     runtime = Runtime(config(tmp_path / "home"))
@@ -3415,51 +3368,6 @@ async def test_context_invalidation_persists_nulls_without_clearing_consumption(
         assert telemetry["context_window"] == 64000
         assert telemetry["input"] == 100
         assert telemetry["output"] == 20
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_codex_budget_exhaustion_keeps_context_unknown_through_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from refract.backends.codex import CodexRun
-
-    root = repository(tmp_path)
-    codex_home = tmp_path / "codex-home"
-    sessions = codex_home / "sessions"
-    sessions.mkdir(parents=True)
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    sid = "00000000-0000-0000-0000-aaaaaaaaaaaa"
-
-    class RolloutDriver(FakeDrivers):
-        async def execute(self, *, cwd, **kwargs):
-            rollout = sessions / f"rollout_{sid}.jsonl"
-            header = json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": str(cwd)}})
-            usage = {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10, "reasoning_output_tokens": 0, "total_tokens": 110}
-            token_count = json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
-                "total_token_usage": usage, "last_token_usage": usage, "model_context_window": 64000,
-            }}})
-            rollout.write_text(header + "\n" + token_count + "\n" + (" " * 5000) + "\n")
-            run = CodexRun(BackendParams(PROMPT="test", cd=cwd), cwd, tmp_path / "last-message.txt", kwargs.get("on_event"))
-            run.collector.max_bytes_per_poll = 4096
-            run.collector.max_total_bytes = 4096
-            await run.feed(json.dumps({"type": "thread.started", "thread_id": sid}))
-            await run.feed(json.dumps({"type": "turn.completed", "usage": {
-                "input_tokens": 5000, "output_tokens": 700, "reasoning_output_tokens": 100,
-            }}))
-            return DriverResult("SUCCESS", sid, "done", "", "")
-
-    runtime = Runtime(config(tmp_path / "home"))
-    runtime.drivers = RolloutDriver()
-    await runtime.start()
-    try:
-        project = register_project(runtime, str(root))
-        submission = await runtime.submit(project.id, "implement", "test")
-        job = await runtime.wait(submission.job_id, 5)
-        telemetry = job.result.tokens
-        assert telemetry["context_used"] == 5700
-        assert telemetry["context_window"] is None
-        assert telemetry["input"] == 5000
-        assert telemetry["output"] == 700
     finally:
         await runtime.close()
 
@@ -3660,7 +3568,7 @@ async def test_telemetry_streaming_enabled_does_not_double_count_returned_teleme
     }
 
     class StreamingDriver(FakeDrivers):
-        def supports_structured_streaming(self, target: Any) -> bool:
+        async def supports_structured_streaming(self, target: Any, cancel_event=None) -> bool:
             return True
 
         async def execute(self, *, on_event: Any = None, **kwargs: Any) -> DriverResult:
@@ -3755,7 +3663,7 @@ async def test_telemetry_malformed_fallback_does_not_change_outcome(tmp_path: Pa
     )
 
     class MalformedDriver(FakeDrivers):
-        def supports_structured_streaming(self, target: Any) -> bool:
+        async def supports_structured_streaming(self, target: Any, cancel_event=None) -> bool:
             return False
 
         async def execute(self, **kwargs: Any) -> DriverResult:
@@ -3781,7 +3689,7 @@ class StreamingSequenceDrivers(FakeDrivers):
         self.sequence = list(sequence)
         self.invocations = []
 
-    def supports_structured_streaming(self, target):
+    async def supports_structured_streaming(self, target, cancel_event=None):
         return True
 
     async def execute(self, *, target, **kwargs):
@@ -4046,7 +3954,7 @@ async def test_retry_probe_and_capacity_held_and_final_only_health(tmp_path: Pat
             self.target_key = target_key
             self.attempt = 0
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return True
 
         async def execute(self, *, target, **kwargs):
@@ -4112,7 +4020,7 @@ async def test_retry_telemetry_rollover_cumulative_consumption(tmp_path: Path) -
             super().__init__()
             self.attempt = 0
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return True
 
         async def execute(self, *, target, on_event=None, **kwargs):
@@ -4196,7 +4104,7 @@ async def test_retry_tool_activity_after_truncation_blocks_replay(tmp_path: Path
             super().__init__()
             self.invocations = []
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return True
 
         async def execute(self, *, target, on_event=None, **kwargs):
@@ -4239,7 +4147,7 @@ async def test_retry_cancellation_before_retry_invocation_releases_resources(tmp
     job_holder = []
 
     class CancellingDriver(FakeDrivers):
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return True
 
         async def execute(self, *, target, **kwargs):
@@ -4527,14 +4435,11 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_name: str, streaming: bool
 ) -> None:
     root = repository(tmp_path)
-    previous_which = shutil.which
-    monkeypatch.setattr(
-        "shutil.which",
-        lambda cmd, *args, **kwargs: f"/usr/bin/{cmd}"
-        if cmd in ("claude", "codex", "pi", "agy")
-        else previous_which(cmd, *args, **kwargs),
-    )
-    monkeypatch.setattr("refract.drivers.DriverRegistry._detect_structured_mode", lambda *a, **k: streaming)
+
+    async def fake_check(req, **kwargs):
+        return Capabilities(available=True, structured_streaming=True if streaming else None)
+
+    monkeypatch.setattr("refract.drivers.coding_agent_cli.check", fake_check)
 
     if backend_name == "claude":
         c_lines = [
@@ -4573,7 +4478,7 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
                 },
             }),
         ]
-        monkeypatch.setattr("refract.backends.pi.run_process", fake_run_process(p_lines))
+        stub_cli(monkeypatch, tmp_path, "pi", p_lines)
     elif backend_name == "codex":
         cdx_lines = [
             json.dumps({"type": "thread.started", "thread_id": "cdx-tid-1"}),
@@ -4583,7 +4488,7 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
                 "usage": {"input_tokens": 200, "cached_input_tokens": 50, "output_tokens": 35},
             }),
         ]
-        monkeypatch.setattr("refract.backends.codex.run_process", shell_fake_as_process(lambda *a, **k: (l for l in cdx_lines)))
+        stub_cli(monkeypatch, tmp_path, "codex", cdx_lines)
     elif backend_name == "agy":
         a_lines = [
             json.dumps({
@@ -4600,7 +4505,7 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
                 "result": {"conversation_id": "00000000-0000-0000-0000-000000000001", "response": "agy done"},
             }),
         ]
-        monkeypatch.setattr("refract.backends.agy.run_process", fake_run_process(a_lines))
+        stub_cli(monkeypatch, tmp_path, "agy", a_lines)
 
     target = TargetConfig(id=f"{backend_name}-target", backend=backend_name)
     selection = TargetSelection((target.id,))
@@ -4653,7 +4558,7 @@ async def test_retry_sequential_streams_and_ask_tokens(tmp_path: Path) -> None:
             super().__init__()
             self.attempt = 0
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return True
 
         async def execute(self, *, target, env=None, on_event=None, **kwargs):
@@ -4723,7 +4628,7 @@ async def test_retry_unknown_observation_blocks_replay(tmp_path: Path) -> None:
             super().__init__()
             self.invocations = []
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return False
 
         async def execute(self, *, target, **kwargs):
@@ -5052,11 +4957,9 @@ async def test_invocation_telemetry_failure_is_logged_and_run_continues(tmp_path
 
 @pytest.mark.asyncio
 async def test_invocation_process_group_record_failure_is_logged(tmp_path, caplog) -> None:
-    from refract.backends._process import spawn_hook
-
     class Spawning(FakeDrivers):
         async def execute(self, **kwargs):
-            await spawn_hook.get()(1234)
+            await kwargs["on_spawn"](1234)
             return DriverResult("SUCCESS", "sid", "ok", "", "")
 
     runtime, root = _attempt_runtime(tmp_path, FakeDrivers())

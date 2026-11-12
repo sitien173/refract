@@ -11,15 +11,9 @@ import os
 import shutil
 import signal
 import subprocess
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-
-from refract.logging_setup import get_logger
-
-
-log = get_logger("processes")
 
 
 def prepare_command(command: list[str]) -> list[str]:
@@ -64,16 +58,6 @@ def process_group_kwargs() -> Mapping[str, Any]:
     return {"start_new_session": True}
 
 
-def _wait(process: subprocess.Popen[str], timeout_s: float) -> bool:
-    try:
-        process.wait(timeout=max(0.0, timeout_s))
-    except subprocess.TimeoutExpired:
-        return False
-    except OSError:
-        return process.poll() is not None
-    return True
-
-
 def _taskkill(process_id: int, *, force: bool, timeout_s: float) -> None:
     taskkill = shutil.which("taskkill")
     if taskkill is None:
@@ -93,99 +77,6 @@ def _taskkill(process_id: int, *, force: bool, timeout_s: float) -> None:
         )
     except (OSError, subprocess.SubprocessError):
         return
-
-
-def _terminate_windows(process: subprocess.Popen[str], wait_s: float) -> None:
-    # CREATE_NEW_PROCESS_GROUP lets console applications receive CTRL_BREAK.
-    # If a wrapper does not handle it, taskkill /T is the Windows-native tree
-    # fallback; terminating only the .cmd/Node launcher can orphan its child.
-    try:
-        process.send_signal(signal.CTRL_BREAK_EVENT)
-    except (AttributeError, OSError, ValueError):
-        pass
-    # Snapshot and stop the tree while the launcher PID still identifies it.
-    # This also handles non-console descendants that cannot receive CTRL_BREAK.
-    _taskkill(process.pid, force=False, timeout_s=wait_s)
-
-    if _wait(process, wait_s):
-        return
-    _taskkill(process.pid, force=True, timeout_s=wait_s)
-    if process.poll() is None:
-        try:
-            process.kill()
-        except OSError:
-            return
-        _wait(process, wait_s)
-
-
-def _process_group_exists(group_id: int) -> bool:
-    try:
-        os.killpg(group_id, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _terminate_posix(process: subprocess.Popen[str], wait_s: float) -> None:
-    group_id = process.pid
-    deadline = time.monotonic() + max(0.0, wait_s)
-    try:
-        os.killpg(group_id, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    except OSError:
-        try:
-            process.terminate()
-        except OSError:
-            return
-
-    _wait(process, max(0.0, deadline - time.monotonic()))
-    while _process_group_exists(group_id) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    if not _process_group_exists(group_id):
-        return
-    try:
-        os.killpg(group_id, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    except OSError:
-        try:
-            process.kill()
-        except OSError:
-            return
-    _wait(process, wait_s)
-
-
-def terminate_process_tree(
-    process: subprocess.Popen[str],
-    *,
-    wait_s: float,
-) -> None:
-    """Stop a process and descendants created in its Refract process group."""
-    started_at = time.monotonic()
-    log.info(
-        "Terminating backend process tree",
-        extra={"event": "process.terminating", "process_id": process.pid},
-    )
-    if os.name == "nt":
-        # Unlike POSIX process groups, Windows tree cleanup is addressed by the
-        # launcher PID. Always attempt taskkill /T, even if the launcher was
-        # just reaped, rather than assuming its descendants exited with it.
-        _terminate_windows(process, wait_s)
-    else:
-        # A POSIX process group can outlive its original launcher.
-        _terminate_posix(process, wait_s)
-    log.info(
-        "Backend process tree terminated",
-        extra={
-            "event": "process.terminated",
-            "process_id": process.pid,
-            "return_code": process.poll(),
-            "duration_ms": round((time.monotonic() - started_at) * 1000, 2),
-        },
-    )
 
 
 def kill_process_tree(process_id: int) -> None:
@@ -239,4 +130,4 @@ def kill_stale_group(group_id: int, job_id: str) -> bool:
     return False
 
 
-__all__ = ["kill_process_tree", "kill_stale_group", "prepare_command", "process_group_kwargs", "terminate_process_tree"]
+__all__ = ["kill_process_tree", "kill_stale_group", "prepare_command", "process_group_kwargs"]

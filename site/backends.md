@@ -8,7 +8,7 @@ nav_order: 6
 
 Refract accepts exactly four `backend` values: `agy`, `codex`, `pi`, and `claude`. The daemon resolves each through `PATH`.
 
-Refract launches argv directly with `shell=False`. On Windows, npm `.cmd` launchers are resolved through their matching PowerShell shim with `-NonInteractive`. Values in target `args` are individual argv tokens, not a shell command and not a shell-quoted string.
+The `coding_agent_cli` library builds each backend command line, runs the process, and parses its output. It launches argv directly with `shell=False`. On Windows, it resolves npm `.cmd` launchers through their matching PowerShell shim with `-NonInteractive`. Values in target `args` are individual argv tokens, not a shell command and not a shell-quoted string.
 
 ## Target fields
 
@@ -34,6 +34,17 @@ Valid `reasoning` values belong to each CLI; confirm them in its `--help` before
 - `system_prompt` is passed to `pi` and `claude`.
 - To isolate a `pi` worker from context files, extensions, skills, and prompt templates, set `args = ["--no-context-files", "--no-extensions", "--no-skills", "--no-prompt-templates"]`. Add `"--tools", "read,grep,find,ls"` to limit it to read and search tools.
 - To isolate a `claude` worker from CLAUDE.md, plugins, hooks, and MCP servers, set `args = ["--safe-mode", "--strict-mcp-config"]`. Add `"--tools", "Read,Grep,Glob"` to limit it to read and search tools.
+
+## Permission flags
+
+The `coding_agent_cli` library builds each worker's argv and does not add permission flags. Refract adds them so that workers run without prompts.
+
+| `backend` | Refract adds | Position |
+| --- | --- | --- |
+| `codex` | `--yolo` | Before target `args` |
+| `claude` | `--permission-mode bypassPermissions` | Before target `args` |
+| `agy` | `--dangerously-skip-permissions` | Before target `args` |
+| `pi` | `--approve` | After target `args`, so a target cannot disable it |
 
 ## Target arguments
 
@@ -61,7 +72,7 @@ args = ["--provider", "openai", "--offline"]
 
 Keep one option or value per TOML array item. Repeat both items for repeatable options, for example `args = ["--add-dir", "D:/one", "--add-dir", "D:/two"]`. Do not put API keys or other credentials in `args`: target configuration is snapshotted into job records. Use each CLI's credential store or the target `env` table instead; `env` values are never stored in job records.
 
-Refract still owns the non-interactive transport, workspace, prompt, output capture, and durable session argument. The driver translates first-class target fields such as `model`, `backend_profile`, `reasoning`, and `system_prompt` into CLI arguments before calling a transport-only backend. Avoid duplicating those fields or transport-owned options in `args`; target arguments should be options only because Refract supplies the final prompt. The reserved end-of-options token `--` is rejected for every backend. Codex `--cd`, `-C`, and their attached-value forms are also rejected so a target cannot leave its isolated worktree. Options such as Codex `--ephemeral` and Pi `--no-session` disable persistence and therefore prevent Refract from resuming that backend context on a later job. These checks apply both when loading TOML and when a target is constructed programmatically.
+The library owns the non-interactive transport, the workspace, the prompt, output parsing, and the session argument. Refract adds only the permission flags and the target `args`. For Claude Code, Pi, and Agy, Refract passes `model`, `reasoning`, and `system_prompt` as request fields, and the library turns them into CLI arguments. Agy supports only `model`. For Codex, Refract translates `model`, `reasoning`, and `backend_profile` itself, so the library receives no Codex target fields. The library returns an error when `args` sets a flag it owns, for example `--output-format`, or sets a flag for a field the target already gives, for example `--model` with `model`. Refract maps each library outcome to retry and the circuit breaker. Avoid duplicating target fields or transport options in `args`; target arguments should be options only because the library supplies the prompt. Refract rejects the reserved end-of-options token `--`, NUL bytes, and, for Codex, `--cd`, `-C`, and their attached-value forms, so a target cannot leave its isolated worktree. Options such as Codex `--ephemeral` and Pi `--no-session` disable persistence and therefore prevent resuming that backend context on a later job. Refract applies these checks when loading TOML and when a target is constructed programmatically.
 
 Flags were last checked on 2026-10-26 against:
 
@@ -95,7 +106,7 @@ Available flags:
 
 `agent`, `models`, plugin management, install, update, and changelog are subcommands, not execution options.
 
-Refract owns `--print`, its prompt, `--conversation`, `--log-file`, and `--dangerously-skip-permissions` for non-interactive execution. New sessions (no stored conversation ID) are created with `--new-project`, so agy registers the working directory as a project and loads its project context files from the first job. Everything else uses the Agy CLI default unless selected by target fields or `args`. The target `model` field is translated to `--model`; configure `--add-dir` or sandbox behavior explicitly when required. Agy stdout is the preferred response channel; the temporary log file is primarily diagnostic.
+The library owns `--print`, the prompt, `--conversation`, `--log-file`, and `--output-format`. Refract adds `--dangerously-skip-permissions` for non-interactive execution. New sessions (no stored conversation ID) are created with `--new-project`, so agy registers the working directory as a project and loads its project context files from the first job. Everything else uses the Agy CLI default unless selected by target fields or `args`. The target `model` field is translated to `--model`; configure `--add-dir` or sandbox behavior explicitly when required. Agy `reasoning` and `system_prompt` are ignored.
 
 ## Codex (`codex exec`)
 
@@ -128,7 +139,7 @@ Available `exec` options:
 
 `codex exec resume` additionally accepts `--last` and `--all`; its documented subset also includes config/feature flags, image, model, bypass flags, skip-check, ephemeral, ignore-config/rules, output schema, JSON, and final message output. Refract supplies a specific session ID and does not use `--last`.
 
-Refract owns `exec`, `--cd`, `--json`, `--output-last-message`, the resume subcommand/session ID, the `--` prompt boundary, and the prompt. Refract always enables `--yolo` for non-interactive execution. Everything else uses the Codex CLI default unless selected by target fields or `args`. The driver translates `backend_profile`, `model`, and `reasoning` to their CLI equivalents; arbitrary Codex configuration remains available through repeated `-c` entries in `args`.
+The library owns `exec`, `--json`, `--output-last-message`, the resume subcommand and session ID, the prompt, and the working directory, which it sets on the process. Refract adds `--yolo` for non-interactive execution. Everything else uses the Codex CLI default unless selected by target fields or `args`. Refract translates `backend_profile`, `model`, and `reasoning` to `--profile`, `--model`, `-c model="<model>"` when a profile is set, and `-c model_reasoning_effort="<reasoning>"`, and places them after target `args` so they win over a conflicting `-c` entry. Codex `system_prompt` is ignored. Arbitrary Codex configuration is available through repeated `-c` entries in `args`.
 
 ## Pi (`pi --mode json`)
 
@@ -146,9 +157,9 @@ Available execution options:
 | Network | `--offline` |
 | Export | `--export` |
 
-The built-in tool names are `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. Pi also supports `@file` message arguments, but target `args` should contain options only because Refract supplies the final prompt.
+The built-in tool names are `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. Pi also supports `@file` message arguments, but target `args` should contain options only because the library supplies the prompt.
 
-Refract owns `--mode json`, the prompt, and `--session`. The driver appends `--approve` after target arguments so it cannot be overridden. To isolate a target, add `--no-context-files`, `--no-extensions`, `--no-skills`, and `--no-prompt-templates` to `args`. To limit it to read and search tools, add `--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become `--system-prompt`, `--model`, and `--thinking` respectively. Refract places `--mode json` after target arguments so output parsing cannot be replaced.
+The library owns `--mode json`, the prompt, and `--session`. Refract appends `--approve` after target arguments so it cannot be overridden. To isolate a target, add `--no-context-files`, `--no-extensions`, `--no-skills`, and `--no-prompt-templates` to `args`. To limit it to read and search tools, add `--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become `--system-prompt`, `--model`, and `--thinking` respectively.
 
 ## Claude Code (`claude -p`)
 
@@ -171,14 +182,15 @@ Available execution options:
 
 Claude Code has no working-root flag. The workspace comes from the subprocess working directory, which Refract sets.
 
-Refract owns `-p`, `--output-format json`, `--resume`, the `--` prompt boundary, and the prompt. Refract always enables `--permission-mode bypassPermissions` for non-interactive execution. Transport flags are appended after target arguments so a target cannot replace `--output-format`. The compiled argv is:
+The library owns `-p`, `--output-format`, `--include-partial-messages`, `--resume`, and the prompt. Refract adds `--permission-mode bypassPermissions` for non-interactive execution, ahead of target arguments. A target cannot replace a library-owned flag: the library rejects it as `invalid_args`. The compiled argv is:
 
 ```
-claude [target args] -p --permission-mode bypassPermissions \
-       --output-format json [--resume <session-id>] -- <prompt>
+claude -p --output-format stream-json --include-partial-messages \
+       [--resume <session-id>] [--model, --effort, --system-prompt] \
+       --permission-mode bypassPermissions [target args]
 ```
 
-The `--` separator is required rather than cosmetic. `--tools` and `--add-dir` are variadic, so without it a trailing prompt beginning with `-` can be consumed as a flag value.
+The library sends the prompt on standard input, so a prompt that begins with `-` cannot be read as a flag value.
 
 Target field translation:
 
@@ -219,7 +231,7 @@ Each job stores six nullable token counters. Values a backend does not report re
 
 ### Backend notes
 
-- **Codex:** Refract reads only the rollout session of the current job. Capacity comes from `model_context_window` when present. Occupancy is derived from the latest `last_token_usage` as `input + output - reasoning`; cumulative `total_token_usage` is never treated as occupancy.
+- **Codex:** The library reads only the rollout session of the current job. Capacity comes from `model_context_window` when present. Occupancy is derived from the latest `last_token_usage` as `input + output - reasoning`; cumulative `total_token_usage` is never treated as occupancy.
 - **Claude Code:** Capacity comes from `modelUsage.contextWindow` when the model matches; otherwise it stays null.
 - **Pi:** Capacity is not reported and stays null.
 - **Antigravity:** Capacity is accepted only when the stream reports it explicitly; otherwise it stays null.

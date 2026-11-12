@@ -6,47 +6,39 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
-from refract.backends import BackendParams
-from refract.backends.agy import execute as agy_execute
-from refract.backends.claude import execute as claude_execute
-from refract.backends.codex import execute as codex_execute
 from refract.config import TargetConfig
-from refract.drivers import DriverRegistry
+from refract.drivers import DriverRegistry, DriverResult
 
 PROMPT = "Reply with exactly the word PONG and nothing else."
 
 
-def _assert_live_result(name: str, out) -> None:
-    if out.outcome == "FATAL":
-        if out.error_class in {"missing_cli", "bad_cd"}:
-            pytest.skip(f"{name}: {out.error_class}")
-        pytest.fail(f"{name} fatal error ({out.error_class}): {out.error}")
-
-    assert out.outcome == "OK", f"{name} unexpected outcome: {out.outcome}"
-    assert out.agent_messages.strip(), f"{name} returned empty agent_messages"
-    assert "PONG" in out.agent_messages.upper(), f"{name} output missing PONG"
-    assert out.SESSION_ID.strip(), f"{name} returned empty SESSION_ID"
-
-
-@pytest.mark.live
-@pytest.mark.asyncio
-async def test_live_agy_execute() -> None:
-    out = agy_execute(BackendParams(PROMPT=PROMPT, cd=Path.cwd()))
-    _assert_live_result("agy", out)
+async def _live_execute(backend: str) -> DriverResult:
+    return await DriverRegistry().execute(
+        target=TargetConfig(id=backend, backend=backend),
+        prompt=PROMPT,
+        cwd=Path.cwd(),
+        session_id="",
+        timeout_s=90,
+        cancel_event=threading.Event(),
+    )
 
 
-@pytest.mark.live
-@pytest.mark.asyncio
-async def test_live_codex_execute() -> None:
-    out = codex_execute(BackendParams(PROMPT=PROMPT, cd=Path.cwd()))
-    _assert_live_result("codex", out)
+def _assert_live_result(name: str, out: DriverResult) -> None:
+    if out.outcome != "SUCCESS":
+        if out.error_code in {"missing_cli", "bad_cwd"}:
+            pytest.skip(f"{name}: {out.error_code}")
+        pytest.fail(f"{name} {out.outcome} error ({out.error_code}): {out.error}")
+
+    assert out.text.strip(), f"{name} returned empty text"
+    assert "PONG" in out.text.upper(), f"{name} output missing PONG"
+    assert out.session_id.strip(), f"{name} returned empty session_id"
 
 
 @pytest.mark.live
 @pytest.mark.asyncio
-async def test_live_claude_execute() -> None:
-    out = await claude_execute(BackendParams(PROMPT=PROMPT, cd=Path.cwd()))
-    _assert_live_result("claude", out)
+@pytest.mark.parametrize("backend", ["agy", "codex", "claude"])
+async def test_live_execute(backend: str) -> None:
+    _assert_live_result(backend, await _live_execute(backend))
 
 
 _READ_ONLY_ARGS = {"claude": ("--tools", "Read,Grep,Glob"), "pi": ("--tools", "read,grep,find,ls")}
@@ -179,12 +171,11 @@ async def test_live_telemetry_probe(backend: str, tmp_path: Path) -> None:
         timeout_s=90,
         cancel_event=threading.Event(),
     )
-    if out.outcome == "FATAL":
-        if out.error_class in {"missing_cli", "bad_cd"}:
-            pytest.fail(f"{backend}: missing prerequisite ({out.error_class}): {out.error}", pytrace=False)
-        pytest.fail(f"{backend}: execution failed ({out.error_class}): {out.error}", pytrace=False)
+    if out.outcome != "SUCCESS":
+        if out.error_code in {"missing_cli", "bad_cwd"}:
+            pytest.fail(f"{backend}: missing prerequisite ({out.error_code}): {out.error}", pytrace=False)
+        pytest.fail(f"{backend}: execution failed ({out.error_code}): {out.error}", pytrace=False)
 
-    assert out.outcome == "SUCCESS", f"{backend} probe failed: outcome={out.outcome}"
     tokens = out.tokens
     assert isinstance(tokens, dict), f"{backend}: token counters were not returned"
     for field in ("context_used", "context_window", "input", "output"):

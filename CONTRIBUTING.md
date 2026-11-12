@@ -30,19 +30,16 @@ are enforced by review.
 - Keep lines under 100 characters. About 97% of current lines comply.
 - Two blank lines between top-level definitions.
 - Imports in three groups separated by blank lines: stdlib, third-party, local.
-- Use absolute `from refract...` imports. Relative imports are used only inside
-  `backends/`.
+- Use absolute `from refract...` imports.
 - Start each module with `from __future__ import annotations`.
 
 ### Naming
 
 | Item | Convention | Example |
 |---|---|---|
-| Modules | `snake_case` | `codex_rollout.py` |
-| Private helper modules | `_snake_case` | `backends/_process.py` |
+| Modules | `snake_case` | `config_inspection.py` |
 | Functions, methods | `snake_case`; `_` prefix when module-private | `_read_tail` |
-| Classes | `PascalCase` | `BackendResult` |
-| Per-run backend state | `<Name>Run` | `CodexRun` |
+| Classes | `PascalCase` | `DriverResult` |
 | Constants | `UPPER_SNAKE`; `_UPPER_SNAKE` when private | `TAIL_BYTES` |
 | Module logger | `log = get_logger("<area>")` | `drivers.py` |
 
@@ -69,7 +66,7 @@ Prefer module-private helpers. About 80% of module-level functions are private.
 - Raise a domain exception: `AskError`, `CardError`, `OrchestrationError`,
   `ConfigurationLoadError`, or a new subclass next to them. Chain with
   `raise ... from err` when translating an exception.
-- Backends return a `BackendResult` for worker failures instead of raising.
+- `DriverRegistry.execute` returns a `DriverResult` for worker failures instead of raising.
 - Catch `Exception` only at boundaries. Log it with `exc_info` or mark it with
   `# noqa: BLE001` and a reason. Never use a bare `except:`.
 - Log through `log`. Pass structured context with `extra={"event": ...}`.
@@ -79,10 +76,10 @@ Prefer module-private helpers. About 80% of module-level functions are private.
 
 ### Backends
 
-Each driver in `server/src/refract/backends/` exposes
-`async def execute(params, *, cancel=None, on_event=None) -> BackendResult`
-and keeps per-run state in a `<Name>Run` class. Shared helpers live in
-`_common.py` and `_process.py`. Argv builders live in `drivers.py`.
+The `coding_agent_cli` library runs the worker CLIs. Refract has no backend
+modules. `server/src/refract/drivers.py` is the adapter: it builds the library
+`Request`, adds the Refract-owned permission flags, and maps each library
+outcome to a `DriverOutcome`. Change worker behavior in the library, not here.
 
 ### Tests
 
@@ -204,9 +201,9 @@ already editing nearby code. Do not open changes only to fix them.
 
 | Area | Deviation |
 |---|---|
-| Python future import | Missing in `workers.py`, `__init__.py`, `backends/__init__.py` |
+| Python future import | Missing in `workers.py`, `__init__.py` |
 | Python logger | `scheduler.py` uses `logging.getLogger(__name__)` |
-| Python blank lines | `models.py:16`, `dashboard.py:164`, `config.py:126`, `server.py:321`, `backends/__init__.py:29` |
+| Python blank lines | `models.py:16`, `dashboard.py:164`, `config.py:126`, `server.py:321` |
 | Python line length | `server.py:371` is 399 characters |
 | Python broad catches | Most `except Exception` sites lack `# noqa: BLE001` or `exc_info` |
 | TS imports | `JobActions.tsx` and `BoardView.tsx` mix `@/` and relative paths |

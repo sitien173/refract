@@ -10,6 +10,9 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
+[options.exclude-newer-package]
+coding-agent-cli = false
+
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
@@ -108,6 +111,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9b/98/518d8e5081007684232226f475082b30087d0f585e8457db087298259f49/click-8.4.1.tar.gz", hash = "sha256:918b5633eddf6b41c32d4f454bf0de810065c74e3f7dbf8ee5452f8be88d3e96", size = 353007, upload-time = "2026-05-22T04:08:37.769Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/0d/67e5b4109ea4a837e80daa87c2c696711955e40449a97e8926672534def2/click-8.4.1-py3-none-any.whl", hash = "sha256:482be17c6991b8c19c5429a1e995d9b0efdbb63172824c41f99965dc0ade8ec2", size = 116639, upload-time = "2026-05-22T04:08:35.26Z" },
+]
+
+[[package]]
+name = "coding-agent-cli"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/c4/5229604841dc5adc23eb738c31dcfe0343b5ac8d8852e5f56cce683f614e/coding_agent_cli-0.1.0.tar.gz", hash = "sha256:d4a10e5d134a75923c112b506d6b47088b8729ece7081791a896748257634ca9", size = 158337, upload-time = "2026-11-12T15:31:59.485Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/0d/73cbe5e5b4d2116eec6f99316266495efd800b17d8e5924edc32f87d312b/coding_agent_cli-0.1.0-py3-none-any.whl", hash = "sha256:10b9f1648a3ee47b690682eb9ec30673d51f144f34108cb81d28c730cab0a315", size = 44352, upload-time = "2026-11-12T15:31:58.238Z" },
 ]
 
 [[package]]
@@ -666,6 +678,7 @@ name = "refract"
 version = "3.0.3"
 source = { editable = "." }
 dependencies = [
+    { name = "coding-agent-cli" },
     { name = "mcp" },
     { name = "notify-py" },
     { name = "pydantic" },
@@ -689,6 +702,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "coding-agent-cli", specifier = "==0.1.0" },
     { name = "mcp", specifier = ">=2.0,<2.1" },
     { name = "notify-py", specifier = ">=0.3.43,<0.4" },
     { name = "pydantic", specifier = ">=2" },

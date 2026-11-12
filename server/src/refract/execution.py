@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from refract.backends._process import spawn_hook
 from refract.config import DaemonConfig, RetryPolicy, TargetConfig
 from refract.database import Database
 from refract.drivers import DriverRegistry, DriverResult
@@ -295,12 +294,12 @@ class TargetExecutor:
 
     async def _start_attempt(
         self, job_id: str, target: TargetConfig, plan: ExecutionPlan,
-        workflow: str, session_id: str, attempt_number: int,
+        workflow: str, session_id: str, attempt_number: int, cancel_event: CancelEvent,
     ) -> tuple[float, bool]:
         await run_sync(self.database.record_job_target, job_id, target.id)
         started_at = time.monotonic()
         log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt_number, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
-        supports_streaming = await run_sync(self.drivers.supports_structured_streaming, target)
+        supports_streaming = await self.drivers.supports_structured_streaming(target, cancel_event)
         return started_at, supports_streaming
 
     async def _execute_attempt(self, context: _ExecutionContext) -> TargetExecutionResult:
@@ -363,7 +362,8 @@ class TargetExecutor:
     ) -> tuple[float, bool]:
         try:
             return await self._start_attempt(
-                context.job_id, context.target, context.plan, context.workflow, context.session_id, attempt_number
+                context.job_id, context.target, context.plan, context.workflow, context.session_id, attempt_number,
+                context.cancel_event,
             )
         except BaseException as exc:
             duration_ms = int((time.monotonic() - overall_started_at) * 1000)
@@ -657,7 +657,6 @@ class TargetExecutor:
 
         attempt_result: DriverResult | None = None
         driver_exc: BaseException | None = None
-        hook_token = spawn_hook.set(lambda pgid: self._record_process_group(job_id, pgid))
         try:
             with log_context(target_id=target.id):
                 attempt_result = await self.drivers.execute(
@@ -669,12 +668,12 @@ class TargetExecutor:
                     cancel_event=cancel_event,
                     on_event=consume if supports_streaming else None,
                     env=env,
+                    on_spawn=lambda pid: self._record_process_group(job_id, pid),
                 )
         except BaseException as exc:
             driver_exc = exc
             raise
         finally:
-            spawn_hook.reset(hook_token)
             if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
                 attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
             # Returned counts apply only when stream events did not already report consumption.

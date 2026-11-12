@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
-from refract.backends._process import run_process
-
+from refract.processes import prepare_command
 from tests.launchers import install_launcher
 
 SCRIPT = """\
@@ -35,12 +34,9 @@ def test_launcher_preserves_arguments_and_exit_code(tmp_path: Path) -> None:
     resolved = shutil.which("fakecli", path=str(bin_dir))
     assert resolved is not None
 
-    async def noop(_line: str) -> None:
-        return None
+    completed = subprocess.run(prepare_command([resolved, *ARGS]), cwd=tmp_path, check=False)
 
-    outcome = asyncio.run(run_process([resolved, *ARGS], None, None, str(tmp_path), None, None, noop))
-
-    assert outcome.returncode == 3
+    assert completed.returncode == 3
     assert json.loads(record.read_text(encoding="utf-8")) == ARGS
 
 
@@ -66,12 +62,11 @@ def test_launcher_delivers_stdin_unchanged(tmp_path: Path) -> None:
     assert resolved is not None
     payload = "the prompt café"
 
-    async def noop(_line: str) -> None:
-        return None
+    completed = subprocess.run(
+        prepare_command([resolved]), input=payload.encode("utf-8"), cwd=tmp_path, check=False
+    )
 
-    outcome = asyncio.run(run_process([resolved], payload, None, str(tmp_path), None, None, noop))
-
-    assert outcome.returncode == 0
+    assert completed.returncode == 0
     assert json.loads(record.read_text(encoding="utf-8")) == {
         "hex": payload.encode("utf-8").hex(),
         "text": payload,

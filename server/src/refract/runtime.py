@@ -252,7 +252,7 @@ class Runtime:
         for job in interrupted:
             await self._notify_job(str(job["id"]))
         for target in self._catalog.targets:
-            await run_sync(self.drivers.supports_structured_streaming, target)
+            await self.drivers.supports_structured_streaming(target)
         await self.scheduler.start()
         self._retention_task = asyncio.create_task(self._retain_history(), name="refract-retention")
         self._telemetry_task = asyncio.create_task(

@@ -808,6 +808,49 @@ def test_target_rejects_retry_policy_alias(tmp_path) -> None:
         load_config(path)
 
 
+@pytest.mark.parametrize(
+    ("code", "replacement"),
+    [
+        ("no_agent_messages", "no_output"),
+        ("fatal_backend", "auth, invalid_model, or service_error"),
+        ("bad_cd", "bad_cwd"),
+        ("request_fatal", "no_output"),
+    ],
+    ids=["no_agent_messages", "fatal_backend", "bad_cd", "request_fatal"],
+)
+def test_retry_codes_reject_removed_code_and_name_its_replacement(tmp_path, code, replacement) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _explicit_config().replace(
+            'backend = "codex"',
+            f'backend = "codex"\nretry = {{ attempts = 1, codes = ["rate_limit", "{code}"] }}',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as caught:
+        load_config(path)
+    assert str(caught.value) == f"Target retry.codes contains removed code '{code}'; use {replacement}"
+
+
+def test_removed_retry_code_error_survives_a_target_id_that_matches_other_checks(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    text = _explicit_config().replace(
+        'backend = "codex"',
+        'backend = "codex"\nretry = { attempts = 1, codes = ["no_agent_messages"] }',
+    )
+    path.write_text(text.replace('"primary"', '"positive integer"'), encoding="utf-8")
+    with pytest.raises(ValueError) as caught:
+        load_config(path)
+    assert str(caught.value) == "Target retry.codes contains removed code 'no_agent_messages'; use no_output"
+
+
+def test_retry_codes_message_passes_through_only_for_removed_codes() -> None:
+    from refract.config_inspection import sanitize_config_error
+
+    unknown = ValueError("Target 'primary' retry.codes contains removed code 'SECRET_CODE'; use no_output")
+    assert sanitize_config_error(unknown) == "Invalid configuration"
+
+
 def test_environment_declarations_preserve_source_revision_metadata(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(

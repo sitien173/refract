@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from refract.backends._process import run_process
+from coding_agent_cli._process import run_process
 from refract.drivers import DriverResult
 from refract.runtime import Runtime
 from tests.orchestration_helpers import FakeDrivers, config, register_project, repository
@@ -18,13 +18,13 @@ pytestmark = pytest.mark.skipif(not Path("/proc").is_dir(), reason="worker group
 
 
 class SpawningDrivers(FakeDrivers):
-    async def execute(self, *, cwd: Path, env=None, **kwargs) -> DriverResult:
+    async def execute(self, *, cwd: Path, env=None, on_spawn=None, **kwargs) -> DriverResult:
         lines: list[str] = []
 
         async def collect(line: str) -> None:
             lines.append(line)
 
-        await run_process(["sh", "-c", 'printf "%s\\n" "$REFRACT_JOB_ID"'], None, env, str(cwd), None, None, collect)
+        await run_process(["sh", "-c", 'printf "%s\\n" "$REFRACT_JOB_ID"'], None, env, str(cwd), None, None, collect, on_spawn=on_spawn)
         return DriverResult("SUCCESS", "session", "".join(lines).strip(), "", "")
 
 

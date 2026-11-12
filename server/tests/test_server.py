@@ -566,7 +566,7 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
 
     class PrivateFailureDrivers:
         @staticmethod
-        def supports_structured_streaming(_target):
+        async def supports_structured_streaming(_target, cancel_event=None):
             return True
 
         @staticmethod

@@ -41,8 +41,7 @@ consult = ["a"]
     probes = []
 
     class Drivers:
-        def supports_structured_streaming(self, target):
-            assert threading.get_ident() != loop_thread
+        async def supports_structured_streaming(self, target, cancel_event=None):
             probes.append(target.id)
             return True
 

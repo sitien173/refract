@@ -945,7 +945,7 @@ async def test_manual_retry_receives_fresh_policy_budget_on_new_job(tmp_path) ->
             super().__init__()
             self.invocations = []
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return True
 
         async def execute(self, *, target, **kwargs):

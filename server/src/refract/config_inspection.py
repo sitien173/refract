@@ -43,6 +43,18 @@ def removed_key_message(key: str) -> str:
 
 _REMOVED_MESSAGES = frozenset(removed_key_message(key) for key in REMOVED_KEYS)
 
+# Codes that retry.codes matched before backends moved to coding_agent_cli, with their replacements.
+REMOVED_RETRY_CODES = {
+    "no_agent_messages": "no_output",
+    "fatal_backend": "auth, invalid_model, or service_error",
+    "bad_cd": "bad_cwd",
+    "request_fatal": "no_output",
+}
+
+
+def removed_retry_code_message(code: str) -> str:
+    return f"retry.codes contains removed code {code!r}; use {REMOVED_RETRY_CODES[code]}"
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -158,6 +170,9 @@ def _target_config_error(text: str) -> str | None:
     """Remove target identifiers and argument values from validation errors."""
     if not text.startswith(("Target ", "Codex target ", "Isolated Pi target ")):
         return None
+    for code in REMOVED_RETRY_CODES:
+        if removed_retry_code_message(code) in text:
+            return f"Target {removed_retry_code_message(code)}"
     if "args must contain only strings" in text:
         return "Target args must contain only strings"
     if "args must be a list of strings" in text:
