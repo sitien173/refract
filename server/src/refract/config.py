@@ -712,23 +712,7 @@ def _load_config_values(
     }
     if unsupported:
         raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
-    daemon = raw.get("daemon", {})
-    if not isinstance(daemon, dict):
-        raise ValueError("[daemon] must be a TOML table")
-    for key in daemon:
-        _reject_removed(f"[daemon].{key}")
-    unsupported_daemon = set(daemon) - {
-        "host",
-        "port",
-        "max_jobs",
-        "default_profile",
-        "breaker_failure_threshold",
-        "breaker_base_cooldown_s",
-        "breaker_max_cooldown_s",
-        "ask_timeout_s",
-    }
-    if unsupported_daemon:
-        raise ValueError(f"Unsupported daemon settings: {sorted(unsupported_daemon)}")
+    daemon = _validated_daemon(raw)
     if "targets" not in raw:
         raise ValueError("Missing required [targets] section")
     if "profiles" not in raw:
@@ -749,10 +733,7 @@ def _load_config_values(
     port = _positive_int(daemon.get("port"), DEFAULT_PORT, "[daemon].port")
     if port > 65535:
         raise ValueError("[daemon].port must not exceed 65535")
-    breaker_base = _positive_int(daemon.get("breaker_base_cooldown_s"), 60, "[daemon].breaker_base_cooldown_s")
-    breaker_max = _positive_int(daemon.get("breaker_max_cooldown_s"), 900, "[daemon].breaker_max_cooldown_s")
-    if breaker_max < breaker_base:
-        raise ValueError("[daemon].breaker_max_cooldown_s must be >= breaker_base_cooldown_s")
+    breaker_base, breaker_max = _breaker_cooldowns(daemon)
     return DaemonConfig(
         home=home,
         config_path=config_path,
@@ -781,6 +762,35 @@ def _load_config_values(
             *(("pricing",) if "pricing" in raw else ()),
         ),
     )
+
+
+def _validated_daemon(raw: dict[str, Any]) -> dict[str, Any]:
+    daemon = raw.get("daemon", {})
+    if not isinstance(daemon, dict):
+        raise ValueError("[daemon] must be a TOML table")
+    for key in daemon:
+        _reject_removed(f"[daemon].{key}")
+    unsupported = set(daemon) - {
+        "host",
+        "port",
+        "max_jobs",
+        "default_profile",
+        "breaker_failure_threshold",
+        "breaker_base_cooldown_s",
+        "breaker_max_cooldown_s",
+        "ask_timeout_s",
+    }
+    if unsupported:
+        raise ValueError(f"Unsupported daemon settings: {sorted(unsupported)}")
+    return daemon
+
+
+def _breaker_cooldowns(daemon: dict[str, Any]) -> tuple[int, int]:
+    base = _positive_int(daemon.get("breaker_base_cooldown_s"), 60, "[daemon].breaker_base_cooldown_s")
+    maximum = _positive_int(daemon.get("breaker_max_cooldown_s"), 900, "[daemon].breaker_max_cooldown_s")
+    if maximum < base:
+        raise ValueError("[daemon].breaker_max_cooldown_s must be >= breaker_base_cooldown_s")
+    return base, maximum
 
 
 def load_project_config(

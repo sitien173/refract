@@ -10,6 +10,7 @@ import shutil
 import sys
 from collections.abc import Callable, Sequence
 from datetime import datetime
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -159,30 +160,49 @@ def _stop_daemon(
 
     info = daemon_control.read_daemon_file()
     if info is None:
-        host, port = daemon_control.configured_endpoint()
-        if daemon_control.port_open(host, port):
-            out("Cannot stop the Refract daemon automatically. Stop it manually.")
-            return False
-        if not quiet_missing:
-            out("Refract daemon is not running.")
-        return True
-
+        return _stop_missing_daemon(daemon_control, out, quiet_missing)
     token, host, port, _pid = info
     raw = daemon_control.post_shutdown(
         token, host, port, daemon_control.SHUTDOWN_POST_TIMEOUT_S, force=force
     )
     if isinstance(raw, bool):
-        if not quiet_missing:
-            out("Refract daemon is not running.")
+        _announce_not_running(out, quiet_missing)
         return True
     if isinstance(raw, daemon_control.ShutdownFailure):
-        if raw.kind == "http":
-            out(f"Failed: the daemon rejected shutdown (HTTP {raw.code}).")
-        elif raw.kind == "timeout":
-            out("Failed: the shutdown request timed out.")
-        else:
-            out("Failed: cannot reach the daemon.")
+        _report_shutdown_failure(raw, out)
         return False
+    return _finish_daemon_shutdown(daemon_control, raw, host, port, force, out)
+
+
+def _announce_not_running(out: Callable[[str], object], quiet: bool) -> None:
+    if not quiet:
+        out("Refract daemon is not running.")
+
+
+def _stop_missing_daemon(
+    daemon_control: Any, out: Callable[[str], object], quiet: bool
+) -> bool:
+    host, port = daemon_control.configured_endpoint()
+    if daemon_control.port_open(host, port):
+        out("Cannot stop the Refract daemon automatically. Stop it manually.")
+        return False
+    _announce_not_running(out, quiet)
+    return True
+
+
+def _report_shutdown_failure(failure: Any, out: Callable[[str], object]) -> None:
+    if failure.kind == "http":
+        out(f"Failed: the daemon rejected shutdown (HTTP {failure.code}).")
+    elif failure.kind == "timeout":
+        out("Failed: the shutdown request timed out.")
+    else:
+        out("Failed: cannot reach the daemon.")
+
+
+def _finish_daemon_shutdown(
+    daemon_control: Any, raw: Any, host: str, port: int, force: bool,
+    out: Callable[[str], object],
+) -> bool:
     reply = daemon_control.shutdown_reply(raw)
     if reply is None:
         out("Failed: the daemon sent an unreadable shutdown reply.")
@@ -379,30 +399,34 @@ def _is_loopback_bind(host: str) -> bool:
         return False
 
 
-def main(argv: Sequence[str] | None = None) -> None:
-    """Run the daemon or inspect local prerequisites."""
-    args = _parser().parse_args(argv)
-    if args.command == "ask":
-        raise SystemExit(_ask(args.question))
-    if args.command == "doctor":
-        raise SystemExit(_doctor())
-    if args.command == "status":
-        raise SystemExit(_status())
-    if args.command == "stop":
-        raise SystemExit(_stop(args))
-    if args.command == "restart":
-        raise SystemExit(_restart(args))
-    if args.command == "update":
-        raise SystemExit(_update(args))
-    if args.command in {"install", "uninstall"}:
-        raise SystemExit(_install(args))
-    if args.command == "stats":
-        raise SystemExit(_stats(args))
-    if args.command == "telemetry":
-        raise SystemExit(_telemetry())
+def _dispatch_command(args: argparse.Namespace) -> None:
+    handlers: dict[str, Callable[[], int]] = {
+        "ask": lambda: _ask(args.question),
+        "doctor": _doctor,
+        "status": _status,
+        "stop": lambda: _stop(args),
+        "restart": lambda: _restart(args),
+        "update": lambda: _update(args),
+        "install": lambda: _install(args),
+        "uninstall": lambda: _install(args),
+        "stats": lambda: _stats(args),
+        "telemetry": _telemetry,
+    }
+    handler = handlers.get(args.command)
+    if handler is not None:
+        raise SystemExit(handler())
     if args.command not in {None, "serve"}:
         raise SystemExit(2)
 
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Run the daemon or inspect local prerequisites."""
+    args = _parser().parse_args(argv)
+    _dispatch_command(args)
+    _serve(args)
+
+
+def _serve(args: argparse.Namespace) -> None:
     logging_overrides = _logging_overrides(args)
     try:
         config = load_config()
