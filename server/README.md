@@ -1,6 +1,6 @@
 # Refract server
 
-Version 3.0.3 · [Repository](https://github.com/sitien173/refract)
+Version 3.0.4 · [Repository](https://github.com/sitien173/refract)
 
 A local daemon that runs coding-agent CLIs as durable jobs. A Coordinator agent submits jobs over MCP. The daemon picks a target from a profile, runs the worker CLI in the project's Git checkout, and stores the session and result.
 

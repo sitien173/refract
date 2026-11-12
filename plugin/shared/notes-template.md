@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 3.0.3 -->
+<!-- refract-shared-version: 3.0.4 -->
 
 # Phase <N> Decision Notes
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.0.4 - 2026-11-12
+
 - Breaking: backends now run through the `coding-agent-cli` library, a new dependency. `server/src/refract/backends/` is gone and `server/src/refract/drivers.py` adapts the library. Refract still adds the permission flags: `--yolo` for Codex, `--permission-mode bypassPermissions` for Claude Code, `--dangerously-skip-permissions` for Agy, and `--approve` for Pi.
 - Error codes now come from the library. Config loading rejects a removed `retry.codes` value and names the replacement: `no_agent_messages` becomes `no_output`, `fatal_backend` becomes `auth`, `invalid_model`, or `service_error`, `bad_cd` becomes `bad_cwd`, and `request_fatal` becomes `no_output`. See the retry codes table in `server/README.md`.
 - Auth failures at exit status 1 for Claude Code, Codex, and Agy are now target fatal. They are not retried and the circuit opens at once. Before, they were retried and counted toward the circuit threshold.
