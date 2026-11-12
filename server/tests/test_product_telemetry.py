@@ -406,6 +406,21 @@ def test_delivery_network_error_backs_off_and_keeps_rows(tmp_path, config_factor
     assert any(getattr(record, "event", "") == "telemetry.send_failed" for record in caplog.records)
 
 
+def test_delivery_network_error_updates_send_status(tmp_path, config_factory) -> None:
+    send_status = SendStatus()
+    asyncio.run(
+        _delivery_case(
+            tmp_path,
+            config_factory,
+            error=OSError("offline"),
+            expected_count=1,
+            expected_attempts=1,
+            send_status=send_status,
+        )
+    )
+    assert send_status.last_error == "network error"
+
+
 @pytest.mark.parametrize("status", [0, 600])
 def test_delivery_unknown_status_defers_with_backoff(tmp_path, config_factory, status) -> None:
     asyncio.run(_delivery_case(tmp_path, config_factory, status=status, expected_count=1, expected_attempts=1))
@@ -450,8 +465,11 @@ def test_delivery_batch_is_limited_to_100_events(tmp_path, config_factory, monke
         database.close()
 
 
-async def _delivery_case(tmp_path, config_factory, *, status=None, error=None,
-                         expected_count: int, expected_attempts: int = 0) -> None:
+async def _delivery_case(
+    tmp_path, config_factory, *, status=None, error=None,
+    expected_count: int, expected_attempts: int = 0,
+    send_status: SendStatus | None = None,
+) -> None:
     database = Database(tmp_path / f"delivery-{status}-{expected_count}.db")
     config = config_factory(enabled=True)
     previous_dnt = os.environ.pop("DO_NOT_TRACK", None)
@@ -470,7 +488,7 @@ async def _delivery_case(tmp_path, config_factory, *, status=None, error=None,
             response = Response()
             response.status = status
             return response
-        await send_outbox_once(database, lambda: config, config.home, opener)
+        await send_outbox_once(database, lambda: config, config.home, opener, send_status)
         rows = database._connection.execute("SELECT * FROM telemetry_outbox").fetchall()
         assert len(rows) == expected_count
         if expected_attempts:

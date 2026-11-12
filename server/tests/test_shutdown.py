@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import sqlite3
@@ -408,6 +409,37 @@ def test_serve_returns_normally_after_a_started_server_stops(tmp_path, monkeypat
         self.started = True
 
     _serve_with_stubbed_run(tmp_path, monkeypatch, fake_serve)
+
+
+def test_serve_logs_keyboard_interrupt_and_returns_normally(tmp_path, monkeypatch, caplog) -> None:
+    def fake_serve(_self) -> None:
+        raise KeyboardInterrupt
+
+    with caplog.at_level(logging.INFO):
+        _serve_with_stubbed_run(tmp_path, monkeypatch, fake_serve)
+
+    assert any(
+        record.message == "Shutdown requested"
+        and getattr(record, "event", None) == "cli.interrupted"
+        for record in caplog.records
+    )
+
+
+def test_serve_logs_and_reraises_unexpected_exception(tmp_path, monkeypatch, caplog) -> None:
+    error = RuntimeError("serve failed")
+
+    def fake_serve(_self) -> None:
+        raise error
+
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="serve failed") as raised:
+        _serve_with_stubbed_run(tmp_path, monkeypatch, fake_serve)
+
+    assert raised.value is error
+    assert any(
+        record.message == "Daemon terminated unexpectedly"
+        and getattr(record, "event", None) == "cli.failed"
+        for record in caplog.records
+    )
 
 
 def test_serve_bounds_graceful_shutdown(tmp_path, monkeypatch) -> None:

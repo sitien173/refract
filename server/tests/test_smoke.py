@@ -245,10 +245,11 @@ def test_status_pid_lookup_failure_does_not_change_running_result(monkeypatch, t
         ("http-503", False, 1, "Failed: the daemon rejected shutdown (HTTP 503)."),
         ("post-timeout", False, 1, "Failed: the shutdown request timed out."),
         ("unreachable", False, 1, "Failed: cannot reach the daemon."),
+        ("unreadable", False, 1, "Failed: the daemon sent an unreadable shutdown reply."),
         ("wait-timeout", False, 1, "Failed: the daemon may still be stopping."),
         ("force-refused", True, 1, "Refused: 2 running, 3 queued job(s)."),
     ],
-    ids=["idle", "busy-no-force", "busy-force", "not-running", "stale-daemon-file", "manual-stop", "http-failure", "http-404", "http-503", "request-timeout", "unreachable", "stop-timeout", "old-daemon-force-refusal"],
+    ids=["idle", "busy-no-force", "busy-force", "not-running", "stale-daemon-file", "manual-stop", "http-failure", "http-404", "http-503", "request-timeout", "unreachable", "unreadable-reply", "stop-timeout", "old-daemon-force-refusal"],
 )
 def test_stop_cli_cases(monkeypatch, tmp_path, capsys, case, force, exit_code, message) -> None:
     from refract import daemon_control
@@ -287,6 +288,8 @@ def test_stop_cli_cases(monkeypatch, tmp_path, capsys, case, force, exit_code, m
         return b'{"stopping": true, "running": 2, "queued": 3}'
 
     monkeypatch.setattr(daemon_control, "post_shutdown", post)
+    if case == "unreadable":
+        monkeypatch.setattr(daemon_control, "shutdown_reply", lambda _raw: None)
     wait_calls = []
     monkeypatch.setattr(
         daemon_control, "wait_for_stop",
