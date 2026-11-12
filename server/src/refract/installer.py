@@ -44,6 +44,8 @@ _SCOPES_BY_HOST = {
 # install at the same path. The dotted, Refract-specific name is not an Antigravity file.
 _AGY_IDE_MARKER = ".refract-agy-ide-install.json"
 _SOURCE_KEYS = ("repo", *updater._MARKETPLACE_KEYS)
+_ALREADY_INSTALLED = "already installed"
+_NOT_INSTALLED = "not installed"
 # Verbs for `<host> plugin <verb>` on the hosts that use a marketplace.
 _VERBS = {"claude": ("install", "uninstall"), "codex": ("add", "remove")}
 
@@ -284,7 +286,7 @@ def _plan_market_install(host: str, source: str, scope: str) -> _Plan:
     if failure:
         return _Plan([], error=failure)
     if installed:
-        return _Plan([], noop="already installed")
+        return _Plan([], noop=_ALREADY_INSTALLED)
     verbs = _VERBS[host]
     steps: list[_Step] = []
     markets = _probe(host, "plugin", "marketplace", "list", "--json")
@@ -344,7 +346,7 @@ def _plan_market_uninstall(host: str, scope: str) -> _Plan:
     if failure:
         return _Plan([], error=failure)
     if not installed:
-        return _Plan([], noop="not installed")
+        return _Plan([], noop=_NOT_INSTALLED)
     remove_plugin = _cmd(host, _VERBS[host][1], PLUGIN_ID, flag="-s", scope=scope)
     reinstall = _cmd(host, _VERBS[host][0], PLUGIN_ID, flag="-s", scope=scope)
     steps, notes = _marketplace_removal(host, scope)
@@ -357,10 +359,10 @@ def _plan_agy(action: str, source: str, scope: str) -> _Plan:
         return _Plan([], error=failure)
     if action == "install":
         if installed:
-            return _Plan([], noop="already installed")
+            return _Plan([], noop=_ALREADY_INSTALLED)
         return _Plan([_Step(["agy", "plugin", "install", source])], done="installed")
     if not installed:
-        return _Plan([], noop="not installed")
+        return _Plan([], noop=_NOT_INSTALLED)
     return _Plan([_Step(["agy", "plugin", "uninstall", "refract"])], done="removed")
 
 
@@ -371,12 +373,12 @@ def _plan_pi(action: str, source: str, scope: str) -> _Plan:
     flag = ["-l"] if scope == "project" else []
     if action == "install":
         if installed:
-            return _Plan([], noop="already installed")
+            return _Plan([], noop=_ALREADY_INSTALLED)
         return _Plan([_Step(["pi", "install", source, *flag])], done="installed")
     # The stored string is passed back unchanged; Pi matches packages on it.
     refs = list(dict.fromkeys(item.ref for item in installed if item.ref))
     if not refs:
-        return _Plan([], noop="not installed")
+        return _Plan([], noop=_NOT_INSTALLED)
     return _Plan([_Step(["pi", "remove", ref, *flag]) for ref in refs], done="removed")
 
 

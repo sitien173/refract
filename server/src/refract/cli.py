@@ -277,7 +277,7 @@ def _stats(args: argparse.Namespace) -> int:
             api_error = exc.reason
         sys.stderr.write(f"Refract stats request failed: HTTP {exc.code}: {api_error}\n")
         return 1
-    except (OSError, URLError):
+    except OSError:
         sys.stderr.write("Refract daemon is not running.\n")
         return 1
     if args.json:
@@ -285,7 +285,7 @@ def _stats(args: argparse.Namespace) -> int:
     else:
         try:
             payload = json.loads(raw_body)
-        except (ValueError, UnicodeDecodeError):
+        except ValueError:
             sys.stderr.write("Refract stats response contains invalid JSON.\n")
             return 1
         try:
@@ -324,7 +324,7 @@ def _telemetry() -> int:
             api_error = exc.reason
         sys.stderr.write(f"Refract telemetry request failed: HTTP {exc.code}: {api_error}\n")
         return 1
-    except (OSError, URLError):
+    except OSError:
         sys.stderr.write("Refract daemon is not running.\n")
         return 1
     except ValueError:

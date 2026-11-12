@@ -14,7 +14,7 @@ import tomllib
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 
 from refract.config import DEFAULT_PORT, refract_home
 
@@ -79,7 +79,7 @@ def daemon_answers(host: str, port: int) -> bool:
             return True
     except HTTPError:
         return True
-    except (OSError, URLError):
+    except OSError:
         return False
 
 
@@ -117,7 +117,7 @@ def post_shutdown(
             return response.read(MAX_REPLY_BYTES)
     except HTTPError as exc:
         return ShutdownFailure("http", exc.code)
-    except (URLError, OSError) as exc:
+    except OSError as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, ConnectionRefusedError):
             return True
