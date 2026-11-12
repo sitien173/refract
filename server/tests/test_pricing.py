@@ -59,6 +59,24 @@ def test_canonical_model(raw, aliases, expected) -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ([], "Invalid pricing configuration"),
+        ({"currency": 1}, "pricing.currency must be a non-empty string"),
+        ({"models": []}, "pricing.models must be a TOML table"),
+        ({"aliases": []}, "pricing.aliases must be a TOML table"),
+        ({"models": {"m": {"input": 1}}}, "Invalid pricing model settings"),
+        ({"models": {"m": {"input": "bad", "output": 0, "cache_read": 0, "cache_write": 0}}},
+         "Pricing values must be non-negative numbers"),
+    ],
+    ids=["top-level", "currency-type", "models-type", "aliases-type", "model-shape", "price-type"],
+)
+def test_parse_pricing_validation_errors_keep_their_messages(raw, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_pricing(raw)
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         [],

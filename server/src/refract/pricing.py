@@ -57,9 +57,7 @@ def canonical_model(raw: str, aliases: dict[str, str]) -> str:
     return aliases.get(name, name)
 
 
-def parse_pricing(raw: Any) -> PricingConfig:
-    if raw is None:
-        return PricingConfig()
+def _validate_pricing_tables(raw: Any) -> tuple[str, dict[str, Any], dict[str, Any]]:
     if not isinstance(raw, dict) or set(raw) - {"currency", "models", "aliases"}:
         raise ValueError("Invalid pricing configuration")
     currency = raw.get("currency", "USD")
@@ -71,25 +69,38 @@ def parse_pricing(raw: Any) -> PricingConfig:
         raise ValueError("pricing.models must be a TOML table")
     if not isinstance(aliases, dict):
         raise ValueError("pricing.aliases must be a TOML table")
-    parsed: dict[str, ModelPricing] = {}
-    for model, values in models.items():
-        if not isinstance(values, dict) or set(values) != {"input", "output", "cache_read", "cache_write"}:
-            raise ValueError("Invalid pricing model settings")
-        prices = []
-        for key in ("input", "output", "cache_read", "cache_write"):
-            value = values[key]
-            if (isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(value) or value < 0):
-                raise ValueError("Pricing values must be non-negative numbers")
-            prices.append(float(value))
-        parsed[model] = ModelPricing(*prices)
-    if any("/" in model for model in parsed):
-        raise ValueError("Pricing model names must not contain '/'")
+    return currency, models, aliases
+
+
+def _parse_model_pricing(values: Any) -> ModelPricing:
+    if not isinstance(values, dict) or set(values) != {"input", "output", "cache_read", "cache_write"}:
+        raise ValueError("Invalid pricing model settings")
+    prices = []
+    for key in ("input", "output", "cache_read", "cache_write"):
+        value = values[key]
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 0):
+            raise ValueError("Pricing values must be non-negative numbers")
+        prices.append(float(value))
+    return ModelPricing(*prices)
+
+
+def _validate_pricing_aliases(aliases: dict[str, Any], parsed: dict[str, ModelPricing]) -> None:
     for alias, target in aliases.items():
         if not alias or "/" in alias or alias in parsed:
             raise ValueError("Invalid pricing alias name")
         if not isinstance(target, str) or target not in parsed:
             raise ValueError("Pricing alias targets must name a priced model")
+
+
+def parse_pricing(raw: Any) -> PricingConfig:
+    if raw is None:
+        return PricingConfig()
+    currency, models, aliases = _validate_pricing_tables(raw)
+    parsed = {model: _parse_model_pricing(values) for model, values in models.items()}
+    if any("/" in model for model in parsed):
+        raise ValueError("Pricing model names must not contain '/'")
+    _validate_pricing_aliases(aliases, parsed)
     return PricingConfig(currency=currency.strip(), models=parsed, aliases=dict(aliases))
 
 
