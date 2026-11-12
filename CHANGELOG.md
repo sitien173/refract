@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.0.3 - 2026-11-12
+
 - `refract install -p agy-ide` no longer needs a local `--source`. Without `--source`, or with a URL, it shallow-clones the repository into a temporary directory with `git`, copies the plugin, and deletes the clone. `-p all` now installs `agy-ide` instead of skipping it when the source is remote.
 - The coordinator now decides whether a fix needs a re-review. Fixes for security, data loss, migration, concurrency, authentication, or public interface findings, and fixes that change more than the finding names, are re-reviewed. The coordinator closes other fixes itself and records the decision in `journal.md`. The review-fix loop allows one automatic fix cycle instead of two, then hands remaining blocking findings to the user. In autonomous runs, blocking findings still open after a second fix cycle are a hard stop.
 - Each kind of test now runs once per phase. Implement workers run targeted tests per task and the `Done When` commands once at the end. The coordinator runs the declared commands once before review and passes the results to the reviewer. Reviewers run a test only to reproduce a suspected blocking finding, and open with the `# CODE QUALITY REVIEW` status block. After a fix, the coordinator reruns only the affected checks, then the full declared commands once when it finalizes the phase.
