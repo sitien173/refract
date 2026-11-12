@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
+import sqlite3
 import stat
 import threading
+import time
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +18,7 @@ from starlette.testclient import TestClient
 from refract.dashboard import DashboardState, register_dashboard_routes
 from refract.runtime import OrchestrationError, Runtime
 from refract.workers import run_sync
+from tests.cli_stub import stub_cli
 from tests.orchestration_helpers import config as make_config, repository, register_project
 
 
@@ -157,6 +162,24 @@ async def test_shutdown_if_idle_counts_queued_and_running_and_latches_when_idle(
         await runtime.close()
 
 
+@pytest.mark.asyncio
+async def test_forced_shutdown_reports_real_counts_and_latches_admission(tmp_path) -> None:
+    runtime, project_id = _runtime(tmp_path)
+    try:
+        running = await runtime.submit(project_id, "consult", "running")
+        runtime.database.start_job(running.job_id)
+        await runtime.submit(project_id, "consult", "queued")
+        latch = runtime.shutdown_if_idle(force=True)
+        assert latch["stopping"] is True
+        assert latch["running"] >= 1
+        assert latch["queued"] >= 1
+        with pytest.raises(OrchestrationError) as raised:
+            await runtime.submit(project_id, "consult", "too late")
+        assert raised.value.code == "daemon_stopping"
+    finally:
+        await runtime.close()
+
+
 def _application(tmp_path, port: int = 9321):
     from refract.server import create_application
 
@@ -182,7 +205,8 @@ async def test_daemon_json_is_private_complete_and_removed_on_exit(tmp_path, mon
     async with application.router.lifespan_context(application):
         assert os.name == "nt" or stat.S_IMODE(path.stat().st_mode) == 0o600  # file modes are POSIX-only
         data = json.loads(path.read_text(encoding="utf-8"))
-        assert set(data) == {"token", "host", "port", "version"}
+        assert set(data) == {"token", "host", "port", "version", "pid"}
+        assert data["pid"] == os.getpid()
         assert len(data["token"]) == 64
         assert int(data["token"], 16) >= 0
         assert (data["host"], data["port"]) == ("127.0.0.1", 9321)
@@ -210,10 +234,12 @@ class _StubRuntime:
     def __init__(self, result: dict) -> None:
         self.result = result
         self.calls = 0
+        self.forced: list[bool] = []
 
-    def shutdown_if_idle(self) -> dict:
+    def shutdown_if_idle(self, *, force: bool = False) -> dict:
         self.calls += 1
-        return self.result
+        self.forced.append(force)
+        return {**self.result, "stopping": True} if force else self.result
 
 
 def _shutdown_client(result: dict, token: str = "secret-token", client_host: str = "127.0.0.1"):
@@ -270,6 +296,49 @@ def test_shutdown_idle_reports_stopping_then_requests_exit() -> None:
     assert response.status_code == 200
     assert response.json() == {"stopping": True, "running": 0, "queued": 0}
     assert (runtime.calls, exits) == (1, [True])
+
+
+_AUTH = {"Authorization": "Bearer secret-token"}
+
+
+def test_shutdown_force_true_stops_a_busy_runtime_and_requests_exit_once() -> None:
+    client, runtime, exits = _shutdown_client(_BUSY)
+    response = client.post(_SHUTDOWN, headers=_AUTH, json={"force": True})
+    assert response.status_code == 200
+    assert response.json() == {"stopping": True, "running": 1, "queued": 2}
+    assert (runtime.calls, runtime.forced, exits) == (1, [True], [True])
+
+
+@pytest.mark.parametrize("content", [b"", b"{}", b'{"force": false}'])
+def test_shutdown_without_force_behaves_as_before(content) -> None:
+    client, runtime, exits = _shutdown_client(_BUSY)
+    response = client.post(_SHUTDOWN, headers=_AUTH, content=content)
+    assert response.status_code == 200
+    assert response.json() == _BUSY
+    assert (runtime.forced, exits) == ([False], [])
+    client, runtime, exits = _shutdown_client(_IDLE)
+    response = client.post(_SHUTDOWN, headers=_AUTH, content=content)
+    assert response.json() == _IDLE
+    assert (runtime.forced, exits) == ([False], [True])
+
+
+@pytest.mark.parametrize("content", [b"{", b"[]", b'"force"', b'{"force": 1}', b'{"force": "true"}', b'{"force": null}'])
+def test_shutdown_rejects_invalid_body_without_latching(content) -> None:
+    client, runtime, exits = _shutdown_client(_BUSY)
+    response = client.post(_SHUTDOWN, headers=_AUTH, content=content)
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
+    assert response.json()["unchanged"] == "The daemon was not stopped."
+    assert (runtime.calls, exits) == (0, [])
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}])
+def test_shutdown_force_without_valid_token_is_unauthorized_even_with_bad_body(headers) -> None:
+    client, runtime, exits = _shutdown_client(_BUSY)
+    for content in (b'{"force": true}', b"{"):
+        response = client.post(_SHUTDOWN, headers=headers, content=content)
+        assert response.status_code == 401
+    assert (runtime.calls, exits) == (0, [])
 
 
 def test_serve_idle_shutdown_request_sets_server_exit_flag(tmp_path, monkeypatch) -> None:
@@ -379,3 +448,53 @@ async def test_active_job_counts_reports_queued_and_running(tmp_path) -> None:
         assert runtime.database.active_job_counts() == {"queued": 1, "running": 0}
     finally:
         await runtime.close()
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _stored_state(runtime: Runtime, job_id: str) -> str:
+    with closing(sqlite3.connect(runtime.config.database_path)) as probe:
+        return probe.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="the worker liveness probe uses POSIX signals")
+async def test_forced_shutdown_interrupts_a_running_job_and_ends_its_worker(tmp_path, monkeypatch) -> None:
+    pid_file = tmp_path / "worker.pid"
+    stub_cli(monkeypatch, tmp_path, "codex", ["{}"], sleep_s=30, pid_file=pid_file)
+    runtime, project_id = _runtime(tmp_path)
+    await runtime.start()
+    worker_pid = 0
+    try:
+        submitted = await runtime.submit(project_id, "consult", "long")
+        # The fake CLI also runs for short probes that overwrite the file, so wait for a live PID.
+        for _ in range(200):
+            text = pid_file.read_text(encoding="utf-8") if pid_file.exists() else ""
+            if text and _pid_alive(int(text)):
+                worker_pid = int(text)
+                break
+            await asyncio.sleep(0.05)
+        assert worker_pid
+        assert runtime.database.job_record(submitted.job_id)["state"] == "running"
+        assert runtime.shutdown_if_idle(force=True) == {"stopping": True, "running": 1, "queued": 0}
+        started = time.monotonic()
+        await runtime.close()
+        assert time.monotonic() - started < 5
+        assert _stored_state(runtime, submitted.job_id) == "interrupted"
+        assert not _pid_alive(worker_pid)
+        restarted = Runtime(runtime.config)
+        await restarted.start()
+        try:
+            assert restarted.database.job_record(submitted.job_id)["state"] == "interrupted"
+            assert not _pid_alive(worker_pid)
+        finally:
+            await restarted.close()
+    finally:
+        if worker_pid and _pid_alive(worker_pid):
+            os.kill(worker_pid, signal.SIGKILL)

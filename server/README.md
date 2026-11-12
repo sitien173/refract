@@ -24,7 +24,9 @@ uv run refract --help
 | --- | --- |
 | `refract serve` | Run the daemon. Flags: `--host`, `--port`, `--log-level`, `--log-file`, `--allow-remote`. |
 | `refract doctor` | Check that the state directory is writable and every target executable resolves. |
-| `refract status` | Exit 0 when the configured daemon answers, 1 otherwise. |
+| `refract status` | Report whether the configured daemon answers and its PID when available. Exit 0 when running, 1 otherwise. |
+| `refract stop [--force]` | Stop the daemon when idle. `--force` interrupts running jobs and keeps queued jobs for the next start. |
+| `refract restart [--force]` | Stop and start the daemon. `--force` interrupts running jobs; queued jobs remain queued for the restarted daemon. |
 | `refract ask "<question>"` | Ask the Coordinator a question from inside a worker job. |
 | `refract update [--check] [--force]` | Check for or apply updates to the server and installed plugins. |
 | `refract install -p <host> [--scope S] [--dry-run] [--source SOURCE]` | Install the plugin through each host's own CLI, except `agy-ide`, which Refract installs by copying files itself. `-p` takes `claude`, `codex`, `agy`, `agy-ide`, `pi`, or `all`, as a comma list or repeated. `--scope` is `user`, `project`, or `local`: `claude` accepts all three, `pi` and `agy-ide` accept `user` and `project`, `codex` and `agy` accept `user` only. `agy-ide` copies to `~/.gemini/config/plugins/refract/` for `user` and to `<cwd>/.agents/plugins/refract/` for `project`, and `--source` must be a local path for it. `--dry-run` prints the host commands, or for `agy-ide` the file operations, without running them. `--source` is a plugin path or URL; the default is the GitHub repository. Exits 0 when every host succeeded or was already installed, 1 when a host failed, a named host is not on PATH or, for `agy-ide`, not found, `-p all` found no host, another update or install holds the lock, or the lock file cannot be opened, and 2 for a usage error or unsupported scope. |

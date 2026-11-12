@@ -305,11 +305,11 @@ def _check_csrf(request: Request) -> Response | None:
     return None
 
 
-async def _parse_json_body(request: Request) -> tuple[dict[str, Any] | None, Response | None]:
+async def _parse_json_body(request: Request, unchanged: str = "No job was changed.") -> tuple[dict[str, Any] | None, Response | None]:
     try:
         raw_body = await request.body()
     except Exception:
-        return None, _api_error(_MALFORMED_BODY, 400, code="invalid_request")
+        return None, _api_error(_MALFORMED_BODY, 400, code="invalid_request", unchanged=unchanged)
 
     if not raw_body:
         return {}, None
@@ -317,10 +317,10 @@ async def _parse_json_body(request: Request) -> tuple[dict[str, Any] | None, Res
     try:
         body = json.loads(raw_body.decode("utf-8"))
     except Exception:
-        return None, _api_error("Malformed JSON body", 400, code="invalid_request")
+        return None, _api_error("Malformed JSON body", 400, code="invalid_request", unchanged=unchanged)
 
     if not isinstance(body, dict):
-        return None, _api_error("JSON body must be an object", 400, code="invalid_request")
+        return None, _api_error("JSON body must be an object", 400, code="invalid_request", unchanged=unchanged)
 
     return body, None
 
@@ -405,8 +405,11 @@ async def _api_answer(state: DashboardState, request: Request) -> Response:
         return _map_orchestration_error(exc)
 
 
-def _api_shutdown(state: DashboardState, request: Request) -> Response:
-    """Latch the daemon shut for the updater; bearer token only, no browser CSRF flow."""
+async def _api_shutdown(state: DashboardState, request: Request) -> Response:
+    """Latch the daemon shut for the updater and the stop command; bearer token only, no browser CSRF flow.
+
+    The optional body ``{"force": true}`` stops the daemon even when jobs are queued or running.
+    """
     scheme, _, supplied = request.headers.get("authorization", "").partition(" ")
     expected = state.shutdown_token
     if not expected or scheme.lower() != "bearer" or not hmac.compare_digest(supplied.encode(), expected.encode()):
@@ -417,21 +420,28 @@ def _api_shutdown(state: DashboardState, request: Request) -> Response:
             unchanged=_DAEMON_NOT_STOPPED,
             recovery="Read the token from daemon.json in the Refract home directory.",
         )
+    body, body_err = await _parse_json_body(request, unchanged=_DAEMON_NOT_STOPPED)
+    if body_err is not None:
+        return body_err
+    assert body is not None
+    force = body.get("force", False)
+    if not isinstance(force, bool):
+        return _api_error("force must be a boolean", 400, code="invalid_request", unchanged=_DAEMON_NOT_STOPPED)
     try:
         runtime = _runtime(state)
     except RuntimeError:
         return _api_error(_RUNTIME_INACTIVE, 503, code="runtime_unavailable", unchanged=_DAEMON_NOT_STOPPED)
     if state.request_exit is None:
         return _api_error("Daemon cannot exit on request", 503, code="shutdown_unavailable", unchanged=_DAEMON_NOT_STOPPED)
-    result = runtime.shutdown_if_idle()
+    result = runtime.shutdown_if_idle(force=force)
     if result["stopping"]:
         state.request_exit()
     return _api_json_response(result)
 
 
 def _register_action_routes(state: DashboardState) -> list[Route]:
-    def shutdown(request: Request) -> Response:
-        return _api_shutdown(state, request)
+    async def shutdown(request: Request) -> Response:
+        return await _api_shutdown(state, request)
 
     async def cancel(request: Request) -> Response:
         return await _api_cancel(state, request)

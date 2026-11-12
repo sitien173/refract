@@ -851,16 +851,16 @@ class Runtime:
     def status(self) -> DaemonStatusResult:
         return DaemonStatusResult(status="stopping" if self._closing else "running", workers=self.scheduler.workers, active_jobs=self.scheduler.active_jobs, queued_jobs=self.scheduler.queued_jobs)
 
-    def shutdown_if_idle(self) -> dict[str, Any]:
-        """Close admission and report ``stopping`` only when no job is queued or running."""
+    def shutdown_if_idle(self, *, force: bool = False) -> dict[str, Any]:
+        """Close admission and report ``stopping`` only when no job is queued or running, or when ``force`` is set."""
         with self._lock:
             counts = self.database.active_job_counts()
             running = max(counts["running"], self.scheduler.active_jobs)
             queued = max(counts["queued"], self.scheduler.queued_jobs)
-            if running or queued:
+            if (running or queued) and not force:
                 return {"stopping": False, "running": running, "queued": queued}
             self._closing = True
-            return {"stopping": True, "running": 0, "queued": 0}
+            return {"stopping": True, "running": running, "queued": queued}
 
     @property
     def catalog(self) -> DaemonConfig:
