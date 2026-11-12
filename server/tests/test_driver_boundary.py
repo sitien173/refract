@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import threading
 from dataclasses import dataclass
@@ -381,7 +382,8 @@ def test_backend_timeout(monkeypatch, tmp_path, backend):
     outcome = run(monkeypatch, tmp_path, backend, STREAMS[backend], sleep_s=60, timeout_s=TIMEOUT_S)
 
     _assert_failure(outcome, "RETRYABLE", "timeout")
-    assert outcome.result.error == f"{backend} subprocess timed out"
+    # The library names the launched file, so Windows adds the launcher extension.
+    assert re.fullmatch(rf"{backend}(\.cmd)? subprocess timed out", outcome.result.error)
     # Output read before the deadline survives.
     assert outcome.result.session_id == SUCCESS[backend]["session_id"]
     assert outcome.result.text == SUCCESS[backend]["text"]
