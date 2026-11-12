@@ -237,20 +237,27 @@ def _send_outbox_locked(
                 send_status.last_error = "network error"
             database.defer_telemetry(ids, [next_backoff(r["send_attempts"]) for r in rows])
             return
-        if send_status is not None:
-            if 200 <= status < 300:
-                send_status.last_send_at, send_status.last_error = datetime.now(timezone.utc).isoformat(), None
-            else:
-                send_status.last_error = f"HTTP {status}"
+        _settle_outbox_status(database, ids, rows, status, send_status)
+
+
+def _settle_outbox_status(
+    database: Any, ids: list[Any], rows: list[Any], status: int,
+    send_status: SendStatus | None,
+) -> None:
+    if send_status is not None:
         if 200 <= status < 300:
-            database.delete_telemetry(ids)
-        elif status == 429 or status >= 500:
-            database.defer_telemetry(ids, [next_backoff(r["send_attempts"]) for r in rows])
-        elif 300 <= status < 500:
-            database.delete_telemetry(ids)
-            log.warning("Telemetry batch rejected", extra={"event": "telemetry.batch_rejected"})
+            send_status.last_send_at, send_status.last_error = datetime.now(timezone.utc).isoformat(), None
         else:
-            database.defer_telemetry(ids, [next_backoff(r["send_attempts"]) for r in rows])
+            send_status.last_error = f"HTTP {status}"
+    if 200 <= status < 300:
+        database.delete_telemetry(ids)
+    elif status == 429 or status >= 500:
+        database.defer_telemetry(ids, [next_backoff(r["send_attempts"]) for r in rows])
+    elif 300 <= status < 500:
+        database.delete_telemetry(ids)
+        log.warning("Telemetry batch rejected", extra={"event": "telemetry.batch_rejected"})
+    else:
+        database.defer_telemetry(ids, [next_backoff(r["send_attempts"]) for r in rows])
 
 
 async def sender(database: Any, config_check: Callable[[], DaemonConfig], home: Path,

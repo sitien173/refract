@@ -22,6 +22,7 @@ from refract.product_telemetry import MAX_OUTBOX_AGE_DAYS, MAX_OUTBOX_ROWS
 log = get_logger("database")
 _BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
 _JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
+_JOB_BY_ID_QUERY = "SELECT * FROM jobs WHERE id=?"
 _SCHEMA_VERSION = 21
 _TOKEN_COLUMNS = (
     ("context_used", "tok_context_used"),
@@ -623,7 +624,7 @@ class Database:
         return {"queued": counts.get("queued", 0), "running": counts.get("running", 0)}
 
     def job_record(self, job_id: str) -> dict[str, Any] | None:
-        row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        row = self._connection.execute(_JOB_BY_ID_QUERY, (job_id,)).fetchone()
         return dict(row) if row else None
 
     def start_job(self, job_id: str) -> None:
@@ -686,7 +687,7 @@ class Database:
     ) -> bool:
         if not self._connection.in_transaction:
             self._connection.execute(_BEGIN_IMMEDIATE)
-        row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        row = self._connection.execute(_JOB_BY_ID_QUERY, (job_id,)).fetchone()
         transitioned = row is not None and row["state"] not in TERMINAL_STATES
         self._connection.execute(
             """UPDATE jobs SET state=?, target=CASE WHEN ?='' THEN target ELSE ? END,
@@ -706,7 +707,7 @@ class Database:
                 sticky_target=excluded.sticky_target, updated_at=excluded.updated_at""",
                 (row["project_id"], row["session"], row["workflow"], target or row["target"], utc_now()),
             )
-        metrics_row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        metrics_row = self._connection.execute(_JOB_BY_ID_QUERY, (job_id,)).fetchone()
         if metrics_row:
             self._write_job_metrics(job_id, metrics_row["finished_at"], state, attempts, skipped_targets, metrics_row)
         self._write_result(job_id, text)
@@ -716,7 +717,7 @@ class Database:
         self, job_id: str, finished_at: str, state: str, attempts: int | None,
         skipped_targets: int | None, row: sqlite3.Row | None = None,
     ) -> None:
-        row = row or self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        row = row or self._connection.execute(_JOB_BY_ID_QUERY, (job_id,)).fetchone()
         if row is None:
             return
         target = row["target"] or ""
@@ -775,7 +776,7 @@ class Database:
             )
 
     def job(self, job_id: str) -> JobView | None:
-        row = self._connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        row = self._connection.execute(_JOB_BY_ID_QUERY, (job_id,)).fetchone()
         if row is None:
             return None
         return self.job_view(row)

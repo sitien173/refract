@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
+import tomllib
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +13,7 @@ from refract.config import (
     RetryPolicy,
     TargetConfig,
     TargetSelection,
+    _load_config_values,
     _notifications_config,
     _profile_declarations,
     _resolve_profile_maps,
@@ -133,6 +137,27 @@ def test_default_profile_must_be_explicit_and_known(tmp_path, daemon) -> None:
 
     with pytest.raises(ValueError, match="default_profile"):
         load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("daemon", "message"),
+    [
+        ('daemon = "not a table"', "[daemon] must be a TOML table"),
+        ('[daemon]\ndefault_profile = "balanced"\nhost = ""', "[daemon].host must be a non-empty string"),
+        ('[daemon]\ndefault_profile = "balanced"\nhost = 7', "[daemon].host must be a non-empty string"),
+    ],
+    ids=["daemon-not-table", "empty-host", "non-string-host"],
+)
+def test_daemon_table_and_host_values_are_validated(tmp_path, daemon, message) -> None:
+    content = _explicit_config().replace(
+        '[daemon]\ndefault_profile = "balanced"', daemon
+    )
+    path = tmp_path / "config.toml"
+    path.write_text(content, encoding="utf-8")
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        _load_config_values(path, tmp_path, raw, SimpleNamespace())
 
 
 def test_removed_global_profile_aliases_are_rejected(tmp_path) -> None:

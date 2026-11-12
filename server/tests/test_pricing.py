@@ -59,6 +59,24 @@ def test_canonical_model(raw, aliases, expected) -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ([], "Invalid pricing configuration"),
+        ({"currency": 1}, "pricing.currency must be a non-empty string"),
+        ({"models": []}, "pricing.models must be a TOML table"),
+        ({"aliases": []}, "pricing.aliases must be a TOML table"),
+        ({"models": {"m": {"input": 1}}}, "Invalid pricing model settings"),
+        ({"models": {"m": {"input": "bad", "output": 0, "cache_read": 0, "cache_write": 0}}},
+         "Pricing values must be non-negative numbers"),
+    ],
+    ids=["top-level", "currency-type", "models-type", "aliases-type", "model-shape", "price-type"],
+)
+def test_parse_pricing_validation_errors_keep_their_messages(raw, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_pricing(raw)
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         [],
@@ -204,8 +222,9 @@ def test_fetch_pricing_returns_body_with_fixed_request() -> None:
 
 @pytest.mark.parametrize("status", [204, 301, 404, 500])
 def test_fetch_pricing_rejects_non_200_status(status: int) -> None:
+    opener = _opener(_Response(status, _VALID))
     with pytest.raises(PricingError) as error:
-        fetch_pricing(_opener(_Response(status, _VALID)))
+        fetch_pricing(opener)
     assert error.value.reason == "http"
 
 
@@ -220,16 +239,18 @@ def test_fetch_pricing_rejects_non_200_status(status: int) -> None:
     ids=["http-error", "url-error", "timeout", "connection-reset"],
 )
 def test_fetch_pricing_maps_transport_failures_to_http_without_detail(failure: Exception) -> None:
+    opener = _opener(failure)
     with pytest.raises(PricingError) as error:
-        fetch_pricing(_opener(failure))
+        fetch_pricing(opener)
     assert error.value.reason == "http"
     assert "secret-body" not in str(error.value)
 
 
 def test_fetch_pricing_accepts_body_at_the_limit_and_rejects_one_byte_more() -> None:
     assert len(fetch_pricing(_opener(_Response(200, b"x" * MAX_PRICING_BYTES)))) == MAX_PRICING_BYTES
+    opener = _opener(_Response(200, b"x" * (MAX_PRICING_BYTES + 1)))
     with pytest.raises(PricingError) as error:
-        fetch_pricing(_opener(_Response(200, b"x" * (MAX_PRICING_BYTES + 1))))
+        fetch_pricing(opener)
     assert error.value.reason == "size"
 
 

@@ -193,13 +193,14 @@ def test_telemetry_opener_refuses_http_redirects(status) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delivery_redirect_http_error_drops_batch_and_records_status(tmp_path, config_factory, caplog) -> None:
+async def test_delivery_redirect_http_error_drops_batch_and_records_status(
+    tmp_path, config_factory, caplog, monkeypatch,
+) -> None:
     database = Database(tmp_path / "redirect.db")
     config = config_factory(enabled=True)
     status = SendStatus()
-    previous_dnt = os.environ.pop("DO_NOT_TRACK", None)
-    previous_consent = os.environ.get("REFRACT_TELEMETRY")
-    os.environ["REFRACT_TELEMETRY"] = "1"
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
+    monkeypatch.setenv("REFRACT_TELEMETRY", "1")
     now = datetime.now(timezone.utc).isoformat()
     database.enqueue_telemetry("job:redirect", json.dumps({"event": "job"}), now)
 
@@ -214,12 +215,6 @@ async def test_delivery_redirect_http_error_drops_batch_and_records_status(tmp_p
         assert sum(getattr(record, "event", None) == "telemetry.batch_rejected" for record in caplog.records) == 1
     finally:
         database.close()
-        if previous_dnt is not None:
-            os.environ["DO_NOT_TRACK"] = previous_dnt
-        if previous_consent is None:
-            os.environ.pop("REFRACT_TELEMETRY", None)
-        else:
-            os.environ["REFRACT_TELEMETRY"] = previous_consent
 
 
 def test_install_id_is_created_private_only_when_called(tmp_path) -> None:
@@ -406,6 +401,21 @@ def test_delivery_network_error_backs_off_and_keeps_rows(tmp_path, config_factor
     assert any(getattr(record, "event", "") == "telemetry.send_failed" for record in caplog.records)
 
 
+def test_delivery_network_error_updates_send_status(tmp_path, config_factory) -> None:
+    send_status = SendStatus()
+    asyncio.run(
+        _delivery_case(
+            tmp_path,
+            config_factory,
+            error=OSError("offline"),
+            expected_count=1,
+            expected_attempts=1,
+            send_status=send_status,
+        )
+    )
+    assert send_status.last_error == "network error"
+
+
 @pytest.mark.parametrize("status", [0, 600])
 def test_delivery_unknown_status_defers_with_backoff(tmp_path, config_factory, status) -> None:
     asyncio.run(_delivery_case(tmp_path, config_factory, status=status, expected_count=1, expected_attempts=1))
@@ -450,8 +460,11 @@ def test_delivery_batch_is_limited_to_100_events(tmp_path, config_factory, monke
         database.close()
 
 
-async def _delivery_case(tmp_path, config_factory, *, status=None, error=None,
-                         expected_count: int, expected_attempts: int = 0) -> None:
+async def _delivery_case(
+    tmp_path, config_factory, *, status=None, error=None,
+    expected_count: int, expected_attempts: int = 0,
+    send_status: SendStatus | None = None,
+) -> None:
     database = Database(tmp_path / f"delivery-{status}-{expected_count}.db")
     config = config_factory(enabled=True)
     previous_dnt = os.environ.pop("DO_NOT_TRACK", None)
@@ -470,7 +483,7 @@ async def _delivery_case(tmp_path, config_factory, *, status=None, error=None,
             response = Response()
             response.status = status
             return response
-        await send_outbox_once(database, lambda: config, config.home, opener)
+        await send_outbox_once(database, lambda: config, config.home, opener, send_status)
         rows = database._connection.execute("SELECT * FROM telemetry_outbox").fetchall()
         assert len(rows) == expected_count
         if expected_attempts:
@@ -841,7 +854,8 @@ async def test_next_batch_equals_sender_post_body_apart_from_sent_at(config_fact
         runtime.database.enqueue_telemetry("job:one", json.dumps({"event": "job", "job_id": "one"}), now)
         runtime.database.enqueue_telemetry("features:p", json.dumps({"event": "features", "counts": {}}), now)
         status = runtime.telemetry_status()
-        assert status["enabled"] is True and status["source"] == "config"
+        assert status["enabled"] is True
+        assert status["source"] == "config"
         assert status["queued"] == 2
         assert status["install_id"] == install_id(config.home)
         await send_outbox_once(runtime.database, runtime._telemetry_config_check, config.home, opener)
@@ -869,14 +883,16 @@ async def test_status_records_last_send_time_and_last_error(config_factory, monk
         await send_outbox_once(runtime.database, runtime._telemetry_config_check, config.home,
                                lambda *a, **k: Response(), runtime._telemetry_send_status)
         status = runtime.telemetry_status()
-        assert status["last_error"] == "HTTP 500" and status["last_send_at"] is None
+        assert status["last_error"] == "HTTP 500"
+        assert status["last_send_at"] is None
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE telemetry_outbox SET next_attempt_at='2000-01-01'")
         Response.status = 200
         await send_outbox_once(runtime.database, runtime._telemetry_config_check, config.home,
                                lambda *a, **k: Response(), runtime._telemetry_send_status)
         status = runtime.telemetry_status()
-        assert status["last_error"] is None and status["last_send_at"] is not None
+        assert status["last_error"] is None
+        assert status["last_send_at"] is not None
         assert status["queued"] == 0
     finally:
         runtime.database.close()
@@ -996,7 +1012,8 @@ async def test_sender_resolves_install_id_off_the_event_loop(config_factory, mon
     try:
         database.enqueue_telemetry("job:one", "{}", datetime.now(timezone.utc).isoformat())
         await send_outbox_once(database, lambda: config, config.home, lambda *a, **k: Response())
-        assert threads and threading.get_ident() not in threads
+        assert threads
+        assert threading.get_ident() not in threads
     finally:
         database.close()
 
@@ -2014,9 +2031,10 @@ async def test_run_secrets_are_released_when_terminal_persistence_keeps_failing(
     monkeypatch.setattr("refract.execution.parse_execution_plan", lambda _plan: object())
     monkeypatch.setattr(runtime.target_executor, "execute", execute)
     monkeypatch.setattr(runtime.database, "finish_job", failing_finish)
+    cancel_event = CancelEvent()
     try:
         with pytest.raises(RuntimeError):
-            await runtime.runner.run("job-one", CancelEvent())
+            await runtime.runner.run("job-one", cancel_event)
         assert runtime.target_executor.run_secrets == {}
         runtime.target_executor.run_secrets["job-two"] = ("other-secret",)
     finally:

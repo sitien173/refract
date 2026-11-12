@@ -29,6 +29,7 @@ _RUNTIME_INACTIVE = "Refract runtime is not active"
 _MALFORMED_BODY = "Malformed request body"
 _DAEMON_NOT_STOPPED = "The daemon was not stopped."
 _NOTHING_MODIFIED = "Nothing was modified."
+_NO_JOB_CHANGED = "No job was changed."
 
 
 @dataclass
@@ -58,7 +59,7 @@ def _api_error(
     status_code: int,
     *,
     code: str = "",
-    unchanged: str = "No job was changed.",
+    unchanged: str = _NO_JOB_CHANGED,
     recovery: str = "",
     headers: dict[str, str] | None = None,
 ) -> Response:
@@ -86,7 +87,7 @@ def _map_orchestration_error(exc: OrchestrationError) -> Response:
         str(exc),
         status_code,
         code=exc.code,
-        unchanged="No job was changed.",
+        unchanged=_NO_JOB_CHANGED,
         recovery=exc.next_action,
         headers=headers,
     )
@@ -305,7 +306,7 @@ def _check_csrf(request: Request) -> Response | None:
     return None
 
 
-async def _parse_json_body(request: Request, unchanged: str = "No job was changed.") -> tuple[dict[str, Any] | None, Response | None]:
+async def _parse_json_body(request: Request, unchanged: str = _NO_JOB_CHANGED) -> tuple[dict[str, Any] | None, Response | None]:
     try:
         raw_body = await request.body()
     except Exception:
