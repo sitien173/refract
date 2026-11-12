@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 3.0.1 -->
+<!-- refract-shared-version: 3.0.2 -->
 # External Response Protocol (ERP)
 
 Response format for the phase implementer. The coordinator reads each section.

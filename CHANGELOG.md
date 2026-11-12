@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.0.2 - 2026-11-12
+
 - The SessionStart hook and skills name Refract MCP tools by the `refract` server instead of a host-specific prefix, so every host resolves them without colliding with same-named tools from other servers. Antigravity no longer receives the Claude Code tool name.
 - Add `refract stop` and `refract restart` with optional force, and report the daemon PID in `refract status`.
 - Opt-in product telemetry. It is off by default and follows `DO_NOT_TRACK=1`, then `REFRACT_TELEMETRY`, then `[telemetry] enabled`. Events queue in a local outbox and go to the fixed collector at `https://cf-api-gateway.sitienbmt.workers.dev/refract-collector`. Prompts, results, project paths, and target `args` and `env` values are never collected as payload fields, and error text is redacted for target values and paths, but it may still carry prompt or code fragments. `refract telemetry` shows the decision and the exact next batch. See the Telemetry section of `server/README.md`.
