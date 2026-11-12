@@ -212,8 +212,6 @@ env = { B = "2" }
         ("backend", '"pi"'),
         ("model", '"gpt-4"'),
         ("args", '["--some-arg"]'),
-        ("isolated", "true"),
-        ("read_only", "true"),
         ("max_concurrency", "5"),
         ("retry", "{ attempts = 2 }"),
     ],

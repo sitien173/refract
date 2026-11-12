@@ -29,8 +29,7 @@ reasoning = "high"
 id = "claude-review"
 backend = "claude"
 model = "sonnet"
-isolated = true
-read_only = true
+args = ["--safe-mode", "--strict-mcp-config", "--tools", "Read,Grep,Glob"]
 
 [profiles.base]
 implement = "codex-code"

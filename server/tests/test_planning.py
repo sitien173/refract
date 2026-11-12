@@ -101,7 +101,8 @@ def test_plan_rejects_legacy_multi_workflow_shape(tmp_path) -> None:
     [
         ("backend", "unknown"),
         ("max_concurrency", 0),
-        ("isolated", "false"),
+        ("isolated", True),
+        ("read_only", True),
         ("args", [1]),
     ],
 )
@@ -158,8 +159,6 @@ def test_custom_target_args_round_trip_in_plan() -> None:
     target = TargetConfig(
         id="native-with-custom-args",
         backend="pi",
-        isolated=True,
-        read_only=True,
         args=("--verbose", "--system-prompt", "advisory only"),
     )
     plan = ExecutionPlan(
@@ -187,8 +186,6 @@ def test_pi_native_args_round_trip_in_plan(native_args: tuple[str, ...]) -> None
     target = TargetConfig(
         id="pi-with-native-args",
         backend="pi",
-        isolated=True,
-        read_only=True,
         args=native_args,
     )
     plan = ExecutionPlan(

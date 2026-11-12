@@ -40,8 +40,7 @@ id = "pi-high-review"
 backend = "pi"
 model = "openai-codex/gpt-5.6-luna"
 reasoning = "high"
-isolated = true
-read_only = true
+args = ["--no-context-files", "--no-extensions", "--no-skills", "--no-prompt-templates", "--tools", "read,grep,find,ls"]
 system_prompt = "Review only. Never modify files."
 retry = { attempts = 1 }
 
@@ -50,7 +49,7 @@ id = "claude-opus-code"
 backend = "claude"
 model = "opus"
 reasoning = "high"
-isolated = true
+args = ["--safe-mode", "--strict-mcp-config"]
 env = { ANTHROPIC_API_KEY = "replace-me" }
 
 [[targets]]

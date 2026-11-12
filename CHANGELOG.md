@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Removed the `isolated` and `read_only` target settings. A config that still sets either key fails to load with a message pointing to `args`. Put the backend options in `args` instead: for Pi, `--no-context-files --no-extensions --no-skills --no-prompt-templates` and `--tools read,grep,find,ls`; for Claude Code, `--safe-mode --strict-mcp-config` and `--tools Read,Grep,Glob`. Pi targets now always receive `--approve`, and Pi targets may load extensions, skills, and prompt templates through `args`. Queued jobs that were planned with either setting fail instead of running without the restriction; retry them after updating the config. The dashboard no longer shows the two fields.
 - Jobs in the same project now run concurrently up to `max_jobs` instead of one at a time. Concurrent jobs share the project checkout and can edit the same files. Jobs that share a project, session, workflow, and target still run one at a time so they never resume one backend session at once.
 
 ## 3.0.3 - 2026-11-12

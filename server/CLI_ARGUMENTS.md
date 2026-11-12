@@ -64,7 +64,8 @@ through `answer`, then resumes `wait` on the same job ID.
 
 The worker tool-shell PATH must contain the installed `refract` executable.
 Targets whose tools exclude shell execution, such as Claude Code and Pi
-`read_only` targets, cannot run `refract ask` and return `BLOCKED` instead.
+targets with `--tools` limited to read and search tools, cannot run
+`refract ask` and return `BLOCKED` instead.
 
 ## Target configuration
 
@@ -99,21 +100,15 @@ snapshotted into job records. Use each CLI's credential store or the target
 
 Refract still owns the non-interactive transport, workspace, prompt, output
 capture, and durable session argument. The driver translates first-class target
-fields such as `model`, `backend_profile`, `reasoning`, `system_prompt`,
-`isolated`, and `read_only` into CLI arguments before calling a transport-only
-backend. Avoid duplicating those fields or transport-owned options in `args`; target arguments
+fields such as `model`, `backend_profile`, `reasoning`, and `system_prompt`
+into CLI arguments before calling a transport-only backend. Avoid duplicating those fields or transport-owned options in `args`; target arguments
 should be options only because Refract supplies the final prompt. The reserved
 end-of-options token `--` is rejected for every backend. Codex `--cd`, `-C`, and
 their attached-value forms are also rejected so a target cannot leave its
-isolated worktree. Isolated Pi targets cannot explicitly load extensions,
-skills, or prompt templates. Options such as Codex `--ephemeral` and Pi
+isolated worktree. Options such as Codex `--ephemeral` and Pi
 `--no-session` disable persistence and therefore prevent Refract from resuming
 that backend context on a later job. These checks apply both when loading TOML
 and when a target is constructed programmatically.
-
-The driver does not translate `read_only` into restrictions for Codex or Agy.
-For those backends the label alone does not enforce read-only access. Claude
-Code and Pi receive restricted tool lists.
 
 ## Antigravity (`agy --print`)
 
@@ -211,12 +206,10 @@ The built-in tool names are `read`, `bash`, `edit`, `write`, `grep`, `find`, and
 `ls`. Pi also supports `@file` message arguments, but target `args` should
 contain options only because Refract supplies the final prompt.
 
-Refract owns `--mode json`, the prompt, and `--session`. Direct runs and normal
-targets append `--approve` after configurable arguments so it cannot be
-overridden. For `isolated = true`, the driver instead adds `--no-approve`,
-`--no-context-files`, `--no-extensions`, `--no-skills`, and
-`--no-prompt-templates`; explicit extension, skill, and prompt-template args
-(including `--extension=...` forms) are rejected. `read_only = true` adds
+Refract owns `--mode json`, the prompt, and `--session`. The driver appends
+`--approve` after target arguments so it cannot be overridden. To isolate a
+target, add `--no-context-files`, `--no-extensions`, `--no-skills`, and
+`--no-prompt-templates` to `args`. To limit it to read and search tools, add
 `--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become
 `--system-prompt`, `--model`, and `--thinking` respectively. Refract places
 `--mode json` after target arguments so output parsing cannot be replaced.
@@ -264,9 +257,7 @@ Target field translation:
 
 | Field | Emitted argv |
 |---|---|
-| `isolated = true` | `--safe-mode --strict-mcp-config` |
 | `system_prompt` | `--system-prompt <value>` |
-| `read_only = true` | `--tools Read,Grep,Glob` |
 | `model` | `--model <value>` |
 | `reasoning` | `--effort <value>` |
 
@@ -274,7 +265,9 @@ Target field translation:
 commands, custom agents, output styles, workflows, custom themes, and
 keybindings. Authentication, model selection, built-in tools, and permissions
 continue to work normally, and admin-managed policy settings still apply. That
-combination is what makes it the usable analogue to Pi isolation.
+combination is what makes it the usable analogue to Pi isolation. To isolate a
+target, add `--safe-mode` and `--strict-mcp-config` to `args`. To limit it to
+read and search tools, add `--tools Read,Grep,Glob`.
 
 `backend_profile` has no Claude Code equivalent and is ignored.
 

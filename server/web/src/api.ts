@@ -70,8 +70,6 @@ export const TargetViewSchema = z.object({
   id: z.string(),
   model: z.string(),
   backend: z.string(),
-  isolated: z.boolean(),
-  read_only: z.boolean(),
   max_concurrency: z.number(),
   active: z.number(),
   healthy: z.boolean(),

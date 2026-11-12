@@ -47,7 +47,7 @@ _TARGET_ARGS_CASES = {
         ('--model', 'm'),
     ),
     'agy_ignores_other_settings': (
-        _target('agy', model='m', reasoning='r', system_prompt='s', read_only=True, isolated=True, backend_profile='bp', args=('--x',)),
+        _target('agy', model='m', reasoning='r', system_prompt='s', backend_profile='bp', args=('--x',)),
         ('--x', '--model', 'm'),
     ),
     'codex_plain': (
@@ -79,16 +79,12 @@ _TARGET_ARGS_CASES = {
         ('-c', 'model_reasoning_effort=high'),
     ),
     'codex_all': (
-        _target('codex', model='m', reasoning='r', system_prompt='s', read_only=True, isolated=True, backend_profile='bp', args=('--x', 'y')),
+        _target('codex', model='m', reasoning='r', system_prompt='s', backend_profile='bp', args=('--x', 'y')),
         ('--x', 'y', '--profile', 'bp', '--model', 'm', '-c', 'model="m"', '-c', 'model_reasoning_effort=r'),
     ),
     'pi_plain': (
         _target('pi'),
         ('--approve',),
-    ),
-    'pi_isolated': (
-        _target('pi', isolated=True),
-        ('--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--no-prompt-templates'),
     ),
     'pi_user_args_then_approve': (
         _target('pi', args=('--x',)),
@@ -97,10 +93,6 @@ _TARGET_ARGS_CASES = {
     'pi_system_prompt': (
         _target('pi', system_prompt='s'),
         ('--approve', '--system-prompt', 's'),
-    ),
-    'pi_read_only': (
-        _target('pi', read_only=True),
-        ('--approve', '--tools', 'read,grep,find,ls'),
     ),
     'pi_model': (
         _target('pi', model='m'),
@@ -111,28 +103,16 @@ _TARGET_ARGS_CASES = {
         ('--approve', '--thinking', 'r'),
     ),
     'pi_all': (
-        _target('pi', model='m', reasoning='r', system_prompt='s', read_only=True, backend_profile='bp', args=('--x',)),
-        ('--x', '--approve', '--system-prompt', 's', '--tools', 'read,grep,find,ls', '--model', 'm', '--thinking', 'r'),
-    ),
-    'pi_isolated_all': (
-        _target('pi', model='m', reasoning='r', system_prompt='s', read_only=True, isolated=True, args=('--x',)),
-        ('--x', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--no-prompt-templates', '--system-prompt', 's', '--tools', 'read,grep,find,ls', '--model', 'm', '--thinking', 'r'),
+        _target('pi', model='m', reasoning='r', system_prompt='s', backend_profile='bp', args=('--x',)),
+        ('--x', '--approve', '--system-prompt', 's', '--model', 'm', '--thinking', 'r'),
     ),
     'claude_plain': (
         _target('claude'),
         (),
     ),
-    'claude_isolated': (
-        _target('claude', isolated=True),
-        ('--safe-mode', '--strict-mcp-config'),
-    ),
     'claude_system_prompt': (
         _target('claude', system_prompt='s'),
         ('--system-prompt', 's'),
-    ),
-    'claude_read_only': (
-        _target('claude', read_only=True),
-        ('--tools', 'Read,Grep,Glob'),
     ),
     'claude_model': (
         _target('claude', model='m'),
@@ -143,8 +123,8 @@ _TARGET_ARGS_CASES = {
         ('--effort', 'r'),
     ),
     'claude_all': (
-        _target('claude', model='m', reasoning='r', system_prompt='s', read_only=True, isolated=True, backend_profile='bp', args=('--x',)),
-        ('--x', '--safe-mode', '--strict-mcp-config', '--system-prompt', 's', '--tools', 'Read,Grep,Glob', '--model', 'm', '--effort', 'r'),
+        _target('claude', model='m', reasoning='r', system_prompt='s', backend_profile='bp', args=('--x',)),
+        ('--x', '--system-prompt', 's', '--model', 'm', '--effort', 'r'),
     ),
     'unknown_backend_passthrough': (
         _target('other', model='m', reasoning='r', args=('--x',)),
@@ -170,11 +150,7 @@ _TARGET_ARGS_CASES = {
         _target('codex', args=('-Cx',)),
         Raised(ValueError, "Codex target 't' args cannot override the workspace root"),
     ),
-    'reject_pi_isolated_skill': (
-        _target('pi', isolated=True, args=('--skill=x',)),
-        Raised(ValueError, "Isolated Pi target 't' cannot explicitly load extensions, skills, or prompt templates"),
-    ),
-    'pi_not_isolated_skill_allowed': (
+    'pi_skill_allowed': (
         _target('pi', args=('--skill=x',)),
         ('--skill=x', '--approve'),
     ),

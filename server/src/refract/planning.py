@@ -26,8 +26,6 @@ def _target_identity_data(target: TargetConfig) -> dict[str, Any]:
         "backend_profile": target.backend_profile,
         "reasoning": target.reasoning,
         "system_prompt": target.system_prompt,
-        "isolated": target.isolated,
-        "read_only": target.read_only,
         "args": list(target.args),
         "max_concurrency": target.max_concurrency,
     }
@@ -106,8 +104,10 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
             backend = value["backend"]
             args = value.get("args", [])
             max_concurrency = value.get("max_concurrency", 1)
-            isolated = value.get("isolated", False)
-            read_only = value.get("read_only", False)
+            # Plans stored before isolated and read_only were removed must not
+            # run without the restrictions they requested.
+            if value.get("isolated") or value.get("read_only"):
+                raise ValueError
             text_values = (
                 value.get("model", ""),
                 value.get("backend_profile", ""),
@@ -130,14 +130,10 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
                 or isinstance(max_concurrency, bool)
                 or not isinstance(max_concurrency, int)
                 or max_concurrency < 1
-                or not isinstance(isolated, bool)
-                or not isinstance(read_only, bool)
                 or not all(isinstance(item, str) for item in text_values)
             ):
                 raise ValueError
-            validate_target_args(
-                target_id, backend, tuple(args), isolated=isolated
-            )
+            validate_target_args(target_id, backend, tuple(args))
             targets.append(
                 TargetConfig(
                     id=target_id,
@@ -146,8 +142,6 @@ def _parse_targets(raw: Any) -> tuple[TargetConfig, ...]:
                     backend_profile=text_values[1],
                     reasoning=text_values[2],
                     system_prompt=text_values[3],
-                    isolated=isolated,
-                    read_only=read_only,
                     args=tuple(args),
                     max_concurrency=max_concurrency,
                     context_window=context_window,
@@ -235,7 +229,9 @@ def resolve_execution_plan(
 
 
 def target_execution_key(target: TargetConfig) -> str:
-    encoded = json.dumps(_target_identity_data(target), sort_keys=True, separators=(",", ":")).encode()
+    # Removed fields keep their former defaults so existing session keys stay stable.
+    identity = {"isolated": False, "read_only": False, **_target_identity_data(target)}
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     return f"{target.id}:{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 

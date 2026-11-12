@@ -59,24 +59,11 @@ def _codex_args(target: TargetConfig, args: list[str]) -> None:
 
 
 def _pi_args(target: TargetConfig, args: list[str]) -> None:
-    if target.isolated:
-        args.extend(
-            [
-                "--no-approve",
-                "--no-context-files",
-                "--no-extensions",
-                "--no-skills",
-                "--no-prompt-templates",
-            ]
-        )
-    else:
-        # Append after user args so normal targets cannot disable the
-        # daemon's required non-interactive project approval.
-        args.append("--approve")
+    # Append after user args so targets cannot disable the daemon's
+    # required non-interactive project approval.
+    args.append("--approve")
     if target.system_prompt:
         args.extend(["--system-prompt", target.system_prompt])
-    if target.read_only:
-        args.extend(["--tools", "read,grep,find,ls"])
     if target.model:
         args.extend(["--model", target.model])
     if target.reasoning:
@@ -84,12 +71,8 @@ def _pi_args(target: TargetConfig, args: list[str]) -> None:
 
 
 def _claude_args(target: TargetConfig, args: list[str]) -> None:
-    if target.isolated:
-        args.extend(["--safe-mode", "--strict-mcp-config"])
     if target.system_prompt:
         args.extend(["--system-prompt", target.system_prompt])
-    if target.read_only:
-        args.extend(["--tools", "Read,Grep,Glob"])
     if target.model:
         args.extend(["--model", target.model])
     if target.reasoning:
@@ -105,12 +88,7 @@ def _target_args(target: TargetConfig) -> tuple[str, ...]:
     Backends only own transport arguments. Provider-specific execution policy
     remains in target configuration and is compiled here.
     """
-    validate_target_args(
-        target.id,
-        target.backend,
-        target.args,
-        isolated=target.isolated,
-    )
+    validate_target_args(target.id, target.backend, target.args)
     args = list(target.args)
     build = _ARGS_BUILDERS.get(target.backend)
     if build is not None:

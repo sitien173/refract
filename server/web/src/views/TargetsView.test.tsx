@@ -6,8 +6,6 @@ const target = {
   id: "local",
   model: "model-x",
   backend: "codex",
-  isolated: false,
-  read_only: true,
   max_concurrency: 3,
   active: 1,
   healthy: true,

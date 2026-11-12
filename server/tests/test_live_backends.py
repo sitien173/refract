@@ -49,6 +49,9 @@ async def test_live_claude_execute() -> None:
     _assert_live_result("claude", out)
 
 
+_READ_ONLY_ARGS = {"claude": ("--tools", "Read,Grep,Glob"), "pi": ("--tools", "read,grep,find,ls")}
+
+
 @pytest.mark.live
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["codex", "claude", "agy", "pi"])
@@ -105,7 +108,7 @@ async def test_live_ask_coordinator(backend: str, read_only: bool, tmp_path: Pat
     )
     try:
         out = await DriverRegistry().execute(
-            target=TargetConfig(id="ask-probe", backend=backend, read_only=read_only),
+            target=TargetConfig(id="ask-probe", backend=backend, args=_READ_ONLY_ARGS.get(backend, ()) if read_only else ()),
             prompt=prompt,
             cwd=tmp_path,
             session_id="",

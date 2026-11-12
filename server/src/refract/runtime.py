@@ -969,13 +969,7 @@ class Runtime:
         views = self.target_executor.views(self._catalog.targets)
         target_by_id = {target.id: target for target in self._catalog.targets}
         return [
-            view.model_copy(
-                update={
-                    "backend": target_by_id[view.id].backend,
-                    "isolated": target_by_id[view.id].isolated,
-                    "read_only": target_by_id[view.id].read_only,
-                }
-            )
+            view.model_copy(update={"backend": target_by_id[view.id].backend})
             for view in views
         ]
 

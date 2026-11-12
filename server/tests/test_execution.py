@@ -703,9 +703,7 @@ async def test_global_project_and_target_capacities_apply_together(tmp_path) -> 
             if job_id == second_job_id:
                 second_runner_started.set()
 
-    target = TargetConfig(
-        id="safe-reader", backend="pi", isolated=True, read_only=True, max_concurrency=1
-    )
+    target = TargetConfig(id="safe-reader", backend="pi", max_concurrency=1)
     catalog = replace(
         config(tmp_path / "home", (target,)), max_jobs=2
     )
@@ -760,11 +758,8 @@ async def test_global_project_and_target_capacities_apply_together(tmp_path) -> 
 @pytest.mark.asyncio
 async def test_submission_preserves_fallback_targets_beyond_attempt_limit(tmp_path) -> None:
     root = repository(tmp_path)
-    safe = TargetConfig(id="safe", backend="pi", isolated=True, read_only=True)
-    fallback = TargetConfig(
-        id="fallback", backend="pi", isolated=True, read_only=True,
-        args=("--export", "out.html"),
-    )
+    safe = TargetConfig(id="safe", backend="pi")
+    fallback = TargetConfig(id="fallback", backend="pi", args=("--export", "out.html"))
     selection = TargetSelection(("safe", "fallback"))
     catalog = replace(
         config(tmp_path / "home", (safe, fallback)),

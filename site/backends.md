@@ -12,7 +12,7 @@ Refract launches argv directly with `shell=False`. On Windows, npm `.cmd` launch
 
 ## Target fields
 
-`id` and `backend` are required. Optional: `model`, `backend_profile`, `reasoning`, `system_prompt`, `isolated`, `read_only`, `args`, `max_concurrency`, `context_window`, `retry`, `env`. Credentials stay in each CLI's own store or in the target `env` table, never in `args`: target settings other than `env` are snapshotted into job records.
+`id` and `backend` are required. Optional: `model`, `backend_profile`, `reasoning`, `system_prompt`, `args`, `max_concurrency`, `context_window`, `retry`, `env`. Credentials stay in each CLI's own store or in the target `env` table, never in `args`: target settings other than `env` are snapshotted into job records.
 
 ## Profile fields
 
@@ -22,18 +22,18 @@ See [Configuration]({% link configuration.md %}) for the full key tables.
 
 ## Backend summary
 
-| `backend` | Detect | List models | `reasoning` becomes | `isolated` / `read_only` |
-| --- | --- | --- | --- | --- |
-| `agy` | `command -v agy` | `agy models` | ignored; pick a model variant whose name carries the level, e.g. `"Gemini 3.1 Pro (High)"` | not supported |
-| `codex` | `command -v codex` | no listing command; ask the user, or omit `model` to use the Codex default | `-c model_reasoning_effort=<value>` | not supported |
-| `pi` | `command -v pi` | `pi --list-models` | `--thinking <value>` | supported |
-| `claude` | `command -v claude` | aliases such as `opus`, `sonnet`; see `claude --help` | `--effort <value>` | supported |
+| `backend` | Detect | List models | `reasoning` becomes |
+| --- | --- | --- | --- |
+| `agy` | `command -v agy` | `agy models` | ignored; pick a model variant whose name carries the level, e.g. `"Gemini 3.1 Pro (High)"` |
+| `codex` | `command -v codex` | no listing command; ask the user, or omit `model` to use the Codex default | `-c model_reasoning_effort=<value>` |
+| `pi` | `command -v pi` | `pi --list-models` | `--thinking <value>` |
+| `claude` | `command -v claude` | aliases such as `opus`, `sonnet`; see `claude --help` | `--effort <value>` |
 
 Valid `reasoning` values belong to each CLI; confirm them in its `--help` before writing them.
 
-- `isolated = true` strips context files, extensions, plugins, hooks, and MCP servers from the worker.
-- `read_only = true` limits the worker to read and search tools.
 - `system_prompt` is passed to `pi` and `claude`.
+- To isolate a `pi` worker from context files, extensions, skills, and prompt templates, set `args = ["--no-context-files", "--no-extensions", "--no-skills", "--no-prompt-templates"]`. Add `"--tools", "read,grep,find,ls"` to limit it to read and search tools.
+- To isolate a `claude` worker from CLAUDE.md, plugins, hooks, and MCP servers, set `args = ["--safe-mode", "--strict-mcp-config"]`. Add `"--tools", "Read,Grep,Glob"` to limit it to read and search tools.
 
 ## Target arguments
 
@@ -61,9 +61,7 @@ args = ["--provider", "openai", "--offline"]
 
 Keep one option or value per TOML array item. Repeat both items for repeatable options, for example `args = ["--add-dir", "D:/one", "--add-dir", "D:/two"]`. Do not put API keys or other credentials in `args`: target configuration is snapshotted into job records. Use each CLI's credential store or the target `env` table instead; `env` values are never stored in job records.
 
-Refract still owns the non-interactive transport, workspace, prompt, output capture, and durable session argument. The driver translates first-class target fields such as `model`, `backend_profile`, `reasoning`, `system_prompt`, `isolated`, and `read_only` into CLI arguments before calling a transport-only backend. Avoid duplicating those fields or transport-owned options in `args`; target arguments should be options only because Refract supplies the final prompt. The reserved end-of-options token `--` is rejected for every backend. Codex `--cd`, `-C`, and their attached-value forms are also rejected so a target cannot leave its isolated worktree. Isolated Pi targets cannot explicitly load extensions, skills, or prompt templates. Options such as Codex `--ephemeral` and Pi `--no-session` disable persistence and therefore prevent Refract from resuming that backend context on a later job. These checks apply both when loading TOML and when a target is constructed programmatically.
-
-The driver does not translate `read_only` into restrictions for Codex or Agy. For those backends the label alone does not enforce read-only access. Claude Code and Pi receive restricted tool lists.
+Refract still owns the non-interactive transport, workspace, prompt, output capture, and durable session argument. The driver translates first-class target fields such as `model`, `backend_profile`, `reasoning`, and `system_prompt` into CLI arguments before calling a transport-only backend. Avoid duplicating those fields or transport-owned options in `args`; target arguments should be options only because Refract supplies the final prompt. The reserved end-of-options token `--` is rejected for every backend. Codex `--cd`, `-C`, and their attached-value forms are also rejected so a target cannot leave its isolated worktree. Options such as Codex `--ephemeral` and Pi `--no-session` disable persistence and therefore prevent Refract from resuming that backend context on a later job. These checks apply both when loading TOML and when a target is constructed programmatically.
 
 Flags were last checked on 2026-10-26 against:
 
@@ -150,7 +148,7 @@ Available execution options:
 
 The built-in tool names are `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. Pi also supports `@file` message arguments, but target `args` should contain options only because Refract supplies the final prompt.
 
-Refract owns `--mode json`, the prompt, and `--session`. Direct runs and normal targets append `--approve` after configurable arguments so it cannot be overridden. For `isolated = true`, the driver instead adds `--no-approve`, `--no-context-files`, `--no-extensions`, `--no-skills`, and `--no-prompt-templates`; explicit extension, skill, and prompt-template args (including `--extension=...` forms) are rejected. `read_only = true` adds `--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become `--system-prompt`, `--model`, and `--thinking` respectively. Refract places `--mode json` after target arguments so output parsing cannot be replaced.
+Refract owns `--mode json`, the prompt, and `--session`. The driver appends `--approve` after target arguments so it cannot be overridden. To isolate a target, add `--no-context-files`, `--no-extensions`, `--no-skills`, and `--no-prompt-templates` to `args`. To limit it to read and search tools, add `--tools read,grep,find,ls`. `system_prompt`, `model`, and `reasoning` become `--system-prompt`, `--model`, and `--thinking` respectively. Refract places `--mode json` after target arguments so output parsing cannot be replaced.
 
 ## Claude Code (`claude -p`)
 
@@ -186,13 +184,11 @@ Target field translation:
 
 | Field | Emitted argv |
 |---|---|
-| `isolated = true` | `--safe-mode --strict-mcp-config` |
 | `system_prompt` | `--system-prompt <value>` |
-| `read_only = true` | `--tools Read,Grep,Glob` |
 | `model` | `--model <value>` |
 | `reasoning` | `--effort <value>` |
 
-`--safe-mode` disables CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands, custom agents, output styles, workflows, custom themes, and keybindings. Authentication, model selection, built-in tools, and permissions continue to work normally, and admin-managed policy settings still apply. That combination is what makes it the usable analogue to Pi isolation.
+`--safe-mode` disables CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands, custom agents, output styles, workflows, custom themes, and keybindings. Authentication, model selection, built-in tools, and permissions continue to work normally, and admin-managed policy settings still apply. That combination is what makes it the usable analogue to Pi isolation. To isolate a target, add `--safe-mode` and `--strict-mcp-config` to `args`. To limit it to read and search tools, add `--tools Read,Grep,Glob`.
 
 `backend_profile` has no Claude Code equivalent and is ignored.
 

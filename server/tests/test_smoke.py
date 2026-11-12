@@ -1426,7 +1426,7 @@ async def test_pi_isolated_mode_replaces_instructions_and_disables_writes(monkey
 
 
 @pytest.mark.asyncio
-async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path) -> None:
+async def test_driver_passes_pi_isolation_args_from_target_args(monkeypatch, tmp_path) -> None:
     import refract.drivers as drivers_module
     from refract.config import TargetConfig
 
@@ -1451,9 +1451,14 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
             model="gpt-5.6-sol",
             reasoning="xhigh",
             system_prompt="sentinel",
-            isolated=True,
-            read_only=True,
-            args=("--verbose",),
+            args=(
+                "--no-context-files",
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                "--tools",
+                "read,grep,find,ls",
+            ),
         ),
         prompt="review",
         cwd=tmp_path,
@@ -1464,16 +1469,15 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
 
     params = captured["params"]
     assert params.args == (
-        "--verbose",
-        "--no-approve",
         "--no-context-files",
         "--no-extensions",
         "--no-skills",
         "--no-prompt-templates",
-        "--system-prompt",
-        "sentinel",
         "--tools",
         "read,grep,find,ls",
+        "--approve",
+        "--system-prompt",
+        "sentinel",
         "--model",
         "gpt-5.6-sol",
         "--thinking",
@@ -1482,7 +1486,7 @@ async def test_driver_passes_isolated_target_policy_to_pi(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_driver_compiles_claude_isolated_target_args(monkeypatch, tmp_path) -> None:
+async def test_driver_passes_claude_isolation_args_from_target_args(monkeypatch, tmp_path) -> None:
     import refract.drivers as drivers_module
     from refract.config import TargetConfig
 
@@ -1497,12 +1501,10 @@ async def test_driver_compiles_claude_isolated_target_args(monkeypatch, tmp_path
         target=TargetConfig(
             id="claude-isolated",
             backend="claude",
-            isolated=True,
             system_prompt="sentinel instructions",
-            read_only=True,
             model="claude-model",
             reasoning="high",
-            args=("--verbose",),
+            args=("--safe-mode", "--strict-mcp-config", "--tools", "Read,Grep,Glob"),
         ),
         prompt="review",
         cwd=tmp_path,
@@ -1512,42 +1514,17 @@ async def test_driver_compiles_claude_isolated_target_args(monkeypatch, tmp_path
     )
 
     assert captured["params"].args == (
-        "--verbose",
         "--safe-mode",
         "--strict-mcp-config",
-        "--system-prompt",
-        "sentinel instructions",
         "--tools",
         "Read,Grep,Glob",
+        "--system-prompt",
+        "sentinel instructions",
         "--model",
         "claude-model",
         "--effort",
         "high",
     )
-
-
-@pytest.mark.asyncio
-async def test_driver_compiles_claude_read_only_args(monkeypatch, tmp_path) -> None:
-    import refract.drivers as drivers_module
-    from refract.config import TargetConfig
-
-    captured = {}
-
-    async def fake_execute(params, *, cancel=None, on_event=None):
-        captured["args"] = params.args
-        return BackendResult(outcome="OK", SESSION_ID="", agent_messages="reviewed", error="", error_class="")
-
-    monkeypatch.setattr(drivers_module.claude, "execute", fake_execute)
-    await drivers_module.DriverRegistry().execute(
-        target=TargetConfig(id="claude-read-only", backend="claude", read_only=True),
-        prompt="review",
-        cwd=tmp_path,
-        session_id="",
-        timeout_s=0,
-        cancel_event=threading.Event(),
-    )
-
-    assert captured["args"] == ("--tools", "Read,Grep,Glob")
 
 
 @pytest.mark.asyncio
@@ -1676,29 +1653,6 @@ async def test_driver_rejects_programmatic_reserved_target_args(tmp_path, target
 
     result = await DriverRegistry().execute(
         target=TargetConfig(**target),
-        prompt="review",
-        cwd=tmp_path,
-        session_id="",
-        timeout_s=0,
-        cancel_event=threading.Event(),
-    )
-
-    assert result.outcome == "TARGET_FATAL"
-    assert result.error_code == "invalid_args"
-
-
-@pytest.mark.asyncio
-async def test_driver_rejects_unsafe_programmatic_isolated_pi_target(tmp_path) -> None:
-    from refract.config import TargetConfig
-    from refract.drivers import DriverRegistry
-
-    result = await DriverRegistry().execute(
-        target=TargetConfig(
-            id="unsafe",
-            backend="pi",
-            isolated=True,
-            args=("--extension=unsafe.ts",),
-        ),
         prompt="review",
         cwd=tmp_path,
         session_id="",

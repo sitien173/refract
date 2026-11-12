@@ -525,10 +525,10 @@ extends = "base"
     assert base.profile_declarations == base_declarations
 
 
-@pytest.mark.parametrize("backend,args", [("agy", ("--",)), ("codex", ("--cd", "/other")), ("pi", ("--extension", "unsafe.ts")), ("claude", ("--",))])
+@pytest.mark.parametrize("backend,args", [("agy", ("--",)), ("codex", ("--cd", "/other")), ("pi", ("--",)), ("claude", ("--",))])
 def test_config_rejects_reserved_target_args(backend, args) -> None:
     with pytest.raises(ValueError):
-        validate_target_args("unsafe", backend, args, isolated=backend == "pi")
+        validate_target_args("unsafe", backend, args)
 
 
 def test_claude_target_loads_without_error(tmp_path) -> None:
@@ -563,8 +563,6 @@ other = "primary"
 @pytest.mark.parametrize(
     ("setting", "value", "expected"),
     [
-        ("isolated", '"false"', "true or false"),
-        ("read_only", "1", "true or false"),
         ("max_concurrency", "0", "positive integer"),
         ("backend_profile", "false", "must be a string"),
     ],

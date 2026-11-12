@@ -37,8 +37,6 @@ A target is one worker CLI with fixed settings. `id` and `backend` are required.
 | `reasoning` | Reasoning level, translated per backend |
 | `backend_profile` | Codex configuration profile |
 | `system_prompt` | System prompt for `pi` and `claude` |
-| `isolated` | Strip context files, extensions, plugins, hooks, and MCP servers; `pi` and `claude` only |
-| `read_only` | Limit the worker to read and search tools; `pi` and `claude` only |
 | `args` | Extra CLI options, one token per array item |
 | `max_concurrency` | Jobs this target runs at once; default `1` |
 | `context_window` | Context capacity reported in `result.tokens`; overrides the backend's value |

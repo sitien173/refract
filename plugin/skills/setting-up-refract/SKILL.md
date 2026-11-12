@@ -38,7 +38,8 @@ Each step ends on its stated completion criterion.
    user has picked the models to use per backend.
 4. **Targets.** Propose one target per role the user wants: code, review,
    consult. Name ids `<backend>-<model>-<reasoning>-<role>`. Default review
-   targets to `isolated = true` and `read_only = true` where supported. Done
+   targets to the isolation and read-only `args` in `backends.md` where
+   supported. Done
    when the user confirms the target list.
 5. **Profiles.** Propose `[profiles.base]` mapping `implement`, `review`, and
    `consult`. Review uses a target other than the implement target when one
