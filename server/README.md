@@ -78,8 +78,6 @@ A target is one worker CLI with fixed settings. `id` and `backend` are required.
 | `reasoning` | Reasoning level, translated per backend |
 | `backend_profile` | Codex configuration profile |
 | `system_prompt` | System prompt for `pi` and `claude` |
-| `isolated` | Strip context files, extensions, plugins, hooks, and MCP servers; `pi` and `claude` only |
-| `read_only` | Limit the worker to read and search tools; `pi` and `claude` only |
 | `args` | Extra CLI options, one token per array item |
 | `max_concurrency` | Jobs this target runs at once; default `1` |
 | `context_window` | Context capacity reported in `result.tokens`; overrides the backend's value |
@@ -89,7 +87,41 @@ A target is one worker CLI with fixed settings. `id` and `backend` are required.
 > [!IMPORTANT]
 > Put credentials in each CLI's own login or in `env`. Every target setting except `env` is copied into job records.
 
-[`CLI_ARGUMENTS.md`](CLI_ARGUMENTS.md) lists the flags each backend accepts and which ones Refract owns.
+[`CLI_ARGUMENTS.md`](CLI_ARGUMENTS.md) lists the flags each backend accepts and which ones the `coding_agent_cli` library or Refract owns.
+
+### Retry Codes
+
+`retry.codes` matches the `error_code` of a retryable failure. The codes come from the `coding_agent_cli` library. The outcome column shows how Refract treats each code.
+
+| Code | Outcome | Meaning |
+| --- | --- | --- |
+| `timeout` | Retryable | The run hit its time limit. |
+| `service_error` | Retryable | The provider reported a service error. |
+| `execution_error` | Retryable | The CLI failed without a more specific code, such as a nonzero exit. |
+| `stdin_failed` | Retryable | Writing the prompt to the CLI standard input failed. |
+| `no_output` | Retryable | The CLI produced no assistant text. |
+| `context_overflow` | Retryable, never retried on the same target | The prompt exceeded the context window. |
+| `bad_cwd` | Request fatal | The working directory is not a directory. |
+| `invalid_prompt` | Request fatal | The prompt is not valid UTF-8 or contains a NUL byte. |
+| `invalid_args` | Target fatal | `args` conflicts with a flag the driver owns. |
+| `unsupported_option` | Target fatal | The backend does not support a target field. |
+| `invalid_model` | Target fatal | The CLI rejected the model. |
+| `missing_cli` | Target fatal | The CLI is not on `PATH`. |
+| `spawn_failed` | Target fatal | The CLI could not start. |
+| `auth` | Target fatal | The CLI is not logged in or the credential failed. |
+
+A request fatal failure is not retried and does not count toward the circuit breaker. A target fatal failure is not retried and opens the target circuit at once.
+
+Config loading rejects a removed code in `retry.codes` and names the replacement. Update the config before you start the daemon.
+
+| Removed code | Replacement |
+| --- | --- |
+| `no_agent_messages` | `no_output` |
+| `fatal_backend` | `auth`, `invalid_model`, or `service_error` |
+| `bad_cd` | `bad_cwd` |
+| `request_fatal` | `no_output` |
+
+`retry.patterns` match the error text. The library changed some error messages, so re-check any pattern that matched the old text, for example `backend command exited with status` or `The <backend> CLI was not found on PATH`.
 
 ### `[profiles.*]`
 
@@ -128,7 +160,7 @@ The daemon serves MCP at `http://127.0.0.1:8765/mcp`. Nine self-describing MCP t
 | `retry` | Create a new job from a finished one on the next target |
 | `card_create`, `card_move`, `card_list` | Track work on a per-repository board |
 
-Each project runs one job at a time. Jobs are admitted first in, first out, up to `max_jobs` across projects.
+Jobs are admitted first in, first out, up to `max_jobs` across all projects. Several jobs in one project can run at once and edit the same checkout. Jobs that share a project, session, workflow, and target run one at a time.
 
 `wait` returns `{job, result}`. Every finished job writes its full text to `result.result_path`; read it when `result.truncated` is true.
 

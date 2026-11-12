@@ -15,25 +15,11 @@ def _count(value: Any) -> int | None:
 
 
 class TokenCounters:
-    """Responses sum across ids; backend totals and context override them per field."""
+    """Backend totals and context are recorded per field; an unrecorded field stays unknown."""
 
     def __init__(self) -> None:
-        self._responses: dict[str, dict[str, int]] = {}
         self._totals: dict[str, int] = {}
         self._context: dict[str, int] = {}
-
-    def record_response(
-        self,
-        response_id: str,
-        *,
-        input: Any = None,
-        output: Any = None,
-        cache_read: Any = None,
-        cache_write: Any = None,
-    ) -> None:
-        values = {"input": input, "output": output, "cache_read": cache_read, "cache_write": cache_write}
-        counted = {key: _count(value) for key, value in values.items()}
-        self._responses[response_id] = {key: value for key, value in counted.items() if value is not None}
 
     def record_totals(
         self,
@@ -55,22 +41,9 @@ class TokenCounters:
             if count is not None:
                 self._context[key] = count
 
-    def clear_context(self) -> None:
-        self._context.pop("context_used", None)
-
-    def has_any(self) -> bool:
-        return any(value is not None for value in self.as_dict().values())
-
     def as_dict(self) -> dict[str, int | None]:
-        counters: dict[str, int | None] = {}
-        for key in CONSUMPTION_KEYS:
-            if key in self._totals:
-                counters[key] = self._totals[key]
-            else:
-                values = [response[key] for response in self._responses.values() if key in response]
-                counters[key] = sum(values) if values else None
         return {
             "context_used": self._context.get("context_used"),
             "context_window": self._context.get("context_window"),
-            **counters,
+            **{key: self._totals.get(key) for key in CONSUMPTION_KEYS},
         }

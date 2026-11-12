@@ -152,7 +152,7 @@ async def test_shutdown_if_idle_counts_queued_and_running_and_latches_when_idle(
         again = await runtime.submit(project_id, "consult", "still open")
         runtime.database.finish_job(queued.job_id, "failed", target="primary")
         runtime.database.finish_job(again.job_id, "failed", target="primary")
-        runtime.scheduler._queued_projects.clear()
+        runtime.scheduler._pending.clear()
         runtime.scheduler._active.clear()
         assert runtime.shutdown_if_idle() == {"stopping": True, "running": 0, "queued": 0}
         with pytest.raises(OrchestrationError) as raised:

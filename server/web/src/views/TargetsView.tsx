@@ -54,10 +54,6 @@ function TargetCard({ target }: { target: TargetView }) {
         <dd>{target.cooldown_s} s</dd>
         <dt>Probing</dt>
         <dd>{yesNo(target.probing)}</dd>
-        <dt>Isolated</dt>
-        <dd>{yesNo(target.isolated)}</dd>
-        <dt>Read only</dt>
-        <dd>{yesNo(target.read_only)}</dd>
       </dl>
     </article>
   );

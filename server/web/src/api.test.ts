@@ -181,8 +181,6 @@ describe("dashboard API", () => {
                 id: "t1",
                 model: "m1",
                 backend: "b1",
-                isolated: false,
-                read_only: false,
                 max_concurrency: 1,
                 active: 0,
                 healthy: true,

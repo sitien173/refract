@@ -3,23 +3,30 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
-import subprocess
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from refract.backends import AsyncEventHandler, BackendParams, BackendResult, agy, claude, codex, pi
+import coding_agent_cli
+from coding_agent_cli import Outcome, Request, Result, Usage, events
+
 from refract.config import TargetConfig, validate_target_args
 from refract.logging_setup import get_logger
-from refract.processes import prepare_command
 from refract.telemetry import TOKEN_KEYS
 
 log = get_logger("drivers")
-_BACKENDS = {"agy": agy, "claude": claude, "codex": codex, "pi": pi}
+_DRIVERS = frozenset(coding_agent_cli.DriverRegistry().names())
 _CANCEL_POLL_S = 0.05
+_TARGET_FATAL_REQUEST_CODES = frozenset({"invalid_args", "unsupported_option", "invalid_model"})
+_REQUEST_FATAL_CODES = frozenset({"bad_cwd", "invalid_prompt"})
+# Target fields a backend ignored before the library, which rejects them as unsupported_option.
+_IGNORED_FIELDS = {"codex": ("system_prompt",), "agy": ("reasoning", "system_prompt")}
+
+type EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 DriverOutcome = Literal[
     "SUCCESS",
@@ -41,103 +48,102 @@ class DriverResult:
     tokens: dict[str, int | None] = field(default_factory=lambda: dict.fromkeys(TOKEN_KEYS))
 
 
-def _agy_args(target: TargetConfig, args: list[str]) -> None:
-    if target.model:
-        args.extend(["--model", target.model])
-
-
-def _codex_args(target: TargetConfig, args: list[str]) -> None:
-    if target.backend_profile:
-        args.extend(["--profile", target.backend_profile])
-    if target.model:
-        args.extend(["--model", target.model])
+def _owned_args(target: TargetConfig) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the Refract-owned flags placed before and after ``target.args``."""
+    if target.backend == "claude":
+        return ("--permission-mode", "bypassPermissions"), ()
+    if target.backend == "agy":
+        return ("--dangerously-skip-permissions",), ()
+    if target.backend == "pi":
+        # After user args so targets cannot disable the daemon's required non-interactive project approval.
+        return (), ("--approve",)
+    if target.backend == "codex":
+        # The library rejects `-c` in args when Request.reasoning is set, so Refract carries the codex target
+        # fields after target `args`, in the in-tree order, and they win over a conflicting `-c` entry.
+        after = []
         if target.backend_profile:
-            escaped = target.model.replace("\\", "\\\\").replace('"', '\\"')
-            args.extend(["-c", f'model="{escaped}"'])
-    if target.reasoning:
-        args.extend(["-c", f"model_reasoning_effort={target.reasoning}"])
+            after += ["--profile", target.backend_profile]
+        if target.model:
+            after += ["--model", target.model]
+            if target.backend_profile:
+                after += ["-c", f"model={_toml_string(target.model)}"]
+        if target.reasoning:
+            after += ["-c", f"model_reasoning_effort={_toml_string(target.reasoning)}"]
+        return ("--yolo",), tuple(after)
+    return (), ()
 
 
-def _pi_args(target: TargetConfig, args: list[str]) -> None:
-    if target.isolated:
-        args.extend(
-            [
-                "--no-approve",
-                "--no-context-files",
-                "--no-extensions",
-                "--no-skills",
-                "--no-prompt-templates",
-            ]
-        )
-    else:
-        # Append after user args so normal targets cannot disable the
-        # daemon's required non-interactive project approval.
-        args.append("--approve")
-    if target.system_prompt:
-        args.extend(["--system-prompt", target.system_prompt])
-    if target.read_only:
-        args.extend(["--tools", "read,grep,find,ls"])
-    if target.model:
-        args.extend(["--model", target.model])
-    if target.reasoning:
-        args.extend(["--thinking", target.reasoning])
-
-
-def _claude_args(target: TargetConfig, args: list[str]) -> None:
-    if target.isolated:
-        args.extend(["--safe-mode", "--strict-mcp-config"])
-    if target.system_prompt:
-        args.extend(["--system-prompt", target.system_prompt])
-    if target.read_only:
-        args.extend(["--tools", "Read,Grep,Glob"])
-    if target.model:
-        args.extend(["--model", target.model])
-    if target.reasoning:
-        args.extend(["--effort", target.reasoning])
-
-
-_ARGS_BUILDERS = {"agy": _agy_args, "codex": _codex_args, "pi": _pi_args, "claude": _claude_args}
+def _toml_string(value: str) -> str:
+    """Return ``value`` as a TOML basic string for a Codex ``-c`` override."""
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 def _target_args(target: TargetConfig) -> tuple[str, ...]:
-    """Translate target policy into backend argv.
-
-    Backends only own transport arguments. Provider-specific execution policy
-    remains in target configuration and is compiled here.
-    """
-    validate_target_args(
-        target.id,
-        target.backend,
-        target.args,
-        isolated=target.isolated,
-    )
-    args = list(target.args)
-    build = _ARGS_BUILDERS.get(target.backend)
-    if build is not None:
-        build(target, args)
-    return tuple(args)
+    """Compile target policy into the argv Refract owns; model, reasoning, and system prompt are Request fields."""
+    validate_target_args(target.id, target.backend, target.args)
+    before, after = _owned_args(target)
+    return (*before, *target.args, *after)
 
 
-def _normalize(result: BackendResult) -> DriverResult:
-    if result.outcome == "OK":
-        outcome: DriverOutcome = "SUCCESS"
-    elif result.error_class == "cancelled":
-        outcome = "CANCELLED"
-    elif result.error_class in {"bad_cd", "request_fatal"}:
-        outcome = "REQUEST_FATAL"
-    elif result.error_class in {"missing_cli", "fatal_backend", "invalid_args"}:
-        outcome = "TARGET_FATAL"
-    else:
-        outcome = "RETRYABLE"
+def _policy(target: TargetConfig, field: str) -> str | None:
+    """Return a target policy field, or ``None`` when it is unset or the backend ignores it."""
+    return None if field in _IGNORED_FIELDS.get(target.backend, ()) else getattr(target, field) or None
+
+
+def _tokens(usage: Usage) -> dict[str, int | None]:
+    return {key: getattr(usage, key) for key in TOKEN_KEYS}
+
+
+def _outcome(result: Result) -> DriverOutcome:
+    code = result.error.code if result.error else ""
+    match result.outcome:
+        case Outcome.SUCCESS:
+            return "SUCCESS"
+        case Outcome.CANCELLED:
+            return "CANCELLED"
+        case Outcome.REQUEST_FATAL if code in _REQUEST_FATAL_CODES:
+            return "REQUEST_FATAL"
+        case Outcome.REQUEST_FATAL if code == "context_overflow":
+            return "RETRYABLE"
+        case Outcome.REQUEST_FATAL | Outcome.AGENT_FATAL:
+            return "TARGET_FATAL"
+        case _:
+            return "RETRYABLE"
+
+
+def _normalize(result: Result) -> DriverResult:
+    failed = result.outcome != Outcome.SUCCESS
     return DriverResult(
-        outcome=outcome,
-        session_id=result.SESSION_ID,
-        text=result.agent_messages,
-        error=result.error,
-        error_code=result.error_class,
+        outcome=_outcome(result),
+        session_id=result.session_id or "",
+        text=result.text,
+        error=result.error.message if failed and result.error else "",
+        error_code=result.error.code if failed and result.error else "",
         model=result.model,
-        tokens=result.tokens,
+        tokens=_tokens(result.usage),
     )
+
+
+def _event_dict(event: Any) -> dict[str, Any] | None:
+    """Convert a library event to the stored stream row, or ``None`` for events Refract does not store."""
+    match event:
+        case events.TextDelta():
+            kind, data = event.kind, {"text": event.text}
+        case events.MessageStarted() | events.MessageCompleted():
+            kind, data = event.kind, {}
+        case events.ToolStarted():
+            kind, data = event.kind, {"tool": event.tool, "activity": event.activity, "input": event.input}
+        case events.ToolCompleted():
+            kind, data = event.kind, {"status": event.status}
+        case events.UsageUpdated():
+            kind, data = "telemetry.updated", _tokens(event.usage)
+        case _:
+            return None
+    row: dict[str, Any] = {"kind": kind}
+    if event.entity_id is not None:
+        row["entity_id"] = event.entity_id
+    row["data"] = data
+    return row
 
 
 async def _mirror_cancel(source: threading.Event, target: asyncio.Event) -> None:
@@ -145,15 +151,6 @@ async def _mirror_cancel(source: threading.Event, target: asyncio.Event) -> None
     while not source.is_set():
         await asyncio.sleep(_CANCEL_POLL_S)
     target.set()
-
-
-async def _run_async_backend(backend: Any, params: BackendParams, on_event: AsyncEventHandler | None) -> BackendResult:
-    cancel = asyncio.Event()
-    mirror = asyncio.create_task(_mirror_cancel(params.cancel_event, cancel))
-    try:
-        return await backend.execute(params, cancel=cancel, on_event=on_event)
-    finally:
-        mirror.cancel()
 
 
 class DriverRegistry:
@@ -164,52 +161,32 @@ class DriverRegistry:
     def available(target: TargetConfig) -> bool:
         return shutil.which(target.backend) is not None
 
-    def supports_structured_streaming(
-        self,
-        target: TargetConfig,
-        version_check: Callable[[str], bool] | None = None,
+    async def supports_structured_streaming(
+        self, target: TargetConfig, cancel_event: threading.Event | None = None
     ) -> bool:
-        """Pre-execution capability check for structured streaming with caching per executable path."""
+        """Pre-execution capability check for structured streaming, cached per executable path once known."""
         resolved = shutil.which(target.backend)
         if resolved is None:
             return False
         if resolved in self._capability_cache:
             return self._capability_cache[resolved]
-
-        if version_check is not None:
-            supported = version_check(resolved)
-        else:
-            supported = self._detect_structured_mode(target.backend, resolved)
-
-        self._capability_cache[resolved] = supported
-        return supported
-
-    @staticmethod
-    def _detect_structured_mode(backend: str, executable_path: str) -> bool:
-        """Check if resolved provider CLI supports the required structured output flags."""
-        help_cmd = [executable_path, "exec", "--help"] if backend == "codex" else [executable_path, "--help"]
+        probe = asyncio.create_task(coding_agent_cli.check(Request(driver=target.backend, prompt="", cwd=Path.cwd())))
+        watcher = asyncio.create_task(_mirror_cancel(cancel_event, asyncio.Event())) if cancel_event else None
         try:
-            completed = subprocess.run(
-                prepare_command(help_cmd),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            help_text = completed.stdout or ""
-        except Exception:
+            await asyncio.wait([probe, *([watcher] if watcher else [])], return_when=asyncio.FIRST_COMPLETED)
+            if not probe.done():
+                return False
+            capabilities = probe.result()
+        finally:
+            if watcher:
+                watcher.cancel()
+            if not probe.done():
+                probe.cancel()
+                await asyncio.gather(probe, return_exceptions=True)
+        if capabilities.structured_streaming is None:
             return False
-
-        if backend == "claude":
-            return "stream-json" in help_text and "--include-partial-messages" in help_text
-        if backend == "agy":
-            return "stream-json" in help_text
-        if backend == "codex":
-            return "--json" in help_text
-        if backend == "pi":
-            return "--mode" in help_text
-        return False
+        self._capability_cache[resolved] = capabilities.structured_streaming
+        return capabilities.structured_streaming
 
     async def execute(
         self,
@@ -220,8 +197,9 @@ class DriverRegistry:
         session_id: str,
         timeout_s: int,
         cancel_event: threading.Event,
-        on_event: AsyncEventHandler | None = None,
+        on_event: EventHandler | None = None,
         env: dict[str, str] | None = None,
+        on_spawn: Callable[[int], Awaitable[None]] | None = None,
     ) -> DriverResult:
         try:
             args = _target_args(target)
@@ -233,8 +211,7 @@ class DriverRegistry:
                 error=str(exc),
                 error_code="invalid_args",
             )
-        backend = _BACKENDS.get(target.backend)
-        if backend is None:
+        if target.backend not in _DRIVERS:
             return DriverResult(
                 outcome="TARGET_FATAL",
                 session_id=session_id,
@@ -242,16 +219,31 @@ class DriverRegistry:
                 error=f"Unsupported backend: {target.backend}",
                 error_code="invalid_args",
             )
-        params = BackendParams(
-            PROMPT=prompt,
-            cd=cwd,
-            SESSION_ID=session_id,
+        request = Request(
+            driver=target.backend,
+            prompt=prompt,
+            cwd=cwd,
+            session_id=session_id or None,
+            model=None if target.backend == "codex" else target.model or None,
+            reasoning=None if target.backend == "codex" else _policy(target, "reasoning"),
+            system_prompt=_policy(target, "system_prompt"),
             args=args,
-            timeout_s=timeout_s,
-            cancel_event=cancel_event,
-            env=env,
+            env=env or {},
+            timeout_s=timeout_s or None,
         )
-        return _normalize(await _run_async_backend(backend, params, on_event))
+
+        async def forward(event: Any) -> None:
+            row = _event_dict(event)
+            if row is not None and on_event is not None:
+                await on_event(row)
+
+        cancel = asyncio.Event()
+        mirror = asyncio.create_task(_mirror_cancel(cancel_event, cancel))
+        try:
+            result = await coding_agent_cli.run(request, on_event=forward, cancel=cancel, on_spawn=on_spawn)
+        finally:
+            mirror.cancel()
+        return _normalize(result)
 
 
 __all__ = ["DriverOutcome", "DriverRegistry", "DriverResult"]

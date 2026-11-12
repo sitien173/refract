@@ -124,9 +124,10 @@ recorded at install. This applies to every Pi session, interactive included:
 For one run only, point `PI_CODING_AGENT_DIR` at a copy of `~/.pi/agent` with
 this filter. The copy needs `auth.json` for provider credentials.
 
-Refract Pi workers with `isolated = true` already run with
-`--no-extensions --no-skills --no-prompt-templates`. A non-isolated Pi target
-loads installed packages, so its workers receive the coordinator context.
+Refract Pi targets whose `args` include
+`--no-extensions --no-skills --no-prompt-templates` do not load installed
+packages. Other Pi targets load installed packages, so their workers receive
+the coordinator context.
 
 ## Installing
 

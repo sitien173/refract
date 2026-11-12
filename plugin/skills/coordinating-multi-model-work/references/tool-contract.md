@@ -36,7 +36,7 @@ Call only these tools with only these parameters. They belong to the `refract` M
 
 ## Admission
 
-At most one job per project runs at a time. Jobs within each project are admitted FIFO, bounded by the global `max_jobs` capacity; jobs in different projects may run concurrently up to that capacity.
+Jobs are admitted FIFO up to the global `max_jobs` capacity, and jobs in the same project may run concurrently. Concurrent jobs share the project checkout and can edit the same files. Jobs that share a project, `session`, workflow, and target run one at a time.
 
 ## Sessions
 

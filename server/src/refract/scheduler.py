@@ -1,4 +1,4 @@
-"""Global worker pool with FIFO, one-job-per-project admission."""
+"""Global worker pool with FIFO admission."""
 
 from __future__ import annotations
 
@@ -45,7 +45,6 @@ RunJob = Callable[[str, CancelEvent], Awaitable[None]]
 @dataclass(slots=True, eq=False)
 class _Dispatch:
     job_id: str
-    project_id: str
     completion: asyncio.Event = field(default_factory=asyncio.Event)
     cancel_event: CancelEvent = field(default_factory=CancelEvent)
     reserved: bool = False
@@ -53,7 +52,7 @@ class _Dispatch:
 
 
 class ProjectScheduler(_SchedulerLifecycle):
-    """Reserve global and project admission before dispatching a job."""
+    """Reserve global admission before dispatching a job."""
 
     def __init__(
         self,
@@ -66,11 +65,9 @@ class ProjectScheduler(_SchedulerLifecycle):
         self._run_job = run_job
         self._ready: asyncio.Queue[_Dispatch | None] = asyncio.Queue()
         self._pending: deque[_Dispatch] = deque()
-        self._queued_projects: dict[str, str] = {}
         self._current: dict[str, _Dispatch] = {}
         self._terminal_waiters: dict[str, _Dispatch] = {}
         self._active: set[_Dispatch] = set()
-        self._active_projects: set[str] = set()
         self._workers: list[asyncio.Task[None]] = []
         self._closing = False
         self._started = False
@@ -85,7 +82,7 @@ class ProjectScheduler(_SchedulerLifecycle):
 
     @property
     def queued_jobs(self) -> int:
-        return len(self._queued_projects)
+        return len(self._pending)
 
     @override
     async def start(self) -> None:
@@ -97,19 +94,14 @@ class ProjectScheduler(_SchedulerLifecycle):
         ]
         self._schedule()
 
-    def enqueue(
-        self,
-        job_id: str,
-        project_id: str,
-    ) -> None:
-        """Queue one job for project-scoped FIFO admission."""
+    def enqueue(self, job_id: str) -> None:
+        """Queue one job for FIFO admission."""
         existing = self._current.get(job_id)
         if existing is not None:
             return
-        dispatch = _Dispatch(job_id=job_id, project_id=project_id)
+        dispatch = _Dispatch(job_id=job_id)
         self._current[job_id] = dispatch
         self._pending.append(dispatch)
-        self._queued_projects[job_id] = project_id
         self._schedule()
 
     async def wait(self, job_id: str, timeout_s: int = 0) -> None:
@@ -166,29 +158,17 @@ class ProjectScheduler(_SchedulerLifecycle):
             self._release(dispatch, schedule=False)
         self._started = False
         self._pending.clear()
-        self._queued_projects.clear()
         self._current.clear()
         self._terminal_waiters.clear()
         self._active.clear()
-        self._active_projects.clear()
 
     def _schedule(self) -> None:
         if self._closing or not self._started:
             return
-        while len(self._active) < self.max_jobs:
-            selected: _Dispatch | None = None
-            for candidate in self._pending:
-                if candidate.project_id in self._active_projects:
-                    continue
-                selected = candidate
-                break
-            if selected is None:
-                break
-            self._pending.remove(selected)
-            self._queued_projects.pop(selected.job_id, None)
+        while self._pending and len(self._active) < self.max_jobs:
+            selected = self._pending.popleft()
             selected.reserved = True
             self._active.add(selected)
-            self._active_projects.add(selected.project_id)
             self._ready.put_nowait(selected)
 
     def _release(
@@ -200,11 +180,9 @@ class ProjectScheduler(_SchedulerLifecycle):
     ) -> None:
         if dispatch in self._pending:
             self._pending.remove(dispatch)
-            self._queued_projects.pop(dispatch.job_id, None)
         if dispatch.reserved:
             dispatch.reserved = False
             self._active.discard(dispatch)
-            self._active_projects.discard(dispatch.project_id)
         if self._current.get(dispatch.job_id) is dispatch:
             self._current.pop(dispatch.job_id, None)
             if signal:

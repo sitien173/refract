@@ -235,31 +235,9 @@ def test_ask_client_timeout_is_ask_timeout_plus_ten(monkeypatch, capsys) -> None
     assert seen["timeout"] == 310
 
 
-def test_run_process_injects_env() -> None:
-    import asyncio
-    import sys
-    from refract.backends._process import run_process
-
-    cmd = [
-        sys.executable,
-        "-c",
-        "import os; print('URL=' + os.environ.get('REFRACT_ASK_URL', '')); print('TOK=' + os.environ.get('REFRACT_ASK_TOKEN', ''))",
-    ]
-    lines: list[str] = []
-
-    async def collect(line: str) -> None:
-        lines.append(line.strip())
-
-    env = {"REFRACT_ASK_URL": "http://127.0.0.1:8765/ask", "REFRACT_ASK_TOKEN": "secret-12345"}
-    asyncio.run(run_process(cmd, None, env, None, None, None, collect))
-    assert "URL=http://127.0.0.1:8765/ask" in lines
-    assert "TOK=secret-12345" in lines
-
-
 @pytest.mark.asyncio
 async def test_execution_attempt_injects_and_revokes_token_and_keeps_secret(tmp_path, caplog) -> None:
     import logging
-    from refract.backends import BackendParams
     from refract.config import DaemonConfig, TargetConfig
     from refract.database import Database
     from refract.drivers import DriverRegistry
@@ -279,10 +257,10 @@ async def test_execution_attempt_injects_and_revokes_token_and_keeps_secret(tmp_
         def available(self, target):
             return True
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return False
 
-        async def execute(self, *, target, prompt, cwd, session_id, timeout_s, cancel_event, on_event=None, env=None):
+        async def execute(self, *, target, prompt, cwd, session_id, timeout_s, cancel_event, on_event=None, env=None, on_spawn=None):
             nonlocal captured_env
             if env:
                 captured_env.update(env)

@@ -864,11 +864,9 @@ def test_target_execution_key_matches_literal_pre_change_fixture() -> None:
     target_with_args = TargetConfig(
         id="native-with-custom-args",
         backend="pi",
-        isolated=True,
-        read_only=True,
         args=("--verbose", "--system-prompt", "advisory only"),
     )
-    assert target_execution_key(target_with_args) == "native-with-custom-args:66e11d34a73875df"
+    assert target_execution_key(target_with_args) == "native-with-custom-args:d2edd4569fa44ac6"
 
     # Adding or modifying retry produces the EXACT same historical key
     target_with_retry = TargetConfig(id="primary", backend="codex", retry=RetryPolicy(2, ("rate_limit",), ()))
@@ -947,7 +945,7 @@ async def test_manual_retry_receives_fresh_policy_budget_on_new_job(tmp_path) ->
             super().__init__()
             self.invocations = []
 
-        def supports_structured_streaming(self, target):
+        async def supports_structured_streaming(self, target, cancel_event=None):
             return True
 
         async def execute(self, *, target, **kwargs):

@@ -566,7 +566,7 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
 
     class PrivateFailureDrivers:
         @staticmethod
-        def supports_structured_streaming(_target):
+        async def supports_structured_streaming(_target, cancel_event=None):
             return True
 
         @staticmethod
@@ -1115,7 +1115,7 @@ async def test_runtime_wait_and_wait_tool_wake_early_with_pending_question(tmp_p
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-q-1'")
-        runtime.scheduler._current["job-q-1"] = _Dispatch(job_id="job-q-1", project_id=project.id)
+        runtime.scheduler._current["job-q-1"] = _Dispatch(job_id="job-q-1")
         token = runtime.ask_registry.issue_token("job-q-1")
 
         # 1. Test Runtime.wait wakes early when question is asked
@@ -1264,7 +1264,7 @@ async def test_connected_client_answer_and_wait(tmp_path, monkeypatch) -> None:
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-client-test'")
-        runtime.scheduler._current["job-client-test"] = _Dispatch(job_id="job-client-test", project_id=project.id)
+        runtime.scheduler._current["job-client-test"] = _Dispatch(job_id="job-client-test")
         token = runtime.ask_registry.issue_token("job-client-test")
 
         async def _ask_later():
@@ -1305,7 +1305,7 @@ async def test_answer_bounds_and_unicode_acceptance(tmp_path, monkeypatch) -> No
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-bounds-test'")
-        runtime.scheduler._current["job-bounds-test"] = _Dispatch(job_id="job-bounds-test", project_id=project.id)
+        runtime.scheduler._current["job-bounds-test"] = _Dispatch(job_id="job-bounds-test")
         token = runtime.ask_registry.issue_token("job-bounds-test")
 
         ask_task = asyncio.create_task(runtime.ask_registry.ask(token, "Question?", timeout_s=10.0))
@@ -1356,7 +1356,7 @@ async def test_wait_oversized_pending_question_raises_response_too_large(tmp_pat
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-oversized-q'")
-        runtime.scheduler._current["job-oversized-q"] = _Dispatch(job_id="job-oversized-q", project_id=project.id)
+        runtime.scheduler._current["job-oversized-q"] = _Dispatch(job_id="job-oversized-q")
         token = runtime.ask_registry.issue_token("job-oversized-q")
 
         # Pending question that exceeds envelope char limit
@@ -1401,7 +1401,7 @@ async def test_real_asgi_ask_and_mcp_wait_answer_integration(tmp_path, monkeypat
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-asgi-1'")
-        runtime.scheduler._current["job-asgi-1"] = _Dispatch(job_id="job-asgi-1", project_id=project.id)
+        runtime.scheduler._current["job-asgi-1"] = _Dispatch(job_id="job-asgi-1")
         token = runtime.ask_registry.issue_token("job-asgi-1")
 
         # 1. Send genuine ASGI POST /ask request in background
@@ -1512,7 +1512,7 @@ async def test_runtime_wait_indefinite_on_timeout_zero_until_question(tmp_path) 
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-t0-1'")
-        runtime.scheduler._current["job-t0-1"] = _Dispatch(job_id="job-t0-1", project_id=project.id)
+        runtime.scheduler._current["job-t0-1"] = _Dispatch(job_id="job-t0-1")
         token = runtime.ask_registry.issue_token("job-t0-1")
 
         # Runtime.wait with timeout_s=0 must NOT return immediately while running

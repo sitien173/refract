@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Breaking: backends now run through the `coding-agent-cli` library, a new dependency. `server/src/refract/backends/` is gone and `server/src/refract/drivers.py` adapts the library. Refract still adds the permission flags: `--yolo` for Codex, `--permission-mode bypassPermissions` for Claude Code, `--dangerously-skip-permissions` for Agy, and `--approve` for Pi.
+- Error codes now come from the library. Config loading rejects a removed `retry.codes` value and names the replacement: `no_agent_messages` becomes `no_output`, `fatal_backend` becomes `auth`, `invalid_model`, or `service_error`, `bad_cd` becomes `bad_cwd`, and `request_fatal` becomes `no_output`. See the retry codes table in `server/README.md`.
+- Auth failures at exit status 1 for Claude Code, Codex, and Agy are now target fatal. They are not retried and the circuit opens at once. Before, they were retried and counted toward the circuit threshold.
+- Codex empty output is now retryable with code `no_output` and counts toward the circuit breaker. Before, it was a request fatal failure.
+- Codex `system_prompt` and Agy `reasoning` and `system_prompt` are still ignored, as before.
+- Tool output is no longer stored in the job stream for Codex, Pi, and Agy. Claude Code no longer stores a `tool.completed` row per tool call.
+- Error messages changed, so `retry.patterns` written against the old text may stop matching. A missing CLI now reads `'<backend>' was not found on PATH`, and a nonzero exit reads `command exited with status <n>` followed by the stderr tail.
+- Agy replies now store only the final text. Agy success at exit 0 no longer returns the `warning` code.
+- Removed the `isolated` and `read_only` target settings. A config that still sets either key fails to load with a message pointing to `args`. Put the backend options in `args` instead: for Pi, `--no-context-files --no-extensions --no-skills --no-prompt-templates` and `--tools read,grep,find,ls`; for Claude Code, `--safe-mode --strict-mcp-config` and `--tools Read,Grep,Glob`. Pi targets now always receive `--approve`, and Pi targets may load extensions, skills, and prompt templates through `args`. Queued jobs that were planned with either setting fail instead of running without the restriction; retry them after updating the config. The dashboard no longer shows the two fields.
+- Jobs in the same project now run concurrently up to `max_jobs` instead of one at a time. Concurrent jobs share the project checkout and can edit the same files. Jobs that share a project, session, workflow, and target still run one at a time so they never resume one backend session at once.
+
 ## 3.0.3 - 2026-11-12
 
 - `refract install -p agy-ide` no longer needs a local `--source`. Without `--source`, or with a URL, it shallow-clones the repository into a temporary directory with `git`, copies the plugin, and deletes the clone. `-p all` now installs `agy-ide` instead of skipping it when the source is remote.

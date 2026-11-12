@@ -101,8 +101,6 @@ class TargetView(BaseModel):
     id: str
     model: str
     backend: str = ""
-    isolated: bool = False
-    read_only: bool = False
     max_concurrency: int
     active: int
     healthy: bool

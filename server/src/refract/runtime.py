@@ -252,7 +252,7 @@ class Runtime:
         for job in interrupted:
             await self._notify_job(str(job["id"]))
         for target in self._catalog.targets:
-            await run_sync(self.drivers.supports_structured_streaming, target)
+            await self.drivers.supports_structured_streaming(target)
         await self.scheduler.start()
         self._retention_task = asyncio.create_task(self._retain_history(), name="refract-retention")
         self._telemetry_task = asyncio.create_task(
@@ -275,10 +275,7 @@ class Runtime:
         record = await run_sync(self.database.job_record, job_id)
         if record is None or record["state"] != "queued":
             return
-        self.scheduler.enqueue(
-            job_id,
-            str(record["project_id"]),
-        )
+        self.scheduler.enqueue(job_id)
 
     async def _job_terminal(self, job_id: str, _state: str, changed: bool = True) -> None:
         self.scheduler.complete(job_id, signal=False)
@@ -972,13 +969,7 @@ class Runtime:
         views = self.target_executor.views(self._catalog.targets)
         target_by_id = {target.id: target for target in self._catalog.targets}
         return [
-            view.model_copy(
-                update={
-                    "backend": target_by_id[view.id].backend,
-                    "isolated": target_by_id[view.id].isolated,
-                    "read_only": target_by_id[view.id].read_only,
-                }
-            )
+            view.model_copy(update={"backend": target_by_id[view.id].backend})
             for view in views
         ]
 

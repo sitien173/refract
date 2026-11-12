@@ -90,7 +90,7 @@ class FakeDrivers:
         self.sessions: list[str] = []
 
     @staticmethod
-    def supports_structured_streaming(target: TargetConfig) -> bool:
+    async def supports_structured_streaming(target: TargetConfig, cancel_event=None) -> bool:
         return True
 
     @staticmethod

@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from refract.backends._process import spawn_hook
 from refract.config import DaemonConfig, RetryPolicy, TargetConfig
 from refract.database import Database
 from refract.drivers import DriverRegistry, DriverResult
@@ -112,6 +111,9 @@ class TargetExecutor:
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
         self._target_users: dict[str, int] = {}
+        # Jobs that resume the same backend session run one at a time.
+        self._session_locks: dict[tuple[str, str, str, str], asyncio.Semaphore] = {}
+        self._session_users: dict[tuple[str, str, str, str], int] = {}
 
     def refresh_configuration(self, config: DaemonConfig) -> None:
         """Adopt settings; occupied capacity drains before replacing its limit."""
@@ -143,27 +145,41 @@ class TargetExecutor:
         session_target_key = target_key
         scoped_session = session
         if target.id in plan.environment_targets:
-            if self.environment_resolver is None:
-                await self._release_probe(target_key, job_id)
-                return self._configuration_failure(target, target_key, "Target environment configuration is unavailable", attempt_tokens)
+            resolved = await self._resolve_environment(project, target, target_key, job_id, attempt_tokens)
+            if isinstance(resolved, TargetExecutionResult):
+                return resolved
+            bound_env, opaque_revision = resolved
+            self.run_secrets[job_id] = (*run_secrets, *bound_env.values())
+            session_target_key = f"{target_key}:env:{opaque_revision}"
+            scoped_session = f"{session}:env:{opaque_revision}"
+        session_key = (project.id, scoped_session, workflow, session_target_key)
+        session_lock = self._session_locks.setdefault(session_key, asyncio.Semaphore(1))
+        self._session_users[session_key] = self._session_users.get(session_key, 0) + 1
+        try:
+            session_locked = await self._acquire_target(session_lock, cancel_event)
+        except BaseException as exc:
             try:
-                bound_env, revision_context = await run_sync(self.environment_resolver, project, target.id)
-                self.run_secrets[job_id] = (*run_secrets, *bound_env.values())
-                opaque_revision = hashlib.sha256((project.id + revision_context).encode()).hexdigest()[:20]
-                session_target_key = f"{target_key}:env:{opaque_revision}"
-                scoped_session = f"{session}:env:{opaque_revision}"
-            except asyncio.CancelledError:
+                self._release_session(session_key, locked=False)
+            finally:
                 await self._release_probe(target_key, job_id)
-                raise
-            except Exception:
+            self._attach_outcome(exc, target, None, attempt_tokens=attempt_tokens)
+            raise
+        if not session_locked:
+            try:
+                self._release_session(session_key, locked=False)
+            finally:
                 await self._release_probe(target_key, job_id)
-                return self._configuration_failure(target, target_key, "Target environment configuration is invalid", attempt_tokens)
+            cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+            return TargetExecutionResult(cancelled, target.id, target_key, self._outcome(cancelled, target, None, attempt_tokens=attempt_tokens))
         try:
             session_id = await self._prepare_session(
                 project, scoped_session, workflow, session_target_key, fresh
             )
         except BaseException as exc:
-            await self._release_probe(target_key, job_id)
+            try:
+                self._release_session(session_key, locked=True)
+            finally:
+                await self._release_probe(target_key, job_id)
             self._attach_outcome(exc, target, None, attempt_tokens=attempt_tokens)
             raise
         semaphore = self._target_semaphores.setdefault(target.id, asyncio.Semaphore(target.max_concurrency))
@@ -174,6 +190,7 @@ class TargetExecutor:
         except BaseException as exc:
             try:
                 self._release_capacity(target.id)
+                self._release_session(session_key, locked=True)
             finally:
                 await self._release_probe(target_key, job_id)
             self._attach_outcome(exc, target, None, attempt_tokens=attempt_tokens)
@@ -181,6 +198,7 @@ class TargetExecutor:
         if not acquired:
             try:
                 self._release_capacity(target.id)
+                self._release_session(session_key, locked=True)
             finally:
                 await self._release_probe(target_key, job_id)
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
@@ -206,6 +224,7 @@ class TargetExecutor:
                 finally:
                     try:
                         self._release_capacity(target.id)
+                        self._release_session(session_key, locked=True)
                     finally:
                         await self._release_probe(target_key, job_id)
 
@@ -221,6 +240,23 @@ class TargetExecutor:
             await run_sync(self.database.release_target_probe, target_key, job_id)
         except Exception:
             log.warning("Failed to release target probe", exc_info=True)
+
+    async def _resolve_environment(
+        self, project: ProjectView, target: TargetConfig, target_key: str, job_id: str, attempt_tokens: list[TokenCounters],
+    ) -> tuple[dict[str, str], str] | TargetExecutionResult:
+        """Return the bound env and its opaque revision, or a configuration failure after releasing the probe."""
+        if self.environment_resolver is None:
+            await self._release_probe(target_key, job_id)
+            return self._configuration_failure(target, target_key, "Target environment configuration is unavailable", attempt_tokens)
+        try:
+            bound_env, revision_context = await run_sync(self.environment_resolver, project, target.id)
+            return bound_env, hashlib.sha256((project.id + revision_context).encode()).hexdigest()[:20]
+        except asyncio.CancelledError:
+            await self._release_probe(target_key, job_id)
+            raise
+        except Exception:
+            await self._release_probe(target_key, job_id)
+            return self._configuration_failure(target, target_key, "Target environment configuration is invalid", attempt_tokens)
 
     @staticmethod
     def _matches_retry_policy(policy: RetryPolicy, result: DriverResult) -> bool:
@@ -267,12 +303,12 @@ class TargetExecutor:
 
     async def _start_attempt(
         self, job_id: str, target: TargetConfig, plan: ExecutionPlan,
-        workflow: str, session_id: str, attempt_number: int,
+        workflow: str, session_id: str, attempt_number: int, cancel_event: CancelEvent,
     ) -> tuple[float, bool]:
         await run_sync(self.database.record_job_target, job_id, target.id)
         started_at = time.monotonic()
         log.info("Target attempt started", extra={"event": "target.attempt_started", "job_id": job_id, "target_id": target.id, "profile": plan.profile, "workflow": workflow, "attempt": attempt_number, "timeout_s": plan.selection.timeout_s, "resumed_session": bool(session_id)})
-        supports_streaming = await run_sync(self.drivers.supports_structured_streaming, target)
+        supports_streaming = await self.drivers.supports_structured_streaming(target, cancel_event)
         return started_at, supports_streaming
 
     async def _execute_attempt(self, context: _ExecutionContext) -> TargetExecutionResult:
@@ -335,7 +371,8 @@ class TargetExecutor:
     ) -> tuple[float, bool]:
         try:
             return await self._start_attempt(
-                context.job_id, context.target, context.plan, context.workflow, context.session_id, attempt_number
+                context.job_id, context.target, context.plan, context.workflow, context.session_id, attempt_number,
+                context.cancel_event,
             )
         except BaseException as exc:
             duration_ms = int((time.monotonic() - overall_started_at) * 1000)
@@ -629,7 +666,6 @@ class TargetExecutor:
 
         attempt_result: DriverResult | None = None
         driver_exc: BaseException | None = None
-        hook_token = spawn_hook.set(lambda pgid: self._record_process_group(job_id, pgid))
         try:
             with log_context(target_id=target.id):
                 attempt_result = await self.drivers.execute(
@@ -641,12 +677,12 @@ class TargetExecutor:
                     cancel_event=cancel_event,
                     on_event=consume if supports_streaming else None,
                     env=env,
+                    on_spawn=lambda pid: self._record_process_group(job_id, pid),
                 )
         except BaseException as exc:
             driver_exc = exc
             raise
         finally:
-            spawn_hook.reset(hook_token)
             if cancel_event.is_set() or isinstance(driver_exc, asyncio.CancelledError):
                 attempt_result = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
             # Returned counts apply only when stream events did not already report consumption.
@@ -701,6 +737,14 @@ class TargetExecutor:
             self._target_users.pop(target_id)
             self._target_semaphores.pop(target_id, None)
             self._target_active.pop(target_id, None)
+
+    def _release_session(self, key: tuple[str, str, str, str], *, locked: bool) -> None:
+        if locked:
+            self._session_locks[key].release()
+        self._session_users[key] -= 1
+        if not self._session_users[key]:
+            self._session_users.pop(key)
+            self._session_locks.pop(key, None)
 
     @staticmethod
     async def _acquire_target(semaphore: asyncio.Semaphore, cancel_event: CancelEvent) -> bool:

@@ -41,7 +41,7 @@ CI runs the server tests on Linux, Windows, and macOS. Keep every change portabl
 
 ## Server conventions
 
-- Backend drivers live in `server/src/refract/backends/`. Workers launch as argv lists with `shell=False`.
+- Backend execution lives in the `coding_agent_cli` library. `server/src/refract/drivers.py` adapts it and adds the permission flags. Workers launch as argv lists with `shell=False`.
 - Tests that need a worker CLI use the fake CLIs in `server/tests/`, launched through `server/tests/launchers.py` so they run on Windows.
 - Tests marked `live` call real worker CLIs and models. Run them only when the user asks.
 

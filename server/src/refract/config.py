@@ -13,10 +13,12 @@ from refract.logging_setup import get_logger
 
 from refract.config_inspection import (
     REMOVED_KEYS,
+    REMOVED_RETRY_CODES,
     ConfigSource,
     ConfigurationLoadError,
     read_config_source,
     removed_key_message,
+    removed_retry_code_message,
     sha256_bytes,
     utc_now,
 )
@@ -29,7 +31,7 @@ _REFRACT_DIR = ".refract"
 _CONFIG_FILE = "config.toml"
 _TARGET_KEYS = frozenset({
     "id", "backend", "model", "backend_profile", "reasoning", "system_prompt",
-    "isolated", "read_only", "args", "max_concurrency", "context_window",
+    "args", "max_concurrency", "context_window",
     "retry", "env",
 })
 
@@ -49,8 +51,6 @@ class TargetConfig:
     backend_profile: str = ""
     reasoning: str = ""
     system_prompt: str = ""
-    isolated: bool = False
-    read_only: bool = False
     args: tuple[str, ...] = ()
     max_concurrency: int = 1
     context_window: int | None = None
@@ -160,14 +160,6 @@ def _positive_int(value: Any, default: int | None, name: str) -> int | None:
         return default
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{name} must be a positive integer")
-    return value
-
-
-def _boolean(value: Any, default: bool, name: str) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ValueError(f"{name} must be true or false")
     return value
 
 
@@ -369,10 +361,8 @@ def validate_target_args(
     target_id: str,
     backend: str,
     args: tuple[str, ...],
-    *,
-    isolated: bool = False,
 ) -> None:
-    """Reject argv that can override transport or isolation boundaries."""
+    """Reject argv that can override transport or workspace boundaries."""
     if not all(isinstance(value, str) for value in args):
         raise ValueError(f"Target {target_id!r} args must contain only strings")
     if any("\x00" in value for value in args):
@@ -389,16 +379,6 @@ def validate_target_args(
     ):
         raise ValueError(
             f"Codex target {target_id!r} args cannot override the workspace root"
-        )
-    forbidden_isolated_pi_args = {"--extension", "-e", "--skill", "--prompt-template"}
-    if backend == "pi" and isolated and any(
-        value in forbidden_isolated_pi_args
-        or value.startswith(("--extension=", "--skill=", "--prompt-template="))
-        for value in args
-    ):
-        raise ValueError(
-            f"Isolated Pi target {target_id!r} cannot explicitly load extensions, "
-            "skills, or prompt templates"
         )
 
 
@@ -453,6 +433,9 @@ def _retry(raw: Any, target_id: str) -> RetryPolicy:
         if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
             raise error
         rules.append(tuple(value))
+    for code in rules[0]:
+        if code in REMOVED_RETRY_CODES:
+            raise ValueError(f"Target {target_id!r} {removed_retry_code_message(code)}")
     return RetryPolicy(attempts, *rules)
 
 
@@ -515,13 +498,9 @@ def _target_config(item: Any) -> TargetConfig:
     args = item.get("args", [])
     if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
         raise ValueError(f"Target {target_id!r} args must be a list of strings")
-    isolated = _boolean(item.get("isolated"), False, f"Target {target_id!r} isolated")
-    read_only = _boolean(
-        item.get("read_only"), False, f"Target {target_id!r} read_only"
-    )
     text_fields = _target_text_fields(item, target_id)
     backend_profile = _target_backend_profile(item, target_id)
-    validate_target_args(target_id, backend, tuple(args), isolated=isolated)
+    validate_target_args(target_id, backend, tuple(args))
     return TargetConfig(
         id=target_id,
         backend=backend,
@@ -529,8 +508,6 @@ def _target_config(item: Any) -> TargetConfig:
         backend_profile=backend_profile,
         reasoning=text_fields["reasoning"],
         system_prompt=text_fields["system_prompt"],
-        isolated=isolated,
-        read_only=read_only,
         args=tuple(args),
         max_concurrency=_positive_int(
             item.get("max_concurrency"),

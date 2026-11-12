@@ -129,7 +129,7 @@ def test_removed_key_fails_load_with_replacement_hint(tmp_path, key, hint, layer
 def test_target_config_has_exact_v3_fields() -> None:
     assert [field.name for field in dataclasses.fields(TargetConfig)] == [
         "id", "backend", "model", "backend_profile", "reasoning", "system_prompt",
-        "isolated", "read_only", "args", "max_concurrency", "context_window",
+        "args", "max_concurrency", "context_window",
         "retry", "env",
     ]
     assert [field.name for field in dataclasses.fields(RetryPolicy)] == [
@@ -367,17 +367,13 @@ _TARGETS_CASES = {
         [{"id": "t", "backend": "codex", "args": ["--x", "y"]}],
         [TargetConfig("t", "codex", args=("--x", "y"))],
     ),
-    "isolated_bad": (
-        [{"id": "t", "backend": "codex", "isolated": "yes"}],
-        Raised(ValueError, "Target 't' isolated must be true or false"),
+    "isolated_removed": (
+        [{"id": "t", "backend": "pi", "isolated": True}],
+        Raised(ValueError, "targets[].isolated has been removed; use targets[].args"),
     ),
-    "read_only_bad": (
-        [{"id": "t", "backend": "codex", "read_only": 1}],
-        Raised(ValueError, "Target 't' read_only must be true or false"),
-    ),
-    "flags_ok": (
-        [{"id": "t", "backend": "pi", "isolated": True, "read_only": True}],
-        [TargetConfig("t", "pi", isolated=True, read_only=True)],
+    "read_only_removed": (
+        [{"id": "t", "backend": "pi", "read_only": True}],
+        Raised(ValueError, "targets[].read_only has been removed; use targets[].args"),
     ),
     "model_int": (
         [{"id": "t", "backend": "codex", "model": 1}],
@@ -415,14 +411,7 @@ _TARGETS_CASES = {
         [{"id": "t", "backend": "codex", "args": ["--cd", "/x"]}],
         Raised(ValueError, "Codex target 't' args cannot override the workspace root"),
     ),
-    "pi_isolated_ext": (
-        [{"id": "t", "backend": "pi", "isolated": True, "args": ["-e", "x"]}],
-        Raised(
-            ValueError,
-            "Isolated Pi target 't' cannot explicitly load extensions, skills, or prompt templates",
-        ),
-    ),
-    "pi_not_isolated_ext": (
+    "pi_ext": (
         [{"id": "t", "backend": "pi", "args": ["-e", "x"]}],
         [TargetConfig("t", "pi", args=("-e", "x"))],
     ),
@@ -473,18 +462,6 @@ _TARGETS_CASES = {
     "dup_ids": (
         [{"id": "a", "backend": "codex"}, {"id": "a", "backend": "pi"}],
         Raised(ValueError, "Target identifiers must be unique"),
-    ),
-    "args_before_isolated": (
-        [{"id": "t", "backend": "codex", "args": "x", "isolated": "y"}],
-        Raised(ValueError, "Target 't' args must be a list of strings"),
-    ),
-    "isolated_before_read_only": (
-        [{"id": "t", "backend": "codex", "isolated": "y", "read_only": "z"}],
-        Raised(ValueError, "Target 't' isolated must be true or false"),
-    ),
-    "read_only_before_text": (
-        [{"id": "t", "backend": "codex", "read_only": "z", "model": 1}],
-        Raised(ValueError, "Target 't' read_only must be true or false"),
     ),
     "text_before_backend_profile": (
         [{"id": "t", "backend": "codex", "model": 1, "backend_profile": 2}],
