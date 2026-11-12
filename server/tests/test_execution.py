@@ -3325,6 +3325,12 @@ async def test_library_usage_event_converted_by_adapter_updates_job_tokens(tmp_p
         return Result(outcome=Outcome.SUCCESS)
 
     monkeypatch.setattr(drivers_module.coding_agent_cli, "run", fake_run)
+    monkeypatch.setattr(drivers_module.DriverRegistry, "available", staticmethod(lambda target: True))
+
+    async def supports_streaming(self, target, cancel_event=None):
+        return True
+
+    monkeypatch.setattr(drivers_module.DriverRegistry, "supports_structured_streaming", supports_streaming)
     root = repository(tmp_path)
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = drivers_module.DriverRegistry()
