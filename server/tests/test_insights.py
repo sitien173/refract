@@ -107,8 +107,9 @@ def test_retry_after_failed_job_outside_window_counts_as_failover_save(metrics_d
 
 
 def test_stats_rejects_timezone_offset_outside_supported_range(metrics_db):
+    config = PricingConfig()
     with pytest.raises(ValueError, match="tz_offset_minutes must be an integer between -1440 and 1440"):
-        get_stats(metrics_db, PricingConfig(), 7, 999999999999)
+        get_stats(metrics_db, config, 7, 999999999999)
 
 
 def test_stats_window_includes_just_inside_and_excludes_just_outside(metrics_db):
@@ -199,13 +200,15 @@ def test_stats_labels_empty_backend_and_model_in_every_section_but_prices_raw_mo
 
 @pytest.mark.parametrize("days", [2, 0, 366])
 def test_stats_rejects_unsupported_days(metrics_db, days):
+    config = PricingConfig()
     with pytest.raises(ValueError, match="days must"):
-        get_stats(metrics_db, PricingConfig(), days)
+        get_stats(metrics_db, config, days)
 
 
 def test_stats_rejects_non_integer_timezone_offset(metrics_db):
+    config = PricingConfig()
     with pytest.raises(ValueError, match="tz_offset_minutes"):
-        get_stats(metrics_db, PricingConfig(), 7, "x")
+        get_stats(metrics_db, config, 7, "x")
 
 
 @pytest.fixture

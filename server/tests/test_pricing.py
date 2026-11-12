@@ -222,8 +222,9 @@ def test_fetch_pricing_returns_body_with_fixed_request() -> None:
 
 @pytest.mark.parametrize("status", [204, 301, 404, 500])
 def test_fetch_pricing_rejects_non_200_status(status: int) -> None:
+    opener = _opener(_Response(status, _VALID))
     with pytest.raises(PricingError) as error:
-        fetch_pricing(_opener(_Response(status, _VALID)))
+        fetch_pricing(opener)
     assert error.value.reason == "http"
 
 
@@ -238,16 +239,18 @@ def test_fetch_pricing_rejects_non_200_status(status: int) -> None:
     ids=["http-error", "url-error", "timeout", "connection-reset"],
 )
 def test_fetch_pricing_maps_transport_failures_to_http_without_detail(failure: Exception) -> None:
+    opener = _opener(failure)
     with pytest.raises(PricingError) as error:
-        fetch_pricing(_opener(failure))
+        fetch_pricing(opener)
     assert error.value.reason == "http"
     assert "secret-body" not in str(error.value)
 
 
 def test_fetch_pricing_accepts_body_at_the_limit_and_rejects_one_byte_more() -> None:
     assert len(fetch_pricing(_opener(_Response(200, b"x" * MAX_PRICING_BYTES)))) == MAX_PRICING_BYTES
+    opener = _opener(_Response(200, b"x" * (MAX_PRICING_BYTES + 1)))
     with pytest.raises(PricingError) as error:
-        fetch_pricing(_opener(_Response(200, b"x" * (MAX_PRICING_BYTES + 1))))
+        fetch_pricing(opener)
     assert error.value.reason == "size"
 
 

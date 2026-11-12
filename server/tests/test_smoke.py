@@ -2049,7 +2049,9 @@ def test_telemetry_prints_off_state_without_batch(monkeypatch, tmp_path, capsys)
     out = capsys.readouterr().out
     assert raised.value.code == 0
     assert out.splitlines()[0] == "enabled: off"
-    assert "install_id: none" in out and "last_send_at: never" in out and "last_error: none" in out
+    assert "install_id: none" in out
+    assert "last_send_at: never" in out
+    assert "last_error: none" in out
     assert out.rstrip().endswith("next_batch: none")
 
 
@@ -2082,7 +2084,8 @@ def test_telemetry_http_error_exits_nonzero(monkeypatch, tmp_path, capsys) -> No
         cli.main(["telemetry"])
     captured = capsys.readouterr()
     assert raised.value.code == 1
-    assert "HTTP 503" in captured.err and "runtime not active" in captured.err
+    assert "HTTP 503" in captured.err
+    assert "runtime not active" in captured.err
 
 
 @pytest.mark.asyncio
