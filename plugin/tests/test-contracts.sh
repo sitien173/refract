@@ -99,7 +99,7 @@ for detail in (
     "`tokens`: `context_used, context_window, input, output, cache_read, cache_write`, each an integer or null.",
     "Unknown tool arguments return `invalid_request`.",
     "`path` is any directory inside the project; Refract resolves its Git root. A path outside Git returns `invalid_path`.",
-    "At most one job per project runs at a time. Jobs within each project are admitted FIFO, bounded by the global `max_jobs` capacity; jobs in different projects may run concurrently up to that capacity.",
+    "Jobs are admitted FIFO up to the global `max_jobs` capacity, and jobs in the same project may run concurrently. Concurrent jobs share the project checkout and can edit the same files. Jobs that share a project, `session`, workflow, and target run one at a time.",
     "`timeout_s` accepts 0..3600.",
     "`result.pending_question` (`{question_id, text}`)",
     "`answer` without a pending question, after the question expired, or on a terminal job returns `invalid_state`.",
@@ -395,7 +395,7 @@ grep -qF 'Call `list(path)` once per phase.' skills/coordinating-multi-model-wor
 grep -q '3600-second default' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q 'You own the entire Git lifecycle' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'You are Coordinator' skills/coordinating-multi-model-work/SKILL.md
-grep -q 'At most one job per project runs at a time' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -q 'jobs in the same project may run concurrently' skills/coordinating-multi-model-work/references/tool-contract.md
 
 grep -q 'the newest terminal jobs' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -q -E 'depends_on|cancelled_dependents|invalid_dependency|dependency_failed' skills/coordinating-multi-model-work/references/tool-contract.md; then

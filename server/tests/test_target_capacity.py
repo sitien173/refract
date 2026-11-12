@@ -153,3 +153,49 @@ async def test_concurrent_probe_ownership_during_retries_blocks_other_probe(tmp_
         assert concurrent_admitted == [(None, 1)]
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_same_project_jobs_run_concurrently_but_serialize_per_session(tmp_path):
+    from dataclasses import replace
+    from refract.config import TargetConfig
+    from refract.drivers import DriverResult
+    from refract.runtime import Runtime
+    from tests.orchestration_helpers import FakeDrivers, config, repository, register_project
+
+    root = repository(tmp_path)
+    targets = (TargetConfig(id="primary", backend="codex", max_concurrency=3),)
+    catalog = replace(config(tmp_path / "home", targets), max_jobs=3)
+    release = asyncio.Event()
+    two_running = asyncio.Event()
+    running: list[str] = []
+    resumed: dict[str, str] = {}
+
+    class GateDrivers(FakeDrivers):
+        async def execute(self, *, prompt, session_id, **kwargs):
+            name = next(name for name in ("a1", "a2", "b1") if f"job {name}" in prompt)
+            resumed[name] = session_id
+            running.append(name)
+            if len(running) == 2:
+                two_running.set()
+            await release.wait()
+            return DriverResult("SUCCESS", session_id or f"sid-{name}", "done", "", "")
+
+    runtime = Runtime(catalog)
+    runtime.drivers = GateDrivers()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        a1 = await runtime.submit(project.id, "consult", "job a1", session="a")
+        b1 = await runtime.submit(project.id, "consult", "job b1", session="b")
+        a2 = await runtime.submit(project.id, "consult", "job a2", session="a")
+        await asyncio.wait_for(two_running.wait(), 10)
+        await asyncio.sleep(0.2)
+        assert sorted(running) == ["a1", "b1"]
+        release.set()
+        for submission in (a1, b1, a2):
+            assert (await runtime.wait(submission.job_id, 10)).state == "succeeded"
+        assert resumed == {"a1": "", "b1": "", "a2": "sid-a1"}
+    finally:
+        release.set()
+        await runtime.close()

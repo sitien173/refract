@@ -1331,7 +1331,7 @@ async def test_queued_and_running_cancellation(tmp_path) -> None:
     async def notify(uri: str) -> None:
         notifications.append(uri)
 
-    runtime = Runtime(config(tmp_path / "home"), notifier=notify)
+    runtime = Runtime(replace(config(tmp_path / "home"), max_jobs=1), notifier=notify)
     runtime.drivers = drivers
     await runtime.start()
     try:
@@ -1379,7 +1379,7 @@ async def test_restart_releases_orphaned_probe_to_half_open(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_shutdown_leaves_unstarted_queued_job_durable_for_restart(tmp_path) -> None:
     root = repository(tmp_path)
-    catalog = config(tmp_path / "home")
+    catalog = replace(config(tmp_path / "home"), max_jobs=1)
     drivers = BlockingDrivers()
     runtime = Runtime(catalog)
     runtime.drivers = drivers
@@ -3041,7 +3041,7 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = repository(tmp_path)
-    catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
+    catalog = replace(config(tmp_path / "home"), max_jobs=1, notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
     monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
 

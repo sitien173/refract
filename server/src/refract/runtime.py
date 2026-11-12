@@ -275,10 +275,7 @@ class Runtime:
         record = await run_sync(self.database.job_record, job_id)
         if record is None or record["state"] != "queued":
             return
-        self.scheduler.enqueue(
-            job_id,
-            str(record["project_id"]),
-        )
+        self.scheduler.enqueue(job_id)
 
     async def _job_terminal(self, job_id: str, _state: str, changed: bool = True) -> None:
         self.scheduler.complete(job_id, signal=False)

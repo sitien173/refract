@@ -128,7 +128,7 @@ The daemon serves MCP at `http://127.0.0.1:8765/mcp`. Nine self-describing MCP t
 | `retry` | Create a new job from a finished one on the next target |
 | `card_create`, `card_move`, `card_list` | Track work on a per-repository board |
 
-Each project runs one job at a time. Jobs are admitted first in, first out, up to `max_jobs` across projects.
+Jobs are admitted first in, first out, up to `max_jobs` across all projects. Several jobs in one project can run at once and edit the same checkout. Jobs that share a project, session, workflow, and target run one at a time.
 
 `wait` returns `{job, result}`. Every finished job writes its full text to `result.result_path`; read it when `result.truncated` is true.
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Jobs in the same project now run concurrently up to `max_jobs` instead of one at a time. Concurrent jobs share the project checkout and can edit the same files. Jobs that share a project, session, workflow, and target still run one at a time so they never resume one backend session at once.
+
 ## 3.0.3 - 2026-11-12
 
 - `refract install -p agy-ide` no longer needs a local `--source`. Without `--source`, or with a URL, it shallow-clones the repository into a temporary directory with `git`, copies the plugin, and deletes the clone. `-p all` now installs `agy-ide` instead of skipping it when the source is remote.

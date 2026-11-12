@@ -112,6 +112,9 @@ class TargetExecutor:
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
         self._target_users: dict[str, int] = {}
+        # Jobs that resume the same backend session run one at a time.
+        self._session_locks: dict[tuple[str, str, str, str], asyncio.Semaphore] = {}
+        self._session_users: dict[tuple[str, str, str, str], int] = {}
 
     def refresh_configuration(self, config: DaemonConfig) -> None:
         """Adopt settings; occupied capacity drains before replacing its limit."""
@@ -158,12 +161,34 @@ class TargetExecutor:
             except Exception:
                 await self._release_probe(target_key, job_id)
                 return self._configuration_failure(target, target_key, "Target environment configuration is invalid", attempt_tokens)
+        session_key = (project.id, scoped_session, workflow, session_target_key)
+        session_lock = self._session_locks.setdefault(session_key, asyncio.Semaphore(1))
+        self._session_users[session_key] = self._session_users.get(session_key, 0) + 1
+        try:
+            session_locked = await self._acquire_target(session_lock, cancel_event)
+        except BaseException as exc:
+            try:
+                self._release_session(session_key, locked=False)
+            finally:
+                await self._release_probe(target_key, job_id)
+            self._attach_outcome(exc, target, None, attempt_tokens=attempt_tokens)
+            raise
+        if not session_locked:
+            try:
+                self._release_session(session_key, locked=False)
+            finally:
+                await self._release_probe(target_key, job_id)
+            cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
+            return TargetExecutionResult(cancelled, target.id, target_key, self._outcome(cancelled, target, None, attempt_tokens=attempt_tokens))
         try:
             session_id = await self._prepare_session(
                 project, scoped_session, workflow, session_target_key, fresh
             )
         except BaseException as exc:
-            await self._release_probe(target_key, job_id)
+            try:
+                self._release_session(session_key, locked=True)
+            finally:
+                await self._release_probe(target_key, job_id)
             self._attach_outcome(exc, target, None, attempt_tokens=attempt_tokens)
             raise
         semaphore = self._target_semaphores.setdefault(target.id, asyncio.Semaphore(target.max_concurrency))
@@ -174,6 +199,7 @@ class TargetExecutor:
         except BaseException as exc:
             try:
                 self._release_capacity(target.id)
+                self._release_session(session_key, locked=True)
             finally:
                 await self._release_probe(target_key, job_id)
             self._attach_outcome(exc, target, None, attempt_tokens=attempt_tokens)
@@ -181,6 +207,7 @@ class TargetExecutor:
         if not acquired:
             try:
                 self._release_capacity(target.id)
+                self._release_session(session_key, locked=True)
             finally:
                 await self._release_probe(target_key, job_id)
             cancelled = DriverResult("CANCELLED", "", "", "cancelled", "cancelled")
@@ -206,6 +233,7 @@ class TargetExecutor:
                 finally:
                     try:
                         self._release_capacity(target.id)
+                        self._release_session(session_key, locked=True)
                     finally:
                         await self._release_probe(target_key, job_id)
 
@@ -701,6 +729,14 @@ class TargetExecutor:
             self._target_users.pop(target_id)
             self._target_semaphores.pop(target_id, None)
             self._target_active.pop(target_id, None)
+
+    def _release_session(self, key: tuple[str, str, str, str], *, locked: bool) -> None:
+        if locked:
+            self._session_locks[key].release()
+        self._session_users[key] -= 1
+        if not self._session_users[key]:
+            self._session_users.pop(key)
+            self._session_locks.pop(key, None)
 
     @staticmethod
     async def _acquire_target(semaphore: asyncio.Semaphore, cancel_event: CancelEvent) -> bool:
