@@ -157,27 +157,28 @@ The default is `user`. An unsupported scope exits 2 before any host command runs
 
 ### Dry run
 
-`--dry-run` prints each planned host command as `<host>: would run: <command>`. It runs no command that changes state. For `agy-ide` it prints each planned file operation instead, as `agy-ide: would copy <src> -> <dst>` or `agy-ide: would remove <dst>`, then `agy-ide: skipped (dry run)`, and writes nothing. It still runs the read-only checks: `plugin list --json` and `plugin marketplace list --json` for Claude and Codex, `plugin list --json` for Antigravity, and a read of Pi's `settings.json`.
+`--dry-run` prints each planned host command as `<host>: would run: <command>`. It runs no command that changes state. For `agy-ide` it prints each planned file operation instead, as `agy-ide: would copy <src> -> <dst>`, `agy-ide: would clone <url> and copy its plugin -> <dst>`, or `agy-ide: would remove <dst>`, then `agy-ide: skipped (dry run)`, and writes nothing. It still runs the read-only checks: `plugin list --json` and `plugin marketplace list --json` for Claude and Codex, `plugin list --json` for Antigravity, and a read of Pi's `settings.json`.
 
 ### Antigravity IDE
 
 The standalone Antigravity IDE has no plugin CLI. For `agy-ide` alone, Refract writes into your home directory (or the current directory for `project`) by copying the plugin tree itself, instead of running a host CLI.
 
 ```bash
+refract install -p agy-ide
 refract install -p agy-ide --source /path/to/refract
 refract install -p agy-ide --scope project --source /path/to/refract/plugin
 refract uninstall -p agy-ide
 ```
 
 - `user` scope copies to `~/.gemini/config/plugins/refract/`. `project` scope copies to `<cwd>/.agents/plugins/refract/`. `--scope local` exits 2.
-- `--source` must be a local path to the repository root or to `plugin/`. The default GitHub source fails with `agy-ide needs a local path source; pass --source <path>`.
+- `--source` is optional. A local path must point to the repository root or to `plugin/`. Without `--source`, or with a URL, Refract runs `git clone --depth 1` into a temporary directory, copies the plugin from it, and deletes the clone. This needs `git` on PATH and network access. When the plugin is already installed, Refract does not clone.
 - Refract detects the IDE by a filesystem check for `~/.gemini/antigravity-ide` or `~/.gemini/config`, not by PATH. A named `agy-ide` without either prints `agy-ide: failed: Antigravity IDE not found`.
-- `-p all` includes `agy-ide` only when that check passes. With a remote source, `refract install -p all` prints `agy-ide: skipped: needs --source <local path>` and still succeeds for it.
+- `-p all` includes `agy-ide` only when that check passes.
 - Install writes an ownership marker, `.refract-agy-ide-install.json`, into the copied directory. Uninstall removes the directory only when that marker is present and names the same path. Refract refuses to delete a directory that is not a Refract plugin, an unmarked directory, a marker for another path, or a link, and it prints the reason.
 - The `agy` CLI stages its own installs at the same `user` path. Refract does not delete that directory.
 - Installing over an existing Refract install prints `already installed`. Replacing is not supported; uninstall first.
 
-If you have the `agy` CLI, `agy plugin install https://github.com/sitien173/refract` is an alternative that needs no `--source`.
+If you have the `agy` CLI, `agy plugin install https://github.com/sitien173/refract` is an alternative that installs through that CLI instead of Refract.
 
 Antigravity does not load plugin slash commands, so the four commands are unavailable here. See Commands below for the skill names to invoke instead.
 

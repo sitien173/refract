@@ -56,11 +56,12 @@ class _Step:
 
 @dataclass(frozen=True, slots=True)
 class _FileStep:
-    """A file operation: ``copy`` the tree at ``src`` to ``dst``, or ``remove`` ``dst``."""
+    """A file operation: ``copy`` the tree at ``src`` (or cloned from ``url``) to ``dst``, or ``remove`` ``dst``."""
 
     kind: Literal["copy", "remove"]
     src: Path | None
     dst: Path
+    url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +163,9 @@ def _plan_agy_ide(action: str, source: str, scope: str) -> _Plan:
             return _Plan([], error=f"{dst} {reason}; not removing it")
         return _Plan([_FileStep("remove", None, dst)], done="removed")
     if _is_remote(source):
-        return _Plan([], error="agy-ide needs a local path source; pass --source <path>")
+        if installed:
+            return _Plan([], noop="already installed")
+        return _Plan([_FileStep("copy", None, dst, url=source)], done="installed")
     root = _agy_ide_plugin_root(source)
     if root is None:
         return _Plan([], error=f"no .antigravity-plugin/plugin.json in {source} or its plugin/")
@@ -481,17 +484,34 @@ def _copy_owned(src: Path, dst: Path) -> str | None:
     return None
 
 
+def _clone_and_copy(url: str, dst: Path) -> str | None:
+    """Shallow-clone ``url`` to a temporary directory, copy its plugin to ``dst``, delete the clone."""
+    with tempfile.TemporaryDirectory(prefix="refract-clone-", ignore_cleanup_errors=True) as tmp:
+        if reason := _apply(["git", "clone", "--depth", "1", "--", url, tmp]):
+            return reason
+        root = _agy_ide_plugin_root(tmp)
+        if root is None:
+            return f"no .antigravity-plugin/plugin.json in {url} or its plugin/"
+        return _copy_owned(root, dst)
+
+
 def _apply_file(step: _FileStep) -> str | None:
     """Run one file step; return the failure reason, or None on success."""
     if step.kind == "remove":
         return _remove_owned(step.dst)
+    if step.url is not None:
+        return _clone_and_copy(step.url, step.dst)
     if step.src is None:
         return "copy has no source"
     return _copy_owned(step.src, step.dst)
 
 
 def _file_step_text(step: _FileStep) -> str:
-    return f"copy {step.src} -> {step.dst}" if step.kind == "copy" else f"remove {step.dst}"
+    if step.kind == "remove":
+        return f"remove {step.dst}"
+    if step.url is not None:
+        return f"clone {step.url} and copy its plugin -> {step.dst}"
+    return f"copy {step.src} -> {step.dst}"
 
 
 def _execute(host: str, plan: _Plan, dry_run: bool, out: Callable[[str], None]) -> bool:
@@ -529,14 +549,10 @@ def _run_hosts(
     scope: str,
     dry_run: bool,
     out: Callable[[str], None],
-    *,
-    ide_via_all: bool = False,
 ) -> int:
     out(f"hosts: {', '.join(hosts)}")
     if scope != "user":
         out(f"directory: {Path.cwd()}")
-    # Under `-p all`, a remote source cannot feed agy-ide; skip it rather than fail the run.
-    ide_skipped = ide_via_all and action == "install" and _is_remote(source)
     failed = False
     for host in hosts:
         if not _host_present(host):
@@ -546,9 +562,6 @@ def _run_hosts(
                 else f"{host}: failed: not on PATH"
             )
             failed = True
-            continue
-        if host == "agy-ide" and ide_skipped:
-            out("agy-ide: skipped: needs --source <local path>")
             continue
         failed |= not _execute(host, _plan(host, action, source, scope), dry_run, out)
     return 1 if failed else 0
@@ -582,13 +595,4 @@ def run(
         if not held:
             out("Another refract update or install is running.")
             return 1
-        named = {part.strip() for value in host_args for part in value.split(",")}
-        return _run_hosts(
-            action,
-            hosts,
-            resolve_source(source),
-            scope,
-            dry_run,
-            out,
-            ide_via_all="agy-ide" not in named,
-        )
+        return _run_hosts(action, hosts, resolve_source(source), scope, dry_run, out)

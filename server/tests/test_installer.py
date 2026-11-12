@@ -578,14 +578,18 @@ def test_agy_ide_destination_per_scope(env: Env, monkeypatch: pytest.MonkeyPatch
     )
 
 
-def test_agy_ide_rejects_url_source(env: Env) -> None:
+def test_agy_ide_remote_source_dry_run_plans_a_clone(env: Env) -> None:
     mark_ide_present(env)
-    code, lines = run("install", ["agy-ide"], dry_run=True)
-    assert code == 1
-    assert any("agy-ide: failed:" in line and "local path" in line for line in lines)
-    code, lines = run("install", ["agy-ide"], source="git@github.com:o/r.git", dry_run=True)
-    assert code == 1
-    assert any("local path" in line for line in lines)
+    dst = installer._agy_ide_destination("user")
+    for source, url in (
+        (None, installer.DEFAULT_SOURCE),
+        ("git@github.com:o/r.git", "git@github.com:o/r.git"),
+    ):
+        code, lines = run("install", ["agy-ide"], source=source, dry_run=True)
+        assert code == 0
+        assert f"agy-ide: would clone {url} and copy its plugin -> {dst}" in lines
+        assert lines[-1] == "agy-ide: skipped (dry run)"
+    assert not dst.exists()
 
 
 def test_agy_ide_plugin_root_from_repository_path(env: Env, tmp_path: Path) -> None:
@@ -702,25 +706,62 @@ def test_agy_ide_project_scope_dry_run(
     assert not (cwd / ".agents").exists()
 
 
-def test_all_with_default_source_skips_agy_ide_and_exits_0(env: Env) -> None:
-    mark_ide_present(env)
-    for dry_run in (True, False):
-        code, lines = run("install", ["all"], dry_run=dry_run)
-        assert code == 0
-        assert lines == ["hosts: agy-ide", "agy-ide: skipped: needs --source <local path>"]
-
-
 def test_all_uninstall_with_agy_ide_not_installed_exits_0(env: Env) -> None:
     mark_ide_present(env)
     code, lines = run("uninstall", ["all"])
     assert (code, lines) == (0, ["hosts: agy-ide", "agy-ide: not installed"])
 
 
-def test_named_agy_ide_with_default_source_still_fails(env: Env) -> None:
+def test_agy_ide_clones_the_default_source_and_copies_its_plugin(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mark_ide_present(env)
+    calls: list[list[str]] = []
+
+    def fake_apply(argv: list[str]) -> str | None:
+        calls.append(argv)
+        fake_plugin(Path(argv[-1]) / "plugin")
+        return None
+
+    monkeypatch.setattr(installer, "_apply", fake_apply)
+    code, lines = run("install", ["agy-ide"])
+    assert (code, lines) == (0, ["hosts: agy-ide", "agy-ide: installed"])
+    assert calls[0][:5] == ["git", "clone", "--depth", "1", "--"]
+    assert calls[0][5] == installer.DEFAULT_SOURCE
+    dst = installer._agy_ide_destination("user")
+    assert installer._agy_ide_owned(dst)
+    assert not Path(calls[0][-1]).exists()
+
+
+def test_agy_ide_clone_failure_is_reported_and_installs_nothing(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    monkeypatch.setattr(installer, "_apply", lambda argv: "cannot run git")
+    code, lines = run("install", ["agy-ide"])
+    assert (code, lines) == (1, ["hosts: agy-ide", "agy-ide: failed: cannot run git"])
+    assert not installer._agy_ide_destination("user").exists()
+
+
+def test_agy_ide_clone_without_a_plugin_manifest_fails(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    monkeypatch.setattr(installer, "_apply", lambda argv: None)
     code, lines = run("install", ["agy-ide"])
     assert code == 1
-    assert "agy-ide: failed: agy-ide needs a local path source; pass --source <path>" in lines
+    assert lines[-1].startswith("agy-ide: failed: no .antigravity-plugin/plugin.json in ")
+    assert not installer._agy_ide_destination("user").exists()
+
+
+def test_agy_ide_remote_source_when_installed_does_not_clone(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark_ide_present(env)
+    dst = installer._agy_ide_destination("user")
+    make_plugin_root(dst)
+    monkeypatch.setattr(installer, "_apply", lambda argv: pytest.fail("cloned"))
+    assert run("install", ["agy-ide"])[1][-1] == "agy-ide: already installed"
 
 
 def tree(root: Path) -> dict[str, bytes]:
