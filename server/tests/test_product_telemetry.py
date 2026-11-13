@@ -589,22 +589,24 @@ def test_project_overlay_with_telemetry_is_rejected(tmp_path) -> None:
         load_project_config(root, base)
 
 
-def _mcp_context(runtime: Runtime, client_name: str | None = "test-client"):
+def _mcp_context(runtime: Runtime, client_name: str | None = "test-client", meta: dict | None = None):
     from types import SimpleNamespace
 
     params = None if client_name is None else SimpleNamespace(client_info=SimpleNamespace(name=client_name))
     return SimpleNamespace(request_context=SimpleNamespace(
-        lifespan_context=runtime, session=SimpleNamespace(client_params=params), request_id=1,
+        lifespan_context=runtime, session=SimpleNamespace(client_params=params), request_id=1, meta=meta,
     ))
 
 
-async def _call_mcp(operation: str, runtime: Runtime, client_name: str | None = "test-client") -> None:
+async def _call_mcp(
+    operation: str, runtime: Runtime, client_name: str | None = "test-client", meta: dict | None = None,
+) -> None:
     from refract.server import _logged_request
 
     async def tool(ctx) -> str:
         return "ok"
 
-    await _logged_request(operation)(tool)(_mcp_context(runtime, client_name))
+    await _logged_request(operation)(tool)(_mcp_context(runtime, client_name, meta))
 
 
 def _outbox(runtime: Runtime) -> dict[str, dict]:
@@ -645,6 +647,21 @@ async def test_consent_on_mcp_calls_and_dashboard_reads_flush_into_one_matching_
         }
         assert set(event) == {"event", "period_start", "period_end", "counts"}
         assert f"features:{event['period_start']}" in _outbox(runtime)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_2026_client_name_from_request_meta_is_counted_and_truncated(config_factory, monkeypatch) -> None:
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
+    runtime = Runtime(config_factory(enabled=True))
+    try:
+        meta = {"io.modelcontextprotocol/clientInfo": {"name": "x" * 80, "version": "9.9"}}
+        await _call_mcp("submit", runtime, None, meta)
+        await _call_mcp("submit", runtime, "legacy-client")
+        await runtime._flush_telemetry()
+        counts = next(value["counts"] for key, value in _outbox(runtime).items() if key.startswith("features:"))
+        assert counts == {"mcp.submit": 2, f"mcp_client.{'x' * 64}": 1, "mcp_client.legacy-client": 1}
     finally:
         await runtime.close()
 

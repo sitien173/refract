@@ -1869,3 +1869,167 @@ async def test_wait_with_progress_nonpositive_heartbeat_uses_thirty_seconds(monk
     runtime = _ProgressRuntime([_job_view("succeeded")])
     await server._wait_with_progress(runtime, _progress_context([]), "job-1", 5)
     assert timeouts == [30.0]
+
+
+_V2026_VERSION = "2026-07-28"
+
+
+def _v2026_post(client, method: str, params: dict | None = None, *, name: str | None = None, progress_token: str | None = None):
+    meta = {
+        "io.modelcontextprotocol/protocolVersion": _V2026_VERSION,
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {"name": "refract-test", "version": "0"},
+    }
+    if progress_token is not None:
+        meta["progressToken"] = progress_token
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": _V2026_VERSION,
+        "Mcp-Method": method,
+    }
+    if name is not None:
+        headers["Mcp-Name"] = name
+    body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": {**(params or {}), "_meta": meta}}
+    return client.post("/mcp", json=body, headers=headers)
+
+
+def _v2026_messages(response) -> list[dict]:
+    if response.headers["content-type"].startswith("text/event-stream"):
+        return [
+            json.loads(line.removeprefix("data:").strip())
+            for line in response.text.splitlines()
+            if line.startswith("data:") and line.removeprefix("data:").strip()
+        ]
+    return [response.json()]
+
+
+def _v2026_call(client, tool: str, arguments: dict, *, progress_token: str | None = None) -> list[dict]:
+    response = _v2026_post(
+        client, "tools/call", {"name": tool, "arguments": arguments}, name=tool, progress_token=progress_token
+    )
+    assert response.status_code == 200, response.text
+    return _v2026_messages(response)
+
+
+@pytest.fixture
+def v2026_http(tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    from refract import server
+    from tests.orchestration_helpers import config as make_config
+
+    monkeypatch.setattr(server, "configure_logging", lambda _settings: None)
+    application = server.create_application(make_config(tmp_path / "home"), host="127.0.0.1", port=9322)
+    with TestClient(application, base_url="http://127.0.0.1:9322") as client:
+        yield client, application.state.runtime
+
+
+def test_v2026_http_discover_lists_protocol_version(v2026_http) -> None:
+    client, _runtime = v2026_http
+    response = _v2026_post(client, "server/discover")
+    assert response.status_code == 200, response.text
+    assert _V2026_VERSION in _v2026_messages(response)[-1]["result"]["supportedVersions"]
+
+
+def test_v2026_http_tools_list_returns_the_nine_tools(v2026_http) -> None:
+    client, _runtime = v2026_http
+    response = _v2026_post(client, "tools/list")
+    assert response.status_code == 200, response.text
+    tools = _v2026_messages(response)[-1]["result"]["tools"]
+    assert {tool["name"] for tool in tools} == {
+        "submit", "wait", "answer", "cancel", "retry", "list", "card_create", "card_move", "card_list",
+    }
+    assert len(tools) == 9
+
+
+def test_v2026_http_submit_wait_progress_and_cancel(v2026_http, tmp_path, monkeypatch) -> None:
+    from refract import server
+    from tests.orchestration_helpers import BlockingDrivers, repository
+
+    client, runtime = v2026_http
+    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    runtime.drivers = BlockingDrivers()
+    root = repository(tmp_path)
+
+    submitted = _v2026_call(client, "submit", {"path": str(root), "workflow": "consult", "prompt": "inspect"})[-1]
+    job_id = json.loads(submitted["result"]["content"][0]["text"])["job"]["id"]
+
+    messages = _v2026_call(client, "wait", {"job_id": job_id, "timeout_s": 1}, progress_token="p1")
+    progress = [m for m in messages if m.get("method") == "notifications/progress"]
+    assert progress, messages
+    assert all(m["params"]["progressToken"] == "p1" for m in progress)
+    assert messages.index(progress[0]) < len(messages) - 1
+    assert "result" in messages[-1]
+    assert json.loads(messages[-1]["result"]["content"][0]["text"])["job"]["state"] == "running"
+
+    cancelled = _v2026_call(client, "cancel", {"job_id": job_id})[-1]
+    assert not cancelled["result"].get("isError")
+
+
+def test_v2026_http_refract_error_matches_2025_payload(v2026_http) -> None:
+    client, _runtime = v2026_http
+    message = _v2026_call(client, "wait", {"job_id": "missing-job", "timeout_s": 0})[-1]
+    assert message["result"]["isError"] is True
+    payload = json.loads(message["result"]["content"][0]["text"])
+    assert set(payload) == {"code", "message", "next_action"}
+    assert payload["code"] == "unknown_job"
+    assert payload["next_action"]
+
+
+def test_create_application_never_expires_idle_2025_sessions(tmp_path, monkeypatch) -> None:
+    from refract import server
+    from tests.orchestration_helpers import config as make_config
+
+    monkeypatch.setattr(server, "configure_logging", lambda _settings: None)
+    application = server.create_application(make_config(tmp_path / "home"), host="127.0.0.1", port=9323)
+    assert application.state.mcp.session_manager.session_idle_timeout is None
+
+
+def _true_flags(value, path: str = "") -> list[str]:
+    if isinstance(value, dict):
+        return [found for key, item in value.items() for found in _true_flags(item, f"{path}.{key}")]
+    return [path] if value is True and path.rsplit(".", 1)[-1] in {"listChanged", "subscribe"} else []
+
+
+def test_v2026_http_discover_advertises_no_list_changed_or_subscribe(v2026_http) -> None:
+    client, _runtime = v2026_http
+    response = _v2026_post(client, "server/discover")
+    assert response.status_code == 200, response.text
+    capabilities = _v2026_messages(response)[-1]["result"]["capabilities"]
+    assert _true_flags(capabilities) == []
+
+
+def test_v2026_http_subscriptions_listen_is_refused(v2026_http) -> None:
+    client, _runtime = v2026_http
+    response = _v2026_post(client, "subscriptions/listen", {"notifications": {"toolsListChanged": True}})
+    message = _v2026_messages(response)[-1]
+    assert "error" in message, message
+
+
+def test_v2026_http_tools_list_carries_cache_hint(v2026_http) -> None:
+    client, _runtime = v2026_http
+    result = _v2026_messages(_v2026_post(client, "tools/list"))[-1]["result"]
+    assert result["ttlMs"] == 300000
+    assert result["cacheScope"] == "private"
+
+
+def test_2025_http_session_round_trip(v2026_http) -> None:
+    client, _runtime = v2026_http
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    initialize = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "legacy", "version": "0"}},
+    }
+    response = client.post("/mcp", json=initialize, headers=headers)
+    assert response.status_code == 200, response.text
+    session_id = response.headers["Mcp-Session-Id"]
+    assert _v2026_messages(response)[-1]["result"]["protocolVersion"] == "2025-06-18"
+
+    session_headers = {**headers, "Mcp-Session-Id": session_id, "MCP-Protocol-Version": "2025-06-18"}
+    ack = client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=session_headers)
+    assert ack.status_code == 202, ack.text
+
+    listed = client.post("/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers=session_headers)
+    assert listed.status_code == 200, listed.text
+    assert len(_v2026_messages(listed)[-1]["result"]["tools"]) == 9

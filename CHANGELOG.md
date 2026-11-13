@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `/mcp` now serves MCP protocol 2026-07-28 on `mcp` 2.3, pinned as `mcp>=2.3,<2.4`. Requests for 2026-07-28 are stateless, with no `initialize` call and no session. Clients from 2025 still use `initialize` and `Mcp-Session-Id` sessions on the same URL.
+- Sessions for 2025-era clients no longer expire while idle. `create_application` passes `session_idle_timeout=None`.
+- `server/discover` no longer reports `listChanged: true` or `resources.subscribe: true`, and `subscriptions/listen` is refused. Refract sends no change notifications and supports no resource subscriptions.
+- For protocol 2026-07-28 only, `tools/list` now carries a cache hint with `ttlMs` 300000 and `cacheScope` `"private"`. Responses to 2025-era clients carry no cache hint.
+- When product telemetry is enabled, it now counts the MCP client name from the request `_meta` key `io.modelcontextprotocol/clientInfo` on 2026-07-28. Before, only `initialize` supplied it. 2025-era clients still use `initialize`.
+
 ## 3.0.4 - 2026-11-12
 
 - Breaking: backends now run through the `coding-agent-cli` library, a new dependency. `server/src/refract/backends/` is gone and `server/src/refract/drivers.py` adapts the library. Refract still adds the permission flags: `--yolo` for Codex, `--permission-mode bypassPermissions` for Claude Code, `--dangerously-skip-permissions` for Agy, and `--approve` for Pi.
