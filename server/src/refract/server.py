@@ -16,11 +16,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal, cast
 
-from mcp.server import MCPServer
+from mcp.server import CacheHint, MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from mcp.types import CLIENT_INFO_META_KEY, CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field, ValidationError
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -459,6 +459,17 @@ def _progress_token_present(context: Any) -> bool:
         return False
 
 
+def _client_name(request_context: Any) -> str:
+    """The client name from the 2026-07-28 request `_meta`, else from the 2025-era initialize params."""
+    meta = getattr(request_context, "meta", None)
+    info = meta.get(CLIENT_INFO_META_KEY) if isinstance(meta, Mapping) else None
+    name = info.get("name") if isinstance(info, Mapping) else None
+    if isinstance(name, str) and name:
+        return name
+    client_params = request_context.session.client_params
+    return client_params.client_info.name if client_params is not None else ""
+
+
 def _count_mcp_feature(context: Any, operation: str) -> None:
     """Count the tool and the client name; a single flag check while telemetry is off."""
     if context is None:
@@ -468,9 +479,9 @@ def _count_mcp_feature(context: Any, operation: str) -> None:
         if not runtime.telemetry_enabled:
             return
         runtime.count_feature(f"mcp.{operation}")
-        client_params = context.request_context.session.client_params
-        if client_params is not None and client_params.client_info.name:
-            runtime.count_feature(f"mcp_client.{client_params.client_info.name[:64]}")
+        client_name = _client_name(context.request_context)
+        if client_name:
+            runtime.count_feature(f"mcp_client.{client_name[:64]}")
     except Exception:
         log.warning("Feature count failed", extra={"event": "telemetry.count_failed"}, exc_info=True)
 
@@ -882,6 +893,8 @@ def create_mcp(
         version=package_version("refract"),
         lifespan=lifespan,
         middleware=[error_boundary],
+        subscriptions=False,
+        cache_hints={"tools/list": CacheHint(ttl_ms=300_000)},
     )
     for function, options in _TOOL_DEFINITIONS:
         instance.tool(**options)(function)
@@ -932,6 +945,7 @@ def create_application(
         streamable_http_path="/mcp",
         json_response=False,
         stateless_http=False,
+        session_idle_timeout=None,
         host=host or config_host,
     )
     session_manager = instance.session_manager

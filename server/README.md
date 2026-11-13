@@ -160,6 +160,8 @@ The daemon serves MCP at `http://127.0.0.1:8765/mcp`. Nine self-describing MCP t
 | `retry` | Create a new job from a finished one on the next target |
 | `card_create`, `card_move`, `card_list` | Track work on a per-repository board |
 
+The same URL serves two protocol generations. Requests for protocol 2026-07-28 are stateless: there is no `initialize` call and no session. Clients from 2025 call `initialize` and receive an `Mcp-Session-Id` session. Those sessions do not expire while idle. Refract advertises no change notifications and no resource subscriptions, and `subscriptions/listen` is refused. For protocol 2026-07-28 only, `tools/list` carries a cache hint of 5 minutes with private scope. Responses to 2025-era clients carry no cache hint.
+
 Jobs are admitted first in, first out, up to `max_jobs` across all projects. Several jobs in one project can run at once and edit the same checkout. Jobs that share a project, session, workflow, and target run one at a time.
 
 `wait` returns `{job, result}`. Every finished job writes its full text to `result.result_path`; read it when `result.truncated` is true.
