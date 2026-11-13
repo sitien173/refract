@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.0.5 - 2026-11-13
+
 - `/mcp` now serves MCP protocol 2026-07-28 on `mcp` 2.3, pinned as `mcp>=2.3,<2.4`. Requests for 2026-07-28 are stateless, with no `initialize` call and no session. Clients from 2025 still use `initialize` and `Mcp-Session-Id` sessions on the same URL.
 - Sessions for 2025-era clients no longer expire while idle. `create_application` passes `session_idle_timeout=None`.
 - `server/discover` no longer reports `listChanged: true` or `resources.subscribe: true`, and `subscriptions/listen` is refused. Refract sends no change notifications and supports no resource subscriptions.
